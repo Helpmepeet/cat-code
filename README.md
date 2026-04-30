@@ -216,24 +216,6 @@ Contributions are welcome.
 
 ---
 
-## Private repo publish checklist
-
-Before pushing this project to any remote (including a private GitHub repo):
-
-1. Verify no secrets are staged:
-   - `git status`
-   - `git diff --staged`
-2. Confirm sensitive local files are ignored by git:
-   - `.env`, `.env.*`
-   - `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`
-3. Confirm your remote target:
-   - `git remote -v`
-   - ensure `origin` points to your own private repository
-4. If available, run a history secret scan before first publish:
-   - `gitleaks git --verbose`
-
----
-
 ## License
 
 The original Claude Code source is the property of Anthropic. This fork exists because the source was publicly exposed through their npm distribution. Use at your own discretion.

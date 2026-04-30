@@ -12,7 +12,6 @@ import {
   touchPoolAccountUsage,
   type PoolAccount,
 } from './codexAccountPool.js'
-import { logForDebugging } from '../../utils/debug.js'
 
 export type CodexLeaseStrategy = 'spread' | 'follow-main'
 export type CodexLeaseOwnerType = 'main' | 'subagent'
@@ -150,9 +149,6 @@ export function registerCodexLease({
 
   codexLeasesByOwnerId.set(ownerId, lease)
   touchPoolAccountUsage(selection.account.accountId)
-  logForDebugging(
-    `[codex-profile] lease-create owner=${ownerId} owner_type=${ownerType} account=${selection.account.accountId} strategy=${resolvedStrategy} reason=${selection.reason}`,
-  )
   return lease
 }
 
@@ -220,7 +216,6 @@ export function reassignCodexLeaseToActiveAccount(ownerId: string): void {
   if (existing.accountId === account.accountId && existing.state === 'active') {
     return
   }
-  const before = existing.accountId
   codexLeasesByOwnerId.set(ownerId, {
     ...existing,
     accountId: account.accountId,
@@ -229,19 +224,11 @@ export function reassignCodexLeaseToActiveAccount(ownerId: string): void {
     updatedAt: Date.now(),
   })
   touchPoolAccountUsage(account.accountId)
-  logForDebugging(
-    `[codex-profile] lease-reassign owner=${ownerId} before=${before} after=${account.accountId} reason=manual /switch-account`,
-  )
 }
 
 export function releaseCodexLease(ownerId: string): void {
   const releasedLease = codexLeasesByOwnerId.get(ownerId)
   codexLeasesByOwnerId.delete(ownerId)
-  if (releasedLease) {
-    logForDebugging(
-      `[codex-profile] lease-release owner=${ownerId} account=${releasedLease.accountId}`,
-    )
-  }
 
   if (releasedLease && getPoolStatus().activeIndex < 0) {
     setActiveAccount(releasedLease.accountId)
@@ -282,9 +269,6 @@ export function failoverCodexLease(
     codexLeasesByOwnerId.set(ownerId, replacementLease)
     setActiveAccount(selection.account.accountId)
     touchPoolAccountUsage(selection.account.accountId)
-    logForDebugging(
-      `[codex-profile] lease-failover owner=${ownerId} before=${failedAccountId} after=${selection.account.accountId} reason=${reason}`,
-    )
     return replacementLease
   } catch (error) {
     const failedLease: CodexLease = {
@@ -296,10 +280,6 @@ export function failoverCodexLease(
     }
 
     codexLeasesByOwnerId.set(ownerId, failedLease)
-    logForDebugging(
-      `[codex-profile] lease-failed owner=${ownerId} account=${failedAccountId} reason=${reason}`,
-      { level: 'warn' },
-    )
     throw error
   }
 }
