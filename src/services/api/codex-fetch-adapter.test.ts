@@ -1,0 +1,705 @@
+import { describe, expect, test } from 'bun:test'
+import {
+  _setWebSocketFactoryForTest,
+  CodexWebSocketClosedBeforeCompletedError,
+  clearWebSocketSession,
+} from './codex-websocket-transport.js'
+
+import {
+  _hasStickyHttpFallbackForTest,
+  _markStickyHttpFallbackForTest,
+  _setStickyFallbackNowForTest,
+  CodexAccountCapError,
+  createCodexFetch,
+  resetCodexCacheContext,
+  translateCodexStreamToAnthropic,
+  translateCodexWsStreamToAnthropic,
+  translateToCodexBody,
+} from './codex-fetch-adapter.js'
+
+function createAccessToken(accountId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))
+  const payload = btoa(JSON.stringify({
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: accountId,
+    },
+  }))
+  return `${header}.${payload}.signature`
+}
+
+type WsListener = (...args: unknown[]) => void
+type FakeWsBatchItem =
+  | Record<string, unknown>
+  | { __close: { code?: number; reason?: string; wasClean?: boolean } }
+
+class FakeWebSocket {
+  static OPEN = 1
+  static CLOSED = 3
+
+  readyState: number = FakeWebSocket.OPEN
+
+  responseBatches: Array<Array<FakeWsBatchItem>> = []
+
+  private listeners = new Map<string, WsListener[]>()
+  private sent: string[] = []
+
+  triggerOpen() {
+    for (const fn of this.listeners.get('open') ?? []) fn()
+  }
+
+  deliver(payload: Record<string, unknown>) {
+    const data = JSON.stringify(payload)
+    for (const fn of this.listeners.get('message') ?? []) fn(data)
+  }
+
+  deliverError(error: Record<string, unknown>) {
+    this.deliver({ type: 'error', error })
+  }
+
+  triggerClose(options?: { code?: number; reason?: string; wasClean?: boolean }) {
+    this.readyState = FakeWebSocket.CLOSED
+    for (const fn of this.listeners.get('close') ?? []) {
+      fn(options?.code, Buffer.from(options?.reason ?? ''))
+    }
+  }
+
+  on(type: string, fn: WsListener) {
+    const list = this.listeners.get(type) ?? []
+    list.push(fn)
+    this.listeners.set(type, list)
+  }
+
+  off(type: string, fn: WsListener) {
+    const list = this.listeners.get(type) ?? []
+    this.listeners.set(type, list.filter(listener => listener !== fn))
+  }
+
+  send(data: string) {
+    this.sent.push(data)
+    for (const payload of this.responseBatches.shift() ?? []) {
+      Promise.resolve().then(() => {
+        if ('__close' in payload) {
+          this.triggerClose(payload.__close)
+          return
+        }
+        this.deliver(payload)
+      })
+    }
+  }
+
+  close() {
+    this.readyState = FakeWebSocket.CLOSED
+  }
+
+  getSentCount() {
+    return this.sent.length
+  }
+}
+
+function installFakeWs(): FakeWebSocket {
+  const fakeWs = new FakeWebSocket()
+  _setWebSocketFactoryForTest(() => fakeWs as never)
+  setTimeout(() => fakeWs.triggerOpen(), 0)
+  return fakeWs
+}
+
+function completedWsResponse(responseId = 'resp_001') {
+  return {
+    type: 'response.completed',
+    response: {
+      id: responseId,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 2,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    },
+  }
+}
+
+describe('codex-fetch-adapter', () => {
+  test('translateToCodexBody sets service_tier="priority" when speed=fast', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      speed: 'fast',
+      _openaiInstructionAssembly: {
+        instructions: '',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.service_tier).toBe('priority')
+  })
+
+  test('translateToCodexBody omits service_tier when speed is standard or absent', () => {
+    const standard = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      speed: 'standard',
+      _openaiInstructionAssembly: {
+        instructions: '',
+        inputMessages: [],
+      },
+    })
+    const absent = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      _openaiInstructionAssembly: {
+        instructions: '',
+        inputMessages: [],
+      },
+    })
+
+    expect(standard.codexBody.service_tier).toBeUndefined()
+    expect(absent.codexBody.service_tier).toBeUndefined()
+  })
+
+  test('translateToCodexBody sends developer context as developer input message', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      _openaiInstructionAssembly: {
+        instructions: 'stable instructions',
+        developerContext: '<session_context>git status</session_context>',
+        inputMessages: [
+          {
+            role: 'user',
+            content: 'real user prompt',
+          },
+        ],
+      },
+    })
+
+    expect(codexBody.input).toEqual([
+      {
+        type: 'message',
+        role: 'developer',
+        content: [
+          {
+            type: 'input_text',
+            text: '<session_context>git status</session_context>',
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: 'real user prompt',
+      },
+    ])
+  })
+
+  test('sticky HTTP fallback expires after its TTL and does not extend on remark', () => {
+    const conv = 'sticky-test-conv'
+    let t = 1_000
+    _setStickyFallbackNowForTest(() => t)
+    resetCodexCacheContext()
+
+    try {
+      _markStickyHttpFallbackForTest(conv, 'first')
+      expect(_hasStickyHttpFallbackForTest(conv)).toBe(true)
+
+      t += 60_000
+      _markStickyHttpFallbackForTest(conv, 'second')
+      expect(_hasStickyHttpFallbackForTest(conv)).toBe(true)
+
+      t += 61_000
+      expect(_hasStickyHttpFallbackForTest(conv)).toBe(false)
+    } finally {
+      _setStickyFallbackNowForTest(null)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('translateToCodexBody preserves function tool strictness and custom tool metadata', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          name: 'strict_tool',
+          description: 'Strict tool',
+          input_schema: { type: 'object', properties: {} },
+          strict: true,
+        },
+        {
+          name: 'loose_tool',
+          description: 'Loose tool',
+          input_schema: { type: 'object', properties: {} },
+          strict: false,
+        },
+        {
+          name: 'legacy_tool',
+          description: 'Legacy tool',
+          input_schema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'Apply_patch',
+          description: 'Apply patches using V4A diff format.',
+          input_schema: { type: 'object', properties: {} },
+          openai_tool_type: 'custom',
+          openai_tool_format: {
+            type: 'grammar',
+            syntax: 'lark',
+            definition: 'start: /(.|\\n)*/',
+          },
+        },
+      ],
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.tools).toEqual([
+      {
+        type: 'function',
+        name: 'strict_tool',
+        description: 'Strict tool',
+        parameters: { type: 'object', properties: {} },
+        strict: true,
+      },
+      {
+        type: 'function',
+        name: 'loose_tool',
+        description: 'Loose tool',
+        parameters: { type: 'object', properties: {} },
+        strict: false,
+      },
+      {
+        type: 'function',
+        name: 'legacy_tool',
+        description: 'Legacy tool',
+        parameters: { type: 'object', properties: {} },
+        strict: null,
+      },
+      {
+        type: 'custom',
+        name: 'Apply_patch',
+        description: 'Apply patches using V4A diff format.',
+        format: {
+          type: 'grammar',
+          syntax: 'lark',
+          definition: 'start: /(.|\\n)*/',
+        },
+      },
+    ])
+  })
+
+  test('translateToCodexBody preserves multimodal tool_result output', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_image_tool',
+                name: 'vision_tool',
+                input: {},
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_image_tool',
+                content: [
+                  { type: 'text', text: 'caption' },
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'ZmFrZQ==',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(codexBody.input).toEqual([
+      {
+        type: 'function_call',
+        call_id: 'call_image_tool',
+        name: 'vision_tool',
+        arguments: '{}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_image_tool',
+        output: [
+          { type: 'input_text', text: 'caption' },
+          {
+            type: 'input_image',
+            image_url: 'data:image/png;base64,ZmFrZQ==',
+          },
+        ],
+      },
+    ])
+  })
+
+  test('translateCodexStreamToAnthropic normalizes custom Apply_patch tool calls', async () => {
+    const codexResponse = new Response(
+      [
+        'event: response.output_item.added',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            id: 'item_apply_patch_1',
+            type: 'custom_tool_call',
+            call_id: 'call_apply_patch_1',
+            name: 'Apply_patch',
+            input: '',
+          },
+        })}`,
+        '',
+        'event: response.custom_tool_call_input.delta',
+        `data: ${JSON.stringify({
+          type: 'response.custom_tool_call_input.delta',
+          item_id: 'item_apply_patch_1',
+          delta: '*** Begin Patch\\n*** Update File: src/example.ts\\n@@ line\\n-line\\n+line changed\\n',
+        })}`,
+        '',
+        'event: response.custom_tool_call_input.done',
+        `data: ${JSON.stringify({
+          type: 'response.custom_tool_call_input.done',
+          item_id: 'item_apply_patch_1',
+          input: '*** Begin Patch\\n*** Update File: src/example.ts\\n@@ line\\n-line\\n+line changed\\n*** End Patch',
+        })}`,
+        '',
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            id: 'item_apply_patch_1',
+            type: 'custom_tool_call',
+            call_id: 'call_apply_patch_1',
+            name: 'Apply_patch',
+            input: '*** Begin Patch\\n*** Update File: src/example.ts\\n@@ line\\n-line\\n+line changed\\n*** End Patch',
+          },
+        })}`,
+        '',
+        'event: response.completed',
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            usage: {
+              input_tokens: 10,
+              output_tokens: 4,
+              input_tokens_details: { cached_tokens: 0 },
+            },
+          },
+        })}`,
+        '',
+      ].join('\n'),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    )
+
+    const anthropicResponse = await translateCodexStreamToAnthropic(
+      codexResponse,
+      'gpt-5.4',
+    )
+    const body = await anthropicResponse.text()
+
+    expect(body).toContain('event: content_block_start')
+    expect(body).toContain('"type":"tool_use"')
+    expect(body).toContain('"id":"call_apply_patch_1"')
+    expect(body).toContain('"name":"Apply_patch"')
+    expect(body).toContain('"type":"input_json_delta"')
+    expect(body).toContain('*** Begin Patch')
+    expect(body).toContain('*** Update File: src/example.ts')
+    expect(body).toContain('event: content_block_stop')
+    expect(body).toContain('"stop_reason":"tool_use"')
+    expect(body).toContain('event: message_stop')
+  })
+
+  test('createCodexFetch completes streamed responses without referencing undefined account state', async () => {
+    const accessToken = createAccessToken('acct_test_streaming')
+    const fetchCalls: Array<{ input: RequestInfo | URL, init?: RequestInit }> = []
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ input, init })
+
+      return new Response(
+        [
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 10,
+                output_tokens: 4,
+                input_tokens_details: { cached_tokens: 3 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_http_direct', 'test')
+      const response = await createCodexFetch(accessToken, 'conv_http_direct')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        },
+      )
+
+      const body = await response.text()
+      expect(fetchCalls).toHaveLength(1)
+      expect(fetchCalls[0]?.input).toBe('https://chatgpt.com/backend-api/codex/responses')
+      expect(fetchCalls[0]?.init?.headers).toMatchObject({
+        Authorization: `Bearer ${accessToken}`,
+        'chatgpt-account-id': 'acct_test_streaming',
+      })
+      expect(body).toContain('event: message_stop')
+      expect(body).toContain('"input_tokens":7')
+      expect(body).toContain('"cache_read_input_tokens":3')
+      // Invariant: emitted input_tokens + cache_read_input_tokens == original OpenAI input_tokens (10)
+      // (adapter converts inclusive→exclusive semantics by subtracting cached from input)
+      expect(body).toContain('"cache_creation_input_tokens":0')
+      expect(body).not.toContain('currentAccountId is not defined')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('translateCodexWsStreamToAnthropic propagates stream failures instead of textifying them', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'hello' }
+        throw new Error('WebSocket closed before response.completed')
+      })(),
+      'gpt-5.4',
+      {
+        accountId: 'acct_test_streaming',
+        model: 'gpt-5.4',
+        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        conversationId: 'conv_test_streaming',
+      },
+    )
+
+    await expect(response.text()).rejects.toThrow('WebSocket closed before response.completed')
+  })
+
+  test('translateCodexWsStreamToAnthropic refuses replay after visible output has started', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'hello' }
+        throw new CodexWebSocketClosedBeforeCompletedError(1000, 'none')
+      })(),
+      'gpt-5.4',
+      {
+        accountId: 'acct_test_streaming',
+        model: 'gpt-5.4',
+        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        conversationId: 'conv_partial_visible',
+      },
+      async () => ({
+        events: (async function* () {
+          yield { type: 'response.output_text.delta', delta: 'should not replay' }
+          yield {
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 12,
+                output_tokens: 3,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          }
+        })(),
+        transportContext: undefined,
+      }),
+    )
+
+    await expect(response.text()).rejects.toThrow(
+      'the turn was not replayed to avoid duplicate output or tool calls',
+    )
+  })
+
+  test('createCodexFetch surfaces immediate WS usage-limit errors as CodexAccountCapError', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+
+    globalThis.fetch = (async () => {
+      throw new Error('HTTP fallback should not run for immediate WS cap errors')
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [completedWsResponse('resp_prewarm')],
+      [{ type: 'error', error: { message: 'The usage limit has been reached' } }],
+    ]
+
+    try {
+      await expect(
+        createCodexFetch(accessToken, 'conv_usage_limit')('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        }),
+      ).rejects.toBeInstanceOf(CodexAccountCapError)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_usage_limit')
+      resetCodexCacheContext()
+    }
+  })
+
+  test('translateCodexWsStreamToAnthropic switches to HTTP fallback when the WS dies before visible output', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.created', response: { id: 'resp_ws_turn_1' } }
+        throw new CodexWebSocketClosedBeforeCompletedError(1000, 'none')
+      })(),
+      'gpt-5.4',
+      {
+        accountId: 'acct_test_streaming',
+        model: 'gpt-5.4',
+        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        conversationId: 'conv_http_fallback',
+      },
+      async () => ({
+        events: (async function* () {
+          yield { type: 'response.output_text.delta', delta: 'http fallback 1' }
+          yield {
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 12,
+                output_tokens: 3,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          }
+        })(),
+        transportContext: undefined,
+      }),
+    )
+
+    const body = await response.text()
+    expect(body).toContain('http fallback 1')
+    expect(body).toContain('event: message_stop')
+  })
+
+  test('createCodexFetch keeps the conversation on HTTP after the websocket becomes unavailable', async () => {
+    resetCodexCacheContext()
+
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+    const fetchCalls: Array<{ input: RequestInfo | URL, init?: RequestInit }> = []
+    let httpAttempt = 0
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ input, init })
+      httpAttempt += 1
+
+      return new Response(
+        [
+          'event: response.output_text.delta',
+          `data: ${JSON.stringify({
+            type: 'response.output_text.delta',
+            delta: `http fallback ${httpAttempt}`,
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 12,
+                output_tokens: 3,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [completedWsResponse('resp_prewarm')],
+      [{ type: 'error', error: { message: 'transient websocket failure' } }],
+    ]
+
+    try {
+      const codexFetch = createCodexFetch(accessToken, 'conv_http_sticky')
+
+      const firstResponse = await codexFetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          _openaiInstructionAssembly: {
+            instructions: 'Be precise.',
+            inputMessages: [],
+          },
+        }),
+      })
+
+      const firstBody = await firstResponse.text()
+      expect(firstBody).toContain('http fallback 1')
+      expect(firstBody).toContain('event: message_stop')
+      expect(fetchCalls).toHaveLength(1)
+      expect(fakeWs.getSentCount()).toBe(2)
+
+      const secondResponse = await codexFetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          _openaiInstructionAssembly: {
+            instructions: 'Be precise.',
+            inputMessages: [],
+          },
+        }),
+      })
+
+      const secondBody = await secondResponse.text()
+      expect(secondBody).toContain('http fallback 2')
+      expect(fetchCalls).toHaveLength(2)
+      expect(fakeWs.getSentCount()).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_http_sticky')
+      resetCodexCacheContext()
+    }
+  })
+})

@@ -1,0 +1,1074 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+
+import {
+  _setWebSocketFactoryForTest,
+  CodexWebSocketClosedBeforeCompletedError,
+  CodexWebSocketIdleTimeoutError,
+  CodexWebSocketUsageLimitError,
+  clearWebSocketSession,
+  ensureWebSocketSession,
+  registerSendPathLogger,
+  schedulePrewarm,
+  streamTurnViaWebSocket,
+  streamTurnViaWebSocketLocked,
+} from './codex-websocket-transport.js'
+
+// ── Fake WebSocket ────────────────────────────────────────────────────────────
+
+type WsListener = (...args: unknown[]) => void
+
+class FakeWebSocket {
+  static OPEN = 1
+  static CLOSED = 3
+
+  readyState: number = FakeWebSocket.OPEN
+
+  private listeners = new Map<string, WsListener[]>()
+  private sent: string[] = []
+
+  // Script of messages to deliver after send(), in order.
+  responses: Array<Record<string, unknown>> = []
+
+  triggerOpen() {
+    for (const fn of this.listeners.get('open') ?? []) fn()
+  }
+
+  triggerUpgrade(headers: Record<string, string | string[]>) {
+    for (const fn of this.listeners.get('upgrade') ?? []) fn({ headers })
+  }
+
+  triggerError(error?: unknown) {
+    for (const fn of this.listeners.get('error') ?? []) fn(error)
+    this.readyState = FakeWebSocket.CLOSED
+  }
+
+  // Push a message to all 'message' listeners.
+  deliver(payload: Record<string, unknown>) {
+    const data = JSON.stringify(payload)
+    for (const fn of this.listeners.get('message') ?? []) fn(data)
+  }
+
+  deliverError(err: Record<string, unknown>) {
+    this.deliver({ type: 'error', error: err })
+  }
+
+  triggerClose(options?: { code?: number; reason?: string; wasClean?: boolean }) {
+    this.readyState = FakeWebSocket.CLOSED
+    for (const fn of this.listeners.get('close') ?? []) {
+      fn(options?.code, Buffer.from(options?.reason ?? ''))
+    }
+  }
+
+  on(type: string, fn: WsListener) {
+    const list = this.listeners.get(type) ?? []
+    list.push(fn)
+    this.listeners.set(type, list)
+  }
+
+  off(type: string, fn: WsListener) {
+    const list = this.listeners.get(type) ?? []
+    this.listeners.set(type, list.filter(f => f !== fn))
+  }
+
+  send(data: string) {
+    this.sent.push(data)
+    // Auto-deliver queued responses after send.
+    for (const msg of this.responses.splice(0)) {
+      Promise.resolve().then(() => this.deliver(msg))
+    }
+  }
+
+  close() {
+    this.readyState = FakeWebSocket.CLOSED
+  }
+
+  getSent(): Array<Record<string, unknown>> {
+    return this.sent.map(s => JSON.parse(s))
+  }
+}
+
+// ── Test helpers ─────────────────────────────────────────────────────────────
+
+const CONV_ID = 'test-conv-id-1111-2222-3333-444444444444'
+const AUTH = { Authorization: 'Bearer tok' }
+
+let fakeWs: FakeWebSocket
+
+function installFakeWs(autoOpen = true): FakeWebSocket {
+  fakeWs = new FakeWebSocket()
+  _setWebSocketFactoryForTest(() => fakeWs as never)
+  if (autoOpen) {
+    // Trigger open on next tick so ensureWebSocketSession resolves.
+    Promise.resolve().then(() => fakeWs.triggerOpen())
+  }
+  return fakeWs
+}
+
+function completedEvent(responseId = 'resp_abc123', inputTokens = 10, cachedTokens = 0) {
+  return {
+    type: 'response.completed',
+    response: {
+      id: responseId,
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: 2,
+        input_tokens_details: { cached_tokens: cachedTokens },
+      },
+    },
+  }
+}
+
+async function collectEvents(gen: AsyncGenerator<Record<string, unknown>>) {
+  const events: Record<string, unknown>[] = []
+  for await (const ev of gen) events.push(ev)
+  return events
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  clearWebSocketSession(CONV_ID)
+})
+
+afterEach(() => {
+  clearWebSocketSession(CONV_ID)
+  _setWebSocketFactoryForTest(null)
+})
+
+describe('streamTurnViaWebSocket', () => {
+
+  // ── Happy path ──────────────────────────────────────────────────────────
+
+  test('full send on first turn — no previous_response_id', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.responses = [completedEvent('resp_001')]
+    const body = { instructions: 'hi', input: [{ role: 'user', content: 'hello' }], reasoning: { effort: 'high' } }
+    const events = await collectEvents(streamTurnViaWebSocket(CONV_ID, body, AUTH, 1))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.previous_response_id).toBeUndefined()
+    expect(sent[0]!.input).toEqual([{ role: 'user', content: 'hello' }])
+    expect(events.find(e => e.type === 'response.completed')).toBeDefined()
+  })
+
+  test('captures upgrade turn-state but does not echo it in the request body', async () => {
+    installFakeWs(false)
+    const opened = ensureWebSocketSession(CONV_ID, AUTH)
+    fakeWs.triggerUpgrade({ 'x-codex-turn-state': 'turn-state-123' })
+    fakeWs.triggerOpen()
+    await opened
+
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [] },
+        AUTH,
+        0,
+      ),
+    )
+
+    expect(fakeWs.getSent()[0]!['x-codex-turn-state']).toBeUndefined()
+  })
+
+  test('schedulePrewarm sends empty input from a non-empty seed body', async () => {
+    installFakeWs()
+    fakeWs.responses = [completedEvent('resp_prewarm')]
+
+    schedulePrewarm(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'real prompt' }] },
+      AUTH,
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.generate).toBe(false)
+    expect(sent[0]!.input).toEqual([])
+  })
+
+  test('streamTurnViaWebSocketLocked waits for scheduled prewarm before real turn', async () => {
+    installFakeWs()
+
+    let sendCount = 0
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      sendCount += 1
+      if (sendCount === 1) {
+        setTimeout(() => fakeWs.deliver(completedEvent('resp_prewarm')), 10)
+      } else {
+        Promise.resolve().then(() => fakeWs.deliver(completedEvent('resp_real')))
+      }
+    }
+
+    schedulePrewarm(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'real prompt' }] },
+      AUTH,
+    )
+    const realTurn = collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'real prompt' }] },
+        AUTH,
+        1,
+      ),
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fakeWs.getSent()).toHaveLength(1)
+
+    await realTurn
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[0]!.generate).toBe(false)
+    expect(sent[0]!.input).toEqual([])
+    expect(sent[1]!.previous_response_id).toBe('resp_prewarm')
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'real prompt' }])
+  })
+
+  test('coalesces prewarm and real turn while the socket is still opening', async () => {
+    const fakeSessions: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      return ws as never
+    })
+
+    const body = {
+      instructions: 'sys',
+      input: [{ role: 'user', content: 'real prompt' }],
+    }
+
+    schedulePrewarm(CONV_ID, body, AUTH)
+    const realTurn = collectEvents(
+      streamTurnViaWebSocketLocked(CONV_ID, body, AUTH, 1),
+    )
+
+    await Promise.resolve()
+    expect(fakeSessions).toHaveLength(1)
+
+    let sendCount = 0
+    fakeSessions[0]!.send = (data: string) => {
+      fakeSessions[0]!['sent'].push(data)
+      sendCount += 1
+      Promise.resolve().then(() => {
+        fakeSessions[0]!.deliver(
+          completedEvent(sendCount === 1 ? 'resp_prewarm' : 'resp_real'),
+        )
+      })
+    }
+    fakeSessions[0]!.triggerOpen()
+
+    await realTurn
+
+    const sent = fakeSessions[0]!.getSent()
+    expect(fakeSessions).toHaveLength(1)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]!.generate).toBe(false)
+    expect(sent[0]!.input).toEqual([])
+    expect(sent[1]!.previous_response_id).toBe('resp_prewarm')
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'real prompt' }])
+  })
+
+  test('second turn sends delta with previous_response_id', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'world', annotations: [] }],
+          status: 'completed',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } }, AUTH, 1))
+
+    const turn2Input = [
+      { role: 'user', content: 'hello' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'world', annotations: [] }],
+        status: 'completed',
+      },
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } }, AUTH, 3))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    // Second turn should use incremental delta
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
+  })
+
+  test('second turn normalizes prior function-call output items before continuation matching', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          id: 'item_fn_1',
+          type: 'function_call',
+          call_id: 'call_weather',
+          name: 'weather_tool',
+          arguments: '{"city":"Paris"}',
+          status: 'completed',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } },
+        AUTH,
+        1,
+      ),
+    )
+
+    const turn2Input = [
+      { role: 'user', content: 'hello' },
+      {
+        type: 'function_call',
+        call_id: 'call_weather',
+        name: 'weather_tool',
+        arguments: '{"city":"Paris"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_weather',
+        output: 'sunny',
+      },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+        AUTH,
+        3,
+      ),
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([
+      {
+        type: 'function_call_output',
+        call_id: 'call_weather',
+        output: 'sunny',
+      },
+    ])
+  })
+
+  test('canonical reconciliation tolerates omitted reasoning before tool call output', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'read file' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'reasoning',
+          summary: [],
+          encrypted_content: 'opaque_reasoning_blob',
+        },
+      },
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'function_call',
+          call_id: 'call_read',
+          name: 'Read',
+          arguments: '{"file_path":"src/foo.ts"}',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } },
+        AUTH,
+        1,
+      ),
+    )
+
+    const turn2Input = [
+      { role: 'user', content: 'read file' },
+      {
+        type: 'function_call',
+        call_id: 'call_read',
+        name: 'Read',
+        arguments: '{"file_path":"src/foo.ts"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_read',
+        output: 'const x = 1',
+      },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+        AUTH,
+        3,
+      ),
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([
+      {
+        type: 'function_call_output',
+        call_id: 'call_read',
+        output: 'const x = 1',
+      },
+    ])
+  })
+
+  test('canonical reconciliation tolerates omitted reasoning before assistant message output', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'reasoning',
+          summary: [],
+          encrypted_content: 'opaque_reasoning_blob',
+        },
+      },
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Hi.', annotations: [] }],
+          status: 'completed',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } },
+        AUTH,
+        1,
+      ),
+    )
+
+    const turn2Input = [
+      { role: 'user', content: 'hello' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'Hi.', annotations: [] }],
+        status: 'completed',
+      },
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+        AUTH,
+        3,
+      ),
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
+  })
+
+  test('canonical reconciliation falls back when reasoning is replayed with different content', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'reasoning',
+          summary: [],
+          encrypted_content: 'reasoning_a',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'hello' }], reasoning: { effort: 'high' } },
+        AUTH,
+        1,
+      ),
+    )
+
+    const turn2Input = [
+      { role: 'user', content: 'hello' },
+      {
+        type: 'reasoning',
+        summary: [],
+        encrypted_content: 'reasoning_b',
+      },
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+        AUTH,
+        3,
+      ),
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBeUndefined()
+    expect(sent[1]!.input).toEqual(turn2Input)
+  })
+
+  test('falls back to full send when prior output-item baseline is missing from next input', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'world', annotations: [] }],
+          status: 'completed',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'hello' }], reasoning: { effort: 'high' } },
+        AUTH,
+        1,
+      ),
+    )
+
+    const turn2Input = [
+      { role: 'user', content: 'hello' },
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+        AUTH,
+        2,
+      ),
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBeUndefined()
+    expect(sent[1]!.input).toEqual(turn2Input)
+  })
+
+  test('canonical reconciliation: stays incremental even when freshly translated prefix has normalization drift', async () => {
+    // This test verifies the Phase 2 fix: even when normalizeMessagesForAPI rewrites
+    // the canonical prefix items (e.g., merges assistant blocks, injects a tag),
+    // the canonical-length reconciliation still produces a correct incremental send.
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'world', annotations: [] }],
+          status: 'completed',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } }, AUTH, 1))
+
+    // Turn 2: simulate normalization drift in the user-message prefix portion.
+    // The user message gets an [id:...] snip tag appended (like appendMessageTagToUserMessage
+    // does). The output item from the server must be replayed verbatim — only
+    // the sent-input portion is subject to drift from normalizeMessagesForAPI.
+    const turn2Input = [
+      // Drifted from canonical: [id:...] tag appended to user message content (sent-input portion)
+      { role: 'user', content: 'hello [id:abc123]' },
+      // Output item replayed verbatim — exactly as stored in lastResponseOutputItems
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'world', annotations: [] }],
+        status: 'completed',
+      },
+      // Genuinely new item
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } }, AUTH, 3))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    // Must still use incremental despite prefix drift
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    // Delta should be only the new item
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
+  })
+
+  test('canonical reconciliation: falls back to full send when input is shorter than canonical baseline', async () => {
+    // Canonical baseline = 1 sent input + 1 output item = 2 items.
+    // If next turn's input only has 1 item total (shorter than baseline), must full-send.
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'world', annotations: [] }],
+          status: 'completed',
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } }, AUTH, 1))
+
+    // Only 1 item — shorter than the canonical baseline of 2
+    const turn2Input = [{ role: 'user', content: 'fresh start' }]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } }, AUTH, 1))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBeUndefined()
+    expect(sent[1]!.input).toEqual(turn2Input)
+  })
+
+  test('canonical reconciliation: succeeds with zero-item delta when no new items beyond baseline', async () => {
+    // If the next turn's input is exactly the same length as the baseline,
+    // delta = [] (empty), which is valid and still uses incremental mode.
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } }, AUTH, 1))
+
+    // Baseline = 1 sent input + 0 output items = 1. Input also has 1 item.
+    // This should produce delta = [] and use previous_response_id.
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } }, AUTH, 1))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([])
+  })
+
+
+  // ── Stale previous_response_id ──────────────────────────────────────────
+
+  test('retries as full send when server rejects previous_response_id', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    // Seed a prior response_id by completing turn 1.
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'q' }] }, AUTH, 1))
+
+    // Turn 2: first attempt gets "not found", second attempt succeeds as full send.
+    let callCount = 0
+    const originalSend = fakeWs.send.bind(fakeWs)
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      callCount++
+      if (callCount === 1) {
+        // First send: deliver the "not found" error
+        Promise.resolve().then(() =>
+          fakeWs.deliver({
+            type: 'error',
+            error: { message: 'Previous response with id resp_001 not found.' },
+          })
+        )
+      } else {
+        // Second send (retry): deliver success
+        Promise.resolve().then(() => fakeWs.deliver(completedEvent('resp_002')))
+      }
+    }
+
+    const turn2Input = [{ role: 'user', content: 'q' }, { role: 'user', content: 'follow' }]
+    const events = await collectEvents(
+      streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input }, AUTH, 2)
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(3) // turn1 + two attempts for turn2
+    // Retry attempt should be a full send (no previous_response_id)
+    expect(sent[2]!.previous_response_id).toBeUndefined()
+    expect(sent[2]!.input).toEqual(turn2Input)
+    expect(events.find(e => e.type === 'response.completed')).toBeDefined()
+  })
+
+  // ── Connection limit ────────────────────────────────────────────────────
+
+  test('reconnects and retries when server hits 60-min connection limit', async () => {
+    const fakeSessions: FakeWebSocket[] = []
+
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    const ws1 = fakeSessions[0]!
+
+    // Turn 1: complete normally.
+    ws1.responses = [completedEvent('resp_001')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'hi' }] }, AUTH, 1))
+
+    // Turn 2: first attempt hits connection limit, second (new WS) succeeds.
+    let attempt = 0
+    ws1.send = (data: string) => {
+      ws1['sent'].push(data)
+      attempt++
+      Promise.resolve().then(() => {
+        ws1.deliverError({ code: 'websocket_connection_limit_reached', message: 'Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.' })
+      })
+    }
+
+    // ws2 will be created on reconnect.
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      ws.responses = [completedEvent('resp_002')]
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+
+    const turn2Input = [{ role: 'user', content: 'hi' }, { role: 'user', content: 'next' }]
+    const events = await collectEvents(
+      streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input }, AUTH, 2)
+    )
+
+    expect(fakeSessions.length).toBeGreaterThan(1) // new WS was created
+    expect(events.find(e => e.type === 'response.completed')).toBeDefined()
+  })
+
+  // ── WS close before response.completed ─────────────────────────────────
+
+  test('throws CodexWebSocketUsageLimitError when WS closes before any events', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    // Deliver close event with no events — classified as account rejection.
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      Promise.resolve().then(() => fakeWs.triggerClose())
+    }
+
+    await expect(
+      collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
+    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+  })
+
+  // ── turnState scoping ───────────────────────────────────────────────────
+
+  test('does not echo previous turn turnState into next turn request', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    // Turn 1: complete, no x-codex-turn-state in any message.
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'q' }] }, AUTH, 1))
+
+    // Turn 2: the request should NOT have x-codex-turn-state since none was received.
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'q' }, { role: 'user', content: 'q2' }] }, AUTH, 2))
+
+    const sent = fakeWs.getSent()
+    expect(sent[1]!['x-codex-turn-state']).toBeUndefined()
+  })
+
+  // ── Effort change ───────────────────────────────────────────────────────
+
+  test('falls back to full send when effort changes between turns', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'q' }], reasoning: { effort: 'high' } }, AUTH, 1))
+
+    fakeWs.responses = [completedEvent('resp_002')]
+    const turn2Input = [{ role: 'user', content: 'q' }, { role: 'user', content: 'q2' }]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input, reasoning: { effort: 'low' } }, AUTH, 2))
+
+    const sent = fakeWs.getSent()
+    expect(sent[1]!.previous_response_id).toBeUndefined()
+    expect(sent[1]!.input).toEqual(turn2Input)
+  })
+
+  // ── Non-retriable errors ────────────────────────────────────────────────
+
+  test('propagates non-retriable WS errors to caller', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      Promise.resolve().then(() =>
+        fakeWs.deliverError({ code: 'rate_limit_exceeded', message: 'Rate limit exceeded' })
+      )
+    }
+
+    await expect(
+      collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
+    ).rejects.toThrow('Rate limit exceeded')
+  })
+
+  test('classifies usage-limit WS errors for pool failover', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      Promise.resolve().then(() =>
+        fakeWs.deliverError({ message: 'The usage limit has been reached' })
+      )
+    }
+
+    await expect(
+      collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
+    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+  })
+
+  // ── WS connect failure → falls back to HTTP ─────────────────────────────
+
+  test('ensureWebSocketSession throws on connect failure', async () => {
+    fakeWs = new FakeWebSocket()
+    _setWebSocketFactoryForTest(() => fakeWs as never)
+    // Trigger error instead of open
+    Promise.resolve().then(() => fakeWs.triggerError())
+
+    await expect(ensureWebSocketSession(CONV_ID, AUTH)).rejects.toThrow('WebSocket connect error')
+  })
+
+  test('reopens the WS session when the account changes', async () => {
+    const fakeSessions: FakeWebSocket[] = []
+
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+
+    await ensureWebSocketSession(CONV_ID, {
+      Authorization: 'Bearer tok-a',
+      'chatgpt-account-id': 'acct-a',
+    })
+    await ensureWebSocketSession(CONV_ID, {
+      Authorization: 'Bearer tok-b',
+      'chatgpt-account-id': 'acct-b',
+    })
+
+    expect(fakeSessions).toHaveLength(2)
+    expect(fakeSessions[0]?.readyState).toBe(FakeWebSocket.CLOSED)
+    expect(fakeSessions[1]?.readyState).toBe(FakeWebSocket.OPEN)
+  })
+
+  test('preserves continuation state when the account changes', async () => {
+    const fakeSessions: FakeWebSocket[] = []
+
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+
+    const authA = {
+      Authorization: 'Bearer tok-a',
+      'chatgpt-account-id': 'acct-a',
+    }
+    const authB = {
+      Authorization: 'Bearer tok-b',
+      'chatgpt-account-id': 'acct-b',
+    }
+
+    await ensureWebSocketSession(CONV_ID, authA)
+    fakeSessions[0]!.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        authA,
+        1,
+      ),
+    )
+
+    await ensureWebSocketSession(CONV_ID, authB)
+    fakeSessions[1]!.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        {
+          instructions: 'sys',
+          input: [
+            { role: 'user', content: 'first' },
+            { role: 'user', content: 'second' },
+          ],
+        },
+        authB,
+        2,
+      ),
+    )
+
+    expect(fakeSessions).toHaveLength(2)
+    expect(fakeSessions[1]!.getSent()[0]!.previous_response_id).toBe('resp_001')
+    expect(fakeSessions[1]!.getSent()[0]!.input).toEqual([
+      { role: 'user', content: 'second' },
+    ])
+  })
+
+  test('account_id_prefix is populated in send-path entry when account header is present', async () => {
+    const authWithAccount = { Authorization: 'Bearer tok', 'chatgpt-account-id': 'acct-0c9b1d6d' }
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, authWithAccount)
+
+    fakeWs.responses = [completedEvent()]
+
+    let capturedEntry: Record<string, unknown> | null = null
+    registerSendPathLogger((entry) => {
+      capturedEntry = entry as unknown as Record<string, unknown>
+    })
+
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, authWithAccount, 0))
+
+    expect(capturedEntry).not.toBeNull()
+    expect(capturedEntry!['account_id_prefix']).toBe('acct-0c9')
+  })
+
+  test('classifies WS close with zero events as CodexWebSocketUsageLimitError', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      // Close immediately with no events delivered first.
+      Promise.resolve().then(() => fakeWs.triggerClose())
+    }
+
+    await expect(
+      collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
+    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+  })
+
+  test('WS close after events yields plain transport error, not CodexWebSocketUsageLimitError', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      // Deliver an event first, then close on the next microtask tick so the
+      // generator has a chance to yield the event before the close fires.
+      Promise.resolve().then(() => {
+        fakeWs.deliver({ type: 'response.created' })
+      }).then(() => {
+        fakeWs.triggerClose()
+      })
+    }
+
+    const err = await collectEvents(
+      streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0)
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(CodexWebSocketUsageLimitError)
+    expect(err).toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
+    expect((err as Error).message).toContain('websocket closed by server before response.completed')
+  })
+
+  test('idle timeout surfaces timeout error instead of a synthetic close error', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const originalSetTimeout = globalThis.setTimeout
+    const originalClearTimeout = globalThis.clearTimeout
+    const originalClose = fakeWs.close.bind(fakeWs)
+
+    fakeWs.close = () => {
+      fakeWs.triggerClose()
+    }
+
+    globalThis.setTimeout = (((cb: TimerHandler) => {
+      Promise.resolve().then(() => {
+        if (typeof cb === 'function') {
+          cb()
+        }
+      })
+      return 1 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+    globalThis.clearTimeout = ((() => {}) as typeof clearTimeout)
+
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+    }
+
+    try {
+      const err = await collectEvents(
+        streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0),
+      ).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(CodexWebSocketIdleTimeoutError)
+      expect((err as Error).message).toBe('idle timeout waiting for websocket')
+    } finally {
+      fakeWs.close = originalClose
+      globalThis.setTimeout = originalSetTimeout
+      globalThis.clearTimeout = originalClearTimeout
+    }
+  })
+})

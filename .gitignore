@@ -1,0 +1,22 @@
+node_modules/
+dist/
+cli
+cli-dev
+openclaw/
+.DS_Store
+.worktrees/
+.cat-code/
+
+# Local secrets and env files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore

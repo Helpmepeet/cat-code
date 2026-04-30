@@ -1,0 +1,468 @@
+import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
+import type { ToolUseContext } from '../../Tool.js'
+import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
+import { getPatchFromContents } from '../../utils/diff.js'
+import { expandPath } from '../../utils/path.js'
+import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
+import {
+  assertFileUnchangedSinceRead,
+  checkSingleFileWritePermissions,
+  deleteFileWithSideEffects,
+  isUncPath,
+  prepareFileMutation,
+  prepareFilePermissionMatcher,
+  readFileContentForValidation,
+  readFileForEdit,
+  validateEditableFileSize,
+  validateEditDenyRule,
+  validateFileNotModifiedSinceRead,
+  validateTeamMemorySecrets,
+  writeFileWithSideEffects,
+} from '../FileEditTool/shared.js'
+import { applyPatchToBuffers } from './applier.js'
+import { FILE_PATCH_TOOL_NAME } from './constants.js'
+import { parseFilePatch } from './parser.js'
+import { getFilePatchToolDescription } from './prompt.js'
+import {
+  type ApplyPatchFileState,
+  type FilePatchOperation,
+  type FilePatchToolInput,
+  type FilePatchToolOutput,
+  inputSchema,
+  outputSchema,
+} from './types.js'
+import {
+  getToolUseSummary,
+  renderToolResultMessage,
+  renderToolUseErrorMessage,
+  renderToolUseMessage,
+  userFacingName,
+} from './UI.js'
+
+export const FilePatchTool = buildTool({
+  name: FILE_PATCH_TOOL_NAME,
+  searchHint: 'apply unified diff patches',
+  maxResultSizeChars: 100_000,
+  strict: false,
+  async description() {
+    return 'Apply one or more file patches.'
+  },
+  async prompt() {
+    return getFilePatchToolDescription()
+  },
+  userFacingName,
+  getToolUseSummary,
+  getActivityDescription(input) {
+    const summary = getToolUseSummary(input)
+    return summary ? `Patching ${summary}` : 'Patching files'
+  },
+  get inputSchema() {
+    return inputSchema()
+  },
+  get outputSchema() {
+    return outputSchema()
+  },
+  toAutoClassifierInput(input) {
+    if ('input' in input) {
+      return input.input
+    }
+    return JSON.stringify(input.ops)
+  },
+  getPath(input) {
+    const firstPath = 'ops' in input ? input.ops[0]?.path : undefined
+    return firstPath ? expandPath(firstPath) : ''
+  },
+  backfillObservableInput(input) {
+    if ('ops' in input && Array.isArray(input.ops)) {
+      for (const operation of input.ops) {
+        if (typeof operation?.path === 'string') {
+          operation.path = expandPath(operation.path)
+        }
+      }
+    }
+  },
+  async preparePermissionMatcher(input) {
+    const firstPath = 'ops' in input ? input.ops[0]?.path : undefined
+    return prepareFilePermissionMatcher(firstPath ?? '')
+  },
+  async checkPermissions(input, context) {
+    const operations = normalizeOperations(input)
+    const appState = context.getAppState()
+    for (const operation of operations) {
+      const pathsToCheck = [operation.path]
+      if (operation.type === 'update' && operation.moveTo) {
+        pathsToCheck.push(operation.moveTo)
+      }
+      for (const filePath of pathsToCheck) {
+        const decision = checkSingleFileWritePermissions(
+          FilePatchTool,
+          { file_path: filePath },
+          context,
+        )
+        if (decision.behavior !== 'allow') {
+          return decision
+        }
+      }
+    }
+    return {
+      behavior: 'allow',
+      updatedInput: input,
+      decisionReason: { type: 'mode', mode: appState.toolPermissionContext.mode },
+    }
+  },
+  renderToolUseMessage,
+  renderToolResultMessage,
+  renderToolUseErrorMessage,
+  async validateInput(input: FilePatchToolInput, toolUseContext: ToolUseContext) {
+    try {
+      const operations = normalizeOperations(input)
+      for (const operation of operations) {
+        const fullFilePath = operation.path
+
+        if (operation.type !== 'delete') {
+          const nextContent = getOperationContentPreview(operation)
+          const secretValidation = validateTeamMemorySecrets(fullFilePath, nextContent)
+          if (secretValidation) {
+            return secretValidation
+          }
+        }
+
+        const denyValidation = validateEditDenyRule(fullFilePath, toolUseContext, 2)
+        if (denyValidation) {
+          return denyValidation
+        }
+
+        if (isUncPath(fullFilePath)) {
+          continue
+        }
+
+        const sizeValidation = await validateEditableFileSize(fullFilePath)
+        if (sizeValidation) {
+          return sizeValidation
+        }
+
+        if (operation.type === 'add') {
+          const fileContent = await readFileContentForValidation(fullFilePath)
+          if (fileContent !== null) {
+            return {
+              result: false,
+              behavior: 'ask',
+              message: `Cannot add ${fullFilePath} because it already exists — use "*** Update File:" to modify it, or choose a different path.`,
+              errorCode: 3,
+            }
+          }
+          continue
+        }
+
+        const fileContent = await readFileContentForValidation(fullFilePath)
+        if (fileContent === null) {
+          return {
+            result: false,
+            behavior: 'ask',
+            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist — check the path, or use "*** Add File:" to create a new file.`,
+            errorCode: 4,
+          }
+        }
+
+        if (fullFilePath.endsWith('.ipynb')) {
+          return {
+            result: false,
+            behavior: 'ask',
+            message: `File is a Jupyter Notebook. Use the ${NOTEBOOK_EDIT_TOOL_NAME} to edit this file.`,
+            errorCode: 5,
+          }
+        }
+
+        const staleValidation = validateFileNotModifiedSinceRead(
+          fullFilePath,
+          fileContent,
+          toolUseContext,
+          7,
+        )
+        if (staleValidation) {
+          return staleValidation
+        }
+
+        if (operation.type === 'update') {
+          if (operation.moveTo) {
+            const moveTargetContent = await readFileContentForValidation(operation.moveTo)
+            if (moveTargetContent !== null) {
+              return {
+                result: false,
+                behavior: 'ask',
+                message: `Cannot move ${fullFilePath} to ${operation.moveTo} because the target already exists.`,
+                errorCode: 6,
+              }
+            }
+          }
+
+          const settingsValidationResult = validateInputForSettingsFileEdit(
+            fullFilePath,
+            fileContent,
+            () => applyPatchToSingleFile(operation, currentFileState(fullFilePath, fileContent)),
+          )
+          if (settingsValidationResult !== null) {
+            return settingsValidationResult
+          }
+        }
+      }
+
+      return { result: true }
+    } catch (error) {
+      if (error instanceof Error) {
+        return {
+          result: false,
+          message: error.message,
+          errorCode: 1,
+        }
+      }
+      throw error
+    }
+  },
+  async call(input, { readFileState, updateFileHistoryState }, _, parentMessage) {
+    const operations = normalizeOperations(input)
+    const currentFiles = new Map<string, ApplyPatchFileState>()
+
+    for (const operation of operations) {
+      if (!isUncPath(operation.path)) {
+        await prepareFileMutation(
+          operation.path,
+          updateFileHistoryState,
+          parentMessage.uuid,
+        )
+      }
+
+      const {
+        content: originalFileContents,
+        fileExists,
+        encoding,
+        lineEndings,
+      } = readFileForEdit(operation.path)
+
+      if (fileExists) {
+        assertFileUnchangedSinceRead(
+          operation.path,
+          originalFileContents,
+          readFileState,
+        )
+      }
+
+      currentFiles.set(operation.path, {
+        path: operation.path,
+        exists: fileExists,
+        buffer: {
+          content: originalFileContents,
+          encoding,
+          lineEndings,
+          noNewlineAtEndOfFile:
+            originalFileContents.length > 0 && !originalFileContents.endsWith('\n'),
+        },
+      })
+    }
+
+    // For move operations: the applier emits delete(src) + add(dst).
+    // currentFiles has no entry for dst, so we carry source metadata forward.
+    const moveTargetMeta = new Map<string, { encoding: BufferEncoding; lineEndings: 'LF' | 'CRLF' }>()
+    for (const op of operations) {
+      if (op.type === 'update' && op.moveTo) {
+        const src = currentFiles.get(op.path)
+        if (src) {
+          moveTargetMeta.set(op.moveTo, {
+            encoding: src.buffer.encoding ?? 'utf8',
+            lineEndings: src.buffer.lineEndings ?? 'LF',
+          })
+        }
+      }
+    }
+
+    // Build a cache map so the applier can detect "file changed since last read" on anchor failures.
+    const cachedFiles = new Map<string, string>()
+    for (const operation of operations) {
+      const cached = readFileState.get(operation.path)
+      if (cached && !cached.isPartialView) {
+        cachedFiles.set(operation.path, cached.content)
+      }
+    }
+
+    const applied = applyPatchToBuffers(operations, currentFiles, cachedFiles)
+    const writtenFiles: Array<{
+      path: string
+      before: string | null
+      after: string | null
+      encoding: BufferEncoding
+      lineEndings: 'LF' | 'CRLF'
+      existedBefore: boolean
+    }> = []
+
+    try {
+      for (const file of applied.files) {
+        const originalState = currentFiles.get(file.path)
+        const moveMeta = moveTargetMeta.get(file.path)
+        if (!originalState && !moveMeta) {
+          continue
+        }
+
+        const encoding = originalState?.buffer.encoding ?? moveMeta?.encoding ?? 'utf8'
+        const lineEndings = originalState?.buffer.lineEndings ?? moveMeta?.lineEndings ?? 'LF'
+
+        if (file.type === 'delete') {
+          await deleteFileWithSideEffects({
+            absoluteFilePath: file.path,
+            originalFileContents: file.before ?? '',
+            readFileState,
+          })
+          writtenFiles.push({
+            path: file.path,
+            before: file.before,
+            after: file.after,
+            encoding,
+            lineEndings,
+            existedBefore: true,
+          })
+          continue
+        }
+
+        writeFileWithSideEffects({
+          absoluteFilePath: file.path,
+          originalFileContents: file.before ?? '',
+          updatedFile: file.after ?? '',
+          encoding,
+          lineEndings,
+          readFileState,
+        })
+        writtenFiles.push({
+          path: file.path,
+          before: file.before,
+          after: file.after,
+          encoding,
+          lineEndings,
+          existedBefore: originalState?.exists ?? false,
+        })
+      }
+    } catch (error) {
+      await rollbackAppliedFiles(writtenFiles, readFileState)
+      throw error
+    }
+
+    for (const file of applied.files) {
+      const op = file.type === 'add' ? 'write' : file.type === 'update' ? 'edit' : null
+      if (op) {
+        logFileOperation({ operation: op, tool: 'FileEditTool', filePath: file.path })
+      }
+    }
+
+    const output: FilePatchToolOutput = {
+      files: applied.files.map(file => ({
+        ...file,
+        structuredPatch: getPatchFromContents({
+          filePath: file.path,
+          oldContent: file.before ?? '',
+          newContent: file.after ?? '',
+        }),
+      })),
+    }
+
+    return { data: output }
+  },
+  mapToolResultToToolResultBlockParam(output, toolUseID) {
+    const count = output.files.length
+    const noun = count === 1 ? 'file' : 'files'
+    return {
+      tool_use_id: toolUseID,
+      type: 'tool_result',
+      content: `Applied patch to ${count} ${noun}.`,
+    }
+  },
+} satisfies ToolDef<ReturnType<typeof inputSchema>, FilePatchToolOutput>)
+
+function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
+  const parsed = 'input' in input ? parseFilePatch(input.input).ops : input.ops
+
+  const seen = new Set<string>()
+  return parsed.map(operation => {
+    const path = expandPath(operation.path)
+    if (seen.has(path)) {
+      throw new Error(`Patch contains duplicate file path: ${path}`)
+    }
+    seen.add(path)
+
+    return {
+      ...operation,
+      path,
+      ...(operation.type === 'update' && operation.moveTo
+        ? { moveTo: expandPath(operation.moveTo) }
+        : {}),
+    }
+  })
+}
+
+function currentFileState(path: string, content: string): ApplyPatchFileState {
+  return {
+    path,
+    exists: true,
+    buffer: {
+      content,
+      encoding: 'utf8',
+      lineEndings: 'LF',
+      noNewlineAtEndOfFile: content.length > 0 && !content.endsWith('\n'),
+    },
+  }
+}
+
+function applyPatchToSingleFile(
+  operation: Extract<FilePatchOperation, { type: 'update' }>,
+  fileState: ApplyPatchFileState,
+): string {
+  return applyPatchToBuffers([operation], new Map([[fileState.path, fileState]])).files[0]
+    ?.after ?? fileState.buffer.content
+}
+
+async function rollbackAppliedFiles(
+  writtenFiles: Array<{
+    path: string
+    before: string | null
+    after: string | null
+    encoding: BufferEncoding
+    lineEndings: 'LF' | 'CRLF'
+    existedBefore: boolean
+  }>,
+  readFileState: ToolUseContext['readFileState'],
+): Promise<void> {
+  for (const file of [...writtenFiles].reverse()) {
+    if (!file.existedBefore) {
+      await deleteFileWithSideEffects({
+        absoluteFilePath: file.path,
+        originalFileContents: file.after ?? '',
+        readFileState,
+      })
+      continue
+    }
+
+    writeFileWithSideEffects({
+      absoluteFilePath: file.path,
+      originalFileContents: file.after ?? '',
+      updatedFile: file.before ?? '',
+      encoding: file.encoding,
+      lineEndings: file.lineEndings,
+      readFileState,
+    })
+  }
+}
+
+function getOperationContentPreview(operation: FilePatchOperation): string {
+  switch (operation.type) {
+    case 'add':
+      return operation.noNewlineAtEndOfFile
+        ? operation.lines.join('\n')
+        : `${operation.lines.join('\n')}\n`
+    case 'update':
+      return operation.hunks
+        .flatMap(hunk => hunk.lines)
+        .filter(line => line.kind !== 'delete')
+        .map(line => line.text)
+        .join('\n')
+    case 'delete':
+      return ''
+  }
+}

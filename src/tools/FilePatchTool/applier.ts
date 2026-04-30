@@ -1,0 +1,441 @@
+import type { LineEndingType } from '../../utils/fileRead.js'
+import { END_OF_FILE_MARKER } from './constants.js'
+import {
+  FilePatchError,
+  type ApplyPatchFileState,
+  type ApplyPatchResult,
+  type FilePatchBuffer,
+  type FilePatchHunk,
+  type FilePatchLine,
+  type FilePatchOperation,
+} from './types.js'
+
+export function applyPatchToBuffers(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+  cachedFiles?: Map<string, string>,
+): ApplyPatchResult {
+  const workingFiles = new Map<string, ApplyPatchFileState>()
+  const results: ApplyPatchResult['files'] = []
+
+  for (const operation of operations) {
+    const current = getExistingOrDefaultState(currentFiles, workingFiles, operation.path)
+
+    switch (operation.type) {
+      case 'update': {
+        if (!current.exists) {
+          throw new FilePatchError(
+            `Cannot update ${operation.path} because it does not exist.`,
+            { code: 'PATCH_TARGET_MISSING', path: operation.path },
+          )
+        }
+
+        const cachedContent = cachedFiles?.get(operation.path)
+        const nextBuffer = applyUpdateHunks(current.buffer, operation.hunks, operation.path, cachedContent)
+
+        if (operation.moveTo) {
+          const moveTarget = getExistingOrDefaultState(currentFiles, workingFiles, operation.moveTo)
+          if (moveTarget.exists) {
+            throw new FilePatchError(
+              `Cannot move ${operation.path} to ${operation.moveTo} because the target already exists.`,
+              { code: 'PATCH_TARGET_EXISTS', path: operation.moveTo },
+            )
+          }
+          // Mark original as deleted, new path as added
+          workingFiles.set(operation.path, { path: operation.path, exists: false, buffer: current.buffer })
+          workingFiles.set(operation.moveTo, { path: operation.moveTo, exists: true, buffer: nextBuffer })
+          results.push({ path: operation.path, type: 'delete', before: current.buffer.content, after: null })
+          results.push({ path: operation.moveTo, type: 'add', before: null, after: nextBuffer.content })
+        } else {
+          workingFiles.set(operation.path, { path: operation.path, exists: true, buffer: nextBuffer })
+          results.push({
+            path: operation.path,
+            type: 'update',
+            before: current.buffer.content,
+            after: nextBuffer.content,
+          })
+        }
+        break
+      }
+
+      case 'add': {
+        if (current.exists) {
+          throw new FilePatchError(
+            `Cannot add ${operation.path} because it already exists.`,
+            { code: 'PATCH_TARGET_EXISTS', path: operation.path },
+          )
+        }
+
+        const content = joinLines(operation.lines, operation.noNewlineAtEndOfFile)
+        const nextState: ApplyPatchFileState = {
+          path: operation.path,
+          exists: true,
+          buffer: {
+            content,
+            encoding: current.buffer.encoding ?? 'utf8',
+            lineEndings: current.buffer.lineEndings ?? 'LF',
+            noNewlineAtEndOfFile: operation.noNewlineAtEndOfFile,
+          },
+        }
+        workingFiles.set(operation.path, nextState)
+        results.push({
+          path: operation.path,
+          type: 'add',
+          before: null,
+          after: content,
+        })
+        break
+      }
+
+      case 'delete': {
+        if (!current.exists) {
+          throw new FilePatchError(
+            `Cannot delete ${operation.path} because it does not exist.`,
+            { code: 'PATCH_TARGET_MISSING', path: operation.path },
+          )
+        }
+
+        workingFiles.set(operation.path, {
+          path: operation.path,
+          exists: false,
+          buffer: current.buffer,
+        })
+        results.push({
+          path: operation.path,
+          type: 'delete',
+          before: current.buffer.content,
+          after: null,
+        })
+        break
+      }
+    }
+  }
+
+  return { files: results }
+}
+
+export function applyUpdateHunks(
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+  cachedContent?: string,
+): FilePatchBuffer {
+  let lines = splitPreservingTerminalNewline(buffer.content)
+  const cachedLines = cachedContent !== undefined
+    ? splitPreservingTerminalNewline(cachedContent)
+    : undefined
+  let noNewlineAtEndOfFile =
+    buffer.noNewlineAtEndOfFile ?? !buffer.content.endsWith('\n')
+
+  for (let i = 0; i < hunks.length; i++) {
+    const next = applySingleHunk(lines, hunks[i], path, i, cachedLines)
+    lines = next.lines
+    if (next.touchesEndOfFile) {
+      noNewlineAtEndOfFile = hunks[i].noNewlineAtEndOfFile
+    }
+  }
+
+  return {
+    content: joinLines(lines, noNewlineAtEndOfFile),
+    encoding: buffer.encoding,
+    lineEndings: buffer.lineEndings,
+    noNewlineAtEndOfFile,
+  }
+}
+
+function applySingleHunk(
+  lines: string[],
+  hunk: FilePatchHunk,
+  path: string,
+  hunkIndex: number,
+  cachedLines?: string[],
+): { lines: string[]; touchesEndOfFile: boolean } {
+  const matchIndex = findHunkPosition(lines, hunk, path, hunkIndex, cachedLines)
+
+  let sourceIndex = matchIndex
+  const nextLines = lines.slice(0, matchIndex)
+  const addedLines: string[] = []
+
+  for (const line of hunk.lines) {
+    switch (line.kind) {
+      case 'context': {
+        const actual = lines[sourceIndex]
+        if (actual === undefined) {
+          throw new FilePatchError(
+            `Context line out of bounds in ${path} at position ${sourceIndex} — re-read the file and verify context.`,
+            { code: 'PATCH_CONFLICT', path },
+          )
+        }
+        // Write back the original file bytes (fuzzy match accepted them as equivalent)
+        nextLines.push(actual)
+        sourceIndex += 1
+        break
+      }
+      case 'delete': {
+        const actual = lines[sourceIndex]
+        if (actual === undefined) {
+          throw new FilePatchError(
+            `Delete line out of bounds in ${path} at position ${sourceIndex} — re-read the file and verify the delete target.`,
+            { code: 'PATCH_CONFLICT', path },
+          )
+        }
+        sourceIndex += 1
+        break
+      }
+      case 'add': {
+        nextLines.push(line.text)
+        addedLines.push(line.text)
+        break
+      }
+    }
+  }
+
+  nextLines.push(...lines.slice(sourceIndex))
+
+  return {
+    lines: nextLines,
+    touchesEndOfFile: isTouchingEndOfFile(lines, hunk.lines, matchIndex, addedLines),
+  }
+}
+
+function isTouchingEndOfFile(
+  originalLines: string[],
+  hunkLines: FilePatchLine[],
+  matchIndex: number,
+  addedLines: string[],
+): boolean {
+  const consumedNonAdds = hunkLines.filter(line => line.kind !== 'add').length
+  const touchesEndOfFile = matchIndex + consumedNonAdds === originalLines.length
+  if (!touchesEndOfFile) {
+    return false
+  }
+
+  return addedLines.length > 0 || hunkLines.some(line => line.kind === 'delete')
+}
+
+function findHunkPosition(
+  fileLines: string[],
+  hunk: FilePatchHunk,
+  path: string,
+  hunkIndex: number,
+  cachedLines?: string[],
+): number {
+  const fingerprint = hunk.lines.filter(l => l.kind !== 'add').map(l => l.text)
+
+  // Pure-insert hunk (no context, no delete lines)
+  if (fingerprint.length === 0) {
+    if (hunk.isEndOfFile) {
+      return fileLines.length
+    }
+    if (hunkIndex === 0) {
+      // Canonical Codex BOF: pure +lines as the first hunk prepend to the file
+      return 0
+    }
+    throw new FilePatchError(
+      `Patch hunk for ${path} has no context or delete lines — pure-insert hunks only work as the first hunk (BOF) or with "*** End of File". Add context lines to locate this hunk.`,
+      { code: 'INVALID_PATCH_FORMAT', path },
+    )
+  }
+
+  const matchFns: Array<(a: string, b: string) => boolean> = [
+    (a, b) => a === b,
+    (a, b) => a.trimEnd() === b.trimEnd(),
+    (a, b) => a.trim() === b.trim(),
+    (a, b) => unicodeNormalize(a) === unicodeNormalize(b),
+  ]
+
+  // EOF-anchored: try all tiers tail-first, then fall back to a full scan if
+  // nothing matched at the tail (mirrors Codex seek_sequence eof behavior).
+  const searchPasses = hunk.isEndOfFile
+    ? [Math.max(0, fileLines.length - fingerprint.length), 0]
+    : [0]
+
+  for (const searchStart of searchPasses) {
+    for (const matchFn of matchFns) {
+      const matches = findAllMatches(fileLines, fingerprint, searchStart, matchFn)
+      if (matches.length === 1) {
+        return matches[0]
+      }
+      if (matches.length > 1) {
+        const resolved = disambiguateWithScopeHints(fileLines, matches, hunk.scopeHints)
+        if (resolved !== null) {
+          return resolved
+        }
+        throw new FilePatchError(
+          `Patch hunk body is ambiguous in ${path}: the context+delete lines match at ${matches.length} locations (lines ${matches.map(i => i + 1).join(', ')}) — add more surrounding context lines or @@ scope hints until only one location matches.`,
+          { code: 'PATCH_ANCHOR_AMBIGUOUS', path },
+        )
+      }
+    }
+    // If tail pass found nothing, the full-scan pass (searchStart=0) will retry
+    // from the beginning. Deduplicate: if tail start === 0 (tiny file), one pass suffices.
+    if (searchPasses.length > 1 && searchStart === 0) break
+  }
+
+  // Check whether the cached (previously-read) version of the file would have matched.
+  // If so, the file changed on disk after the last read — say that explicitly.
+  if (cachedLines !== undefined) {
+    for (const matchFn of [
+      (a: string, b: string) => a === b,
+      (a: string, b: string) => a.trimEnd() === b.trimEnd(),
+      (a: string, b: string) => a.trim() === b.trim(),
+      (a: string, b: string) => unicodeNormalize(a) === unicodeNormalize(b),
+    ]) {
+      const cacheMatches = findAllMatches(cachedLines, fingerprint, 0, matchFn)
+      if (cacheMatches.length > 0) {
+        throw new FilePatchError(
+          `Patch anchor not found in ${path} — the context matched the previously-read version of the file, but the file has since changed on disk. Re-read the file and rebuild the patch with fresh context.`,
+          { code: 'PATCH_ANCHOR_NOT_FOUND', path },
+        )
+      }
+    }
+  }
+
+  throw new FilePatchError(
+    `Patch anchor not found in ${path} — re-read the file; the context may be stale. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+    { code: 'PATCH_ANCHOR_NOT_FOUND', path },
+  )
+}
+
+function findAllMatches(
+  fileLines: string[],
+  fingerprint: string[],
+  searchStart: number,
+  matchFn: (a: string, b: string) => boolean,
+): number[] {
+  const matches: number[] = []
+  const limit = fileLines.length - fingerprint.length
+  for (let i = searchStart; i <= limit; i++) {
+    if (fingerprint.every((text, j) => matchFn(fileLines[i + j], text))) {
+      matches.push(i)
+    }
+  }
+  return matches
+}
+
+function disambiguateWithScopeHints(
+  fileLines: string[],
+  matches: number[],
+  scopeHints: string[],
+): number | null {
+  const effectiveHints = scopeHints.filter(h => h.trim().length > 0)
+  if (effectiveHints.length === 0) {
+    return null
+  }
+
+  // For each match position, walk backwards through scope hints (outermost last).
+  // A match "wins" if all hints appear in order at-or-before the match position.
+  const satisfies = (matchPos: number): boolean => {
+    let searchFrom = matchPos
+    for (let h = effectiveHints.length - 1; h >= 0; h--) {
+      const hint = effectiveHints[h]
+      let found = false
+      for (let i = searchFrom; i >= 0; i--) {
+        if (fileLines[i].trim().includes(hint.trim())) {
+          searchFrom = i - 1
+          found = true
+          break
+        }
+      }
+      if (!found) return false
+    }
+    return true
+  }
+
+  const satisfied = matches.filter(satisfies)
+  if (satisfied.length === 1) {
+    return satisfied[0]
+  }
+  return null
+}
+
+function unicodeNormalize(s: string): string {
+  return s
+    .trim()
+    .split('')
+    .map(c => {
+      const cp = c.codePointAt(0) ?? 0
+      // Dashes → '-'
+      if (
+        (cp >= 0x2010 && cp <= 0x2015) ||
+        cp === 0x2212
+      ) return '-'
+      // Fancy single quotes → "'"
+      if (cp >= 0x2018 && cp <= 0x201b) return "'"
+      // Fancy double quotes → '"'
+      if (cp >= 0x201c && cp <= 0x201f) return '"'
+      // Fancy spaces → ' '
+      if (
+        cp === 0x00a0 ||
+        (cp >= 0x2002 && cp <= 0x200a) ||
+        cp === 0x202f ||
+        cp === 0x205f ||
+        cp === 0x3000
+      ) return ' '
+      return c
+    })
+    .join('')
+}
+
+function getExistingOrDefaultState(
+  currentFiles: Map<string, ApplyPatchFileState>,
+  workingFiles: Map<string, ApplyPatchFileState>,
+  path: string,
+): ApplyPatchFileState {
+  const current = workingFiles.get(path) ?? currentFiles.get(path)
+  if (current) {
+    return {
+      path,
+      exists: current.exists,
+      buffer: { ...current.buffer },
+    }
+  }
+
+  return {
+    path,
+    exists: false,
+    buffer: {
+      content: '',
+      encoding: 'utf8',
+      lineEndings: 'LF',
+      noNewlineAtEndOfFile: false,
+    },
+  }
+}
+
+export function serializeBuffer(buffer: FilePatchBuffer): string {
+  return applyLineEndingStyle(buffer.content, buffer.lineEndings ?? 'LF')
+}
+
+function applyLineEndingStyle(
+  content: string,
+  lineEndings: LineEndingType,
+): string {
+  if (lineEndings !== 'CRLF') {
+    return content
+  }
+
+  return content.replaceAll('\r\n', '\n').split('\n').join('\r\n')
+}
+
+function splitPreservingTerminalNewline(content: string): string[] {
+  if (!content) {
+    return []
+  }
+
+  const normalized = content.replaceAll('\r\n', '\n')
+  const lines = normalized.split('\n')
+  if (normalized.endsWith('\n')) {
+    lines.pop()
+  }
+  return lines
+}
+
+function joinLines(lines: string[], noNewlineAtEndOfFile: boolean): string {
+  if (lines.length === 0) {
+    return ''
+  }
+
+  const joined = lines.join('\n')
+  return noNewlineAtEndOfFile ? joined : `${joined}\n`
+}
