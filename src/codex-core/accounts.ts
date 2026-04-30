@@ -6,6 +6,7 @@ import {
 } from '../services/api/codexAccountPool.js'
 import { refreshCodexToken } from '../services/oauth/codex-client.js'
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../utils/auth.js'
+import { logForDebugging } from '../utils/debug.js'
 import { CodexCoreError } from './errors.js'
 
 export type CodexCoreAccount = {
@@ -15,6 +16,8 @@ export type CodexCoreAccount = {
   expiresAt: number
   profile: string
   source: PoolAccount['source'] | 'config'
+  alias?: string
+  vaultFilePath?: string
 }
 
 const TOKEN_REFRESH_SKEW_MS = 60_000
@@ -53,6 +56,8 @@ export async function resolveCodexCoreAccount(
       expiresAt: match.expiresAt,
       profile,
       source: match.source,
+      alias: match.alias,
+      vaultFilePath: match.vaultFilePath,
     })
   }
 
@@ -109,23 +114,46 @@ async function maybeRefreshAccount(
   }
 
   try {
+    logForDebugging(
+      `[codex-profile] core-refresh-start writer=codex-core.maybeRefreshAccount profile=${account.profile} account=${account.accountId} source=${account.source} expires_at=${String(account.expiresAt)}`,
+    )
     const refreshed = await refreshCodexToken(account.refreshToken)
+    const sameAccount = refreshed.accountId === account.accountId
+    let savedVaultPath = account.vaultFilePath
     const next = {
-      ...account,
       accountId: refreshed.accountId,
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
+      profile: account.profile,
+      source: account.source,
+      alias: sameAccount ? account.alias : undefined,
+      vaultFilePath: sameAccount ? account.vaultFilePath : undefined,
     }
     if (account.source === 'config') {
       saveCodexOAuthTokens(refreshed)
     } else {
-      saveCodexTokenToVault({
+      const saved = saveCodexTokenToVault({
         accessToken: refreshed.accessToken,
         refreshToken: refreshed.refreshToken,
         accountId: refreshed.accountId,
+        alias: sameAccount ? account.alias : undefined,
+      }, {
+        writer: 'codex-core.maybeRefreshAccount',
+        expectedPreviousAccountId: account.accountId,
       })
+      savedVaultPath = saved?.filePath
+      next.vaultFilePath = sameAccount ? savedVaultPath : undefined
     }
+    if (!sameAccount) {
+      logForDebugging(
+        `[codex-profile] identity-mismatch writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} action=do-not-transfer-alias`,
+        { level: 'warn' },
+      )
+    }
+    logForDebugging(
+      `[codex-profile] core-refresh-done writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} result=${sameAccount ? 'same-account' : 'changed-account'}`,
+    )
     return next
   } catch (error) {
     throw new CodexCoreError(

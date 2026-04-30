@@ -46,6 +46,9 @@ export async function refreshAccountTokens(
   refreshToken: string,
   vaultFilePath: string,
 ): Promise<{ accessToken: string; refreshToken: string; idToken: string }> {
+  logForDebugging(
+    `[codex-profile] vault-refresh-start writer=codex-refresh.touchAll account=${accountId} file=${vaultFilePath.split('/').pop() ?? ''}`,
+  )
   const response = await globalThis.fetch(TOKEN_REFRESH_URL, {
     method: 'POST',
     headers: {
@@ -74,6 +77,10 @@ export async function refreshAccountTokens(
     }
     const reason = knownErrors[errorCode] || `Token refresh failed: ${errorCode}`
     markAccountDead(accountId, reason)
+    logForDebugging(
+      `[codex-profile] vault-refresh-failed writer=codex-refresh.touchAll account=${accountId} file=${vaultFilePath.split('/').pop() ?? ''} reason=${reason}`,
+      { level: 'warn' },
+    )
     throw new Error(reason)
   }
 
@@ -104,6 +111,10 @@ export async function refreshAccountTokens(
       `[codex-refresh] Failed to update vault file for ${accountId}: ${err instanceof Error ? err.message : String(err)}`,
       { level: 'warn' },
     )
+    logForDebugging(
+      `[codex-profile] vault-refresh-failed writer=codex-refresh.touchAll account=${accountId} file=${vaultFilePath.split('/').pop() ?? ''} reason=vault-write-failed`,
+      { level: 'warn' },
+    )
     // Token was refreshed server-side even if we fail to persist — the old
     // refresh_token is now invalid. Mark dead so we don't try the stale token.
     markAccountDead(accountId, 'Refresh succeeded but vault write failed')
@@ -118,7 +129,12 @@ export async function refreshAccountTokens(
     accountId,
   }, {
     preserveCapped: true,
+    writer: 'codex-refresh.touchAll',
   })
+
+  logForDebugging(
+    `[codex-profile] vault-refresh-done writer=codex-refresh.touchAll account=${accountId} file=${vaultFilePath.split('/').pop() ?? ''} metadata=preserved`,
+  )
 
   logForDebugging(`[codex-refresh] Refreshed account ${accountId.slice(0, 12)}...`)
 

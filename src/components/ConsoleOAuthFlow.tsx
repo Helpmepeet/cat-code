@@ -183,8 +183,19 @@ export function ConsoleOAuthFlow({
   ) => {
     saveCodexOAuthTokens(codexTokens);
     const { appendAccount, saveCodexTokenToVault } = await import('../services/api/codexAccountPool.js');
-    appendAccount({ ...codexTokens, alias });
-    saveCodexTokenToVault({ ...codexTokens, alias });
+    const saved = saveCodexTokenToVault(
+      { ...codexTokens, alias },
+      { writer: alias ? 'login.alias' : 'login' },
+    );
+    appendAccount(
+      {
+        ...codexTokens,
+        alias,
+        source: saved ? 'vault' : 'config',
+        vaultFilePath: saved?.filePath,
+      },
+      { writer: alias ? 'login.alias' : 'login' },
+    );
   }, []);
   async function handleSubmitAlias(alias: string, codexTokens: { accessToken: string; refreshToken: string; expiresAt: number; accountId: string }) {
     try {
@@ -328,7 +339,6 @@ export function ConsoleOAuthFlow({
         setOAuthStatus({ state: 'waiting_for_login', url });
         setTimeout(setShowPastePrompt, 3000, true);
       });
-      await persistCodexLogin(codexTokens);
       logEvent('tengu_oauth_codex_success', {});
       // Pause to ask for an account alias before saving
       setOAuthStatus({ state: 'waiting_for_alias', codexTokens });

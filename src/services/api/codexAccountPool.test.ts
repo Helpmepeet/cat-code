@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 
 import {
   appendAccount,
+  buildCodexVaultRecordForSave,
   getPoolStatus,
   getVaultPlanHealthFromIdToken,
   mergePoolAccountsForTest,
@@ -214,5 +215,162 @@ describe('codexAccountPool appendAccount', () => {
       status: 'capped',
       lastError: 'Plan type free is not eligible for Codex usage',
     })
+  })
+
+  test('appendAccount marks new account as vault-backed when metadata is provided', () => {
+    appendAccount({
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      expiresAt: Date.now() + 10_000,
+      accountId: 'vault-account',
+      alias: 'main',
+      source: 'vault',
+      vaultFilePath: '/tmp/vault-account.json',
+    })
+
+    const account = getPoolStatus().accounts.find((a) => a.accountId === 'vault-account')
+    expect(account?.source).toBe('vault')
+    expect(account?.vaultFilePath).toBe('/tmp/vault-account.json')
+    expect(account?.alias).toBe('main')
+  })
+
+  test('appendAccount upgrades existing config account to vault-backed metadata', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'upgrade-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'upgrade-account',
+          source: 'config',
+          vaultFilePath: undefined,
+        }),
+      ],
+    })
+
+    appendAccount({
+      accessToken: 'access-new',
+      refreshToken: 'refresh-new',
+      expiresAt: Date.now() + 10_000,
+      accountId: 'upgrade-account',
+      source: 'vault',
+      vaultFilePath: '/tmp/upgrade-account.json',
+    })
+
+    const account = getPoolStatus().accounts.find((a) => a.accountId === 'upgrade-account')
+    expect(account?.source).toBe('vault')
+    expect(account?.vaultFilePath).toBe('/tmp/upgrade-account.json')
+  })
+
+  test('appendAccount can explicitly clear vault metadata on update', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'clear-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'clear-account',
+          source: 'vault',
+          vaultFilePath: '/tmp/clear-account.json',
+        }),
+      ],
+    })
+
+    appendAccount({
+      accessToken: 'access-new',
+      refreshToken: 'refresh-new',
+      expiresAt: Date.now() + 10_000,
+      accountId: 'clear-account',
+      source: 'config',
+      vaultFilePath: undefined,
+    })
+
+    const account = getPoolStatus().accounts.find((a) => a.accountId === 'clear-account')
+    expect(account?.source).toBe('config')
+    expect(account?.vaultFilePath).toBeUndefined()
+  })
+})
+
+describe('buildCodexVaultRecordForSave', () => {
+  const accountA = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+  const accountB = '80ef361d-5bdc-411f-8bd1-a8fe2a0f18b3'
+  const nowIso = '2026-04-30T00:00:00.000Z'
+
+  test('token-only save preserves alias and metadata for same account', () => {
+    const existing = {
+      alias: 'main',
+      created_at: '2026-04-01T00:00:00.000Z',
+      custom: { debug: true },
+      tokens: {
+        access_token: 'old-access',
+        refresh_token: 'old-refresh',
+        account_id: accountA,
+        id_token: 'old-id-token',
+        extra_token_field: 'keep',
+      },
+    } as Record<string, unknown>
+
+    const result = buildCodexVaultRecordForSave(existing, {
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      accountId: accountA,
+    }, nowIso)
+
+    expect(result.metadataAction).toBe('preserved')
+    expect(result.aliasAction).toBe('preserved')
+    expect(result.identityAction).toBe('same')
+    expect(result.record.alias).toBe('main')
+    expect(result.record.created_at).toBe('2026-04-01T00:00:00.000Z')
+    expect((result.record.custom as Record<string, unknown>).debug).toBe(true)
+    const tokens = result.record.tokens as Record<string, unknown>
+    expect(tokens.id_token).toBe('old-id-token')
+    expect(tokens.extra_token_field).toBe('keep')
+  })
+
+  test('explicit alias overrides existing alias', () => {
+    const existing = { alias: 'main', tokens: { account_id: accountA } } as Record<string, unknown>
+    const result = buildCodexVaultRecordForSave(existing, {
+      accessToken: 'a',
+      refreshToken: 'r',
+      accountId: accountA,
+      alias: 'backup',
+    }, nowIso)
+    expect(result.record.alias).toBe('backup')
+    expect(result.aliasAction).toBe('set')
+  })
+
+  test('account-id mismatch does not inherit alias without explicit alias', () => {
+    const existing = { alias: 'main', tokens: { account_id: accountA } } as Record<string, unknown>
+    const result = buildCodexVaultRecordForSave(existing, {
+      accessToken: 'a',
+      refreshToken: 'r',
+      accountId: accountB,
+    }, nowIso)
+    expect(result.record.alias).toBeUndefined()
+    expect(result.metadataAction).toBe('replaced')
+    expect(result.aliasAction).toBe('cleared')
+    expect(result.identityAction).toBe('mismatch')
+  })
+
+  test('account-id mismatch keeps explicit alias', () => {
+    const existing = { alias: 'main', tokens: { account_id: accountA } } as Record<string, unknown>
+    const result = buildCodexVaultRecordForSave(existing, {
+      accessToken: 'a',
+      refreshToken: 'r',
+      accountId: accountB,
+      alias: 'backup2',
+    }, nowIso)
+    expect(result.record.alias).toBe('backup2')
+    expect(result.aliasAction).toBe('set')
+    expect(result.identityAction).toBe('mismatch')
+  })
+
+  test('new save creates valid minimal record', () => {
+    const result = buildCodexVaultRecordForSave(undefined, {
+      accessToken: 'a',
+      refreshToken: 'r',
+      accountId: accountA,
+    }, nowIso)
+    expect(result.metadataAction).toBe('new')
+    expect(result.identityAction).toBe('new')
+    const tokens = result.record.tokens as Record<string, unknown>
+    expect(tokens.account_id).toBe(accountA)
+    expect(result.record.last_refresh).toBe(nowIso)
   })
 })

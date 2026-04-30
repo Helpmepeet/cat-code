@@ -166,9 +166,12 @@ export async function fetchPoolUsage(
         markPoolAccountCapped(
           usage.accountId,
           'Usage snapshot reported account exhaustion',
+          { writer: 'codex-usage.fetchPoolUsage' },
         )
       } else {
-        markPoolAccountStatus(usage.accountId, 'healthy')
+        markPoolAccountStatus(usage.accountId, 'healthy', undefined, {
+          writer: 'codex-usage.fetchPoolUsage',
+        })
       }
     }
   }
