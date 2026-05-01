@@ -20,12 +20,15 @@ export type AgentModeWorkerSessionStatus =
   | 'failed'
   | 'killed'
 
+export type AgentModeWorkerSynthesisStatus = 'pending' | 'synthesized'
+
 export type AgentModeWorkerSession = {
   agentId: string
   handle?: string
   role: WorkerRole
   description: string
   status: AgentModeWorkerSessionStatus
+  synthesisStatus?: AgentModeWorkerSynthesisStatus
   resumable?: boolean
   worktreePath: string | null
   outputSummary?: string

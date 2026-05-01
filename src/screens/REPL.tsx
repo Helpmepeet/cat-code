@@ -162,6 +162,9 @@ import { useManagePlugins } from '../hooks/useManagePlugins.js';
 import { Messages } from '../components/Messages.js';
 import { TaskListV2 } from '../components/TaskListV2.js';
 import { TeammateViewHeader } from '../components/TeammateViewHeader.js';
+import { AgentModeWorkerRoster } from '../agent-mode/AgentModeWorkerRoster.js';
+import type { AgentModeSessionState } from '../agent-mode/sessionState.js';
+import { summarizeAgentModeWorkers } from '../agent-mode/workerUxSummary.js';
 import { useTasksV2WithCollapseEffect } from '../hooks/useTasksV2.js';
 import { maybeMarkProjectOnboardingComplete } from '../projectOnboardingState.js';
 import type { MCPServerConnection } from '../services/mcp/types.js';
@@ -321,39 +324,6 @@ const EMPTY_MCP_CLIENTS: MCPServerConnection[] = [];
 const HISTORY_STUB = {
   maybeLoadOlder: (_: ScrollBoxHandle) => {}
 };
-function getAgentModeWorkerSummary(tasks: Record<string, unknown>): {
-  active: number;
-  queued: number;
-  done: number;
-  failed: number;
-} {
-  let active = 0;
-  let queued = 0;
-  let done = 0;
-  let failed = 0;
-  for (const task of Object.values(tasks)) {
-    if (isInProcessTeammateTask(task)) {
-      if (task.status === 'running') active++;
-      if (task.status === 'pending') queued++;
-      if (task.status === 'completed') done++;
-      if (task.status === 'failed' || task.status === 'killed') failed++;
-      continue;
-    }
-    if (!isLocalAgentTask(task) || task.agentType === 'main-session') {
-      continue;
-    }
-    if (task.status === 'running') active++;
-    if (task.status === 'pending') queued++;
-    if (task.status === 'completed') done++;
-    if (task.status === 'failed' || task.status === 'killed') failed++;
-  }
-  return {
-    active,
-    queued,
-    done,
-    failed
-  };
-}
 // Window after a user-initiated scroll during which type-into-empty does NOT
 // repin to bottom. Josh Rosen's workflow: Claude emits long output → scroll
 // up to read the start → start typing → before this fix, snapped to bottom.
@@ -4842,6 +4812,8 @@ export function REPL({
     // persists at its last screen coords after ctrl-c exits transcript.
     if (!inTranscript) setPositions(null);
   }, [inTranscript, searchQuery, setHighlight, setPositions]);
+  const [agentModeSessionState, setAgentModeSessionState] = useState<AgentModeSessionState | null>(null);
+  const [agentModeSessionStateLoaded, setAgentModeSessionStateLoaded] = useState(false);
   const globalKeybindingProps = {
     screen,
     setScreen,
@@ -4873,7 +4845,32 @@ export function REPL({
   // Auto-exit viewing mode when teammate completes or errors
   useTeammateViewAutoExit();
   const agentModeActive = isAgentMode();
-  const agentModeWorkerSummary = useMemo(() => agentModeActive ? getAgentModeWorkerSummary(tasks) : null, [agentModeActive, tasks]);
+  useEffect(() => {
+    if (!agentModeActive) {
+      setAgentModeSessionState(null);
+      setAgentModeSessionStateLoaded(false);
+      return;
+    }
+    let cancelled = false;
+    void import('../agent-mode/sessionState.js').then(({
+      readSessionState
+    }) => readSessionState(getSessionId())).then(state => {
+      if (!cancelled) {
+        setAgentModeSessionState(state);
+        setAgentModeSessionStateLoaded(true);
+      }
+    }).catch(error => {
+      logForDebugging(`Failed to read Agent Mode session state: ${error}`);
+      if (!cancelled) {
+        setAgentModeSessionState(null);
+        setAgentModeSessionStateLoaded(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentModeActive, tasks, messages.length]);
+  const agentModeWorkerSummary = useMemo(() => agentModeActive ? summarizeAgentModeWorkers(agentModeSessionState) : null, [agentModeActive, agentModeSessionState]);
   if (screen === 'transcript') {
     // Virtual scroll replaces the 30-message cap: everything is scrollable
     // and memory is bounded by the viewport. Without it, wrapping transcript
@@ -5391,21 +5388,7 @@ export function REPL({
                       {/* Skill improvement survey - appears when improvements detected (ant-only) */}
                       {"external" === 'ant' && skillImprovementSurvey.suggestion && <SkillImprovementSurvey isOpen={skillImprovementSurvey.isOpen} skillName={skillImprovementSurvey.suggestion.skillName} updates={skillImprovementSurvey.suggestion.updates} handleSelect={skillImprovementSurvey.handleSelect} inputValue={inputValue} setInputValue={setInputValue} />}
                       {showIssueFlagBanner && <IssueFlagBanner />}
-                      {agentModeActive ? <Box width="100%" flexDirection="column" marginBottom={1}>
-                            <Box>
-                              <Text color="claude">◉ Agent Mode</Text>
-                              <Text dimColor> · orchestrating workers</Text>
-                            </Box>
-                            {agentModeWorkerSummary && (agentModeWorkerSummary.active > 0 || agentModeWorkerSummary.queued > 0 || agentModeWorkerSummary.done > 0 || agentModeWorkerSummary.failed > 0) ? <Box>
-                                  <Text dimColor>  workers: </Text>
-                                  <Text>{agentModeWorkerSummary.active} active</Text>
-                                  {agentModeWorkerSummary.queued > 0 ? <Text dimColor>{` · ${agentModeWorkerSummary.queued} queued`}</Text> : null}
-                                  {agentModeWorkerSummary.done > 0 ? <Text dimColor>{` · ${agentModeWorkerSummary.done} done`}</Text> : null}
-                                  {agentModeWorkerSummary.failed > 0 ? <Text color="warning">{` · ${agentModeWorkerSummary.failed} attention`}</Text> : null}
-                                </Box> : <Box>
-                                  <Text dimColor>  workers: none yet</Text>
-                                </Box>}
-                          </Box> : null}
+                      {agentModeActive ? <AgentModeWorkerRoster loaded={agentModeSessionStateLoaded} summary={agentModeWorkerSummary} /> : null}
                       {}
                       <PromptInput debug={debug} ideSelection={ideSelection} hasSuppressedDialogs={!!hasSuppressedDialogs} isLocalJSXCommandActive={isShowingLocalJSXCommand} getToolUseContext={getToolUseContext} toolPermissionContext={toolPermissionContext} setToolPermissionContext={setToolPermissionContext} apiKeyStatus={apiKeyStatus} commands={commands} agents={agentDefinitions.activeAgents} isLoading={isLoading} onExit={handleExit} verbose={verbose} messages={messages} onAutoUpdaterResult={setAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} input={inputValue} onInputChange={setInputValue} mode={inputMode} onModeChange={setInputMode} stashedPrompt={stashedPrompt} setStashedPrompt={setStashedPrompt} submitCount={submitCount} onShowMessageSelector={handleShowMessageSelector} onMessageActionsEnter={
             // Works during isLoading — edit cancels first; uuid selection survives appends.
