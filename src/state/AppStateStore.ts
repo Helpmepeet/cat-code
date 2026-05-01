@@ -36,6 +36,7 @@ import type { PermissionMode } from '../utils/permissions/PermissionMode.js'
 import { getInitialSettings } from '../utils/settings/settings.js'
 import type { SettingsJson } from '../utils/settings/types.js'
 import { shouldEnableThinkingByDefault } from '../utils/thinking.js'
+import type { ThreadGoal } from '../utils/threadGoal.js'
 import type { Store } from './store.js'
 
 export type CompletionBoundary =
@@ -131,6 +132,7 @@ export type AppState = DeepImmutable<{
   // AppState.tasks is always empty in viewer mode — the tasks live in a
   // different process.
   remoteBackgroundTaskCount: number
+  threadGoal: ThreadGoal | null
   // Always-on bridge: desired state (controlled by /config or footer toggle)
   replBridgeEnabled: boolean
   // Always-on bridge: true when activated via /remote-control command, false when config-driven
@@ -498,6 +500,7 @@ export function getDefaultAppState(): AppState {
     remoteSessionUrl: undefined,
     remoteConnectionStatus: 'connecting',
     remoteBackgroundTaskCount: 0,
+    threadGoal: null,
     replBridgeEnabled: false,
     replBridgeExplicit: false,
     replBridgeOutboundOnly: false,

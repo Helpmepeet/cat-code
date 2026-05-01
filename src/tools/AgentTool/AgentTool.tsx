@@ -1031,6 +1031,56 @@ export const AgentTool = buildTool({
                       totalTokensOverride: getTokenCountFromTracker(tracker)
                     });
 
+                    // If the backgrounded subagent ended with a synthetic
+                    // API-error terminal (e.g. prompt-too-long blocking-limit
+                    // preempt in query.ts:682-687), record it as failed
+                    // rather than completed so the parent sees what happened.
+                    // Mirrors the sync path's terminalError handling.
+                    if (agentResult.error) {
+                      const apiErrorMsg = agentResult.error;
+                      failAsyncAgent(backgroundedTaskId, apiErrorMsg, rootSetAppState);
+                      let finalMessage = extractTextContent(agentResult.content, '\n');
+                      if (isForkPath && finalMessage.trim()) {
+                        finalMessage = formatForkWorkerResultForNotification(finalMessage, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
+                      }
+                      const worktreeResult = await cleanupWorktreeIfNeeded();
+                      appendSubagentTerminal(parentTranscriptPath, {
+                        sessionId: parentSessionId,
+                        agentId: asAgentId(backgroundedTaskId),
+                        toolUseId: toolUseContext.toolUseId,
+                        status: 'failed',
+                        reason: apiErrorMsg,
+                        durationMs: agentResult.totalDurationMs,
+                        endedAt: new Date().toISOString(),
+                      });
+                      await recordWorkerSessionTerminal({
+                        sessionId: parentSessionId,
+                        agentId: backgroundedTaskId,
+                        status: 'failed',
+                        error: apiErrorMsg,
+                        outputSummary: description,
+                      }).catch(_err =>
+                        logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+                      );
+                      unregisterActiveSubagent(backgroundedTaskId);
+                      enqueueAgentNotification({
+                        taskId: backgroundedTaskId,
+                        description,
+                        status: 'failed',
+                        error: apiErrorMsg,
+                        setAppState: rootSetAppState,
+                        finalMessage,
+                        usage: {
+                          totalTokens: getTokenCountFromTracker(tracker),
+                          toolUses: agentResult.totalToolUseCount,
+                          durationMs: agentResult.totalDurationMs
+                        },
+                        toolUseId: toolUseContext.toolUseId,
+                        ...worktreeResult
+                      });
+                      return;
+                    }
+
                     // Mark task completed FIRST so TaskOutput(block=true)
                     // unblocks immediately. classifyHandoffIfNeeded and
                     // cleanupWorktreeIfNeeded can hang — they must not gate
@@ -1463,20 +1513,28 @@ export const AgentTool = buildTool({
             }, ...agentResult.content];
           }
         }
+        // Treat synthetic API-error terminals (set by finalizeAgentTool when
+        // the subagent's last assistant message has isApiErrorMessage=true)
+        // the same as a thrown syncAgentError. The two represent equivalent
+        // failure modes — the subagent ran but did not produce a real final
+        // response — and should both surface as `failed`/`completed_with_error`
+        // so the parent can see what happened and partial work is preserved.
+        const terminalError = syncAgentError?.message ?? agentResult.error;
+        const completedWithError = Boolean(terminalError);
         appendSubagentTerminal(parentTranscriptPath, {
           sessionId: parentSessionId,
           agentId: asAgentId(syncAgentId),
           toolUseId: toolUseContext.toolUseId,
-          status: syncAgentError ? 'failed' : 'completed',
-          ...(syncAgentError && { reason: syncAgentError.message }),
+          status: completedWithError ? 'failed' : 'completed',
+          ...(terminalError ? { reason: terminalError } : {}),
           durationMs: Date.now() - metadata.startTime,
           endedAt: new Date().toISOString(),
         });
         await recordWorkerSessionTerminal({
           sessionId: parentSessionId,
           agentId: syncAgentId,
-          status: syncAgentError ? 'failed' : 'completed',
-          ...(syncAgentError ? { error: syncAgentError.message } : {}),
+          status: completedWithError ? 'failed' : 'completed',
+          ...(terminalError ? { error: terminalError } : {}),
           outputSummary: description,
         }).catch(_err =>
           logForDebugging(`Failed to record Agent Mode worker terminal state: ${_err}`),
@@ -1484,10 +1542,13 @@ export const AgentTool = buildTool({
         unregisterActiveSubagent(syncAgentId);
         return {
           data: {
-            status: syncAgentError ? 'completed_with_error' as const : 'completed' as const,
+            status: completedWithError ? 'completed_with_error' as const : 'completed' as const,
             prompt,
-            ...(syncAgentError ? { error: syncAgentError.message } : {}),
             ...agentResult,
+            // Override agentResult.error with the resolved terminalError so
+            // a thrown syncAgentError takes precedence when both are present
+            // (e.g. exception fired after a synthetic API-error message).
+            ...(terminalError ? { error: terminalError } : {}),
             ...worktreeResult
           }
         };

@@ -3,7 +3,7 @@ import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import { webUIBus } from '../web/WebUIBus.js';
 import { spawnSync } from 'child_process';
-import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
+import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens, getTotalTokenUsage } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
 import { count } from '../utils/array.js';
 import { dirname, join } from 'path';
@@ -178,6 +178,7 @@ import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
+import { accountThreadGoalUsage, renderThreadGoalBudgetLimitPrompt, type ThreadGoal } from '../utils/threadGoal.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -185,7 +186,7 @@ import type { ContentBlockParam, ImageBlockParam } from '@anthropic-ai/sdk/resou
 import type { ProcessUserInputContext } from '../utils/processUserInput/processUserInput.js';
 import type { PastedContent } from '../utils/config.js';
 import { copyPlanForFork, copyPlanForResume, getPlanSlug, setPlanSlug } from '../utils/plans.js';
-import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, saveWorktreeState, getAgentTranscript } from '../utils/sessionStorage.js';
+import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript } from '../utils/sessionStorage.js';
 import { deserializeMessages } from '../utils/conversationRecovery.js';
 import { extractReadFilesFromMessages, extractBashToolsFromMessages } from '../utils/queryHelpers.js';
 import { resetMicrocompactState } from '../services/compact/microCompact.js';
@@ -986,6 +987,8 @@ export function REPL({
 
   // Wall-clock time tracking refs for accurate elapsed time calculation
   const loadingStartTimeRef = React.useRef<number>(0);
+  const turnGoalAtStartRef = React.useRef<ThreadGoal | null>(null);
+  const turnTotalTokensAtStartRef = React.useRef(0);
   const totalPausedMsRef = React.useRef(0);
   const pauseStartTimeRef = React.useRef<number | null>(null);
   const resetTimingRefs = React.useCallback(() => {
@@ -1706,6 +1709,78 @@ export function REPL({
     // Promise chains for unconsumed checks (denied/aborted paths).
     clearSpeculativeChecks();
   }, [pickNewSpinnerTip]);
+
+  const accountCompletedTurnThreadGoal = useCallback(() => {
+    const turnGoalAtStart = turnGoalAtStartRef.current;
+    if (
+      !turnGoalAtStart ||
+      (turnGoalAtStart.status !== 'active' &&
+        turnGoalAtStart.status !== 'budget_limited')
+    ) {
+      return;
+    }
+
+    const currentGoal = store.getState().threadGoal;
+    const currentGoalMatchesTurnStart =
+      currentGoal?.goalId === turnGoalAtStart.goalId;
+    const goalToAccount = currentGoalMatchesTurnStart
+      ? currentGoal
+      : turnGoalAtStart;
+
+    const nowMs = Date.now();
+    const tokenDelta = Math.max(
+      0,
+      getTotalTokenUsage() - turnTotalTokensAtStartRef.current,
+    );
+    const timeDeltaSeconds = Math.max(
+      0,
+      Math.floor(
+        (nowMs - loadingStartTimeRef.current - totalPausedMsRef.current) / 1000,
+      ),
+    );
+    const nextGoal = accountThreadGoalUsage(
+      goalToAccount,
+      tokenDelta,
+      timeDeltaSeconds,
+      nowMs,
+    );
+
+    if (
+      nextGoal.status === goalToAccount.status &&
+      nextGoal.tokensUsed === goalToAccount.tokensUsed &&
+      nextGoal.timeUsedSeconds === goalToAccount.timeUsedSeconds
+    ) {
+      return;
+    }
+
+    saveThreadGoal(nextGoal);
+    if (!currentGoalMatchesTurnStart) {
+      if (currentGoal) {
+        saveThreadGoal(currentGoal);
+      } else {
+        clearThreadGoal(turnGoalAtStart.goalId);
+      }
+      return;
+    }
+
+    setAppState(prev => ({
+      ...prev,
+      threadGoal: nextGoal
+    }));
+
+    if (
+      goalToAccount.status === 'active' &&
+      nextGoal.status === 'budget_limited'
+    ) {
+      setMessages(prev => [
+        ...prev,
+        createUserMessage({
+          content: renderThreadGoalBudgetLimitPrompt(nextGoal),
+          isMeta: true
+        })
+      ]);
+    }
+  }, [setAppState, setMessages, store]);
 
   // Session backgrounding — hook is below, after getToolUseContext
 
@@ -3079,6 +3154,7 @@ export function REPL({
     logQueryProfileReport();
 
     // Signal that a query turn has completed successfully
+    accountCompletedTurnThreadGoal();
     await onTurnComplete?.(messagesRef.current);
 
     // Surface any pending cache warnings accumulated during this turn
@@ -3089,7 +3165,7 @@ export function REPL({
         ...cacheWarnings.map(w => createSystemMessage(w, 'warning')),
       ]);
     }
-  }, [initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode]);
+  }, [initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode, accountCompletedTurnThreadGoal, store]);
   const onQuery = useCallback(async (newMessages: MessageType[], abortController: AbortController, shouldQuery: boolean, additionalAllowedTools: string[], mainLoopModelParam: string, onBeforeQueryCallback?: (input: string, newMessages: MessageType[]) => Promise<boolean>, input?: string, effort?: EffortValue): Promise<void> => {
     logForDebugging(`[REPL:onQuery] start messages=${newMessages.length} shouldQuery=${shouldQuery} additionalAllowedTools=${additionalAllowedTools.length} hasInput=${Boolean(input)}`);
     // If this is a teammate, mark them as active when starting a turn
@@ -3129,6 +3205,8 @@ export function REPL({
       // isLoading is derived from queryGuard — tryStart() above already
       // transitioned dispatching→running, so no setter call needed here.
       resetTimingRefs();
+      turnGoalAtStartRef.current = store.getState().threadGoal;
+      turnTotalTokensAtStartRef.current = getTotalTokenUsage();
       setMessages(oldMessages => [...oldMessages, ...newMessages]);
       responseLengthRef.current = 0;
       if (feature('TOKEN_BUDGET')) {
