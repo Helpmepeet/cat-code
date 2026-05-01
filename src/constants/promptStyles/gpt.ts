@@ -346,6 +346,7 @@ export function getGPTAgentModeSessionGuidanceSection(
     hasAgentTool
       ? `AGENT MODE: You are the orchestrator. Plan inline on the main thread. Use ${AGENT_TOOL_NAME} for bounded delegation when it improves the run: broader codebase investigation via Explore, implementation passes, or independent verification. Keep synthesis, approval decisions, and completion truth on the main thread. Ask for approval only for plan mode, destructive or hard-to-reverse actions, shared-state actions, worktree apply-back, permission broadening, or meaningful scope/approach shifts.`
       : null,
+    getGPTAgentModeWorkerControlGuidance(enabledTools),
     hasSkills
       ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
       : null,
@@ -354,6 +355,29 @@ export function getGPTAgentModeSessionGuidanceSection(
 
   if (items.length === 0) return null
   return ['# Session-Specific Guidance', ...prependBullets(items)].join('\n')
+}
+
+function getGPTAgentModeWorkerControlGuidance(
+  enabledTools: Set<string>,
+): string | null {
+  const available = [
+    enabledTools.has('ListWorkers')
+      ? 'ListWorkers: inspect the worker roster before redundant spawning.'
+      : null,
+    enabledTools.has('WaitWorkers')
+      ? 'WaitWorkers: wait after parallel launches so convergence is explicit.'
+      : null,
+    enabledTools.has('GetWorkerResult')
+      ? 'GetWorkerResult: read worker output before synthesis or final completion; mark synthesized only after use.'
+      : null,
+    enabledTools.has('CancelWorker')
+      ? 'CancelWorker: cancel stale, wrong, conflicting, unsafe, or no-longer-needed workers.'
+      : null,
+  ].filter(item => item !== null)
+
+  if (available.length === 0) return null
+
+  return `WORKER CONTROL: ${available.join(' ')} Use worker handles instead of raw task IDs or internal agent IDs.`
 }
 
 export function getGPTSessionGuidanceSection(
