@@ -874,7 +874,7 @@ async function* _streamTurnAttempt(
 
   // Diagnostic state for close/error reporting. Captured in handler closures so
   // that a mid-stream close can surface enough context for postmortem analysis
-  // (see docs/session-10c4f510-review-impl-subagent-runtime-investigation.md).
+  // (see docs/reports/2026-04-30-session-10c4f510-review-impl-subagent-runtime-investigation.md).
   let eventCount = 0
   let lastEventType: string | null = null
   let lastEventAtMs: number | null = null

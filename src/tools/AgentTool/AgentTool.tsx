@@ -8,6 +8,7 @@ import type { BetaJSONOutputFormat } from '@anthropic-ai/sdk/resources/index.mjs
 import { clearInvokedSkillsForAgent, getSessionId, getSdkAgentProgressSummariesEnabled } from '../../bootstrap/state.js';
 import { enhanceSystemPromptWithEnvDetails, getSystemPrompt } from '../../constants/prompts.js';
 import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
+import { isAgentMode } from '../../agent-mode/agentMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
 import { recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
@@ -1647,14 +1648,17 @@ The agent is now running and will receive instructions via mailbox.`
       // 34M Explore runs/week ≈ 1-2 Gtok/week). Telemetry doesn't parse this
       // block (it uses logEvent in finalizeAgentTool), so dropping is safe.
       // agentType is optional for resume compat — missing means show trailer.
-      if (data.status === 'completed' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
+      if (!isAgentMode() && data.status === 'completed' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
           content: contentOrMarker
         };
       }
-      const continuationText = data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) ? `agentId: ${data.agentId}` : `agentId: ${data.agentId} (use SendMessage with to: '${data.agentId}' to continue this agent)`;
+      const continuationText =
+        data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
+          ? `agentId: ${data.agentId}`
+          : `agentId: ${data.agentId} (use SendMessage with to: '${data.agentId}' to continue this agent)`;
       const changedFilesText = data.changedFiles && data.changedFiles.length > 0 ? `\n<changed_files>\n${data.changedFiles.map(file => `- ${file.path} (${file.op}, ${file.ok ? 'ok' : `error: ${file.error ?? 'unknown error'}`})`).join('\n')}${data.changedFilesTruncated ? `\n- +${data.changedFilesTruncated} more` : ''}\n</changed_files>` : '';
       const errorText = data.status === 'completed_with_error' ? `\nstatus: completed_with_error\nerror: ${data.error}` : '';
       return {

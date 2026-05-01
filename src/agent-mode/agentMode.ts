@@ -1,5 +1,5 @@
 import { feature } from 'bun:bundle'
-import { ASYNC_AGENT_ALLOWED_TOOLS } from '../constants/tools.js'
+import { getSessionId } from '../bootstrap/state.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -15,6 +15,10 @@ import { TEAM_CREATE_TOOL_NAME } from '../tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '../tools/TeamDeleteTool/constants.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { getOrchestratorSystemPrompt } from './orchestratorPrompt.js'
+import {
+  formatAgentModeSessionState,
+  readSessionState,
+} from './sessionState.js'
 
 function isScratchpadGateEnabled(): boolean {
   return checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_scratch')
@@ -27,14 +31,35 @@ const INTERNAL_WORKER_TOOLS = new Set([
   SYNTHETIC_OUTPUT_TOOL_NAME,
 ])
 
+const ASYNC_AGENT_ALLOWED_TOOLS = new Set([
+  FILE_READ_TOOL_NAME,
+  'WebSearch',
+  'TodoWrite',
+  'Grep',
+  'WebFetch',
+  'Glob',
+  'Bash',
+  'PowerShell',
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'Skill',
+  'AskOrchestrator',
+  'SyntheticOutput',
+  'ToolSearch',
+  'EnterWorktree',
+  'ExitWorktree',
+])
+
 export function isAgentMode(): boolean {
   return isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
 }
 
-export function getAgentModeUserContext(
+export async function getAgentModeUserContext(
   mcpClients: ReadonlyArray<{ name: string }>,
   scratchpadDir?: string,
-): { [k: string]: string } {
+  sessionId?: string,
+): Promise<{ [k: string]: string }> {
   if (!isAgentMode()) {
     return {}
   }
@@ -59,7 +84,19 @@ export function getAgentModeUserContext(
     content += `\n\nScratchpad directory: ${scratchpadDir}\nWorkers can read and write here without permission prompts. Use this for durable cross-worker knowledge when it helps the run.`
   }
 
-  return { workerToolsContext: content }
+  const effectiveSessionId = sessionId ?? getSessionId()
+  const sessionState = await readSessionState(effectiveSessionId)
+
+  return {
+    workerToolsContext: content,
+    ...(sessionState
+      ? {
+          agentModeSessionState:
+            `${formatAgentModeSessionState(sessionState)}\n\n` +
+            "Use this state to choose whether to resume an existing worker or spawn a fresh worker. Prefer SendMessage to a resumable worker handle when the follow-up strongly overlaps that worker.",
+        }
+      : {}),
+  }
 }
 
 export function getAgentModeSystemPrompt(): string {

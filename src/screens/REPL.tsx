@@ -118,11 +118,11 @@ const getCoordinatorUserContext: (mcpClients: ReadonlyArray<{
 }>, scratchpadDir?: string) => {
   [k: string]: string;
 } = feature('COORDINATOR_MODE') ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext : () => ({});
-const getAgentModeUserContext: (mcpClients: ReadonlyArray<{
-  name: string;
-}>, scratchpadDir?: string) => {
-  [k: string]: string;
-} = require('../agent-mode/agentMode.js').getAgentModeUserContext;
+const getAgentModeUserContext: (
+  mcpClients: ReadonlyArray<{ name: string }>,
+  scratchpadDir?: string,
+) => Promise<{ [k: string]: string }> = require('../agent-mode/agentMode.js')
+  .getAgentModeUserContext
 const isAgentMode: () => boolean = require('../agent-mode/agentMode.js').isAgentMode;
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 import useCanUseTool from '../hooks/useCanUseTool.js';
@@ -3072,7 +3072,7 @@ export function REPL({
     const userContext = {
       ...baseUserContext,
       ...getCoordinatorUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined),
-      ...getAgentModeUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined),
+      ...(await getAgentModeUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined)),
       ...((feature('PROACTIVE') || feature('KAIROS')) && proactiveModule?.isProactiveActive() && !terminalFocusRef.current ? {
         terminalFocus: 'The terminal is unfocused \u2014 the user is not actively watching.'
       } : {})

@@ -1,7 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'fs/promises'
 import { dirname } from 'path'
 import { isFsInaccessible } from '../utils/errors.js'
-import { getTranscriptPathForSession } from '../utils/sessionStorage.js'
 
 export type AgentModeRunPhase =
   | 'planning'
@@ -36,7 +35,6 @@ export type AgentModeWorkerSession = {
   spawnedAt?: string
   lastResultAt?: string
   lastResultSummary?: string
-  synthesisStatus?: 'pending' | 'synthesized'
   lastSynthesizedAt?: string
 }
 
@@ -60,7 +58,9 @@ export type AgentSessionState = {
 
 const sessionStateWriteChains = new Map<string, Promise<void>>()
 
-function getSessionStatePath(sessionId: string): string {
+async function getSessionStatePath(sessionId: string): Promise<string> {
+  const { getTranscriptPathForSession } =
+    await import('../utils/sessionStorage.js')
   return getTranscriptPathForSession(sessionId).replace(
     /\.jsonl$/,
     '.agent-mode-state.json',
@@ -137,7 +137,7 @@ function deriveNextAction(
 async function readPersistedSessionState(
   sessionId: string,
 ): Promise<AgentSessionState | null> {
-  const path = getSessionStatePath(sessionId)
+  const path = await getSessionStatePath(sessionId)
 
   try {
     const raw = await readFile(path, 'utf-8')
@@ -154,7 +154,7 @@ async function mutatePersistedSessionState(
   initFn: (() => AgentSessionState) | null,
   mutateFn: (state: AgentSessionState) => void,
 ): Promise<void> {
-  const path = getSessionStatePath(sessionId)
+  const path = await getSessionStatePath(sessionId)
   const prior = sessionStateWriteChains.get(path) ?? Promise.resolve()
 
   const next = prior

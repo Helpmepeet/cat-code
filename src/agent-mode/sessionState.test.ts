@@ -9,6 +9,7 @@ import {
   readSessionState,
   recordWorkerSessionSpawn,
   recordWorkerSessionTerminal,
+  resolveWorkerAgentId,
   updateSessionState,
 } from './sessionState.js'
 
@@ -91,6 +92,42 @@ describe('agent mode session state', () => {
     expect(synthesizedWorker?.lastSynthesizedAt).toBeTruthy()
   })
 
+  test('resolves worker ids by durable handle and direct id', async () => {
+    const mode = 'agent'
+    const objective = 'Resolve durable worker handles'
+    const workerAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      () => {},
+    )
+
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode,
+      objective,
+      handle: 'explore-1',
+      agentId: workerAgentId,
+      role: 'explorer',
+      description: 'Resolve current context',
+      worktreePath: null,
+    })
+
+    expect(await resolveWorkerAgentId(sessionId, 'explore-1')).toBe(
+      workerAgentId,
+    )
+    expect(await resolveWorkerAgentId(sessionId, workerAgentId)).toBe(
+      workerAgentId,
+    )
+    expect(await resolveWorkerAgentId(sessionId, 'unknown-worker')).toBeNull()
+  })
+
   test('does not mark failed terminal workers as pending synthesis', async () => {
     const mode = 'agent'
     const objective = 'Handle failed worker'
@@ -133,5 +170,6 @@ describe('agent mode session state', () => {
 
     expect(failedWorker).toBeDefined()
     expect(failedWorker!.synthesisStatus).toBeUndefined()
+    expect(failedWorker!.resumable).toBe(false)
   })
 })

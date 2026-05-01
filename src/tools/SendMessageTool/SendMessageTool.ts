@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import { z } from 'zod/v4'
 import { isReplBridgeActive } from '../../bootstrap/state.js'
+import { getSessionId } from '../../bootstrap/state.js'
 import { getReplBridgeHandle } from '../../bridge/replBridgeHandle.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
@@ -42,6 +43,7 @@ import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
+import { resolveWorkerAgentId } from '../../agent-mode/sessionState.js'
 import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
@@ -805,7 +807,12 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
       if (typeof input.message === 'string' && input.to !== '*') {
         const appState = context.getAppState()
         const registered = appState.agentNameRegistry.get(input.to)
-        const agentId = registered ?? toAgentId(input.to)
+        const rawAgentId = toAgentId(input.to)
+        const durableAgentId =
+          registered || rawAgentId
+            ? null
+            : await resolveWorkerAgentId(getSessionId(), input.to)
+        const agentId = registered ?? rawAgentId ?? durableAgentId
         if (agentId) {
           const task = appState.tasks[agentId]
           if (isLocalAgentTask(task) && !isMainSessionTask(task)) {

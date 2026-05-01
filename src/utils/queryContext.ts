@@ -138,16 +138,16 @@ export async function buildSideQuestionFallbackParams({
     ? agents.find(agent => agent.agentType === appState.agent)
     : undefined
 
-  const getCoordinatorUserContext: (
-    mcpClients: ReadonlyArray<{ name: string }>,
-    scratchpadDir?: string,
-  ) => { [k: string]: string } = feature('COORDINATOR_MODE')
-    ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext
-    : () => ({})
-  const getAgentModeUserContext: (
-    mcpClients: ReadonlyArray<{ name: string }>,
-    scratchpadDir?: string,
-  ) => { [k: string]: string } = require('../agent-mode/agentMode.js').getAgentModeUserContext
+const getCoordinatorUserContext: (
+  mcpClients: ReadonlyArray<{ name: string }>,
+  scratchpadDir?: string,
+) => { [k: string]: string } = feature('COORDINATOR_MODE')
+  ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext
+  : () => ({})
+const getAgentModeUserContext: (
+  mcpClients: ReadonlyArray<{ name: string }>,
+  scratchpadDir?: string,
+) => Promise<{ [k: string]: string }> = require('../agent-mode/agentMode.js').getAgentModeUserContext
 
   const userContext = {
     ...baseUserContext,
@@ -155,10 +155,10 @@ export async function buildSideQuestionFallbackParams({
       mcpClients,
       isScratchpadEnabled() ? getScratchpadDir() : undefined,
     ),
-    ...getAgentModeUserContext(
+    ...(await getAgentModeUserContext(
       mcpClients,
       isScratchpadEnabled() ? getScratchpadDir() : undefined,
-    ),
+    )),
   }
 
   const toolUseContextBase: ToolUseContext = {
