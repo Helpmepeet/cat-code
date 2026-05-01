@@ -110,6 +110,13 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
     return null
   }
 
+  if (context.isQueryActive) {
+    onDone('Cannot set a new goal while a turn is running. Stop or wait first.', {
+      display: 'system',
+    })
+    return null
+  }
+
   if (currentGoal && currentGoal.status !== 'complete') {
     onDone(GOAL_EXISTS_MESSAGE, { display: 'system' })
     return null
