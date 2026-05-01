@@ -12,6 +12,7 @@ import { GlobTool } from './tools/GlobTool/GlobTool.js'
 import { NotebookEditTool } from './tools/NotebookEditTool/NotebookEditTool.js'
 import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js'
 import { TaskStopTool } from './tools/TaskStopTool/TaskStopTool.js'
+import { CancelWorkerTool } from './tools/CancelWorkerTool/CancelWorkerTool.js'
 import { BriefTool } from './tools/BriefTool/BriefTool.js'
 // Dead code elimination: conditional import for ant-only tools
 /* eslint-disable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
@@ -54,6 +55,9 @@ const SubscribePRTool = feature('KAIROS_GITHUB_WEBHOOKS')
   : null
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 import { TaskOutputTool } from './tools/TaskOutputTool/TaskOutputTool.js'
+import { GetWorkerResultTool } from './tools/GetWorkerResultTool/GetWorkerResultTool.js'
+import { ListWorkersTool } from './tools/ListWorkersTool/ListWorkersTool.js'
+import { WaitWorkersTool } from './tools/WaitWorkersTool/WaitWorkersTool.js'
 import { WebSearchTool } from './tools/WebSearchTool/WebSearchTool.js'
 import { TodoWriteTool } from './tools/TodoWriteTool/TodoWriteTool.js'
 import { ExitPlanModeV2Tool } from './tools/ExitPlanModeTool/ExitPlanModeV2Tool.js'
@@ -83,7 +87,6 @@ import { EnterPlanModeTool } from './tools/EnterPlanModeTool/EnterPlanModeTool.j
 import { EnterWorktreeTool } from './tools/EnterWorktreeTool/EnterWorktreeTool.js'
 import { ExitWorktreeTool } from './tools/ExitWorktreeTool/ExitWorktreeTool.js'
 import { ConfigTool } from './tools/ConfigTool/ConfigTool.js'
-import { AskOrchestratorTool } from './tools/AskOrchestratorTool/AskOrchestratorTool.js'
 import { UpdateGoalTool } from './tools/UpdateGoalTool/UpdateGoalTool.js'
 import { TaskCreateTool } from './tools/TaskCreateTool/TaskCreateTool.js'
 import { TaskGetTool } from './tools/TaskGetTool/TaskGetTool.js'
@@ -223,9 +226,12 @@ export function getAllBaseTools(): Tools {
     TodoWriteTool,
     WebSearchTool,
     TaskStopTool,
+    ListWorkersTool,
+    WaitWorkersTool,
+    GetWorkerResultTool,
+    CancelWorkerTool,
     AskOrchestratorTool,
     AskUserQuestionTool,
-    AskOrchestratorTool,
     SkillTool,
     EnterPlanModeTool,
     GetGoalTool,

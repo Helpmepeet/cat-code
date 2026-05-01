@@ -31,6 +31,10 @@ export type AgentModeWorkerSession = {
   outputSummary?: string
   error?: string
   spawnedAt?: string
+  lastResultAt?: string
+  lastResultSummary?: string
+  synthesisStatus?: 'pending' | 'synthesized'
+  lastSynthesizedAt?: string
 }
 
 export type AgentModeSessionState = {
@@ -70,6 +74,7 @@ function formatWorkerSession(worker: AgentModeWorkerSession): string {
     worker.description,
     worker.status,
     worker.resumable ? 'resumable' : undefined,
+    worker.synthesisStatus ? `synthesis:${worker.synthesisStatus}` : undefined,
   ]
   return `- ${parts.filter(Boolean).join(' — ')}`
 }
@@ -273,6 +278,29 @@ export async function readPersistedWorkerHandle(
   return handle
 }
 
+export async function resolveWorkerAgentId(
+  sessionId: string,
+  worker: string,
+): Promise<string | null> {
+  const state = await readPersistedSessionState(sessionId)
+  const directMatch = state?.knownWorkers[worker]
+  if (directMatch) {
+    return worker
+  }
+
+  if (!state) {
+    return null
+  }
+
+  for (const [agentId, knownWorker] of Object.entries(state.knownWorkers)) {
+    if (knownWorker.handle === worker) {
+      return agentId
+    }
+  }
+
+  return null
+}
+
 export async function recordWorkerSessionTerminal({
   sessionId,
   agentId,
@@ -296,14 +324,48 @@ export async function recordWorkerSessionTerminal({
     const existing = state.knownWorkers[agentId]
     if (!existing) return
 
+    const completed = status === 'completed'
+    const endedAt = new Date().toISOString()
+
     state.knownWorkers[agentId] = {
       ...existing,
       status,
-      resumable: true,
+      resumable: completed,
       ...(error ? { error } : {}),
       ...(outputSummary ? { outputSummary } : {}),
+      ...(completed
+        ? {
+            lastResultAt: endedAt,
+            lastResultSummary: outputSummary,
+            synthesisStatus: 'pending' as const,
+          }
+        : {}),
     }
   })
+}
+
+export async function markWorkerResultSynthesized({
+  sessionId,
+  agentId,
+}: {
+  sessionId: string
+  agentId: string
+}): Promise<boolean> {
+  let found = false
+
+  await mutatePersistedSessionState(sessionId, null, state => {
+    const existing = state.knownWorkers[agentId]
+    if (!existing || existing.synthesisStatus !== 'pending') return
+
+    found = true
+    state.knownWorkers[agentId] = {
+      ...existing,
+      synthesisStatus: 'synthesized',
+      lastSynthesizedAt: new Date().toISOString(),
+    }
+  })
+
+  return found
 }
 
 export async function readSessionState(

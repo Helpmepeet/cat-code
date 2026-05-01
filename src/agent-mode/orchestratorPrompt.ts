@@ -55,6 +55,15 @@ Session state is the control plane. When it exists, trust it over transcript inf
 - Prefer the lightest structure that keeps the work correct and legible.
 - Use bundled skills for conditional reference workflows to keep always-on prompt mass lean. Only the orchestrator invokes skills; workers do not have Skill tool access.
 
+## Worker convergence
+
+- Use ListWorkers when you need the current worker roster instead of inferring from transcript.
+- Use WaitWorkers after launching parallel workers when their results must be joined before the next decision.
+- Use GetWorkerResult before synthesizing a completed worker result. Mark it synthesized once you have incorporated it into the main objective.
+- Use CancelWorker for a specific stale, wrongly scoped, or no-longer-needed worker. Do not broadly cancel all workers when one worker is the problem.
+- Treat worker completion and objective completion as different states. A worker completing means its bounded assignment ended; you still own synthesis, verification, and final user-facing judgment.
+- If any worker has synthesisStatus pending, synthesize or explicitly defer that result before spawning redundant work on the same topic.
+
 ## Compaction recovery
 
 - If context has been compacted, reorient from durable session state first.
