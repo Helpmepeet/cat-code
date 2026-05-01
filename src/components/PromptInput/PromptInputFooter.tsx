@@ -16,6 +16,7 @@ import type { Message } from '../../types/message.js';
 import type { PromptInputMode, VimMode } from '../../types/textInputTypes.js';
 import type { AutoUpdaterResult } from '../../utils/autoUpdater.js';
 import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
+import { formatThreadGoalFooterLabel } from '../../utils/threadGoal.js';
 import { isUndercover } from '../../utils/undercover.js';
 import { CoordinatorTaskPanel, useCoordinatorTaskCount } from '../CoordinatorAgentStatus.js';
 import { getLastAssistantMessageId, getLatestUsageSignature, StatusLine, statusLineShouldDisplay } from '../StatusLine.js';
@@ -145,6 +146,7 @@ function PromptInputFooter({
         <Box flexShrink={1} gap={1}>
           {isFullscreen ? null : <Notifications apiKeyStatus={apiKeyStatus} autoUpdaterResult={autoUpdaterResult} debug={debug} isAutoUpdating={isAutoUpdating} verbose={verbose} messages={messages} onAutoUpdaterResult={onAutoUpdaterResult} onChangeIsUpdating={onChangeIsUpdating} ideSelection={ideSelection} mcpClients={mcpClients} isInputWrapped={isInputWrapped} isNarrow={isNarrow} />}
           {"external" === 'ant' && isUndercover() && <Text dimColor>undercover</Text>}
+          <GoalStatusIndicator />
           <BridgeStatusIndicator bridgeSelected={bridgeSelected} />
         </Box>
       </Box>
@@ -152,6 +154,11 @@ function PromptInputFooter({
     </>;
 }
 export default memo(PromptInputFooter);
+function GoalStatusIndicator(): React.ReactNode {
+  const goal = useAppState(s => s.threadGoal);
+  if (!goal) return null;
+  return <Text dimColor wrap="truncate">{formatThreadGoalFooterLabel(goal)}</Text>;
+}
 type BridgeStatusProps = {
   bridgeSelected: boolean;
 };

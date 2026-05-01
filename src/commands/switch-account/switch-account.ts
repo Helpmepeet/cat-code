@@ -97,12 +97,42 @@ export const call: LocalCommandCall = async (args, context) => {
   const prefix = args.trim().toLowerCase()
 
   if (prefix) {
-    // With arg: match against both pools, Claude first then Codex
-    if (claudeHealthy > 1) {
+    // Probe both pools before switching to detect cross-pool ambiguity
+    const lower = prefix
+    const claudeMatch = claudeHealthy > 1
+      ? (() => {
+          const accts = claudePool.accounts
+          return accts.find((a) => a.alias?.toLowerCase() === lower && a.status === 'healthy')
+            ?? accts.find((a) => a.alias?.toLowerCase().startsWith(lower) && a.status === 'healthy')
+            ?? accts.find((a) => a.emailAddress.toLowerCase().startsWith(lower) && a.status === 'healthy')
+            ?? accts.find((a) => a.accountUuid.toLowerCase().startsWith(lower) && a.status === 'healthy')
+            ?? null
+        })()
+      : null
+    const codexMatch = codexHealthy > 1
+      ? (() => {
+          const accts = codexPool.accounts
+          return accts.find((a) => a.alias?.toLowerCase() === lower && a.status === 'healthy')
+            ?? accts.find((a) => a.alias?.toLowerCase().startsWith(lower) && a.status === 'healthy')
+            ?? accts.find((a) => a.accountId.toLowerCase().startsWith(lower) && a.status === 'healthy')
+            ?? null
+        })()
+      : null
+
+    if (claudeMatch && codexMatch) {
+      const claudeLabel = claudeMatch.alias ?? claudeMatch.emailAddress
+      const codexLabel = codexMatch.alias ?? codexMatch.accountId.slice(0, 12)
+      return {
+        type: 'text',
+        value: `Ambiguous: "${prefix}" matches Claude account "${claudeLabel}" and Codex account "${codexLabel}". Be more specific.`,
+      }
+    }
+
+    if (claudeMatch) {
       const result = await performClaudeSwitch(prefix, context)
       if (result) return result
     }
-    if (codexHealthy > 1) {
+    if (codexMatch) {
       const result = await performCodexSwitch(prefix, context)
       if (result) return result
     }

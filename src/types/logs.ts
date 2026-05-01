@@ -1,6 +1,7 @@
 import type { UUID } from 'crypto'
 import type { FileHistorySnapshot } from 'src/utils/fileHistory.js'
 import type { ContentReplacementRecord } from 'src/utils/toolResultStorage.js'
+import type { ThreadGoal } from '../utils/threadGoal.js'
 import type { AgentId } from './ids.js'
 import type { Message } from './message.js'
 import type { QueueOperationMessage } from './messageQueueTypes.js'
@@ -49,6 +50,7 @@ export type LogOption = {
   prRepository?: string // Repository in "owner/repo" format
   mode?: 'agent' | 'coordinator' | 'normal' // Session mode for restore-mode detection
   worktreeSession?: PersistedWorktreeSession | null // Worktree state at session end (null = exited, undefined = never entered)
+  threadGoal?: ThreadGoal | null // Last-wins thread goal state for resume/hydration
   contentReplacements?: ContentReplacementRecord[] // Replacement decisions for resume reconstruction
 }
 
@@ -138,6 +140,20 @@ export type ModeEntry = {
   type: 'mode'
   sessionId: UUID
   mode: 'agent' | 'coordinator' | 'normal'
+}
+
+export type ThreadGoalUpdatedEntry = {
+  type: 'thread-goal-updated'
+  sessionId: UUID
+  goal: ThreadGoal
+  timestamp: string
+}
+
+export type ThreadGoalClearedEntry = {
+  type: 'thread-goal-cleared'
+  sessionId: UUID
+  goalId?: string
+  timestamp: string
 }
 
 /**
@@ -333,6 +349,8 @@ export type Entry =
   | QueueOperationMessage
   | SpeculationAcceptMessage
   | ModeEntry
+  | ThreadGoalUpdatedEntry
+  | ThreadGoalClearedEntry
   | WorktreeStateEntry
   | ContentReplacementEntry
   | ContextCollapseCommitEntry

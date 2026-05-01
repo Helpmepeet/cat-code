@@ -5,7 +5,7 @@ import type { Dirent } from 'fs'
 // Sync fs primitives for readFileTailSync — separate from fs/promises
 // imports above. Named (not wildcard) per CLAUDE.md style; no collisions
 // with the async-suffixed names.
-import { closeSync, fstatSync, openSync, readSync } from 'fs'
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from 'fs'
 import {
   appendFile as fsAppendFile,
   open as fsOpen,
@@ -95,6 +95,7 @@ import {
 import { getSettings_DEPRECATED } from './settings/settings.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
+import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
 
 // Cache MACRO.VERSION at module level to work around bun --define bug in async contexts
@@ -107,6 +108,24 @@ type Transcript = (
   | AttachmentMessage
   | SystemMessage
 )[]
+
+function applyThreadGoalEntry(
+  threadGoals: Map<UUID, ThreadGoal | null>,
+  entry: Entry,
+): void {
+  if (entry.type === 'thread-goal-updated') {
+    const goal = parseThreadGoal(entry.goal)
+    if (!goal || goal.threadId !== entry.sessionId) {
+      return
+    }
+    threadGoals.set(entry.sessionId, goal)
+    return
+  }
+
+  if (entry.type === 'thread-goal-cleared') {
+    threadGoals.set(entry.sessionId, null)
+  }
+}
 
 // Use getOriginalCwd() at each call site instead of capturing at module load
 // time. getCwd() at import time may run before bootstrap resolves symlinks via
@@ -741,6 +760,10 @@ class Project {
   currentSessionLastPrompt: string | undefined
   currentSessionAgentSetting: string | undefined
   currentSessionMode: 'agent' | 'coordinator' | 'normal' | undefined
+  // Tri-state: undefined = no goal metadata seen yet, null = cleared,
+  // object = current goal state. reAppendSessionMetadata writes null so
+  // resume preserves a cleared goal across compaction and exit.
+  currentSessionThreadGoal: ThreadGoal | null | undefined
   // Tri-state: undefined = never touched (don't write), null = exited worktree,
   // object = currently in worktree. reAppendSessionMetadata writes null so
   // --resume knows the session exited (vs. crashed while inside).
@@ -1017,6 +1040,22 @@ class Project {
         mode: this.currentSessionMode,
         sessionId,
       })
+    }
+    if (this.currentSessionThreadGoal !== undefined) {
+      if (this.currentSessionThreadGoal === null) {
+        appendEntryToFile(this.sessionFile, {
+          type: 'thread-goal-cleared',
+          sessionId,
+          timestamp: new Date().toISOString(),
+        })
+      } else {
+        appendEntryToFile(this.sessionFile, {
+          type: 'thread-goal-updated',
+          sessionId,
+          goal: this.currentSessionThreadGoal,
+          timestamp: new Date().toISOString(),
+        })
+      }
     }
     if (this.currentSessionWorktree !== undefined) {
       appendEntryToFile(this.sessionFile, {
@@ -2509,6 +2548,7 @@ export async function loadTranscriptFromFile(
       contextCollapseSnapshot,
       leafUuids,
       contentReplacements,
+      threadGoals,
       worktreeStates,
     } = await loadTranscriptFile(filePath)
 
@@ -2552,6 +2592,9 @@ export async function loadTranscriptFromFile(
         contextCollapseSnapshot?.sessionId === sessionId
           ? contextCollapseSnapshot
           : undefined,
+      threadGoal: threadGoals.has(sessionId)
+        ? (threadGoals.get(sessionId) ?? null)
+        : undefined,
       worktreeSession: worktreeStates.has(sessionId)
         ? worktreeStates.get(sessionId)
         : undefined,
@@ -2690,6 +2733,7 @@ function convertToLogOption(
   attributionSnapshots?: AttributionSnapshotMessage[],
   agentSetting?: string,
   contentReplacements?: ContentReplacementRecord[],
+  threadGoal?: ThreadGoal | null,
 ): LogOption {
   const lastMessage = transcript.at(-1)!
   const firstMessage = transcript[0]!
@@ -2718,6 +2762,7 @@ function convertToLogOption(
     summary,
     customTitle,
     tag,
+    threadGoal,
     fileHistorySnapshots: fileHistorySnapshots,
     attributionSnapshots: attributionSnapshots,
     contentReplacements,
@@ -2890,6 +2935,49 @@ export function saveTaskSummary(sessionId: UUID, summary: string): void {
   })
 }
 
+export function saveThreadGoal(goal: ThreadGoal): void {
+  if (goal.threadId === getSessionId()) {
+    getProject().currentSessionThreadGoal = goal
+  }
+  appendEntryToFile(getTranscriptPathForSession(goal.threadId as UUID), {
+    type: 'thread-goal-updated',
+    sessionId: goal.threadId,
+    goal,
+    timestamp: new Date().toISOString(),
+  })
+}
+
+export function clearThreadGoal(goalId?: string): void {
+  const sessionId = getSessionId() as UUID
+  getProject().currentSessionThreadGoal = null
+  appendEntryToFile(getTranscriptPathForSession(sessionId), {
+    type: 'thread-goal-cleared',
+    sessionId,
+    ...(goalId ? { goalId } : {}),
+    timestamp: new Date().toISOString(),
+  })
+}
+
+export function getCurrentThreadGoal(sessionId?: string): ThreadGoal | null {
+  const resolvedSessionId = (sessionId ?? getSessionId()) as UUID | undefined
+  if (!resolvedSessionId) {
+    return null
+  }
+
+  try {
+    const entries = parseJSONL<Entry>(
+      readFileSync(getTranscriptPathForSession(resolvedSessionId)),
+    )
+    const threadGoals = new Map<UUID, ThreadGoal | null>()
+    for (const entry of entries) {
+      applyThreadGoalEntry(threadGoals, entry)
+    }
+    return threadGoals.get(resolvedSessionId) ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function saveTag(sessionId: UUID, tag: string, fullPath?: string) {
   // Fall back to computed path if fullPath is not provided
   const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
@@ -2965,6 +3053,7 @@ export function restoreSessionMetadata(meta: {
   agentColor?: string
   agentSetting?: string
   mode?: 'agent' | 'coordinator' | 'normal'
+  threadGoal?: ThreadGoal | null
   worktreeSession?: PersistedWorktreeSession | null
   prNumber?: number
   prUrl?: string
@@ -2979,6 +3068,8 @@ export function restoreSessionMetadata(meta: {
   if (meta.agentColor) project.currentSessionAgentColor = meta.agentColor
   if (meta.agentSetting) project.currentSessionAgentSetting = meta.agentSetting
   if (meta.mode) project.currentSessionMode = meta.mode
+  if (meta.threadGoal !== undefined)
+    project.currentSessionThreadGoal = meta.threadGoal
   if (meta.worktreeSession !== undefined)
     project.currentSessionWorktree = meta.worktreeSession
   if (meta.prNumber !== undefined)
@@ -3001,6 +3092,7 @@ export function clearSessionMetadata(): void {
   project.currentSessionLastPrompt = undefined
   project.currentSessionAgentSetting = undefined
   project.currentSessionMode = undefined
+  project.currentSessionThreadGoal = undefined
   project.currentSessionWorktree = undefined
   project.currentSessionPrNumber = undefined
   project.currentSessionPrUrl = undefined
@@ -3321,6 +3413,8 @@ const METADATA_TYPE_MARKERS = [
   '"type":"agent-color"',
   '"type":"agent-setting"',
   '"type":"mode"',
+  '"type":"thread-goal-updated"',
+  '"type":"thread-goal-cleared"',
   '"type":"worktree-state"',
   '"type":"pr-link"',
 ]
@@ -3687,6 +3781,7 @@ export async function loadTranscriptFile(
   prUrls: Map<UUID, string>
   prRepositories: Map<UUID, string>
   modes: Map<UUID, string>
+  threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
@@ -3707,6 +3802,7 @@ export async function loadTranscriptFile(
   const prUrls = new Map<UUID, string>()
   const prRepositories = new Map<UUID, string>()
   const modes = new Map<UUID, string>()
+  const threadGoals = new Map<UUID, ThreadGoal | null>()
   const worktreeStates = new Map<UUID, PersistedWorktreeSession | null>()
   const fileHistorySnapshots = new Map<UUID, FileHistorySnapshotMessage>()
   const attributionSnapshots = new Map<UUID, AttributionSnapshotMessage>()
@@ -3804,6 +3900,11 @@ export async function loadTranscriptFile(
           agentSettings.set(entry.sessionId, entry.agentSetting)
         } else if (entry.type === 'mode' && entry.sessionId) {
           modes.set(entry.sessionId, entry.mode)
+        } else if (
+          entry.type === 'thread-goal-updated' ||
+          entry.type === 'thread-goal-cleared'
+        ) {
+          applyThreadGoalEntry(threadGoals, entry)
         } else if (entry.type === 'worktree-state' && entry.sessionId) {
           worktreeStates.set(entry.sessionId, entry.worktreeSession)
         } else if (entry.type === 'pr-link' && entry.sessionId) {
@@ -3872,6 +3973,11 @@ export async function loadTranscriptFile(
         agentSettings.set(entry.sessionId, entry.agentSetting)
       } else if (entry.type === 'mode' && entry.sessionId) {
         modes.set(entry.sessionId, entry.mode)
+      } else if (
+        entry.type === 'thread-goal-updated' ||
+        entry.type === 'thread-goal-cleared'
+      ) {
+        applyThreadGoalEntry(threadGoals, entry)
       } else if (entry.type === 'worktree-state' && entry.sessionId) {
         worktreeStates.set(entry.sessionId, entry.worktreeSession)
       } else if (entry.type === 'pr-link' && entry.sessionId) {
@@ -4004,6 +4110,7 @@ export async function loadTranscriptFile(
     prUrls,
     prRepositories,
     modes,
+    threadGoals,
     worktreeStates,
     fileHistorySnapshots,
     attributionSnapshots,
@@ -4024,6 +4131,7 @@ async function loadSessionFile(sessionId: UUID): Promise<{
   customTitles: Map<UUID, string>
   tags: Map<UUID, string>
   agentSettings: Map<UUID, string>
+  threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
@@ -4067,6 +4175,7 @@ export async function getLastSessionLog(
     customTitles,
     tags,
     agentSettings,
+    threadGoals,
     worktreeStates,
     fileHistorySnapshots,
     attributionSnapshots,
@@ -4110,6 +4219,9 @@ export async function getLastSessionLog(
       buildAttributionSnapshotChain(attributionSnapshots, transcript),
       agentSetting,
       contentReplacements.get(sessionId) ?? [],
+      threadGoals.has(sessionId)
+        ? (threadGoals.get(sessionId) ?? null)
+        : undefined,
     ),
     mode: messages.values().next().value?.type ? modes.get(sessionId) as LogOption['mode'] : undefined,
     worktreeSession: worktreeStates.get(sessionId),

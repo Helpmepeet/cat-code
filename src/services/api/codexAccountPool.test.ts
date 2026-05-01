@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
 import {
   appendAccount,
@@ -7,6 +10,7 @@ import {
   mergePoolAccountsForTest,
   removeCodexAccount,
   resetCodexAccountPoolForTest,
+  saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from './codexAccountPool.js'
@@ -214,5 +218,150 @@ describe('codexAccountPool appendAccount', () => {
       status: 'capped',
       lastError: 'Plan type free is not eligible for Codex usage',
     })
+  })
+
+  test('saveCodexTokenToVault preserves metadata for same account', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const filePath = join(accountsDir, '78c.json')
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            account_id: '78c15115-7a20-4568-9aec-cfa886dd71ae',
+          },
+          alias: 'main',
+          created_at: '2026-04-01T00:00:00.000Z',
+          profile_note: 'keep',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        accountId: '78c15115-7a20-4568-9aec-cfa886dd71ae',
+      },
+      { filePath, writer: 'test' },
+    )
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    const tokens = written.tokens as Record<string, unknown>
+
+    expect(tokens.access_token).toBe('new-access')
+    expect(tokens.refresh_token).toBe('new-refresh')
+    expect(tokens.account_id).toBe('78c15115-7a20-4568-9aec-cfa886dd71ae')
+    expect(written.alias).toBe('main')
+    expect(written.created_at).toBe('2026-04-01T00:00:00.000Z')
+    expect(written.profile_note).toBe('keep')
+    expect(saved?.metadataAction).toBe('preserved')
+
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('saveCodexTokenToVault identity change does not preserve alias', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const filePath = join(accountsDir, '80e.json')
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            account_id: '78c15115-7a20-4568-9aec-cfa886dd71ae',
+          },
+          alias: 'main',
+          profile_note: 'drop',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        accountId: '80ef361d-5bdc-411f-8bd1-a8fe2a0f18b3',
+      },
+      { filePath, writer: 'test' },
+    )
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    const tokens = written.tokens as Record<string, unknown>
+
+    expect(tokens.account_id).toBe('80ef361d-5bdc-411f-8bd1-a8fe2a0f18b3')
+    expect(written.alias).toBeUndefined()
+    expect(saved?.metadataAction).toBe('replaced')
+    expect(saved?.accountChanged).toBe(true)
+
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('saveCodexTokenToVault explicit alias overrides existing alias', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const filePath = join(accountsDir, '78c.json')
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            account_id: '78c15115-7a20-4568-9aec-cfa886dd71ae',
+          },
+          alias: 'main',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        accountId: '78c15115-7a20-4568-9aec-cfa886dd71ae',
+        alias: 'backup',
+      },
+      { filePath, writer: 'test' },
+    )
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    expect(written.alias).toBe('backup')
+    expect(saved?.metadataAction).toBe('preserved')
+
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('appendAccount can sync vault metadata', () => {
+    appendAccount(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        expiresAt: Date.now() + 120_000,
+        accountId: 'vault-account',
+      },
+      {
+        source: 'vault',
+        vaultFilePath: '/tmp/vault/accounts/78c.json',
+        writer: 'test',
+      },
+    )
+    const updated = getPoolStatus().accounts.find((account) => account.accountId === 'vault-account')
+    expect(updated?.source).toBe('vault')
+    expect(updated?.vaultFilePath).toBe('/tmp/vault/accounts/78c.json')
   })
 })

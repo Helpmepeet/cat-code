@@ -60,6 +60,7 @@ import { isTodoV2Enabled } from './tasks.js'
 import type { TodoList } from './todo/types.js'
 import { TodoListSchema } from './todo/types.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
+import type { ThreadGoal } from './threadGoal.js'
 import {
   getCurrentWorktreeSession,
   restoreWorktreeSession,
@@ -71,6 +72,7 @@ type ResumeResult = {
   attributionSnapshots?: AttributionSnapshotMessage[]
   contextCollapseCommits?: ContextCollapseCommitEntry[]
   contextCollapseSnapshot?: ContextCollapseSnapshotEntry
+  threadGoal?: ThreadGoal | null
 }
 
 /**
@@ -104,6 +106,8 @@ export function restoreSessionStateFromLog(
   result: ResumeResult,
   setAppState: (f: (prev: AppState) => AppState) => void,
 ): void {
+  setAppState(prev => ({ ...prev, threadGoal: result.threadGoal ?? null }))
+
   // Restore file history state
   if (result.fileHistorySnapshots && result.fileHistorySnapshots.length > 0) {
     fileHistoryRestoreStateFromLog(result.fileHistorySnapshots, newState => {
@@ -305,6 +309,7 @@ type ResumeLoadResult = {
   contentReplacements?: ContentReplacementRecord[]
   contextCollapseCommits?: ContextCollapseCommitEntry[]
   contextCollapseSnapshot?: ContextCollapseSnapshotEntry
+  threadGoal?: ThreadGoal | null
   sessionId: UUID | undefined
   agentName?: string
   agentColor?: string
@@ -637,6 +642,7 @@ export async function processResumedConversation(
       ...(resumedAgentType && { agent: resumedAgentType }),
       ...(restoredAttribution && { attribution: restoredAttribution }),
       ...(standaloneAgentContext && { standaloneAgentContext }),
+      threadGoal: result.threadGoal ?? null,
       agentDefinitions: refreshedAgentDefs,
     },
   }

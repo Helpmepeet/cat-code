@@ -1,4 +1,4 @@
-import { getPoolStatus, setAccountAlias } from '../../services/api/codexAccountPool.js'
+import { getPoolStatus, setAccountAlias, validateCodexAccountAlias } from '../../services/api/codexAccountPool.js'
 import { getClaudePoolStatus, setClaudeAccountAlias } from '../../services/api/claudeAccountPool.js'
 import type { LocalCommandCall } from '../../types/command.js'
 
@@ -31,7 +31,11 @@ export const call: LocalCommandCall = async (args) => {
         value: `Account ${codexAcct.alias ?? codexAcct.accountId.slice(0, 12)} is not a vault account and cannot be renamed.`,
       }
     }
-    const ok = setAccountAlias(codexAcct.accountId, newAlias)
+    const validation = validateCodexAccountAlias(newAlias, codexAcct.accountId)
+    if (!validation.ok) {
+      return { type: 'text', value: validation.message }
+    }
+    const ok = setAccountAlias(codexAcct.accountId, newAlias, 'rename-account')
     if (!ok) {
       return { type: 'text', value: `Failed to rename account. Check logs for details.` }
     }

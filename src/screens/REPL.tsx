@@ -3,7 +3,7 @@ import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import { webUIBus } from '../web/WebUIBus.js';
 import { spawnSync } from 'child_process';
-import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
+import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens, getTotalTokenUsage } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
 import { count } from '../utils/array.js';
 import { dirname, join } from 'path';
@@ -178,6 +178,7 @@ import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
+import { accountThreadGoalUsage, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldClearThreadGoalContinuationSuppression, shouldStartThreadGoalBudgetWrapUp, shouldStartThreadGoalContinuation, shouldSuppressThreadGoalContinuationAfterTurn, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -185,7 +186,7 @@ import type { ContentBlockParam, ImageBlockParam } from '@anthropic-ai/sdk/resou
 import type { ProcessUserInputContext } from '../utils/processUserInput/processUserInput.js';
 import type { PastedContent } from '../utils/config.js';
 import { copyPlanForFork, copyPlanForResume, getPlanSlug, setPlanSlug } from '../utils/plans.js';
-import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, saveWorktreeState, getAgentTranscript } from '../utils/sessionStorage.js';
+import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript } from '../utils/sessionStorage.js';
 import { deserializeMessages } from '../utils/conversationRecovery.js';
 import { extractReadFilesFromMessages, extractBashToolsFromMessages } from '../utils/queryHelpers.js';
 import { resetMicrocompactState } from '../services/compact/microCompact.js';
@@ -677,6 +678,7 @@ export function REPL({
   const agentDefinitions = useAppState(s => s.agentDefinitions);
   const fileHistory = useAppState(s => s.fileHistory);
   const initialMessage = useAppState(s => s.initialMessage);
+  const threadGoal = useAppState(s => s.threadGoal);
   const queuedCommands = useCommandQueue();
   // feature() is a build-time constant — dead code elimination removes the hook
   // call entirely in external builds, so this is safe despite looking conditional.
@@ -986,13 +988,32 @@ export function REPL({
 
   // Wall-clock time tracking refs for accurate elapsed time calculation
   const loadingStartTimeRef = React.useRef<number>(0);
+  const turnGoalAtStartRef = React.useRef<ThreadGoal | null>(null);
+  const turnTotalTokensAtStartRef = React.useRef(0);
+  const goalContinuationInFlightRef = React.useRef(false);
+  const goalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
+  const turnGoalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
+  const goalContinuationSuppressedRef = React.useRef(false);
+  const pendingBudgetWrapUpGoalIdRef = React.useRef<string | null>(null);
   const totalPausedMsRef = React.useRef(0);
   const pauseStartTimeRef = React.useRef<number | null>(null);
+  const threadGoalContinuationResetKeyRef = React.useRef<string | null>(null);
   const resetTimingRefs = React.useCallback(() => {
     loadingStartTimeRef.current = Date.now();
     totalPausedMsRef.current = 0;
     pauseStartTimeRef.current = null;
   }, []);
+
+  useEffect(() => {
+    const resetKey = threadGoal ? `${threadGoal.goalId}:${threadGoal.objective}:${threadGoal.status}:${threadGoal.tokenBudget ?? ''}` : null;
+    if (threadGoalContinuationResetKeyRef.current !== resetKey) {
+      goalContinuationSuppressedRef.current = false;
+      if (!threadGoal) {
+        pendingBudgetWrapUpGoalIdRef.current = null;
+      }
+      threadGoalContinuationResetKeyRef.current = resetKey;
+    }
+  }, [threadGoal]);
 
   // Reset timing refs inline when isQueryActive transitions false→true.
   // queryGuard.reserve() (in executeUserInput) fires BEFORE processUserInput's
@@ -1592,6 +1613,8 @@ export function REPL({
   // immediately hides the streaming preview.
   const visibleStreamingText = streamingText && showStreamingText ? streamingText.substring(0, streamingText.lastIndexOf('\n') + 1) || null : null;
   const [lastQueryCompletionTime, setLastQueryCompletionTime] = useState(0);
+  const [goalContinuationIdleSignal, setGoalContinuationIdleSignal] = useState(0);
+  const handledGoalContinuationIdleSignalRef = useRef(0);
   const [spinnerMessage, setSpinnerMessage] = useState<string | null>(null);
   const [spinnerColor, setSpinnerColor] = useState<keyof Theme | null>(null);
   const [spinnerShimmerColor, setSpinnerShimmerColor] = useState<keyof Theme | null>(null);
@@ -1706,6 +1729,72 @@ export function REPL({
     // Promise chains for unconsumed checks (denied/aborted paths).
     clearSpeculativeChecks();
   }, [pickNewSpinnerTip]);
+
+  const accountCompletedTurnThreadGoal = useCallback(() => {
+    const turnGoalAtStart = turnGoalAtStartRef.current;
+    if (
+      !turnGoalAtStart ||
+      (turnGoalAtStart.status !== 'active' &&
+        turnGoalAtStart.status !== 'budget_limited')
+    ) {
+      return;
+    }
+
+    const currentGoal = store.getState().threadGoal;
+    const currentGoalMatchesTurnStart =
+      currentGoal?.goalId === turnGoalAtStart.goalId;
+    const goalToAccount = currentGoalMatchesTurnStart
+      ? currentGoal
+      : turnGoalAtStart;
+
+    const nowMs = Date.now();
+    const tokenDelta = Math.max(
+      0,
+      getTotalTokenUsage() - turnTotalTokensAtStartRef.current,
+    );
+    const timeDeltaSeconds = Math.max(
+      0,
+      Math.floor(
+        (nowMs - loadingStartTimeRef.current - totalPausedMsRef.current) / 1000,
+      ),
+    );
+    const nextGoal = accountThreadGoalUsage(
+      goalToAccount,
+      tokenDelta,
+      timeDeltaSeconds,
+      nowMs,
+    );
+
+    if (
+      nextGoal.status === goalToAccount.status &&
+      nextGoal.tokensUsed === goalToAccount.tokensUsed &&
+      nextGoal.timeUsedSeconds === goalToAccount.timeUsedSeconds
+    ) {
+      return;
+    }
+
+    saveThreadGoal(nextGoal);
+    if (!currentGoalMatchesTurnStart) {
+      if (currentGoal) {
+        saveThreadGoal(currentGoal);
+      } else {
+        clearThreadGoal(turnGoalAtStart.goalId);
+      }
+      return;
+    }
+
+    setAppState(prev => ({
+      ...prev,
+      threadGoal: nextGoal
+    }));
+
+    if (
+      goalToAccount.status === 'active' &&
+      nextGoal.status === 'budget_limited'
+    ) {
+      pendingBudgetWrapUpGoalIdRef.current = nextGoal.goalId;
+    }
+  }, [setAppState, store]);
 
   // Session backgrounding — hook is below, after getToolUseContext
 
@@ -2246,6 +2335,20 @@ export function REPL({
     if (feature('PROACTIVE') || feature('KAIROS')) {
       proactiveModule?.pauseProactive();
     }
+    if (queryGuard.isActive || isExternalLoading || abortController !== null) {
+      const currentGoal = store.getState().threadGoal;
+      const pausedGoal = pauseActiveThreadGoalOnAbort(currentGoal);
+      if (currentGoal?.status === 'active' && pausedGoal) {
+        saveThreadGoal(pausedGoal);
+        setAppState(prev => ({
+          ...prev,
+          threadGoal: prev.threadGoal?.goalId === pausedGoal.goalId ? pausedGoal : prev.threadGoal
+        }));
+      }
+    }
+    goalContinuationInFlightRef.current = false;
+    goalContinuationKindRef.current = null;
+    turnGoalContinuationKindRef.current = null;
     queryGuard.forceEnd();
     skipIdleCheckRef.current = false;
 
@@ -2624,9 +2727,10 @@ export function REPL({
       sendOSNotification: opts => {
         void sendNotification(opts, terminal);
       },
-      onChangeDynamicMcpConfig,
+	      onChangeDynamicMcpConfig,
 	      onInstallIDEExtension: setIDEToInstallExtension,
-		      enterAgentModeSession,
+	      enterAgentModeSession,
+	      isQueryActive: queryGuard.isActive,
       nestedMemoryAttachmentTriggers: new Set<string>(),
       loadedNestedMemoryPaths: loadedNestedMemoryPathsRef.current,
       dynamicSkillDirTriggers: new Set<string>(),
@@ -2670,7 +2774,7 @@ export function REPL({
       requestPrompt: feature('HOOK_PROMPTS') ? requestPrompt : undefined,
       contentReplacementState: contentReplacementStateRef.current
     };
-  }, [commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, enterAgentModeSession]);
+	  }, [commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, enterAgentModeSession, queryGuard]);
   getToolUseContextRef.current = getToolUseContext;
 
   // Session backgrounding (Ctrl+B to background/foreground)
@@ -3037,6 +3141,13 @@ export function REPL({
       }));
     }
     queryCheckpoint('query_end');
+    const completedTurnToolCount = getTurnToolCount();
+    if (shouldSuppressThreadGoalContinuationAfterTurn({
+      continuationKind: turnGoalContinuationKindRef.current,
+      toolUseCount: completedTurnToolCount
+    })) {
+      goalContinuationSuppressedRef.current = true;
+    }
 
     // Capture ant-only API metrics before resetLoadingState clears the ref.
     // For multi-request turns (tool use loops), compute P50 across all requests.
@@ -3055,7 +3166,7 @@ export function REPL({
       const hookMs = getTurnHookDurationMs();
       const hookCount = getTurnHookCount();
       const toolMs = getTurnToolDurationMs();
-      const toolCount = getTurnToolCount();
+      const toolCount = completedTurnToolCount;
       const classifierMs = getTurnClassifierDurationMs();
       const classifierCount = getTurnClassifierCount();
       const turnMs = Date.now() - loadingStartTimeRef.current;
@@ -3079,6 +3190,7 @@ export function REPL({
     logQueryProfileReport();
 
     // Signal that a query turn has completed successfully
+    accountCompletedTurnThreadGoal();
     await onTurnComplete?.(messagesRef.current);
 
     // Surface any pending cache warnings accumulated during this turn
@@ -3089,7 +3201,7 @@ export function REPL({
         ...cacheWarnings.map(w => createSystemMessage(w, 'warning')),
       ]);
     }
-  }, [initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode]);
+  }, [initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode, accountCompletedTurnThreadGoal, store]);
   const onQuery = useCallback(async (newMessages: MessageType[], abortController: AbortController, shouldQuery: boolean, additionalAllowedTools: string[], mainLoopModelParam: string, onBeforeQueryCallback?: (input: string, newMessages: MessageType[]) => Promise<boolean>, input?: string, effort?: EffortValue): Promise<void> => {
     logForDebugging(`[REPL:onQuery] start messages=${newMessages.length} shouldQuery=${shouldQuery} additionalAllowedTools=${additionalAllowedTools.length} hasInput=${Boolean(input)}`);
     // If this is a teammate, mark them as active when starting a turn
@@ -3129,6 +3241,9 @@ export function REPL({
       // isLoading is derived from queryGuard — tryStart() above already
       // transitioned dispatching→running, so no setter call needed here.
       resetTimingRefs();
+      turnGoalContinuationKindRef.current = goalContinuationKindRef.current;
+      turnGoalAtStartRef.current = store.getState().threadGoal;
+      turnTotalTokensAtStartRef.current = getTotalTokenUsage();
       setMessages(oldMessages => [...oldMessages, ...newMessages]);
       responseLengthRef.current = 0;
       if (feature('TOKEN_BUDGET')) {
@@ -3168,6 +3283,9 @@ export function REPL({
         logForDebugging(`[REPL:onQuery] onQueryImpl error: ${errorMessage(error)}`);
         logError(error);
         throw error;
+      }
+      if (shouldQuery && !abortController.signal.aborted) {
+        setGoalContinuationIdleSignal(signal => signal + 1);
       }
       logForDebugging(`[REPL:onQuery] onQueryImpl complete`);
     } finally {
@@ -3246,6 +3364,9 @@ export function REPL({
         // controller makes ctrl+c fire onCancel() (aborting nothing) instead of
         // propagating to the double-press exit flow.
         setAbortController(null);
+        goalContinuationInFlightRef.current = false;
+        goalContinuationKindRef.current = null;
+        turnGoalContinuationKindRef.current = null;
       }
 
       // Auto-restore: if the user interrupted before any meaningful response
@@ -3549,6 +3670,9 @@ export function REPL({
     // Remote mode: skip empty input early before any state mutations
     if (activeRemote.isRemoteMode && !input.trim()) {
       return;
+    }
+    if (shouldClearThreadGoalContinuationSuppression(input, inputMode)) {
+      goalContinuationSuppressedRef.current = false;
     }
 
     // Idle-return: prompt returning users to start fresh when the
@@ -4310,6 +4434,72 @@ export function REPL({
     void onQuery([userMessage], newAbortController, true, [], mainLoopModel);
     return true;
   }, [onQuery, mainLoopModel, store]);
+
+  useEffect(() => {
+    const hasUnhandledIdleSignal =
+      goalContinuationIdleSignal > handledGoalContinuationIdleSignalRef.current;
+    const sessionIsIdle =
+      sessionStatus === 'idle' && initialMessage === null && hasUnhandledIdleSignal;
+
+    if (shouldStartThreadGoalBudgetWrapUp({
+      sessionIsIdle,
+      goal: threadGoal,
+      goalContinuationInFlight: goalContinuationInFlightRef.current,
+      pendingBudgetWrapUpGoalId: pendingBudgetWrapUpGoalIdRef.current,
+      queuedCommandsCount: queuedCommands.length,
+      hasActiveLocalJsxUI: isShowingLocalJSXCommand
+    })) {
+      handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
+      pendingBudgetWrapUpGoalIdRef.current = null;
+      goalContinuationInFlightRef.current = true;
+      goalContinuationKindRef.current = 'budget-wrap-up';
+      if (!handleIncomingPrompt(renderThreadGoalBudgetLimitPrompt(threadGoal!), {
+        isMeta: true
+      })) {
+        pendingBudgetWrapUpGoalIdRef.current = threadGoal!.goalId;
+        goalContinuationInFlightRef.current = false;
+        goalContinuationKindRef.current = null;
+      }
+      return;
+    }
+
+    if (!shouldStartThreadGoalContinuation({
+      sessionIsIdle,
+      goal: threadGoal,
+      goalContinuationInFlight: goalContinuationInFlightRef.current,
+      goalContinuationSuppressed: goalContinuationSuppressedRef.current,
+      queuedCommandsCount: queuedCommands.length,
+      hasActiveLocalJsxUI: isShowingLocalJSXCommand
+    })) {
+      if (
+        sessionIsIdle &&
+        !goalContinuationInFlightRef.current &&
+        queuedCommands.length === 0 &&
+        !isShowingLocalJSXCommand
+      ) {
+        handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
+      }
+      return;
+    }
+
+    handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
+    goalContinuationInFlightRef.current = true;
+    goalContinuationKindRef.current = 'active';
+    if (!handleIncomingPrompt(renderThreadGoalContinuationPrompt(threadGoal!), {
+      isMeta: true
+    })) {
+      goalContinuationInFlightRef.current = false;
+      goalContinuationKindRef.current = null;
+    }
+  }, [
+    sessionStatus,
+    initialMessage,
+    goalContinuationIdleSignal,
+    threadGoal,
+    queuedCommands.length,
+    isShowingLocalJSXCommand,
+    handleIncomingPrompt
+  ]);
 
   // Voice input integration (VOICE_MODE builds only)
   const voice = feature('VOICE_MODE') ?

@@ -259,6 +259,11 @@ export const agentToolResultSchema = lazySchema(() =>
       .optional(),
     changedFilesTruncated: z.number().optional(),
     content: z.array(z.object({ type: z.literal('text'), text: z.string() })),
+    // Set when the subagent's final assistant message was a synthetic API
+    // error (e.g. prompt-too-long from query.ts blocking-limit preempt).
+    // Surfaces the failure to the AgentTool sync/async paths so they can
+    // record `failed`/`completed_with_error` instead of `completed`.
+    error: z.string().optional(),
     totalToolUseCount: z.number(),
     totalDurationMs: z.number(),
     totalTokens: z.number(),
@@ -497,16 +502,31 @@ export function finalizeAgentTool(
   if (lastAssistantMessage === undefined) {
     throw new Error('No assistant messages found')
   }
+
+  // Detect synthetic API-error terminals (e.g. blocking-limit preempt in
+  // query.ts:682-687, which yields an isApiErrorMessage assistant and
+  // returns reason='blocking_limit'). Without this check, the synthetic
+  // "Prompt is too long" text would become the subagent's apparent output
+  // and the tool result would surface as a normal completion.
+  const isApiErrorTerminal = lastAssistantMessage.isApiErrorMessage === true
+  const apiErrorText = isApiErrorTerminal
+    ? extractTextContent(lastAssistantMessage.message.content, '\n')
+    : undefined
+
   // Extract text content from the agent's response. If the final assistant
   // message is a pure tool_use block (loop exited mid-turn), fall back to
-  // the most recent assistant message that has text content.
-  let content = lastAssistantMessage.message.content.filter(
-    _ => _.type === 'text',
-  )
+  // the most recent assistant message that has text content. When the
+  // terminal is a synthetic API error, skip it entirely (and skip any
+  // earlier API-error messages too) so partial work from the subagent's
+  // real turns is what's reported, not the error string.
+  let content = isApiErrorTerminal
+    ? []
+    : lastAssistantMessage.message.content.filter(_ => _.type === 'text')
   if (content.length === 0) {
     for (let i = agentMessages.length - 1; i >= 0; i--) {
       const m = agentMessages[i]!
       if (m.type !== 'assistant') continue
+      if (m.isApiErrorMessage === true) continue
       const textBlocks = m.message.content.filter(_ => _.type === 'text')
       if (textBlocks.length > 0) {
         content = textBlocks
@@ -571,6 +591,7 @@ export function finalizeAgentTool(
     changedFiles,
     ...(changedFilesTruncated !== undefined ? { changedFilesTruncated } : {}),
     content,
+    ...(apiErrorText !== undefined ? { error: apiErrorText } : {}),
     totalDurationMs: Date.now() - startTime,
     totalTokens,
     totalToolUseCount,
@@ -836,6 +857,58 @@ export async function runAsyncAgentLifecycle({
     // immediately. classifyHandoffIfNeeded (API call) and getWorktreeResult
     // (git exec) are notification embellishments that can hang — they must
     // not gate the status transition (gh-20236).
+    //
+    // If the subagent ended with a synthetic API-error terminal (e.g.
+    // prompt-too-long blocking-limit preempt), surface it as failed rather
+    // than completed so the parent sees what happened and partial work is
+    // preserved through the failure notification.
+    if (agentResult.error) {
+      const apiErrorMsg = agentResult.error
+      failAsyncAgent(taskId, apiErrorMsg, rootSetAppState)
+      appendSubagentTerminal(parentTranscriptPath, {
+        sessionId: parentSessionId,
+        agentId: asAgentId(taskId),
+        toolUseId: toolUseContext.toolUseId,
+        status: 'failed',
+        reason: apiErrorMsg,
+        durationMs: Date.now() - metadata.startTime,
+        endedAt: new Date().toISOString(),
+      })
+      await recordWorkerSessionTerminal({
+        sessionId: parentSessionId,
+        agentId: taskId,
+        status: 'failed',
+        error: apiErrorMsg,
+        outputSummary: description,
+      }).catch(_err =>
+        logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+      )
+      unregisterActiveSubagent(taskId)
+
+      let finalMessage = extractTextContent(agentResult.content, '\n')
+      if (formatFinalMessage && finalMessage.trim()) {
+        finalMessage = formatFinalMessage(finalMessage)
+      }
+
+      const worktreeResult = await getWorktreeResult()
+      enqueueAgentNotification({
+        taskId,
+        description,
+        status: 'failed',
+        error: apiErrorMsg,
+        setAppState: rootSetAppState,
+        finalMessage,
+        usage: {
+          totalTokens: getTokenCountFromTracker(tracker),
+          toolUses: agentResult.totalToolUseCount,
+          durationMs: agentResult.totalDurationMs,
+        },
+        toolUseId: toolUseContext.toolUseId,
+        ...worktreeResult,
+      })
+      return
+    }
+
     completeAsyncAgent(agentResult, rootSetAppState)
 
     appendSubagentTerminal(parentTranscriptPath, {

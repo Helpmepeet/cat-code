@@ -83,6 +83,7 @@ import { EnterWorktreeTool } from './tools/EnterWorktreeTool/EnterWorktreeTool.j
 import { ExitWorktreeTool } from './tools/ExitWorktreeTool/ExitWorktreeTool.js'
 import { ConfigTool } from './tools/ConfigTool/ConfigTool.js'
 import { AskOrchestratorTool } from './tools/AskOrchestratorTool/AskOrchestratorTool.js'
+import { UpdateGoalTool } from './tools/UpdateGoalTool/UpdateGoalTool.js'
 import { TaskCreateTool } from './tools/TaskCreateTool/TaskCreateTool.js'
 import { TaskGetTool } from './tools/TaskGetTool/TaskGetTool.js'
 import { TaskUpdateTool } from './tools/TaskUpdateTool/TaskUpdateTool.js'
@@ -226,6 +227,7 @@ export function getAllBaseTools(): Tools {
     AskOrchestratorTool,
     SkillTool,
     EnterPlanModeTool,
+    UpdateGoalTool,
     ...(process.env.USER_TYPE === 'ant' ? [ConfigTool] : []),
     ...(process.env.USER_TYPE === 'ant' ? [TungstenTool] : []),
     ...(SuggestBackgroundPRTool ? [SuggestBackgroundPRTool] : []),
