@@ -12,12 +12,14 @@ import { join, dirname } from 'path'
 import { logForDebugging } from '../../utils/debug.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
+import { extractCodexAccountId } from '../oauth/codex-client.js'
 import {
   appendAccount,
   getPoolStatus,
   getVaultPath,
   isAccountLocked,
   markAccountDead,
+  saveCodexTokenToVault,
 } from './codexAccountPool.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -30,8 +32,9 @@ const DEFAULT_REFRESH_INTERVAL_HOURS = 4
 
 export interface RefreshResult {
   accountId: string
-  status: 'refreshed' | 'locked' | 'failed'
+  status: 'refreshed' | 'locked' | 'failed' | 'identity_mismatch'
   detail?: string
+  refreshedAccountId?: string
 }
 
 // ── Token refresh ──────────────────────────────────────────────────────────
@@ -45,7 +48,10 @@ export async function refreshAccountTokens(
   accountId: string,
   refreshToken: string,
   vaultFilePath: string,
-): Promise<{ accessToken: string; refreshToken: string; idToken: string }> {
+): Promise<{ accessToken: string; refreshToken: string; idToken: string; status: 'refreshed' | 'identity_mismatch'; refreshedAccountId?: string }> {
+  logForDebugging(
+    `[codex-profile] refresh-start writer=codex-refresh.refreshAccountTokens account=${accountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath}`,
+  )
   const response = await globalThis.fetch(TOKEN_REFRESH_URL, {
     method: 'POST',
     headers: {
@@ -88,6 +94,57 @@ export async function refreshAccountTokens(
     throw new Error(reason)
   }
 
+  const refreshedAccountId = extractCodexAccountId(newAccessToken)
+  if (!refreshedAccountId) {
+    const reason = 'Token refresh response missing account identity'
+    markAccountDead(accountId, reason)
+    throw new Error(reason)
+  }
+
+  const sameAccount = refreshedAccountId === accountId
+  if (!sameAccount) {
+    logForDebugging(
+      `[codex-profile] identity-mismatch writer=codex-refresh.refreshAccountTokens before_account=${accountId} after_account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} action=save-as-new-profile`,
+      { level: 'warn' },
+    )
+    markAccountDead(accountId, `Refresh returned different account ${refreshedAccountId}`)
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+        accountId: refreshedAccountId,
+        idToken: newIdToken,
+      },
+      {
+        writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
+        expectedPreviousAccountId: accountId,
+        filePath: join(dirname(vaultFilePath), `${refreshedAccountId}.json`),
+        preserveExistingMetadata: false,
+      },
+    )
+    appendAccount(
+      {
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+        expiresAt: Date.now(),
+        accountId: refreshedAccountId,
+      },
+      {
+        preserveCapped: true,
+        writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
+        source: saved ? 'vault' : 'config',
+        vaultFilePath: saved?.filePath,
+      },
+    )
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      idToken: newIdToken || '',
+      status: 'identity_mismatch',
+      refreshedAccountId,
+    }
+  }
+
   // Update vault file atomically
   const nowIso = new Date().toISOString()
   try {
@@ -95,6 +152,7 @@ export async function refreshAccountTokens(
     const tokens = (existing.tokens || {}) as Record<string, unknown>
     tokens.access_token = newAccessToken
     tokens.refresh_token = newRefreshToken
+    tokens.account_id = refreshedAccountId
     if (newIdToken) tokens.id_token = newIdToken
     existing.tokens = tokens
     existing.last_refresh = nowIso
@@ -115,17 +173,23 @@ export async function refreshAccountTokens(
     accessToken: newAccessToken,
     refreshToken: newRefreshToken,
     expiresAt: Date.now(),
-    accountId,
+    accountId: refreshedAccountId,
   }, {
     preserveCapped: true,
+    writer: 'codex-refresh.refreshAccountTokens',
+    source: 'vault',
+    vaultFilePath,
   })
 
-  logForDebugging(`[codex-refresh] Refreshed account ${accountId.slice(0, 12)}...`)
+  logForDebugging(
+    `[codex-profile] refresh-done writer=codex-refresh.refreshAccountTokens account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} metadata=preserved`,
+  )
 
   return {
     accessToken: newAccessToken,
     refreshToken: newRefreshToken,
     idToken: newIdToken || '',
+    status: 'refreshed',
   }
 }
 
@@ -177,8 +241,17 @@ export async function touchAll(): Promise<RefreshResult[]> {
       }
 
       // Refresh
-      await refreshAccountTokens(accountId, String(tokens.refresh_token), filePath)
-      results.push({ accountId, status: 'refreshed' })
+      const refreshed = await refreshAccountTokens(accountId, String(tokens.refresh_token), filePath)
+      if (refreshed.status === 'identity_mismatch') {
+        results.push({
+          accountId,
+          status: 'identity_mismatch',
+          detail: `Refresh returned different account ${refreshed.refreshedAccountId}`,
+          refreshedAccountId: refreshed.refreshedAccountId,
+        })
+      } else {
+        results.push({ accountId, status: 'refreshed' })
+      }
     } catch (err) {
       const accountId = file.replace('.json', '')
       results.push({

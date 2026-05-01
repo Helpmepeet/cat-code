@@ -45,6 +45,7 @@ export const call: LocalCommandCall = async () => {
       lines.push('Codex Account Pool:')
       lines.push('')
 
+      let hasConfigOnly = false
       for (let i = 0; i < accounts.length; i++) {
         const acct = accounts[i]!
         const isActive = i === activeIndex
@@ -56,8 +57,10 @@ export const call: LocalCommandCall = async () => {
             : acct.status === 'capped'
               ? '  [capped]'
               : '  [dead]'
+        const sourceTag = acct.source === 'vault' ? '  vault' : '  config'
+        if (acct.source !== 'vault') hasConfigOnly = true
 
-        let line = `${dot}${label}${statusTag}`
+        let line = `${dot}${label}${statusTag}${sourceTag}`
         if (acct.lastError) {
           line += `\n    warning: ${acct.lastError}`
         }
@@ -73,6 +76,9 @@ export const call: LocalCommandCall = async () => {
       lines.push(
         `Total: ${accounts.length} (${healthy} healthy${capped ? `, ${capped} capped` : ''}${dead ? `, ${dead} dead` : ''})`,
       )
+      if (hasConfigOnly) {
+        lines.push('Note: config-only accounts cannot be deleted with /delete-account.')
+      }
     }
 
     lines.push('')

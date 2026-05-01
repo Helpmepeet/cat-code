@@ -8,6 +8,12 @@
 
 ## Phase 0
 
+### 1 May 2026
+
+51. Fixed cross-tab Codex "usage unavailable" inconsistency — opening multiple tabs showed different profiles as `usage unavailable` in `/accounts` because each tab's wham/usage call ran against whatever access_token was sitting in the vault file, and stale tokens (>1h old, common at startup since interactive launches don't trigger a refresh) returned HTTP 401. Two-layer fix: (1) reactive — `fetchAccountUsageResult` now refreshes the account's token on HTTP 401 and retries the usage call once, honoring the existing vault lock so concurrent tabs don't double-refresh; (2) proactive — `initAccountPool` now fires `void touchAll()` at interactive startup alongside the existing periodic-refresh setup so vault tokens are fresh before any usage or Codex API call runs.
+
+52. Added local reference skills for account/profile support and session forensics — `cat-code-profiles-accounts` now covers Claude/Codex account pools, aliases, login/delete/rename/switch behavior, vault/config source tags, logging, and Codex refresh/usage states; `session-analysis` now covers Cat Code/Claude/Codex JSONL discovery, schema differences, subagent metadata, debug logs, and safe transcript reconstruction.
+
 ### 26 Apr 2026
 
 50. Made cache-break warnings more diagnostic on the server-context-shrink path — the generic "server truncated context window" reason now distinguishes prefix pruning ("pruned N messages from prefix") from in-place compaction ("compacted message contents in place, same message count") via per-turn message-count tracking, surfaces both the input-token drop and invalidated-cache-token count, and flags suspicious cascading evictions ("change hit near prefix start, cascaded") when invalidated cache tokens are ≥10× the input drop.

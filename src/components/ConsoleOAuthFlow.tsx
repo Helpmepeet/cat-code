@@ -97,6 +97,7 @@ export function ConsoleOAuthFlow({
   const [cursorOffset, setCursorOffset] = useState(0);
   const [aliasInput, setAliasInput] = useState('');
   const [aliasCursorOffset, setAliasCursorOffset] = useState(0);
+  const [aliasError, setAliasError] = useState<string | null>(null);
   const [oauthService] = useState(() => new OAuthService());
   const [loginWithClaudeAi, setLoginWithClaudeAi] = useState(() => {
     // Use Claude AI auth for setup-token mode to support user:inference scope
@@ -183,15 +184,33 @@ export function ConsoleOAuthFlow({
   ) => {
     saveCodexOAuthTokens(codexTokens);
     const { appendAccount, saveCodexTokenToVault } = await import('../services/api/codexAccountPool.js');
-    appendAccount({ ...codexTokens, alias });
-    saveCodexTokenToVault({ ...codexTokens, alias });
+    const saved = saveCodexTokenToVault(
+      { ...codexTokens, alias },
+      { writer: 'ConsoleOAuthFlow.persistCodexLogin' },
+    );
+    appendAccount(
+      { ...codexTokens, alias },
+      {
+        writer: 'ConsoleOAuthFlow.persistCodexLogin',
+        source: saved ? 'vault' : 'config',
+        vaultFilePath: saved?.filePath,
+        activate: true,
+      },
+    );
   }, []);
   async function handleSubmitAlias(alias: string, codexTokens: { accessToken: string; refreshToken: string; expiresAt: number; accountId: string }) {
     try {
       const trimmed = alias.trim();
       if (trimmed) {
-        await persistCodexLogin(codexTokens, trimmed);
+        const { validateCodexAccountAlias } = await import('../services/api/codexAccountPool.js');
+        const validation = validateCodexAccountAlias(trimmed, codexTokens.accountId);
+        if (!validation.ok) {
+          setAliasError(validation.message);
+          return;
+        }
       }
+      setAliasError(null);
+      await persistCodexLogin(codexTokens, trimmed || undefined);
       void sendNotification({ message: 'OpenAI login successful', notificationType: 'auth_success' }, terminal);
       setAliasInput('');
       setOAuthStatus({ state: 'success', provider: 'openai' });
@@ -328,9 +347,8 @@ export function ConsoleOAuthFlow({
         setOAuthStatus({ state: 'waiting_for_login', url });
         setTimeout(setShowPastePrompt, 3000, true);
       });
-      await persistCodexLogin(codexTokens);
       logEvent('tengu_oauth_codex_success', {});
-      // Pause to ask for an account alias before saving
+      // Ask for alias before saving — account is persisted in handleSubmitAlias
       setOAuthStatus({ state: 'waiting_for_alias', codexTokens });
     } catch (err) {
       const msg = (err as Error).message;
@@ -427,13 +445,14 @@ export function ConsoleOAuthFlow({
             <Text>{'> '}</Text>
             <TextInput
               value={aliasInput}
-              onChange={setAliasInput}
+              onChange={(val) => { setAliasInput(val); setAliasError(null); }}
               cursorOffset={aliasCursorOffset}
               onChangeCursorOffset={setAliasCursorOffset}
               columns={40}
               onSubmit={(val) => { void handleSubmitAlias(val, oauthStatus.codexTokens); }}
             />
           </Box>
+          {aliasError && <Text color="red">{aliasError}</Text>}
         </Box>}
       {oauthStatus.state !== 'waiting_for_alias' && <Box paddingLeft={1} flexDirection="column" gap={1}>
         <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} setLoginWithCodex={setLoginWithCodex} />

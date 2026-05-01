@@ -114,7 +114,7 @@ export async function call(): Promise<React.ReactNode> {
   await performLogout({
     clearOnboarding: true
   });
-  const message = <Text>Successfully logged out of saved Anthropic and OpenAI Codex accounts.</Text>;
+  const message = <Text>Logged out of current session credentials.{'\n'}Codex vault profiles remain on disk. Use /delete-account {'<alias>'} --confirm to remove one.</Text>;
   setTimeout(() => {
     gracefulShutdownSync(0, 'logout');
   }, 200);

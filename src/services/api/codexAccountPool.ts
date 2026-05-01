@@ -132,10 +132,14 @@ export async function initAccountPool(): Promise<void> {
       `[codex-pool] Loaded ${pool.accounts.length} accounts (${healthy} healthy, ${dead} dead)`,
     )
 
-    // Start periodic token refresh if vault accounts exist
+    // Start periodic token refresh if vault accounts exist, and eagerly
+    // refresh now so wham/usage and Codex API calls don't hit a stale
+    // access_token on tab startup. Vault locks in touchAll() serialize
+    // concurrent refreshes across tabs.
     if (pool.accounts.some((a) => a.source === 'vault')) {
-      const { startPeriodicRefresh } = await import('./codexTokenRefresh.js')
+      const { startPeriodicRefresh, touchAll } = await import('./codexTokenRefresh.js')
       startPeriodicRefresh()
+      void touchAll().catch(() => {})
     }
 
     // Fire-and-forget: fetch initial usage data for scoring
@@ -285,8 +289,13 @@ export function appendAccount(tokens: {
   expiresAt: number
   accountId: string
   alias?: string
+  idToken?: string
 }, options?: {
   preserveCapped?: boolean
+  writer?: string
+  source?: PoolAccount['source']
+  vaultFilePath?: string
+  activate?: boolean
 }): void {
   const existing = pool.accounts.findIndex(
     (a) => a.accountId === tokens.accountId,
@@ -302,8 +311,10 @@ export function appendAccount(tokens: {
     acct.status = preserveCapped ? 'capped' : 'healthy'
     acct.lastError = preserveCapped ? acct.lastError : undefined
     if (tokens.alias) acct.alias = tokens.alias
+    if (options?.source) acct.source = options.source
+    if (options?.vaultFilePath) acct.vaultFilePath = options.vaultFilePath
     logForDebugging(
-      `[codex-pool] Updated existing account ${truncId(tokens.accountId)}`,
+      `[codex-profile] profile-save writer=${options?.writer ?? 'appendAccount'} account=${tokens.accountId} action=updated-memory`,
     )
   } else {
     pool.accounts.push({
@@ -311,22 +322,27 @@ export function appendAccount(tokens: {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,
-      source: 'config',
+      source: options?.source ?? 'config',
       status: 'healthy',
       lastUsedAt: 0,
       turnsUsed: 0,
       alias: tokens.alias,
+      vaultFilePath: options?.vaultFilePath,
     })
     logForDebugging(
-      `[codex-pool] Appended new account ${truncId(tokens.accountId)}`,
+      `[codex-profile] profile-save writer=${options?.writer ?? 'appendAccount'} account=${tokens.accountId} action=added-memory`,
     )
   }
 
-  // If this is the first or only healthy account, activate it
-  if (
+  if (options?.activate) {
+    // Force this account to be active regardless of current pool state
+    const idx = pool.accounts.findIndex((a) => a.accountId === tokens.accountId)
+    if (idx >= 0) pool.activeIndex = idx
+  } else if (
     pool.activeIndex < 0 ||
     pool.accounts[pool.activeIndex]?.status !== 'healthy'
   ) {
+    // Fall back: activate only if no healthy account is currently active
     const idx = pool.accounts.findIndex((a) => a.status === 'healthy')
     if (idx >= 0) pool.activeIndex = idx
   }
@@ -431,10 +447,18 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
     if (targetIdx < 0) return null
   }
 
-  if (targetIdx === pool.activeIndex) return pool.accounts[targetIdx]!
+  if (targetIdx === pool.activeIndex) {
+    const current = pool.accounts[targetIdx]!
+    logForDebugging(
+      `[codex-profile] active-profile-change writer=switch-account account=${current.accountId} action=no-op`,
+    )
+    return current
+  }
 
+  const from = pool.accounts[pool.activeIndex]
+  const to = pool.accounts[targetIdx]!
   logForDebugging(
-    `[codex-pool] Manual switch: ${truncId(pool.accounts[pool.activeIndex]?.accountId ?? '?')} → ${truncId(pool.accounts[targetIdx]!.accountId)}`,
+    `[codex-profile] active-profile-change writer=switch-account before_account=${from?.accountId ?? '?'} before_alias=${from?.alias ?? 'none'} after_account=${to.accountId} after_alias=${to.alias ?? 'none'}`,
   )
   // Stamp the outgoing account so LRU doesn't immediately pick it again
   if (pool.accounts[pool.activeIndex]) {
@@ -443,7 +467,7 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
   pool.activeIndex = targetIdx
   pool.accounts[targetIdx]!.turnsUsed = 0
   persistActiveCodexAccountId(pool.accounts[targetIdx]!.accountId)
-  return pool.accounts[targetIdx]!
+  return to
 }
 
 /** Mark an account as dead with a reason. Used by token refresh on unrecoverable errors. */
@@ -480,29 +504,82 @@ export function saveCodexTokenToVault(tokens: {
   refreshToken: string
   accountId: string
   alias?: string
-}): void {
+  idToken?: string
+}, options: {
+  writer?: string
+  expectedPreviousAccountId?: string
+  filePath?: string
+  preserveExistingMetadata?: boolean
+} = {}): {
+  filePath: string
+  existed: boolean
+  previousAccountId?: string
+  metadataAction: 'created' | 'preserved' | 'replaced'
+  accountChanged: boolean
+} | null {
   try {
     const vaultPath = readVaultPath() ?? DEFAULT_VAULT_PATH
     const accountsDir = join(vaultPath, 'accounts')
     mkdirSync(accountsDir, { recursive: true })
 
-    const filePath = join(accountsDir, `${tokens.accountId}.json`)
-    const data: Record<string, unknown> = {
-      tokens: {
-        access_token: tokens.accessToken,
-        refresh_token: tokens.refreshToken,
-        account_id: tokens.accountId,
-      },
-      last_refresh: new Date().toISOString(),
+    const filePath = options.filePath ?? join(accountsDir, `${tokens.accountId}.json`)
+    const existed = existsSync(filePath)
+    const existing = existed
+      ? (JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>)
+      : null
+    const existingTokens = (existing?.tokens ?? null) as Record<string, unknown> | null
+    const previousAccountId = typeof existingTokens?.account_id === 'string'
+      ? existingTokens.account_id
+      : undefined
+    const accountChanged = previousAccountId != null && previousAccountId !== tokens.accountId
+    const shouldPreserve = Boolean(
+      existing &&
+        options.preserveExistingMetadata !== false &&
+        !accountChanged,
+    )
+    const data: Record<string, unknown> = shouldPreserve ? { ...existing! } : {}
+    data.tokens = {
+      ...(shouldPreserve ? existingTokens ?? {} : {}),
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+      account_id: tokens.accountId,
+      ...(tokens.idToken ? { id_token: tokens.idToken } : {}),
     }
-    if (tokens.alias) data.alias = tokens.alias
-    writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
-    logForDebugging(`[codex-pool] Saved account ${truncId(tokens.accountId)} to vault`)
+    data.last_refresh = new Date().toISOString()
+    if (tokens.alias?.trim()) {
+      data.alias = tokens.alias.trim()
+    } else if (!shouldPreserve) {
+      delete data.alias
+    }
+
+    const tmpPath = join(accountsDir, `.${Date.now()}.${process.pid}.tmp`)
+    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+    renameSync(tmpPath, filePath)
+
+    const metadataAction: 'created' | 'preserved' | 'replaced' = !existed
+      ? 'created'
+      : shouldPreserve
+        ? 'preserved'
+        : 'replaced'
+
+    logForDebugging(
+      `[codex-profile] profile-save writer=${options.writer ?? 'saveCodexTokenToVault'} account=${tokens.accountId} file=${basename(filePath)} existed=${existed} metadata=${metadataAction}${previousAccountId ? ` previous_account=${previousAccountId}` : ''} alias=${typeof data.alias === 'string' ? data.alias : 'none'}`,
+      { level: accountChanged ? 'warn' : 'debug' },
+    )
+
+    return {
+      filePath,
+      existed,
+      previousAccountId,
+      metadataAction,
+      accountChanged,
+    }
   } catch (err) {
     logForDebugging(
-      `[codex-pool] Failed to save account to vault: ${err instanceof Error ? err.message : String(err)}`,
+      `[codex-profile] profile-save-failed writer=${options.writer ?? 'saveCodexTokenToVault'} account=${tokens.accountId} error=${err instanceof Error ? err.message : String(err)}`,
       { level: 'warn' },
     )
+    return null
   }
 }
 
@@ -510,7 +587,7 @@ export function saveCodexTokenToVault(tokens: {
  * Update the alias for an existing vault account.
  * Reads the current vault JSON, sets/overwrites the alias field, writes back atomically.
  */
-export function setAccountAlias(accountId: string, alias: string): boolean {
+export function setAccountAlias(accountId: string, alias: string, writer = 'rename-account'): boolean {
   const acct = pool.accounts.find((a) => a.accountId === accountId)
   if (!acct?.vaultFilePath) return false
 
@@ -522,8 +599,11 @@ export function setAccountAlias(accountId: string, alias: string): boolean {
     const tmp = `${dir}/.${Date.now()}.${process.pid}.tmp`
     writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
     renameSync(tmp, acct.vaultFilePath)
+    const oldAlias = acct.alias
     acct.alias = alias
-    logForDebugging(`[codex-pool] Set alias "${alias}" for ${truncId(accountId)}`)
+    logForDebugging(
+      `[codex-profile] profile-rename writer=${writer} account=${accountId} old_alias=${oldAlias ?? 'none'} new_alias=${alias} file=${basename(acct.vaultFilePath)}`,
+    )
     return true
   } catch (err) {
     logForDebugging(
@@ -591,6 +671,33 @@ export function removeCodexAccount(accountId: string): boolean {
   return true
 }
 
+const ALIAS_PATTERN = /^[a-zA-Z0-9_-]{1,32}$/
+
+/**
+ * Validate a proposed Codex account alias.
+ * Returns ok:true for valid aliases, ok:false with a user-facing message otherwise.
+ * Pass currentAccountId to skip the duplicate check for an account's own alias.
+ */
+export function validateCodexAccountAlias(
+  alias: string,
+  currentAccountId?: string,
+): { ok: true } | { ok: false; message: string } {
+  if (!ALIAS_PATTERN.test(alias)) {
+    return {
+      ok: false,
+      message: `Invalid alias "${alias}". Use 1–32 letters, numbers, underscores, or hyphens (no spaces).`,
+    }
+  }
+  const lower = alias.toLowerCase()
+  const duplicate = pool.accounts.find(
+    (a) => a.accountId !== currentAccountId && a.alias?.toLowerCase() === lower,
+  )
+  if (duplicate) {
+    return { ok: false, message: `Alias "${alias}" is already in use by another account.` }
+  }
+  return { ok: true }
+}
+
 function readVaultPath(): string | null {
   try {
     if (!existsSync(CODEX_NOOTP_CONFIG)) return DEFAULT_VAULT_PATH
@@ -639,6 +746,13 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
       }
 
       const accountId = String(tokens.account_id)
+      const fileAccountId = file.replace(/\.json$/, '')
+      if (fileAccountId !== accountId) {
+        logForDebugging(
+          `[codex-profile] profile-file-mismatch file=${file} filename_account=${fileAccountId} stored_account=${accountId} action=loaded-stored-account`,
+          { level: 'warn' },
+        )
+      }
 
       // Check lock
       if (isAccountLocked(locksDir, accountId)) {
@@ -674,6 +788,9 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
             ? { lastError: planHealth.lastError }
             : {}),
       })
+      logForDebugging(
+        `[codex-profile] profile-load source=vault account=${accountId} alias=${typeof data.alias === 'string' && data.alias ? data.alias : 'none'} file=${file} status=${status} last_refresh=${lastRefresh ?? 'none'}`,
+      )
     } catch (err) {
       logForDebugging(
         `[codex-pool] Failed to load vault account ${file}: ${err instanceof Error ? err.message : String(err)}`,
@@ -710,6 +827,13 @@ function mergePoolAccounts(
   if (configAccount) {
     if (!byId.has(configAccount.accountId)) {
       byId.set(configAccount.accountId, configAccount)
+      logForDebugging(
+        `[codex-profile] profile-merge account=${configAccount.accountId} vault=false config=true action=added-config-profile`,
+      )
+    } else {
+      logForDebugging(
+        `[codex-profile] profile-merge account=${configAccount.accountId} vault=true config=true action=kept-vault-metadata`,
+      )
     }
   }
 
