@@ -8,6 +8,14 @@
 
 ## Phase 0
 
+### 2 May 2026
+
+53. Added Agent Mode worker control tools — Agent Mode can now list durable workers, wait for selected workers, read worker results, and cancel a specific worker by handle without stopping the whole run.
+
+54. Added durable worker result synthesis tracking — completed workers now record result timestamps/summaries, mark outputs as pending synthesis, and can be explicitly marked synthesized after the orchestrator incorporates the result.
+
+55. Improved Agent Mode worker/worktree UX — the REPL now surfaces a compact durable worker roster, prompt guidance requires worker-result convergence before claiming completion, and worktree copy frames isolated work as agent-managed attempts/results instead of user-managed branches.
+
 ### 1 May 2026
 
 51. Fixed cross-tab Codex "usage unavailable" inconsistency — opening multiple tabs showed different profiles as `usage unavailable` in `/accounts` because each tab's wham/usage call ran against whatever access_token was sitting in the vault file, and stale tokens (>1h old, common at startup since interactive launches don't trigger a refresh) returned HTTP 401. Two-layer fix: (1) reactive — `fetchAccountUsageResult` now refreshes the account's token on HTTP 401 and retries the usage call once, honoring the existing vault lock so concurrent tabs don't double-refresh; (2) proactive — `initAccountPool` now fires `void touchAll()` at interactive startup alongside the existing periodic-refresh setup so vault tokens are fresh before any usage or Codex API call runs.
