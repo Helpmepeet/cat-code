@@ -3,6 +3,7 @@ import { getSessionId, getSessionProjectDir, switchSession } from '../../bootstr
 import { asSessionId } from '../../types/ids.js'
 import { getCurrentThreadGoal } from '../../utils/sessionStorage.js'
 import {
+  accountThreadGoalUsage,
   createThreadGoal,
   updateThreadGoalStatus,
 } from '../../utils/threadGoal.js'
@@ -59,13 +60,43 @@ describe('UpdateGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data).toEqual({
+    expect(result.data).toMatchObject({
       message: 'Thread goal marked complete.',
       goalId: goal.goalId,
       status: 'complete',
+      objective: goal.objective,
+      tokensUsed: goal.tokensUsed,
+      timeUsedSeconds: goal.timeUsedSeconds,
     })
     expect(getState().threadGoal?.status).toBe('complete')
     expect(getCurrentThreadGoal(sessionId)?.status).toBe('complete')
+  })
+
+  test('returns budget usage details for a budgeted goal', async () => {
+    const goal = accountThreadGoalUsage(
+      createThreadGoal(sessionId, 'finish phase 1A', 50_000, 100),
+      12_000,
+      45,
+      200,
+    )
+    const { context, getState } = createContext(goal)
+
+    const result = await UpdateGoalTool.call(
+      { status: 'complete' },
+      context as never,
+      undefined as never,
+      {} as never,
+    )
+
+    expect(result.data).toMatchObject({
+      tokenBudget: 50_000,
+      remainingTokens: 38_000,
+    })
+    expect(result.data.completionBudgetReport).toContain(
+      'tokens used: 12000 of 50000',
+    )
+    expect(result.data.completionBudgetReport).toContain('time used: 45 seconds')
+    expect(getState().threadGoal?.status).toBe('complete')
   })
 
   test('marks a budget-limited goal complete', async () => {

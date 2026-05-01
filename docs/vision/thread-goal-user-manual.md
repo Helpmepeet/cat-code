@@ -82,6 +82,14 @@ Normal continuation only starts when all of these are true:
 
 Cat Code does not continue paused, complete, or budget-limited goals as normal work.
 
+## Automatic continuation behavior
+
+When a goal is active, Cat Code may continue working on it after the session becomes idle. The continuation prompt includes the current objective, token budget, tokens used, elapsed time, and remaining tokens.
+
+Before marking a goal complete, Cat Code should perform a completion audit against real evidence such as files, command output, test results, logs, or PR state. Passing tests alone is not enough unless those tests cover every requirement in the goal.
+
+When a token budget is reached, Cat Code should not start new substantive work. It should summarize progress, identify remaining work or blockers, and leave a clear next step.
+
 ## Continuation suppression
 
 If an automatic continuation turn makes zero tool calls, Cat Code suppresses the next automatic continuation. This prevents repeated autonomous turns that do not take concrete action.

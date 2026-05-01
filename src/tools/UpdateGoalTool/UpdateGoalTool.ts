@@ -18,6 +18,12 @@ type Output = {
   message: string
   goalId: string
   status: 'complete'
+  objective: string
+  tokensUsed: number
+  timeUsedSeconds: number
+  tokenBudget?: number
+  remainingTokens?: number
+  completionBudgetReport?: string
 }
 
 function validateGoalUpdate(input: {
@@ -26,6 +32,26 @@ function validateGoalUpdate(input: {
 }): ValidationResult {
   void input.status
   return { result: true }
+}
+
+function buildCompletionBudgetReport(goal: {
+  tokenBudget?: number
+  tokensUsed: number
+  timeUsedSeconds: number
+}): string | undefined {
+  const parts: string[] = []
+
+  if (goal.tokenBudget !== undefined) {
+    parts.push(`tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`)
+  }
+
+  if (goal.timeUsedSeconds > 0) {
+    parts.push(`time used: ${goal.timeUsedSeconds} seconds`)
+  }
+
+  return parts.length
+    ? `Goal achieved. Report final budget usage to the user: ${parts.join('; ')}.`
+    : undefined
 }
 
 export const UpdateGoalTool = buildTool({
@@ -43,8 +69,13 @@ export const UpdateGoalTool = buildTool({
   },
   async prompt() {
     return [
-      'Use this only after verifying that the active thread goal is actually achieved.',
+      'Update the existing thread goal.',
+      'Use this tool only to mark the goal achieved.',
       'The only valid status is "complete".',
+      'Set status to "complete" only when the objective has actually been achieved and no required work remains.',
+      'Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.',
+      'You cannot use this tool to pause, resume, clear, or budget-limit a goal; those status changes are controlled by the user or runtime.',
+      'When marking a budgeted goal complete, report the final token usage and elapsed time from the tool result to the user.',
     ].join('\n')
   },
   async validateInput(input, context) {
@@ -118,6 +149,12 @@ export const UpdateGoalTool = buildTool({
     }
 
     const nextGoal = updateThreadGoalStatus(currentGoal, 'complete')
+    const remainingTokens =
+      nextGoal.tokenBudget === undefined
+        ? undefined
+        : Math.max(0, nextGoal.tokenBudget - nextGoal.tokensUsed)
+    const completionBudgetReport = buildCompletionBudgetReport(nextGoal)
+
     saveThreadGoal(nextGoal)
     context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
 
@@ -126,6 +163,14 @@ export const UpdateGoalTool = buildTool({
         message: 'Thread goal marked complete.',
         goalId: nextGoal.goalId,
         status: 'complete',
+        objective: nextGoal.objective,
+        tokensUsed: nextGoal.tokensUsed,
+        timeUsedSeconds: nextGoal.timeUsedSeconds,
+        ...(nextGoal.tokenBudget !== undefined
+          ? { tokenBudget: nextGoal.tokenBudget }
+          : {}),
+        ...(remainingTokens !== undefined ? { remainingTokens } : {}),
+        ...(completionBudgetReport ? { completionBudgetReport } : {}),
       },
     }
   },
