@@ -14,8 +14,6 @@ import {
 const GOAL_EXISTS_MESSAGE =
   'A goal already exists. Run /goal replace <objective> to replace it, or /goal clear first.'
 const NO_GOAL_MESSAGE = 'No goal is currently set.'
-const GOAL_QUERY_ACTIVE_MESSAGE =
-  'Cannot set a new goal while a turn is running. Stop or wait first.'
 
 export const call: LocalJSXCommandCall = async (onDone, context, args) => {
   const parsed = parseGoalCommand(args)
@@ -96,14 +94,6 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       display: 'system',
       metaMessages: [buildGoalMetaMessage(nextGoal)],
     })
-    return null
-  }
-
-  if (
-    (parsed.type === 'set' || parsed.type === 'replace') &&
-    context.isQueryActive
-  ) {
-    onDone(GOAL_QUERY_ACTIVE_MESSAGE, { display: 'system' })
     return null
   }
 

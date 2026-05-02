@@ -171,31 +171,6 @@ describe('/goal command', () => {
     expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
   })
 
-  test('rejects setting a new goal while a turn is running', async () => {
-    let output = ''
-    let state = { threadGoal: null as ReturnType<typeof createThreadGoal> | null }
-
-    await call(
-      value => {
-        output = value ?? ''
-      },
-      {
-        getAppState: () => state,
-        setAppState: updater => {
-          state = updater(state)
-        },
-        isQueryActive: true,
-      } as Parameters<typeof call>[1],
-      'new goal',
-    )
-
-    expect(output).toBe(
-      'Cannot set a new goal while a turn is running. Stop or wait first.',
-    )
-    expect(state.threadGoal).toBeNull()
-    expect(await readSessionState(sessionId)).toBeNull()
-  })
-
   test('explicit replace swaps an active goal and resets durable worker state', async () => {
     const oldGoal = createThreadGoal(sessionId, 'old goal', 10_000, 100)
     let state = { threadGoal: oldGoal }
@@ -241,54 +216,6 @@ describe('/goal command', () => {
     expect(state.threadGoal?.goalId).not.toBe(oldGoal.goalId)
     expect((await readSessionState(sessionId))?.objective).toBe('new goal')
     expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
-  })
-
-  test('rejects replacing a goal while a turn is running', async () => {
-    const oldGoal = createThreadGoal(sessionId, 'old goal', 10_000, 100)
-    let state = { threadGoal: oldGoal }
-
-    await updateSessionState(
-      sessionId,
-      () =>
-        createSessionState({
-          sessionId,
-          mode: 'agent',
-          objective: oldGoal.objective,
-        }),
-      () => {},
-    )
-    await recordWorkerSessionSpawn({
-      sessionId,
-      mode: 'agent',
-      objective: oldGoal.objective,
-      handle: 'old-worker',
-      agentId: randomUUID().slice(0, 8),
-      role: 'implementor',
-      description: 'Old goal worker',
-      worktreePath: null,
-    })
-
-    let output = ''
-    await call(
-      value => {
-        output = value ?? ''
-      },
-      {
-        getAppState: () => state,
-        setAppState: updater => {
-          state = updater(state)
-        },
-        isQueryActive: true,
-      } as Parameters<typeof call>[1],
-      'replace new goal',
-    )
-
-    expect(output).toBe(
-      'Cannot set a new goal while a turn is running. Stop or wait first.',
-    )
-    expect(state.threadGoal).toBe(oldGoal)
-    expect((await readSessionState(sessionId))?.objective).toBe('old goal')
-    expect((await readSessionState(sessionId))?.knownWorkers).toHaveLength(1)
   })
 
   test('keeps the durable Agent Mode objective in sync on pause and resume', async () => {
