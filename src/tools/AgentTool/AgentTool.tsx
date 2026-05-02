@@ -10,7 +10,7 @@ import { enhanceSystemPromptWithEnvDetails, getSystemPrompt } from '../../consta
 import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
 import { isAgentMode } from '../../agent-mode/agentMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
-import { recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
+import { recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
@@ -66,6 +66,135 @@ import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorM
 /* eslint-disable @typescript-eslint/no-require-imports */
 const proactiveModule = feature('PROACTIVE') || feature('KAIROS') ? require('../../proactive/index.js') as typeof import('../../proactive/index.js') : null;
 /* eslint-enable @typescript-eslint/no-require-imports */
+
+export function deriveSessionStateTrackingObjective({
+  threadGoalObjective,
+  description,
+}: {
+  threadGoalObjective?: string
+  description?: string
+}): string {
+  return threadGoalObjective ?? description ?? 'Continue current objective'
+}
+
+export type AgentSessionStateTracking = {
+  sessionId: string
+  mode: Exclude<ReturnType<typeof getCurrentSessionMode>, 'normal'>
+  objective: string
+}
+
+export function buildAgentSessionStateTracking({
+  sessionMode,
+  sessionId,
+  threadGoalObjective,
+  description,
+}: {
+  sessionMode: ReturnType<typeof getCurrentSessionMode>
+  sessionId: string
+  threadGoalObjective?: string
+  description?: string
+}): AgentSessionStateTracking | undefined {
+  if (sessionMode !== 'agent' && sessionMode !== 'coordinator') {
+    return undefined
+  }
+
+  return {
+    sessionId,
+    mode: sessionMode,
+    objective: deriveSessionStateTrackingObjective({
+      threadGoalObjective,
+      description,
+    }),
+  }
+}
+
+export async function finalizeFailedAgentLaunch({
+  prompt,
+  description,
+  agentId,
+  agentType,
+  model,
+  error,
+  durationMs,
+  sessionStateTracking,
+  worktreePath,
+  spawnedAt = new Date().toISOString(),
+}: {
+  prompt: string
+  description: string
+  agentId: string
+  agentType: string
+  model?: string
+  error: unknown
+  durationMs: number
+  sessionStateTracking?: AgentSessionStateTracking
+  worktreePath?: string | null
+  spawnedAt?: string
+}, {
+  recordSpawn = recordWorkerSessionSpawn,
+  recordTerminal = recordWorkerSessionTerminal,
+}: {
+  recordSpawn?: typeof recordWorkerSessionSpawn
+  recordTerminal?: typeof recordWorkerSessionTerminal
+} = {}): Promise<{ data: Output }> {
+  const errMsg = errorMessage(error)
+
+  if (sessionStateTracking) {
+    await recordSpawn({
+      sessionId: sessionStateTracking.sessionId,
+      mode: sessionStateTracking.mode,
+      objective: sessionStateTracking.objective,
+      agentId,
+      role: agentType,
+      description,
+      worktreePath: worktreePath ?? null,
+      spawnedAt,
+    }).catch(_err =>
+      logForDebugging(`Failed to record Agent Mode worker spawn failure: ${_err}`),
+    )
+
+    await recordTerminal({
+      sessionId: sessionStateTracking.sessionId,
+      agentId,
+      status: 'failed',
+      error: errMsg,
+      outputSummary: description,
+    }).catch(_err =>
+      logForDebugging(`Failed to record Agent Mode worker launch failure: ${_err}`),
+    )
+  }
+
+  return {
+    data: {
+      status: 'completed_with_error',
+      prompt,
+      agentId,
+      agentType,
+      ...(model ? { model } : {}),
+      content: [
+        {
+          type: 'text',
+          text:
+            `Worker launch failed before initialization for ${agentType} (${description}).\n` +
+            `Error: ${errMsg}`,
+        },
+      ],
+      error: errMsg,
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        server_tool_use: null,
+        service_tier: null,
+        cache_creation: null,
+      },
+      totalToolUseCount: 0,
+      totalDurationMs: durationMs,
+      totalTokens: 0,
+    },
+  }
+}
 
 // Progress display constants (for showing background hint)
 const PROGRESS_THRESHOLD_MS = 2000; // Show background hint after 2 seconds
@@ -514,53 +643,6 @@ export const AgentTool = buildTool({
     let enhancedSystemPrompt: string[] | undefined;
     let forkParentSystemPrompt: ReturnType<typeof buildEffectiveSystemPrompt> | undefined;
     let promptMessages: MessageType[];
-    if (isForkPath) {
-      if (toolUseContext.renderedSystemPrompt) {
-        forkParentSystemPrompt = toolUseContext.renderedSystemPrompt;
-      } else {
-        // Fallback: recompute. May diverge from parent's cached bytes if
-        // GrowthBook state changed between parent turn-start and fork spawn.
-        const mainThreadAgentDefinition = appState.agent ? appState.agentDefinitions.activeAgents.find(a => a.agentType === appState.agent) : undefined;
-        const additionalWorkingDirectories = Array.from(appState.toolPermissionContext.additionalWorkingDirectories.keys());
-        const defaultSystemPrompt = await getSystemPrompt(toolUseContext.options.tools, toolUseContext.options.mainLoopModel, additionalWorkingDirectories, toolUseContext.options.mcpClients);
-        forkParentSystemPrompt = buildEffectiveSystemPrompt({
-          mainThreadAgentDefinition,
-          toolUseContext,
-          customSystemPrompt: toolUseContext.options.customSystemPrompt,
-          defaultSystemPrompt,
-          appendSystemPrompt: toolUseContext.options.appendSystemPrompt
-        });
-      }
-      promptMessages = buildForkedMessages(prompt, assistantMessage, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
-    } else {
-      try {
-        const additionalWorkingDirectories = Array.from(appState.toolPermissionContext.additionalWorkingDirectories.keys());
-
-        // All agents have getSystemPrompt - pass toolUseContext to all
-        const agentPrompt = selectedAgent.getSystemPrompt({
-          toolUseContext
-        });
-
-        // Log agent memory loaded event for subagents
-        if (selectedAgent.memory) {
-          logEvent('tengu_agent_memory_loaded', {
-            ...("external" === 'ant' && {
-              agent_type: selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
-            }),
-            scope: selectedAgent.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            source: 'subagent' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
-          });
-        }
-
-        // Apply environment details enhancement
-        enhancedSystemPrompt = await enhanceSystemPromptWithEnvDetails([agentPrompt], resolvedAgentModel, additionalWorkingDirectories, undefined, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
-      } catch (error) {
-        logForDebugging(`Failed to get system prompt for agent ${selectedAgent.agentType}: ${errorMessage(error)}`);
-      }
-      promptMessages = [createUserMessage({
-        content: prompt
-      })];
-    }
     const metadata = {
       prompt,
       resolvedAgentModel,
@@ -598,10 +680,6 @@ export const AgentTool = buildTool({
     };
     const workerTools = assembleToolPool(workerPermissionContext, appState.mcp.tools);
 
-    // Create a stable agent ID early so it can be used for worktree slug
-    const earlyAgentId = createAgentId();
-
-    // Set up worktree isolation if requested
     let worktreeInfo: {
       worktreePath: string;
       worktreeBranch?: string;
@@ -609,31 +687,79 @@ export const AgentTool = buildTool({
       gitRoot?: string;
       hookBased?: boolean;
     } | null = null;
-    if (effectiveIsolation === 'worktree') {
-      const slug = `agent-${earlyAgentId.slice(0, 8)}`;
-      worktreeInfo = await createAgentWorktree(slug);
-    }
+    const earlyAgentId = createAgentId();
+    const sessionStateTracking = buildAgentSessionStateTracking({
+      sessionMode: getCurrentSessionMode(),
+      sessionId: getSessionId(),
+      threadGoalObjective: appState.threadGoal?.objective,
+      description,
+    });
+    let runAgentParams: Parameters<typeof runAgent>[0];
+    try {
+      if (isForkPath) {
+        if (toolUseContext.renderedSystemPrompt) {
+          forkParentSystemPrompt = toolUseContext.renderedSystemPrompt;
+        } else {
+          // Fallback: recompute. May diverge from parent's cached bytes if
+          // GrowthBook state changed between parent turn-start and fork spawn.
+          const mainThreadAgentDefinition = appState.agent ? appState.agentDefinitions.activeAgents.find(a => a.agentType === appState.agent) : undefined;
+          const additionalWorkingDirectories = Array.from(appState.toolPermissionContext.additionalWorkingDirectories.keys());
+          const defaultSystemPrompt = await getSystemPrompt(toolUseContext.options.tools, toolUseContext.options.mainLoopModel, additionalWorkingDirectories, toolUseContext.options.mcpClients);
+          forkParentSystemPrompt = buildEffectiveSystemPrompt({
+            mainThreadAgentDefinition,
+            toolUseContext,
+            customSystemPrompt: toolUseContext.options.customSystemPrompt,
+            defaultSystemPrompt,
+            appendSystemPrompt: toolUseContext.options.appendSystemPrompt
+          });
+        }
+        promptMessages = buildForkedMessages(prompt, assistantMessage, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
+      } else {
+        try {
+          const additionalWorkingDirectories = Array.from(appState.toolPermissionContext.additionalWorkingDirectories.keys());
 
-    // Fork + worktree: inject a notice telling the child to translate paths
-    // and re-read potentially stale files. Appended after the fork directive
-    // so it appears as the most recent guidance the child sees.
-    if (isForkPath && worktreeInfo) {
-      promptMessages.push(createUserMessage({
-        content: buildWorktreeNotice(getCwd(), worktreeInfo.worktreePath)
-      }));
-    }
-    const forkOutputFormat: BetaJSONOutputFormat | undefined = isForkPath ? getForkWorkerResultOutputFormat() : undefined;
-    const currentSessionMode = getCurrentSessionMode();
-    const sessionStateTracking =
-      currentSessionMode === 'agent' || currentSessionMode === 'coordinator'
-        ? {
-            sessionId: getSessionId(),
-            mode: currentSessionMode,
-            objective: description ?? 'Continue current objective',
+          // All agents have getSystemPrompt - pass toolUseContext to all
+          const agentPrompt = selectedAgent.getSystemPrompt({
+            toolUseContext
+          });
+
+          // Log agent memory loaded event for subagents
+          if (selectedAgent.memory) {
+            logEvent('tengu_agent_memory_loaded', {
+              ...("external" === 'ant' && {
+                agent_type: selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+              }),
+              scope: selectedAgent.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+              source: 'subagent' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+            });
           }
-        : undefined;
 
-    const runAgentParams: Parameters<typeof runAgent>[0] = {
+          // Apply environment details enhancement
+          enhancedSystemPrompt = await enhanceSystemPromptWithEnvDetails([agentPrompt], resolvedAgentModel, additionalWorkingDirectories, undefined, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
+        } catch (error) {
+          logForDebugging(`Failed to get system prompt for agent ${selectedAgent.agentType}: ${errorMessage(error)}`);
+        }
+        promptMessages = [createUserMessage({
+          content: prompt
+        })];
+      }
+
+      if (effectiveIsolation === 'worktree') {
+        const slug = `agent-${earlyAgentId.slice(0, 8)}`;
+        worktreeInfo = await createAgentWorktree(slug);
+      }
+
+      // Fork + worktree: inject a notice telling the child to translate paths
+      // and re-read potentially stale files. Appended after the fork directive
+      // so it appears as the most recent guidance the child sees.
+      if (isForkPath && worktreeInfo) {
+        promptMessages.push(createUserMessage({
+          content: buildWorktreeNotice(getCwd(), worktreeInfo.worktreePath)
+        }));
+      }
+
+      const forkOutputFormat: BetaJSONOutputFormat | undefined = isForkPath ? getForkWorkerResultOutputFormat() : undefined;
+      runAgentParams = {
       agentDefinition: selectedAgent,
       promptMessages,
       toolUseContext,
@@ -668,7 +794,33 @@ export const AgentTool = buildTool({
       worktreePath: worktreeInfo?.worktreePath,
       description,
       sessionStateTracking,
-    };
+      };
+    } catch (error) {
+      if (worktreeInfo && !worktreeInfo.hookBased && worktreeInfo.worktreeBranch && worktreeInfo.gitRoot) {
+        try {
+          await removeAgentWorktree(worktreeInfo.worktreePath, worktreeInfo.worktreeBranch, worktreeInfo.gitRoot);
+        } catch (cleanupError) {
+          logForDebugging(`Failed to clean up worktree after launch failure: ${errorMessage(cleanupError)}`, {
+            level: 'warn'
+          });
+        }
+      }
+
+      logForDebugging(`Agent launch failed before initialization (${selectedAgent.agentType}): ${errorMessage(error)}`, {
+        level: 'error'
+      });
+      return await finalizeFailedAgentLaunch({
+        prompt,
+        description,
+        agentId: earlyAgentId,
+        agentType: selectedAgent.agentType,
+        model: resolvedAgentModel,
+        error,
+        durationMs: Date.now() - startTime,
+        sessionStateTracking,
+        worktreePath: worktreeInfo?.hookBased ? worktreeInfo.worktreePath : null,
+      });
+    }
 
     // Helper to wrap execution with a cwd override: explicit cwd arg (KAIROS)
     // takes precedence over worktree isolation path.
