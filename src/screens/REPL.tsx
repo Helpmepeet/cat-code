@@ -3,7 +3,7 @@ import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import { webUIBus } from '../web/WebUIBus.js';
 import { spawnSync } from 'child_process';
-import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens, getTotalTokenUsage } from '../bootstrap/state.js';
+import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
 import { count } from '../utils/array.js';
 import { dirname, join } from 'path';
@@ -181,7 +181,7 @@ import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalUsage, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
@@ -960,7 +960,7 @@ export function REPL({
   // Wall-clock time tracking refs for accurate elapsed time calculation
   const loadingStartTimeRef = React.useRef<number>(0);
   const turnGoalAtStartRef = React.useRef<ThreadGoal | null>(null);
-  const turnTotalTokensAtStartRef = React.useRef(0);
+  const turnContextTokensAtStartRef = React.useRef(0);
   const goalContinuationInFlightRef = React.useRef(false);
   const goalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
   const turnGoalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
@@ -1725,9 +1725,9 @@ export function REPL({
       : turnGoalAtStart;
 
     const nowMs = Date.now();
-    const tokenDelta = Math.max(
-      0,
-      getTotalTokenUsage() - turnTotalTokensAtStartRef.current,
+    const tokenDelta = calculateThreadGoalContextTokenDelta(
+      turnContextTokensAtStartRef.current,
+      tokenCountWithEstimation(messagesRef.current),
     );
     const timeDeltaSeconds = Math.max(
       0,
@@ -3219,7 +3219,9 @@ export function REPL({
       resetTimingRefs();
       turnGoalContinuationKindRef.current = goalContinuationKindRef.current;
       turnGoalAtStartRef.current = store.getState().threadGoal;
-      turnTotalTokensAtStartRef.current = getTotalTokenUsage();
+      turnContextTokensAtStartRef.current = tokenCountWithEstimation(
+        messagesRef.current,
+      );
       setMessages(oldMessages => [...oldMessages, ...newMessages]);
       responseLengthRef.current = 0;
       if (feature('TOKEN_BUDGET')) {

@@ -140,7 +140,7 @@ describe('UpdateGoalTool', () => {
       remainingTokens: 38_000,
     })
     expect(result.data.completionBudgetReport).toContain(
-      'tokens used: 12000 of 50000',
+      'context tokens used: 12000 of 50000',
     )
     expect(result.data.completionBudgetReport).toContain('time used: 45 seconds')
     expect(getState().threadGoal?.status).toBe('complete')

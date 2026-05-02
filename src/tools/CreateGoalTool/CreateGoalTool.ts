@@ -44,7 +44,7 @@ export const CreateGoalTool = buildTool({
   async prompt() {
     return [
       'Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.',
-      'Set tokenBudget only when an explicit token budget is requested.',
+      'Set tokenBudget only when an explicit context-token budget is requested.',
       'This tool fails if a non-complete goal already exists; use UpdateGoal only to mark an existing goal complete.',
     ].join('\n')
   },

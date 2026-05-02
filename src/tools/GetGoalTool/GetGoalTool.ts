@@ -27,7 +27,7 @@ export const GetGoalTool = buildTool({
   },
 
   async description() {
-    return 'Get the current thread goal, including status, budget, token usage, elapsed time, and remaining token budget.'
+    return 'Get the current thread goal, including status, context-token budget, context-token usage, elapsed time, and remaining context-token budget.'
   },
 
   async prompt() {

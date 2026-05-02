@@ -43,7 +43,9 @@ function buildCompletionBudgetReport(goal: {
   const parts: string[] = []
 
   if (goal.tokenBudget !== undefined) {
-    parts.push(`tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`)
+    parts.push(
+      `context tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`,
+    )
   }
 
   if (goal.timeUsedSeconds > 0) {

@@ -9,6 +9,7 @@ import {
 } from './sessionStorage.js'
 import {
   accountThreadGoalUsage,
+  calculateThreadGoalContextTokenDelta,
   createThreadGoal,
   deriveThreadGoalContinuationResetState,
   deriveThreadGoalContinuationSeed,
@@ -33,6 +34,7 @@ import { join } from 'path'
 describe('parseGoalCommand', () => {
   test('empty args show the current goal', () => {
     expect(parseGoalCommand(undefined)).toEqual({ type: 'show' })
+    expect(parseGoalCommand('status')).toEqual({ type: 'show' })
   })
 
   test('parses clear, pause, and resume', () => {
@@ -119,12 +121,20 @@ describe('thread goal formatting and parsing', () => {
       [
         'Goal: active',
         'Objective: finish phase 1A',
-        'Budget: 50,000 tokens',
-        'Tokens used: 12,000',
+        'Budget: 50,000 context tokens',
+        'Context tokens used: 12,000',
         'Time used: 45s',
+        '',
+        'This goal will continue while the session is idle.',
+        'Use /goal pause, /goal resume, /goal clear, or /goal replace <objective>.',
+        'The agent will mark it complete with UpdateGoal when finished.',
       ].join('\n'),
     )
-    expect(formatThreadGoalFooterLabel(goal)).toBe('Goal: active · 12K/50K')
+    expect(formatThreadGoalFooterLabel(goal)).toBe('Goal: active · 12K/50K ctx')
+
+    expect(
+      formatThreadGoalFooterLabel(updateThreadGoalStatus(goal, 'complete', 200)),
+    ).toBe('Goal: complete · 12K context tokens')
   })
 
   test('updates goal status timestamps', () => {
@@ -206,6 +216,26 @@ describe('thread goal formatting and parsing', () => {
     })
   })
 
+  test('does not account usage after a goal is complete', () => {
+    const goal = {
+      ...updateThreadGoalStatus(
+        createThreadGoal('session-1', 'finish phase 1B', undefined, 100),
+        'complete',
+        200,
+      ),
+      tokensUsed: 36_671,
+      timeUsedSeconds: 26,
+    }
+
+    expect(accountThreadGoalUsage(goal, 12_500_383, 449, 300)).toEqual(goal)
+  })
+
+  test('calculates only positive context-token deltas', () => {
+    expect(calculateThreadGoalContextTokenDelta(40_000, 50_000)).toBe(10_000)
+    expect(calculateThreadGoalContextTokenDelta(50_000, 0)).toBe(0)
+    expect(calculateThreadGoalContextTokenDelta(50_000, 45_000)).toBe(0)
+  })
+
   test('renders the budget-limit wrap-up prompt safely', () => {
     const goal = {
       ...createThreadGoal('session-1', 'finish phase 1B', 50_000, 100),
@@ -216,12 +246,14 @@ describe('thread goal formatting and parsing', () => {
 
     expect(prompt).toContain('<untrusted_objective>')
     expect(prompt).toContain(goal.objective)
-    expect(prompt).toContain('The active thread goal has reached its token budget.')
+    expect(prompt).toContain(
+      'The active thread goal has reached its context-token budget.',
+    )
     expect(prompt).toContain('Budget:')
     expect(prompt).toContain('Time spent pursuing goal: 45 seconds')
-    expect(prompt).toContain('Tokens used: 12000')
-    expect(prompt).toContain('Token budget: 50000')
-    expect(prompt).toContain('Tokens remaining: 38000')
+    expect(prompt).toContain('Context tokens used: 12000')
+    expect(prompt).toContain('Context token budget: 50000')
+    expect(prompt).toContain('Context tokens remaining: 38000')
     expect(prompt).toContain('budget_limited')
     expect(prompt).toContain('do not start new substantive work')
     expect(prompt).toContain('summarize useful progress')
@@ -271,9 +303,9 @@ describe('thread goal formatting and parsing', () => {
     expect(prompt).toContain(goal.objective)
     expect(prompt).toContain('Budget:')
     expect(prompt).toContain('Time spent pursuing goal: 45 seconds')
-    expect(prompt).toContain('Tokens used: 12000')
-    expect(prompt).toContain('Token budget: 50000')
-    expect(prompt).toContain('Tokens remaining: 38000')
+    expect(prompt).toContain('Context tokens used: 12000')
+    expect(prompt).toContain('Context token budget: 50000')
+    expect(prompt).toContain('Context tokens remaining: 38000')
     expect(prompt).toContain('Avoid repeating work that is already done')
     expect(prompt).toContain('Restate the objective as concrete deliverables or success criteria.')
     expect(prompt).toContain('Build a prompt-to-artifact checklist')
