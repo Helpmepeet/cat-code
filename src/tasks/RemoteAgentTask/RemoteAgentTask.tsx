@@ -5,6 +5,10 @@ import { formatTaskNotificationText, toTaskNotificationOrigin } from '../../util
 import type { SDKAssistantMessage, SDKMessage } from '../../entrypoints/agentSdkTypes.js';
 import type { SetAppState, Task, TaskContext, TaskStateBase } from '../../Task.js';
 import { createTaskStateBase, generateTaskId } from '../../Task.js';
+import { TASK_CREATE_TOOL_NAME } from '../../tools/TaskCreateTool/constants.js';
+import { TaskCreateTool } from '../../tools/TaskCreateTool/TaskCreateTool.js';
+import { TASK_UPDATE_TOOL_NAME } from '../../tools/TaskUpdateTool/constants.js';
+import { TaskUpdateTool } from '../../tools/TaskUpdateTool/TaskUpdateTool.js';
 import { TodoWriteTool } from '../../tools/TodoWriteTool/TodoWriteTool.js';
 import { type BackgroundRemoteSessionPrecondition, checkBackgroundRemoteSessionEligibility } from '../../utils/background/remote/remoteSession.js';
 import { logForDebugging } from '../../utils/debug.js';
@@ -18,7 +22,7 @@ import { appendTaskOutput, evictTaskOutput, getTaskOutputPath, initTaskOutput } 
 import { registerTask, updateTaskState } from '../../utils/task/framework.js';
 import { fetchSession } from '../../utils/teleport/api.js';
 import { archiveRemoteSession, pollRemoteSessionEvents } from '../../utils/teleport.js';
-import type { TodoList } from '../../utils/todo/types.js';
+import type { TodoItem, TodoList } from '../../utils/todo/types.js';
 import type { UltraplanPhase } from '../../utils/ultraplan/ccrSession.js';
 export type RemoteAgentTaskState = TaskStateBase & {
   type: 'remote_agent';
@@ -367,10 +371,149 @@ Remote review did not produce output (${reason}). Tell the user to retry /ultrar
   });
 }
 
+function findLastTaskManagementIndex(log: SDKMessage[]): number {
+  return log.findLastIndex(
+    (msg): msg is SDKAssistantMessage =>
+      msg.type === 'assistant' &&
+      msg.message.content.some(
+        block =>
+          block.type === 'tool_use' &&
+          (block.name === TASK_CREATE_TOOL_NAME ||
+            block.name === TASK_UPDATE_TOOL_NAME),
+      ),
+  );
+}
+
+function findLastTodoWriteIndex(log: SDKMessage[]): number {
+  return log.findLastIndex(
+    (msg): msg is SDKAssistantMessage =>
+      msg.type === 'assistant' &&
+      msg.message.content.some(
+        block => block.type === 'tool_use' && block.name === TodoWriteTool.name,
+      ),
+  );
+}
+
+function toProjectedTodoItem(
+  item: Partial<TodoItem> & { content: string },
+): TodoItem {
+  return {
+    content: item.content,
+    status: item.status ?? 'pending',
+    activeForm: item.activeForm ?? item.content,
+  };
+}
+
+function parseTaskCreateResult(content: unknown): string | null {
+  if (typeof content !== 'string') {
+    return null;
+  }
+  const match = content.match(/Task #([^ ]+) created successfully:/);
+  return match?.[1] ?? null;
+}
+
+function extractProjectedTaskTodoList(
+  log: SDKMessage[],
+  startIndex = 0,
+): TodoList {
+  const tasks = new Map<string, TodoItem>();
+  const pendingCreates = new Map<string, TodoItem>();
+
+  for (const msg of log.slice(startIndex)) {
+    if (msg.type === 'assistant') {
+      for (const block of msg.message.content) {
+        if (block.type !== 'tool_use') {
+          continue;
+        }
+
+        if (block.name === TASK_CREATE_TOOL_NAME) {
+          const parsedInput = TaskCreateTool.inputSchema.safeParse(block.input);
+          if (!parsedInput.success) {
+            continue;
+          }
+
+          pendingCreates.set(
+            block.id,
+            toProjectedTodoItem({
+              content: parsedInput.data.subject,
+              status: 'pending',
+              activeForm: parsedInput.data.activeForm,
+            }),
+          );
+          continue;
+        }
+
+        if (block.name !== TASK_UPDATE_TOOL_NAME) {
+          continue;
+        }
+
+        const parsedInput = TaskUpdateTool.inputSchema.safeParse(block.input);
+        if (!parsedInput.success) {
+          continue;
+        }
+
+        const { taskId, subject, activeForm, status } = parsedInput.data;
+        if (status === 'deleted') {
+          tasks.delete(taskId);
+          continue;
+        }
+
+        const existingTask = tasks.get(taskId);
+        tasks.set(
+          taskId,
+          toProjectedTodoItem({
+            content: subject ?? existingTask?.content ?? `Task ${taskId}`,
+            activeForm: activeForm ?? existingTask?.activeForm ?? subject,
+            status: status ?? existingTask?.status,
+          }),
+        );
+      }
+      continue;
+    }
+
+    if (msg.type !== 'user') {
+      continue;
+    }
+
+    for (const block of msg.message.content) {
+      if (block.type !== 'tool_result') {
+        continue;
+      }
+
+      const taskId = parseTaskCreateResult(block.content);
+      if (!taskId) {
+        continue;
+      }
+
+      const pendingTask = pendingCreates.get(block.tool_use_id);
+      if (!pendingTask) {
+        continue;
+      }
+
+      tasks.set(taskId, pendingTask);
+      pendingCreates.delete(block.tool_use_id);
+    }
+  }
+
+  return Array.from(tasks.values());
+}
+
 /**
- * Extract todo list from SDK messages (finds last TodoWrite tool use).
+ * Extract todo/task progress from SDK messages.
+ * Prefers the most recently used task-management system for mixed transcripts.
  */
-function extractTodoListFromLog(log: SDKMessage[]): TodoList {
+export function extractTodoListFromLog(log: SDKMessage[]): TodoList {
+  const lastTaskManagementIndex = findLastTaskManagementIndex(log);
+  const lastTodoWriteIndex = findLastTodoWriteIndex(log);
+
+  if (lastTaskManagementIndex === -1 && lastTodoWriteIndex === -1) {
+    return [];
+  }
+
+  if (lastTaskManagementIndex > lastTodoWriteIndex) {
+    return extractProjectedTaskTodoList(log, lastTodoWriteIndex + 1);
+  }
+
   const todoListMessage = log.findLast((msg): msg is SDKAssistantMessage => msg.type === 'assistant' && msg.message.content.some(block => block.type === 'tool_use' && block.name === TodoWriteTool.name));
   if (!todoListMessage) {
     return [];

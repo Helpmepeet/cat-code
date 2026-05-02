@@ -1,5 +1,5 @@
 import { feature } from 'bun:bundle'
-import { ASYNC_AGENT_ALLOWED_TOOLS } from '../constants/tools.js'
+import { getAsyncAgentDisplayTools } from '../constants/tools.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -89,7 +89,7 @@ export function getCoordinatorUserContext(
     ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_EDIT_TOOL_NAME]
         .sort()
         .join(', ')
-    : Array.from(ASYNC_AGENT_ALLOWED_TOOLS)
+    : getAsyncAgentDisplayTools()
         .filter(name => !INTERNAL_WORKER_TOOLS.has(name))
         .sort()
         .join(', ')

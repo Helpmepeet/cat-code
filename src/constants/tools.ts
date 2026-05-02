@@ -32,6 +32,7 @@ import { ENTER_WORKTREE_TOOL_NAME } from '../tools/EnterWorktreeTool/constants.j
 import { EXIT_WORKTREE_TOOL_NAME } from '../tools/ExitWorktreeTool/constants.js'
 import { WORKFLOW_TOOL_NAME } from '../tools/WorkflowTool/constants.js'
 import { ASK_ORCHESTRATOR_TOOL_NAME } from '../tools/AskOrchestratorTool/prompt.js'
+import { isTodoV2Enabled } from '../utils/tasks.js'
 import {
   CRON_CREATE_TOOL_NAME,
   CRON_DELETE_TOOL_NAME,
@@ -58,13 +59,9 @@ export const CUSTOM_AGENT_DISALLOWED_TOOLS = new Set([
   ...ALL_AGENT_DISALLOWED_TOOLS,
 ])
 
-/*
- * Async Agent Tool Availability Status (Source of Truth)
- */
-export const ASYNC_AGENT_ALLOWED_TOOLS = new Set([
+const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   FILE_READ_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
-  TODO_WRITE_TOOL_NAME,
   GREP_TOOL_NAME,
   WEB_FETCH_TOOL_NAME,
   GLOB_TOOL_NAME,
@@ -78,7 +75,34 @@ export const ASYNC_AGENT_ALLOWED_TOOLS = new Set([
   TOOL_SEARCH_TOOL_NAME,
   ENTER_WORKTREE_TOOL_NAME,
   EXIT_WORKTREE_TOOL_NAME,
+] as const
+
+const ASYNC_AGENT_V1_TASK_TOOLS = [TODO_WRITE_TOOL_NAME] as const
+
+const ASYNC_AGENT_V2_TASK_TOOLS = [
+  TASK_CREATE_TOOL_NAME,
+  TASK_GET_TOOL_NAME,
+  TASK_LIST_TOOL_NAME,
+  TASK_UPDATE_TOOL_NAME,
+] as const
+
+/*
+ * Async Agent Tool Availability Status (Source of Truth)
+ */
+export const ASYNC_AGENT_ALLOWED_TOOLS = new Set([
+  ...ASYNC_AGENT_BASE_ALLOWED_TOOLS,
+  ...ASYNC_AGENT_V1_TASK_TOOLS,
+  ...ASYNC_AGENT_V2_TASK_TOOLS,
 ])
+
+export function getAsyncAgentDisplayTools(): string[] {
+  return [
+    ...ASYNC_AGENT_BASE_ALLOWED_TOOLS,
+    ...(isTodoV2Enabled()
+      ? ASYNC_AGENT_V2_TASK_TOOLS
+      : ASYNC_AGENT_V1_TASK_TOOLS),
+  ]
+}
 /**
  * Tools allowed only for in-process teammates (not general async agents).
  * These are injected by inProcessRunner.ts and allowed through filterToolsForAgent

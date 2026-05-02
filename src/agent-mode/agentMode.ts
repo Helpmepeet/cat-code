@@ -13,6 +13,7 @@ import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import { TEAM_CREATE_TOOL_NAME } from '../tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '../tools/TeamDeleteTool/constants.js'
+import { getAsyncAgentDisplayTools } from '../constants/tools.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { getOrchestratorSystemPrompt } from './orchestratorPrompt.js'
 import {
@@ -29,26 +30,6 @@ const INTERNAL_WORKER_TOOLS = new Set([
   TEAM_DELETE_TOOL_NAME,
   SEND_MESSAGE_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
-])
-
-const ASYNC_AGENT_ALLOWED_TOOLS = new Set([
-  FILE_READ_TOOL_NAME,
-  'WebSearch',
-  'TodoWrite',
-  'Grep',
-  'WebFetch',
-  'Glob',
-  'Bash',
-  'PowerShell',
-  'Edit',
-  'Write',
-  'NotebookEdit',
-  'Skill',
-  'AskOrchestrator',
-  'SyntheticOutput',
-  'ToolSearch',
-  'EnterWorktree',
-  'ExitWorktree',
 ])
 
 export function isAgentMode(): boolean {
@@ -68,7 +49,7 @@ export async function getAgentModeUserContext(
     ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_EDIT_TOOL_NAME]
         .sort()
         .join(', ')
-    : Array.from(ASYNC_AGENT_ALLOWED_TOOLS)
+    : getAsyncAgentDisplayTools()
         .filter(name => !INTERNAL_WORKER_TOOLS.has(name))
         .sort()
         .join(', ')
