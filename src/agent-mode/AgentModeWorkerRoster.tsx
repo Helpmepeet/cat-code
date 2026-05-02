@@ -18,9 +18,11 @@ function getRoleLabel(role: string): string {
 }
 
 function getStatusColor(statusLabel: string): 'warning' | undefined {
-  return statusLabel === 'pending review' || statusLabel === 'attention'
-    ? 'warning'
-    : undefined
+  return statusLabel === 'attention' ? 'warning' : undefined
+}
+
+function getTreePrefix(index: number, total: number): string {
+  return index === total - 1 ? '  └─ ' : '  ├─ '
 }
 
 export function AgentModeWorkerRoster({
@@ -33,40 +35,36 @@ export function AgentModeWorkerRoster({
   return (
     <Box width="100%" flexDirection="column" marginBottom={1}>
       <Box>
-        <Text color="claude">◉ Agent Mode</Text>
-        <Text dimColor> · orchestrating workers</Text>
+        <Text color="claude">◉ Agent Mode workers</Text>
       </Box>
       {!loaded ? (
         <Box>
-          <Text dimColor>  workers: loading…</Text>
+          <Text dimColor>  loading…</Text>
         </Box>
       ) : !summary?.hasWorkers ? (
         <Box>
-          <Text dimColor>  workers: none yet</Text>
+          <Text dimColor>  none yet</Text>
         </Box>
       ) : (
         <>
           <Box>
-            <Text dimColor>  workers: </Text>
             <Text>{summary.active} active</Text>
-            {summary.done > 0 ? (
-              <Text dimColor>{` · ${summary.done} done`}</Text>
+            {summary.ready > 0 ? (
+              <Text>{` · ${summary.ready} result ready`}</Text>
             ) : null}
-            {summary.pendingSynthesis > 0 ? (
-              <Text color="warning">
-                {` · ${summary.pendingSynthesis} pending review`}
-              </Text>
+            {summary.reviewed > 0 ? (
+              <Text dimColor>{` · ${summary.reviewed} reviewed`}</Text>
             ) : null}
             {summary.attention > 0 ? (
               <Text color="warning">{` · ${summary.attention} attention`}</Text>
             ) : null}
           </Box>
-          {summary.visibleWorkers.map(worker => {
+          {summary.visibleWorkers.map((worker, index) => {
             const statusLabel = getWorkerStatusLabel(worker)
 
             return (
               <Box key={worker.agentId}>
-                <Text>{`  ${getWorkerDisplayHandle(worker)}`}</Text>
+                <Text>{`${getTreePrefix(index, summary.visibleWorkers.length)}${getWorkerDisplayHandle(worker)}`}</Text>
                 <Text dimColor>{` · ${getRoleLabel(worker.role)}`}</Text>
                 <Text color={getStatusColor(statusLabel)}>
                   {` · ${statusLabel}`}

@@ -49,20 +49,22 @@ describe('AgentModeWorkerRoster', () => {
   test('shows loading state before the first durable read completes', () => {
     const node = AgentModeWorkerRoster({ loaded: false, summary: null })
 
-    expect(extractText(node)).toContain('workers: loading…')
+    expect(extractText(node)).toContain('Agent Mode workers')
+    expect(extractText(node)).toContain('loading…')
   })
 
   test('shows none yet after loading with no worker summary', () => {
     const node = AgentModeWorkerRoster({ loaded: true, summary: null })
 
-    expect(extractText(node)).toContain('workers: none yet')
+    expect(extractText(node)).toContain('none yet')
   })
 
   test('falls back to the raw role label for unknown worker roles', () => {
     const summary: AgentModeWorkerUxSummary = {
       hasWorkers: true,
       active: 1,
-      done: 0,
+      ready: 0,
+      reviewed: 0,
       attention: 0,
       pendingSynthesis: 0,
       visibleWorkers: [
@@ -81,5 +83,52 @@ describe('AgentModeWorkerRoster', () => {
     expect(text).toContain('@synth-a')
     expect(text).toContain('agent-mode-synthesizer')
     expect(text).toContain('running')
+    expect(text).toContain('└─')
+  })
+
+  test('renders exclusive summary buckets and tree markers for visible workers', () => {
+    const summary: AgentModeWorkerUxSummary = {
+      hasWorkers: true,
+      active: 1,
+      ready: 1,
+      reviewed: 2,
+      attention: 1,
+      pendingSynthesis: 1,
+      visibleWorkers: [
+        worker({
+          agentId: 'worker-1',
+          handle: 'turing',
+          description: 'Map the live worker state',
+          status: 'running',
+        }),
+        worker({
+          agentId: 'worker-2',
+          handle: 'curie',
+          description: 'Summarize finished worker output',
+          status: 'completed',
+          synthesisStatus: 'pending',
+        }),
+        worker({
+          agentId: 'worker-3',
+          handle: 'hopper',
+          description: 'Investigate the blocked worker path',
+          status: 'failed',
+        }),
+      ],
+    }
+
+    const node = AgentModeWorkerRoster({ loaded: true, summary })
+    const text = extractText(node)
+
+    expect(text).toContain('1 active')
+    expect(text).toContain('1 result ready')
+    expect(text).toContain('2 reviewed')
+    expect(text).toContain('1 attention')
+    expect(text).not.toContain('done')
+    expect(text).not.toContain('pending review')
+    expect(text).toContain('├─ @turing')
+    expect(text).toContain('├─ @curie')
+    expect(text).toContain('└─ @hopper')
+    expect(text).toContain('result ready')
   })
 })

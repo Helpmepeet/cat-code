@@ -6,7 +6,8 @@ import type {
 export type AgentModeWorkerUxSummary = {
   hasWorkers: boolean
   active: number
-  done: number
+  ready: number
+  reviewed: number
   attention: number
   pendingSynthesis: number
   visibleWorkers: AgentModeWorkerSession[]
@@ -26,12 +27,16 @@ function needsAttention(worker: AgentModeWorkerSession): boolean {
   return worker.status === 'failed' || worker.status === 'killed'
 }
 
+function isResultReady(worker: AgentModeWorkerSession): boolean {
+  return worker.synthesisStatus === 'pending'
+}
+
+function isReviewed(worker: AgentModeWorkerSession): boolean {
+  return worker.status === 'completed' && worker.synthesisStatus === 'synthesized'
+}
+
 function isVisibleWorker(worker: AgentModeWorkerSession): boolean {
-  return (
-    worker.status === 'running' ||
-    worker.synthesisStatus === 'pending' ||
-    needsAttention(worker)
-  )
+  return worker.status === 'running' || isResultReady(worker) || needsAttention(worker)
 }
 
 export function getWorkerDisplayHandle(
@@ -49,10 +54,10 @@ export function getWorkerStatusLabel(worker: {
   synthesisStatus?: AgentModeWorkerSession['synthesisStatus']
 }): string {
   if (worker.synthesisStatus === 'pending') {
-    return 'pending review'
+    return 'result ready'
   }
   if (worker.synthesisStatus === 'synthesized') {
-    return 'synthesized'
+    return 'reviewed'
   }
   if (worker.status === 'failed' || worker.status === 'killed') {
     return 'attention'
@@ -68,11 +73,10 @@ export function summarizeAgentModeWorkers(
   return {
     hasWorkers: workers.length > 0,
     active: workers.filter(worker => worker.status === 'running').length,
-    done: workers.filter(worker => worker.status === 'completed').length,
+    ready: workers.filter(worker => isResultReady(worker)).length,
+    reviewed: workers.filter(worker => isReviewed(worker)).length,
     attention: workers.filter(worker => needsAttention(worker)).length,
-    pendingSynthesis: workers.filter(
-      worker => worker.synthesisStatus === 'pending',
-    ).length,
+    pendingSynthesis: workers.filter(worker => isResultReady(worker)).length,
     visibleWorkers: workers.filter(worker => isVisibleWorker(worker)).slice(-4),
   }
 }

@@ -44,7 +44,8 @@ describe('workerUxSummary', () => {
     expect(summarizeAgentModeWorkers(state)).toEqual({
       hasWorkers: true,
       active: 1,
-      done: 1,
+      ready: 1,
+      reviewed: 0,
       attention: 1,
       pendingSynthesis: 1,
       visibleWorkers: [runningWorker, pendingWorker, failedWorker],
@@ -55,7 +56,8 @@ describe('workerUxSummary', () => {
     expect(summarizeAgentModeWorkers(null)).toEqual({
       hasWorkers: false,
       active: 0,
-      done: 0,
+      ready: 0,
+      reviewed: 0,
       attention: 0,
       pendingSynthesis: 0,
       visibleWorkers: [],
@@ -81,14 +83,57 @@ describe('workerUxSummary', () => {
   test('maps synthesis and attention states to UX labels', () => {
     expect(
       getWorkerStatusLabel(completedWorker({ synthesisStatus: 'pending' })),
-    ).toBe('pending review')
+    ).toBe('result ready')
 
     expect(
       getWorkerStatusLabel(completedWorker({ synthesisStatus: 'synthesized' })),
-    ).toBe('synthesized')
+    ).toBe('reviewed')
 
     expect(getWorkerStatusLabel(terminalWorker('killed'))).toBe('attention')
     expect(getWorkerStatusLabel(terminalWorker('running'))).toBe('running')
+  })
+
+  test('counts reviewed workers separately from result-ready workers', () => {
+    const reviewedWorker = worker({
+      agentId: 'worker-reviewed',
+      role: 'implementor',
+      description: 'Already reviewed',
+      status: 'completed',
+      spawnedAt: '2026-05-02T10:00:00.000Z',
+      synthesisStatus: 'synthesized',
+    })
+    const legacyCompletedWorker = worker({
+      agentId: 'worker-legacy',
+      role: 'implementor',
+      description: 'Completed before synthesis tracking',
+      status: 'completed',
+      spawnedAt: '2026-05-02T10:01:00.000Z',
+    })
+    const resultReadyWorker = worker({
+      agentId: 'worker-ready',
+      role: 'implementor',
+      description: 'Finished and waiting on the lead',
+      status: 'completed',
+      spawnedAt: '2026-05-02T10:02:00.000Z',
+      synthesisStatus: 'pending',
+    })
+
+    const state: AgentModeSessionState = {
+      objective: 'Count worker buckets cleanly',
+      currentPhase: 'verifying',
+      activeWorker: null,
+      knownWorkers: [reviewedWorker, legacyCompletedWorker, resultReadyWorker],
+      nextAction: 'Read the worker result before concluding.',
+    }
+
+    expect(summarizeAgentModeWorkers(state)).toMatchObject({
+      active: 0,
+      ready: 1,
+      reviewed: 1,
+      attention: 0,
+      pendingSynthesis: 1,
+      visibleWorkers: [resultReadyWorker],
+    })
   })
 
   test('keeps the last four visible workers after filtering in spawned order', () => {

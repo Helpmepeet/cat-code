@@ -7,6 +7,7 @@ import { logForDebugging } from 'src/utils/debug.js'
 import { getProjectRoot, getSessionId } from '../../bootstrap/state.js'
 import { loadRoleFilePrompt, loadContextIndex } from '../../agent-mode/roleFiles.js'
 import {
+  readSessionState,
   readPersistedWorkerHandle,
   recordWorkerSessionSpawn,
 } from '../../agent-mode/sessionState.js'
@@ -378,8 +379,17 @@ export async function* runAgent({
           override.agentId,
         )
       : null
+  const reservedWorkerHandles = sessionStateTracking
+    ? (
+        (await readSessionState(sessionStateTracking.sessionId))?.knownWorkers ??
+        []
+      )
+        .map(worker => worker.handle)
+        .filter((handle): handle is string => Boolean(handle && handle.length > 0))
+    : []
   const workerName =
-    persistedWorkerHandle ?? allocateWorkerName(agentDefinition.agentType)
+    persistedWorkerHandle ??
+    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles)
   const workerHandle = workerName ?? agentId
 
   // Route this agent's transcript into a grouping subdirectory if requested
