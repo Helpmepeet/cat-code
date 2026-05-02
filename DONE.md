@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 3 May 2026
+
+58. Strengthened goal completion evidence requirements — `UpdateGoal` now tells the model to mark a thread goal complete only after every explicit requirement is satisfied, real evidence supports completion, tests or green status actually cover the objective, and no required work remains; regression coverage locks the model-facing completion prompt.
+
 ### 2 May 2026
 
 56. Fixed model-scaled autocompact headroom — autocompact no longer uses the same 10k recovery window for every model; the recovery window now scales with effective context size (with floor/cap), context analysis uses the same threshold logic as runtime, and regression coverage now locks the concrete windows plus blocking-limit behavior.
