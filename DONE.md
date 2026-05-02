@@ -10,6 +10,8 @@
 
 ### 2 May 2026
 
+56. Fixed model-scaled autocompact headroom — autocompact no longer uses the same 10k recovery window for every model; the recovery window now scales with effective context size (with floor/cap), context analysis uses the same threshold logic as runtime, and regression coverage now locks the concrete windows plus blocking-limit behavior.
+
 53. Added Agent Mode worker control tools — Agent Mode can now list durable workers, wait for selected workers, read worker results, and cancel a specific worker by handle without stopping the whole run.
 
 54. Added durable worker result synthesis tracking — completed workers now record result timestamps/summaries, mark outputs as pending synthesis, and can be explicitly marked synthesized after the orchestrator incorporates the result.
