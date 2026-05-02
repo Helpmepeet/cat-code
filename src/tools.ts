@@ -79,6 +79,7 @@ const getSendMessageTool = () =>
 import { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
 import { AskOrchestratorTool } from './tools/AskOrchestratorTool/AskOrchestratorTool.js'
 import { GetGoalTool } from './tools/GetGoalTool/GetGoalTool.js'
+import { CreateGoalTool } from './tools/CreateGoalTool/CreateGoalTool.js'
 import { LSPTool } from './tools/LSPTool/LSPTool.js'
 import { ListMcpResourcesTool } from './tools/ListMcpResourcesTool/ListMcpResourcesTool.js'
 import { ReadMcpResourceTool } from './tools/ReadMcpResourceTool/ReadMcpResourceTool.js'
@@ -235,6 +236,7 @@ export function getAllBaseTools(): Tools {
     SkillTool,
     EnterPlanModeTool,
     GetGoalTool,
+    CreateGoalTool,
     UpdateGoalTool,
     ...(process.env.USER_TYPE === 'ant' ? [ConfigTool] : []),
     ...(process.env.USER_TYPE === 'ant' ? [TungstenTool] : []),

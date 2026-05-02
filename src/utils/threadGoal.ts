@@ -21,11 +21,24 @@ export type ThreadGoal = {
 
 export type ThreadGoalContinuationKind = 'active' | 'budget-wrap-up'
 
+export type ThreadGoalContinuationSeed = {
+  shouldBumpIdleSignal: boolean
+  pendingBudgetWrapUpGoalId: string | null
+}
+
+export type ThreadGoalContinuationResetState = {
+  resetKey: string | null
+  goalContinuationStallCount: number
+  pendingBudgetWrapUpGoalId: string | null
+  shouldBumpIdleSignal: boolean
+}
+
 export type ParsedGoalCommand =
   | { type: 'show' }
   | { type: 'clear' }
   | { type: 'pause' }
   | { type: 'resume' }
+  | { type: 'replace'; objective: string; tokenBudget?: number }
   | { type: 'set'; objective: string; tokenBudget?: number }
   | { type: 'error'; message: string }
 
@@ -34,6 +47,8 @@ const GOAL_USAGE =
   '  /goal\n' +
   '  /goal <objective>\n' +
   '  /goal --budget N <objective>\n' +
+  '  /goal replace <objective>\n' +
+  '  /goal replace --budget N <objective>\n' +
   '  /goal pause\n' +
   '  /goal resume\n' +
   '  /goal clear'
@@ -44,6 +59,8 @@ const STATUS_LABELS: Record<ThreadGoalStatus, string> = {
   budget_limited: 'budget limited',
   complete: 'complete',
 }
+
+export const MAX_GOAL_CONTINUATION_STALL_COUNT = 2
 
 function formatBudgetValue(value: number): string {
   return value.toLocaleString('en-US')
@@ -79,6 +96,53 @@ function usageError(message: string): ParsedGoalCommand {
   }
 }
 
+function splitFirstWhitespaceSeparatedToken(
+  args: string,
+): { token: string; remainder: string } | null {
+  const separatorMatch = args.match(/\s+/)
+  if (!separatorMatch || separatorMatch.index === undefined) {
+    return null
+  }
+
+  const separatorIndex = separatorMatch.index
+  return {
+    token: args.slice(0, separatorIndex).trim(),
+    remainder: args.slice(separatorIndex + separatorMatch[0].length).trim(),
+  }
+}
+
+function parseBudgetedObjective({
+  args,
+  commandType,
+  missingBudgetMessage,
+}: {
+  args: string
+  commandType: 'set' | 'replace'
+  missingBudgetMessage: string
+}): ParsedGoalCommand {
+  if (!args) {
+    return usageError(missingBudgetMessage)
+  }
+
+  const splitArgs = splitFirstWhitespaceSeparatedToken(args)
+  if (!splitArgs) {
+    return usageError('Error: Goal objective is required after --budget.')
+  }
+
+  const { token: rawBudget, remainder: objective } = splitArgs
+  const tokenBudget = parseTokenBudget(rawBudget)
+  if (tokenBudget === null) {
+    return usageError(
+      `Error: Invalid budget "${rawBudget}". Use a positive integer or K/M suffix.`,
+    )
+  }
+  if (!objective) {
+    return usageError('Error: Goal objective is required after --budget.')
+  }
+
+  return { type: commandType, objective, tokenBudget }
+}
+
 export function getThreadGoalUsageText(): string {
   return GOAL_USAGE
 }
@@ -97,48 +161,53 @@ export function parseGoalCommand(rawArgs?: string): ParsedGoalCommand {
   if (trimmedArgs === 'pause') return { type: 'pause' }
   if (trimmedArgs === 'resume') return { type: 'resume' }
 
-  if (trimmedArgs.startsWith('clear ')) {
+  if (/^clear\s+/.test(trimmedArgs)) {
     return usageError('Error: /goal clear does not accept extra arguments.')
   }
-  if (trimmedArgs.startsWith('pause ')) {
+  if (/^pause\s+/.test(trimmedArgs)) {
     return usageError('Error: /goal pause does not accept extra arguments.')
   }
-  if (trimmedArgs.startsWith('resume ')) {
+  if (/^resume\s+/.test(trimmedArgs)) {
     return usageError('Error: /goal resume does not accept extra arguments.')
+  }
+
+  if (trimmedArgs === 'replace') {
+    return usageError('Error: Goal objective is required after replace.')
+  }
+
+  const replaceMatch = trimmedArgs.match(/^replace\s+([\s\S]+)$/)
+  if (replaceMatch) {
+    const replaceArgs = replaceMatch[1].trim()
+    if (replaceArgs === '--budget') {
+      return usageError('Error: Missing budget value after replace --budget.')
+    }
+
+    const replaceBudgetMatch = replaceArgs.match(/^--budget\s+([\s\S]+)$/)
+    if (replaceBudgetMatch) {
+      return parseBudgetedObjective({
+        args: replaceBudgetMatch[1].trim(),
+        commandType: 'replace',
+        missingBudgetMessage: 'Error: Missing budget value after replace --budget.',
+      })
+    }
+
+    return {
+      type: 'replace',
+      objective: replaceArgs,
+    }
   }
 
   if (trimmedArgs === '--budget') {
     return usageError('Error: Missing budget value after --budget.')
   }
 
-  if (trimmedArgs.startsWith('--budget ')) {
-    const budgetArgs = trimmedArgs.slice('--budget '.length).trim()
-    if (!budgetArgs) {
-      return usageError('Error: Missing budget value after --budget.')
-    }
-
-    const firstSpace = budgetArgs.indexOf(' ')
-    if (firstSpace === -1) {
-      return usageError('Error: Goal objective is required after --budget.')
-    }
-
-    const rawBudget = budgetArgs.slice(0, firstSpace).trim()
-    const objective = budgetArgs.slice(firstSpace + 1).trim()
-    const tokenBudget = parseTokenBudget(rawBudget)
-    if (tokenBudget === null) {
-      return usageError(
-        `Error: Invalid budget "${rawBudget}". Use a positive integer or K/M suffix.`,
-      )
-    }
-    if (!objective) {
-      return usageError('Error: Goal objective is required after --budget.')
-    }
-
-    return {
-      type: 'set',
-      objective,
-      tokenBudget,
-    }
+  const budgetMatch = trimmedArgs.match(/^--budget\s+([\s\S]+)$/)
+  if (budgetMatch) {
+    return parseBudgetedObjective({
+      args: budgetMatch[1].trim(),
+      commandType: 'set',
+      missingBudgetMessage: 'Error: Missing budget value after --budget.',
+    })
   }
 
   return {
@@ -346,18 +415,63 @@ export function renderThreadGoalBudgetLimitPrompt(goal: ThreadGoal): string {
   ].join('\n')
 }
 
+export function deriveThreadGoalContinuationSeed(
+  goal: ThreadGoal | null,
+): ThreadGoalContinuationSeed {
+  if (!goal) {
+    return {
+      shouldBumpIdleSignal: false,
+      pendingBudgetWrapUpGoalId: null,
+    }
+  }
+
+  return {
+    shouldBumpIdleSignal:
+      goal.status === 'active' || goal.status === 'budget_limited',
+    pendingBudgetWrapUpGoalId:
+      goal.status === 'budget_limited' ? goal.goalId : null,
+  }
+}
+
+export function deriveThreadGoalContinuationResetState({
+  previousResetKey,
+  goal,
+}: {
+  previousResetKey: string | null
+  goal: ThreadGoal | null
+}): ThreadGoalContinuationResetState | null {
+  const resetKey = goal
+    ? `${goal.goalId}:${goal.objective}:${goal.status}:${goal.tokenBudget ?? ''}`
+    : null
+
+  if (previousResetKey === resetKey) {
+    return null
+  }
+
+  const continuationSeed = deriveThreadGoalContinuationSeed(goal)
+
+  return {
+    resetKey,
+    goalContinuationStallCount: 0,
+    pendingBudgetWrapUpGoalId: continuationSeed.pendingBudgetWrapUpGoalId,
+    shouldBumpIdleSignal: continuationSeed.shouldBumpIdleSignal,
+  }
+}
+
 export function shouldStartThreadGoalContinuation({
   sessionIsIdle,
   goal,
   goalContinuationInFlight,
-  goalContinuationSuppressed,
+  goalContinuationStallCount,
+  maxStallCount = MAX_GOAL_CONTINUATION_STALL_COUNT,
   queuedCommandsCount = 0,
   hasActiveLocalJsxUI = false,
 }: {
   sessionIsIdle: boolean
   goal: ThreadGoal | null
   goalContinuationInFlight: boolean
-  goalContinuationSuppressed: boolean
+  goalContinuationStallCount: number
+  maxStallCount?: number
   queuedCommandsCount?: number
   hasActiveLocalJsxUI?: boolean
 }): boolean {
@@ -365,7 +479,7 @@ export function shouldStartThreadGoalContinuation({
     sessionIsIdle &&
     goal?.status === 'active' &&
     !goalContinuationInFlight &&
-    !goalContinuationSuppressed &&
+    goalContinuationStallCount < maxStallCount &&
     queuedCommandsCount === 0 &&
     !hasActiveLocalJsxUI
   )
@@ -396,17 +510,22 @@ export function shouldStartThreadGoalBudgetWrapUp({
   )
 }
 
-export function shouldSuppressThreadGoalContinuationAfterTurn({
+export function nextThreadGoalContinuationStallCount({
   continuationKind,
   toolUseCount,
+  previousStallCount,
 }: {
   continuationKind: ThreadGoalContinuationKind | null
   toolUseCount: number
-}): boolean {
-  return continuationKind === 'active' && toolUseCount === 0
+  previousStallCount: number
+}): number {
+  if (continuationKind !== 'active') {
+    return previousStallCount
+  }
+  return toolUseCount === 0 ? previousStallCount + 1 : 0
 }
 
-export function shouldClearThreadGoalContinuationSuppression(
+export function shouldResetThreadGoalContinuationStallCount(
   input: string,
   mode: 'prompt' | 'bash' | 'orphaned-permission' | 'task-notification',
 ): boolean {

@@ -1,9 +1,10 @@
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
+import { getSessionId } from '../../bootstrap/state.js'
+import { readSessionState } from '../../agent-mode/sessionState.js'
+import { completeThreadGoalAction } from '../../utils/threadGoalActions.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
-import { saveThreadGoal } from '../../utils/sessionStorage.js'
-import { updateThreadGoalStatus } from '../../utils/threadGoal.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
@@ -52,6 +53,31 @@ function buildCompletionBudgetReport(goal: {
   return parts.length
     ? `Goal achieved. Report final budget usage to the user: ${parts.join('; ')}.`
     : undefined
+}
+
+function describeUnresolvedWorkers(
+  workers: Array<{
+    agentId: string
+    handle?: string
+    status: string
+    synthesisStatus?: string
+  }>,
+): string {
+  return workers
+    .map(worker => {
+      const label =
+        worker.handle && worker.handle !== worker.agentId
+          ? worker.handle
+          : worker.agentId
+      const reason =
+        worker.status === 'running'
+          ? 'still running'
+          : worker.synthesisStatus === 'pending'
+            ? 'pending synthesis'
+            : worker.status
+      return `@${label} (${reason})`
+    })
+    .join(', ')
 }
 
 export const UpdateGoalTool = buildTool({
@@ -124,6 +150,23 @@ export const UpdateGoalTool = buildTool({
       }
     }
 
+    const sessionState = await readSessionState(getSessionId())
+    const unresolvedWorkers =
+      sessionState?.knownWorkers.filter(
+        worker =>
+          worker.status === 'running' || worker.synthesisStatus === 'pending',
+      ) ?? []
+
+    if (unresolvedWorkers.length > 0) {
+      return {
+        result: false,
+        message:
+          'Cannot mark the goal complete while Agent Mode still has unresolved workers. ' +
+          `Resolve or synthesize them first: ${describeUnresolvedWorkers(unresolvedWorkers)}.`,
+        errorCode: 6,
+      }
+    }
+
     return { result: true }
   },
   renderToolUseMessage() {
@@ -148,15 +191,15 @@ export const UpdateGoalTool = buildTool({
       throw new Error('No current thread goal exists.')
     }
 
-    const nextGoal = updateThreadGoalStatus(currentGoal, 'complete')
+    const nextGoal = await completeThreadGoalAction({
+      context,
+      goal: currentGoal,
+    })
     const remainingTokens =
       nextGoal.tokenBudget === undefined
         ? undefined
         : Math.max(0, nextGoal.tokenBudget - nextGoal.tokensUsed)
     const completionBudgetReport = buildCompletionBudgetReport(nextGoal)
-
-    saveThreadGoal(nextGoal)
-    context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
 
     return {
       data: {

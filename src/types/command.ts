@@ -78,6 +78,7 @@ type LocalCommand = {
 }
 
 export type LocalJSXCommandContext = ToolUseContext & {
+  isQueryActive: boolean
   canUseTool?: CanUseToolFn
   setMessages: (updater: (prev: Message[]) => Message[]) => void
   options: {
@@ -96,7 +97,6 @@ export type LocalJSXCommandContext = ToolUseContext & {
     entrypoint: ResumeEntrypoint,
   ) => Promise<void>
   enterAgentModeSession?: () => Promise<void>
-  isQueryActive?: boolean
 }
 
 export type ResumeEntrypoint =

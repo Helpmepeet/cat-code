@@ -181,7 +181,8 @@ import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, deriveThreadGoalContinuationResetState, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldClearThreadGoalContinuationSuppression, shouldStartThreadGoalBudgetWrapUp, shouldStartThreadGoalContinuation, shouldSuppressThreadGoalContinuationAfterTurn, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalUsage, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -963,7 +964,7 @@ export function REPL({
   const goalContinuationInFlightRef = React.useRef(false);
   const goalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
   const turnGoalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
-  const goalContinuationSuppressedRef = React.useRef(false);
+  const goalContinuationStallCountRef = React.useRef(0);
   const pendingBudgetWrapUpGoalIdRef = React.useRef<string | null>(null);
   const totalPausedMsRef = React.useRef(0);
   const pauseStartTimeRef = React.useRef<number | null>(null);
@@ -980,8 +981,8 @@ export function REPL({
       goal: threadGoal
     });
     if (nextResetState) {
-      goalContinuationSuppressedRef.current =
-        nextResetState.goalContinuationSuppressed;
+      goalContinuationStallCountRef.current =
+        nextResetState.goalContinuationStallCount;
       pendingBudgetWrapUpGoalIdRef.current =
         nextResetState.pendingBudgetWrapUpGoalId;
       if (nextResetState.shouldBumpIdleSignal) {
@@ -2637,6 +2638,7 @@ export function REPL({
     };
     return {
       abortController,
+      isQueryActive: queryGuard.isActive,
       options: {
         commands,
         tools: computeTools(),
@@ -2706,7 +2708,6 @@ export function REPL({
 	      onChangeDynamicMcpConfig,
 	      onInstallIDEExtension: setIDEToInstallExtension,
 	      enterAgentModeSession,
-	      isQueryActive: queryGuard.isActive,
       nestedMemoryAttachmentTriggers: new Set<string>(),
       loadedNestedMemoryPaths: loadedNestedMemoryPathsRef.current,
       dynamicSkillDirTriggers: new Set<string>(),
@@ -3118,12 +3119,11 @@ export function REPL({
     }
     queryCheckpoint('query_end');
     const completedTurnToolCount = getTurnToolCount();
-    if (shouldSuppressThreadGoalContinuationAfterTurn({
+    goalContinuationStallCountRef.current = nextThreadGoalContinuationStallCount({
       continuationKind: turnGoalContinuationKindRef.current,
-      toolUseCount: completedTurnToolCount
-    })) {
-      goalContinuationSuppressedRef.current = true;
-    }
+      toolUseCount: completedTurnToolCount,
+      previousStallCount: goalContinuationStallCountRef.current
+    });
 
     // Capture ant-only API metrics before resetLoadingState clears the ref.
     // For multi-request turns (tool use loops), compute P50 across all requests.
@@ -3647,8 +3647,8 @@ export function REPL({
     if (activeRemote.isRemoteMode && !input.trim()) {
       return;
     }
-    if (shouldClearThreadGoalContinuationSuppression(input, inputMode)) {
-      goalContinuationSuppressedRef.current = false;
+    if (shouldResetThreadGoalContinuationStallCount(input, inputMode)) {
+      goalContinuationStallCountRef.current = 0;
     }
 
     // Idle-return: prompt returning users to start fresh when the
@@ -4417,14 +4417,17 @@ export function REPL({
     const sessionIsIdle =
       sessionStatus === 'idle' && initialMessage === null && hasUnhandledIdleSignal;
 
-    if (shouldStartThreadGoalBudgetWrapUp({
+    const continuationAction = getThreadGoalContinuationAction({
       sessionIsIdle,
       goal: threadGoal,
       goalContinuationInFlight: goalContinuationInFlightRef.current,
+      goalContinuationStallCount: goalContinuationStallCountRef.current,
       pendingBudgetWrapUpGoalId: pendingBudgetWrapUpGoalIdRef.current,
       queuedCommandsCount: queuedCommands.length,
       hasActiveLocalJsxUI: isShowingLocalJSXCommand
-    })) {
+    });
+
+    if (continuationAction.type === 'budget-wrap-up') {
       handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
       pendingBudgetWrapUpGoalIdRef.current = null;
       goalContinuationInFlightRef.current = true;
@@ -4439,14 +4442,12 @@ export function REPL({
       return;
     }
 
-    if (!shouldStartThreadGoalContinuation({
-      sessionIsIdle,
-      goal: threadGoal,
-      goalContinuationInFlight: goalContinuationInFlightRef.current,
-      goalContinuationSuppressed: goalContinuationSuppressedRef.current,
-      queuedCommandsCount: queuedCommands.length,
-      hasActiveLocalJsxUI: isShowingLocalJSXCommand
-    })) {
+    if (continuationAction.type === 'stalled') {
+      handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
+      return;
+    }
+
+    if (continuationAction.type !== 'continue') {
       if (
         sessionIsIdle &&
         !goalContinuationInFlightRef.current &&

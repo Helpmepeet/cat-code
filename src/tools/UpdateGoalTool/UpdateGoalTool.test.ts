@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { getSessionId, getSessionProjectDir, switchSession } from '../../bootstrap/state.js'
+import {
+  createSessionState,
+  markWorkerResultSynthesized,
+  recordWorkerSessionSpawn,
+  recordWorkerSessionTerminal,
+  readSessionState,
+  updateSessionState,
+} from '../../agent-mode/sessionState.js'
 import { asSessionId } from '../../types/ids.js'
 import { getCurrentThreadGoal } from '../../utils/sessionStorage.js'
 import {
@@ -49,9 +57,46 @@ describe('UpdateGoalTool', () => {
     }
   }
 
-  test('marks an active goal complete', async () => {
-    const goal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
+  test('completion uses shared goal action and clears Agent Mode objective', async () => {
+    const goal = createThreadGoal(
+      sessionId,
+      'finish shared action test',
+      undefined,
+      100,
+    )
     const { context, getState } = createContext(goal)
+    const workerAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode: 'agent',
+          objective: goal.objective,
+        }),
+      () => {},
+    )
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode: 'agent',
+      objective: goal.objective,
+      handle: 'review-1',
+      agentId: workerAgentId,
+      role: 'reviewer',
+      description: 'Review the active goal',
+      worktreePath: null,
+    })
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: workerAgentId,
+      status: 'completed',
+      outputSummary: 'Reviewed',
+    })
+    await markWorkerResultSynthesized({
+      sessionId,
+      agentId: workerAgentId,
+    })
 
     const result = await UpdateGoalTool.call(
       { status: 'complete' },
@@ -70,6 +115,8 @@ describe('UpdateGoalTool', () => {
     })
     expect(getState().threadGoal?.status).toBe('complete')
     expect(getCurrentThreadGoal(sessionId)?.status).toBe('complete')
+    expect((await readSessionState(sessionId))?.objective).toBe('')
+    expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
   })
 
   test('returns budget usage details for a budgeted goal', async () => {
@@ -192,6 +239,80 @@ describe('UpdateGoalTool', () => {
       result: false,
       message: 'Paused goals cannot be marked complete.',
       errorCode: 3,
+    })
+  })
+
+  test('rejects completion while a worker is still running', async () => {
+    const goal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
+    const { context } = createContext(goal)
+    const workerAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode: 'agent',
+          objective: goal.objective,
+        }),
+      () => {},
+    )
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode: 'agent',
+      objective: goal.objective,
+      handle: 'implement-1',
+      agentId: workerAgentId,
+      role: 'implementor',
+      description: 'Implement the active goal',
+      worktreePath: null,
+    })
+
+    await expect(
+      UpdateGoalTool.validateInput?.({ status: 'complete' }, context as never),
+    ).resolves.toMatchObject({
+      result: false,
+      errorCode: 6,
+    })
+  })
+
+  test('rejects completion while a completed worker is pending synthesis', async () => {
+    const goal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
+    const { context } = createContext(goal)
+    const workerAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode: 'agent',
+          objective: goal.objective,
+        }),
+      () => {},
+    )
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode: 'agent',
+      objective: goal.objective,
+      handle: 'review-1',
+      agentId: workerAgentId,
+      role: 'reviewer',
+      description: 'Review the active goal',
+      worktreePath: null,
+    })
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: workerAgentId,
+      status: 'completed',
+      outputSummary: 'Looks good',
+    })
+
+    await expect(
+      UpdateGoalTool.validateInput?.({ status: 'complete' }, context as never),
+    ).resolves.toMatchObject({
+      result: false,
+      errorCode: 6,
     })
   })
 

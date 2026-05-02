@@ -10,17 +10,19 @@ import {
 import {
   accountThreadGoalUsage,
   createThreadGoal,
+  deriveThreadGoalContinuationResetState,
+  deriveThreadGoalContinuationSeed,
   formatThreadGoalFooterLabel,
   formatThreadGoalSummary,
+  nextThreadGoalContinuationStallCount,
   parseGoalCommand,
   parseThreadGoal,
   pauseActiveThreadGoalOnAbort,
   renderThreadGoalBudgetLimitPrompt,
   renderThreadGoalContinuationPrompt,
-  shouldClearThreadGoalContinuationSuppression,
+  shouldResetThreadGoalContinuationStallCount,
   shouldStartThreadGoalBudgetWrapUp,
   shouldStartThreadGoalContinuation,
-  shouldSuppressThreadGoalContinuationAfterTurn,
   updateThreadGoalStatus,
 } from './threadGoal.js'
 import { randomUUID } from 'crypto'
@@ -61,16 +63,44 @@ describe('parseGoalCommand', () => {
     })
   })
 
+  test('parses explicit replacement objectives and budgeted replacement objectives', () => {
+    expect(parseGoalCommand('replace finish the new goal')).toEqual({
+      type: 'replace',
+      objective: 'finish the new goal',
+    })
+    expect(parseGoalCommand('replace\tfinish the new goal')).toEqual({
+      type: 'replace',
+      objective: 'finish the new goal',
+    })
+    expect(parseGoalCommand('replace --budget 75K finish the new goal')).toEqual({
+      type: 'replace',
+      objective: 'finish the new goal',
+      tokenBudget: 75_000,
+    })
+    expect(parseGoalCommand('replace\t--budget\t75K\tfinish the new goal')).toEqual({
+      type: 'replace',
+      objective: 'finish the new goal',
+      tokenBudget: 75_000,
+    })
+  })
+
   test('rejects invalid budget forms and extra args', () => {
     for (const rawArgs of [
+      'replace',
+      'replace --budget',
+      'replace --budget 0 do thing',
+      'replace --budget 75K',
       '--budget',
       '--budget abc do thing',
       '--budget 0 do thing',
       '--budget -1 do thing',
       '--budget 50K',
       'pause extra',
+      'pause\textra',
       'clear extra',
+      'clear\textra',
       'resume extra',
+      'resume\textra',
     ]) {
       expect(parseGoalCommand(rawArgs).type).toBe('error')
     }
@@ -261,6 +291,87 @@ describe('thread goal formatting and parsing', () => {
 })
 
 describe('thread goal continuation policy', () => {
+  test('derives idle continuation seed for active and budget-limited goals', () => {
+    const activeGoal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+    const budgetLimitedGoal = updateThreadGoalStatus(
+      activeGoal,
+      'budget_limited',
+      200,
+    )
+
+    expect(deriveThreadGoalContinuationSeed(null)).toEqual({
+      shouldBumpIdleSignal: false,
+      pendingBudgetWrapUpGoalId: null,
+    })
+    expect(deriveThreadGoalContinuationSeed(activeGoal)).toEqual({
+      shouldBumpIdleSignal: true,
+      pendingBudgetWrapUpGoalId: null,
+    })
+    expect(deriveThreadGoalContinuationSeed(budgetLimitedGoal)).toEqual({
+      shouldBumpIdleSignal: true,
+      pendingBudgetWrapUpGoalId: budgetLimitedGoal.goalId,
+    })
+    expect(
+      deriveThreadGoalContinuationSeed(
+        updateThreadGoalStatus(activeGoal, 'paused', 300),
+      ),
+    ).toEqual({
+      shouldBumpIdleSignal: false,
+      pendingBudgetWrapUpGoalId: null,
+    })
+  })
+
+  test('derives REPL continuation reset behavior for resume and restore transitions', () => {
+    const activeGoal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+    const pausedGoal = updateThreadGoalStatus(activeGoal, 'paused', 200)
+    const resumedGoal = updateThreadGoalStatus(pausedGoal, 'active', 300)
+    const budgetLimitedGoal = updateThreadGoalStatus(
+      resumedGoal,
+      'budget_limited',
+      400,
+    )
+
+    const firstActive = deriveThreadGoalContinuationResetState({
+      previousResetKey: null,
+      goal: activeGoal,
+    })
+    expect(firstActive).toEqual({
+      resetKey: `${activeGoal.goalId}:${activeGoal.objective}:${activeGoal.status}:`,
+      goalContinuationStallCount: 0,
+      pendingBudgetWrapUpGoalId: null,
+      shouldBumpIdleSignal: true,
+    })
+
+    expect(
+      deriveThreadGoalContinuationResetState({
+        previousResetKey: firstActive!.resetKey,
+        goal: activeGoal,
+      }),
+    ).toBeNull()
+
+    const resumed = deriveThreadGoalContinuationResetState({
+      previousResetKey: `${pausedGoal.goalId}:${pausedGoal.objective}:${pausedGoal.status}:`,
+      goal: resumedGoal,
+    })
+    expect(resumed).toEqual({
+      resetKey: `${resumedGoal.goalId}:${resumedGoal.objective}:${resumedGoal.status}:`,
+      goalContinuationStallCount: 0,
+      pendingBudgetWrapUpGoalId: null,
+      shouldBumpIdleSignal: true,
+    })
+
+    const budgetWrap = deriveThreadGoalContinuationResetState({
+      previousResetKey: `${resumedGoal.goalId}:${resumedGoal.objective}:${resumedGoal.status}:`,
+      goal: budgetLimitedGoal,
+    })
+    expect(budgetWrap).toEqual({
+      resetKey: `${budgetLimitedGoal.goalId}:${budgetLimitedGoal.objective}:${budgetLimitedGoal.status}:`,
+      goalContinuationStallCount: 0,
+      pendingBudgetWrapUpGoalId: budgetLimitedGoal.goalId,
+      shouldBumpIdleSignal: true,
+    })
+  })
+
   test('active goal plus idle starts continuation', () => {
     const goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
 
@@ -269,9 +380,38 @@ describe('thread goal continuation policy', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationSuppressed: false,
+        goalContinuationStallCount: 0,
       }),
     ).toBe(true)
+  })
+
+  test('active continuation stops only after the stall threshold is reached', () => {
+    const goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+
+    expect(
+      shouldStartThreadGoalContinuation({
+        sessionIsIdle: true,
+        goal,
+        goalContinuationInFlight: false,
+        goalContinuationStallCount: 0,
+      }),
+    ).toBe(true)
+    expect(
+      shouldStartThreadGoalContinuation({
+        sessionIsIdle: true,
+        goal,
+        goalContinuationInFlight: false,
+        goalContinuationStallCount: 1,
+      }),
+    ).toBe(true)
+    expect(
+      shouldStartThreadGoalContinuation({
+        sessionIsIdle: true,
+        goal,
+        goalContinuationInFlight: false,
+        goalContinuationStallCount: 2,
+      }),
+    ).toBe(false)
   })
 
   test('paused, budget-limited, and complete goals do not start normal continuation', () => {
@@ -283,13 +423,13 @@ describe('thread goal continuation policy', () => {
           sessionIsIdle: true,
           goal: updateThreadGoalStatus(active, status, 200),
           goalContinuationInFlight: false,
-          goalContinuationSuppressed: false,
+          goalContinuationStallCount: 0,
         }),
       ).toBe(false)
     }
   })
 
-  test('suppression, queued input, active UI, or in-flight continuation prevents continuation', () => {
+  test('stall threshold, queued input, active UI, or in-flight continuation prevents continuation', () => {
     const goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
 
     expect(
@@ -297,7 +437,7 @@ describe('thread goal continuation policy', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationSuppressed: true,
+        goalContinuationStallCount: 2,
       }),
     ).toBe(false)
     expect(
@@ -305,7 +445,7 @@ describe('thread goal continuation policy', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: true,
-        goalContinuationSuppressed: false,
+        goalContinuationStallCount: 0,
       }),
     ).toBe(false)
     expect(
@@ -313,7 +453,7 @@ describe('thread goal continuation policy', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationSuppressed: false,
+        goalContinuationStallCount: 0,
         queuedCommandsCount: 1,
       }),
     ).toBe(false)
@@ -322,7 +462,7 @@ describe('thread goal continuation policy', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationSuppressed: false,
+        goalContinuationStallCount: 0,
         hasActiveLocalJsxUI: true,
       }),
     ).toBe(false)
@@ -340,7 +480,7 @@ describe('thread goal continuation policy', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationSuppressed: false,
+        goalContinuationStallCount: 0,
       }),
     ).toBe(false)
     expect(
@@ -361,36 +501,46 @@ describe('thread goal continuation policy', () => {
     ).toBe(false)
   })
 
-  test('zero tool calls suppress the next active continuation', () => {
+  test('zero-tool active continuations increment stall count instead of immediately stopping', () => {
     expect(
-      shouldSuppressThreadGoalContinuationAfterTurn({
+      nextThreadGoalContinuationStallCount({
         continuationKind: 'active',
         toolUseCount: 0,
+        previousStallCount: 0,
       }),
-    ).toBe(true)
+    ).toBe(1)
     expect(
-      shouldSuppressThreadGoalContinuationAfterTurn({
+      nextThreadGoalContinuationStallCount({
+        continuationKind: 'active',
+        toolUseCount: 0,
+        previousStallCount: 1,
+      }),
+    ).toBe(2)
+    expect(
+      nextThreadGoalContinuationStallCount({
         continuationKind: 'active',
         toolUseCount: 1,
+        previousStallCount: 2,
       }),
-    ).toBe(false)
+    ).toBe(0)
     expect(
-      shouldSuppressThreadGoalContinuationAfterTurn({
+      nextThreadGoalContinuationStallCount({
         continuationKind: 'budget-wrap-up',
         toolUseCount: 0,
+        previousStallCount: 2,
       }),
-    ).toBe(false)
+    ).toBe(2)
   })
 
-  test('user prompt clears suppression but slash commands and non-prompt modes do not', () => {
+  test('user prompt resets stall count but slash commands and non-prompt modes do not', () => {
     expect(
-      shouldClearThreadGoalContinuationSuppression('continue the work', 'prompt'),
+      shouldResetThreadGoalContinuationStallCount('continue the work', 'prompt'),
     ).toBe(true)
     expect(
-      shouldClearThreadGoalContinuationSuppression('/goal resume', 'prompt'),
+      shouldResetThreadGoalContinuationStallCount('/goal resume', 'prompt'),
     ).toBe(false)
     expect(
-      shouldClearThreadGoalContinuationSuppression('echo hi', 'bash'),
+      shouldResetThreadGoalContinuationStallCount('echo hi', 'bash'),
     ).toBe(false)
   })
 
