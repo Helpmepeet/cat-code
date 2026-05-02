@@ -23,6 +23,16 @@ describe('Agent Mode orchestrator prompt', () => {
     expect(prompt).toContain('Prefer worker handles over raw task IDs or internal agent IDs')
   })
 
+  test('pushes post-spawn orchestration and concrete worker thresholds', () => {
+    const prompt = getOrchestratorSystemPrompt()
+
+    expect(prompt).toContain('After spawning Explore workers, do not keep doing overlapping repo reads, greps, or file tours on the main thread')
+    expect(prompt).toContain('touch more than one file')
+    expect(prompt).toContain('more than one meaningful edit or command cycle')
+    expect(prompt).toContain('behavioral or user-visible logic')
+    expect(prompt).toContain('prompt, session-state, worker-control, or orchestration behavior changed')
+  })
+
   test('defines multitask decomposition boundaries', () => {
     const prompt = getOrchestratorSystemPrompt()
 

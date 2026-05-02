@@ -14,6 +14,12 @@ describe('Agent Mode role prompts', () => {
     expect(promptSource).toContain('ready for orchestrator synthesis')
   })
 
+  test('worker role descriptions make coding and verification defaults concrete', () => {
+    expect(promptSource).toContain('default implementation owner once a patch stops being a tiny single-file tweak')
+    expect(promptSource).toContain('default review path for non-trivial implementation batches')
+    expect(promptSource).toContain('especially when prompt, session-state, worker-control, or orchestration behavior changed')
+  })
+
   test('verifier judges isolated worktree result safety', () => {
     expect(promptSource).toContain('If verifying an isolated worktree result')
     expect(promptSource).toContain('safe to apply')

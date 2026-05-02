@@ -131,7 +131,7 @@ Keep the whole response compact and operational.`
 export const AGENT_MODE_CODING_WORKER: BuiltInAgentDefinition = {
   agentType: 'agent-mode-coding-worker',
   whenToUse:
-    'Agent Mode Coding Worker: executes an approved coding implementation slice. Has full edit/run access scoped to the assigned task. Returns a compact handoff (changed files, check results, blockers) to the orchestrator.',
+    'Agent Mode Coding Worker: executes an approved coding implementation slice. It is the default implementation owner once a patch stops being a tiny single-file tweak. Has full edit/run access scoped to the assigned task and returns a compact handoff (changed files, check results, blockers) to the orchestrator.',
   tools: [
     AGENT_TOOL_NAME,
     BASH_TOOL_NAME,
@@ -274,7 +274,7 @@ Keep the whole response under ~20 lines. Do not attempt to repair code. Do not e
 export const AGENT_MODE_VERIFIER: BuiltInAgentDefinition = {
   agentType: 'agent-mode-verifier',
   whenToUse:
-    'Agent Mode Verifier: read-only evaluator that checks design-vs-plan, correctness, and code quality after implementation. Returns a verdict packet (pass/fail/warn) with evidence to the orchestrator. Never communicates directly with the user.',
+    'Agent Mode Verifier: read-only evaluator that checks design-vs-plan, correctness, and code quality after implementation. It is the default review path for non-trivial implementation batches, especially when prompt, session-state, worker-control, or orchestration behavior changed. Returns a verdict packet (pass/fail/warn) with evidence to the orchestrator and never communicates directly with the user.',
   tools: [
     BASH_TOOL_NAME,
     FILE_READ_TOOL_NAME,
