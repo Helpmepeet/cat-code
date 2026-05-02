@@ -27,10 +27,23 @@ describe('Agent Mode orchestrator prompt', () => {
     const prompt = getOrchestratorSystemPrompt()
 
     expect(prompt).toContain('After spawning Explore workers, do not keep doing overlapping repo reads, greps, or file tours on the main thread')
+    expect(prompt).toContain('Do not both spawn Explore and then keep investigating the same area yourself')
+    expect(prompt).toContain('Either gather one narrow blocking fact needed immediately to steer another worker, or wait and synthesize')
     expect(prompt).toContain('touch more than one file')
     expect(prompt).toContain('more than one meaningful edit or command cycle')
     expect(prompt).toContain('behavioral or user-visible logic')
-    expect(prompt).toContain('prompt, session-state, worker-control, or orchestration behavior changed')
+    expect(prompt).toContain('prompt, session-state, worker-control, or orchestration surfaces')
+    expect(prompt).toContain('changed prompt, session-state, worker-control, or orchestration behavior')
+    expect(prompt).toContain('If a coding worker changed more than one file')
+  })
+
+  test('makes agent mode more aggressive than normal chat in delegation posture', () => {
+    const prompt = getOrchestratorSystemPrompt()
+
+    expect(prompt).toContain('Agent Mode should feel different from normal chat because execution pressure moves outward sooner')
+    expect(prompt).toContain('Default toward a worker unless the task is truly tiny')
+    expect(prompt).toContain('A real implementation phase should usually belong to a coding worker, not the orchestrator')
+    expect(prompt).toContain('Do not let the orchestrator drift into being the primary implementor or verifier')
   })
 
   test('defines multitask decomposition boundaries', () => {

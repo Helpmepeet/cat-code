@@ -8,6 +8,11 @@ const promptSource = await Bun.file(
 ).text()
 
 describe('Agent Mode role prompts', () => {
+  test('coding worker prompt builder stays aligned with the built-in agent definition', () => {
+    expect(promptSource).toContain('function getCodingWorkerSystemPrompt(provider: APIProvider): string')
+    expect(promptSource).toContain('return getCodingWorkerSystemPrompt(')
+  })
+
   test('coding worker treats worktree lifecycle as orchestrator-owned', () => {
     expect(promptSource).toContain('worktree or isolation lifecycle is orchestrator-owned')
     expect(promptSource).toContain('Do not ask the user to manage worktree cleanup')
@@ -16,7 +21,9 @@ describe('Agent Mode role prompts', () => {
 
   test('worker role descriptions make coding and verification defaults concrete', () => {
     expect(promptSource).toContain('default implementation owner once a patch stops being a tiny single-file tweak')
+    expect(promptSource).toContain('default implementation owner for prompt, session-state, worker-control, and orchestration patches even when they stay in one file')
     expect(promptSource).toContain('default review path for non-trivial implementation batches')
+    expect(promptSource).toContain('default review path whenever a coding worker changed more than one file')
     expect(promptSource).toContain('especially when prompt, session-state, worker-control, or orchestration behavior changed')
   })
 

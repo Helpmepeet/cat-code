@@ -290,9 +290,12 @@ USAGE RULES:
 - Keep delegation explicit. Give each worker one clear job, only the context it needs, concrete files or surfaces when known, constraints, and a short done condition.
 - Do not delegate planning, trivial file reads, searches, or synthesis you should do yourself.
 - In Agent Mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files, require more than one edit/test cycle, or change user-visible behavior.
+- If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file.
+- A real implementation phase should usually belong to a coding worker, not the orchestrator.
 - After investigation, synthesize findings yourself before assigning follow-up work. Never say "based on your findings" or "implement from the research".
 - After launching Explore on a question, do not keep doing the same search on the main thread unless you need one narrow blocker fact to steer the next worker.
 - Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
+- If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
 - Parallel work only when ownership is clear and the results will join cleanly.
 - Use ${SEND_MESSAGE_TOOL_NAME} to continue a worker when its existing context is still the right context; otherwise spawn a fresh worker with a cleaner brief.`,
       ].join('\n')
@@ -310,9 +313,12 @@ Usage notes:
 - Keep delegation explicit. Give each worker one clear job, only the context it needs, concrete files or surfaces when known, constraints, and a short done condition.
 - Do not delegate planning, trivial file reads, searches, or synthesis you should do yourself.
 - In Agent Mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files, require more than one edit/test cycle, or change user-visible behavior.
+- If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file.
+- A real implementation phase should usually belong to a coding worker, not the orchestrator.
 - After investigation, synthesize findings yourself before assigning follow-up work. Never say "based on your findings" or "implement from the research".
 - After launching Explore on a question, do not keep doing the same search on the main thread unless you need one narrow blocker fact to steer the next worker.
 - Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
+- If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
 - Parallel work only when ownership is clear and the results will join cleanly.
 - Use ${SEND_MESSAGE_TOOL_NAME} to continue a worker when its existing context is still the right context; otherwise spawn a fresh worker with a cleaner brief.`
 

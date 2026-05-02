@@ -28,7 +28,10 @@ describe('Agent tool prompt in Agent Mode', () => {
     const prompt = await getPrompt([], false, undefined, 'openai', true)
 
     expect(prompt).toContain('prefer a worker over main-thread execution for any implementation expected to touch multiple files')
+    expect(prompt).toContain('If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file')
     expect(prompt).toContain('After launching Explore on a question, do not keep doing the same search on the main thread')
+    expect(prompt).toContain('A real implementation phase should usually belong to a coding worker, not the orchestrator')
+    expect(prompt).toContain('If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default')
     expect(prompt).toContain('prompt, session-state, worker-control, or orchestration behavior changed')
   })
 })

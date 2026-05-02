@@ -386,7 +386,7 @@ function getAgentModeSessionSpecificGuidanceSection(
       ? null
       : `If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands directly in the conversation.`,
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `You are the orchestrator in Agent mode. Plan inline on the main thread. Keep the main thread focused on planning, synthesis, approval decisions, and completion truth. Use ${AGENT_TOOL_NAME} as the default execution path for bounded investigation, implementation, and verification slices that would otherwise take more than a tiny single-file pass. After spawning Explore workers, avoid overlapping repo reads and searches unless you need one narrow blocking fact to steer the run. Ask for approval only for plan mode, destructive or hard-to-reverse actions, shared-state actions, worktree apply-back, permission broadening, or meaningful scope/approach shifts.`
+      ? `You are the orchestrator in Agent mode. Plan inline on the main thread. Keep the main thread focused on planning, synthesis, approval decisions, and completion truth. Agent Mode should feel more aggressive than normal chat by moving execution outward sooner. Use ${AGENT_TOOL_NAME} as the default execution path for bounded investigation, implementation, and verification slices that would otherwise take more than a tiny single-file pass. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default. After spawning Explore workers, avoid overlapping repo reads and searches unless you need one narrow blocking fact to steer the run.`
       : null,
     getAgentModeWorkerControlGuidance(enabledTools),
     hasSkills
@@ -423,7 +423,7 @@ export function getAgentModeWorkerControlGuidance(
 
   if (available.length === 0) return null
 
-  return `Worker control: ${available.join(' ')} If Explore already owns a question, do not keep doing the same search on the main thread. Use worker handles instead of raw task IDs or internal agent IDs.`
+  return `Worker control: ${available.join(' ')} If Explore already owns a question, do not keep doing the same search on the main thread. Do not both spawn Explore and then keep investigating the same area yourself. Use worker handles instead of raw task IDs or internal agent IDs.`
 }
 
 function getSessionSpecificGuidanceSection(
@@ -630,7 +630,7 @@ function getSimpleAgentModeUsingToolsSection(enabledTools: Set<string>): string 
       ? `Break down and manage the run with the ${taskToolName} tool. Mark each task as completed as soon as you are done with it. Do not batch completions.`
       : null,
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `Use the ${AGENT_TOOL_NAME} tool as your default for bounded work with a clear scope: broader codebase investigation via Explore, implementation, verification, and parallel workstreams. If the work is more than a tiny single-file pass, push execution to a worker and keep planning, synthesis, approval routing, and final outcome judgment on the main thread.`
+      ? `Use the ${AGENT_TOOL_NAME} tool as your default for bounded work with a clear scope: broader codebase investigation via Explore, implementation, verification, and parallel workstreams. If the work is more than a tiny single-file pass, push execution to a worker and keep planning, synthesis, approval routing, and final outcome judgment on the main thread. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.`
       : null,
     `Call multiple tools in a single response when they are independent. Keep context small and decision-focused — prefer compact evidence over long raw tool output.`,
   ].filter(item => item !== null)
