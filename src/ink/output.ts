@@ -60,6 +60,22 @@ type Options = {
   screen: Screen
 }
 
+const ITERM2_INLINE_IMAGE_PREFIX = '\x1b]1337;File='
+const TMUX_ITERM2_INLINE_IMAGE_PREFIX = '\x1bPtmux;\x1b\x1b]1337;File='
+const TMUX_DCS_TERMINATOR = '\x1b\\'
+
+function isWholeLineIterm2InlineImageSequence(line: string): boolean {
+  return (
+    (line.startsWith(ITERM2_INLINE_IMAGE_PREFIX) && line.endsWith('\x07')) ||
+    (line.startsWith(TMUX_ITERM2_INLINE_IMAGE_PREFIX) &&
+      line.endsWith(TMUX_DCS_TERMINATOR))
+  )
+}
+
+function lineWidthForClipping(line: string): number {
+  return isWholeLineIterm2InlineImageSequence(line) ? 1 : stringWidth(line)
+}
+
 export type Operation =
   | WriteOperation
   | ClipOperation
@@ -399,6 +415,9 @@ export default class Output {
           const { text, softWrap } = operation
           let { x, y } = operation
           let lines = text.split('\n')
+          const hasIterm2InlineImageLine = lines.some(
+            isWholeLineIterm2InlineImageSequence,
+          )
           let swFrom = 0
           let prevContentEnd = 0
 
@@ -414,7 +433,9 @@ export default class Output {
             // If text is positioned outside of clipping area altogether,
             // skip to the next operation to avoid unnecessary calculations
             if (clipHorizontally) {
-              const width = widestLine(text)
+              const width = hasIterm2InlineImageLine
+                ? Math.max(...lines.map(lineWidthForClipping))
+                : widestLine(text)
 
               if (x + width <= clip.x1! || x >= clip.x2!) {
                 continue
@@ -431,6 +452,10 @@ export default class Output {
 
             if (clipHorizontally) {
               lines = lines.map(line => {
+                if (isWholeLineIterm2InlineImageSequence(line)) {
+                  return x >= clip.x1! && x < clip.x2! ? line : ''
+                }
+
                 const from = x < clip.x1! ? clip.x1! - x : 0
                 const width = stringWidth(line)
                 const to = x + width > clip.x2! ? clip.x2! - x : width
@@ -652,6 +677,19 @@ function writeLineToScreen(
   stylePool: StylePool,
   charCache: Map<string, ClusteredChar[]>,
 ): number {
+  if (isWholeLineIterm2InlineImageSequence(line)) {
+    // OSC 1337 is terminal-private payload, not ANSI text. Keep it as a raw
+    // cell so the terminal diff writes the sequence instead of tokenizing it
+    // away as a zero-width control string.
+    setCellAt(screen, x, y, {
+      char: line,
+      styleId: stylePool.none,
+      width: CellWidth.Narrow,
+      hyperlink: undefined,
+    })
+    return x + 1
+  }
+
   let characters = charCache.get(line)
   if (!characters) {
     characters = reorderBidi(
