@@ -1434,7 +1434,7 @@ export function generateSuggestions(
     const dirsToAdd = getPathsForPermissionCheck(dirPath)
 
     const suggestions = dirsToAdd
-      .map(dir => createReadRuleSuggestion(dir, 'session'))
+      .map(dir => createReadRuleSuggestion(dir, 'localSettings'))
       .filter((s): s is PermissionUpdate => s !== undefined)
 
     return suggestions
@@ -1463,7 +1463,7 @@ export function generateSuggestions(
       updates.push({
         type: 'addDirectories',
         directories: dirsToAdd,
-        destination: 'session',
+        destination: 'localSettings',
       })
     }
 

@@ -1775,7 +1775,7 @@ function checkPathConstraintsForStatement(
           if (operationType === 'read') {
             const suggestion = createReadRuleSuggestion(
               getDirectoryForPath(resolvedPath),
-              'session',
+              'localSettings',
             )
             if (suggestion) {
               suggestions.push(suggestion)
@@ -1784,7 +1784,7 @@ function checkPathConstraintsForStatement(
             suggestions.push({
               type: 'addDirectories',
               directories: [getDirectoryForPath(resolvedPath)],
-              destination: 'session',
+              destination: 'localSettings',
             })
           }
         }
@@ -1888,7 +1888,7 @@ function checkPathConstraintsForStatement(
             if (operationType === 'read') {
               const suggestion = createReadRuleSuggestion(
                 getDirectoryForPath(resolvedPath),
-                'session',
+                'localSettings',
               )
               if (suggestion) {
                 suggestions.push(suggestion)
@@ -1897,7 +1897,7 @@ function checkPathConstraintsForStatement(
               suggestions.push({
                 type: 'addDirectories',
                 directories: [getDirectoryForPath(resolvedPath)],
-                destination: 'session',
+                destination: 'localSettings',
               })
             }
           }
@@ -1979,7 +1979,7 @@ function checkPathConstraintsForStatement(
                 {
                   type: 'addDirectories',
                   directories: [getDirectoryForPath(resolvedPath)],
-                  destination: 'session',
+                  destination: 'localSettings',
                 },
               ],
             }
@@ -2032,7 +2032,7 @@ function checkPathConstraintsForStatement(
             {
               type: 'addDirectories',
               directories: [getDirectoryForPath(resolvedPath)],
-              destination: 'session',
+              destination: 'localSettings',
             },
           ],
         }
