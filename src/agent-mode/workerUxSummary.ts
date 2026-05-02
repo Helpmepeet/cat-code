@@ -8,6 +8,8 @@ export type AgentModeWorkerUxSummary = {
   active: number
   ready: number
   reviewed: number
+  resumable: number
+  stale: number
   attention: number
   pendingSynthesis: number
   visibleWorkers: AgentModeWorkerSession[]
@@ -28,15 +30,33 @@ function needsAttention(worker: AgentModeWorkerSession): boolean {
 }
 
 function isResultReady(worker: AgentModeWorkerSession): boolean {
-  return worker.synthesisStatus === 'pending'
+  return worker.origin !== 'prior' && worker.synthesisStatus === 'pending'
 }
 
 function isReviewed(worker: AgentModeWorkerSession): boolean {
-  return worker.status === 'completed' && worker.synthesisStatus === 'synthesized'
+  return (
+    worker.origin !== 'prior' &&
+    worker.status === 'completed' &&
+    worker.synthesisStatus === 'synthesized'
+  )
+}
+
+function isPriorResumable(worker: AgentModeWorkerSession): boolean {
+  return worker.origin === 'prior' && worker.resumable === true
+}
+
+function isPriorStale(worker: AgentModeWorkerSession): boolean {
+  return worker.origin === 'prior' && worker.resumable === false
 }
 
 function isVisibleWorker(worker: AgentModeWorkerSession): boolean {
-  return worker.status === 'running' || isResultReady(worker) || needsAttention(worker)
+  return (
+    worker.status === 'running' ||
+    isResultReady(worker) ||
+    needsAttention(worker) ||
+    isPriorResumable(worker) ||
+    isPriorStale(worker)
+  )
 }
 
 export function getWorkerDisplayHandle(
@@ -52,7 +72,15 @@ export function getWorkerDisplayHandle(
 export function getWorkerStatusLabel(worker: {
   status: AgentModeWorkerSession['status']
   synthesisStatus?: AgentModeWorkerSession['synthesisStatus']
+  origin?: AgentModeWorkerSession['origin']
+  resumable?: AgentModeWorkerSession['resumable']
 }): string {
+  if (worker.origin === 'prior' && worker.resumable === true) {
+    return 'resumable'
+  }
+  if (worker.origin === 'prior' && worker.resumable === false) {
+    return 'stale'
+  }
   if (worker.synthesisStatus === 'pending') {
     return 'result ready'
   }
@@ -75,6 +103,8 @@ export function summarizeAgentModeWorkers(
     active: workers.filter(worker => worker.status === 'running').length,
     ready: workers.filter(worker => isResultReady(worker)).length,
     reviewed: workers.filter(worker => isReviewed(worker)).length,
+    resumable: workers.filter(worker => isPriorResumable(worker)).length,
+    stale: workers.filter(worker => isPriorStale(worker)).length,
     attention: workers.filter(worker => needsAttention(worker)).length,
     pendingSynthesis: workers.filter(worker => isResultReady(worker)).length,
     visibleWorkers: workers.filter(worker => isVisibleWorker(worker)).slice(-4),

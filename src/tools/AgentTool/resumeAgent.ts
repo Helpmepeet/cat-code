@@ -20,9 +20,11 @@ import {
 import { getAgentModel } from '../../utils/model/agent.js'
 import { getQuerySourceForAgent } from '../../utils/promptCategory.js'
 import {
+  getAgentTranscriptForSession,
   getAgentTranscript,
   getTranscriptPath,
   readAgentMetadata,
+  readAgentMetadataForSession,
 } from '../../utils/sessionStorage.js'
 import { buildEffectiveSystemPrompt } from '../../utils/systemPrompt.js'
 import type { SystemPrompt } from '../../utils/systemPromptType.js'
@@ -47,12 +49,14 @@ export async function resumeAgentBackground({
   toolUseContext,
   canUseTool,
   invokingRequestId,
+  sourceSessionId,
 }: {
   agentId: string
   prompt: string
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   invokingRequestId?: string
+  sourceSessionId?: string
 }): Promise<ResumeAgentResult> {
   const startTime = Date.now()
   const appState = toolUseContext.getAppState()
@@ -62,9 +66,15 @@ export async function resumeAgentBackground({
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
   const permissionMode = appState.toolPermissionContext.mode
 
+  const sourceSession = sourceSessionId ?? getSessionId()
+  const currentSession = getSessionId()
   const [transcript, meta] = await Promise.all([
-    getAgentTranscript(asAgentId(agentId)),
-    readAgentMetadata(asAgentId(agentId)),
+    sourceSession === currentSession
+      ? getAgentTranscript(asAgentId(agentId))
+      : getAgentTranscriptForSession(sourceSession, asAgentId(agentId)),
+    sourceSession === currentSession
+      ? readAgentMetadata(asAgentId(agentId))
+      : readAgentMetadataForSession(sourceSession, asAgentId(agentId)),
   ])
   if (!transcript) {
     throw new Error(`No transcript found for agent ID: ${agentId}`)

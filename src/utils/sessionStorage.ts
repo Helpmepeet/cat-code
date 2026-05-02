@@ -308,8 +308,26 @@ export function getAgentTranscriptPath(agentId: AgentId): string {
   return join(base, `agent-${agentId}.jsonl`)
 }
 
+export function getAgentTranscriptPathForSession(
+  sessionId: string,
+  agentId: AgentId,
+): string {
+  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  return join(projectDir, sessionId, 'subagents', `agent-${agentId}.jsonl`)
+}
+
 function getAgentMetadataPath(agentId: AgentId): string {
   return getAgentTranscriptPath(agentId).replace(/\.jsonl$/, '.meta.json')
+}
+
+function getAgentMetadataPathForSession(
+  sessionId: string,
+  agentId: AgentId,
+): string {
+  return getAgentTranscriptPathForSession(sessionId, agentId).replace(
+    /\.jsonl$/,
+    '.meta.json',
+  )
 }
 
 export type AgentMetadata = {
@@ -350,6 +368,20 @@ export async function readAgentMetadata(
   agentId: AgentId,
 ): Promise<AgentMetadata | null> {
   const path = getAgentMetadataPath(agentId)
+  try {
+    const raw = await readFile(path, 'utf-8')
+    return JSON.parse(raw) as AgentMetadata
+  } catch (e) {
+    if (isFsInaccessible(e)) return null
+    throw e
+  }
+}
+
+export async function readAgentMetadataForSession(
+  sessionId: string,
+  agentId: AgentId,
+): Promise<AgentMetadata | null> {
+  const path = getAgentMetadataPathForSession(sessionId, agentId)
   try {
     const raw = await readFile(path, 'utf-8')
     return JSON.parse(raw) as AgentMetadata
@@ -4495,8 +4527,29 @@ export async function getAgentTranscript(agentId: AgentId): Promise<{
   messages: Message[]
   contentReplacements: ContentReplacementRecord[]
 } | null> {
-  const agentFile = getAgentTranscriptPath(agentId)
+  return getAgentTranscriptFromPath(agentId, getAgentTranscriptPath(agentId))
+}
 
+export async function getAgentTranscriptForSession(
+  sessionId: string,
+  agentId: AgentId,
+): Promise<{
+  messages: Message[]
+  contentReplacements: ContentReplacementRecord[]
+} | null> {
+  return getAgentTranscriptFromPath(
+    agentId,
+    getAgentTranscriptPathForSession(sessionId, agentId),
+  )
+}
+
+async function getAgentTranscriptFromPath(
+  agentId: AgentId,
+  agentFile: string,
+): Promise<{
+  messages: Message[]
+  contentReplacements: ContentReplacementRecord[]
+} | null> {
   try {
     const { messages, agentContentReplacements } =
       await loadTranscriptFile(agentFile)

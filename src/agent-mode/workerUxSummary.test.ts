@@ -46,6 +46,8 @@ describe('workerUxSummary', () => {
       active: 1,
       ready: 1,
       reviewed: 0,
+      resumable: 0,
+      stale: 0,
       attention: 1,
       pendingSynthesis: 1,
       visibleWorkers: [runningWorker, pendingWorker, failedWorker],
@@ -58,6 +60,8 @@ describe('workerUxSummary', () => {
       active: 0,
       ready: 0,
       reviewed: 0,
+      resumable: 0,
+      stale: 0,
       attention: 0,
       pendingSynthesis: 0,
       visibleWorkers: [],
@@ -91,6 +95,20 @@ describe('workerUxSummary', () => {
 
     expect(getWorkerStatusLabel(terminalWorker('killed'))).toBe('attention')
     expect(getWorkerStatusLabel(terminalWorker('running'))).toBe('running')
+  })
+
+  test('maps prior worker continuity states to resumable or stale labels', () => {
+    expect(
+      getWorkerStatusLabel(
+        completedWorker({ origin: 'prior', resumable: true }),
+      ),
+    ).toBe('resumable')
+
+    expect(
+      getWorkerStatusLabel(
+        completedWorker({ origin: 'prior', resumable: false }),
+      ),
+    ).toBe('stale')
   })
 
   test('counts reviewed workers separately from result-ready workers', () => {
@@ -233,6 +251,76 @@ describe('workerUxSummary', () => {
       runningWorker,
     ])
   })
+
+  test('surfaces prior reusable and stale workers without result-ready confusion', () => {
+    const reusableWorker = worker({
+      agentId: 'worker-reusable',
+      role: 'explorer',
+      description: 'Reusable prior worker',
+      status: 'completed',
+      origin: 'prior',
+      resumable: true,
+      spawnedAt: '2026-05-02T10:00:00.000Z',
+      synthesisStatus: 'synthesized',
+    })
+    const staleWorker = worker({
+      agentId: 'worker-stale',
+      role: 'explorer',
+      description: 'Stale prior worker',
+      status: 'completed',
+      origin: 'prior',
+      resumable: false,
+      spawnedAt: '2026-05-02T10:01:00.000Z',
+      reuseBlockedReason: 'original worker transcript is unavailable',
+      synthesisStatus: 'synthesized',
+    })
+
+    const state: AgentModeSessionState = {
+      objective: 'Check continuity visibility',
+      currentPhase: 'planning',
+      activeWorker: null,
+      knownWorkers: [reusableWorker, staleWorker],
+      nextAction: 'Resume the relevant prior worker.',
+    }
+
+    expect(summarizeAgentModeWorkers(state)).toMatchObject({
+      active: 0,
+      ready: 0,
+      reviewed: 0,
+      resumable: 1,
+      stale: 1,
+      visibleWorkers: [reusableWorker, staleWorker],
+    })
+  })
+
+  test('does not count prior pending workers as current result-ready work', () => {
+    const priorPendingWorker = worker({
+      agentId: 'worker-prior-pending',
+      role: 'explorer',
+      description: 'Prior unsynthesized worker',
+      status: 'completed',
+      origin: 'prior',
+      resumable: true,
+      spawnedAt: '2026-05-02T10:00:00.000Z',
+      synthesisStatus: 'pending',
+    })
+
+    const state: AgentModeSessionState = {
+      objective: 'Check continuity synthesis buckets',
+      currentPhase: 'planning',
+      activeWorker: null,
+      knownWorkers: [priorPendingWorker],
+      nextAction: 'Resume the relevant prior worker.',
+    }
+
+    expect(summarizeAgentModeWorkers(state)).toMatchObject({
+      ready: 0,
+      pendingSynthesis: 0,
+      resumable: 1,
+      visibleWorkers: [priorPendingWorker],
+    })
+    expect(getWorkerStatusLabel(priorPendingWorker)).toBe('resumable')
+  })
 })
 
 function completedWorker(
@@ -268,10 +356,13 @@ function worker(
     description: overrides.description ?? 'Worker sample',
     status: overrides.status ?? 'completed',
     synthesisStatus: overrides.synthesisStatus,
+    origin: overrides.origin,
+    originSessionId: overrides.originSessionId,
     resumable: overrides.resumable,
     worktreePath: overrides.worktreePath ?? null,
     outputSummary: overrides.outputSummary,
     error: overrides.error,
     spawnedAt: overrides.spawnedAt,
+    reuseBlockedReason: overrides.reuseBlockedReason,
   }
 }

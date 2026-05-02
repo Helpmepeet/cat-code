@@ -2,7 +2,7 @@ import { z } from 'zod/v4'
 import { getSessionId } from '../../bootstrap/state.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { isAgentMode } from '../../agent-mode/agentMode.js'
-import { readSessionState } from '../../agent-mode/sessionState.js'
+import { readSessionStateWithContinuity } from '../../agent-mode/sessionState.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { LIST_WORKERS_TOOL_NAME } from './constants.js'
@@ -41,7 +41,7 @@ export const ListWorkersTool = buildTool({
     return 'List known Agent Mode workers, including handle, agentId, role, status, resumability, and synthesis status.'
   },
   async call(input: Input) {
-    const state = await readSessionState(getSessionId())
+    const state = await readSessionStateWithContinuity(getSessionId())
     const workers = state?.knownWorkers ?? []
     const filtered = workers.filter(worker => {
       if (input.activeOnly && worker.status !== 'running') return false

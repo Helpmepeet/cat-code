@@ -18,7 +18,9 @@ function getRoleLabel(role: string): string {
 }
 
 function getStatusColor(statusLabel: string): 'warning' | undefined {
-  return statusLabel === 'attention' ? 'warning' : undefined
+  return statusLabel === 'attention' || statusLabel === 'stale'
+    ? 'warning'
+    : undefined
 }
 
 function getTreePrefix(index: number, total: number): string {
@@ -55,6 +57,12 @@ export function AgentModeWorkerRoster({
             {summary.reviewed > 0 ? (
               <Text dimColor>{` · ${summary.reviewed} reviewed`}</Text>
             ) : null}
+            {summary.resumable > 0 ? (
+              <Text>{` · ${summary.resumable} resumable`}</Text>
+            ) : null}
+            {summary.stale > 0 ? (
+              <Text color="warning">{` · ${summary.stale} stale`}</Text>
+            ) : null}
             {summary.attention > 0 ? (
               <Text color="warning">{` · ${summary.attention} attention`}</Text>
             ) : null}
@@ -70,7 +78,7 @@ export function AgentModeWorkerRoster({
                   {` · ${statusLabel}`}
                 </Text>
                 <Text dimColor>
-                  {` · ${truncateToWidth(worker.description, 64)}`}
+                  {` · ${truncateToWidth(worker.reuseBlockedReason ?? worker.description, 64)}`}
                 </Text>
               </Box>
             )

@@ -18,7 +18,7 @@ import { isEnvTruthy } from '../utils/envUtils.js'
 import { getOrchestratorSystemPrompt } from './orchestratorPrompt.js'
 import {
   formatAgentModeSessionState,
-  readSessionState,
+  readSessionStateWithContinuity,
 } from './sessionState.js'
 
 function isScratchpadGateEnabled(): boolean {
@@ -66,7 +66,7 @@ export async function getAgentModeUserContext(
   }
 
   const effectiveSessionId = sessionId ?? getSessionId()
-  const sessionState = await readSessionState(effectiveSessionId)
+  const sessionState = await readSessionStateWithContinuity(effectiveSessionId)
 
   return {
     workerToolsContext: content,

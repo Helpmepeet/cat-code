@@ -181,7 +181,7 @@ import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldClearThreadGoalContinuationSuppression, shouldStartThreadGoalBudgetWrapUp, shouldStartThreadGoalContinuation, shouldSuppressThreadGoalContinuationAfterTurn, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalUsage, deriveThreadGoalContinuationResetState, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldClearThreadGoalContinuationSuppression, shouldStartThreadGoalBudgetWrapUp, shouldStartThreadGoalContinuation, shouldSuppressThreadGoalContinuationAfterTurn, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -975,13 +975,19 @@ export function REPL({
   }, []);
 
   useEffect(() => {
-    const resetKey = threadGoal ? `${threadGoal.goalId}:${threadGoal.objective}:${threadGoal.status}:${threadGoal.tokenBudget ?? ''}` : null;
-    if (threadGoalContinuationResetKeyRef.current !== resetKey) {
-      goalContinuationSuppressedRef.current = false;
-      if (!threadGoal) {
-        pendingBudgetWrapUpGoalIdRef.current = null;
+    const nextResetState = deriveThreadGoalContinuationResetState({
+      previousResetKey: threadGoalContinuationResetKeyRef.current,
+      goal: threadGoal
+    });
+    if (nextResetState) {
+      goalContinuationSuppressedRef.current =
+        nextResetState.goalContinuationSuppressed;
+      pendingBudgetWrapUpGoalIdRef.current =
+        nextResetState.pendingBudgetWrapUpGoalId;
+      if (nextResetState.shouldBumpIdleSignal) {
+        setGoalContinuationIdleSignal(signal => signal + 1);
       }
-      threadGoalContinuationResetKeyRef.current = resetKey;
+      threadGoalContinuationResetKeyRef.current = nextResetState.resetKey;
     }
   }, [threadGoal]);
 
@@ -4853,8 +4859,8 @@ export function REPL({
     }
     let cancelled = false;
     void import('../agent-mode/sessionState.js').then(({
-      readSessionState
-    }) => readSessionState(getSessionId())).then(state => {
+      readSessionStateWithContinuity
+    }) => readSessionStateWithContinuity(getSessionId())).then(state => {
       if (!cancelled) {
         setAgentModeSessionState(state);
         setAgentModeSessionStateLoaded(true);

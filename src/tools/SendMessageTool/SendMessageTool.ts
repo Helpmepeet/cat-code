@@ -43,7 +43,7 @@ import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
-import { resolveWorkerAgentId } from '../../agent-mode/sessionState.js'
+import { resolveWorkerAgentTarget } from '../../agent-mode/sessionState.js'
 import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
@@ -808,11 +808,11 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         const appState = context.getAppState()
         const registered = appState.agentNameRegistry.get(input.to)
         const rawAgentId = toAgentId(input.to)
-        const durableAgentId =
-          registered || rawAgentId
-            ? null
-            : await resolveWorkerAgentId(getSessionId(), input.to)
-        const agentId = registered ?? rawAgentId ?? durableAgentId
+        const durableTarget = registered
+          ? null
+          : await resolveWorkerAgentTarget(getSessionId(), input.to)
+        const agentId = registered ?? durableTarget?.agentId ?? rawAgentId
+        const sourceSessionId = durableTarget?.originSessionId ?? getSessionId()
         if (agentId) {
           const task = appState.tasks[agentId]
           if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
@@ -834,6 +834,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               const result = await resumeAgentBackground({
                 agentId,
                 prompt: input.message,
+                sourceSessionId,
                 toolUseContext: context,
                 canUseTool,
                 invokingRequestId: assistantMessage?.requestId,
@@ -861,6 +862,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               const result = await resumeAgentBackground({
                 agentId,
                 prompt: input.message,
+                sourceSessionId,
                 toolUseContext: context,
                 canUseTool,
                 invokingRequestId: assistantMessage?.requestId,
