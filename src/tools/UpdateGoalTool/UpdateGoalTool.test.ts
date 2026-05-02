@@ -57,6 +57,40 @@ describe('UpdateGoalTool', () => {
     }
   }
 
+  test('prompt requires evidence-backed completion before marking goal complete', async () => {
+    const prompt = await UpdateGoalTool.prompt()
+
+    expect(prompt).toContain(
+      'Use this tool only to mark the current thread goal complete.',
+    )
+    expect(prompt).toContain(
+      '- every explicit requirement in the goal objective is satisfied',
+    )
+    expect(prompt).toContain(
+      '- relevant files, command output, tests, logs, PR state, or other real evidence support completion',
+    )
+    expect(prompt).toContain(
+      '- tests or green status actually cover the objective requirements',
+    )
+    expect(prompt).toContain('- no required work remains')
+    expect(prompt).toContain(
+      'Do not use this tool because the work seems mostly done.',
+    )
+    expect(prompt).toContain(
+      'Do not use this tool because tests passed unless those tests cover the objective.',
+    )
+    expect(prompt).toContain(
+      'Do not use this tool because the token budget is nearly exhausted.',
+    )
+    expect(prompt).toContain(
+      'Do not use this tool because you are stopping work.',
+    )
+    expect(prompt).toContain('The only valid status is "complete".')
+    expect(prompt).toContain(
+      'When marking a budgeted goal complete, report the final token usage and elapsed time from the tool result to the user.',
+    )
+  })
+
   test('completion uses shared goal action and clears Agent Mode objective', async () => {
     const goal = createThreadGoal(
       sessionId,
