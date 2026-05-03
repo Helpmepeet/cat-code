@@ -79,6 +79,9 @@ the architectural center of the product.
 - Do not replace `QueryEngine` until there is a proven app-facing runtime around
   it.
 - Do not make the dedicated app import Ink or `src/screens/REPL.tsx`.
+- Do not treat the existing `web/` Vite browser UI as the dedicated app. It may
+  be reference or temporary bridge code, but the product goal is a real
+  dedicated app path and a runtime refactor, not a webapp reskin.
 - Preserve transcript compatibility and resume behavior.
 - Preserve permission safety semantics. Changing the UI must not silently allow
   tools that previously required confirmation.
@@ -281,9 +284,10 @@ removing the terminal.
 **Purpose:** Build the first actual dedicated app interface against the runtime
 boundary.
 
-**Decision still required:** Choose the shell technology. Options include a
-local web app, Electron, Tauri, or native macOS. The first choice should favor
-local iteration speed and runtime correctness over final packaging.
+**Decision still required:** Choose the shell technology. Options include
+Electron, Tauri, native macOS, or another packaged local app approach. The
+existing `web/` app is not the target; using it alone does not satisfy this
+phase.
 
 **Key work:**
 
@@ -434,16 +438,16 @@ runtime architecture.
 
 ## Current Next Step
 
-Implement Phase 1 from:
+Execute the dedicated app refactor swarm task:
 
 ```text
-docs/superpowers/plans/2026-05-03-dedicated-app-replacement-plan.md
+docs/superpowers/plans/2026-05-03-dedicated-app-cat-swarm-task.md
 ```
 
 Use `/goal` with:
 
 ```text
-/goal --budget 250K Replace the terminal-first Cat Code UI with a dedicated app by extracting a shared app-facing session runtime from the existing REPL, preserving provider routing, tools, permissions, transcripts, and goal-mode behavior.
+/goal --budget 250K Refactor Cat Code from a terminal-first product into a real dedicated app path, preserving provider routing, tools, permissions, transcripts, Agent Mode, and goal behavior while making the terminal a compatibility client rather than the runtime owner.
 ```
 
 ## Update Rules

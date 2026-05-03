@@ -1,8 +1,8 @@
-# Dedicated App Replacement Implementation Plan
+# Dedicated App Runtime Refactor Reference Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the terminal-first Cat Code experience with a dedicated app while preserving the existing agent runtime, tools, permissions, transcripts, `/goal` behavior, and provider routing.
+**Goal:** Refactor the terminal-first Cat Code runtime so a real dedicated app can become the primary client while preserving the existing agent runtime, tools, permissions, transcripts, `/goal` behavior, and provider routing.
 
 **Architecture:** Treat the current Ink REPL as the incumbent UI shell, not as the runtime boundary. Extract a stable app-facing session controller around the existing `QueryEngine`, command, tool, permission, and session-storage surfaces, then let both the terminal and the dedicated app consume the same event contract. Keep the first implementation transport local and incremental so the terminal keeps working throughout the migration.
 
@@ -10,10 +10,51 @@
 
 ---
 
+## Warning: Reference Only
+
+This document is a runtime-refactor reference, not the complete dedicated app
+execution brief. Do not use it to claim the dedicated app is complete.
+
+For `/cat-swarm`, use:
+
+```text
+docs/superpowers/plans/2026-05-03-dedicated-app-cat-swarm-task.md
+```
+
+The swarm task explicitly requires a real dedicated app path. It must not treat
+the existing `web/` Vite browser UI as the dedicated app target.
+
 ## Ground Truth
 
-This is the detailed Phase 1 implementation plan. The whole migration roadmap
+This is a detailed runtime-boundary reference plan. The whole migration roadmap
 lives in `docs/agent/2026-05-03-dedicated-app-groundtruth.md`.
+
+This plan is not the full dedicated app replacement. It describes one possible
+runtime-boundary extraction that makes later app UI work possible. Do not mark
+the dedicated app replacement complete after this plan.
+
+## Prototype And UI References
+
+The dedicated app UI direction is documented in:
+
+- `docs/design/2026-05-03-dedicated-app-prototype-brief.md`
+- `docs/agent/2026-05-03-dedicated-app-groundtruth.md`
+- Local prototype archive: `/Users/pt/Downloads/catcode_prototype.zip`
+
+Use these references before any app-shell or UI task. The prototype defines the
+desired dense local workspace shape, but it uses mock data and is not runtime
+evidence. Do not substitute the existing `web/` app for the dedicated app target
+unless the task explicitly says a temporary browser bridge is acceptable.
+
+## Cat Swarm Handoff
+
+Use `docs/superpowers/plans/2026-05-03-dedicated-app-cat-swarm-task.md` as the
+direct `/cat-swarm` task brief. That file gives the swarm the end-to-end goal,
+required context, constraints, and minimum validation gates.
+
+This runtime-refactor plan remains reference material only. The swarm owns
+deciding whether to use it, split it differently, or choose a more direct
+dedicated-app scaffold as part of the end-to-end refactor task.
 
 ## How To Start This With `/goal`
 
@@ -23,10 +64,17 @@ Use this command in a fresh Cat Code session:
 /goal --budget 250K Replace the terminal-first Cat Code UI with a dedicated app by extracting a shared app-facing session runtime from the existing REPL, preserving provider routing, tools, permissions, transcripts, and goal-mode behavior.
 ```
 
-Then tell the agent:
+Then tell the agent if you want to execute only this Phase 1 reference plan
+without `/cat-swarm`:
 
 ```text
-Follow docs/superpowers/plans/2026-05-03-dedicated-app-replacement-plan.md task by task. Preserve existing dirty worktree changes. Do not rewrite the model/provider stack. Start by extracting the app-facing session contract and controller seam, then verify the terminal still works.
+Execute docs/superpowers/plans/2026-05-03-dedicated-app-replacement-plan.md as a Phase 1 runtime-boundary milestone. Preserve existing dirty worktree changes. Do not rewrite the model/provider stack. Extract the app-facing session contract and controller seam, then verify the terminal still works.
+```
+
+For `/cat-swarm`, use the dedicated swarm task brief:
+
+```text
+/cat-swarm Execute docs/superpowers/plans/2026-05-03-dedicated-app-cat-swarm-task.md end to end. Read the required context docs first. Own the planning, worker decomposition, implementation, integration, and verification. Stop only when the validation gates pass or a blocker is clearly reported.
 ```
 
 ## Current Reality
@@ -76,6 +124,10 @@ Terminal PromptInput / Messages
 - Modify `src/screens/REPL.tsx`: only after the controller exists, route a narrow path through it while preserving the current UI behavior.
 - Modify `src/utils/handlePromptSubmit.ts`: only if needed to expose reusable input-processing pieces without importing Ink components.
 - Modify `src/QueryEngine.ts`: only if a missing callback prevents non-terminal runtime use.
+
+Phase 1 app-runtime files must not import `ink`, `react`, `src/screens/REPL.tsx`,
+or terminal components. If a task needs one of those imports, stop and move that
+work to Phase 3 or later.
 
 ---
 
@@ -177,7 +229,7 @@ Expected: commit succeeds after reviewing that only plan/doc files are staged.
 - Create: `src/app-runtime/sessionEvents.ts`
 - Create: `src/app-runtime/sessionEvents.test.ts`
 - Reference: `src/entrypoints/agentSdkTypes.ts`
-- Reference: `src/entrypoints/sdk/controlTypes.ts`
+- Reference: `src/entrypoints/sdk/coreTypes.generated.ts`
 - Reference: `src/utils/threadGoal.ts`
 
 - [ ] **Step 1: Write event type tests**
@@ -187,7 +239,7 @@ Create `src/app-runtime/sessionEvents.test.ts` with this content:
 ```ts
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
-import type { SDKControlPermissionRequest } from '../entrypoints/sdk/controlTypes.js'
+import type { SDKControlPermissionRequest } from '../entrypoints/sdk/coreTypes.generated.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
 import {
   createAppSessionGoalEvent,
@@ -270,7 +322,7 @@ Create `src/app-runtime/sessionEvents.ts` with this content:
 
 ```ts
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
-import type { SDKControlPermissionRequest } from '../entrypoints/sdk/controlTypes.js'
+import type { SDKControlPermissionRequest } from '../entrypoints/sdk/coreTypes.generated.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
 
 export type AppSessionStatus =
@@ -644,7 +696,205 @@ Expected: commit succeeds.
 
 ---
 
-### Task 5: Decide The First Dedicated App Shell
+### Task 5: Add Permission And Abort Controller Contract
+
+**Files:**
+- Modify: `src/app-runtime/sessionEvents.ts`
+- Modify: `src/app-runtime/sessionEvents.test.ts`
+- Modify: `src/app-runtime/AppSessionController.ts`
+- Modify: `src/app-runtime/AppSessionController.test.ts`
+- Reference: `src/entrypoints/sdk/coreTypes.generated.ts`
+- Reference: `src/remote/RemoteSessionManager.ts`
+
+- [ ] **Step 1: Add tests for permission requests and abort status**
+
+Add this import at the top of `src/app-runtime/AppSessionController.test.ts`:
+
+```ts
+import type { SDKControlPermissionRequest } from '../entrypoints/sdk/coreTypes.generated.js'
+```
+
+Append these tests to `src/app-runtime/AppSessionController.test.ts`:
+
+```ts
+test('surfaces permission requests and waits for app response', async () => {
+  const request: SDKControlPermissionRequest = {
+    subtype: 'can_use_tool',
+    tool_name: 'Bash',
+    tool_use_id: 'toolu_1',
+    input: { command: 'pwd' },
+  }
+  const events: string[] = []
+  const controller = new AppSessionController({
+    getGoal: () => null,
+    submit: async function* () {},
+  })
+
+  controller.subscribe(event => {
+    events.push(event.type === 'status' ? `status:${event.status}` : event.type)
+    if (event.type === 'permission_request') {
+      controller.respondToPermission(event.requestId, {
+        behavior: 'allow',
+        updatedInput: request.input,
+      })
+    }
+  })
+
+  await expect(controller.requestPermission('request-1', request)).resolves.toEqual({
+    behavior: 'allow',
+    updatedInput: request.input,
+  })
+  expect(events).toEqual([
+    'status:waiting_for_permission',
+    'permission_request',
+    'status:running',
+  ])
+})
+
+test('can abort the active controller turn', async () => {
+  const events: string[] = []
+  const controller = new AppSessionController({
+    getGoal: () => null,
+    submit: async function* () {
+      controller.abort()
+    },
+  })
+
+  controller.subscribe(event => {
+    if (event.type === 'status') {
+      events.push(event.status)
+    }
+  })
+
+  await controller.submitUserInput('stop')
+  expect(events).toEqual(['running', 'aborted'])
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run:
+
+```bash
+bun test src/app-runtime/AppSessionController.test.ts
+```
+
+Expected: FAIL because `requestPermission`, `respondToPermission`, and `abort`
+do not exist yet.
+
+- [ ] **Step 3: Add permission response types**
+
+Update `src/app-runtime/sessionEvents.ts` so it includes these exported types:
+
+```ts
+export type AppSessionPermissionResponse =
+  | {
+      behavior: 'allow'
+      updatedInput: Record<string, unknown>
+    }
+  | {
+      behavior: 'deny'
+      message: string
+    }
+```
+
+- [ ] **Step 4: Add controller permission and abort methods**
+
+Update `src/app-runtime/AppSessionController.ts` with these members inside
+`AppSessionController`:
+
+```ts
+  private pendingPermissions = new Map<
+    string,
+    (response: AppSessionPermissionResponse) => void
+  >()
+  private aborted = false
+
+  async requestPermission(
+    requestId: string,
+    request: SDKControlPermissionRequest,
+  ): Promise<AppSessionPermissionResponse> {
+    this.emit(createAppSessionStatusEvent('waiting_for_permission'))
+    this.emit(createAppSessionPermissionEvent(requestId, request))
+
+    return new Promise(resolve => {
+      this.pendingPermissions.set(requestId, response => {
+        this.pendingPermissions.delete(requestId)
+        this.emit(createAppSessionStatusEvent('running'))
+        resolve(response)
+      })
+    })
+  }
+
+  respondToPermission(
+    requestId: string,
+    response: AppSessionPermissionResponse,
+  ): boolean {
+    const resolve = this.pendingPermissions.get(requestId)
+    if (!resolve) return false
+    resolve(response)
+    return true
+  }
+
+  abort(): void {
+    this.aborted = true
+    this.emit(createAppSessionStatusEvent('aborted'))
+  }
+```
+
+Also update the imports at the top of `src/app-runtime/AppSessionController.ts`:
+
+```ts
+import type { SDKControlPermissionRequest } from '../entrypoints/sdk/coreTypes.generated.js'
+import {
+  createAppSessionGoalEvent,
+  createAppSessionMessageEvent,
+  createAppSessionPermissionEvent,
+  createAppSessionStatusEvent,
+  type AppSessionEvent,
+  type AppSessionPermissionResponse,
+} from './sessionEvents.js'
+```
+
+Finally, update `submitUserInput` so it resets the abort flag for each new turn
+and does not emit `goal` and `idle` after an abort:
+
+```ts
+    this.aborted = false
+    this.emit(createAppSessionStatusEvent('running'))
+```
+
+```ts
+      if (!this.aborted) {
+        this.emit(createAppSessionGoalEvent(this.options.getGoal()))
+        this.emit(createAppSessionStatusEvent('idle'))
+      }
+```
+
+- [ ] **Step 5: Run controller and event tests**
+
+Run:
+
+```bash
+bun test src/app-runtime/sessionEvents.test.ts src/app-runtime/AppSessionController.test.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit permission and abort contract**
+
+Run:
+
+```bash
+git add src/app-runtime/sessionEvents.ts src/app-runtime/sessionEvents.test.ts src/app-runtime/AppSessionController.ts src/app-runtime/AppSessionController.test.ts
+git commit -m "feat: add app session permission and abort contract"
+```
+
+Expected: commit succeeds.
+
+---
+
+### Task 6: Decide The First Dedicated App Shell
 
 **Files:**
 - Modify: `docs/agent/2026-05-03-dedicated-app-runtime-boundary.md`
@@ -665,6 +915,7 @@ The first dedicated app shell should be selected by these constraints:
 - It can show current `/goal` state.
 - It can run locally against the same server Mac runtime.
 - It does not force a provider, model, tool, or transcript rewrite.
+- It follows the product and visual direction in `docs/design/2026-05-03-dedicated-app-prototype-brief.md`.
 
 The first shell should optimize for local iteration speed over final distribution. A local web app, Electron, Tauri, or native macOS app can all be considered, but the runtime boundary must stay independent of the shell choice.
 ```
@@ -675,9 +926,10 @@ Run:
 
 ```bash
 bun test src/app-runtime/sessionEvents.test.ts src/app-runtime/AppSessionController.test.ts src/app-runtime/createQueryEngineSessionController.test.ts
+if rg -n "from ['\\\"](ink|react|.*screens/REPL|.*components/)" src/app-runtime; then exit 1; fi
 ```
 
-Expected: PASS.
+Expected: tests pass and `rg` finds no terminal UI imports in `src/app-runtime`.
 
 - [ ] **Step 3: Commit the app-shell decision criteria**
 
@@ -699,6 +951,7 @@ Run these before claiming the first extraction phase is complete:
 ```bash
 bun test src/app-runtime/sessionEvents.test.ts src/app-runtime/AppSessionController.test.ts src/app-runtime/createQueryEngineSessionController.test.ts
 bun test src/utils/threadGoal.test.ts src/commands/goal/goal.test.ts src/tools/GetGoalTool/GetGoalTool.test.ts src/tools/CreateGoalTool/CreateGoalTool.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts
+if rg -n "from ['\\\"](ink|react|.*screens/REPL|.*components/)" src/app-runtime; then exit 1; fi
 bun run build:dev:full
 ```
 
@@ -706,6 +959,7 @@ Expected:
 
 - App-runtime tests pass.
 - Goal-mode tests pass.
+- `src/app-runtime` has no terminal UI imports.
 - `bun run build:dev:full` creates `./cli-dev` and prints the version.
 
 ## Follow-On Phases
