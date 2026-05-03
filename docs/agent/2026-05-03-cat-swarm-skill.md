@@ -11,7 +11,8 @@ This document describes the local `/cat-swarm` skill workflow for Cat Code Agent
   - and the runtime killswitch gate to leave the tools visible
 - `SendMessage`, `TeamCreate`, and `TeamDelete` are also behind the same swarm gate.
 - `Agent` supports `name` and `team_name`.
-- The local skill command name comes from the folder name: `/Users/pt/.cat-code/skills/cat-swarm/SKILL.md` loads as `/cat-swarm`.
+- The local skill command name comes from the folder name: `~/.cat-code/skills/cat-swarm/SKILL.md` loads as `/cat-swarm` by default.
+- If `CLAUDE_CONFIG_DIR` is set, the user skill path moves with it.
 
 ## Startup commands
 
@@ -50,8 +51,14 @@ Stop if:
 ## Execution notes from this plan run
 
 - `./cli-dev --agent-mode --agent-teams` failed immediately with `error: unknown option '--agent-teams'`.
-- A follow-up `--print` preflight run with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` reported `Agent` and `GetWorkerResult` as available, but `TeamCreate`, `TeamDelete`, `SendMessage`, `WaitWorkers`, and `CancelWorker` as unavailable.
-- Because the runtime availability did not match the milestone assumptions, the validation matrix was not completed in this run.
+- A follow-up non-interactive `--print` preflight response did not match the current source-backed tool gates, so it was not treated as authoritative for Agent Mode worker-control availability.
+- The confirmed blocker from this run was the external-build CLI mismatch around `--agent-teams`, which prevented clean validation of the team-gated path expected by the milestone.
+- Because the startup path and swarm-gated validation path did not match the milestone assumptions, the validation matrix was not completed in this run.
+
+## Status
+
+- This branch contains the local-skill support docs and repo-local role/context files, but it does not represent a passed milestone.
+- Use it as a setup/reference branch plus blocker documentation, not as evidence that the read-only validation matrix succeeded.
 
 ## Read-only smoke tests
 
