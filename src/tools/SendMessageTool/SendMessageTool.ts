@@ -13,6 +13,7 @@ import {
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
 import { toAgentId } from '../../types/ids.js'
 import { generateRequestId } from '../../utils/agentId.js'
+import { isAgentMode } from '../../agent-mode/agentMode.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
@@ -538,7 +539,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     shouldDefer: true,
 
     isEnabled() {
-      return isAgentSwarmsEnabled()
+      return isAgentMode() || isAgentSwarmsEnabled()
     },
 
     isReadOnly(input) {
@@ -632,6 +633,37 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
             'to must be a bare teammate name or "*" — there is only one team per session',
           errorCode: 9,
         }
+      }
+      if (!isAgentSwarmsEnabled()) {
+        if (input.to === '*') {
+          return {
+            result: false,
+            message: 'broadcast messaging requires Agent Teams',
+            errorCode: 9,
+          }
+        }
+        if (parseAddress(input.to).scheme !== 'other') {
+          return {
+            result: false,
+            message: 'cross-session messaging requires Agent Teams',
+            errorCode: 9,
+          }
+        }
+        if (typeof input.message !== 'string') {
+          return {
+            result: false,
+            message: 'structured messages require Agent Teams',
+            errorCode: 9,
+          }
+        }
+        if (!input.summary || input.summary.trim().length === 0) {
+          return {
+            result: false,
+            message: 'summary is required when message is a string',
+            errorCode: 9,
+          }
+        }
+        return { result: true }
       }
       if (feature('UDS_INBOX') && parseAddress(input.to).scheme === 'bridge') {
         // Structured-message rejection first — it's the permanent constraint.
@@ -882,6 +914,15 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               }
             }
           }
+        }
+      }
+
+      if (!isAgentSwarmsEnabled()) {
+        return {
+          data: {
+            success: false,
+            message: `No Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target worker handles or agent IDs.`,
+          },
         }
       }
 

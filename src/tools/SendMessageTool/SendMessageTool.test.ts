@@ -99,6 +99,8 @@ function writePriorAgentTranscript(
 describe('SendMessageTool durable worker handle fallback', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
+  const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
+  const originalAgentTeams = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
   let tempDir: string
 
   beforeEach(async () => {
@@ -137,6 +139,16 @@ describe('SendMessageTool durable worker handle fallback', () => {
   })
 
   afterEach(() => {
+    if (originalAgentMode === undefined) {
+      delete process.env.CLAUDE_CODE_AGENT_MODE
+    } else {
+      process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
+    }
+    if (originalAgentTeams === undefined) {
+      delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+    } else {
+      process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = originalAgentTeams
+    }
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true })
     }
@@ -146,6 +158,72 @@ describe('SendMessageTool durable worker handle fallback', () => {
       rmSync(file, { force: true })
     }
     switchSession(originalSessionId, originalProjectDir)
+  })
+
+  test('is enabled in Agent Mode without Agent Teams', () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+    expect(SendMessageTool.isEnabled?.()).toBe(true)
+  })
+
+  test('without Agent Teams rejects teammate-only routes', async () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+    await expect(
+      SendMessageTool.validateInput?.(
+        { to: '*', summary: 'broadcast', message: 'status?' },
+        undefined as never,
+      ),
+    ).resolves.toMatchObject({
+      result: false,
+      message: 'broadcast messaging requires Agent Teams',
+    })
+
+    await expect(
+      SendMessageTool.validateInput?.(
+        {
+          to: 'team-lead',
+          message: {
+            type: 'shutdown_response',
+            request_id: 'req-1',
+            approve: true,
+          },
+        },
+        undefined as never,
+      ),
+    ).resolves.toMatchObject({
+      result: false,
+      message: 'structured messages require Agent Teams',
+    })
+  })
+
+  test('without Agent Teams does not fall through to teammate mailbox', async () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+    const context = {
+      getAppState: () => ({
+        agentNameRegistry: new Map(),
+        tasks: {},
+      }),
+    } as never
+
+    const result = await SendMessageTool.call(
+      { to: 'missing-worker', summary: 'follow up', message: 'continue' },
+      context,
+      undefined as never,
+      { requestId: 'req-0' } as never,
+    )
+
+    expect(result).toMatchObject({
+      data: {
+        success: false,
+        message: expect.stringContaining(
+          'Without Agent Teams, SendMessage can only target worker handles or agent IDs',
+        ),
+      },
+    })
   })
 
   test('resolves durable handle to agent id and resumes in background', async () => {

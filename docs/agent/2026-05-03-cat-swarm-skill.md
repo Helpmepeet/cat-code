@@ -21,7 +21,8 @@ Cat Swarm coordinates parallel implementation by assigning ownership, running ed
 - Git-backed worker worktrees are cleaned up when no changes are made and kept when changes exist.
 - Hook-based worker worktrees may be kept even when clean because change detection may be unavailable.
 - Kept worker metadata may include `worktreePath` and `worktreeBranch`.
-- `SendMessage`, `TeamCreate`, and `TeamDelete` are behind the swarm gate.
+- `SendMessage` is available in Agent Mode for worker follow-up by handle or agent ID.
+- `TeamCreate` and `TeamDelete` are behind the swarm gate.
 - `TeamCreate` and `TeamDelete` are conditional team tools. For external builds they require:
   - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` or a build that supports `--agent-teams`
   - and the runtime killswitch gate to leave the tools visible
@@ -70,7 +71,7 @@ Stop if:
 3. Assign each worker allowed paths, forbidden paths, goal, expected return format, and checks.
 4. For edit-capable workers, prefer `Agent` with `isolation: "worktree"`.
 5. Use `run_in_background: true` when true parallel execution is available.
-6. If `SendMessage` is visible, steer overlapping running workers instead of spawning duplicates.
+6. Use `SendMessage` to steer overlapping running workers instead of spawning duplicates.
 7. Wait with `WaitWorkers`.
 8. Read each result with `GetWorkerResult`.
 9. Inspect kept worker worktrees before integrating changes.
