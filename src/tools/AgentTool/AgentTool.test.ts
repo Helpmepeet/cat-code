@@ -60,6 +60,7 @@ describe('buildAgentSessionStateTracking', () => {
       sessionId: 'session-123',
       mode: 'agent',
       objective: 'Deliver the report',
+      statePath: expect.any(String),
     })
   })
 
@@ -80,6 +81,7 @@ describe('finalizeFailedAgentLaunch', () => {
     const spawnCalls: Array<Record<string, unknown>> = []
     const terminalCalls: Array<Record<string, unknown>> = []
     const sessionId = randomUUID()
+    const statePath = join(tmpdir(), `${sessionId}.agent-mode-state.json`)
     Math.random = () => 0
 
     const result = await finalizeFailedAgentLaunch(
@@ -97,6 +99,7 @@ describe('finalizeFailedAgentLaunch', () => {
           sessionId,
           mode: 'agent',
           objective: 'Deliver the report',
+          statePath,
         },
       },
       {
@@ -114,6 +117,7 @@ describe('finalizeFailedAgentLaunch', () => {
         sessionId,
         mode: 'agent',
         objective: 'Deliver the report',
+        statePath,
         handle: 'Ada',
         agentId: 'agent-123',
         role: 'Explore',
@@ -129,6 +133,12 @@ describe('finalizeFailedAgentLaunch', () => {
         status: 'failed',
         error: 'store is not defined',
         outputSummary: 'Map workspace for report flow',
+        createStateIfMissing: {
+          sessionId,
+          mode: 'agent',
+          objective: 'Deliver the report',
+          statePath,
+        },
       },
     ])
     expect(result).toEqual({

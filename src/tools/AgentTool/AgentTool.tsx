@@ -10,7 +10,7 @@ import { enhanceSystemPromptWithEnvDetails, getSystemPrompt } from '../../consta
 import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
 import { isAgentMode } from '../../agent-mode/agentMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
-import { readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
+import { getSessionStatePathFromTranscriptPath, readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
 import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
@@ -82,6 +82,7 @@ export type AgentSessionStateTracking = {
   sessionId: string
   mode: Exclude<ReturnType<typeof getCurrentSessionMode>, 'normal'>
   objective: string
+  statePath: string
 }
 
 export function buildAgentSessionStateTracking({
@@ -106,6 +107,7 @@ export function buildAgentSessionStateTracking({
       threadGoalObjective,
       description,
     }),
+    statePath: getSessionStatePathFromTranscriptPath(getTranscriptPath()),
   }
 }
 
@@ -142,7 +144,12 @@ export async function finalizeFailedAgentLaunch({
 
   if (sessionStateTracking) {
     const reservedWorkerHandles = (
-      (await readSessionState(sessionStateTracking.sessionId))?.knownWorkers ??
+      (
+        await readSessionState(
+          sessionStateTracking.sessionId,
+          sessionStateTracking.statePath,
+        )
+      )?.knownWorkers ??
       []
     )
       .map(worker => worker.handle)
@@ -156,6 +163,9 @@ export async function finalizeFailedAgentLaunch({
         sessionId: sessionStateTracking.sessionId,
         mode: sessionStateTracking.mode,
         objective: sessionStateTracking.objective,
+        ...(sessionStateTracking.statePath
+          ? { statePath: sessionStateTracking.statePath }
+          : {}),
         handle: workerName ?? agentId,
         agentId,
         role: agentType,
@@ -172,6 +182,7 @@ export async function finalizeFailedAgentLaunch({
         status: 'failed',
         error: errMsg,
         outputSummary: description,
+        createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
         logForDebugging(`Failed to record Agent Mode worker launch failure: ${_err}`),
       )
@@ -985,6 +996,7 @@ export const AgentTool = buildTool({
         formatFinalMessage: isForkPath ? (text: string) => formatForkWorkerResultForNotification(text, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider)) : undefined,
         parentTranscriptPath,
         parentSessionId,
+        sessionStateTracking: runAgentParams.sessionStateTracking,
       })));
       const canCheckProgress = toolUseContext.options.tools.some(t => toolMatchesName(t, TASK_OUTPUT_TOOL_NAME) || toolMatchesName(t, FILE_READ_TOOL_NAME));
       return {
@@ -1228,6 +1240,7 @@ export const AgentTool = buildTool({
                         status: 'failed',
                         error: apiErrorMsg,
                         outputSummary: description,
+                        createStateIfMissing: runAgentParams.sessionStateTracking,
                       }).catch(_err =>
                         logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
                       );
@@ -1291,6 +1304,7 @@ export const AgentTool = buildTool({
                       agentId: backgroundedTaskId,
                       status: 'completed',
                       outputSummary: description,
+                      createStateIfMissing: runAgentParams.sessionStateTracking,
                     }).catch(_err =>
                       logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
                     );
@@ -1335,6 +1349,7 @@ export const AgentTool = buildTool({
                         agentId: backgroundedTaskId,
                         status: 'killed',
                         outputSummary: description,
+                        createStateIfMissing: runAgentParams.sessionStateTracking,
                       }).catch(_err =>
                         logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
                       );
@@ -1374,6 +1389,7 @@ export const AgentTool = buildTool({
                       status: 'failed',
                       error: errMsg,
                       outputSummary: description,
+                      createStateIfMissing: runAgentParams.sessionStateTracking,
                     }).catch(_err =>
                       logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
                     );
@@ -1518,6 +1534,7 @@ export const AgentTool = buildTool({
               agentId: syncAgentId,
               status: 'killed',
               outputSummary: description,
+              createStateIfMissing: runAgentParams.sessionStateTracking,
             }).catch(_err =>
               logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
             );
@@ -1612,6 +1629,7 @@ export const AgentTool = buildTool({
             agentId: syncAgentId,
             status: 'killed',
             outputSummary: description,
+            createStateIfMissing: runAgentParams.sessionStateTracking,
           }).catch(_err =>
             logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
           );
@@ -1641,6 +1659,7 @@ export const AgentTool = buildTool({
               status: 'failed',
               error: syncAgentError.message,
               outputSummary: description,
+              createStateIfMissing: runAgentParams.sessionStateTracking,
             }).catch(_err =>
               logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
             );
@@ -1705,6 +1724,7 @@ export const AgentTool = buildTool({
           status: completedWithError ? 'failed' : 'completed',
           ...(terminalError ? { error: terminalError } : {}),
           outputSummary: description,
+          createStateIfMissing: runAgentParams.sessionStateTracking,
         }).catch(_err =>
           logForDebugging(`Failed to record Agent Mode worker terminal state: ${_err}`),
         );

@@ -762,6 +762,7 @@ export async function runAsyncAgentLifecycle({
   formatFinalMessage,
   parentTranscriptPath,
   parentSessionId,
+  sessionStateTracking,
 }: {
   taskId: string
   abortController: AbortController
@@ -786,6 +787,13 @@ export async function runAsyncAgentLifecycle({
   /** Parent session ID captured at spawn time. Must be passed explicitly for
    * the same reason as parentTranscriptPath. */
   parentSessionId: string
+  /** Durable Agent Mode/coordinator tracking context. When omitted, terminal
+   * recording must not create Agent Mode state for ordinary subagents. */
+  sessionStateTracking?: {
+    mode: string
+    objective: string
+    statePath?: string
+  }
 }): Promise<void> {
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
@@ -880,6 +888,7 @@ export async function runAsyncAgentLifecycle({
         status: 'failed',
         error: apiErrorMsg,
         outputSummary: description,
+        createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
         logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
       )
@@ -924,6 +933,7 @@ export async function runAsyncAgentLifecycle({
       agentId: taskId,
       status: 'completed',
       outputSummary: description,
+      createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
       logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
     )
@@ -997,6 +1007,7 @@ export async function runAsyncAgentLifecycle({
         agentId: taskId,
         status: 'killed',
         outputSummary: description,
+        createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
         logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
       )
@@ -1036,6 +1047,7 @@ export async function runAsyncAgentLifecycle({
       status: 'failed',
       error: msg,
       outputSummary: description,
+      createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
       logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
     )
