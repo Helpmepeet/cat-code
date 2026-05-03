@@ -9,6 +9,7 @@ This document describes the local `/cat-swarm` skill workflow for Cat Code Agent
 - `TeamCreate` and `TeamDelete` are conditional team tools. For external builds they require:
   - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` or `--agent-teams`
   - and the runtime killswitch gate to leave the tools visible
+- `SendMessage`, `TeamCreate`, and `TeamDelete` are also behind the same swarm gate.
 - `Agent` supports `name` and `team_name`.
 - The local skill command name comes from the folder name: `/Users/pt/.cat-code/skills/cat-swarm/SKILL.md` loads as `/cat-swarm`.
 
@@ -24,8 +25,13 @@ Run:
 
 ```bash
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-./cli-dev --agent-mode --agent-teams
+./cli-dev --agent-mode
 ```
+
+Current external-build note:
+
+- In this snapshot, `./cli-dev --agent-mode --agent-teams` failed with `error: unknown option '--agent-teams'`.
+- The source still checks `process.argv` for `--agent-teams`, but the built CLI parser did not expose that flag for this build.
 
 ## Preflight prompt
 
@@ -40,6 +46,12 @@ Stop if:
 - `Agent` is missing
 - any worker-control tool is missing
 - `TeamCreate` / `TeamDelete` are missing and the planned run requires strong team coordination
+
+## Execution notes from this plan run
+
+- `./cli-dev --agent-mode --agent-teams` failed immediately with `error: unknown option '--agent-teams'`.
+- A follow-up `--print` preflight run with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` reported `Agent` and `GetWorkerResult` as available, but `TeamCreate`, `TeamDelete`, `SendMessage`, `WaitWorkers`, and `CancelWorker` as unavailable.
+- Because the runtime availability did not match the milestone assumptions, the validation matrix was not completed in this run.
 
 ## Read-only smoke tests
 
