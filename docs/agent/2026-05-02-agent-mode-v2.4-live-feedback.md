@@ -210,7 +210,7 @@ Use this shape for new issues:
   bun test src/agent-mode/workerNames.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx src/agent-mode/sessionState.test.ts src/agent-mode/workerUxSummary.test.ts src/tools/AgentTool/AgentTool.test.ts src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/agent-mode/agentMode.test.ts
   ```
 
-  Result: 58 pass, 0 fail, 142 expect calls.
+  Result: 64 pass, 0 fail, 160 expect calls.
 - **Manual live Agent Mode smoke (2026-05-03)**: Not run in this noninteractive subagent pass. The original live/manual smoke remains pending unless someone runs it separately.
 
 ---
