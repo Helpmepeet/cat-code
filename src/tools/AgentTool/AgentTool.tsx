@@ -10,7 +10,8 @@ import { enhanceSystemPromptWithEnvDetails, getSystemPrompt } from '../../consta
 import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
 import { isAgentMode } from '../../agent-mode/agentMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
-import { recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
+import { readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
+import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
@@ -140,28 +141,43 @@ export async function finalizeFailedAgentLaunch({
   const errMsg = errorMessage(error)
 
   if (sessionStateTracking) {
-    await recordSpawn({
-      sessionId: sessionStateTracking.sessionId,
-      mode: sessionStateTracking.mode,
-      objective: sessionStateTracking.objective,
-      agentId,
-      role: agentType,
-      description,
-      worktreePath: worktreePath ?? null,
-      spawnedAt,
-    }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker spawn failure: ${_err}`),
+    const reservedWorkerHandles = (
+      (await readSessionState(sessionStateTracking.sessionId))?.knownWorkers ??
+      []
     )
+      .map(worker => worker.handle)
+      .filter((handle): handle is string => Boolean(handle && handle.length > 0))
+    const workerName = allocateWorkerName(agentType, reservedWorkerHandles, {
+      allowGeneric: true,
+    })
 
-    await recordTerminal({
-      sessionId: sessionStateTracking.sessionId,
-      agentId,
-      status: 'failed',
-      error: errMsg,
-      outputSummary: description,
-    }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker launch failure: ${_err}`),
-    )
+    try {
+      await recordSpawn({
+        sessionId: sessionStateTracking.sessionId,
+        mode: sessionStateTracking.mode,
+        objective: sessionStateTracking.objective,
+        handle: workerName ?? agentId,
+        agentId,
+        role: agentType,
+        description,
+        worktreePath: worktreePath ?? null,
+        spawnedAt,
+      }).catch(_err =>
+        logForDebugging(`Failed to record Agent Mode worker spawn failure: ${_err}`),
+      )
+
+      await recordTerminal({
+        sessionId: sessionStateTracking.sessionId,
+        agentId,
+        status: 'failed',
+        error: errMsg,
+        outputSummary: description,
+      }).catch(_err =>
+        logForDebugging(`Failed to record Agent Mode worker launch failure: ${_err}`),
+      )
+    } finally {
+      if (workerName) releaseWorkerName(workerName)
+    }
   }
 
   return {

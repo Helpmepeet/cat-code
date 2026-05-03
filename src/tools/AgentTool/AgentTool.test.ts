@@ -1,11 +1,28 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
+import { randomUUID } from 'crypto'
+import { mkdtempSync } from 'fs'
+import { rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
+import { readSessionState } from '../../agent-mode/sessionState.js'
+import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js'
 import {
   AgentTool,
   buildAgentSessionStateTracking,
   deriveSessionStateTrackingObjective,
   finalizeFailedAgentLaunch,
 } from './AgentTool.js'
+
+const originalRandom = Math.random
+
+afterEach(() => {
+  Math.random = originalRandom
+  releaseWorkerName('Ada')
+  releaseWorkerName('Katherine')
+  resetStateForTests()
+})
 
 describe('deriveSessionStateTrackingObjective', () => {
   test('prefers the thread goal objective over worker description', () => {
@@ -62,6 +79,8 @@ describe('finalizeFailedAgentLaunch', () => {
   test('records failed launch state and returns structured error output', async () => {
     const spawnCalls: Array<Record<string, unknown>> = []
     const terminalCalls: Array<Record<string, unknown>> = []
+    const sessionId = randomUUID()
+    Math.random = () => 0
 
     const result = await finalizeFailedAgentLaunch(
       {
@@ -75,7 +94,7 @@ describe('finalizeFailedAgentLaunch', () => {
         spawnedAt: '2026-05-02T10:00:00.000Z',
         worktreePath: null,
         sessionStateTracking: {
-          sessionId: 'session-123',
+          sessionId,
           mode: 'agent',
           objective: 'Deliver the report',
         },
@@ -92,9 +111,10 @@ describe('finalizeFailedAgentLaunch', () => {
 
     expect(spawnCalls).toEqual([
       {
-        sessionId: 'session-123',
+        sessionId,
         mode: 'agent',
         objective: 'Deliver the report',
+        handle: 'Ada',
         agentId: 'agent-123',
         role: 'Explore',
         description: 'Map workspace for report flow',
@@ -104,7 +124,7 @@ describe('finalizeFailedAgentLaunch', () => {
     ])
     expect(terminalCalls).toEqual([
       {
-        sessionId: 'session-123',
+        sessionId,
         agentId: 'agent-123',
         status: 'failed',
         error: 'store is not defined',
@@ -193,5 +213,43 @@ describe('finalizeFailedAgentLaunch', () => {
 
     expect(spawnCalls).toHaveLength(1)
     expect(terminalCalls).toHaveLength(1)
+  })
+
+  test('persists generic handles for tracked Agent Mode launch failures without leaking reservations', async () => {
+    const tempProjectDir = mkdtempSync(join(tmpdir(), 'agent-tool-failed-launch-'))
+    const sessionId = 'session-123'
+    Math.random = () => 0
+    resetStateForTests()
+    switchSession(sessionId as never, tempProjectDir)
+
+    try {
+      await finalizeFailedAgentLaunch({
+        prompt: 'Investigate the report flow',
+        description: 'Map workspace for report flow',
+        agentId: 'agent-123',
+        agentType: 'Explore',
+        error: new Error('worktree setup failed'),
+        durationMs: 42,
+        sessionStateTracking: buildAgentSessionStateTracking({
+          sessionMode: 'agent',
+          sessionId,
+          threadGoalObjective: 'Deliver the report',
+          description: 'Map workspace for report flow',
+        }),
+      })
+
+      const state = await readSessionState(sessionId)
+      const failedWorker = state?.knownWorkers.find(
+        worker => worker.agentId === 'agent-123',
+      )
+
+      expect(failedWorker?.handle).toBe('Ada')
+      expect(failedWorker?.handle).not.toBe('agent-123')
+      expect(allocateWorkerName('Explore', [], { allowGeneric: true })).toBe(
+        'Ada',
+      )
+    } finally {
+      await rm(tempProjectDir, { recursive: true, force: true })
+    }
   })
 })
