@@ -285,6 +285,49 @@ export function calculateThreadGoalContextTokenDelta(
   return Math.max(0, endContextTokens - startContextTokens)
 }
 
+export function buildThreadGoalDisplayState({
+  goal,
+  liveContextTokens,
+  turnStartContextTokens,
+  turnGoalId,
+  isTurnRunning,
+}: {
+  goal: ThreadGoal | null
+  liveContextTokens: number
+  turnStartContextTokens: number
+  turnGoalId: string | null
+  isTurnRunning: boolean
+}): ThreadGoal | null {
+  if (!goal || !isTurnRunning || goal.goalId !== turnGoalId) {
+    return goal
+  }
+  if (goal.status !== 'active' && goal.status !== 'budget_limited') {
+    return goal
+  }
+
+  const liveDelta = calculateThreadGoalContextTokenDelta(
+    turnStartContextTokens,
+    liveContextTokens,
+  )
+  if (liveDelta === 0) {
+    return goal
+  }
+
+  const tokensUsed = goal.tokensUsed + liveDelta
+  const status =
+    goal.status === 'active' &&
+    goal.tokenBudget !== undefined &&
+    tokensUsed >= goal.tokenBudget
+      ? 'budget_limited'
+      : goal.status
+
+  return {
+    ...goal,
+    status,
+    tokensUsed,
+  }
+}
+
 export function pauseActiveThreadGoalOnAbort(
   goal: ThreadGoal | null,
   nowMs: number = Date.now(),

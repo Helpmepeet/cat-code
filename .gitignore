@@ -5,6 +5,7 @@ cli-dev
 openclaw/
 .DS_Store
 .worktrees/
+.cat-code/
 
 # Local secrets and env files
 .env

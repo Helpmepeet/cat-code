@@ -180,8 +180,9 @@ import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
+import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
@@ -1589,6 +1590,15 @@ export function REPL({
   // Guard on showStreamingText so toggling reducedMotion mid-stream
   // immediately hides the streaming preview.
   const visibleStreamingText = streamingText && showStreamingText ? streamingText.substring(0, streamingText.lastIndexOf('\n') + 1) || null : null;
+  const liveStreamingTokenEstimate = useMemo(() => {
+    const textTokens = streamingText
+      ? roughTokenCountEstimation(streamingText)
+      : 0;
+    const thinkingTokens = streamingThinking?.thinking
+      ? roughTokenCountEstimation(streamingThinking.thinking)
+      : 0;
+    return textTokens + thinkingTokens;
+  }, [streamingText, streamingThinking]);
   const [lastQueryCompletionTime, setLastQueryCompletionTime] = useState(0);
   const [goalContinuationIdleSignal, setGoalContinuationIdleSignal] = useState(0);
   const handledGoalContinuationIdleSignalRef = useRef(0);
@@ -5009,6 +5019,13 @@ export function REPL({
   // agent — displayedMessages is a different array there, and onAgentSubmit
   // doesn't use the placeholder anyway.
   const placeholderText = userInputOnProcessing && !viewedAgentTask && displayedMessages.length <= userInputBaselineRef.current ? userInputOnProcessing : undefined;
+  const threadGoalDisplay = useMemo(() => buildThreadGoalDisplayState({
+    goal: threadGoal,
+    liveContextTokens: tokenCountWithEstimation(messages) + liveStreamingTokenEstimate,
+    turnStartContextTokens: turnContextTokensAtStartRef.current,
+    turnGoalId: turnGoalAtStartRef.current?.goalId ?? null,
+    isTurnRunning: isLoading
+  }), [threadGoal, messages, liveStreamingTokenEstimate, isLoading]);
   const toolPermissionOverlay = focusedInputDialog === 'tool-permission' ? <PermissionRequest key={toolUseConfirmQueue[0]?.toolUseID} onDone={() => setToolUseConfirmQueue(([_, ...tail]) => tail)} onReject={handleQueuedCommandOnCancel} toolUseConfirm={toolUseConfirmQueue[0]!} toolUseContext={getToolUseContext(messages, messages, abortController ?? createAbortController(), mainLoopModel)} verbose={verbose} workerBadge={toolUseConfirmQueue[0]?.workerBadge} setStickyFooter={isFullscreenEnvEnabled() ? setPermissionStickyFooter : undefined} /> : null;
 
   // Narrow terminals: companion collapses to a one-liner that REPL stacks
@@ -5401,7 +5418,7 @@ export function REPL({
                       {showIssueFlagBanner && <IssueFlagBanner />}
                       {agentModeActive ? <AgentModeWorkerRoster loaded={agentModeSessionStateLoaded} summary={agentModeWorkerSummary} /> : null}
                       {}
-                      <PromptInput debug={debug} ideSelection={ideSelection} hasSuppressedDialogs={!!hasSuppressedDialogs} isLocalJSXCommandActive={isShowingLocalJSXCommand} getToolUseContext={getToolUseContext} toolPermissionContext={toolPermissionContext} setToolPermissionContext={setToolPermissionContext} apiKeyStatus={apiKeyStatus} commands={commands} agents={agentDefinitions.activeAgents} isLoading={isLoading} onExit={handleExit} verbose={verbose} messages={messages} onAutoUpdaterResult={setAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} input={inputValue} onInputChange={setInputValue} mode={inputMode} onModeChange={setInputMode} stashedPrompt={stashedPrompt} setStashedPrompt={setStashedPrompt} submitCount={submitCount} onShowMessageSelector={handleShowMessageSelector} onMessageActionsEnter={
+                      <PromptInput debug={debug} ideSelection={ideSelection} hasSuppressedDialogs={!!hasSuppressedDialogs} isLocalJSXCommandActive={isShowingLocalJSXCommand} getToolUseContext={getToolUseContext} toolPermissionContext={toolPermissionContext} setToolPermissionContext={setToolPermissionContext} apiKeyStatus={apiKeyStatus} commands={commands} agents={agentDefinitions.activeAgents} isLoading={isLoading} onExit={handleExit} verbose={verbose} messages={messages} threadGoalDisplay={threadGoalDisplay} onAutoUpdaterResult={setAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} input={inputValue} onInputChange={setInputValue} mode={inputMode} onModeChange={setInputMode} stashedPrompt={stashedPrompt} setStashedPrompt={setStashedPrompt} submitCount={submitCount} onShowMessageSelector={handleShowMessageSelector} onMessageActionsEnter={
             // Works during isLoading — edit cancels first; uuid selection survives appends.
             feature('MESSAGE_ACTIONS') && isFullscreenEnvEnabled() && !disableMessageActions ? enterMessageActions : undefined} mcpClients={mcpClients} pastedContents={pastedContents} setPastedContents={setPastedContents} vimMode={vimMode} setVimMode={setVimMode} showBashesDialog={showBashesDialog} setShowBashesDialog={setShowBashesDialog} onSubmit={onSubmit} onAgentSubmit={onAgentSubmit} isSearchingHistory={isSearchingHistory} setIsSearchingHistory={setIsSearchingHistory} helpOpen={isHelpOpen} setHelpOpen={setIsHelpOpen} insertTextRef={feature('VOICE_MODE') ? insertTextRef : undefined} voiceInterimRange={voice.interimRange} />
                       <SessionBackgroundHint onBackgroundSession={handleBackgroundSession} isLoading={isLoading} />

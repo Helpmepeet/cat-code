@@ -9,6 +9,7 @@ import {
 } from './sessionStorage.js'
 import {
   accountThreadGoalUsage,
+  buildThreadGoalDisplayState,
   calculateThreadGoalContextTokenDelta,
   createThreadGoal,
   deriveThreadGoalContinuationResetState,
@@ -234,6 +235,130 @@ describe('thread goal formatting and parsing', () => {
     expect(calculateThreadGoalContextTokenDelta(40_000, 50_000)).toBe(10_000)
     expect(calculateThreadGoalContextTokenDelta(50_000, 0)).toBe(0)
     expect(calculateThreadGoalContextTokenDelta(50_000, 45_000)).toBe(0)
+  })
+
+  test('builds live display usage from positive context growth only', () => {
+    const goal = {
+      ...createThreadGoal('session-1', 'finish phase 1D', undefined, 100),
+      tokensUsed: 12_000,
+      timeUsedSeconds: 30,
+    }
+
+    const displayGoal = buildThreadGoalDisplayState({
+      goal,
+      liveContextTokens: 50_000,
+      turnStartContextTokens: 40_000,
+      turnGoalId: goal.goalId,
+      isTurnRunning: true,
+    })
+
+    expect(displayGoal).toEqual({
+      ...goal,
+      tokensUsed: 22_000,
+    })
+    expect(goal.tokensUsed).toBe(12_000)
+  })
+
+  test('live display usage does not decrease when context shrinks or resets', () => {
+    const goal = {
+      ...createThreadGoal('session-1', 'finish phase 1D', undefined, 100),
+      tokensUsed: 12_000,
+      timeUsedSeconds: 30,
+    }
+
+    expect(
+      buildThreadGoalDisplayState({
+        goal,
+        liveContextTokens: 0,
+        turnStartContextTokens: 40_000,
+        turnGoalId: goal.goalId,
+        isTurnRunning: true,
+      }),
+    ).toEqual(goal)
+
+    expect(
+      buildThreadGoalDisplayState({
+        goal,
+        liveContextTokens: 35_000,
+        turnStartContextTokens: 40_000,
+        turnGoalId: goal.goalId,
+        isTurnRunning: true,
+      }),
+    ).toEqual(goal)
+  })
+
+  test('live display usage is disabled when idle or when goal identity changed', () => {
+    const goal = {
+      ...createThreadGoal('session-1', 'finish phase 1D', undefined, 100),
+      tokensUsed: 12_000,
+      timeUsedSeconds: 30,
+    }
+
+    expect(
+      buildThreadGoalDisplayState({
+        goal,
+        liveContextTokens: 50_000,
+        turnStartContextTokens: 40_000,
+        turnGoalId: goal.goalId,
+        isTurnRunning: false,
+      }),
+    ).toBe(goal)
+
+    expect(
+      buildThreadGoalDisplayState({
+        goal,
+        liveContextTokens: 50_000,
+        turnStartContextTokens: 40_000,
+        turnGoalId: 'different-goal',
+        isTurnRunning: true,
+      }),
+    ).toBe(goal)
+  })
+
+  test('live display usage does not alter paused or complete goals', () => {
+    const activeGoal = {
+      ...createThreadGoal('session-1', 'finish phase 1D', undefined, 100),
+      tokensUsed: 12_000,
+      timeUsedSeconds: 30,
+    }
+    const pausedGoal = updateThreadGoalStatus(activeGoal, 'paused', 200)
+    const completeGoal = updateThreadGoalStatus(activeGoal, 'complete', 200)
+
+    for (const goal of [pausedGoal, completeGoal]) {
+      expect(
+        buildThreadGoalDisplayState({
+          goal,
+          liveContextTokens: 50_000,
+          turnStartContextTokens: 40_000,
+          turnGoalId: goal.goalId,
+          isTurnRunning: true,
+        }),
+      ).toBe(goal)
+    }
+  })
+
+  test('live display can show budget limited without persisting it', () => {
+    const goal = {
+      ...createThreadGoal('session-1', 'finish phase 1D', 20_000, 100),
+      tokensUsed: 12_000,
+      timeUsedSeconds: 30,
+    }
+
+    const displayGoal = buildThreadGoalDisplayState({
+      goal,
+      liveContextTokens: 50_000,
+      turnStartContextTokens: 40_000,
+      turnGoalId: goal.goalId,
+      isTurnRunning: true,
+    })
+
+    expect(displayGoal).toEqual({
+      ...goal,
+      status: 'budget_limited',
+      tokensUsed: 22_000,
+    })
+    expect(goal.status).toBe('active')
+    expect(goal.tokensUsed).toBe(12_000)
   })
 
   test('renders the budget-limit wrap-up prompt safely', () => {

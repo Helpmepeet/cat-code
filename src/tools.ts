@@ -8,6 +8,7 @@ import { FileEditTool } from './tools/FileEditTool/FileEditTool.js'
 import { FilePatchTool } from './tools/FilePatchTool/FilePatchTool.js'
 import { FileReadTool } from './tools/FileReadTool/FileReadTool.js'
 import { FileWriteTool } from './tools/FileWriteTool/FileWriteTool.js'
+import { GenerateImageTool } from './tools/GenerateImageTool/GenerateImageTool.js'
 import { GlobTool } from './tools/GlobTool/GlobTool.js'
 import { NotebookEditTool } from './tools/NotebookEditTool/NotebookEditTool.js'
 import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js'
@@ -224,6 +225,7 @@ export function getAllBaseTools(): Tools {
     FileWriteTool,
     NotebookEditTool,
     WebFetchTool,
+    GenerateImageTool,
     TodoWriteTool,
     WebSearchTool,
     TaskStopTool,

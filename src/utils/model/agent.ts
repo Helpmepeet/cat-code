@@ -167,7 +167,7 @@ export function getAgentModelOptions(): AgentModelOption[] {
     },
     {
       value: 'gpt-5.4',
-      label: 'GPT-5.4 (previous)',
+      label: 'GPT-5.4',
       description: 'Previous frontier GPT option for OpenAI-backed agents',
     },
     {

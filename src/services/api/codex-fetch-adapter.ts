@@ -243,7 +243,7 @@ export class CodexAccountCapError extends Error {
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
   { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Latest GPT' },
-  { id: 'gpt-5.4', label: 'GPT-5.4 (previous)', description: 'Previous GPT' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Previous GPT' },
   { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast GPT-5.4 model' },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Optimized Codex coding model' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },

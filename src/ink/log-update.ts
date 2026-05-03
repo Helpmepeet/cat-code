@@ -39,6 +39,75 @@ type Options = {
 
 const CARRIAGE_RETURN = { type: 'carriageReturn' } as const
 const NEWLINE = { type: 'stdout', content: '\n' } as const
+const ITERM2_INLINE_IMAGE_PREFIX = '\x1b]1337;File='
+const ITERM2_MULTIPART_INLINE_IMAGE_PREFIX = '\x1b]1337;MultipartFile='
+const ITERM2_FILE_END = '\x1b]1337;FileEnd\x07'
+const TMUX_ITERM2_INLINE_IMAGE_PREFIX = '\x1bPtmux;\x1b\x1b]1337;File='
+const TMUX_ITERM2_MULTIPART_INLINE_IMAGE_PREFIX =
+  '\x1bPtmux;\x1b\x1b]1337;MultipartFile='
+const TMUX_ITERM2_FILE_END = '\x1bPtmux;\x1b\x1b]1337;FileEnd\x07\x1b\\'
+const TMUX_DCS_TERMINATOR = '\x1b\\'
+
+type InlineImageRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function isWholeLineIterm2InlineImageSequence(line: string): boolean {
+  return (
+    (line.startsWith(ITERM2_INLINE_IMAGE_PREFIX) && line.endsWith('\x07')) ||
+    (line.startsWith(ITERM2_MULTIPART_INLINE_IMAGE_PREFIX) &&
+      line.endsWith(ITERM2_FILE_END)) ||
+    (line.startsWith(TMUX_ITERM2_INLINE_IMAGE_PREFIX) &&
+      line.endsWith(TMUX_DCS_TERMINATOR)) ||
+    (line.startsWith(TMUX_ITERM2_MULTIPART_INLINE_IMAGE_PREFIX) &&
+      line.endsWith(TMUX_ITERM2_FILE_END))
+  )
+}
+
+function getIterm2InlineImageArgs(line: string): string {
+  if (line.startsWith(ITERM2_MULTIPART_INLINE_IMAGE_PREFIX)) {
+    const start = ITERM2_MULTIPART_INLINE_IMAGE_PREFIX.length
+    return line.slice(start, line.indexOf('\x07', start))
+  }
+  if (line.startsWith(TMUX_ITERM2_MULTIPART_INLINE_IMAGE_PREFIX)) {
+    const start = TMUX_ITERM2_MULTIPART_INLINE_IMAGE_PREFIX.length
+    return line.slice(start, line.indexOf('\x07', start))
+  }
+
+  const fileIndex = line.indexOf('File=')
+  const argsEnd = line.indexOf(':', fileIndex)
+  return argsEnd === -1 ? '' : line.slice(fileIndex + 5, argsEnd)
+}
+
+function getIterm2InlineImageSize(line: string): {
+  width: number
+  height: number
+} | null {
+  if (!isWholeLineIterm2InlineImageSequence(line)) return null
+
+  const args = getIterm2InlineImageArgs(line)
+  return {
+    width: Math.max(1, Number(args.match(/(?:^|;)width=(\d+)/)?.[1] ?? 1)),
+    height: Math.max(1, Number(args.match(/(?:^|;)height=(\d+)/)?.[1] ?? 1)),
+  }
+}
+
+function isInsideInlineImageRect(
+  rect: InlineImageRect | undefined,
+  x: number,
+  y: number,
+): boolean {
+  return (
+    rect !== undefined &&
+    x >= rect.x &&
+    x < rect.x + rect.width &&
+    y >= rect.y &&
+    y < rect.y + rect.height
+  )
+}
 
 export class LogUpdate {
   private state: State
@@ -305,6 +374,7 @@ export class LogUpdate {
     // First pass: render changes to existing rows (rows < prev.screen.height)
     let needsFullReset = false
     let resetTriggerY = -1
+    let inlineImageRect: InlineImageRect | undefined
     diffEach(prev.screen, next.screen, (x, y, removed, added) => {
       // Skip new rows - we'll render them directly after
       if (growing && y >= prev.screen.height) {
@@ -340,6 +410,15 @@ export class LogUpdate {
         return
       }
 
+      if (
+        removed &&
+        added &&
+        isEmptyCellAt(next.screen, x, y) &&
+        isInsideInlineImageRect(inlineImageRect, x, y)
+      ) {
+        return
+      }
+
       // If the cell outside the viewport range has changed, we need to reset
       // because we can't move the cursor there to draw.
       if (y < viewportY) {
@@ -351,6 +430,27 @@ export class LogUpdate {
       moveCursorTo(screen, x, y)
 
       if (added) {
+        const inlineImageSize = getIterm2InlineImageSize(added.char)
+        if (inlineImageSize) {
+          currentStyleId = transitionStyle(
+            screen.diff,
+            stylePool,
+            currentStyleId,
+            stylePool.none,
+          )
+          currentHyperlink = transitionHyperlink(
+            screen.diff,
+            currentHyperlink,
+            undefined,
+          )
+          clearInlineImageRect(screen, x, y, inlineImageSize)
+          inlineImageRect = {
+            x,
+            y,
+            width: inlineImageSize.width,
+            height: inlineImageSize.height,
+          }
+        }
         const targetHyperlink = added.hyperlink
         currentHyperlink = transitionHyperlink(
           screen.diff,
@@ -465,6 +565,26 @@ export class LogUpdate {
       ? [...scrollPatch, ...screen.diff]
       : screen.diff
   }
+}
+
+function clearInlineImageRect(
+  screen: VirtualScreen,
+  x: number,
+  y: number,
+  size: { width: number; height: number },
+): void {
+  const clearWidth = Math.min(size.width, screen.viewportWidth - x)
+  if (clearWidth <= 0) return
+
+  const spaces = ' '.repeat(clearWidth)
+  for (let row = y; row < y + size.height; row++) {
+    moveCursorTo(screen, x, row)
+    screen.txn(() => [
+      [{ type: 'stdout', content: spaces }],
+      { dx: clearWidth, dy: 0 },
+    ])
+  }
+  moveCursorTo(screen, x, y)
 }
 
 function transitionHyperlink(
