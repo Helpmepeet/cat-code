@@ -86,6 +86,43 @@ describe('AgentModeWorkerRoster', () => {
     expect(text).toContain('└─')
   })
 
+  test('renders compact worker status without competing with the main spinner', () => {
+    const summary: AgentModeWorkerUxSummary = {
+      hasWorkers: true,
+      active: 1,
+      ready: 0,
+      reviewed: 0,
+      resumable: 0,
+      stale: 0,
+      attention: 0,
+      pendingSynthesis: 0,
+      visibleWorkers: [
+        worker({
+          agentId: 'worker-1',
+          handle: 'Ada',
+          role: 'Explore',
+          description: 'Map data and analysis surfaces',
+          status: 'running',
+        }),
+      ],
+    }
+
+    const node = AgentModeWorkerRoster({
+      loaded: true,
+      summary,
+      compact: true,
+    })
+    const text = extractText(node)
+
+    expect(text).toContain('Workers')
+    expect(text).not.toContain('◉ Agent Mode workers')
+    expect(text).toContain('1 active')
+    expect(text).toContain('@Ada')
+    expect(React.isValidElement(node) ? node.props.marginBottom : undefined).toBe(
+      0,
+    )
+  })
+
   test('renders exclusive summary buckets and tree markers for visible workers', () => {
     const summary: AgentModeWorkerUxSummary = {
       hasWorkers: true,
