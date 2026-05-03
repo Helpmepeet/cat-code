@@ -122,12 +122,12 @@ Expected behavior:
 
 ## Status
 
-- This branch contains the local-skill support docs and repo-local role/context files, but it does not represent a passed milestone.
-- Use it as a setup/reference branch plus blocker documentation, not as evidence that the execution validation matrix succeeded.
+- This branch contains the local-skill support docs, repo-local role/context files, and a source change that exposes basic `SendMessage` in Agent Mode.
+- It does not represent a fully passed execution-swarm milestone because the team-gated validation matrix still has not completed.
+- Use it as setup/reference material plus the basic `SendMessage` runtime fix, not as evidence that formal team mode succeeded.
 
-## Out of scope for this milestone
+## Out of scope for the remaining milestone
 
-- source changes under `src/`
 - runtime same-file conflict detection
 - runtime max-worker enforcement
 - bundling `/cat-swarm` into the product
