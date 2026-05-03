@@ -458,4 +458,91 @@ describe('agent mode session state', () => {
       'Inspect implement-1 and recover or report the blocker.',
     )
   })
+
+  test('terminal failed and killed workers are removed from active counts', async () => {
+    const mode = 'agent'
+    const objective = 'Keep terminal worker truth'
+    const failedAgentId = randomUUID().slice(0, 8)
+    const killedAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      state => {
+        state.mode = mode
+      },
+    )
+
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode,
+      objective,
+      handle: 'Ada',
+      agentId: failedAgentId,
+      role: 'Explore',
+      description: 'Map surfaces',
+      worktreePath: null,
+      spawnedAt: '2026-05-03T00:00:00.000Z',
+    })
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode,
+      objective,
+      handle: 'Katherine',
+      agentId: killedAgentId,
+      role: 'general-purpose',
+      description: 'Run audit',
+      worktreePath: null,
+      spawnedAt: '2026-05-03T00:01:00.000Z',
+    })
+
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: failedAgentId,
+      status: 'failed',
+      error: 'Tool execution failed',
+      outputSummary: 'Map surfaces',
+    })
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: killedAgentId,
+      status: 'killed',
+      outputSummary: 'Run audit',
+    })
+
+    let persistedActiveWorkerHandles: string[] = []
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      persistedState => {
+        persistedActiveWorkerHandles = Object.keys(persistedState.activeWorkers)
+      },
+    )
+
+    const state = await readSessionState(sessionId)
+    const statuses = state?.knownWorkers
+      .map(worker => worker.status)
+      .sort((left, right) => left.localeCompare(right))
+
+    expect(persistedActiveWorkerHandles).toEqual([])
+    expect(state?.knownWorkers).toHaveLength(2)
+    expect(statuses).toEqual(['failed', 'killed'])
+    expect(state?.currentPhase).toBe('blocked')
+    expect(state?.nextAction).toBe(
+      'Inspect Katherine and recover or report the blocker.',
+    )
+    expect(
+      state?.knownWorkers.some(worker => worker.status === 'running'),
+    ).toBe(false)
+  })
 })
