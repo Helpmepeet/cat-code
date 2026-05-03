@@ -389,7 +389,9 @@ export async function* runAgent({
     : []
   const workerName =
     persistedWorkerHandle ??
-    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles)
+    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles, {
+      allowGeneric: Boolean(sessionStateTracking),
+    })
   const workerHandle = workerName ?? agentId
 
   // Route this agent's transcript into a grouping subdirectory if requested
