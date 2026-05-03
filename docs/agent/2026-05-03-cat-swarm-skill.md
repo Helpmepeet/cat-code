@@ -18,7 +18,8 @@ Cat Swarm coordinates parallel implementation by assigning ownership, running ed
 - `ListWorkers`, `WaitWorkers`, `GetWorkerResult`, and `CancelWorker` are Agent Mode tools. They do not require coordinator mode.
 - `Agent` supports named workers through `name`.
 - `Agent` supports `isolation: "worktree"` for isolated edit workers.
-- Worker worktrees are cleaned up when no changes are made and kept when changes exist.
+- Git-backed worker worktrees are cleaned up when no changes are made and kept when changes exist.
+- Hook-based worker worktrees may be kept even when clean because change detection may be unavailable.
 - Kept worker metadata may include `worktreePath` and `worktreeBranch`.
 - `SendMessage`, `TeamCreate`, and `TeamDelete` are behind the swarm gate.
 - `TeamCreate` and `TeamDelete` are conditional team tools. For external builds they require:
@@ -69,12 +70,13 @@ Stop if:
 3. Assign each worker allowed paths, forbidden paths, goal, expected return format, and checks.
 4. For edit-capable workers, prefer `Agent` with `isolation: "worktree"`.
 5. Use `run_in_background: true` when true parallel execution is available.
-6. Wait with `WaitWorkers`.
-7. Read each result with `GetWorkerResult`.
-8. Inspect kept worker worktrees before integrating changes.
-9. Integrate accepted changes deliberately.
-10. Run targeted verification or a build when the scope justifies it.
-11. Report accepted, rejected, failed, blocked, cancelled, and deferred work explicitly.
+6. If `SendMessage` is visible, steer overlapping running workers instead of spawning duplicates.
+7. Wait with `WaitWorkers`.
+8. Read each result with `GetWorkerResult`.
+9. Inspect kept worker worktrees before integrating changes.
+10. Integrate accepted changes deliberately.
+11. Run targeted verification or a build when the scope justifies it.
+12. Report accepted, rejected, failed, blocked, cancelled, and deferred work explicitly.
 
 ## Smoke tests
 
