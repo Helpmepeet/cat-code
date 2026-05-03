@@ -102,7 +102,7 @@ This is a project convention for the current runtime, not a built-in semantic ve
 - **Severity**: medium
 - **Likely layer**: runtime | ui
 - **Evidence**: same fresh live retest sample as above.
-- **Evidence (verified 2026-05-03)**: Source review shows `allocateWorkerName` supports an Agent Mode-only generic fallback, and `runAgent` enables that fallback only when durable session tracking is active. Automated coverage includes `workerNames` tests for the `Explore` worker name and custom fallback behavior.
+- **Evidence (verified 2026-05-03)**: Source review shows `allocateWorkerName` supports an Agent Mode-only generic fallback, `runAgent` enables that fallback only when durable session tracking is active, and tracked launch-failure recording also persists a friendly fallback handle instead of a raw agent ID. Automated coverage includes `workerNames` tests for the `Explore` worker name and custom fallback behavior plus `AgentTool` coverage for failed launch handle persistence.
 - **Suggested fix direction**: inspect the live spawn path and handle registration path for `Explore` workers to confirm where friendly naming is still bypassed or lost before UI render.
 
 ---
@@ -210,7 +210,7 @@ Use this shape for new issues:
   bun test src/agent-mode/workerNames.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx src/agent-mode/sessionState.test.ts src/agent-mode/workerUxSummary.test.ts src/tools/AgentTool/AgentTool.test.ts src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/agent-mode/agentMode.test.ts
   ```
 
-  Result: 57 pass, 0 fail, 139 expect calls.
+  Result: 58 pass, 0 fail, 142 expect calls.
 - **Manual live Agent Mode smoke (2026-05-03)**: Not run in this noninteractive subagent pass. The original live/manual smoke remains pending unless someone runs it separately.
 
 ---
