@@ -207,10 +207,10 @@ Use this shape for new issues:
 - **Automated verification (2026-05-03)**: The coordinator ran the focused suite after Tasks 1-3 in this worktree:
 
   ```text
-  bun test src/agent-mode/workerNames.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx src/agent-mode/sessionState.test.ts src/agent-mode/workerUxSummary.test.ts src/tools/AgentTool/AgentTool.test.ts src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/agent-mode/agentMode.test.ts
+  bun test src/agent-mode/workerNames.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx src/agent-mode/sessionState.test.ts src/agent-mode/workerUxSummary.test.ts src/tools/AgentTool/AgentTool.test.ts src/tools/AgentTool/resumeAgent.test.ts src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/agent-mode/agentMode.test.ts
   ```
 
-  Result: 64 pass, 0 fail, 160 expect calls.
+  Result: 65 pass, 0 fail, 176 expect calls.
 - **Manual live Agent Mode smoke (2026-05-03)**: Not run in this noninteractive subagent pass. The original live/manual smoke remains pending unless someone runs it separately.
 
 ---

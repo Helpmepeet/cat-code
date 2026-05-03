@@ -20,6 +20,10 @@ import {
   resolveWorkerAgentTarget,
   updateSessionState,
 } from './sessionState.js'
+import {
+  getWorkerStatusLabel,
+  summarizeAgentModeWorkers,
+} from './workerUxSummary.js'
 
 describe('agent mode session state', () => {
   let sessionId: string
@@ -778,5 +782,91 @@ describe('agent mode session state', () => {
     expect(
       state?.knownWorkers.some(worker => worker.status === 'running'),
     ).toBe(false)
+  })
+
+  test('failed or killed terminal updates clear stale pending synthesis state', async () => {
+    const mode = 'agent'
+    const objective = 'Keep terminal failure truth'
+    const failedAgentId = randomUUID().slice(0, 8)
+    const killedAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      () => {},
+    )
+
+    for (const [handle, agentId] of [
+      ['failed-1', failedAgentId],
+      ['killed-1', killedAgentId],
+    ] as const) {
+      await recordWorkerSessionSpawn({
+        sessionId,
+        mode,
+        objective,
+        handle,
+        agentId,
+        role: 'implementor',
+        description: `Run ${handle}`,
+        worktreePath: null,
+        spawnedAt: '2026-05-03T00:00:00.000Z',
+      })
+      await recordWorkerSessionTerminal({
+        sessionId,
+        agentId,
+        status: 'completed',
+        outputSummary: `${handle} completed`,
+      })
+    }
+
+    const pendingState = await readSessionState(sessionId)
+    expect(
+      pendingState?.knownWorkers.map(worker => worker.synthesisStatus),
+    ).toEqual(['pending', 'pending'])
+
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: failedAgentId,
+      status: 'failed',
+      error: 'Worker crashed after result capture',
+    })
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: killedAgentId,
+      status: 'killed',
+      outputSummary: 'Worker was stopped after result capture',
+    })
+
+    const state = await readSessionState(sessionId)
+    const failedWorker = state?.knownWorkers.find(
+      worker => worker.agentId === failedAgentId,
+    )
+    const killedWorker = state?.knownWorkers.find(
+      worker => worker.agentId === killedAgentId,
+    )
+    const summary = summarizeAgentModeWorkers(state)
+
+    expect(failedWorker?.status).toBe('failed')
+    expect(failedWorker?.synthesisStatus).toBeUndefined()
+    expect(failedWorker?.lastResultAt).toBeUndefined()
+    expect(failedWorker?.lastResultSummary).toBeUndefined()
+    expect(getWorkerStatusLabel(failedWorker!)).toBe('attention')
+
+    expect(killedWorker?.status).toBe('killed')
+    expect(killedWorker?.synthesisStatus).toBeUndefined()
+    expect(killedWorker?.lastResultAt).toBeUndefined()
+    expect(killedWorker?.lastResultSummary).toBeUndefined()
+    expect(getWorkerStatusLabel(killedWorker!)).toBe('attention')
+
+    expect(state?.currentPhase).toBe('blocked')
+    expect(summary.pendingSynthesis).toBe(0)
+    expect(summary.ready).toBe(0)
+    expect(summary.attention).toBe(2)
+    expect(summary.visibleWorkers).toEqual([failedWorker, killedWorker])
   })
 })

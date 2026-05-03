@@ -603,6 +603,11 @@ export async function recordWorkerSessionTerminal({
 
       const completed = status === 'completed'
       const endedAt = new Date().toISOString()
+      const existingWorkerFields = { ...existing }
+      delete existingWorkerFields.synthesisStatus
+      delete existingWorkerFields.lastResultAt
+      delete existingWorkerFields.lastResultSummary
+      delete existingWorkerFields.lastSynthesizedAt
 
       state.knownWorkers[agentId] = {
         agentId,
@@ -612,7 +617,7 @@ export async function recordWorkerSessionTerminal({
           outputSummary ??
           'Worker ended before spawn was recorded',
         worktreePath: existing?.worktreePath ?? null,
-        ...existing,
+        ...existingWorkerFields,
         status,
         resumable: completed,
         ...(error ? { error } : {}),
