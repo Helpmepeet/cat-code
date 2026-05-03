@@ -320,6 +320,20 @@ describe('thread goal formatting and parsing', () => {
     )
     expect(prompt).toContain('After UpdateGoal succeeds')
   })
+
+  test('renders an Agent Mode continuation prompt with orchestrator guidance', () => {
+    const goal = createThreadGoal('session-1', 'finish the agent mode goal', undefined, 100)
+
+    const prompt = renderThreadGoalContinuationPrompt(goal, {
+      agentMode: true,
+    })
+
+    expect(prompt).toContain('Continue working toward the active thread goal as the Agent Mode orchestrator.')
+    expect(prompt).toContain('Read Agent Mode session state before deciding whether to resume, steer, or spawn workers.')
+    expect(prompt).toContain('Delegate substantive investigation, implementation, or verification work to workers instead of doing it all on the main thread.')
+    expect(prompt).toContain('Synthesize pending worker results before claiming the goal is complete.')
+    expect(prompt).toContain('If the objective is achieved, call UpdateGoal with status "complete"')
+  })
 })
 
 describe('thread goal continuation policy', () => {

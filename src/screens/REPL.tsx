@@ -4464,7 +4464,9 @@ export function REPL({
     handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
     goalContinuationInFlightRef.current = true;
     goalContinuationKindRef.current = 'active';
-    if (!handleIncomingPrompt(renderThreadGoalContinuationPrompt(threadGoal!), {
+    if (!handleIncomingPrompt(renderThreadGoalContinuationPrompt(threadGoal!, {
+      agentMode: isAgentMode()
+    }), {
       isMeta: true
     })) {
       goalContinuationInFlightRef.current = false;
