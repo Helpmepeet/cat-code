@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { asAgentId } from '../types/ids.js'
@@ -64,13 +65,25 @@ const sessionStateWriteChains = new Map<string, Promise<void>>()
 const AGENT_MODE_STATE_SUFFIX = '.agent-mode-state.json'
 const MAX_PRIOR_AGENT_MODE_SESSIONS = 12
 
+export function getSessionStatePathFromTranscriptPath(
+  transcriptPath: string,
+): string {
+  return transcriptPath.replace(/\.jsonl$/, AGENT_MODE_STATE_SUFFIX)
+}
+
 async function getSessionStatePath(sessionId: string): Promise<string> {
   const { getTranscriptPathForSession } =
     await import('../utils/sessionStorage.js')
-  return getTranscriptPathForSession(sessionId).replace(
-    /\.jsonl$/,
-    AGENT_MODE_STATE_SUFFIX,
+  return getSessionStatePathFromTranscriptPath(
+    getTranscriptPathForSession(sessionId),
   )
+}
+
+async function resolveSessionStatePath(
+  sessionId: string,
+  statePath?: string,
+): Promise<string> {
+  return statePath ?? (await getSessionStatePath(sessionId))
 }
 
 async function getCurrentProjectDir(): Promise<string> {
@@ -192,8 +205,9 @@ function deriveNextAction(
 
 async function readPersistedSessionState(
   sessionId: string,
+  statePath?: string,
 ): Promise<AgentSessionState | null> {
-  const path = await getSessionStatePath(sessionId)
+  const path = await resolveSessionStatePath(sessionId, statePath)
 
   try {
     const raw = await readFile(path, 'utf-8')
@@ -209,30 +223,33 @@ async function mutatePersistedSessionState(
   sessionId: string,
   initFn: (() => AgentSessionState) | null,
   mutateFn: (state: AgentSessionState) => void,
+  statePath?: string,
 ): Promise<void> {
-  const path = await getSessionStatePath(sessionId)
-  const prior = sessionStateWriteChains.get(path) ?? Promise.resolve()
+  const path = await resolveSessionStatePath(sessionId, statePath)
+  const writeChainKey = path
+  const prior = sessionStateWriteChains.get(writeChainKey) ?? Promise.resolve()
 
   const next = prior
     .catch(() => {})
     .then(async () => {
-      const state = (await readPersistedSessionState(sessionId)) ?? initFn?.()
+      const state =
+        (await readPersistedSessionState(sessionId, path)) ?? initFn?.()
       if (!state) return
 
       mutateFn(state)
       await mkdir(dirname(path), { recursive: true })
-      const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`
+      const tempPath = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
       await writeFile(tempPath, JSON.stringify(state, null, 2))
       await rename(tempPath, path)
     })
 
-  sessionStateWriteChains.set(path, next)
+  sessionStateWriteChains.set(writeChainKey, next)
 
   try {
     await next
   } finally {
-    if (sessionStateWriteChains.get(path) === next) {
-      sessionStateWriteChains.delete(path)
+    if (sessionStateWriteChains.get(writeChainKey) === next) {
+      sessionStateWriteChains.delete(writeChainKey)
     }
   }
 }
@@ -269,8 +286,9 @@ export async function updateSessionState(
   sessionId: string,
   initFn: () => AgentSessionState,
   mutateFn: (state: AgentSessionState) => void,
+  statePath?: string,
 ): Promise<void> {
-  await mutatePersistedSessionState(sessionId, initFn, mutateFn)
+  await mutatePersistedSessionState(sessionId, initFn, mutateFn, statePath)
 }
 
 export async function updateSessionObjective({
@@ -424,10 +442,12 @@ export async function recordWorkerSessionSpawn({
   description,
   worktreePath,
   spawnedAt,
+  statePath,
 }: {
   sessionId: string
   mode: string
   objective: string
+  statePath?: string
   handle?: string
   agentId: string
   role: string
@@ -451,28 +471,43 @@ export async function recordWorkerSessionSpawn({
       const existing = state.knownWorkers[agentId]
       const effectiveHandle = existing?.handle ?? handle ?? agentId
       const effectiveSpawnedAt = existing?.spawnedAt ?? spawnedAt
+      const terminalStatus = existing?.status
+      const isAlreadyTerminal =
+        terminalStatus !== undefined && terminalStatus !== 'running'
 
-      state.activeWorkers[effectiveHandle] = { role, agentId }
+      if (isAlreadyTerminal) {
+        for (const [activeHandle, worker] of Object.entries(
+          state.activeWorkers,
+        )) {
+          if (worker.agentId === agentId) {
+            delete state.activeWorkers[activeHandle]
+          }
+        }
+      } else {
+        state.activeWorkers[effectiveHandle] = { role, agentId }
+      }
       state.knownWorkers[agentId] = {
         ...existing,
         agentId,
         handle: effectiveHandle,
         role,
         description,
-        status: 'running',
-        resumable: false,
+        status: terminalStatus ?? 'running',
+        resumable: existing?.resumable ?? false,
         worktreePath,
         ...(effectiveSpawnedAt ? { spawnedAt: effectiveSpawnedAt } : {}),
       }
     },
+    statePath,
   )
 }
 
 export async function readPersistedWorkerHandle(
   sessionId: string,
   agentId: string,
+  statePath?: string,
 ): Promise<string | null> {
-  const state = await readPersistedSessionState(sessionId)
+  const state = await readPersistedSessionState(sessionId, statePath)
   const handle = state?.knownWorkers[agentId]?.handle
   if (!handle || handle === agentId) return null
   return handle
@@ -532,41 +567,72 @@ export async function recordWorkerSessionTerminal({
   status,
   error,
   outputSummary,
+  createStateIfMissing,
 }: {
   sessionId: string
   agentId: string
   status: Exclude<AgentModeWorkerSessionStatus, 'running'>
   error?: string
   outputSummary?: string
+  createStateIfMissing?: {
+    mode: string
+    objective: string
+    statePath?: string
+  }
 }): Promise<void> {
-  await mutatePersistedSessionState(sessionId, null, state => {
-    for (const [handle, worker] of Object.entries(state.activeWorkers)) {
-      if (worker.agentId === agentId) {
-        delete state.activeWorkers[handle]
+  const statePath = createStateIfMissing?.statePath
+  await mutatePersistedSessionState(
+    sessionId,
+    createStateIfMissing
+      ? () =>
+          createSessionState({
+            sessionId,
+            mode: createStateIfMissing.mode,
+            objective: createStateIfMissing.objective,
+          })
+      : null,
+    state => {
+      const existing = state.knownWorkers[agentId]
+      if (!existing && !createStateIfMissing) return
+
+      for (const [handle, worker] of Object.entries(state.activeWorkers)) {
+        if (worker.agentId === agentId) {
+          delete state.activeWorkers[handle]
+        }
       }
-    }
 
-    const existing = state.knownWorkers[agentId]
-    if (!existing) return
+      const completed = status === 'completed'
+      const endedAt = new Date().toISOString()
+      const existingWorkerFields = { ...existing }
+      delete existingWorkerFields.synthesisStatus
+      delete existingWorkerFields.lastResultAt
+      delete existingWorkerFields.lastResultSummary
+      delete existingWorkerFields.lastSynthesizedAt
 
-    const completed = status === 'completed'
-    const endedAt = new Date().toISOString()
-
-    state.knownWorkers[agentId] = {
-      ...existing,
-      status,
-      resumable: completed,
-      ...(error ? { error } : {}),
-      ...(outputSummary ? { outputSummary } : {}),
-      ...(completed
-        ? {
-            lastResultAt: endedAt,
-            lastResultSummary: outputSummary,
-            synthesisStatus: 'pending' as const,
-          }
-        : {}),
-    }
-  })
+      state.knownWorkers[agentId] = {
+        agentId,
+        role: existing?.role ?? 'unknown',
+        description:
+          existing?.description ??
+          outputSummary ??
+          'Worker ended before spawn was recorded',
+        worktreePath: existing?.worktreePath ?? null,
+        ...existingWorkerFields,
+        status,
+        resumable: completed,
+        ...(error ? { error } : {}),
+        ...(outputSummary ? { outputSummary } : {}),
+        ...(completed
+          ? {
+              lastResultAt: endedAt,
+              lastResultSummary: outputSummary,
+              synthesisStatus: 'pending' as const,
+            }
+          : {}),
+      }
+    },
+    statePath,
+  )
 }
 
 export async function markWorkerResultSynthesized({
@@ -595,8 +661,9 @@ export async function markWorkerResultSynthesized({
 
 export async function readSessionState(
   sessionId: string,
+  statePath?: string,
 ): Promise<AgentModeSessionState | null> {
-  const persistedState = await readPersistedSessionState(sessionId)
+  const persistedState = await readPersistedSessionState(sessionId, statePath)
   if (!persistedState) return null
 
   const knownWorkers = sortWorkers(

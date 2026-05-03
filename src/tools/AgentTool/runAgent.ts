@@ -342,6 +342,7 @@ export async function* runAgent({
     sessionId: string
     mode: string
     objective: string
+    statePath?: string
     recordSpawn?: boolean
   }
   /** Optional callback fired on every message yielded by query() — including
@@ -377,11 +378,17 @@ export async function* runAgent({
       ? await readPersistedWorkerHandle(
           sessionStateTracking.sessionId,
           override.agentId,
+          sessionStateTracking.statePath,
         )
       : null
   const reservedWorkerHandles = sessionStateTracking
     ? (
-        (await readSessionState(sessionStateTracking.sessionId))?.knownWorkers ??
+        (
+          await readSessionState(
+            sessionStateTracking.sessionId,
+            sessionStateTracking.statePath,
+          )
+        )?.knownWorkers ??
         []
       )
         .map(worker => worker.handle)
@@ -389,7 +396,9 @@ export async function* runAgent({
     : []
   const workerName =
     persistedWorkerHandle ??
-    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles)
+    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles, {
+      allowGeneric: Boolean(sessionStateTracking),
+    })
   const workerHandle = workerName ?? agentId
 
   // Route this agent's transcript into a grouping subdirectory if requested
@@ -800,6 +809,9 @@ export async function* runAgent({
       sessionId: sessionStateTracking.sessionId,
       mode: sessionStateTracking.mode,
       objective: sessionStateTracking.objective,
+      ...(sessionStateTracking.statePath
+        ? { statePath: sessionStateTracking.statePath }
+        : {}),
       handle: workerHandle,
       agentId,
       role: agentDefinition.agentType,

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'crypto'
-import { mkdir, rm, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -20,6 +20,10 @@ import {
   resolveWorkerAgentTarget,
   updateSessionState,
 } from './sessionState.js'
+import {
+  getWorkerStatusLabel,
+  summarizeAgentModeWorkers,
+} from './workerUxSummary.js'
 
 describe('agent mode session state', () => {
   let sessionId: string
@@ -108,6 +112,17 @@ describe('agent mode session state', () => {
     )
   }
 
+  async function readDurableState(): Promise<unknown> {
+    const projectDir = getSessionProjectDir()
+    if (!projectDir) throw new Error('expected session project dir')
+    return JSON.parse(
+      await readFile(
+        join(projectDir, `${sessionId}.agent-mode-state.json`),
+        'utf-8',
+      ),
+    )
+  }
+
   test('marks completed worker output as pending synthesis until explicitly marked', async () => {
     const mode = 'agent'
     const objective = 'Build worker control plane'
@@ -167,6 +182,229 @@ describe('agent mode session state', () => {
 
     expect(synthesizedWorker?.synthesisStatus).toBe('synthesized')
     expect(synthesizedWorker?.lastSynthesizedAt).toBeTruthy()
+  })
+
+  test('does not resurrect a worker as running when terminal recording wins the race', async () => {
+    const mode = 'agent'
+    const objective = 'Avoid stale running workers'
+    const workerAgentId = randomUUID().slice(0, 8)
+
+    const terminalPromise = recordWorkerSessionTerminal({
+      sessionId,
+      agentId: workerAgentId,
+      status: 'killed',
+      outputSummary: 'Map surfaces',
+      createStateIfMissing: {
+        mode,
+        objective,
+      },
+    })
+    const spawnPromise = recordWorkerSessionSpawn({
+      sessionId,
+      mode,
+      objective,
+      handle: 'Ada',
+      agentId: workerAgentId,
+      role: 'Explore',
+      description: 'Map surfaces',
+      worktreePath: null,
+      spawnedAt: '2026-05-03T00:00:00.000Z',
+    })
+
+    await terminalPromise
+    await spawnPromise
+
+    const state = await readSessionState(sessionId)
+    const worker = state?.knownWorkers.find(
+      knownWorker => knownWorker.agentId === workerAgentId,
+    )
+
+    expect(worker?.status).toBe('killed')
+    expect(state?.currentPhase).toBe('blocked')
+    expect(state?.activeWorker?.agentId).toBe(workerAgentId)
+    expect(state?.activeWorker?.status).toBe('killed')
+    expect(
+      state?.knownWorkers.some(knownWorker => knownWorker.status === 'running'),
+    ).toBe(false)
+
+    const durableState = (await readDurableState()) as {
+      activeWorkers: Record<string, { role: string; agentId: string }>
+    }
+    expect(durableState.activeWorkers).toEqual({})
+  })
+
+  test('ignores terminal recording without existing state or tracking context', async () => {
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: randomUUID().slice(0, 8),
+      status: 'completed',
+      outputSummary: 'Normal subagent finished',
+    })
+
+    expect(await readSessionState(sessionId)).toBeNull()
+  })
+
+  test('uses captured state path for tracked writes after ambient session switches', async () => {
+    const mode = 'agent'
+    const objective = 'Keep worker state in original project'
+    const workerAgentId = randomUUID().slice(0, 8)
+    const originalProjectDir = tempProjectDir
+    const switchedProjectDir = mkdtempSync(join(tmpdir(), 'agent-mode-state-drift-'))
+    const capturedStatePath = join(
+      originalProjectDir,
+      `${sessionId}.agent-mode-state.json`,
+    )
+
+    try {
+      await recordWorkerSessionSpawn({
+        sessionId,
+        mode,
+        objective,
+        statePath: capturedStatePath,
+        handle: 'explore-1',
+        agentId: workerAgentId,
+        role: 'explorer',
+        description: 'Resolve stable state path',
+        worktreePath: null,
+      })
+
+      switchSession(randomUUID() as never, switchedProjectDir)
+
+      await recordWorkerSessionTerminal({
+        sessionId,
+        agentId: workerAgentId,
+        status: 'completed',
+        outputSummary: 'Stable path respected',
+        createStateIfMissing: {
+          mode,
+          objective,
+          statePath: capturedStatePath,
+        },
+      })
+
+      const originalState = JSON.parse(
+        await readFile(capturedStatePath, 'utf-8'),
+      ) as {
+        knownWorkers: Record<string, { status: string; outputSummary?: string }>
+      }
+      const driftedStatePath = join(
+        switchedProjectDir,
+        `${sessionId}.agent-mode-state.json`,
+      )
+
+      expect(originalState.knownWorkers[workerAgentId]).toMatchObject({
+        status: 'completed',
+        outputSummary: 'Stable path respected',
+      })
+      await expect(readFile(driftedStatePath, 'utf-8')).rejects.toThrow()
+    } finally {
+      await rm(switchedProjectDir, { recursive: true, force: true })
+    }
+  })
+
+  test('serializes concurrent implicit and explicit writes to the same state file', async () => {
+    const mode = 'agent'
+    const objective = 'Preserve mixed same-file writes'
+    const capturedStatePath = join(
+      tempProjectDir,
+      `${sessionId}.agent-mode-state.json`,
+    )
+    const originalDateNow = Date.now
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      () => {},
+    )
+
+    Date.now = () => 1_700_000_000_000
+    try {
+      await Promise.all([
+        ...Array.from({ length: 20 }, (_, index) =>
+          updateSessionState(
+            sessionId,
+            () =>
+              createSessionState({
+                sessionId,
+                mode,
+                objective,
+              }),
+            state => {
+              const agentId = `implicit-${index}`
+              state.knownWorkers[agentId] = {
+                agentId,
+                handle: agentId,
+                role: 'implicit',
+                description: 'Implicit write survived',
+                status: 'running',
+                resumable: false,
+                worktreePath: null,
+              }
+            },
+          ),
+        ),
+        ...Array.from({ length: 20 }, (_, index) =>
+          recordWorkerSessionSpawn({
+            sessionId,
+            mode,
+            objective,
+            statePath: capturedStatePath,
+            handle: `explicit-${index}`,
+            agentId: `explicit-${index}`,
+            role: 'explicit',
+            description: 'Tracked write survived',
+            worktreePath: null,
+            spawnedAt: '2026-05-03T00:00:00.000Z',
+          }),
+        ),
+      ])
+    } finally {
+      Date.now = originalDateNow
+    }
+
+    const durableState = (await readDurableState()) as {
+      knownWorkers: Record<string, { role: string; status: string }>
+    }
+    const workers = Object.values(durableState.knownWorkers)
+    const implicitWorkers = workers.filter(worker => worker.role === 'implicit')
+    const explicitWorkers = workers.filter(worker => worker.role === 'explicit')
+
+    expect(implicitWorkers).toHaveLength(20)
+    expect(explicitWorkers).toHaveLength(20)
+    expect(workers.every(worker => worker.status === 'running')).toBe(true)
+  })
+
+  test('does not add an unknown missing worker for untracked terminal recording against existing state', async () => {
+    const mode = 'agent'
+    const objective = 'Ignore unrelated subagent terminals'
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      () => {},
+    )
+
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: randomUUID().slice(0, 8),
+      status: 'completed',
+      outputSummary: 'Normal subagent finished',
+    })
+
+    const state = await readSessionState(sessionId)
+
+    expect(state?.knownWorkers).toEqual([])
+    expect(state?.currentPhase).toBe('planning')
   })
 
   test('resolves worker ids by durable handle and direct id', async () => {
@@ -457,5 +695,178 @@ describe('agent mode session state', () => {
     expect(state?.nextAction).toBe(
       'Inspect implement-1 and recover or report the blocker.',
     )
+  })
+
+  test('terminal failed and killed workers are removed from active counts', async () => {
+    const mode = 'agent'
+    const objective = 'Keep terminal worker truth'
+    const failedAgentId = randomUUID().slice(0, 8)
+    const killedAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      state => {
+        state.mode = mode
+      },
+    )
+
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode,
+      objective,
+      handle: 'Ada',
+      agentId: failedAgentId,
+      role: 'Explore',
+      description: 'Map surfaces',
+      worktreePath: null,
+      spawnedAt: '2026-05-03T00:00:00.000Z',
+    })
+    await recordWorkerSessionSpawn({
+      sessionId,
+      mode,
+      objective,
+      handle: 'Katherine',
+      agentId: killedAgentId,
+      role: 'general-purpose',
+      description: 'Run audit',
+      worktreePath: null,
+      spawnedAt: '2026-05-03T00:01:00.000Z',
+    })
+
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: failedAgentId,
+      status: 'failed',
+      error: 'Tool execution failed',
+      outputSummary: 'Map surfaces',
+    })
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: killedAgentId,
+      status: 'killed',
+      outputSummary: 'Run audit',
+    })
+
+    let persistedActiveWorkerHandles: string[] = []
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      persistedState => {
+        persistedActiveWorkerHandles = Object.keys(persistedState.activeWorkers)
+      },
+    )
+
+    const state = await readSessionState(sessionId)
+    const statuses = state?.knownWorkers
+      .map(worker => worker.status)
+      .sort((left, right) => left.localeCompare(right))
+
+    expect(persistedActiveWorkerHandles).toEqual([])
+    expect(state?.knownWorkers).toHaveLength(2)
+    expect(statuses).toEqual(['failed', 'killed'])
+    expect(state?.currentPhase).toBe('blocked')
+    expect(state?.nextAction).toBe(
+      'Inspect Katherine and recover or report the blocker.',
+    )
+    expect(
+      state?.knownWorkers.some(worker => worker.status === 'running'),
+    ).toBe(false)
+  })
+
+  test('failed or killed terminal updates clear stale pending synthesis state', async () => {
+    const mode = 'agent'
+    const objective = 'Keep terminal failure truth'
+    const failedAgentId = randomUUID().slice(0, 8)
+    const killedAgentId = randomUUID().slice(0, 8)
+
+    await updateSessionState(
+      sessionId,
+      () =>
+        createSessionState({
+          sessionId,
+          mode,
+          objective,
+        }),
+      () => {},
+    )
+
+    for (const [handle, agentId] of [
+      ['failed-1', failedAgentId],
+      ['killed-1', killedAgentId],
+    ] as const) {
+      await recordWorkerSessionSpawn({
+        sessionId,
+        mode,
+        objective,
+        handle,
+        agentId,
+        role: 'implementor',
+        description: `Run ${handle}`,
+        worktreePath: null,
+        spawnedAt: '2026-05-03T00:00:00.000Z',
+      })
+      await recordWorkerSessionTerminal({
+        sessionId,
+        agentId,
+        status: 'completed',
+        outputSummary: `${handle} completed`,
+      })
+    }
+
+    const pendingState = await readSessionState(sessionId)
+    expect(
+      pendingState?.knownWorkers.map(worker => worker.synthesisStatus),
+    ).toEqual(['pending', 'pending'])
+
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: failedAgentId,
+      status: 'failed',
+      error: 'Worker crashed after result capture',
+    })
+    await recordWorkerSessionTerminal({
+      sessionId,
+      agentId: killedAgentId,
+      status: 'killed',
+      outputSummary: 'Worker was stopped after result capture',
+    })
+
+    const state = await readSessionState(sessionId)
+    const failedWorker = state?.knownWorkers.find(
+      worker => worker.agentId === failedAgentId,
+    )
+    const killedWorker = state?.knownWorkers.find(
+      worker => worker.agentId === killedAgentId,
+    )
+    const summary = summarizeAgentModeWorkers(state)
+
+    expect(failedWorker?.status).toBe('failed')
+    expect(failedWorker?.synthesisStatus).toBeUndefined()
+    expect(failedWorker?.lastResultAt).toBeUndefined()
+    expect(failedWorker?.lastResultSummary).toBeUndefined()
+    expect(getWorkerStatusLabel(failedWorker!)).toBe('attention')
+
+    expect(killedWorker?.status).toBe('killed')
+    expect(killedWorker?.synthesisStatus).toBeUndefined()
+    expect(killedWorker?.lastResultAt).toBeUndefined()
+    expect(killedWorker?.lastResultSummary).toBeUndefined()
+    expect(getWorkerStatusLabel(killedWorker!)).toBe('attention')
+
+    expect(state?.currentPhase).toBe('blocked')
+    expect(summary.pendingSynthesis).toBe(0)
+    expect(summary.ready).toBe(0)
+    expect(summary.attention).toBe(2)
+    expect(summary.visibleWorkers).toEqual([failedWorker, killedWorker])
   })
 })

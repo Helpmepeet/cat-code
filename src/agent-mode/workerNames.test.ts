@@ -30,6 +30,12 @@ const ALL_TEST_NAMES = [
   'Franklin',
   'Bell',
   'Noether',
+  'Ada',
+  'Katherine',
+  'Johnson',
+  'Hamilton',
+  'Ritchie',
+  'Kay',
 ]
 
 afterEach(() => {
@@ -83,5 +89,26 @@ describe('workerNames', () => {
     reserveWorkerName('Bell')
 
     expect(allocateWorkerName('agent-mode-coding-worker')).toBe('Turing-2')
+  })
+
+  test('allocates generic handles for Explore workers when generic fallback is enabled', () => {
+    Math.random = () => 0
+
+    expect(allocateWorkerName('Explore', [], { allowGeneric: true })).toBe('Ada')
+  })
+
+  test('does not allocate generic handles for Explore workers by default', () => {
+    Math.random = () => 0
+
+    expect(allocateWorkerName('Explore')).toBe(null)
+  })
+
+  test('skips reserved generic handles', () => {
+    Math.random = () => 0
+    reserveWorkerName('Ada')
+
+    expect(
+      allocateWorkerName('general-purpose', [], { allowGeneric: true }),
+    ).toBe('Katherine')
   })
 })

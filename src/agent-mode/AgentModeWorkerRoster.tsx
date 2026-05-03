@@ -30,14 +30,20 @@ function getTreePrefix(index: number, total: number): string {
 export function AgentModeWorkerRoster({
   loaded,
   summary,
+  compact = false,
 }: {
   loaded: boolean
   summary: AgentModeWorkerUxSummary | null
+  compact?: boolean
 }): React.ReactNode {
   return (
-    <Box width="100%" flexDirection="column" marginBottom={1}>
+    <Box width="100%" flexDirection="column" marginBottom={compact ? 0 : 1}>
       <Box>
-        <Text color="claude">◉ Agent Mode workers</Text>
+        {compact ? (
+          <Text dimColor>Workers</Text>
+        ) : (
+          <Text color="claude">◉ Agent Mode workers</Text>
+        )}
       </Box>
       {!loaded ? (
         <Box>

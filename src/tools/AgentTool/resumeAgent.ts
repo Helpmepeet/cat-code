@@ -1,5 +1,6 @@
 import { promises as fsp } from 'fs'
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js'
+import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
 import { getCurrentSessionMode } from '../../agent-mode/agentMode.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
@@ -176,12 +177,14 @@ export async function resumeAgentBackground({
     : assembleToolPool(workerPermissionContext, appState.mcp.tools)
 
   const currentSessionMode = getCurrentSessionMode()
+  const parentTranscriptPath = getTranscriptPath()
   const sessionStateTracking =
     currentSessionMode === 'agent' || currentSessionMode === 'coordinator'
       ? {
           sessionId: getSessionId(),
           mode: currentSessionMode,
           objective: meta?.description ?? 'Continue current objective',
+          statePath: getSessionStatePathFromTranscriptPath(parentTranscriptPath),
         }
       : undefined
   const parentSessionId = getSessionId()
@@ -277,8 +280,9 @@ export async function resumeAgentBackground({
           getSdkAgentProgressSummariesEnabled(),
         getWorktreeResult: async () =>
           resumedWorktreePath ? { worktreePath: resumedWorktreePath } : {},
-        parentTranscriptPath: getTranscriptPath(),
+        parentTranscriptPath,
         parentSessionId,
+        sessionStateTracking: runAgentParams.sessionStateTracking,
       }),
     ),
   )

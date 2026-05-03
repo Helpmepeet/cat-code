@@ -10,6 +10,11 @@ const VERIFIER_NAMES = [
   'Torvalds', 'McCarthy', 'Babbage', 'Minsky', 'Khayyam', 'Poincare',
 ]
 
+const GENERIC_WORKER_NAMES = [
+  'Ada', 'Katherine', 'Johnson', 'Hamilton', 'Ritchie', 'Kay',
+  'Wilkes', 'Goldstine', 'Backus', 'Engelbart', 'Cerf', 'Barton',
+]
+
 const NAME_POOLS: Record<string, string[]> = {
   'agent-mode-coding-worker': CODING_WORKER_NAMES,
   'agent-mode-verifier': VERIFIER_NAMES,
@@ -48,8 +53,11 @@ function pickRandom(pool: string[], reservedNames: Iterable<string>): string {
 export function allocateWorkerName(
   agentType: string,
   reservedNames: Iterable<string> = [],
+  options: { allowGeneric?: boolean } = {},
 ): string | null {
-  const pool = NAME_POOLS[agentType]
+  const pool = NAME_POOLS[agentType] ?? (
+    options.allowGeneric ? GENERIC_WORKER_NAMES : null
+  )
   if (!pool) return null
   const name = pickRandom(pool, reservedNames)
   activeNames.add(name)

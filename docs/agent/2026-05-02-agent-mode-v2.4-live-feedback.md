@@ -86,6 +86,7 @@ This is a project convention for the current runtime, not a built-in semantic ve
     └─ @ad0c227a12b1ff891 · Explore · running · Map data and analysis surfaces
   ```
 
+- **Evidence (verified 2026-05-03)**: Source review shows the fix makes `AgentModeWorkerRoster` compact by demoting the roster to a subordinate `Workers` detail while the spinner remains the owner of top-level progress. Automated coverage includes the `AgentModeWorkerRoster` compact rendering test.
 - **Suggested fix direction**: decide which surface owns primary session status in Agent Mode and demote or merge the other so the operator does not see two top-level status systems competing.
 
 ---
@@ -101,6 +102,7 @@ This is a project convention for the current runtime, not a built-in semantic ve
 - **Severity**: medium
 - **Likely layer**: runtime | ui
 - **Evidence**: same fresh live retest sample as above.
+- **Evidence (verified 2026-05-03)**: Source review shows `allocateWorkerName` supports an Agent Mode-only generic fallback, `runAgent` enables that fallback only when durable session tracking is active, and tracked launch-failure recording also persists a friendly fallback handle instead of a raw agent ID. Automated coverage includes `workerNames` tests for the `Explore` worker name and custom fallback behavior plus `AgentTool` coverage for failed launch handle persistence.
 - **Suggested fix direction**: inspect the live spawn path and handle registration path for `Explore` workers to confirm where friendly naming is still bypassed or lost before UI render.
 
 ---
@@ -130,6 +132,7 @@ This is a project convention for the current runtime, not a built-in semantic ve
   ❯
   ```
 
+- **Evidence (verified 2026-05-03)**: Source review shows the compact roster removes its bottom margin while the spinner is visible. Automated coverage asserts `marginBottom` is `0` for that state.
 - **Suggested fix direction**: inspect `REPL` layout spacing around the spinner/tip block, worker roster mount, and prompt container to see whether Agent Mode is reserving vertical space twice or leaving a stale spacer when both surfaces render together.
 
 ---
@@ -167,6 +170,7 @@ This is a project convention for the current runtime, not a built-in semantic ve
 - **Severity**: high
 - **Likely layer**: session-state | recovery | ui
 - **Evidence**: fresh live retest on 2026-05-02 from a real Agent Mode run in another workspace.
+- **Evidence (verified 2026-05-03)**: Source review shows terminal worker state now removes failed/killed workers from active tracking and surfaces terminal workers as attention/blocker state. Automated coverage includes the `sessionState` terminal failed/killed test, including `activeWorkers` cleanup.
 - **Suggested fix direction**: inspect the worker terminal-state update path for:
   - tool execution failure during initialization
   - explicit user stop/cancel via `X`
@@ -198,10 +202,23 @@ Use this shape for new issues:
 
 ---
 
+## Combined verification evidence
+
+- **Automated verification (2026-05-03)**: The coordinator ran the focused suite after Tasks 1-3 in this worktree:
+
+  ```text
+  bun test src/agent-mode/workerNames.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx src/agent-mode/sessionState.test.ts src/agent-mode/workerUxSummary.test.ts src/tools/AgentTool/AgentTool.test.ts src/tools/AgentTool/resumeAgent.test.ts src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/agent-mode/agentMode.test.ts
+  ```
+
+  Result: 65 pass, 0 fail, 176 expect calls.
+- **Manual live Agent Mode smoke (2026-05-03)**: Not run in this noninteractive subagent pass. The original live/manual smoke remains pending unless someone runs it separately.
+
+---
+
 ## Closure decision
 
-Leave this blank until you explicitly decide whether the current `v2.4` milestone is:
+The code/test fix for the listed v2.4 feedback is complete with automated/source evidence recorded on 2026-05-03.
 
-- complete
-- incomplete
-- complete with deferred follow-ups
+Deferred follow-ups:
+- Run manual live Agent Mode smoke in an interactive session before claiming live-smoke completion.
+- Continue watching for worker-spawn failures in non-cat-code workspaces, including any recurrence of the prior `store is not defined` class of failure.
