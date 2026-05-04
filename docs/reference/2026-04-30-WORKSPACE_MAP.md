@@ -191,6 +191,32 @@ When a concern has no single owner, do not treat the first matching file as auth
 - Some surfaces are present only as stubs and should not be treated as real product behavior: `src/services/contextCollapse/index.ts` is effectively a no-op implementation; `src/remote/remotePermissionBridge.ts` synthesizes minimal tool stubs for unknown remote tools; and several slash commands imported by `src/commands.ts` are explicit placeholders in `src/commands/break-cache/index.js`, `src/commands/ctx_viz/index.js`, `src/commands/issue/index.js`, `src/commands/onboarding/index.js`, `src/commands/share/index.js`, `src/commands/summary/index.js`, and `src/commands/teleport/index.js`.
 - Internal-only or upstream-looking surfaces can mislead in this fork: `src/commands.ts` still imports many internal-only commands into `INTERNAL_ONLY_COMMANDS`, `src/entrypoints/cli.tsx` still contains feature-gated fast paths for internal capabilities, and `README.md` / feature docs should not be used as the source of truth for agent-visible behavior without checking the gated runtime paths above.
 
+## Dedicated App Runtime Boundary Addendum
+
+Use this addendum when working on the dedicated app refactor. The rest of this
+workspace map still reflects the current terminal-first product, while the
+dedicated app effort needs routing that does not send workers back into the
+wrong shell.
+
+| If you want to change or verify X | Inspect first | Then inspect | Notes |
+|---|---|---|---|
+| Shared dedicated-app runtime logic | `src/app-runtime/` | the minimal dedicated shell entry path outside root `web/` | If logic is reusable by the dedicated app, prefer the runtime boundary over shell-local code. |
+| Dedicated app shell wiring | the minimal dedicated shell entry path outside root `web/` | `src/app-runtime/` | Keep the shell thin. Do not turn it into another copy of the runtime layer. |
+| Terminal-only UI behavior | `src/screens/REPL.tsx` | Ink components and REPL-owned lifecycle files | This is the existing product shell, not the dedicated app target. Do not route replacement work here unless you are extracting code back out into `src/app-runtime/`. |
+| Boundary validation | `src/app-runtime/` existence and imports | docs searches for stale root `web/` claims | A boundary is not real until the path exists, builds, and stays free of Ink/REPL coupling. |
+| Dedicated app scaffold validation | `bun run validate:dedicated-app` | `bun run build:dedicated-app`, `bun run serve:dedicated-app` | The validator checks app-runtime and dedicated-shell import boundaries; the build script bundles the React shell scaffold and Bun host. |
+
+Dedicated app rules of thumb:
+
+- Do not start dedicated-app implementation from root `web/`.
+- Do not treat `src/screens/REPL.tsx` as a reusable shell for the dedicated app.
+- Do not mark roadmap phases complete because a shell prototype exists without
+  the runtime boundary.
+- Prefer moving shared behavior into `src/app-runtime/` before adding
+  shell-specific logic.
+- Treat live QueryEngine session bootstrap and final desktop/native packaging as
+  follow-on work until they are explicitly wired and verified.
+
 ## What Not To Encode Here
 
 - Do not encode low-level call chains or exact function sequences. They will drift faster than the routing surfaces.

@@ -450,6 +450,41 @@ Use `/goal` with:
 /goal --budget 250K Refactor Cat Code from a terminal-first product into a real dedicated app path, preserving provider routing, tools, permissions, transcripts, Agent Mode, and goal behavior while making the terminal a compatibility client rather than the runtime owner.
 ```
 
+## Current Refactor Boundary Handoff
+
+As the first scaffold lands, keep the dedicated app path conservative:
+
+- `src/app-runtime/` is the intended app-facing boundary for shared runtime
+  behavior that a dedicated app can consume without importing terminal UI code.
+- The first dedicated shell should stay thin and live outside the root `web/`
+  browser/Vite surface.
+- The root `web/` surface may remain useful history or bridge code, but it is
+  not the destination for the dedicated app replacement.
+- The dedicated app path must remain no-Ink and no-REPL: no imports from `ink`,
+  no imports from `src/screens/REPL.tsx`, and no dependency on REPL-owned event
+  loops as the way the app works.
+- Do not mark any roadmap phase complete until the corresponding filesystem
+  paths, wiring, and validation have actually landed.
+
+Before claiming boundary work complete, verify:
+
+```bash
+test -d src/app-runtime
+bun run validate:dedicated-app
+bun run build:dedicated-app
+bun test src/app-runtime/sessionEvents.test.ts src/app-runtime/AppSessionController.test.ts src/app-runtime/createQueryEngineSessionController.test.ts src/app-runtime/appRuntimeCanUseTool.test.ts
+bun run build:dev:full
+```
+
+Also search docs for stale copy that routes the dedicated app replacement back
+to root `web/`.
+
+Current status: the scaffold has a React shell, a Bun-served local HTML host, and
+an app-runtime bridge that can turn `QueryEngineConfig.canUseTool` ask decisions
+into app permission events. The next phase must supply the real session bootstrap
+configuration and connect the host to live `AppSessionController` events before
+the app can complete real turns independently of the REPL.
+
 ## Update Rules
 
 - Update this file when a phase changes, completes, or splits.

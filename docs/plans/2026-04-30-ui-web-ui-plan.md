@@ -251,7 +251,10 @@ The settings page should expose key settings grouped by section:
 The absolute minimum to see something in a browser. No design needed — just plumbing.
 
 **Tech decisions:**
-- Web app directory: root-level `web/` — keeps it separate from terminal Ink code
+- Browser debug UI directory: root-level `web/` — keeps this historical browser
+  surface separate from terminal Ink code. This is not the dedicated app target;
+  the dedicated app refactor now routes through `src/app-runtime/` and a thin
+  shell outside root `web/`.
 - WS server: opt-in `--web` flag — no risk to terminal, add always-on later
 - Port: fixed `3456`
 - CSS framework: Tailwind — decided here so scaffold includes it
@@ -488,7 +491,8 @@ Far-future. Desktop-first for now.
 
 - [x] Port number — **fixed 3456**
 - [x] CSS framework — **Tailwind**
-- [x] Web app directory — **root-level `web/`**
+- [x] Browser debug UI directory — **root-level `web/`**, not the dedicated app
+  target
 - [x] WS server startup — **opt-in `--web` flag**
 - [x] Syntax highlighting — **Shiki**
 - [x] ANSI rendering — **ansi-to-html**
