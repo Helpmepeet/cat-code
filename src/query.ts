@@ -488,14 +488,6 @@ async function* queryLoop(
       toolUseContext.options.mainLoopProvider,
     )
 
-    const instructionAssembly = buildProviderInstructionAssembly({
-      provider: currentProvider,
-      messages: messagesForQuery,
-      systemPrompt,
-      userContext,
-      systemContext,
-    })
-
     queryCheckpoint('query_autocompact_start')
     const { compactionResult, consecutiveFailures } = await deps.autocompact(
       messagesForQuery,
@@ -688,6 +680,10 @@ async function* queryLoop(
       }
     }
 
+    let instructionAssembly:
+      | ReturnType<typeof buildProviderInstructionAssembly>
+      | undefined
+
     let attemptWithFallback = true
 
     queryCheckpoint('query_api_loop_start')
@@ -695,6 +691,14 @@ async function* queryLoop(
       while (attemptWithFallback) {
         attemptWithFallback = false
         try {
+          instructionAssembly = buildProviderInstructionAssembly({
+            provider: currentProvider,
+            messages: messagesForQuery,
+            systemPrompt,
+            userContext,
+            systemContext,
+          })
+
           let streamingFallbackOccured = false
           queryCheckpoint('query_api_streaming_start')
           for await (const message of deps.callModel({
@@ -1046,7 +1050,7 @@ async function* queryLoop(
     }
 
     // Execute post-sampling hooks after model response is complete
-    if (assistantMessages.length > 0) {
+    if (assistantMessages.length > 0 && instructionAssembly) {
       void executePostSamplingHooks(
         [...messagesForQuery, ...assistantMessages],
         systemPrompt,
