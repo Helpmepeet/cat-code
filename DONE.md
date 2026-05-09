@@ -8,6 +8,14 @@
 
 ## Phase 0
 
+### 9 May 2026
+
+60. Installed the Cat Code change impact checklist skill — `checking-cat-code-change-impact` now lives in the user skills directory and prompts agents to consider logs, telemetry, docs, tests, registries, permissions, cache behavior, generated types, and stale references before claiming completion.
+
+### 5 May 2026
+
+59. Fixed auto-compaction request assembly refresh — provider instruction assembly now happens after auto-compaction updates the query messages, so both generic model input and OpenAI-native input use the compacted transcript; regression coverage locks the post-compact request payload.
+
 ### 3 May 2026
 
 58. Strengthened goal completion evidence requirements — `UpdateGoal` now tells the model to mark a thread goal complete only after every explicit requirement is satisfied, real evidence supports completion, tests or green status actually cover the objective, and no required work remains; regression coverage locks the model-facing completion prompt.
