@@ -380,6 +380,75 @@ describe('streamTurnViaWebSocket', () => {
     ])
   })
 
+  test('second turn preserves prior web_search_call output items for continuation matching', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'search the web' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          id: 'ws_123',
+          type: 'web_search_call',
+          status: 'completed',
+          action: {
+            type: 'search',
+            query: 'OpenAI web_search',
+            sources: [
+              {
+                type: 'url',
+                title: 'OpenAI docs',
+                url: 'https://platform.openai.com/docs/guides/tools-web-search',
+              },
+            ],
+          },
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID,
+      { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } },
+      AUTH,
+      1,
+    ))
+
+    const priorWebSearchCall = {
+      id: 'ws_123',
+      type: 'web_search_call',
+      status: 'completed',
+      action: {
+        type: 'search',
+        query: 'OpenAI web_search',
+        sources: [
+          {
+            type: 'url',
+            title: 'OpenAI docs',
+            url: 'https://platform.openai.com/docs/guides/tools-web-search',
+          },
+        ],
+      },
+    }
+    const turn2Input = [
+      { role: 'user', content: 'search the web' },
+      priorWebSearchCall,
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID,
+      { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+      AUTH,
+      3,
+    ))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
+  })
+
   test('canonical reconciliation tolerates omitted reasoning before tool call output', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)

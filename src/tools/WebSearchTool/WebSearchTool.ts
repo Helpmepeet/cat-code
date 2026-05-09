@@ -32,7 +32,7 @@ const inputSchema = lazySchema(() =>
     blocked_domains: z
       .array(z.string())
       .optional()
-      .describe('Never include search results from these domains'),
+      .describe('Never include search results from these domains. Not supported on OpenAI/Codex.'),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
@@ -174,6 +174,12 @@ export const WebSearchTool = buildTool({
       return true
     }
 
+    // OpenAI/Codex uses the Responses API hosted web_search tool through the
+    // Codex adapter. The Cat Code WebSearch tool remains the user-facing wrapper.
+    if (provider === 'openai') {
+      return true
+    }
+
     // Enable for Vertex AI with supported models (Claude 4.0+)
     if (provider === 'vertex') {
       const supportsWebSearch =
@@ -247,6 +253,14 @@ export const WebSearchTool = buildTool({
         message:
           'Error: Cannot specify both allowed_domains and blocked_domains in the same request',
         errorCode: 2,
+      }
+    }
+    if (getAPIProvider() === 'openai' && blocked_domains?.length) {
+      return {
+        result: false,
+        message:
+          'Error: blocked_domains is not supported for OpenAI/Codex web search; use allowed_domains instead',
+        errorCode: 3,
       }
     }
     return { result: true }

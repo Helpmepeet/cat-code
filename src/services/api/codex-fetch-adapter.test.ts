@@ -281,6 +281,60 @@ describe('codex-fetch-adapter', () => {
     ])
   })
 
+  test('translateToCodexBody sends Anthropic web search schema as OpenAI hosted web_search', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          allowed_domains: ['openai.com', 'platform.openai.com'],
+          max_uses: 8,
+        },
+      ],
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.tools).toEqual([
+      {
+        type: 'web_search',
+        external_web_access: true,
+        search_context_size: 'medium',
+        filters: {
+          allowed_domains: ['openai.com', 'platform.openai.com'],
+        },
+      },
+    ])
+    expect(codexBody.include).toEqual(['web_search_call.action.sources'])
+  })
+
+  test('translateToCodexBody merges web search sources include with reasoning include', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: 8,
+        },
+      ],
+      output_config: { effort: 'low' },
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'low', summary: 'auto' })
+    expect(codexBody.include).toEqual([
+      'reasoning.encrypted_content',
+      'web_search_call.action.sources',
+    ])
+  })
+
   test('translateToCodexBody preserves multimodal tool_result output', () => {
     const { codexBody } = translateToCodexBody({
       model: 'claude-sonnet-4-6',
@@ -422,6 +476,98 @@ describe('codex-fetch-adapter', () => {
     expect(body).toContain('event: message_stop')
   })
 
+  test('translateCodexStreamToAnthropic converts OpenAI web_search_call into Anthropic server tool blocks', async () => {
+    const codexResponse = new Response(
+      [
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            id: 'ws_123',
+            type: 'web_search_call',
+            status: 'completed',
+            action: {
+              type: 'search',
+              query: 'OpenAI Responses web_search',
+              sources: [
+                {
+                  type: 'url',
+                  title: 'Web search - OpenAI API',
+                  url: 'https://platform.openai.com/docs/guides/tools-web-search',
+                },
+              ],
+            },
+          },
+        })}`,
+        '',
+        'event: response.output_text.delta',
+        `data: ${JSON.stringify({
+          type: 'response.output_text.delta',
+          delta: 'OpenAI supports hosted web search.',
+        })}`,
+        '',
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              {
+                type: 'output_text',
+                text: 'OpenAI supports hosted web search.',
+                annotations: [
+                  {
+                    type: 'url_citation',
+                    start_index: 17,
+                    end_index: 35,
+                    title: 'Web search - OpenAI API',
+                    url: 'https://platform.openai.com/docs/guides/tools-web-search',
+                  },
+                ],
+              },
+            ],
+            status: 'completed',
+          },
+        })}`,
+        '',
+        'event: response.completed',
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            usage: {
+              input_tokens: 10,
+              output_tokens: 4,
+              input_tokens_details: { cached_tokens: 0 },
+            },
+          },
+        })}`,
+        '',
+      ].join('\n'),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    )
+
+    const anthropicResponse = await translateCodexStreamToAnthropic(
+      codexResponse,
+      'gpt-5.4',
+    )
+    const body = await anthropicResponse.text()
+
+    expect(body).toContain('"type":"server_tool_use"')
+    expect(body).toContain('"id":"ws_123"')
+    expect(body).toContain('"name":"web_search"')
+    expect(body).toContain('"type":"input_json_delta"')
+    expect(body).toContain('OpenAI Responses web_search')
+    expect(body).toContain('"type":"web_search_tool_result"')
+    expect(body).toContain('Web search - OpenAI API')
+    expect(body).toContain('https://platform.openai.com/docs/guides/tools-web-search')
+    expect(body).toContain('OpenAI supports hosted web search.')
+    expect(body).toContain('"stop_reason":"end_turn"')
+  })
+
   test('createCodexFetch completes streamed responses without referencing undefined account state', async () => {
     const accessToken = createAccessToken('acct_test_streaming')
     const fetchCalls: Array<{ input: RequestInfo | URL, init?: RequestInit }> = []
@@ -482,6 +628,103 @@ describe('codex-fetch-adapter', () => {
       // (adapter converts inclusive→exclusive semantics by subtracting cached from input)
       expect(body).toContain('"cache_creation_input_tokens":0')
       expect(body).not.toContain('currentAccountId is not defined')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch sends hosted web_search and returns normalized web search stream blocks on HTTP path', async () => {
+    const accessToken = createAccessToken('acct_test_web_search')
+    const originalFetch = globalThis.fetch
+    const fetchCalls: Array<{ input: RequestInfo | URL, init?: RequestInit }> = []
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ input, init })
+
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              id: 'ws_456',
+              type: 'web_search_call',
+              status: 'completed',
+              action: {
+                type: 'search',
+                query: 'OpenAI native web search',
+                sources: [
+                  {
+                    type: 'url',
+                    title: 'OpenAI web search docs',
+                    url: 'https://platform.openai.com/docs/guides/tools-web-search',
+                  },
+                ],
+              },
+            },
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 10,
+                output_tokens: 4,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_web_search_http', 'test')
+      const response = await createCodexFetch(accessToken, 'conv_web_search_http')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            tools: [
+              {
+                type: 'web_search_20250305',
+                name: 'web_search',
+                allowed_domains: ['platform.openai.com'],
+                max_uses: 8,
+              },
+            ],
+            _openaiInstructionAssembly: {
+              instructions: 'Perform a web search.',
+              inputMessages: [{ role: 'user', content: 'search docs' }],
+            },
+          }),
+        },
+      )
+
+      const requestBody = JSON.parse(String(fetchCalls[0]?.init?.body))
+      expect(requestBody.tools).toEqual([
+        {
+          type: 'web_search',
+          external_web_access: true,
+          search_context_size: 'medium',
+          filters: { allowed_domains: ['platform.openai.com'] },
+        },
+      ])
+      expect(requestBody.include).toEqual(['web_search_call.action.sources'])
+
+      const body = await response.text()
+      expect(body).toContain('"type":"server_tool_use"')
+      expect(body).toContain('"type":"web_search_tool_result"')
+      expect(body).toContain('OpenAI web search docs')
+      expect(body).toContain('https://platform.openai.com/docs/guides/tools-web-search')
     } finally {
       globalThis.fetch = originalFetch
       resetCodexCacheContext()

@@ -321,6 +321,7 @@ interface AnthropicMessage {
 }
 
 interface AnthropicTool {
+  type?: string
   name: string
   description?: string
   input_schema?: Record<string, unknown>
@@ -331,6 +332,8 @@ interface AnthropicTool {
     syntax: 'lark'
     definition: string
   }
+  allowed_domains?: string[]
+  blocked_domains?: string[]
 }
 
 interface OpenAIInstructionAssemblyPayload {
@@ -345,30 +348,71 @@ registerStaleResponseIdCallback((conversationId) => {
 
 // ── Tool translation: Anthropic → Codex ─────────────────────────────
 
+const OPENAI_WEB_SEARCH_SOURCES_INCLUDE = 'web_search_call.action.sources'
+
+function isAnthropicHostedWebSearchTool(tool: AnthropicTool): boolean {
+  return tool.type === 'web_search_20250305' && tool.name === 'web_search'
+}
+
+function translateHostedWebSearchTool(
+  tool: AnthropicTool,
+): Record<string, unknown> {
+  const translated: Record<string, unknown> = {
+    type: 'web_search',
+    external_web_access: true,
+    search_context_size: 'medium',
+  }
+
+  if (Array.isArray(tool.allowed_domains) && tool.allowed_domains.length > 0) {
+    translated.filters = { allowed_domains: tool.allowed_domains }
+  }
+
+  return translated
+}
+
+function addCodexInclude(
+  codexBody: Record<string, unknown>,
+  value: string,
+): void {
+  const current = Array.isArray(codexBody.include)
+    ? codexBody.include.filter((item): item is string => typeof item === 'string')
+    : []
+  if (!current.includes(value)) {
+    current.push(value)
+  }
+  codexBody.include = current
+}
+
 /**
  * Translates Anthropic tool definitions to Codex format.
  * @param anthropicTools - Array of Anthropic tool definitions
  * @returns Array of Codex-compatible tool objects
  */
 function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, unknown>> {
-  return anthropicTools.filter(tool => tool.name !== SYNTHETIC_OUTPUT_TOOL_NAME).map(tool => {
-    if (tool.openai_tool_type === 'custom' && tool.openai_tool_format) {
+  return anthropicTools
+    .filter(tool => tool.name !== SYNTHETIC_OUTPUT_TOOL_NAME)
+    .map(tool => {
+      if (isAnthropicHostedWebSearchTool(tool)) {
+        return translateHostedWebSearchTool(tool)
+      }
+
+      if (tool.openai_tool_type === 'custom' && tool.openai_tool_format) {
+        return {
+          type: 'custom',
+          name: tool.name,
+          description: tool.description || '',
+          format: tool.openai_tool_format,
+        }
+      }
+
       return {
-        type: 'custom',
+        type: 'function',
         name: tool.name,
         description: tool.description || '',
-        format: tool.openai_tool_format,
+        parameters: tool.input_schema || { type: 'object', properties: {} },
+        strict: tool.strict ?? null,
       }
-    }
-
-    return {
-      type: 'function',
-      name: tool.name,
-      description: tool.description || '',
-      parameters: tool.input_schema || { type: 'object', properties: {} },
-      strict: tool.strict ?? null,
-    }
-  })
+    })
 }
 
 // ── Tool result content serialization ───────────────────────────────
@@ -666,8 +710,13 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   }
 
   // Add tools if present
-  if (anthropicTools.length > 0) {
-    codexBody.tools = translateTools(anthropicTools)
+  const translatedTools = anthropicTools.length > 0
+    ? translateTools(anthropicTools)
+    : []
+  const hasHostedWebSearch = translatedTools.some(tool => tool.type === 'web_search')
+
+  if (translatedTools.length > 0) {
+    codexBody.tools = translatedTools
   }
 
   const outputConfig = anthropicBody.output_config as
@@ -739,7 +788,11 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     // `instructions` block alone. Requesting encrypted reasoning lets us
     // round-trip it as an opaque `thinking.signature` and grow the cached
     // prefix with the real conversation.
-    codexBody.include = ['reasoning.encrypted_content']
+    addCodexInclude(codexBody, 'reasoning.encrypted_content')
+  }
+
+  if (hasHostedWebSearch) {
+    addCodexInclude(codexBody, OPENAI_WEB_SEARCH_SOURCES_INCLUDE)
   }
 
   return { codexBody, codexModel }
@@ -1394,6 +1447,29 @@ async function processCodexEvents(
                 if (toolCall) {
                   closeOpenToolCall(toolCall)
                 }
+              } else if (item?.type === 'web_search_call') {
+                closeAllOpenReasoningBlocks()
+                if (currentTextBlockStarted) {
+                  noteVisibleOutput()
+                  controller.enqueue(
+                    encoder.encode(
+                      formatSSE('content_block_stop', JSON.stringify({
+                        type: 'content_block_stop',
+                        index: contentBlockIndex,
+                      })),
+                    ),
+                  )
+                  contentBlockIndex++
+                  currentTextBlockStarted = false
+                }
+
+                noteVisibleOutput()
+                contentBlockIndex = emitOpenAIWebSearchCall(
+                  controller,
+                  encoder,
+                  contentBlockIndex,
+                  item,
+                )
               } else if (item?.type === 'message') {
                 if (currentTextBlockStarted) {
                   noteVisibleOutput()
@@ -1503,6 +1579,13 @@ async function processCodexEvents(
                 cachedInputTokens = inputDetails?.cached_tokens || 0
               }
               completedAtMs = eventObservedAtMs
+            }
+            else if (
+              eventType === 'response.web_search_call.in_progress' ||
+              eventType === 'response.web_search_call.searching' ||
+              eventType === 'response.web_search_call.completed'
+            ) {
+              // Handled via response.output_item.done.
             }
       }
       break stream_loop
@@ -1620,6 +1703,117 @@ function closeToolCallBlock(
       })),
     ),
   )
+}
+
+function readWebSearchAction(
+  item: Record<string, unknown>,
+): {
+  input: Record<string, unknown>
+  sources: Array<{ title: string; url: string }>
+} {
+  const action = item.action as Record<string, unknown> | undefined
+  const actionType = typeof action?.type === 'string' ? action.type : 'other'
+  const query =
+    typeof action?.query === 'string'
+      ? action.query
+      : Array.isArray(action?.queries)
+        ? action.queries.filter((q): q is string => typeof q === 'string').join('; ')
+        : typeof action?.url === 'string'
+          ? action.url
+          : ''
+
+  const sources = Array.isArray(action?.sources)
+    ? action.sources.flatMap(source => {
+        if (typeof source !== 'object' || source === null) return []
+        const record = source as Record<string, unknown>
+        const url = typeof record.url === 'string' ? record.url : ''
+        if (!url) return []
+        const title = typeof record.title === 'string' && record.title.length > 0
+          ? record.title
+          : url
+        return [{ title, url }]
+      })
+    : []
+
+  const input: Record<string, unknown> = { type: actionType }
+  if (query) input.query = query
+  if (Array.isArray(action?.queries)) input.queries = action.queries
+  if (typeof action?.url === 'string') input.url = action.url
+  if (typeof action?.pattern === 'string') input.pattern = action.pattern
+
+  return { input, sources }
+}
+
+function emitOpenAIWebSearchCall(
+  controller: ReadableStreamDefaultController,
+  encoder: TextEncoder,
+  index: number,
+  item: Record<string, unknown>,
+): number {
+  const id = typeof item.id === 'string' && item.id.length > 0
+    ? item.id
+    : `ws_${Date.now()}`
+  const { input, sources } = readWebSearchAction(item)
+
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_start', JSON.stringify({
+        type: 'content_block_start',
+        index,
+        content_block: {
+          type: 'server_tool_use',
+          id,
+          name: 'web_search',
+          input: {},
+        },
+      })),
+    ),
+  )
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_delta', JSON.stringify({
+        type: 'content_block_delta',
+        index,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: JSON.stringify(input),
+        },
+      })),
+    ),
+  )
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_stop', JSON.stringify({
+        type: 'content_block_stop',
+        index,
+      })),
+    ),
+  )
+
+  const resultIndex = index + 1
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_start', JSON.stringify({
+        type: 'content_block_start',
+        index: resultIndex,
+        content_block: {
+          type: 'web_search_tool_result',
+          tool_use_id: id,
+          content: sources,
+        },
+      })),
+    ),
+  )
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_stop', JSON.stringify({
+        type: 'content_block_stop',
+        index: resultIndex,
+      })),
+    ),
+  )
+
+  return resultIndex + 1
 }
 
 function emitTextBlock(
