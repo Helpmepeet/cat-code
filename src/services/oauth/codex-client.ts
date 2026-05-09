@@ -38,6 +38,8 @@ export type CodexTokens = {
   expiresAt: number
   /** ChatGPT account ID extracted from the JWT */
   accountId: string
+  /** Email from the OIDC id_token or access token when OpenAI provides it */
+  accountEmail?: string
 }
 
 type TokenSuccessResult = {
@@ -45,6 +47,7 @@ type TokenSuccessResult = {
   access: string
   refresh: string
   expires: number
+  idToken?: string
 }
 
 type TokenFailedResult = {
@@ -53,8 +56,18 @@ type TokenFailedResult = {
 
 type TokenResult = TokenSuccessResult | TokenFailedResult
 
+type CodexAuthenticatedAccount = {
+  accountId: string
+  accountEmail?: string
+}
+
+type CodexCallbackResult = {
+  code: string
+  showComplete?: (account: CodexAuthenticatedAccount) => void
+}
+
 type LocalServer = {
-  waitForCode: () => Promise<{ code: string } | null>
+  waitForCode: () => Promise<CodexCallbackResult | null>
   cancelWait: () => void
   close: () => void
 }
@@ -89,6 +102,25 @@ export function extractCodexAccountId(accessToken: string): string | null {
   if (!authClaim || typeof authClaim !== 'object') return null
   const accountId = (authClaim as Record<string, unknown>).chatgpt_account_id
   return typeof accountId === 'string' && accountId.length > 0 ? accountId : null
+}
+
+function extractCodexAccountEmail(...tokens: Array<string | undefined>): string | null {
+  for (const token of tokens) {
+    if (!token) continue
+    const payload = decodeJwtPayload(token)
+    const email = payload?.email ?? payload?.email_address
+    if (typeof email === 'string' && email.length > 0) return email
+  }
+  return null
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 // ── Authorization URL ─────────────────────────────────────────────────────────
@@ -144,6 +176,7 @@ async function postToTokenUrl(body: URLSearchParams): Promise<TokenResult> {
       access_token?: string
       refresh_token?: string
       expires_in?: number
+      id_token?: string
     }
     if (!json.access_token || !json.refresh_token || typeof json.expires_in !== 'number') {
       logError(new Error('[codex-oauth] token response missing required fields'))
@@ -154,6 +187,7 @@ async function postToTokenUrl(body: URLSearchParams): Promise<TokenResult> {
       access: json.access_token,
       refresh: json.refresh_token,
       expires: Date.now() + json.expires_in * 1000,
+      ...(json.id_token ? { idToken: json.id_token } : {}),
     }
   } catch (err) {
     logError(err as Error)
@@ -184,11 +218,13 @@ export async function exchangeCodexCode(
   if (!accountId) {
     throw new Error('Failed to extract accountId from Codex token.')
   }
+  const accountEmail = extractCodexAccountEmail(result.idToken, result.access)
   return {
     accessToken: result.access,
     refreshToken: result.refresh,
     expiresAt: result.expires,
     accountId,
+    ...(accountEmail ? { accountEmail } : {}),
   }
 }
 
@@ -210,11 +246,13 @@ export async function refreshCodexToken(refreshToken: string): Promise<CodexToke
   if (!accountId) {
     throw new Error('Failed to extract accountId from refreshed Codex token.')
   }
+  const accountEmail = extractCodexAccountEmail(result.idToken, result.access)
   return {
     accessToken: result.access,
     refreshToken: result.refresh,
     expiresAt: result.expires,
     accountId,
+    ...(accountEmail ? { accountEmail } : {}),
   }
 }
 
@@ -229,14 +267,19 @@ export async function refreshCodexToken(refreshToken: string): Promise<CodexToke
  * to paste the redirect URL manually).
  */
 export async function startCodexCallbackServer(expectedState: string): Promise<LocalServer> {
-  let settleWait: ((value: { code: string } | null) => void) | null = null
+  let settleWait: ((value: CodexCallbackResult | null) => void) | null = null
+  const finishPendingResponses = new Set<(account: CodexAuthenticatedAccount | null) => void>()
   let server: Server | null = null
 
-  const waitPromise = new Promise<{ code: string } | null>((resolve) => {
+  const waitPromise = new Promise<CodexCallbackResult | null>((resolve) => {
     settleWait = resolve
   })
 
   const doClose = () => {
+    for (const finish of finishPendingResponses) {
+      finish(null)
+    }
+    finishPendingResponses.clear()
     if (server) {
       server.removeAllListeners()
       server.close()
@@ -254,7 +297,7 @@ export async function startCodexCallbackServer(expectedState: string): Promise<L
   }
 
   return new Promise<LocalServer>((resolve) => {
-    const s = createServer((req, res) => {
+    const s = createServer(async (req, res) => {
       try {
         const url = new URL(req.url ?? '', 'http://localhost')
         if (url.pathname !== '/auth/callback') {
@@ -274,6 +317,25 @@ export async function startCodexCallbackServer(expectedState: string): Promise<L
           res.end('Missing authorization code')
           return
         }
+        const completionPromise = new Promise<CodexAuthenticatedAccount | null>((complete) => {
+          finishPendingResponses.add(complete)
+        })
+        const showComplete = (account: CodexAuthenticatedAccount) => {
+          for (const finish of finishPendingResponses) {
+            finish(account)
+          }
+          finishPendingResponses.clear()
+        }
+        settleWait?.({ code, showComplete })
+        settleWait = null
+
+        const account = await completionPromise
+        if (!account) {
+          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('Return to terminal.')
+          return
+        }
+        const accountLabel = escapeHtml(account.accountEmail ?? account.accountId)
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(`<!DOCTYPE html>
 <html lang="en">
@@ -417,6 +479,15 @@ export async function startCodexCallbackServer(expectedState: string): Promise<L
       color: var(--muted);
     }
 
+    strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .close-help[hidden] {
+      display: none;
+    }
+
     .actions {
       margin-top: 28px;
       display: flex;
@@ -461,17 +532,17 @@ export async function startCodexCallbackServer(expectedState: string): Promise<L
       </div>
 
       <h1>Authentication <span>complete</span>.</h1>
+      <p>Signed in as <strong>${accountLabel}</strong>.</p>
       <p>Return to terminal.</p>
 
       <div class="actions">
-        <button onclick="window.close()">Close</button>
+        <button onclick="window.close(); document.getElementById('close-help').hidden = false; this.textContent = 'Close this tab'">Close</button>
       </div>
+      <p id="close-help" class="close-help" hidden>You can close this tab now.</p>
     </div>
   </main>
 </body>
 </html>`)
-        settleWait?.({ code })
-        settleWait = null
       } catch {
         res.writeHead(500)
         res.end('Internal error')
@@ -522,6 +593,7 @@ export async function runCodexOAuthFlow(
     await openBrowser(url)
 
     let code: string | undefined
+    let showComplete: CodexCallbackResult['showComplete']
 
     if (onManualInput) {
       // Race: browser callback vs. manual paste
@@ -533,6 +605,7 @@ export async function runCodexOAuthFlow(
       const callbackResult = await callbackServer.waitForCode()
       if (callbackResult?.code) {
         code = callbackResult.code
+        showComplete = callbackResult.showComplete
       } else {
         // Callback didn't arrive — use manual input
         const manualInput = await manualPromise
@@ -542,6 +615,7 @@ export async function runCodexOAuthFlow(
     } else {
       const callbackResult = await callbackServer.waitForCode()
       code = callbackResult?.code
+      showComplete = callbackResult?.showComplete
     }
 
     if (!code) {
@@ -550,6 +624,10 @@ export async function runCodexOAuthFlow(
 
     logEvent('tengu_oauth_codex_code_received', {})
     const tokens = await exchangeCodexCode(code, verifier)
+    showComplete?.({
+      accountId: tokens.accountId,
+      ...(tokens.accountEmail ? { accountEmail: tokens.accountEmail } : {}),
+    })
     logEvent('tengu_oauth_codex_success', {})
     return tokens
   } catch (err) {
