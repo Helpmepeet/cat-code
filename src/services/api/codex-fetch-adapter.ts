@@ -903,6 +903,22 @@ type HttpFallbackResult = {
 
 type HttpFallbackEventsFactory = () => Promise<HttpFallbackResult>
 
+type AnthropicSseMaterializedMessage = {
+  id: string
+  type: 'message'
+  role: 'assistant'
+  content: AnthropicContentBlock[]
+  model: string
+  stop_reason: string | null
+  stop_sequence: string | null
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    cache_creation_input_tokens: number
+    cache_read_input_tokens: number
+  }
+}
+
 /**
  * Formats data as Server-Sent Events (SSE) format.
  * @param event - The event type
@@ -1461,10 +1477,30 @@ async function processCodexEvents(
             ) {
               const toolCall = resolveOpenToolCall(event)
               if (toolCall) {
-                toolCall.args =
+                const finalArgs =
                   (event.arguments as string) ||
                   (event.input as string) ||
                   toolCall.args
+                if (
+                  finalArgs.startsWith(toolCall.args) &&
+                  finalArgs.length > toolCall.args.length
+                ) {
+                  const argDelta = finalArgs.slice(toolCall.args.length)
+                  noteVisibleOutput()
+                  controller.enqueue(
+                    encoder.encode(
+                      formatSSE('content_block_delta', JSON.stringify({
+                        type: 'content_block_delta',
+                        index: toolCall.index,
+                        delta: {
+                          type: 'input_json_delta',
+                          partial_json: argDelta,
+                        },
+                      })),
+                    ),
+                  )
+                }
+                toolCall.args = finalArgs
               }
             }
 
@@ -1936,6 +1972,196 @@ export async function translateCodexStreamToAnthropic(
   )
 }
 
+function parseAnthropicSseBlocks(
+  sseBody: string,
+): Array<{ event?: string, data: Record<string, unknown> }> {
+  const blocks: Array<{ event?: string, data: Record<string, unknown> }> = []
+  for (const block of sseBody.split(/\n\n+/)) {
+    let event: string | undefined
+    const dataLines: string[] = []
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event: ')) {
+        event = line.slice(7)
+      } else if (line.startsWith('data: ')) {
+        dataLines.push(line.slice(6))
+      }
+    }
+    if (dataLines.length === 0) continue
+    const dataText = dataLines.join('\n')
+    if (dataText === '[DONE]') continue
+    try {
+      blocks.push({ event, data: JSON.parse(dataText) })
+    } catch {
+      continue
+    }
+  }
+  return blocks
+}
+
+function materializeAnthropicMessageFromSse(
+  sseBody: string,
+  codexModel: string,
+): AnthropicSseMaterializedMessage {
+  let message: AnthropicSseMaterializedMessage | null = null
+  const content: AnthropicContentBlock[] = []
+  const inputJsonDeltasByIndex = new Map<number, string>()
+
+  for (const { data } of parseAnthropicSseBlocks(sseBody)) {
+    const type = data.type
+    if (type === 'message_start') {
+      const startedMessage = data.message as
+        | Partial<AnthropicSseMaterializedMessage>
+        | undefined
+      message = {
+        id: typeof startedMessage?.id === 'string' ? startedMessage.id : '',
+        type: 'message',
+        role: 'assistant',
+        content,
+        model: typeof startedMessage?.model === 'string'
+          ? startedMessage.model
+          : codexModel,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      }
+    } else if (type === 'content_block_start') {
+      const index = typeof data.index === 'number' ? data.index : content.length
+      const block = data.content_block as AnthropicContentBlock | undefined
+      if (block) {
+        content[index] = { ...block }
+      }
+    } else if (type === 'content_block_delta') {
+      const index = typeof data.index === 'number' ? data.index : content.length - 1
+      const block = content[index]
+      const delta = data.delta as Record<string, unknown> | undefined
+      if (!block || !delta) continue
+
+      if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+        block.text = `${block.text ?? ''}${delta.text}`
+      } else if (
+        delta.type === 'thinking_delta' &&
+        typeof delta.thinking === 'string'
+      ) {
+        block.thinking = `${block.thinking ?? ''}${delta.thinking}`
+      } else if (
+        delta.type === 'signature_delta' &&
+        typeof delta.signature === 'string'
+      ) {
+        block.signature = delta.signature
+      } else if (
+        delta.type === 'input_json_delta' &&
+        typeof delta.partial_json === 'string'
+      ) {
+        if (typeof block.input === 'string') {
+          block.input = `${block.input}${delta.partial_json}`
+        } else {
+          inputJsonDeltasByIndex.set(
+            index,
+            `${inputJsonDeltasByIndex.get(index) ?? ''}${delta.partial_json}`,
+          )
+        }
+      }
+    } else if (type === 'message_delta' && message) {
+      const delta = data.delta as Record<string, unknown> | undefined
+      if (typeof delta?.stop_reason === 'string') {
+        message.stop_reason = delta.stop_reason
+      }
+      if (typeof delta?.stop_sequence === 'string' || delta?.stop_sequence === null) {
+        message.stop_sequence = delta.stop_sequence
+      }
+      const usage = data.usage as Partial<AnthropicSseMaterializedMessage['usage']> | undefined
+      if (usage) {
+        message.usage = {
+          ...message.usage,
+          ...usage,
+        }
+      }
+    } else if (type === 'message_stop' && message) {
+      const usage = data.usage as Partial<AnthropicSseMaterializedMessage['usage']> | undefined
+      if (usage) {
+        message.usage = {
+          ...message.usage,
+          ...usage,
+        }
+      }
+    }
+  }
+
+  if (!message || !message.id || message.content.length === 0) {
+    throw new Error(
+      'Codex non-streaming fallback produced an empty or invalid assistant message',
+    )
+  }
+
+  message.content = message.content.filter(Boolean)
+  for (const [index, inputJson] of inputJsonDeltasByIndex) {
+    if (inputJson.length === 0) continue
+    const block = message.content[index]
+    if (!block || typeof block.input === 'string') continue
+    try {
+      const parsed = JSON.parse(inputJson)
+      block.input =
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+          ? parsed
+          : {}
+    } catch {
+      throw new Error(
+        'Codex non-streaming fallback produced invalid tool input JSON',
+      )
+    }
+  }
+  return message
+}
+
+async function* observeCodexResponseId(
+  events: AsyncIterable<Record<string, unknown>>,
+  onResponseId: (id: string) => void,
+): AsyncGenerator<Record<string, unknown>> {
+  for await (const event of events) {
+    const response = event.response as Record<string, unknown> | undefined
+    if (typeof response?.id === 'string' && response.id.length > 0) {
+      onResponseId(response.id)
+    }
+    yield event
+  }
+}
+
+async function translateCodexStreamToAnthropicMessage(
+  codexResponse: Response,
+  codexModel: string,
+  requestCacheMetadata?: CodexRequestCacheMetadata,
+  transportContext?: CodexStreamTransportContext,
+): Promise<Response> {
+  let codexResponseId: string | undefined
+  const anthropicStreamResponse = buildAnthropicStreamResponse(
+    observeCodexResponseId(httpSseToEvents(codexResponse), id => {
+      codexResponseId = id
+    }),
+    codexModel,
+    requestCacheMetadata,
+    undefined,
+    transportContext,
+  )
+  const sseBody = await anthropicStreamResponse.text()
+  const message = materializeAnthropicMessageFromSse(sseBody, codexModel)
+  if (codexResponseId) {
+    message.id = codexResponseId
+  }
+
+  return new Response(JSON.stringify(message), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': message.id,
+    },
+  })
+}
+
 /**
  * Translates a WebSocket event stream to Anthropic streaming format.
  */
@@ -2269,6 +2495,7 @@ export function createCodexFetch(
 
     // Translate to Codex format
     const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
+    const isStreamingAnthropicRequest = anthropicBody.stream === true
 
     // Upstream openai/codex (codex-rs/core/src/client.rs) uses a single plain
     // UUID as the conversation identity — it becomes prompt_cache_key, session_id,
@@ -2419,55 +2646,57 @@ export function createCodexFetch(
       ? (codexBody.input as Array<Record<string, unknown>>)
       : []
 
-    if (!hasStickyHttpFallback(conversationId)) {
-      try {
-        schedulePrewarm(conversationId, codexBody, authHeaders)
-        const wsRequestStartedAtMs = Date.now()
-        const wsEvents = await primeCodexEvents(
-          streamTurnViaWebSocketLocked(
+    if (isStreamingAnthropicRequest) {
+      if (!hasStickyHttpFallback(conversationId)) {
+        try {
+          schedulePrewarm(conversationId, codexBody, authHeaders)
+          const wsRequestStartedAtMs = Date.now()
+          const wsEvents = await primeCodexEvents(
+            streamTurnViaWebSocketLocked(
+              conversationId,
+              codexBody,
+              authHeaders,
+              fullInput.length,
+            ),
+          )
+          logForDebugging(
+            `[codex-cache] transport=websocket conv=${conversationId.slice(0, 8)} ` +
+            `account=${currentAccountId.slice(0, 12)} model=${codexModel} ` +
+            `instructions_hash=${instructionsHash} effort=${effort} messages=${inputMessages.length}`,
+          )
+          return translateCodexWsStreamToAnthropic(
+            wsEvents,
+            codexModel,
+            requestCacheMetadata,
+            httpFallbackEvents,
+            {
+              transport: 'websocket',
+              requestStartedAtMs: wsRequestStartedAtMs,
+            },
+          )
+        } catch (wsError) {
+          clearWebSocketSession(conversationId)
+          const normalized = normalizeInitialWebSocketError(
+            wsError,
+            currentAccountId,
             conversationId,
-            codexBody,
-            authHeaders,
-            fullInput.length,
-          ),
-        )
-        logForDebugging(
-          `[codex-cache] transport=websocket conv=${conversationId.slice(0, 8)} ` +
-          `account=${currentAccountId.slice(0, 12)} model=${codexModel} ` +
-          `instructions_hash=${instructionsHash} effort=${effort} messages=${inputMessages.length}`,
-        )
-        return translateCodexWsStreamToAnthropic(
-          wsEvents,
-          codexModel,
-          requestCacheMetadata,
-          httpFallbackEvents,
-          {
-            transport: 'websocket',
-            requestStartedAtMs: wsRequestStartedAtMs,
-          },
-        )
-      } catch (wsError) {
-        clearWebSocketSession(conversationId)
-        const normalized = normalizeInitialWebSocketError(
-          wsError,
-          currentAccountId,
-          conversationId,
-        )
-        // Usage-cap errors must propagate so withRetry can trigger pool failover.
-        // All other WS errors fall through to the HTTP path below.
-        if (normalized instanceof CodexAccountCapError) {
-          throw normalized
+          )
+          // Usage-cap errors must propagate so withRetry can trigger pool failover.
+          // All other WS errors fall through to the HTTP path below.
+          if (normalized instanceof CodexAccountCapError) {
+            throw normalized
+          }
+          logForDebugging(
+            `[codex-fetch] WS unavailable, falling back to HTTP: ${wsError instanceof Error ? wsError.message : String(wsError)}`,
+            { level: 'warn' },
+          )
         }
+      } else {
         logForDebugging(
-          `[codex-fetch] WS unavailable, falling back to HTTP: ${wsError instanceof Error ? wsError.message : String(wsError)}`,
+          `[codex-fetch] sticky HTTP fallback active conv=${conversationId.slice(0, 8)} account=${currentAccountId.slice(0, 12)}`,
           { level: 'warn' },
         )
       }
-    } else {
-      logForDebugging(
-        `[codex-fetch] sticky HTTP fallback active conv=${conversationId.slice(0, 8)} account=${currentAccountId.slice(0, 12)}`,
-        { level: 'warn' },
-      )
     }
 
     // ── HTTP fallback ─────────────────────────────────────────────────
@@ -2492,11 +2721,18 @@ export function createCodexFetch(
       })
     }
 
-    return translateCodexStreamToAnthropic(
-      codexResponse,
-      codexModel,
-      requestCacheMetadata,
-      transportContext,
-    )
+    return isStreamingAnthropicRequest
+      ? translateCodexStreamToAnthropic(
+          codexResponse,
+          codexModel,
+          requestCacheMetadata,
+          transportContext,
+        )
+      : translateCodexStreamToAnthropicMessage(
+          codexResponse,
+          codexModel,
+          requestCacheMetadata,
+          transportContext,
+        )
   }
 }

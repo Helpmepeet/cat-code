@@ -805,6 +805,7 @@ describe('codex-fetch-adapter', () => {
         {
           method: 'POST',
           body: JSON.stringify({
+            stream: true,
             model: 'claude-sonnet-4-6',
             _openaiInstructionAssembly: {
               instructions: 'Be precise.',
@@ -892,6 +893,7 @@ describe('codex-fetch-adapter', () => {
         {
           method: 'POST',
           body: JSON.stringify({
+            stream: true,
             model: 'claude-sonnet-4-6',
             tools: [
               {
@@ -924,6 +926,361 @@ describe('codex-fetch-adapter', () => {
       expect(body).toContain('"type":"web_search_tool_result"')
       expect(body).toContain('OpenAI web search docs')
       expect(body).toContain('https://platform.openai.com/docs/guides/tools-web-search')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch returns JSON for non-streaming custom tool calls on HTTP path', async () => {
+    const accessToken = createAccessToken('acct_test_nonstream_tool')
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        [
+          'event: response.output_item.added',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item: {
+              id: 'item_apply_patch_1',
+              type: 'custom_tool_call',
+              call_id: 'call_apply_patch_1',
+              name: 'Apply_patch',
+              input: '',
+            },
+          })}`,
+          '',
+          'event: response.custom_tool_call_input.delta',
+          `data: ${JSON.stringify({
+            type: 'response.custom_tool_call_input.delta',
+            item_id: 'item_apply_patch_1',
+            delta: '*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n',
+          })}`,
+          '',
+          'event: response.custom_tool_call_input.done',
+          `data: ${JSON.stringify({
+            type: 'response.custom_tool_call_input.done',
+            item_id: 'item_apply_patch_1',
+            input: '*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n*** End Patch',
+          })}`,
+          '',
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              id: 'item_apply_patch_1',
+              type: 'custom_tool_call',
+              call_id: 'call_apply_patch_1',
+              name: 'Apply_patch',
+              input: '*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n*** End Patch',
+            },
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              id: 'resp_nonstream_tool',
+              usage: {
+                input_tokens: 10,
+                output_tokens: 4,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_nonstream_tool', 'test')
+      const response = await createCodexFetch(accessToken, 'conv_nonstream_tool')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            tools: [
+              {
+                name: 'Apply_patch',
+                description: 'Apply patches.',
+                input_schema: { type: 'object', properties: {} },
+                openai_tool_type: 'custom',
+                openai_tool_format: {
+                  type: 'grammar',
+                  syntax: 'lark',
+                  definition: 'start: /(.|\\n)*/',
+                },
+              },
+            ],
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [{ role: 'user', content: 'patch it' }],
+            },
+          }),
+        },
+      )
+
+      expect(response.headers.get('Content-Type')).toContain('application/json')
+      const body = await response.json()
+      expect(body.id).toBe('resp_nonstream_tool')
+      expect(body.content).toEqual([
+        {
+          type: 'tool_use',
+          id: 'call_apply_patch_1',
+          name: 'Apply_patch',
+          input: '*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n*** End Patch',
+        },
+      ])
+      expect(body.stop_reason).toBe('tool_use')
+      expect(body.usage).toMatchObject({
+        input_tokens: 10,
+        output_tokens: 4,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch returns object input for non-streaming function tool calls', async () => {
+    const accessToken = createAccessToken('acct_test_nonstream_function_tool')
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        [
+          'event: response.output_item.added',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item: {
+              id: 'item_read_1',
+              type: 'function_call',
+              call_id: 'call_read_1',
+              name: 'Read',
+              arguments: '',
+            },
+          })}`,
+          '',
+          'event: response.function_call_arguments.delta',
+          `data: ${JSON.stringify({
+            type: 'response.function_call_arguments.delta',
+            item_id: 'item_read_1',
+            delta: '{"file_path":"/tmp/example.ts"}',
+          })}`,
+          '',
+          'event: response.function_call_arguments.done',
+          `data: ${JSON.stringify({
+            type: 'response.function_call_arguments.done',
+            item_id: 'item_read_1',
+            arguments: '{"file_path":"/tmp/example.ts"}',
+          })}`,
+          '',
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              id: 'item_read_1',
+              type: 'function_call',
+              call_id: 'call_read_1',
+              name: 'Read',
+              arguments: '{"file_path":"/tmp/example.ts"}',
+            },
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              id: 'resp_nonstream_function_tool',
+              usage: {
+                input_tokens: 10,
+                output_tokens: 4,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_nonstream_function_tool', 'test')
+      const response = await createCodexFetch(
+        accessToken,
+        'conv_nonstream_function_tool',
+      )('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          tools: [
+            {
+              name: 'Read',
+              description: 'Read a file.',
+              input_schema: {
+                type: 'object',
+                properties: { file_path: { type: 'string' } },
+              },
+            },
+          ],
+          _openaiInstructionAssembly: {
+            instructions: 'Be precise.',
+            inputMessages: [{ role: 'user', content: 'read it' }],
+          },
+        }),
+      })
+
+      const body = await response.json()
+      expect(body.id).toBe('resp_nonstream_function_tool')
+      expect(body.content).toEqual([
+        {
+          type: 'tool_use',
+          id: 'call_read_1',
+          name: 'Read',
+          input: { file_path: '/tmp/example.ts' },
+        },
+      ])
+      expect(body.stop_reason).toBe('tool_use')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch returns JSON for non-streaming text-only HTTP responses', async () => {
+    const accessToken = createAccessToken('acct_test_nonstream_text')
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        [
+          'event: response.output_text.delta',
+          `data: ${JSON.stringify({
+            type: 'response.output_text.delta',
+            delta: 'hello from fallback',
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              id: 'resp_nonstream_text',
+              usage: {
+                input_tokens: 8,
+                output_tokens: 3,
+                input_tokens_details: { cached_tokens: 2 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_nonstream_text', 'test')
+      const response = await createCodexFetch(accessToken, 'conv_nonstream_text')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [{ role: 'user', content: 'say hello' }],
+            },
+          }),
+        },
+      )
+
+      expect(response.headers.get('Content-Type')).toContain('application/json')
+      const body = await response.json()
+      expect(body.id).toBe('resp_nonstream_text')
+      expect(body.content).toEqual([
+        {
+          type: 'text',
+          text: 'hello from fallback',
+        },
+      ])
+      expect(body.stop_reason).toBe('end_turn')
+      expect(body.usage).toMatchObject({
+        input_tokens: 6,
+        output_tokens: 3,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 2,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch fails visibly for empty non-streaming HTTP responses', async () => {
+    const accessToken = createAccessToken('acct_test_nonstream_empty')
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        [
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              id: 'resp_nonstream_empty',
+              usage: {
+                input_tokens: 8,
+                output_tokens: 3,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_nonstream_empty', 'test')
+      await expect(
+        createCodexFetch(accessToken, 'conv_nonstream_empty')(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [{ role: 'user', content: 'say hello' }],
+              },
+            }),
+          },
+        ),
+      ).rejects.toThrow(
+        'Codex non-streaming fallback produced an empty or invalid assistant message',
+      )
     } finally {
       globalThis.fetch = originalFetch
       resetCodexCacheContext()
@@ -1004,6 +1361,7 @@ describe('codex-fetch-adapter', () => {
         createCodexFetch(accessToken, 'conv_usage_limit')('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           body: JSON.stringify({
+            stream: true,
             model: 'claude-sonnet-4-6',
             _openaiInstructionAssembly: {
               instructions: 'Be precise.',
@@ -1108,6 +1466,7 @@ describe('codex-fetch-adapter', () => {
       const firstResponse = await codexFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         body: JSON.stringify({
+          stream: true,
           model: 'claude-sonnet-4-6',
           _openaiInstructionAssembly: {
             instructions: 'Be precise.',
@@ -1125,6 +1484,7 @@ describe('codex-fetch-adapter', () => {
       const secondResponse = await codexFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         body: JSON.stringify({
+          stream: true,
           model: 'claude-sonnet-4-6',
           _openaiInstructionAssembly: {
             instructions: 'Be precise.',

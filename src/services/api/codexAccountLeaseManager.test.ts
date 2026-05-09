@@ -686,7 +686,7 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -753,21 +753,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-b', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1170,7 +1170,7 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1237,21 +1237,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-b', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1312,14 +1312,14 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('subagent-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
 
@@ -1368,21 +1368,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.4', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.4', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
 
