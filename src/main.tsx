@@ -162,7 +162,7 @@ import { eagerParseCliFlag } from 'src/utils/cliArgs.js';
 import { createEmptyAttributionState } from 'src/utils/commitAttribution.js';
 import { countConcurrentSessions, registerSession, updateSessionName } from 'src/utils/concurrentSessions.js';
 import { getCwd } from 'src/utils/cwd.js';
-import { logForDebugging, setHasFormattedOutput } from 'src/utils/debug.js';
+import { isDebugMode, logForDebugging, setHasFormattedOutput } from 'src/utils/debug.js';
 import { errorMessage, getErrnoCode, isENOENT, TeleportOperationError, toError } from 'src/utils/errors.js';
 import { getFsImplementation, safeResolvePath } from 'src/utils/fsOperations.js';
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
@@ -2605,11 +2605,12 @@ async function run(): Promise<CommanderCommand> {
     registerCleanup(async () => {
       logForDiagnosticsNoPII('info', 'exited');
     });
+    const effectiveDebug = debug || debugToStderr || isDebugMode();
     void logTenguInit({
       hasInitialPrompt: Boolean(prompt),
       hasStdin: Boolean(inputPrompt),
       verbose,
-      debug,
+      debug: effectiveDebug,
       debugToStderr,
       print: print ?? false,
       outputFormat: outputFormat ?? 'text',
@@ -3186,7 +3187,7 @@ async function run(): Promise<CommanderCommand> {
     // state gracefully (re-checks each turn, so auth recovery mid-session works).
     const uploaderReady = sessionUploaderPromise ? sessionUploaderPromise.then(mod => mod.createSessionTurnUploader()).catch(() => null) : null;
     const sessionConfig = {
-      debug: debug || debugToStderr,
+      debug: effectiveDebug,
       commands: [...commands, ...mcpCommands],
       initialTools,
       mcpClients,
@@ -3295,7 +3296,7 @@ async function run(): Promise<CommanderCommand> {
         stats,
         initialState
       }, {
-        debug: debug || debugToStderr,
+        debug: effectiveDebug,
         commands,
         initialTools: [],
         initialMessages: [connectInfoMessage],
@@ -3361,7 +3362,7 @@ async function run(): Promise<CommanderCommand> {
         stats,
         initialState
       }, {
-        debug: debug || debugToStderr,
+        debug: effectiveDebug,
         commands,
         initialTools: [],
         initialMessages: [sshInfoMessage],
@@ -3457,7 +3458,7 @@ async function run(): Promise<CommanderCommand> {
         stats,
         initialState: assistantInitialState
       }, {
-        debug: debug || debugToStderr,
+        debug: effectiveDebug,
         commands: remoteCommands,
         initialTools: [],
         initialMessages: [infoMessage],
@@ -3606,7 +3607,7 @@ async function run(): Promise<CommanderCommand> {
           stats,
           initialState: remoteInitialState
         }, {
-          debug: debug || debugToStderr,
+          debug: effectiveDebug,
           commands: remoteCommands,
           initialTools: [],
           initialMessages: initialUserMessage ? [remoteInfoMessage, initialUserMessage] : [remoteInfoMessage],
