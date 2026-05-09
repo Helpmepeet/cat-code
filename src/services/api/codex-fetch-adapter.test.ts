@@ -302,13 +302,100 @@ describe('codex-fetch-adapter', () => {
       {
         type: 'web_search',
         external_web_access: true,
-        search_context_size: 'medium',
         filters: {
           allowed_domains: ['openai.com', 'platform.openai.com'],
         },
       },
     ])
     expect(codexBody.include).toEqual(['web_search_call.action.sources'])
+  })
+
+  test('translateToCodexBody rejects blocked_domains on Anthropic web search schema', () => {
+    expect(() =>
+      translateToCodexBody({
+        model: 'claude-sonnet-4-6',
+        tools: [
+          {
+            type: 'web_search_20250305',
+            name: 'web_search',
+            blocked_domains: ['evil.example.com'],
+          },
+        ],
+        _openaiInstructionAssembly: {
+          instructions: 'test instructions',
+          inputMessages: [],
+        },
+      }),
+    ).toThrow(/blocked_domains/)
+  })
+
+  test('translateToCodexBody passes Anthropic tool_choice through to Codex', () => {
+    const forcedWebSearch = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search' },
+      ],
+      tool_choice: { type: 'tool', name: 'web_search' },
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+    expect(forcedWebSearch.tool_choice).toEqual({ type: 'web_search' })
+
+    const forcedFunction = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          name: 'lookup',
+          description: 'd',
+          input_schema: { type: 'object', properties: {} },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'lookup' },
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+    expect(forcedFunction.tool_choice).toEqual({ type: 'function', name: 'lookup' })
+
+    const anyChoice = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tool_choice: { type: 'any' },
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+    expect(anyChoice.tool_choice).toBe('required')
+
+    const noneChoice = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tool_choice: { type: 'none' },
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+    expect(noneChoice.tool_choice).toBe('none')
+
+    const defaultChoice = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+    expect(defaultChoice.tool_choice).toBe('auto')
+  })
+
+  test('translateToCodexBody preserves reasoning include when thinking is disabled and web search is enabled', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+        },
+      ],
+      thinking: { type: 'disabled' },
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'minimal' })
+    expect(codexBody.include).toEqual([
+      'reasoning.encrypted_content',
+      'web_search_call.action.sources',
+    ])
   })
 
   test('translateToCodexBody merges web search sources include with reasoning include', () => {
@@ -568,6 +655,119 @@ describe('codex-fetch-adapter', () => {
     expect(body).toContain('"stop_reason":"end_turn"')
   })
 
+  test('translateCodexStreamToAnthropic keeps stop_reason=end_turn for web_search-only output and uses tool_use when a real function call follows', async () => {
+    const searchOnly = new Response(
+      [
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            id: 'ws_only',
+            type: 'web_search_call',
+            status: 'completed',
+            action: { type: 'search', query: 'q', sources: [] },
+          },
+        })}`,
+        '',
+        'event: response.completed',
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            usage: {
+              input_tokens: 1,
+              output_tokens: 1,
+              input_tokens_details: { cached_tokens: 0 },
+            },
+          },
+        })}`,
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
+
+    const searchOnlyBody = await (
+      await translateCodexStreamToAnthropic(searchOnly, 'gpt-5.4')
+    ).text()
+    expect(searchOnlyBody).toContain('"stop_reason":"end_turn"')
+
+    const mixed = new Response(
+      [
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            id: 'ws_first',
+            type: 'web_search_call',
+            status: 'completed',
+            action: { type: 'search', query: 'q', sources: [] },
+          },
+        })}`,
+        '',
+        'event: response.output_item.added',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.added',
+          output_index: 1,
+          item: {
+            id: 'item_fn',
+            type: 'function_call',
+            call_id: 'call_fn',
+            name: 'lookup',
+            arguments: '',
+          },
+        })}`,
+        '',
+        'event: response.function_call_arguments.delta',
+        `data: ${JSON.stringify({
+          type: 'response.function_call_arguments.delta',
+          item_id: 'item_fn',
+          delta: '{"x":1}',
+        })}`,
+        '',
+        'event: response.function_call_arguments.done',
+        `data: ${JSON.stringify({
+          type: 'response.function_call_arguments.done',
+          item_id: 'item_fn',
+          arguments: '{"x":1}',
+        })}`,
+        '',
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            id: 'item_fn',
+            type: 'function_call',
+            call_id: 'call_fn',
+            name: 'lookup',
+            arguments: '{"x":1}',
+          },
+        })}`,
+        '',
+        'event: response.completed',
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            usage: {
+              input_tokens: 1,
+              output_tokens: 1,
+              input_tokens_details: { cached_tokens: 0 },
+            },
+          },
+        })}`,
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
+
+    const mixedBody = await (
+      await translateCodexStreamToAnthropic(mixed, 'gpt-5.4')
+    ).text()
+    expect(mixedBody).toContain('"type":"server_tool_use"')
+    expect(mixedBody).toContain('"id":"ws_first"')
+    expect(mixedBody).toContain('"type":"tool_use"')
+    expect(mixedBody).toContain('"id":"call_fn"')
+    expect(mixedBody).toContain('"stop_reason":"tool_use"')
+  })
+
   test('createCodexFetch completes streamed responses without referencing undefined account state', async () => {
     const accessToken = createAccessToken('acct_test_streaming')
     const fetchCalls: Array<{ input: RequestInfo | URL, init?: RequestInit }> = []
@@ -714,7 +914,6 @@ describe('codex-fetch-adapter', () => {
         {
           type: 'web_search',
           external_web_access: true,
-          search_context_size: 'medium',
           filters: { allowed_domains: ['platform.openai.com'] },
         },
       ])

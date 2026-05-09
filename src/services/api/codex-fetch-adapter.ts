@@ -357,10 +357,15 @@ function isAnthropicHostedWebSearchTool(tool: AnthropicTool): boolean {
 function translateHostedWebSearchTool(
   tool: AnthropicTool,
 ): Record<string, unknown> {
+  if (Array.isArray(tool.blocked_domains) && tool.blocked_domains.length > 0) {
+    throw new Error(
+      'OpenAI hosted web_search does not support blocked_domains; use allowed_domains',
+    )
+  }
+
   const translated: Record<string, unknown> = {
     type: 'web_search',
     external_web_access: true,
-    search_context_size: 'medium',
   }
 
   if (Array.isArray(tool.allowed_domains) && tool.allowed_domains.length > 0) {
@@ -381,6 +386,30 @@ function addCodexInclude(
     current.push(value)
   }
   codexBody.include = current
+}
+
+function translateToolChoice(
+  anthropicChoice: unknown,
+  anthropicTools: AnthropicTool[],
+): unknown {
+  if (anthropicChoice == null) return 'auto'
+  if (typeof anthropicChoice === 'string') return anthropicChoice
+
+  if (typeof anthropicChoice !== 'object') return 'auto'
+  const choice = anthropicChoice as Record<string, unknown>
+  const type = typeof choice.type === 'string' ? choice.type : null
+
+  if (type === 'auto') return 'auto'
+  if (type === 'none') return 'none'
+  if (type === 'any') return 'required'
+  if (type === 'tool' && typeof choice.name === 'string') {
+    const target = anthropicTools.find(t => t.name === choice.name)
+    if (target && isAnthropicHostedWebSearchTool(target)) {
+      return { type: 'web_search' }
+    }
+    return { type: 'function', name: choice.name }
+  }
+  return 'auto'
 }
 
 /**
@@ -699,7 +728,10 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     stream: true,
     instructions,
     input,
-    tool_choice: 'auto',
+    tool_choice: translateToolChoice(
+      anthropicBody.tool_choice,
+      anthropicTools,
+    ),
     parallel_tool_calls: true,
   }
 
