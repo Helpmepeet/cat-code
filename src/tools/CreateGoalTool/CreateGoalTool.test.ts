@@ -15,7 +15,11 @@ import {
 } from '../../agent-mode/sessionState.js'
 import { asSessionId } from '../../types/ids.js'
 import { getCurrentThreadGoal } from '../../utils/sessionStorage.js'
-import { createThreadGoal, updateThreadGoalStatus } from '../../utils/threadGoal.js'
+import {
+  buildThreadGoalToolResponse,
+  createThreadGoal,
+  updateThreadGoalStatus,
+} from '../../utils/threadGoal.js'
 import { CreateGoalTool } from './CreateGoalTool.js'
 
 describe('CreateGoalTool', () => {
@@ -75,12 +79,8 @@ describe('CreateGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data).toMatchObject({
-      message: 'Thread goal created.',
-      status: 'active',
-      objective: 'finish goal parity',
-      tokensUsed: 0,
-      timeUsedSeconds: 0,
+    expect(result.data).toEqual({
+      ...buildThreadGoalToolResponse(getState().threadGoal),
     })
     expect(getState().threadGoal?.objective).toBe('finish goal parity')
     expect(getCurrentThreadGoal(sessionId)?.objective).toBe('finish goal parity')
@@ -93,18 +93,17 @@ describe('CreateGoalTool', () => {
     const { context } = createContext(null)
 
     const result = await CreateGoalTool.call(
-      { objective: 'finish within budget', tokenBudget: 50_000 },
+      { objective: 'finish within budget', token_budget: 50_000 },
       context as never,
       undefined as never,
       {} as never,
     )
 
-    expect(result.data).toMatchObject({
-      message: 'Thread goal created.',
+    expect(result.data.goal).toMatchObject({
       objective: 'finish within budget',
       tokenBudget: 50_000,
-      remainingTokens: 50_000,
     })
+    expect(result.data.remainingTokens).toBe(50_000)
   })
 
   test('rejects when an active goal exists', async () => {
@@ -138,7 +137,7 @@ describe('CreateGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data.objective).toBe('next goal')
+    expect(result.data.goal?.objective).toBe('next goal')
     expect(getState().threadGoal?.objective).toBe('next goal')
     expect(getState().threadGoal?.status).toBe('active')
   })
@@ -150,7 +149,21 @@ describe('CreateGoalTool', () => {
     expect(
       CreateGoalTool.inputSchema.safeParse({
         objective: 'valid objective',
-        tokenBudget: 0,
+        token_budget: 0,
+      }).success,
+    ).toBe(false)
+    expect(
+      CreateGoalTool.inputSchema.safeParse({
+        objective: 'valid objective',
+        tokenBudget: 1,
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects overly long objectives at the schema level', () => {
+    expect(
+      CreateGoalTool.inputSchema.safeParse({
+        objective: 'x'.repeat(4097),
       }).success,
     ).toBe(false)
   })

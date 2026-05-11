@@ -22,6 +22,8 @@ import { Box, Text, useStdin, useTheme, useTerminalFocus, useTerminalTitle, useT
 import type { TabStatusKind } from '../ink/hooks/use-tab-status.js';
 import { CostThresholdDialog } from '../components/CostThresholdDialog.js';
 import { IdleReturnDialog } from '../components/IdleReturnDialog.js';
+import { Select } from '../components/CustomSelect/index.js';
+import { Dialog } from '../components/design-system/Dialog.js';
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue, useLayoutEffect, type RefObject } from 'react';
 import { useNotifications } from '../context/notifications.js';
@@ -182,8 +184,9 @@ import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState
 import { renderModelName } from '../utils/model/model.js';
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
+import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -970,6 +973,7 @@ export function REPL({
   const totalPausedMsRef = React.useRef(0);
   const pauseStartTimeRef = React.useRef<number | null>(null);
   const threadGoalContinuationResetKeyRef = React.useRef<string | null>(null);
+  const lastPromptedPausedGoalIdRef = React.useRef<string | null>(null);
   const resetTimingRefs = React.useCallback(() => {
     loadingStartTimeRef.current = Date.now();
     totalPausedMsRef.current = 0;
@@ -1616,6 +1620,40 @@ export function REPL({
     input: string;
     idleMinutes: number;
   } | null>(null);
+  const [resumePausedGoalPrompt, setResumePausedGoalPrompt] = useState<ThreadGoal | null>(null);
+  const shouldCheckInitialPausedGoalRef = React.useRef(true);
+  useEffect(() => {
+    if (shouldCheckInitialPausedGoalRef.current) {
+      if (isLoading || initialMessage !== null) {
+        return;
+      }
+      shouldCheckInitialPausedGoalRef.current = false;
+      if (
+        shouldPromptToResumePausedGoal({
+          goal: threadGoal,
+          lastPromptedGoalId: lastPromptedPausedGoalIdRef.current,
+          isQueryActive: false
+        })
+      ) {
+        const pausedGoal = threadGoal;
+        if (!pausedGoal || pausedGoal.status !== 'paused') {
+          return;
+        }
+
+        lastPromptedPausedGoalIdRef.current = pausedGoal.goalId;
+        setResumePausedGoalPrompt(pausedGoal);
+      }
+      return;
+    }
+
+    if (
+      resumePausedGoalPrompt &&
+      (threadGoal?.goalId !== resumePausedGoalPrompt.goalId ||
+        threadGoal?.status !== 'paused')
+    ) {
+      setResumePausedGoalPrompt(null);
+    }
+  }, [threadGoal, isLoading, initialMessage, resumePausedGoalPrompt]);
   const skipIdleCheckRef = useRef(false);
   const lastQueryCompletionTimeRef = useRef(lastQueryCompletionTime);
   lastQueryCompletionTimeRef.current = lastQueryCompletionTime;
@@ -2212,7 +2250,7 @@ export function REPL({
   // Permission and interactive dialogs can show even when toolJSX is set,
   // as long as shouldContinueAnimation is true. This prevents deadlocks when
   // agents set background hints while waiting for user interaction.
-  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'remote-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
+  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'resume-paused-goal' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'remote-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
     // Exit states always take precedence
     if (isExiting || exitFlow) return undefined;
 
@@ -2232,6 +2270,7 @@ export function REPL({
     if (allowDialogsWithAnimation && elicitation.queue[0]) return 'elicitation';
     if (allowDialogsWithAnimation && showingCostDialog) return 'cost';
     if (allowDialogsWithAnimation && idleReturnPending) return 'idle-return';
+    if (allowDialogsWithAnimation && resumePausedGoalPrompt) return 'resume-paused-goal';
     if (feature('ULTRAPLAN') && allowDialogsWithAnimation && !isLoading && ultraplanPendingChoice) return 'ultraplan-choice';
     if (feature('ULTRAPLAN') && allowDialogsWithAnimation && !isLoading && ultraplanLaunchPending) return 'ultraplan-launch';
 
@@ -4436,7 +4475,8 @@ export function REPL({
       goalContinuationStallCount: goalContinuationStallCountRef.current,
       pendingBudgetWrapUpGoalId: pendingBudgetWrapUpGoalIdRef.current,
       queuedCommandsCount: queuedCommands.length,
-      hasActiveLocalJsxUI: isShowingLocalJSXCommand
+      hasActiveLocalJsxUI: isShowingLocalJSXCommand,
+      isInPlanMode: toolPermissionContext.mode === 'plan'
     });
 
     if (continuationAction.type === 'budget-wrap-up') {
@@ -4456,6 +4496,10 @@ export function REPL({
 
     if (continuationAction.type === 'stalled') {
       handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
+      return;
+    }
+
+    if (continuationAction.type === 'ignored') {
       return;
     }
 
@@ -4489,7 +4533,8 @@ export function REPL({
     threadGoal,
     queuedCommands.length,
     isShowingLocalJSXCommand,
-    handleIncomingPrompt
+    handleIncomingPrompt,
+    toolPermissionContext.mode
   ]);
 
   // Voice input integration (VOICE_MODE builds only)
@@ -5317,6 +5362,34 @@ export function REPL({
               resetHistory: () => {}
             });
           }} />}
+                {focusedInputDialog === 'resume-paused-goal' && resumePausedGoalPrompt && <Dialog title="Resume paused goal?" subtitle={`Goal: ${resumePausedGoalPrompt.objective}`} onCancel={() => setResumePausedGoalPrompt(null)}>
+                  <Select options={[{
+              value: 'resume' as const,
+              label: 'Resume goal',
+              description: 'Mark it active and continue when idle'
+            }, {
+              value: 'leave-paused' as const,
+              label: 'Leave paused',
+              description: 'Keep it paused; use /goal resume later'
+            }]} defaultFocusValue="resume" onCancel={() => setResumePausedGoalPrompt(null)} onChange={async action => {
+              const promptedGoal = resumePausedGoalPrompt;
+              setResumePausedGoalPrompt(null);
+              if (action !== 'resume') return;
+              const currentGoal = store.getState().threadGoal;
+              if (!promptedGoal || currentGoal?.goalId !== promptedGoal.goalId || currentGoal.status !== 'paused') {
+                return;
+              }
+              await updateThreadGoalStatusAction({
+                context: {
+                  getAppState: () => store.getState(),
+                  setAppState
+                },
+                goal: currentGoal,
+                status: 'active',
+                objective: currentGoal.objective
+              });
+            }} />
+                </Dialog>}
                 {focusedInputDialog === 'ide-onboarding' && <IdeOnboardingDialog onDone={() => setShowIdeOnboarding(false)} installationStatus={ideInstallationStatus} />}
                 {"external" === 'ant' && focusedInputDialog === 'model-switch' && AntModelSwitchCallout && <AntModelSwitchCallout onDone={(selection: string, modelAlias?: string) => {
             setShowModelSwitchCallout(false);

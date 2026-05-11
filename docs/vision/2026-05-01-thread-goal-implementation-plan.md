@@ -115,7 +115,7 @@ This phase may touch `REPL.tsx`, but only to account for completed turns and upd
 Implement:
 
 - idle-driven continuation after a turn completes
-- continuation suppression
+- bounded continuation stall counting
 - one continuation in flight at a time
 - active-goal continuation prompt
 - budget-limited wrap-up behavior
@@ -300,10 +300,10 @@ Implement command behavior:
   clear current goal
 ```
 
-For phase 1A, reject replacement:
+For phase 1A, reject replacement. Current behavior later added `/goal replace`, so the rejection text is:
 
 ```text
-A goal already exists. Run /goal clear first.
+A goal already exists. Run /goal replace <objective> to replace it, or /goal clear first.
 ```
 
 Do not add a replacement confirmation UI in phase 1A.
@@ -568,34 +568,19 @@ Do not implement continuation in phase 1A.
 
 ## Running slash commands while a turn is active
 
-Because `/goal` is immediate, decide which forms are allowed during an active turn.
+Because `/goal` is immediate, it can run during an active turn. This plan originally considered adding a running-turn guard, but the current implementation does not have one.
 
-Recommended phase 1 behavior:
-
-Allowed while running:
+Current control forms while running:
 
 ```text
 /goal
 /goal pause
 /goal clear
 /goal resume
+/goal replace <new objective>
 ```
 
-Potentially reject while running:
-
-```text
-/goal <new objective>
-```
-
-Suggested message:
-
-```text
-Cannot set a new goal while a turn is running. Stop or wait first.
-```
-
-This avoids changing the objective underneath an active model turn.
-
-If detecting a running turn is awkward in phase 1A, the stricter replacement rule still prevents the most dangerous case: a new objective replacing an old active objective.
+When a non-complete goal already exists, `/goal <new objective>` is rejected by the normal existing-goal guard. `/goal replace <new objective>` replaces immediately.
 
 ## Tests
 

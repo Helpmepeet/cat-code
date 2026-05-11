@@ -3,58 +3,28 @@ import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import { readSessionState } from '../../agent-mode/sessionState.js'
 import { completeThreadGoalAction } from '../../utils/threadGoalActions.js'
+import {
+  buildThreadGoalToolResponse,
+  type ThreadGoalToolResponse,
+} from '../../utils/threadGoal.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
     status: z.literal('complete'),
-    goalId: z.string().optional(),
   }),
 )
 
 type InputSchema = ReturnType<typeof inputSchema>
 
-type Output = {
-  message: string
-  goalId: string
-  status: 'complete'
-  objective: string
-  tokensUsed: number
-  timeUsedSeconds: number
-  tokenBudget?: number
-  remainingTokens?: number
-  completionBudgetReport?: string
-}
+type Output = ThreadGoalToolResponse
 
 function validateGoalUpdate(input: {
   status: 'complete'
-  goalId?: string
 }): ValidationResult {
   void input.status
   return { result: true }
-}
-
-function buildCompletionBudgetReport(goal: {
-  tokenBudget?: number
-  tokensUsed: number
-  timeUsedSeconds: number
-}): string | undefined {
-  const parts: string[] = []
-
-  if (goal.tokenBudget !== undefined) {
-    parts.push(
-      `context tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`,
-    )
-  }
-
-  if (goal.timeUsedSeconds > 0) {
-    parts.push(`time used: ${goal.timeUsedSeconds} seconds`)
-  }
-
-  return parts.length
-    ? `Goal achieved. Report final budget usage to the user: ${parts.join('; ')}.`
-    : undefined
 }
 
 function describeUnresolvedWorkers(
@@ -93,7 +63,14 @@ export const UpdateGoalTool = buildTool({
     return false
   },
   async description() {
-    return 'Mark the current thread goal complete after verifying it is achieved'
+    return [
+      'Update the existing goal.',
+      'Use this tool only to mark the goal achieved.',
+      'Set status to `complete` only when the objective has actually been achieved and no required work remains.',
+      'Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.',
+      'You cannot use this tool to pause, resume, or budget-limit a goal; those status changes are controlled by the user or system.',
+      'When marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user.',
+    ].join('\n')
   },
   async prompt() {
     return [
@@ -127,13 +104,6 @@ export const UpdateGoalTool = buildTool({
         result: false,
         message: 'No current thread goal exists.',
         errorCode: 1,
-      }
-    }
-    if (input.goalId && input.goalId !== currentGoal.goalId) {
-      return {
-        result: false,
-        message: `Goal ID ${input.goalId} is stale. Current goal ID is ${currentGoal.goalId}.`,
-        errorCode: 2,
       }
     }
     if (currentGoal.status === 'paused') {
@@ -206,26 +176,11 @@ export const UpdateGoalTool = buildTool({
       context,
       goal: currentGoal,
     })
-    const remainingTokens =
-      nextGoal.tokenBudget === undefined
-        ? undefined
-        : Math.max(0, nextGoal.tokenBudget - nextGoal.tokensUsed)
-    const completionBudgetReport = buildCompletionBudgetReport(nextGoal)
 
     return {
-      data: {
-        message: 'Thread goal marked complete.',
-        goalId: nextGoal.goalId,
-        status: 'complete',
-        objective: nextGoal.objective,
-        tokensUsed: nextGoal.tokensUsed,
-        timeUsedSeconds: nextGoal.timeUsedSeconds,
-        ...(nextGoal.tokenBudget !== undefined
-          ? { tokenBudget: nextGoal.tokenBudget }
-          : {}),
-        ...(remainingTokens !== undefined ? { remainingTokens } : {}),
-        ...(completionBudgetReport ? { completionBudgetReport } : {}),
-      },
+      data: buildThreadGoalToolResponse(nextGoal, {
+        includeCompletionBudgetReport: true,
+      }),
     }
   },
 } satisfies ToolDef<InputSchema, Output>)

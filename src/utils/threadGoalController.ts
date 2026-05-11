@@ -9,6 +9,7 @@ export type ThreadGoalContinuationAction =
   | { type: 'continue' }
   | { type: 'budget-wrap-up' }
   | { type: 'stalled' }
+  | { type: 'ignored' }
   | { type: 'none' }
 
 export function getThreadGoalContinuationAction({
@@ -19,6 +20,7 @@ export function getThreadGoalContinuationAction({
   pendingBudgetWrapUpGoalId,
   queuedCommandsCount,
   hasActiveLocalJsxUI,
+  isInPlanMode,
 }: {
   sessionIsIdle: boolean
   goal: ThreadGoal | null
@@ -27,7 +29,24 @@ export function getThreadGoalContinuationAction({
   pendingBudgetWrapUpGoalId: string | null
   queuedCommandsCount: number
   hasActiveLocalJsxUI: boolean
+  isInPlanMode: boolean
 }): ThreadGoalContinuationAction {
+  const canHandleGoalContinuation =
+    sessionIsIdle &&
+    !goalContinuationInFlight &&
+    queuedCommandsCount === 0 &&
+    !hasActiveLocalJsxUI
+
+  if (
+    isInPlanMode &&
+    canHandleGoalContinuation &&
+    (goal?.status === 'active' ||
+      (goal?.status === 'budget_limited' &&
+        goal.goalId === pendingBudgetWrapUpGoalId))
+  ) {
+    return { type: 'ignored' }
+  }
+
   if (
     shouldStartThreadGoalBudgetWrapUp({
       sessionIsIdle,

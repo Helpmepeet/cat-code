@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { createThreadGoal } from '../../utils/threadGoal.js'
+import {
+  buildThreadGoalToolResponse,
+  createThreadGoal,
+} from '../../utils/threadGoal.js'
 import { GetGoalTool } from './GetGoalTool.js'
 
 describe('GetGoalTool', () => {
@@ -17,7 +20,20 @@ describe('GetGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data).toEqual({ goal: null })
+    expect(result.data).toEqual({ goal: null, remainingTokens: null })
+  })
+
+  test('omits remainingTokens when no token budget exists', async () => {
+    const goal = createThreadGoal('session-1', 'finish implementation', undefined, 100)
+
+    const result = await GetGoalTool.call(
+      {},
+      createContext(goal) as never,
+      undefined as never,
+      {} as never,
+    )
+
+    expect(result.data).toEqual(buildThreadGoalToolResponse(goal))
   })
 
   test('returns the active goal and remaining token budget', async () => {
@@ -33,8 +49,7 @@ describe('GetGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data.goal).toEqual(goal)
-    expect(result.data.remainingTokens).toBe(goal.tokenBudget! - goal.tokensUsed)
+    expect(result.data).toEqual(buildThreadGoalToolResponse(goal))
   })
 
   test('is read-only', () => {

@@ -192,6 +192,26 @@ describe('finalizeFailedAgentLaunch', () => {
     ).not.toThrow()
   })
 
+  test('serializes completed_with_error results when usage is missing', () => {
+    expect(() =>
+      AgentTool.mapToolResultToToolResultBlockParam(
+        {
+          status: 'completed_with_error',
+          prompt: 'Investigate websocket close',
+          agentId: 'agent-123',
+          agentType: 'Explore',
+          content: [{ type: 'text', text: 'partial result before stream error' }],
+          error: 'websocket closed by server before response.completed',
+          totalToolUseCount: 0,
+          totalDurationMs: 42,
+          totalTokens: 0,
+        },
+        'toolu_123',
+        'assistant-msg-123',
+      ),
+    ).not.toThrow()
+  })
+
   test('records failed worker state when tracking is available before later launch steps fail', async () => {
     const spawnCalls: Array<Record<string, unknown>> = []
     const terminalCalls: Array<Record<string, unknown>> = []

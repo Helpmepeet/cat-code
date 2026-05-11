@@ -10,6 +10,7 @@ import {
 } from '../../bootstrap/state.js'
 import { getTranscriptPathForSession } from '../../utils/sessionStorage.js'
 import { createAgentId } from '../../utils/uuid.js'
+import { isDeferredTool } from '../ToolSearchTool/prompt.js'
 
 type SendMessageToolModule = typeof import('./SendMessageTool.js')
 
@@ -165,6 +166,13 @@ describe('SendMessageTool durable worker handle fallback', () => {
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     expect(SendMessageTool.isEnabled?.()).toBe(true)
+  })
+
+  test('is not deferred in Agent Mode', () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+    expect(isDeferredTool(SendMessageTool)).toBe(false)
   })
 
   test('without Agent Teams rejects teammate-only routes', async () => {

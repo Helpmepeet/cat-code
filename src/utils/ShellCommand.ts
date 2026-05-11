@@ -57,6 +57,30 @@ function prependStderr(prefix: string, stderr: string): string {
   return stderr ? `${prefix} ${stderr}` : prefix
 }
 
+function killProcessGroupSync(childProcess: ChildProcess): boolean {
+  const pid = childProcess.pid
+  if (!pid || process.platform === 'win32') {
+    return false
+  }
+
+  try {
+    process.kill(-pid, 'SIGKILL')
+    return true
+  } catch {
+    return false
+  }
+}
+
+function killChildProcess(childProcess: ChildProcess, signal: NodeJS.Signals): void {
+  if (killProcessGroupSync(childProcess)) {
+    return
+  }
+
+  if (childProcess.pid) {
+    treeKill(childProcess.pid, signal)
+  }
+}
+
 /**
  * Thin pipe from a child process stream into TaskOutput.
  * Used in pipe mode (hooks) for stdout and stderr.
@@ -130,6 +154,7 @@ class ShellCommandImpl implements ShellCommand {
   #resultResolver: ((result: ExecResult) => void) | null = null
   #exitCodeResolver: ((code: number) => void) | null = null
   #boundAbortHandler: (() => void) | null = null
+  #boundProcessExitHandler: (() => void) | null = null
   readonly taskOutput: TaskOutput
 
   static #handleTimeout(self: ShellCommandImpl): void {
@@ -206,6 +231,12 @@ class ShellCommandImpl implements ShellCommand {
     this.#resolveExitCode(1)
   }
 
+  #processExitHandler(): void {
+    if (this.#status === 'running' || this.#status === 'backgrounded') {
+      killProcessGroupSync(this.#childProcess)
+    }
+  }
+
   #resolveExitCode(code: number): void {
     if (this.#exitCodeResolver) {
       this.#exitCodeResolver(code)
@@ -215,7 +246,7 @@ class ShellCommandImpl implements ShellCommand {
 
   // Note: exit/error listeners are NOT removed here — they're needed for
   // the result promise to resolve. They clean up when the child process exits.
-  #cleanupListeners(): void {
+  #cleanupListeners(opts?: { removeProcessExitHandler?: boolean }): void {
     this.#clearSizeWatchdog()
     const timeoutId = this.#timeoutId
     if (timeoutId) {
@@ -226,6 +257,13 @@ class ShellCommandImpl implements ShellCommand {
     if (boundAbortHandler) {
       this.#abortSignal.removeEventListener('abort', boundAbortHandler)
       this.#boundAbortHandler = null
+    }
+    if (opts?.removeProcessExitHandler !== false) {
+      const boundProcessExitHandler = this.#boundProcessExitHandler
+      if (boundProcessExitHandler) {
+        process.removeListener('exit', boundProcessExitHandler)
+        this.#boundProcessExitHandler = null
+      }
     }
   }
 
@@ -265,6 +303,8 @@ class ShellCommandImpl implements ShellCommand {
     this.#abortSignal.addEventListener('abort', this.#boundAbortHandler, {
       once: true,
     })
+    this.#boundProcessExitHandler = this.#processExitHandler.bind(this)
+    process.once('exit', this.#boundProcessExitHandler)
 
     // Use 'exit' not 'close': 'close' waits for stdio to close, which includes
     // grandchild processes that inherit file descriptors (e.g. `sleep 30 &`).
@@ -336,9 +376,7 @@ class ShellCommandImpl implements ShellCommand {
 
   #doKill(code?: number): void {
     this.#status = 'killed'
-    if (this.#childProcess.pid) {
-      treeKill(this.#childProcess.pid, 'SIGKILL')
-    }
+    killChildProcess(this.#childProcess, 'SIGKILL')
     this.#resolveExitCode(code ?? SIGKILL)
   }
 
@@ -350,7 +388,7 @@ class ShellCommandImpl implements ShellCommand {
     if (this.#status === 'running') {
       this.#backgroundTaskId = taskId
       this.#status = 'backgrounded'
-      this.#cleanupListeners()
+      this.#cleanupListeners({ removeProcessExitHandler: false })
       if (this.taskOutput.stdoutToFile) {
         // File mode: child writes directly to the fd with no JS involvement.
         // The foreground timeout is gone, so watch file size to prevent

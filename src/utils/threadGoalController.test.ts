@@ -15,6 +15,7 @@ describe('getThreadGoalContinuationAction', () => {
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,
+        isInPlanMode: false,
       }),
     ).toEqual({ type: 'continue' })
   })
@@ -31,6 +32,7 @@ describe('getThreadGoalContinuationAction', () => {
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,
+        isInPlanMode: false,
       }),
     ).toEqual({ type: 'stalled' })
   })
@@ -50,6 +52,7 @@ describe('getThreadGoalContinuationAction', () => {
         pendingBudgetWrapUpGoalId: goal.goalId,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,
+        isInPlanMode: false,
       }),
     ).toEqual({ type: 'budget-wrap-up' })
   })
@@ -66,6 +69,7 @@ describe('getThreadGoalContinuationAction', () => {
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 1,
         hasActiveLocalJsxUI: false,
+        isInPlanMode: false,
       }),
     ).toEqual({ type: 'none' })
     expect(
@@ -77,7 +81,45 @@ describe('getThreadGoalContinuationAction', () => {
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: true,
+        isInPlanMode: false,
       }),
     ).toEqual({ type: 'none' })
+  })
+
+  test('ignores goal continuation while plan mode is active', () => {
+    const goal = createThreadGoal('session-1', 'finish goal mode')
+
+    expect(
+      getThreadGoalContinuationAction({
+        sessionIsIdle: true,
+        goal,
+        goalContinuationInFlight: false,
+        goalContinuationStallCount: 0,
+        pendingBudgetWrapUpGoalId: null,
+        queuedCommandsCount: 0,
+        hasActiveLocalJsxUI: false,
+        isInPlanMode: true,
+      }),
+    ).toEqual({ type: 'ignored' })
+  })
+
+  test('ignores budget wrap-up while plan mode is active', () => {
+    const goal = updateThreadGoalStatus(
+      createThreadGoal('session-1', 'finish goal mode'),
+      'budget_limited',
+    )
+
+    expect(
+      getThreadGoalContinuationAction({
+        sessionIsIdle: true,
+        goal,
+        goalContinuationInFlight: false,
+        goalContinuationStallCount: 0,
+        pendingBudgetWrapUpGoalId: goal.goalId,
+        queuedCommandsCount: 0,
+        hasActiveLocalJsxUI: false,
+        isInPlanMode: true,
+      }),
+    ).toEqual({ type: 'ignored' })
   })
 })

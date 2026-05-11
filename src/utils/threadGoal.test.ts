@@ -9,6 +9,7 @@ import {
 } from './sessionStorage.js'
 import {
   accountThreadGoalUsage,
+  buildThreadGoalToolResponse,
   buildThreadGoalDisplayState,
   calculateThreadGoalContextTokenDelta,
   createThreadGoal,
@@ -22,6 +23,7 @@ import {
   pauseActiveThreadGoalOnAbort,
   renderThreadGoalBudgetLimitPrompt,
   renderThreadGoalContinuationPrompt,
+  shouldPromptToResumePausedGoal,
   shouldResetThreadGoalContinuationStallCount,
   shouldStartThreadGoalBudgetWrapUp,
   shouldStartThreadGoalContinuation,
@@ -108,6 +110,16 @@ describe('parseGoalCommand', () => {
       expect(parseGoalCommand(rawArgs).type).toBe('error')
     }
   })
+
+  test('rejects overly long objectives', () => {
+    const objective = 'x'.repeat(4097)
+
+    expect(parseGoalCommand(objective)).toEqual({
+      type: 'error',
+      message:
+        'Goal objective is too long: 4,097 characters. Limit: 4,000 characters. Put longer instructions in a file and refer to that file in the goal, for example: /goal follow the instructions in docs/goal.md.',
+    })
+  })
 })
 
 describe('thread goal formatting and parsing', () => {
@@ -122,13 +134,13 @@ describe('thread goal formatting and parsing', () => {
       [
         'Goal: active',
         'Objective: finish phase 1A',
-        'Budget: 50,000 context tokens',
-        'Context tokens used: 12,000',
+        'Token budget: 50,000',
+        'Tokens used: 12,000',
         'Time used: 45s',
         '',
         'This goal will continue while the session is idle.',
         'Use /goal pause, /goal resume, /goal clear, or /goal replace <objective>.',
-        'The agent will mark it complete with UpdateGoal when finished.',
+        'The agent will mark it complete with update_goal when finished.',
       ].join('\n'),
     )
     expect(formatThreadGoalFooterLabel(goal)).toBe('Goal: active · 12K/50K ctx')
@@ -136,6 +148,90 @@ describe('thread goal formatting and parsing', () => {
     expect(
       formatThreadGoalFooterLabel(updateThreadGoalStatus(goal, 'complete', 200)),
     ).toBe('Goal: complete · 12K context tokens')
+  })
+
+  test('builds upstream-shaped goal tool responses', () => {
+    const goal = {
+      ...createThreadGoal('session-1', 'finish phase 1A', 50_000, 100),
+      tokensUsed: 12_000,
+      timeUsedSeconds: 45,
+    }
+    const completedGoal = updateThreadGoalStatus(goal, 'complete', 200)
+
+    expect(buildThreadGoalToolResponse(goal)).toEqual({
+      goal: {
+        threadId: goal.threadId,
+        objective: goal.objective,
+        status: 'active',
+        tokenBudget: 50_000,
+        tokensUsed: 12_000,
+        timeUsedSeconds: 45,
+        createdAt: 100,
+        updatedAt: 100,
+      },
+      remainingTokens: 38_000,
+    })
+    expect(
+      buildThreadGoalToolResponse(completedGoal, {
+        includeCompletionBudgetReport: true,
+      }),
+    ).toEqual({
+      goal: {
+        threadId: completedGoal.threadId,
+        objective: completedGoal.objective,
+        status: 'complete',
+        tokenBudget: 50_000,
+        tokensUsed: 12_000,
+        timeUsedSeconds: 45,
+        createdAt: 100,
+        updatedAt: 200,
+      },
+      remainingTokens: 38_000,
+      completionBudgetReport:
+        'Goal achieved. Report final budget usage to the user: tokens used: 12000 of 50000; time used: 45 seconds.',
+    })
+  })
+
+  test('omits completion budget report for completed unbudgeted zero-time goals', () => {
+    const goal = updateThreadGoalStatus(
+      createThreadGoal('session-1', 'write a poem', undefined, 100),
+      'complete',
+      200,
+    )
+
+    expect(
+      buildThreadGoalToolResponse(goal, {
+        includeCompletionBudgetReport: true,
+      }),
+    ).toEqual({
+      goal: {
+        threadId: goal.threadId,
+        objective: goal.objective,
+        status: 'complete',
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 100,
+        updatedAt: 200,
+      },
+      remainingTokens: null,
+    })
+  })
+
+  test('formats budget-limited goals with upstream wording', () => {
+    const goal = updateThreadGoalStatus(
+      {
+        ...createThreadGoal('session-1', 'finish phase 1A', 50_000, 100),
+        tokensUsed: 63_876,
+        timeUsedSeconds: 120,
+      },
+      'budget_limited',
+      200,
+    )
+
+    expect(formatThreadGoalSummary(goal)).toContain('Goal: limited by budget')
+    expect(formatThreadGoalFooterLabel(goal)).toBe(
+      'Goal: limited by budget · 63.9K/50K tokens',
+    )
   })
 
   test('updates goal status timestamps', () => {
@@ -371,22 +467,19 @@ describe('thread goal formatting and parsing', () => {
 
     expect(prompt).toContain('<untrusted_objective>')
     expect(prompt).toContain(goal.objective)
-    expect(prompt).toContain(
-      'The active thread goal has reached its context-token budget.',
-    )
+    expect(prompt).toContain('The active thread goal has reached its token budget.')
     expect(prompt).toContain('Budget:')
     expect(prompt).toContain('Time spent pursuing goal: 45 seconds')
-    expect(prompt).toContain('Context tokens used: 12000')
-    expect(prompt).toContain('Context token budget: 50000')
-    expect(prompt).toContain('Context tokens remaining: 38000')
+    expect(prompt).toContain('Tokens used: 12000')
+    expect(prompt).toContain('Token budget: 50000')
+    expect(prompt).not.toContain('Tokens remaining:')
+    expect(prompt).not.toContain('context-token')
     expect(prompt).toContain('budget_limited')
-    expect(prompt).toContain('do not start new substantive work')
-    expect(prompt).toContain('summarize useful progress')
-    expect(prompt).toContain('remaining work or blockers')
-    expect(prompt).toContain('clear next step')
-    expect(prompt).toContain('Budget exhaustion is not completion.')
     expect(prompt).toContain(
-      'Do not call UpdateGoal unless the goal is actually complete.',
+      'The system has marked the goal as budget_limited, so do not start new substantive work for this goal. Wrap up this turn soon: summarize useful progress, identify remaining work or blockers, and leave the user with a clear next step.',
+    )
+    expect(prompt).toContain(
+      'Do not call update_goal unless the goal is actually complete.',
     )
   })
 
@@ -428,9 +521,10 @@ describe('thread goal formatting and parsing', () => {
     expect(prompt).toContain(goal.objective)
     expect(prompt).toContain('Budget:')
     expect(prompt).toContain('Time spent pursuing goal: 45 seconds')
-    expect(prompt).toContain('Context tokens used: 12000')
-    expect(prompt).toContain('Context token budget: 50000')
-    expect(prompt).toContain('Context tokens remaining: 38000')
+    expect(prompt).toContain('Tokens used: 12000')
+    expect(prompt).toContain('Token budget: 50000')
+    expect(prompt).toContain('Tokens remaining: 38000')
+    expect(prompt).not.toContain('Context tokens')
     expect(prompt).toContain('Avoid repeating work that is already done')
     expect(prompt).toContain('Restate the objective as concrete deliverables or success criteria.')
     expect(prompt).toContain('Build a prompt-to-artifact checklist')
@@ -443,7 +537,10 @@ describe('thread goal formatting and parsing', () => {
     expect(prompt).toContain(
       'Do not rely on intent, partial progress, elapsed effort',
     )
-    expect(prompt).toContain('After UpdateGoal succeeds')
+    expect(prompt).toContain('call update_goal with status "complete"')
+    expect(prompt).toContain(
+      'Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after update_goal succeeds.',
+    )
   })
 
   test('renders an Agent Mode continuation prompt with orchestrator guidance', () => {
@@ -457,7 +554,7 @@ describe('thread goal formatting and parsing', () => {
     expect(prompt).toContain('Read Agent Mode session state before deciding whether to resume, steer, or spawn workers.')
     expect(prompt).toContain('Delegate substantive investigation, implementation, or verification work to workers instead of doing it all on the main thread.')
     expect(prompt).toContain('Synthesize pending worker results before claiming the goal is complete.')
-    expect(prompt).toContain('If the objective is achieved, call UpdateGoal with status "complete"')
+    expect(prompt).toContain('If the objective is achieved, call update_goal with status "complete"')
   })
 })
 
@@ -730,6 +827,40 @@ describe('thread goal continuation policy', () => {
       )?.status,
     ).toBe('complete')
     expect(pauseActiveThreadGoalOnAbort(null, 300)).toBeNull()
+  })
+
+  test('prompts to resume restored paused goals once per goal', () => {
+    const activeGoal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+    const pausedGoal = updateThreadGoalStatus(activeGoal, 'paused', 200)
+
+    expect(
+      shouldPromptToResumePausedGoal({
+        goal: pausedGoal,
+        lastPromptedGoalId: null,
+        isQueryActive: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldPromptToResumePausedGoal({
+        goal: pausedGoal,
+        lastPromptedGoalId: pausedGoal.goalId,
+        isQueryActive: false,
+      }),
+    ).toBe(false)
+    expect(
+      shouldPromptToResumePausedGoal({
+        goal: activeGoal,
+        lastPromptedGoalId: null,
+        isQueryActive: false,
+      }),
+    ).toBe(false)
+    expect(
+      shouldPromptToResumePausedGoal({
+        goal: pausedGoal,
+        lastPromptedGoalId: null,
+        isQueryActive: true,
+      }),
+    ).toBe(false)
   })
 })
 

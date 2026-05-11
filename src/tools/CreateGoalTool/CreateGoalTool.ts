@@ -3,26 +3,22 @@ import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { createThreadGoalAction } from '../../utils/threadGoalActions.js'
+import {
+  buildThreadGoalToolResponse,
+  MAX_GOAL_OBJECTIVE_CHARS,
+  type ThreadGoalToolResponse,
+} from '../../utils/threadGoal.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
-    objective: z.string().trim().min(1),
-    tokenBudget: z.number().int().positive().optional(),
+    objective: z.string().trim().min(1).max(MAX_GOAL_OBJECTIVE_CHARS),
+    token_budget: z.number().int().positive().optional(),
   }),
 )
 
 type InputSchema = ReturnType<typeof inputSchema>
 
-type Output = {
-  message: string
-  goalId: string
-  status: 'active'
-  objective: string
-  tokensUsed: number
-  timeUsedSeconds: number
-  tokenBudget?: number
-  remainingTokens?: number
-}
+type Output = ThreadGoalToolResponse
 
 function validateCreateGoalInput(): ValidationResult {
   return { result: true }
@@ -39,13 +35,15 @@ export const CreateGoalTool = buildTool({
     return false
   },
   async description() {
-    return 'Create a new active thread goal when explicitly requested'
+    return [
+      'Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.',
+      'Set token_budget only when an explicit token budget is requested. Fails if a goal exists; use update_goal only for status.',
+    ].join('\n')
   },
   async prompt() {
     return [
       'Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.',
-      'Set tokenBudget only when an explicit context-token budget is requested.',
-      'This tool fails if a non-complete goal already exists; use UpdateGoal only to mark an existing goal complete.',
+      'Set token_budget only when an explicit token budget is requested. Fails if a goal exists; use update_goal only for status.',
     ].join('\n')
   },
   async validateInput(input, context) {
@@ -87,27 +85,12 @@ export const CreateGoalTool = buildTool({
     const nextGoal = await createThreadGoalAction({
       context,
       objective: input.objective,
-      tokenBudget: input.tokenBudget,
+      tokenBudget: input.token_budget,
       resetWorkers: true,
     })
-    const remainingTokens =
-      nextGoal.tokenBudget === undefined
-        ? undefined
-        : Math.max(0, nextGoal.tokenBudget - nextGoal.tokensUsed)
 
     return {
-      data: {
-        message: 'Thread goal created.',
-        goalId: nextGoal.goalId,
-        status: nextGoal.status,
-        objective: nextGoal.objective,
-        tokensUsed: nextGoal.tokensUsed,
-        timeUsedSeconds: nextGoal.timeUsedSeconds,
-        ...(nextGoal.tokenBudget !== undefined
-          ? { tokenBudget: nextGoal.tokenBudget }
-          : {}),
-        ...(remainingTokens !== undefined ? { remainingTokens } : {}),
-      },
+      data: buildThreadGoalToolResponse(nextGoal),
     }
   },
 } satisfies ToolDef<InputSchema, Output>)

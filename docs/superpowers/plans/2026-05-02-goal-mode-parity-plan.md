@@ -10,20 +10,20 @@
 
 ---
 
-## Verified Baseline
+## Historical Baseline
 
 - Upstream `openai/codex` current `main` has `get_goal`, `create_goal`, and `update_goal` model tools.
 - Upstream `/goal [objective]` queues before thread start and uses replace-confirm behavior when a goal exists.
-- Local `cat-code` has `GetGoalTool` and `UpdateGoalTool`, but no `CreateGoalTool`.
-- Local `/goal [objective]` refuses when a non-complete goal exists.
-- Local continuation is REPL-idle-driven and one zero-tool active continuation suppresses future continuation until user input.
-- Baseline tests pass with:
+- At the time this plan was written, local `cat-code` had `GetGoalTool` and `UpdateGoalTool`, but no `CreateGoalTool`.
+- At the time this plan was written, local `/goal [objective]` refused when a non-complete goal existed.
+- At the time this plan was written, local continuation was REPL-idle-driven and one zero-tool active continuation suppressed future continuation until user input.
+- The baseline test command at that time was:
 
 ```bash
 bun test src/utils/threadGoal.test.ts src/commands/goal/goal.test.ts src/tools/GetGoalTool/GetGoalTool.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts
 ```
 
-Expected baseline: `44 pass`, `0 fail`.
+Historical expected baseline: `44 pass`, `0 fail`.
 
 ## File Structure
 
@@ -1013,13 +1013,7 @@ test('explicit replace swaps an active goal and resets durable worker state', as
 
 - [ ] **Step 5: Implement command replacement**
 
-In `src/commands/goal/goal.tsx`, change:
-
-```ts
-const GOAL_EXISTS_MESSAGE = 'A goal already exists. Run /goal clear first.'
-```
-
-to:
+In `src/commands/goal/goal.tsx`, use this existing-goal message:
 
 ```ts
 const GOAL_EXISTS_MESSAGE =

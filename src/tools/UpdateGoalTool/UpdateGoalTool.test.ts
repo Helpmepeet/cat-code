@@ -12,6 +12,7 @@ import { asSessionId } from '../../types/ids.js'
 import { getCurrentThreadGoal } from '../../utils/sessionStorage.js'
 import {
   accountThreadGoalUsage,
+  buildThreadGoalToolResponse,
   createThreadGoal,
   updateThreadGoalStatus,
 } from '../../utils/threadGoal.js'
@@ -139,13 +140,8 @@ describe('UpdateGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data).toMatchObject({
-      message: 'Thread goal marked complete.',
-      goalId: goal.goalId,
-      status: 'complete',
-      objective: goal.objective,
-      tokensUsed: goal.tokensUsed,
-      timeUsedSeconds: goal.timeUsedSeconds,
+    expect(result.data).toEqual({
+      ...buildThreadGoalToolResponse(getState().threadGoal),
     })
     expect(getState().threadGoal?.status).toBe('complete')
     expect(getCurrentThreadGoal(sessionId)?.status).toBe('complete')
@@ -169,14 +165,11 @@ describe('UpdateGoalTool', () => {
       {} as never,
     )
 
-    expect(result.data).toMatchObject({
-      tokenBudget: 50_000,
-      remainingTokens: 38_000,
+    expect(result.data).toEqual({
+      ...buildThreadGoalToolResponse(getState().threadGoal, {
+        includeCompletionBudgetReport: true,
+      }),
     })
-    expect(result.data.completionBudgetReport).toContain(
-      'context tokens used: 12000 of 50000',
-    )
-    expect(result.data.completionBudgetReport).toContain('time used: 45 seconds')
     expect(getState().threadGoal?.status).toBe('complete')
   })
 
@@ -207,55 +200,6 @@ describe('UpdateGoalTool', () => {
       result: false,
       message: 'No current thread goal exists.',
       errorCode: 1,
-    })
-  })
-
-  test('rejects a stale goalId', async () => {
-    const goal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
-    const { context } = createContext(goal)
-
-    await expect(
-      UpdateGoalTool.validateInput?.(
-        { status: 'complete', goalId: 'stale-goal-id' },
-        context as never,
-      ),
-    ).resolves.toEqual({
-      result: false,
-      message: `Goal ID stale-goal-id is stale. Current goal ID is ${goal.goalId}.`,
-      errorCode: 2,
-    })
-  })
-
-  test('rejects an old goalId after clear', async () => {
-    const oldGoal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
-    const { context } = createContext(null)
-
-    await expect(
-      UpdateGoalTool.validateInput?.(
-        { status: 'complete', goalId: oldGoal.goalId },
-        context as never,
-      ),
-    ).resolves.toEqual({
-      result: false,
-      message: 'No current thread goal exists.',
-      errorCode: 1,
-    })
-  })
-
-  test('rejects an old goalId after a new goal replaces it', async () => {
-    const oldGoal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
-    const newGoal = createThreadGoal(sessionId, 'finish phase 1B', undefined, 200)
-    const { context } = createContext(newGoal)
-
-    await expect(
-      UpdateGoalTool.validateInput?.(
-        { status: 'complete', goalId: oldGoal.goalId },
-        context as never,
-      ),
-    ).resolves.toEqual({
-      result: false,
-      message: `Goal ID ${oldGoal.goalId} is stale. Current goal ID is ${newGoal.goalId}.`,
-      errorCode: 2,
     })
   })
 
@@ -354,5 +298,14 @@ describe('UpdateGoalTool', () => {
     expect(UpdateGoalTool.inputSchema.safeParse({ status: 'paused' }).success).toBe(
       false,
     )
+  })
+
+  test('rejects model-visible goalId at the schema level', () => {
+    expect(
+      UpdateGoalTool.inputSchema.safeParse({
+        status: 'complete',
+        goalId: 'stale-goal-id',
+      }).success,
+    ).toBe(false)
   })
 })

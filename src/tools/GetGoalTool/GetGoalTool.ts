@@ -2,16 +2,16 @@ import { z } from 'zod/v4'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
-import type { ThreadGoal } from '../../utils/threadGoal.js'
+import {
+  buildThreadGoalToolResponse,
+  type ThreadGoalToolResponse,
+} from '../../utils/threadGoal.js'
 
 const inputSchema = lazySchema(() => z.strictObject({}))
 
 type InputSchema = ReturnType<typeof inputSchema>
 
-type Output = {
-  goal: ThreadGoal | null
-  remainingTokens?: number
-}
+type Output = ThreadGoalToolResponse
 
 export const GetGoalTool = buildTool({
   name: 'GetGoal',
@@ -27,7 +27,7 @@ export const GetGoalTool = buildTool({
   },
 
   async description() {
-    return 'Get the current thread goal, including status, context-token budget, context-token usage, elapsed time, and remaining context-token budget.'
+    return 'Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget.'
   },
 
   async prompt() {
@@ -59,17 +59,8 @@ export const GetGoalTool = buildTool({
   },
 
   async call(_input, context) {
-    const goal = context.getAppState().threadGoal
-    const remainingTokens =
-      goal?.tokenBudget === undefined
-        ? undefined
-        : Math.max(0, goal.tokenBudget - goal.tokensUsed)
-
     return {
-      data: {
-        goal,
-        ...(remainingTokens !== undefined ? { remainingTokens } : {}),
-      },
+      data: buildThreadGoalToolResponse(context.getAppState().threadGoal),
     }
   },
 } satisfies ToolDef<InputSchema, Output>)

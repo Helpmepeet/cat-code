@@ -16,6 +16,7 @@ import { startAgentSummarization } from '../../services/AgentSummary/agentSummar
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
+import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
 import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease } from '../../services/api/codexAccountLeaseManager.js';
 import { checkRemoteAgentEligibility, formatPreconditionError, getRemoteTaskSessionUrl, registerRemoteAgentTask } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
@@ -1847,6 +1848,7 @@ The agent is now running and will receive instructions via mailbox.`
         data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
           ? `agentId: ${data.agentId}`
           : `agentId: ${data.agentId} (use SendMessage with to: '${data.agentId}' to continue this agent)`;
+      const usage = data.usage ?? EMPTY_USAGE;
       const changedFilesText = data.changedFiles && data.changedFiles.length > 0 ? `\n<changed_files>\n${data.changedFiles.map(file => `- ${file.path} (${file.op}, ${file.ok ? 'ok' : `error: ${file.error ?? 'unknown error'}`})`).join('\n')}${data.changedFilesTruncated ? `\n- +${data.changedFilesTruncated} more` : ''}\n</changed_files>` : '';
       const errorText = data.status === 'completed_with_error' ? `\nstatus: completed_with_error\nerror: ${data.error}` : '';
       return {
@@ -1857,9 +1859,9 @@ The agent is now running and will receive instructions via mailbox.`
           type: 'text',
           text: `${continuationText}${errorText}${worktreeInfoText}${changedFilesText}
 <usage>total_tokens: ${data.totalTokens}
-input_tokens: ${data.usage.input_tokens}
-cached_input_tokens: ${data.usage.cache_read_input_tokens ?? 0}
-cache_creation_tokens: ${data.usage.cache_creation_input_tokens ?? 0}
+input_tokens: ${usage.input_tokens}
+cached_input_tokens: ${usage.cache_read_input_tokens ?? 0}
+cache_creation_tokens: ${usage.cache_creation_input_tokens ?? 0}
 tool_uses: ${data.totalToolUseCount}
 duration_ms: ${data.totalDurationMs}</usage>`
         }]

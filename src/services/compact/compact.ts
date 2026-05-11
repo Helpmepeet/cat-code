@@ -446,14 +446,14 @@ export async function compactConversation(
     )
 
     const sessionState =
-      agentModeOptions?.sessionState ??
-      (context.agentId ? null : await readSessionState(getSessionId()))
+      context.agentId ? null : await readSessionState(getSessionId())
     const compactPrompt = getCompactPrompt(
       customInstructions,
       resolveRequestProvider(
         context.options.mainLoopModel,
         context.options.mainLoopProvider,
       ),
+      !!sessionState,
     )
     const summaryRequest = createUserMessage({
       content: compactPrompt,
@@ -650,6 +650,7 @@ export async function compactConversation(
             context.options.mainLoopModel,
             context.options.mainLoopProvider,
           ),
+          sessionState ?? undefined,
         ),
         isCompactSummary: true,
         isVisibleInTranscriptOnly: true,
