@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { APIConnectionError } from '@anthropic-ai/sdk'
 
 import { setSessionProvider } from '../../bootstrap/state.js'
 import { SettingsSchema } from '../../utils/settings/types.js'
@@ -1581,5 +1582,178 @@ describe('codexAccountLeaseManager', () => {
     })
 
     expect(lease.accountId).toBe('worker-a')
+  })
+
+  test('withRetry does not fail over Codex leases for non-Codex connection errors', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+        }),
+        buildPoolAccount({
+          accountId: 'worker-a',
+          lastUsedAt: 100,
+        }),
+      ],
+    })
+
+    moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      strategy: 'follow-main',
+    })
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new APIConnectionError({ message: 'Claude OAuth refresh failed' })
+        },
+        {
+          maxRetries: 1,
+          model: 'claude-haiku-4-5-20251001',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'main-thread',
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')).toMatchObject({
+      accountId: 'main-account',
+      state: 'active',
+      failoverCount: 0,
+    })
+    expect(getPoolStatus().accounts.find((account) => account.accountId === 'main-account'))
+      .toMatchObject({
+        status: 'healthy',
+        usagePrimary: undefined,
+      })
+  })
+
+  test('withRetry Codex connection failover leaves the failed account healthy', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+          lastUsedAt: 0,
+        }),
+        buildPoolAccount({
+          accountId: 'worker-a',
+          lastUsedAt: 100,
+        }),
+      ],
+    })
+
+    moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      strategy: 'follow-main',
+    })
+
+    let attempts = 0
+    for await (const _message of withRetry(
+      async () => ({}) as never,
+      async () => {
+        attempts += 1
+        if (attempts <= 2) {
+          throw new APIConnectionError({ message: 'Connection error.' })
+        }
+        return attempts
+      },
+      {
+        maxRetries: 2,
+        model: 'gpt-5.4',
+        thinkingConfig: { type: 'disabled' },
+        ownerId: 'main-thread',
+        isCodexRequest: true,
+      } as Parameters<typeof withRetry>[2],
+    )) {
+      // consume retry messages if any
+    }
+
+    expect(attempts).toBe(3)
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')).toMatchObject({
+      accountId: 'worker-a',
+      state: 'active',
+      failoverCount: 1,
+      lastFailureReason: 'Connection error.',
+    })
+    const failedAccount = getPoolStatus().accounts.find(
+      (account) => account.accountId === 'main-account',
+    )
+    expect(failedAccount)
+      .toMatchObject({
+        status: 'healthy',
+        usagePrimary: undefined,
+      })
+    expect(failedAccount?.lastErrorAt).toBeGreaterThan(0)
+  })
+
+  test('withRetry Codex connection errors without a replacement preserve the connection failure', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+        }),
+      ],
+    })
+
+    moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      strategy: 'follow-main',
+    })
+
+    let attempts = 0
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          attempts += 1
+          throw new APIConnectionError({ message: 'Connection error.' })
+        },
+        {
+          maxRetries: 2,
+          model: 'gpt-5.4',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'main-thread',
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(attempts).toBe(3)
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).originalError).toBeInstanceOf(APIConnectionError)
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')).toMatchObject({
+      accountId: 'main-account',
+      state: 'active',
+      failoverCount: 0,
+    })
+    expect(getPoolStatus().accounts.find((account) => account.accountId === 'main-account'))
+      .toMatchObject({
+        status: 'healthy',
+        usagePrimary: undefined,
+      })
   })
 })

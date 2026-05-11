@@ -42,6 +42,10 @@ export type CodexLeaseSnapshot = {
   }>
 }
 
+type CodexLeaseFailoverOptions = {
+  markAccountCapped?: boolean
+}
+
 const codexLeasesByOwnerId = new Map<string, CodexLease>()
 const NO_HEALTHY_ACCOUNTS_ERROR = 'All Codex accounts are capped or unavailable'
 const codexLeaseOwnerContext = new AsyncLocalStorage<string | undefined>()
@@ -239,6 +243,7 @@ export function failoverCodexLease(
   ownerId: string,
   failedAccountId: string,
   reason: string,
+  options: CodexLeaseFailoverOptions = {},
 ): CodexLease {
   const existingLease = codexLeasesByOwnerId.get(ownerId)
   if (!existingLease) {
@@ -251,11 +256,17 @@ export function failoverCodexLease(
     )
   }
 
+  const markAccountCapped = options.markAccountCapped ?? true
   markPoolAccountLastError(existingLease.accountId)
-  markPoolAccountCapped(existingLease.accountId, reason)
+  if (markAccountCapped) {
+    markPoolAccountCapped(existingLease.accountId, reason)
+  }
 
   try {
-    const selection = selectAccountForLease(existingLease.strategy)
+    const selection = selectAccountForLease(
+      existingLease.strategy,
+      markAccountCapped ? undefined : failedAccountId,
+    )
     const replacementLease: CodexLease = {
       ...existingLease,
       accountId: selection.account.accountId,
@@ -271,6 +282,10 @@ export function failoverCodexLease(
     touchPoolAccountUsage(selection.account.accountId)
     return replacementLease
   } catch (error) {
+    if (!markAccountCapped) {
+      throw error
+    }
+
     const failedLease: CodexLease = {
       ...existingLease,
       state: 'failed',
@@ -326,10 +341,12 @@ function selectMainAccountForLease(): { account: PoolAccount; reason: string } {
 
 function selectAccountForLease(
   strategy: CodexLeaseStrategy,
+  excludedAccountId?: string,
 ): { account: PoolAccount; reason: string } {
   const poolAccounts = getPoolAccountsForLeaseSelection()
   const healthyCandidates = poolAccounts.filter(
-    (account) => account.status === 'healthy',
+    (account) =>
+      account.status === 'healthy' && account.accountId !== excludedAccountId,
   )
 
   if (healthyCandidates.length === 0) {

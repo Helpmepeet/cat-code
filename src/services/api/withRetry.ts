@@ -15,7 +15,13 @@ import {
   getCurrentCodexLease,
   runWithCodexLeaseOwner,
 } from './codexAccountLeaseManager.js'
-import { markPoolAccountCapped, switchToAccount, isPoolActive, getActiveAccount } from './codexAccountPool.js'
+import {
+  getActiveAccount,
+  isPoolActive,
+  markPoolAccountCapped,
+  markPoolAccountLastError,
+  switchToAccount,
+} from './codexAccountPool.js'
 import { isAwsCredentialsProviderError } from 'src/utils/aws.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logError } from 'src/utils/log.js'
@@ -143,6 +149,7 @@ interface RetryOptions {
   querySource?: QuerySource
   ownerId?: string
   onCodexAccountSwitch?: () => void
+  isCodexRequest?: boolean
   /**
    * Pre-seed the consecutive 529 counter. Used when this retry loop is a
    * non-streaming fallback after a streaming 529 — the streaming 529 should
@@ -320,12 +327,12 @@ export async function* withRetry<T>(
         }
       }
 
-      // Codex connection-error failover: a persistent APIConnectionError against
-      // the Codex endpoint is almost always a capped/expired account rather than
-      // a real network outage. After 2 consecutive connection errors, treat it
-      // the same as a cap error and failover to the next pool account.
+      // Codex connection-error failover: after two consecutive connection
+      // errors on a confirmed Codex request, try a different pooled account
+      // without converting the failed account into usage-cap state.
       if (
         error instanceof APIConnectionError &&
+        options.isCodexRequest === true &&
         isPoolActive() &&
         attempt >= 2
       ) {
@@ -340,6 +347,7 @@ export async function* withRetry<T>(
                 currentLease.ownerId,
                 accountId,
                 error.message,
+                { markAccountCapped: false },
               )
               logForDebugging(
                 `[codex-pool] Reassigned lease ${currentLease.ownerId} from ${accountId} to ${nextLease.accountId} on connection error`,
@@ -351,7 +359,7 @@ export async function* withRetry<T>(
               // Fall through — pool exhausted, let normal retry exhaust too
             }
           } else {
-            markPoolAccountCapped(accountId, error.message)
+            markPoolAccountLastError(accountId)
             const next = switchToAccount(null)
             if (next) {
               logForDebugging(
