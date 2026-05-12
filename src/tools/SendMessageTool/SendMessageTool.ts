@@ -874,7 +874,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Agent "${input.to}" was stopped (${task.status}); resumed it in the background with your message. You'll be notified when it finishes. Output: ${result.outputFile}`,
+                  message: `Resumed "${result.description}" in the background.`,
                 },
               }
             } catch (e) {
@@ -902,7 +902,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Agent "${input.to}" had no active task; resumed from transcript in the background with your message. You'll be notified when it finishes. Output: ${result.outputFile}`,
+                  message: `Resumed "${result.description}" in the background.`,
                 },
               }
             } catch (e) {

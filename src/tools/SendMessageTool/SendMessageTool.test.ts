@@ -275,7 +275,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
       data: {
         success: true,
         message: expect.stringContaining(
-          'had no active task; resumed from transcript in the background',
+          'Resumed "Resumed worker" in the background.',
         ),
       },
     })
@@ -314,7 +314,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
     expect(result).toMatchObject({
       data: {
         success: true,
-        message: expect.stringContaining('was stopped (completed); resumed'),
+        message: expect.stringContaining('Resumed "Resumed worker" in the background.'),
       },
     })
   })
