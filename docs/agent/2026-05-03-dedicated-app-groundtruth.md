@@ -183,7 +183,7 @@ runtime code.
 
 **Primary files:**
 
-- `docs/reference/2026-04-30-WORKSPACE_MAP.md`
+- `docs/maps/WORKSPACE_MAP.md`
 - `docs/reference/2026-04-30-codex-core-extraction-map.md`
 - `src/screens/REPL.tsx`
 - `src/QueryEngine.ts`
@@ -415,7 +415,7 @@ runtime architecture.
 - `src/screens/REPL.tsx`
 - `src/app-runtime/`
 - `src/ink/`
-- `docs/reference/2026-04-30-WORKSPACE_MAP.md`
+- `docs/maps/WORKSPACE_MAP.md`
 - packaging/build files for the chosen app shell
 
 **Done when:**

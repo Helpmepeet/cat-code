@@ -10,7 +10,7 @@ Before deciding the implementation plan, read:
 - `docs/agent/2026-05-03-dedicated-app-groundtruth.md`
 - `docs/design/2026-05-03-dedicated-app-prototype-brief.md`
 - `docs/superpowers/plans/2026-05-03-dedicated-app-replacement-plan.md`
-- `docs/reference/2026-04-30-WORKSPACE_MAP.md`
+- `docs/maps/WORKSPACE_MAP.md`
 
 ## Goal
 

@@ -253,7 +253,7 @@ Project-local/private state can live in:
 | `.claude/settings.local.json` | Private project settings. |
 
 For the detailed config and persistence model, see
-`docs/reference/2026-04-30-WORKSPACE_MAP.md`.
+`docs/maps/WORKSPACE_MAP.md`.
 
 ## Repository Map
 
@@ -264,7 +264,7 @@ Start here:
 | `README.md` | Private operator overview. |
 | `CLAUDE.md` | Build commands, high-level architecture, coding guidance. |
 | `AGENTS.md` | Agent-facing repository instructions and routing rules. |
-| `docs/reference/2026-04-30-WORKSPACE_MAP.md` | Routing map for source inspection. |
+| `docs/maps/WORKSPACE_MAP.md` | Routing map for source inspection. |
 | `docs/prompts/2026-04-30-prompt-surfaces.md` | Prompt and instruction surface index. |
 | `docs/agent/2026-04-30-agent-mode-readme.md` | Agent Mode manual. |
 | `docs/vision/2026-04-30-GOAL_PLAN.md` | Long-term project vision and milestones. |
@@ -284,7 +284,7 @@ Important source surfaces:
 | Memory/session state | `src/memdir/`, `src/services/SessionMemory/`, `src/utils/sessionStorage.ts` |
 | Build system | `scripts/build.ts` |
 
-Use `docs/reference/2026-04-30-WORKSPACE_MAP.md` before broad source search for any
+Use `docs/maps/WORKSPACE_MAP.md` before broad source search for any
 non-trivial bug, question, or feature work.
 
 ## Reality Checks

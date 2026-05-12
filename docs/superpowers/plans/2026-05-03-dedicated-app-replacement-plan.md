@@ -135,7 +135,7 @@ work to Phase 3 or later.
 
 **Files:**
 - Create: `docs/agent/2026-05-03-dedicated-app-runtime-boundary.md`
-- Reference: `docs/reference/2026-04-30-WORKSPACE_MAP.md`
+- Reference: `docs/maps/WORKSPACE_MAP.md`
 - Reference: `docs/reference/2026-04-30-codex-core-extraction-map.md`
 - Reference: `src/screens/REPL.tsx`
 - Reference: `src/QueryEngine.ts`

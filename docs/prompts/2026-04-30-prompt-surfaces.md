@@ -11,7 +11,7 @@ Use it when you need to answer questions like:
 This file is intentionally:
 - routing-oriented
 - prompt-focused
-- broader than `docs/reference/2026-04-30-WORKSPACE_MAP.md` for prompt work
+- broader than `docs/maps/WORKSPACE_MAP.md` for prompt work
 - not a line-by-line walkthrough of every prompt string
 
 ## Edit By Goal
@@ -445,4 +445,4 @@ These are not primary prompt owners, but they often matter when prompt changes a
 - If you want to change worker or subagent behavior, start at `src/coordinator/coordinatorMode.ts` and `src/tools/AgentTool/`.
 - If you want to change tool instructions, start in `src/tools/*/prompt.ts`.
 - If you want to change output styles, start at `src/constants/outputStyles.ts` and `.claude/output-styles/*.md`.
-- If you want to inspect everything prompt-related before editing, read this file first, then `docs/reference/2026-04-30-WORKSPACE_MAP.md`.
+- If you want to inspect everything prompt-related before editing, read this file first, then `docs/maps/WORKSPACE_MAP.md`.
