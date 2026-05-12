@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 12 May 2026
+
+63. Added first-class Cat Code support to Open Design — Open Design now has a dedicated `cat-code` runtime using the Claude-compatible stream-json adapter shape, `CAT_CODE_BIN` detection/configuration, Settings UI exposure, Cat Code diagnostics, managed-project `.mcp.json` MCP wiring, and regression coverage for runtime args, executable precedence, app config, diagnostics, MCP spawn, and Settings autosave.
+
 ### 9 May 2026
 
 62. Fixed Codex non-streaming fallback message materialization — when a Codex WebSocket stream fails mid-turn and Cat Code falls back through the Anthropic SDK's non-streaming path, the Codex adapter now returns a real JSON assistant message instead of Anthropic SSE, preserving response IDs, text, tool calls, custom `Apply_patch` input, object-shaped function tool input, stop reasons, and usage while failing visibly on empty fallback output.
