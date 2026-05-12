@@ -178,7 +178,8 @@ function AgentLine(t0) {
   } else {
     t2 = $[4];
   }
-  const tokenText = t2;
+  const resumeText = task.resumedAt && isRunning ? " · resumed" : "";
+  const tokenText = `${t2}${resumeText}`;
   const profileText = profileLabel ? ` · ${profileLabel}` : "";
   const queuedCount = task.pendingMessages.length;
   const queuedText = queuedCount > 0 ? ` · ${queuedCount} queued` : "";

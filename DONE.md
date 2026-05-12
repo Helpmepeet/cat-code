@@ -10,6 +10,8 @@
 
 ### 12 May 2026
 
+64. Fixed subagent resume UX — `SendMessage` is available for normal-session subagent resume by worker handle/raw agent ID, resumed agents show visible terminal status, direct resumed-subagent prompts append inline resume/failure transcript messages, and resume results render with clearer success/error treatment.
+
 63. Added first-class Cat Code support to Open Design — Open Design now has a dedicated `cat-code` runtime using the Claude-compatible stream-json adapter shape, `CAT_CODE_BIN` detection/configuration, Settings UI exposure, Cat Code diagnostics, managed-project `.mcp.json` MCP wiring, and regression coverage for runtime args, executable precedence, app config, diagnostics, MCP spawn, and Settings autosave.
 
 ### 9 May 2026

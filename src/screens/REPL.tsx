@@ -45,7 +45,7 @@ import { registerSandboxPermissionCallback } from '../hooks/useSwarmPermissionPo
 import { getTeamName, getAgentName } from '../utils/teammate.js';
 import { WorkerPendingPermission } from '../components/permissions/WorkerPendingPermission.js';
 import { injectUserMessageToTeammate, getAllInProcessTeammateTasks } from '../tasks/InProcessTeammateTask/InProcessTeammateTask.js';
-import { isLocalAgentTask, queuePendingMessage, appendMessageToLocalAgent, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
+import { isLocalAgentTask, queuePendingMessage, appendMessageToLocalAgent, appendLocalAgentSystemMessage, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerLeaderToolUseConfirmQueue, unregisterLeaderToolUseConfirmQueue, registerLeaderSetToolPermissionContext, unregisterLeaderSetToolPermissionContext } from '../utils/swarm/leaderPermissionBridge.js';
 import { endInteractionSpan } from '../utils/telemetry/sessionTracing.js';
 import { useLogMessages } from '../hooks/useLogMessages.js';
@@ -3976,6 +3976,13 @@ export function REPL({
       if (task.status === 'running') {
         queuePendingMessage(task.id, input, setAppState);
       } else {
+        const agentDisplayName = (() => {
+          for (const [name, id] of store.getState().agentNameRegistry) {
+            if (id === task.id) return `@${name}`;
+          }
+          return task.description || task.id;
+        })();
+        appendLocalAgentSystemMessage(task.id, `Resuming ${agentDisplayName}...`, 'info', setAppState);
         void resumeAgentBackground({
           agentId: task.id,
           prompt: input,
@@ -3983,12 +3990,13 @@ export function REPL({
           canUseTool
         }).catch(err => {
           logForDebugging(`resumeAgentBackground failed: ${errorMessage(err)}`);
+          appendLocalAgentSystemMessage(task.id, `Failed to resume ${agentDisplayName}: ${errorMessage(err)}`, 'error', setAppState);
           addNotification({
             key: `resume-agent-failed-${task.id}`,
             jsx: <Text color="error">
-                  Failed to resume agent: {errorMessage(err)}
+                  Failed to resume {agentDisplayName}: {errorMessage(err)}
                 </Text>,
-            priority: 'low'
+            priority: 'high'
           });
         });
       }
@@ -3998,7 +4006,7 @@ export function REPL({
     setInputValue('');
     helpers.setCursorOffset(0);
     helpers.clearBuffer();
-  }, [setAppState, setInputValue, getToolUseContext, canUseTool, mainLoopModel, addNotification]);
+  }, [store, setAppState, setInputValue, getToolUseContext, canUseTool, mainLoopModel, addNotification]);
 
   // Handlers for auto-run /issue or /good-claude (defined after onSubmit)
   const handleAutoRunIssue = useCallback(() => {

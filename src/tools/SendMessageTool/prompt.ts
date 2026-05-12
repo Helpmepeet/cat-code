@@ -8,7 +8,7 @@ export function getPrompt(): string {
     return `
 # SendMessage
 
-Send a plain text follow-up to an Agent Mode worker by worker handle or raw agent ID.
+Send a plain text follow-up to a previously spawned subagent by raw agent ID, or to an Agent Mode worker by worker handle.
 
 \`\`\`json
 {"to": "implement-auth", "summary": "fix failing test", "message": "The auth test is failing on the expired-token branch. Please inspect the failure and patch only your assigned files."}

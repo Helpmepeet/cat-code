@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -11,11 +11,10 @@ import {
 import { getTranscriptPathForSession } from '../../utils/sessionStorage.js'
 import { createAgentId } from '../../utils/uuid.js'
 import { isDeferredTool } from '../ToolSearchTool/prompt.js'
+import * as resumeAgentModule from '../AgentTool/resumeAgent.js'
+import { SendMessageTool } from './SendMessageTool.js'
 
-type SendMessageToolModule = typeof import('./SendMessageTool.js')
-
-let SendMessageTool: SendMessageToolModule['SendMessageTool']
-let resumeAgentBackground: ReturnType<typeof mock>
+let resumeAgentBackground: ReturnType<typeof spyOn>
 
 const createdFiles: string[] = []
 
@@ -127,19 +126,18 @@ describe('SendMessageTool durable worker handle fallback', () => {
       },
     })
 
-    resumeAgentBackground = mock(async () => ({
+    resumeAgentBackground = spyOn(
+      resumeAgentModule,
+      'resumeAgentBackground',
+    ).mockImplementation(mock(async () => ({
       agentId: 'agent-persistent',
       description: 'Resumed worker',
       outputFile: join(tempDir, 'agent-output.txt'),
-    }))
-
-    await mock.module('../AgentTool/resumeAgent.js', () => ({
-      resumeAgentBackground,
-    }))
-    SendMessageTool = (await import('./SendMessageTool.js')).SendMessageTool
+    })) as never)
   })
 
   afterEach(() => {
+    mock.restore()
     if (originalAgentMode === undefined) {
       delete process.env.CLAUDE_CODE_AGENT_MODE
     } else {
@@ -166,6 +164,22 @@ describe('SendMessageTool durable worker handle fallback', () => {
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     expect(SendMessageTool.isEnabled?.()).toBe(true)
+  })
+
+  test('is enabled in normal sessions for subagent resume by id', () => {
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+    expect(SendMessageTool.isEnabled?.()).toBe(true)
+  })
+
+  test('schema describes resumable subagent targets', () => {
+    expect(SendMessageTool.inputSchema.shape.to.description).toContain(
+      'subagent raw agent ID',
+    )
+    expect(SendMessageTool.inputSchema.shape.to.description).toContain(
+      'Agent Mode worker handle',
+    )
   })
 
   test('is not deferred in Agent Mode', () => {
@@ -263,6 +277,44 @@ describe('SendMessageTool durable worker handle fallback', () => {
         message: expect.stringContaining(
           'had no active task; resumed from transcript in the background',
         ),
+      },
+    })
+  })
+
+  test('resumes a stopped in-memory local subagent by registered name', async () => {
+    const context = {
+      getAppState: () => ({
+        agentNameRegistry: new Map([['worker-one', 'agent-persistent']]),
+        tasks: {
+          'agent-persistent': {
+            id: 'agent-persistent',
+            type: 'local_agent',
+            status: 'completed',
+            agentId: 'agent-persistent',
+            agentType: 'general-purpose',
+          },
+        },
+      }),
+    } as never
+
+    const result = await SendMessageTool.call(
+      { to: 'worker-one', summary: 'follow up', message: 'continue' },
+      context,
+      undefined as never,
+      { requestId: 'req-stopped' } as never,
+    )
+
+    expect(resumeAgentBackground).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-persistent',
+        prompt: 'continue',
+        sourceSessionId: getSessionId(),
+      }),
+    )
+    expect(result).toMatchObject({
+      data: {
+        success: true,
+        message: expect.stringContaining('was stopped (completed); resumed'),
       },
     })
   })

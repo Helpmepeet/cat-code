@@ -12,7 +12,12 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
-import { unregisterAgentForeground, registerAgentForeground } from './LocalAgentTask.js'
+import {
+  appendLocalAgentSystemMessage,
+  markAgentTaskResumed,
+  unregisterAgentForeground,
+  registerAgentForeground,
+} from './LocalAgentTask.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -78,5 +83,50 @@ describe('LocalAgentTask foreground cleanup', () => {
 
     expect(getCodexLeaseForOwner(agentId)).toBeUndefined()
     expect(appState.tasks[agentId]).toBeUndefined()
+  })
+
+  test('markAgentTaskResumed tracks visible resume state on local agent tasks', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-2',
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+
+    markAgentTaskResumed('sync-agent-2', setAppState)
+
+    expect(appState.tasks['sync-agent-2']).toMatchObject({
+      type: 'local_agent',
+      resumedAt: expect.any(Number),
+    })
+  })
+
+  test('appendLocalAgentSystemMessage adds visible status to the local transcript', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-3',
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+
+    appendLocalAgentSystemMessage(
+      'sync-agent-3',
+      'Resuming @worker...',
+      'info',
+      setAppState,
+    )
+
+    const task = appState.tasks['sync-agent-3']
+    expect(task).toMatchObject({ type: 'local_agent' })
+    if (task?.type !== 'local_agent') throw new Error('expected local agent')
+    expect(task.messages?.at(-1)).toMatchObject({
+      type: 'system',
+      subtype: 'informational',
+      content: 'Resuming @worker...',
+      level: 'info',
+      isMeta: false,
+    })
   })
 })

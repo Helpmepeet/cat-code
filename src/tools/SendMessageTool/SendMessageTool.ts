@@ -13,7 +13,6 @@ import {
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
 import { toAgentId } from '../../types/ids.js'
 import { generateRequestId } from '../../utils/agentId.js'
-import { isAgentMode } from '../../agent-mode/agentMode.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
@@ -77,8 +76,8 @@ const inputSchema = lazySchema(() =>
       .string()
       .describe(
         feature('UDS_INBOX')
-          ? 'Recipient: teammate name, "*" for broadcast, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
-          : 'Recipient: teammate name, or "*" for broadcast to all teammates',
+          ? 'Recipient: subagent raw agent ID, Agent Mode worker handle, teammate name or "*" when Agent Teams is enabled, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
+          : 'Recipient: subagent raw agent ID, Agent Mode worker handle, or teammate name/"*" when Agent Teams is enabled',
       ),
     summary: z
       .string()
@@ -526,7 +525,7 @@ async function handlePlanRejection(
 export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
   buildTool({
     name: SEND_MESSAGE_TOOL_NAME,
-    searchHint: 'send messages to agent teammates (swarm protocol)',
+    searchHint: 'send messages to subagents, Agent Mode workers, or agent teammates',
     maxResultSizeChars: 100_000,
 
     userFacingName() {
@@ -540,7 +539,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     alwaysLoad: true,
 
     isEnabled() {
-      return isAgentMode() || isAgentSwarmsEnabled()
+      return true
     },
 
     isReadOnly(input) {
@@ -922,7 +921,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         return {
           data: {
             success: false,
-            message: `No Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target worker handles or agent IDs.`,
+            message: `No resumable subagent or Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target worker handles or agent IDs.`,
           },
         }
       }
