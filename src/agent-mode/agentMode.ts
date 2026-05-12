@@ -9,6 +9,7 @@ import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
+import { RESUME_AGENT_TOOL_NAME } from '../tools/ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import { TEAM_CREATE_TOOL_NAME } from '../tools/TeamCreateTool/constants.js'
@@ -28,6 +29,7 @@ function isScratchpadGateEnabled(): boolean {
 const INTERNAL_WORKER_TOOLS = new Set([
   TEAM_CREATE_TOOL_NAME,
   TEAM_DELETE_TOOL_NAME,
+  RESUME_AGENT_TOOL_NAME,
   SEND_MESSAGE_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
 ])
@@ -74,7 +76,7 @@ export async function getAgentModeUserContext(
       ? {
           agentModeSessionState:
             `${formatAgentModeSessionState(sessionState)}\n\n` +
-            "Use this state to choose whether to resume an existing worker or spawn a fresh worker. Prefer SendMessage to a resumable worker handle when the follow-up strongly overlaps that worker.",
+            `Use this state to choose whether to resume an existing worker or spawn a fresh worker. Use ${RESUME_AGENT_TOOL_NAME} on a resumable worker handle when the follow-up overlaps that worker's loaded context. Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is currently running.`,
         }
       : {}),
   }

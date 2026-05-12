@@ -76,6 +76,9 @@ const getTeamDeleteTool = () =>
 const getSendMessageTool = () =>
   require('./tools/SendMessageTool/SendMessageTool.js')
     .SendMessageTool as typeof import('./tools/SendMessageTool/SendMessageTool.js').SendMessageTool
+const getResumeAgentTool = () =>
+  require('./tools/ResumeAgentTool/ResumeAgentTool.js')
+    .ResumeAgentTool as typeof import('./tools/ResumeAgentTool/ResumeAgentTool.js').ResumeAgentTool
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
 import { AskOrchestratorTool } from './tools/AskOrchestratorTool/AskOrchestratorTool.js'
@@ -252,6 +255,7 @@ export function getAllBaseTools(): Tools {
     ...(TerminalCaptureTool ? [TerminalCaptureTool] : []),
     ...(isEnvTruthy(process.env.ENABLE_LSP_TOOL) ? [LSPTool] : []),
     ...(isWorktreeModeEnabled() ? [EnterWorktreeTool, ExitWorktreeTool] : []),
+    getResumeAgentTool(),
     getSendMessageTool(),
     ...(ListPeersTool ? [ListPeersTool] : []),
     ...(isAgentSwarmsEnabled()
@@ -309,7 +313,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
         feature('COORDINATOR_MODE') &&
         coordinatorModeModule?.isCoordinatorMode()
       ) {
-        replSimple.push(TaskStopTool, getSendMessageTool())
+        replSimple.push(TaskStopTool, getResumeAgentTool(), getSendMessageTool())
       }
       return filterToolsByDenyRules(replSimple, permissionContext)
     }
@@ -321,7 +325,12 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       feature('COORDINATOR_MODE') &&
       coordinatorModeModule?.isCoordinatorMode()
     ) {
-      simpleTools.push(AgentTool, TaskStopTool, getSendMessageTool())
+      simpleTools.push(
+        AgentTool,
+        TaskStopTool,
+        getResumeAgentTool(),
+        getSendMessageTool(),
+      )
     }
     return filterToolsByDenyRules(simpleTools, permissionContext)
   }

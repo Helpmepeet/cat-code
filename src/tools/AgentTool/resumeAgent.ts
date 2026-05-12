@@ -47,6 +47,14 @@ export type ResumeAgentResult = {
   description: string
   outputFile: string
 }
+
+export class TranscriptNotFoundError extends Error {
+  constructor(agentId: string) {
+    super(`No transcript found for agent ID: ${agentId}`)
+    this.name = 'TranscriptNotFoundError'
+  }
+}
+
 export async function resumeAgentBackground({
   agentId,
   prompt,
@@ -81,7 +89,7 @@ export async function resumeAgentBackground({
       : readAgentMetadataForSession(sourceSession, asAgentId(agentId)),
   ])
   if (!transcript) {
-    throw new Error(`No transcript found for agent ID: ${agentId}`)
+    throw new TranscriptNotFoundError(agentId)
   }
   const resumedMessages = filterWhitespaceOnlyAssistantMessages(
     filterOrphanedThinkingOnlyMessages(

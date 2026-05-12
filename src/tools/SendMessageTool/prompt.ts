@@ -1,5 +1,7 @@
 import { feature } from 'bun:bundle'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
+import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
+import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 
 export const DESCRIPTION = 'Send a message to another agent'
 
@@ -8,19 +10,18 @@ export function getPrompt(): string {
     return `
 # SendMessage
 
-Send a plain text follow-up to a previously spawned subagent by raw agent ID, or to an Agent Mode worker by worker handle.
+This tool targets recipients that are currently running. To restart a stopped subagent, use ${RESUME_AGENT_TOOL_NAME}. To start a fresh subagent, use ${AGENT_TOOL_NAME}.
 
 \`\`\`json
 {"to": "implement-auth", "summary": "fix failing test", "message": "The auth test is failing on the expired-token branch. Please inspect the failure and patch only your assigned files."}
 \`\`\`
 
-Use this to continue a relevant existing worker instead of spawning a duplicate.
+Use this to queue a follow-up to a relevant running worker instead of spawning a duplicate.
 
 Available without Agent Teams:
 
-- plain text messages to existing worker handles
-- plain text messages to raw agent IDs
-- resuming stopped or evicted workers when their transcript is available
+- plain text messages to running worker handles
+- plain text messages to running raw agent IDs
 
 Requires Agent Teams:
 
@@ -50,7 +51,7 @@ A listed peer is alive and will process your message — no "busy" state; messag
   return `
 # SendMessage
 
-Send a message to another agent.
+Send a message to another running agent.
 
 \`\`\`json
 {"to": "researcher", "summary": "assign task 1", "message": "start on task #1"}

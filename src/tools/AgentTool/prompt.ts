@@ -8,6 +8,7 @@ import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
+import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { AGENT_TOOL_NAME } from './constants.js'
 import { isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -297,7 +298,7 @@ USAGE RULES:
 - Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
 - If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
 - Parallel work only when ownership is clear and the results will join cleanly.
-- Use ${SEND_MESSAGE_TOOL_NAME} to continue a worker when its existing context is still the right context; otherwise spawn a fresh worker with a cleaner brief.`,
+- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context. Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. Otherwise spawn a fresh worker with a cleaner brief.`,
       ].join('\n')
     : `Launch a delegated worker for a bounded part of the run.
 
@@ -320,7 +321,7 @@ Usage notes:
 - Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
 - If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
 - Parallel work only when ownership is clear and the results will join cleanly.
-- Use ${SEND_MESSAGE_TOOL_NAME} to continue a worker when its existing context is still the right context; otherwise spawn a fresh worker with a cleaner brief.`
+- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context. Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. Otherwise spawn a fresh worker with a cleaner brief.`
 
   // Coordinator mode and Agent mode both get slim prompts because their
   // system prompts already carry the main behavior contract.
@@ -388,7 +389,7 @@ ${usageHeader}
 - **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.${isGPTPromptStyle ? ' **IMPORTANT: run_in_background: true is REQUIRED for true parallel execution — without it, the parent agent is fully blocked waiting for each subagent to finish, even if you emit multiple spawns in the same turn.**' : ''}`
       : ''
   }
-- To continue a previously spawned agent, use ${SEND_MESSAGE_TOOL_NAME} with the agent's ID or name as the \`to\` field. The agent resumes with its full context preserved. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
+- To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes with its full context preserved. Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
 - The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.

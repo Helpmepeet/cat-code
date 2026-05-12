@@ -394,7 +394,7 @@ Allowlist (strings that may legitimately remain after migration): `"SendMessage 
 
 ## Risks
 
-- **Live coordinator prompt is the highest blast radius.** Six lines in `coordinatorMode.ts` teach the old pattern. Task 6 must rewrite all six in the same change as Task 4's removal of SendMessage auto-resume. If any are missed, coordinator users hit the new error on legitimate calls and lose one turn per occurrence until the prompt re-fires with the updated text. Decision 10's hard gate prevents this.
+- **Live coordinator prompt is the highest blast radius.** Thirteen sites in `coordinatorMode.ts` teach the old pattern. Task 6 must rewrite all thirteen in the same change as Task 4's removal of SendMessage auto-resume. If any are missed, coordinator users hit the new error on legitimate calls and lose one turn per occurrence until the prompt re-fires with the updated text. Decision 10's hard gate prevents this.
 - **User-authored prompts.** CLAUDE.md in user repos, third-party plugins, user-installed skills are out of scope. The new error message is the migration aid for those. Acceptable cost: one wasted model turn per affected callsite per session, with explicit error wording guiding the correction.
 - **`resolveAgentTarget` extraction may shift behavior.** Today's resolution at `SendMessageTool.ts:840–847` is inline and slightly intertwined with the running-target check. Extraction should be behavior-preserving; Tasks 1 and 4 tests guard.
 - **`renderedSystemPrompt` for forks.** The new tool's `ToolUseContext` should have `renderedSystemPrompt` populated for forks to resume cleanly; the fallback at `resumeAgent.ts:137–157` handles the absent case. Task 2's fork test verifies.
@@ -411,3 +411,71 @@ Allowlist (strings that may legitimately remain after migration): `"SendMessage 
 - No changes to the notification machinery. Both paths feed `runAsyncAgentLifecycle` → `enqueueAgentNotification`.
 - No refactor of `resumeAgentBackground`. It stays the internal primitive; the plan documents its `ToolUseContext` dependencies (Decision 2) so the new tool's `call` produces a compatible context.
 - No introduction of locking or new concurrency primitives. Existing `registerTask` semantics handle the resume-race case (Decision 7).
+
+## Survey Results
+
+Survey run on 2026-05-12 with:
+
+- `rg -n "SendMessage" src/ docs/ skills/ -g '*.ts' -g '*.tsx' -g '*.md'` (repo has no root `skills/` directory)
+- `rg -n "SendMessage|SEND_MESSAGE_TOOL_NAME|continue|resume|restart|stopped|completed" src/agent-mode/agentMode.ts src/coordinator/coordinatorMode.ts src/agent-mode/rolePrompts.ts`
+- `rg -n "resumeAgentBackground" src/`
+- `.claude/`, `src/skills/`, `src/utils/skills/`, `src/components/skills/`, and `src/commands/skills/` prompt scan
+
+### A. Teaches auto-resume / continuation
+
+These need rewrite before Task 4 removes SendMessage auto-resume:
+
+- `src/agent-mode/agentMode.ts:77` - `"Prefer SendMessage to a resumable worker handle..."`
+- `src/coordinator/coordinatorMode.ts:131` - SendMessage tool-list entry says "Continue an existing worker"
+- `src/coordinator/coordinatorMode.ts:139` - "Continue workers whose work is complete via SendMessage"
+- `src/coordinator/coordinatorMode.ts:165` - task ID guidance says use SendMessage to continue
+- `src/coordinator/coordinatorMode.ts:191` - completed-worker example continues via SendMessage
+- `src/coordinator/coordinatorMode.ts:233` - worker failure guidance continues via SendMessage
+- `src/coordinator/coordinatorMode.ts:238` - stopped worker guidance continues via SendMessage
+- `src/coordinator/coordinatorMode.ts:249` - TaskStop example continues via SendMessage
+- `src/coordinator/coordinatorMode.ts:254` - continue-vs-spawn prompt points only at SendMessage
+- `src/coordinator/coordinatorMode.ts:287` - decision table labels continue mechanism as SendMessage
+- `src/coordinator/coordinatorMode.ts:298` - continue mechanics lead-in points at SendMessage
+- `src/coordinator/coordinatorMode.ts:301` - finished-research continuation example uses SendMessage
+- `src/coordinator/coordinatorMode.ts:306` - correction continuation example uses SendMessage
+- `src/coordinator/coordinatorMode.ts:361` - example-session completed worker continues via SendMessage
+- `src/tools/AgentTool/AgentTool.tsx:1812` - async spawn result says use SendMessage to continue
+- `src/tools/AgentTool/AgentTool.tsx:1835` - one-shot comment says never continued via SendMessage
+- `src/tools/AgentTool/AgentTool.tsx:1850` - sync spawn result says use SendMessage to continue
+- `src/tools/AgentTool/constants.ts:7` - comment couples agentId trailers to SendMessage continuation
+- `src/tools/AgentTool/prompt.ts:300` - Agent prompt says use SendMessage to continue a worker
+- `src/tools/AgentTool/prompt.ts:323` - same guidance in alternate prompt branch
+- `src/tools/AgentTool/prompt.ts:391` - Agent prompt says SendMessage resumes with full context
+- `src/tools/AgentTool/built-in/claudeCodeGuideAgent.ts:134` - built-in agent says continue recently completed guide agent via SendMessage
+- `src/utils/agentContext.ts:48` - comment says subsequent resume via SendMessage
+- `docs/maps/agent-mode.md:47` - map calls the responsibility "Worker resume / steering" under SendMessage
+
+Historical design docs and prior implementation plans under `docs/agent/` and `docs/superpowers/plans/` contain old SendMessage-continuation examples. They are not live shipped prompts, but the mechanical sweep will be reviewed after live prompt migration so any stale wording that still trips the gate can be either updated or explicitly treated as historical context.
+
+### B. Describes running-target messaging
+
+These remain valid after the split:
+
+- `src/utils/swarm/teammatePromptAddendum.ts:12-15` - teammate messaging by name or broadcast
+- `src/tools/TeamCreateTool/prompt.ts:45,107` - team shutdown and teammate communication via SendMessage
+- `src/tools/AgentTool/AgentTool.tsx:259,945-947` - naming/routing comments for running agents
+- `src/tasks/LocalAgentTask/LocalAgentTask.tsx:155,194` - pending-message queueing comments
+- SendMessage tool implementation, UI, tests, constants, and imports that name the tool without teaching continuation
+- Agent Mode worker role disallow-list entries for SendMessage in `src/agent-mode/rolePrompts.ts`
+
+### C. Unrelated / historical references
+
+The remaining hits are tests, imports, UI names, report tables, archived plans, historical design docs, and generic tool lists. They do not change the model-facing live prompt boundary unless captured in A above.
+
+### `resumeAgentBackground` Callers
+
+Production callers:
+
+- `src/tools/SendMessageTool/SendMessageTool.ts` - removed in Task 4
+- `src/screens/REPL.tsx` - intentionally remains as the internal user-driven resume path
+
+Tests and comments:
+
+- `src/tools/AgentTool/resumeAgent.test.ts`
+- `src/tools/SendMessageTool/SendMessageTool.test.ts`
+- comments in task/session/tool-result utilities documenting resume plumbing

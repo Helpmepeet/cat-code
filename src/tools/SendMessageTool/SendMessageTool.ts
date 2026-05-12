@@ -11,7 +11,6 @@ import {
   queuePendingMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
-import { toAgentId } from '../../types/ids.js'
 import { generateRequestId } from '../../utils/agentId.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -43,8 +42,7 @@ import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
-import { resolveWorkerAgentTarget } from '../../agent-mode/sessionState.js'
-import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
+import { resolveAgentTarget } from '../AgentTool/resolveAgentTarget.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -775,7 +773,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
       }
     },
 
-    async call(input, context, canUseTool, assistantMessage) {
+    async call(input, context, _canUseTool, _assistantMessage) {
       if (feature('UDS_INBOX') && typeof input.message === 'string') {
         const addr = parseAddress(input.to)
         if (addr.scheme === 'bridge') {
@@ -834,18 +832,19 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         }
       }
 
-      // Route to in-process subagent by name or raw agentId before falling
-      // through to ambient-team resolution. Stopped agents are auto-resumed.
+      // Route to in-process subagent by name, durable handle, or raw agentId
+      // before falling through to ambient-team resolution. Stopped subagents
+      // are NOT auto-resumed; SendMessage targets running recipients only.
+      // Use ResumeAgent for stopped subagents.
       if (typeof input.message === 'string' && input.to !== '*') {
         const appState = context.getAppState()
-        const registered = appState.agentNameRegistry.get(input.to)
-        const rawAgentId = toAgentId(input.to)
-        const durableTarget = registered
-          ? null
-          : await resolveWorkerAgentTarget(getSessionId(), input.to)
-        const agentId = registered ?? durableTarget?.agentId ?? rawAgentId
-        const sourceSessionId = durableTarget?.originSessionId ?? getSessionId()
-        if (agentId) {
+        const resolved = await resolveAgentTarget({
+          input: input.to,
+          appState,
+          sessionId: getSessionId(),
+        })
+        if (resolved) {
+          const { agentId } = resolved
           const task = appState.tasks[agentId]
           if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
             if (task.status === 'running') {
@@ -861,58 +860,12 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
                 },
               }
             }
-            // task exists but stopped — auto-resume
-            try {
-              const result = await resumeAgentBackground({
-                agentId,
-                prompt: input.message,
-                sourceSessionId,
-                toolUseContext: context,
-                canUseTool,
-                invokingRequestId: assistantMessage?.requestId,
-              })
-              return {
-                data: {
-                  success: true,
-                  message: `Resumed "${result.description}" in the background.`,
-                },
-              }
-            } catch (e) {
-              return {
-                data: {
-                  success: false,
-                  message: `Agent "${input.to}" is stopped (${task.status}) and could not be resumed: ${errorMessage(e)}`,
-                },
-              }
-            }
-          } else {
-            // task evicted from state — try resume from disk transcript.
-            // agentId is either a registered name or a format-matching raw ID
-            // (toAgentId validates the createAgentId format, so teammate names
-            // never reach this block).
-            try {
-              const result = await resumeAgentBackground({
-                agentId,
-                prompt: input.message,
-                sourceSessionId,
-                toolUseContext: context,
-                canUseTool,
-                invokingRequestId: assistantMessage?.requestId,
-              })
-              return {
-                data: {
-                  success: true,
-                  message: `Resumed "${result.description}" in the background.`,
-                },
-              }
-            } catch (e) {
-              return {
-                data: {
-                  success: false,
-                  message: `Agent "${input.to}" is registered but has no transcript to resume. It may have been cleaned up. (${errorMessage(e)})`,
-                },
-              }
-            }
+          }
+          return {
+            data: {
+              success: false,
+              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${agentId}", prompt }) to restart it.`,
+            },
           }
         }
       }
@@ -921,7 +874,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         return {
           data: {
             success: false,
-            message: `No resumable subagent or Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target worker handles or agent IDs.`,
+            message: `No running subagent or Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target running worker handles or agent IDs.`,
           },
         }
       }

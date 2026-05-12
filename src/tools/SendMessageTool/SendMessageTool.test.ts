@@ -101,6 +101,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
   const originalProjectDir = getSessionProjectDir()
   const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
   const originalAgentTeams = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   let tempDir: string
 
   beforeEach(async () => {
@@ -147,6 +148,11 @@ describe('SendMessageTool durable worker handle fallback', () => {
       delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
     } else {
       process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = originalAgentTeams
+    }
+    if (originalConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
     }
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true })
@@ -242,13 +248,129 @@ describe('SendMessageTool durable worker handle fallback', () => {
       data: {
         success: false,
         message: expect.stringContaining(
-          'Without Agent Teams, SendMessage can only target worker handles or agent IDs',
+          'Without Agent Teams, SendMessage can only target running worker handles or agent IDs',
         ),
       },
     })
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
   })
 
-  test('resolves durable handle to agent id and resumes in background', async () => {
+  test('queues messages to a running local subagent by registered name', async () => {
+    let state = {
+      agentNameRegistry: new Map([['worker-one', 'agent-running']]),
+      tasks: {
+        'agent-running': {
+          id: 'agent-running',
+          type: 'local_agent',
+          status: 'running',
+          agentId: 'agent-running',
+          agentType: 'general-purpose',
+          pendingMessages: [],
+        },
+      },
+    }
+    const context = {
+      getAppState: () => state,
+      setAppState: (updater: (prev: typeof state) => typeof state) => {
+        state = updater(state)
+      },
+    } as never
+
+    const result = await SendMessageTool.call(
+      { to: 'worker-one', summary: 'follow up', message: 'go deeper' },
+      context,
+      undefined as never,
+      { requestId: 'req-running' } as never,
+    )
+
+    expect(result).toMatchObject({
+      data: {
+        success: true,
+        message:
+          'Message queued for delivery to worker-one at its next tool round.',
+      },
+    })
+    expect(state.tasks['agent-running'].pendingMessages).toEqual(['go deeper'])
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
+  })
+
+  test('queues messages to a running raw agent id before transcript creation', async () => {
+    const agentId = createAgentId()
+    let state = {
+      agentNameRegistry: new Map(),
+      tasks: {
+        [agentId]: {
+          id: agentId,
+          type: 'local_agent',
+          status: 'running',
+          agentId,
+          agentType: 'general-purpose',
+          pendingMessages: [],
+        },
+      },
+    }
+    const context = {
+      getAppState: () => state,
+      setAppState: (updater: (prev: typeof state) => typeof state) => {
+        state = updater(state)
+      },
+    } as never
+
+    const result = await SendMessageTool.call(
+      { to: agentId, summary: 'follow up', message: 'raw follow-up' },
+      context,
+      undefined as never,
+      { requestId: 'req-running-raw' } as never,
+    )
+
+    expect(result.data.success).toBe(true)
+    expect(state.tasks[agentId].pendingMessages).toEqual(['raw follow-up'])
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
+  })
+
+  test('falls through to teammate mailbox when Agent Teams are enabled and target is unresolved', async () => {
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+    process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1'
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    const context = {
+      getAppState: () => ({
+        agentNameRegistry: new Map(),
+        tasks: {},
+        teamContext: {
+          teamName: 'review-team',
+          teamFilePath: join(tempDir, 'teams', 'review-team', 'config.json'),
+          leadAgentId: 'lead',
+          isLeader: true,
+          teammates: {
+            alice: {
+              name: 'alice',
+              tmuxSessionName: 'session',
+              tmuxPaneId: 'pane',
+              cwd: tempDir,
+              spawnedAt: Date.now(),
+            },
+          },
+        },
+      }),
+    } as never
+
+    const result = await SendMessageTool.call(
+      { to: 'alice', summary: 'hello', message: 'status?' },
+      context,
+      undefined as never,
+      { requestId: 'req-team' } as never,
+    )
+
+    expect(result).toMatchObject({
+      data: {
+        success: true,
+        message: "Message sent to alice's inbox",
+      },
+    })
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
+  })
+
+  test('returns ResumeAgent guidance for a durable-handle target evicted from task state', async () => {
     const context = {
       getAppState: () => ({
         agentNameRegistry: new Map(),
@@ -263,25 +385,17 @@ describe('SendMessageTool durable worker handle fallback', () => {
       { requestId: 'req-1' } as never,
     )
 
-    expect(resumeAgentBackground).toHaveBeenCalledTimes(1)
-    expect(resumeAgentBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-persistent',
-        prompt: 'go deeper',
-        sourceSessionId: getSessionId(),
-      }),
-    )
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
     expect(result).toMatchObject({
       data: {
-        success: true,
-        message: expect.stringContaining(
-          'Resumed "Resumed worker" in the background.',
-        ),
+        success: false,
+        message:
+          'Agent "agent-persis..." is stopped. Use ResumeAgent({ agentId: "agent-persistent", prompt }) to restart it.',
       },
     })
   })
 
-  test('resumes a stopped in-memory local subagent by registered name', async () => {
+  test('returns ResumeAgent guidance for a stopped in-memory local subagent', async () => {
     const context = {
       getAppState: () => ({
         agentNameRegistry: new Map([['worker-one', 'agent-persistent']]),
@@ -304,22 +418,17 @@ describe('SendMessageTool durable worker handle fallback', () => {
       { requestId: 'req-stopped' } as never,
     )
 
-    expect(resumeAgentBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-persistent',
-        prompt: 'continue',
-        sourceSessionId: getSessionId(),
-      }),
-    )
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
     expect(result).toMatchObject({
       data: {
-        success: true,
-        message: expect.stringContaining('Resumed "Resumed worker" in the background.'),
+        success: false,
+        message:
+          'Agent "@worker-one" is stopped. Use ResumeAgent({ agentId: "agent-persistent", prompt }) to restart it.',
       },
     })
   })
 
-  test('resolves prior-session worker handles and resumes from the origin session', async () => {
+  test('returns ResumeAgent guidance for a prior-session worker handle', async () => {
     const freshSessionId = randomUUID()
     const priorSessionId = randomUUID()
     switchSession(freshSessionId, tempDir)
@@ -361,17 +470,15 @@ describe('SendMessageTool durable worker handle fallback', () => {
       { requestId: 'req-2' } as never,
     )
 
-    expect(resumeAgentBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-prior',
-        prompt: 'continue prior work',
-        sourceSessionId: priorSessionId,
-      }),
-    )
-    expect(result.data.success).toBe(true)
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
+    expect(result.data).toEqual({
+      success: false,
+      message:
+        'Agent "agent-prior" is stopped. Use ResumeAgent({ agentId: "agent-prior", prompt }) to restart it.',
+    })
   })
 
-  test('resolves prior-session raw agent ids and resumes from the origin session', async () => {
+  test('returns ResumeAgent guidance for a prior-session raw agent id', async () => {
     const freshSessionId = randomUUID()
     const priorSessionId = randomUUID()
     const priorAgentId = createAgentId()
@@ -414,13 +521,10 @@ describe('SendMessageTool durable worker handle fallback', () => {
       { requestId: 'req-3' } as never,
     )
 
-    expect(resumeAgentBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: priorAgentId,
-        prompt: 'continue by raw id',
-        sourceSessionId: priorSessionId,
-      }),
-    )
-    expect(result.data.success).toBe(true)
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
+    expect(result.data).toEqual({
+      success: false,
+      message: `Agent "${priorAgentId.slice(0, 12)}..." is stopped. Use ResumeAgent({ agentId: "${priorAgentId}", prompt }) to restart it.`,
+    })
   })
 })

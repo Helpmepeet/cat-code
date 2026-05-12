@@ -24,7 +24,7 @@ This file is intentionally:
 | Change injected repo or user instructions | `src/utils/claudemd.ts` | `src/context.ts`, repo `CLAUDE.md`, `.claude/rules/*.md`, `CLAUDE.local.md` |
 | Change final prompt assembly before model invocation | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/services/api/claude.ts` |
 | Change output-style prompt content | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts` |
-| Change subagent or coordinator prompt behavior | `src/coordinator/coordinatorMode.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts` |
+| Change subagent or coordinator prompt behavior | `src/coordinator/coordinatorMode.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/ResumeAgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts` |
 
 ## Start Here
 
@@ -86,7 +86,7 @@ These are the surfaces you are most likely to configure directly.
 | Auto-injected context | `src/context.ts`, `src/utils/queryContext.ts` | Git snapshot, current date, injected prompt sections, user context |
 | Repo/user/admin instructions | `src/utils/claudemd.ts` | Managed, user, project, and local `CLAUDE.md` and `.claude/rules/*.md` loading order |
 | Output style prompts | `src/constants/outputStyles.ts`, `src/outputStyles/loadOutputStylesDir.ts` | Style-specific prompt text layered into the main prompt |
-| Coordinator and subagent prompts | `src/coordinator/coordinatorMode.ts`, `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts`, `src/tools/AgentTool/loadAgentsDir.ts` | Worker orchestration policy, agent spawning guidance, built-in and custom agent system prompts |
+| Coordinator and subagent prompts | `src/coordinator/coordinatorMode.ts`, `src/tools/AgentTool/prompt.ts`, `src/tools/ResumeAgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts`, `src/tools/AgentTool/loadAgentsDir.ts` | Worker orchestration policy, agent spawning/resume guidance, built-in and custom agent system prompts |
 
 ## Safe Vs Careful Edits
 

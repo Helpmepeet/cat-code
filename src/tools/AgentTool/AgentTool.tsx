@@ -256,7 +256,7 @@ const baseInputSchema = lazySchema(() => z.object({
 const fullInputSchema = lazySchema(() => {
   // Multi-agent parameters
   const multiAgentInputSchema = z.object({
-    name: z.string().optional().describe('Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running.'),
+    name: z.string().optional().describe('Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running, and via ResumeAgent({agentId: name}) after it stops.'),
     team_name: z.string().optional().describe('Team name for spawning. Uses current team context if omitted.'),
     mode: permissionModeSchema().optional().describe('Permission mode for spawned teammate (e.g., "plan" to require plan approval).')
   });
@@ -1809,7 +1809,7 @@ The agent is now running and will receive instructions via mailbox.`
       };
     }
     if (data.status === 'async_launched') {
-      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. Use SendMessage with to: '${data.agentId}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes.`;
+      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. While it is running, use SendMessage with to: '${data.agentId}' to queue follow-ups. After it completes or is stopped, use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue it.)\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const instructions = data.canCheckProgress ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: ${data.outputFile}\nIf asked, you can check progress before completion using ${TASK_OUTPUT_TOOL_NAME} (preferred), or ${FILE_READ_TOOL_NAME} on the output file for raw stdout.` : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.`;
       const text = `${prefix}\n${instructions}`;
       return {
@@ -1832,7 +1832,7 @@ The agent is now running and will receive instructions via mailbox.`
         type: 'text' as const,
         text: '(Subagent completed but returned no output.)'
       }];
-      // One-shot built-ins (Explore, Plan) are never continued via SendMessage
+      // One-shot built-ins (Explore, Plan) are never continued via SendMessage or ResumeAgent
       // — the agentId hint and <usage> block are dead weight (~135 chars ×
       // 34M Explore runs/week ≈ 1-2 Gtok/week). Telemetry doesn't parse this
       // block (it uses logEvent in finalizeAgentTool), so dropping is safe.
@@ -1847,7 +1847,7 @@ The agent is now running and will receive instructions via mailbox.`
       const continuationText =
         data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
           ? `agentId: ${data.agentId}`
-          : `agentId: ${data.agentId} (use SendMessage with to: '${data.agentId}' to continue this agent)`;
+          : `agentId: ${data.agentId} (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`;
       const usage = data.usage ?? EMPTY_USAGE;
       const changedFilesText = data.changedFiles && data.changedFiles.length > 0 ? `\n<changed_files>\n${data.changedFiles.map(file => `- ${file.path} (${file.op}, ${file.ok ? 'ok' : `error: ${file.error ?? 'unknown error'}`})`).join('\n')}${data.changedFilesTruncated ? `\n- +${data.changedFilesTruncated} more` : ''}\n</changed_files>` : '';
       const errorText = data.status === 'completed_with_error' ? `\nstatus: completed_with_error\nerror: ${data.error}` : '';

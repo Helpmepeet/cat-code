@@ -14,10 +14,11 @@ When refreshing this map, verify these source paths before trusting older docs:
 4. `src/QueryEngine.ts`
 5. `src/screens/REPL.tsx`
 6. `src/tools/AgentTool/`
-7. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
-8. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
-9. commands: `src/commands/agent/`, `src/commands/agents/`
-10. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
+7. `src/tools/ResumeAgentTool/`
+8. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
+9. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
+10. commands: `src/commands/agent/`, `src/commands/agents/`
+11. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
 
 ## Current Mental Model
 
@@ -28,6 +29,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 - `src/constants/prompts.ts` plus `src/utils/systemPrompt.ts` for prompt replacement and Agent Mode session guidance.
 - transcript-adjacent `.agent-mode-state.json` files for durable worker state.
 - existing subagent/task machinery plus Agent Mode-specific worker roles and worker-control tools.
+- a three-tool worker boundary: `Agent` spawns new workers, `ResumeAgent` continues stopped workers, and `SendMessage` queues messages into running workers.
 - `src/screens/REPL.tsx` as the operational UI hub.
 
 ## Routing Table
@@ -44,8 +46,8 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Worker state persistence | `src/agent-mode/sessionState.ts` | `src/tools/AgentTool/runAgent.ts`, `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts` | Durable state lives beside transcripts as `<session-id>.agent-mode-state.json`. It tracks objective, active workers, known workers, status, resumability, synthesis status, handles, and worktree path. |
 | Worker lifecycle recording | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts` | Spawns record durable worker state when `sessionStateTracking` is present. Terminal paths record completed, failed, and killed status and set completed results to `synthesisStatus: pending`. |
 | Worker control tools | `src/tools/ListWorkersTool/ListWorkersTool.ts` | `src/tools/WaitWorkersTool/WaitWorkersTool.ts`, `src/tools/GetWorkerResultTool/GetWorkerResultTool.ts`, `src/tools/CancelWorkerTool/CancelWorkerTool.ts`, `src/tools.ts` | These tools are enabled only in Agent Mode. They list workers, wait for terminal status, read and optionally synthesize results, and cancel specific workers. |
-| Worker resume / steering | `src/tools/SendMessageTool/SendMessageTool.ts` | `src/tools/SendMessageTool/prompt.ts`, `src/tools/AgentTool/resumeAgent.ts`, `src/agent-mode/sessionState.ts` | `SendMessage` can target Agent Mode worker handles or agent IDs without Agent Teams. `resolveWorkerAgentTarget()` can find current and prior resumable workers. |
-| Prior-session continuity | `src/agent-mode/sessionState.ts` `readSessionStateWithContinuity()` | `src/tools/ListWorkersTool/ListWorkersTool.ts`, `src/tools/SendMessageTool/SendMessageTool.ts` | Continuity reads recent prior Agent Mode state files for completed, resumable workers and marks unavailable transcripts as stale/non-reusable. |
+| Worker spawn / resume / steering | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/SendMessageTool/SendMessageTool.ts` | `src/tools/AgentTool/resolveAgentTarget.ts`, `src/tools/AgentTool/resumeAgent.ts`, `src/agent-mode/sessionState.ts` | `Agent` spawns new workers. `ResumeAgent` restarts stopped workers by alias, durable handle, or raw agent ID. `SendMessage` only queues into workers that are currently running. |
+| Prior-session continuity | `src/agent-mode/sessionState.ts` `readSessionStateWithContinuity()` | `src/tools/ListWorkersTool/ListWorkersTool.ts`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/AgentTool/resolveAgentTarget.ts` | Continuity reads recent prior Agent Mode state files for completed, resumable workers and marks unavailable transcripts as stale/non-reusable. |
 | Role prompts | `src/agent-mode/rolePrompts.ts` | `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/runAgent.ts` | Agent Mode adds built-in `agent-mode-coding-worker` and `agent-mode-verifier` definitions. Coding workers can edit/run scoped checks; verifiers are read-only. |
 | Repo-local worker customization | `src/agent-mode/roleFiles.ts` | `.cat-code/roles/implementor.md`, `.cat-code/roles/verifier.md`, `.cat-code/context/*.md` | Built-in role files are injected by role. Context files are listed, not auto-injected; workers decide which relevant files to read. |
 | Worker naming and roster display | `src/agent-mode/workerNames.ts` | `src/agent-mode/workerUxSummary.ts`, `src/agent-mode/AgentModeWorkerRoster.tsx` | Friendly handles are allocated by role when durable tracking is active. UX summary buckets running, result-ready, reviewed, resumable, stale, and attention workers. |
@@ -64,7 +66,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Session state and worker continuity | `bun test src/agent-mode/sessionState.test.ts src/tools/ListWorkersTool/ListWorkersTool.test.ts src/tools/GetWorkerResultTool/GetWorkerResultTool.test.ts src/tools/WaitWorkersTool/WaitWorkersTool.test.ts src/tools/CancelWorkerTool/CancelWorkerTool.test.ts` |
 | Role prompts and naming | `bun test src/agent-mode/rolePrompts.test.ts src/agent-mode/workerNames.test.ts` |
 | Roster UX | `bun test src/agent-mode/workerUxSummary.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx` |
-| AgentTool integration and resume | `bun test src/tools/AgentTool/AgentTool.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/prompt.test.ts` |
+| AgentTool integration and resume | `bun test src/tools/AgentTool/AgentTool.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/resolveAgentTarget.test.ts src/tools/AgentTool/prompt.test.ts src/tools/ResumeAgentTool/ResumeAgentTool.test.ts` |
 | SendMessage worker follow-up | `bun test src/tools/SendMessageTool/SendMessageTool.test.ts` |
 | Goal integration | `bun test src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/utils/threadGoal.test.ts` |
 | Build-level validation | `bun run build:dev:full` |
@@ -78,7 +80,7 @@ Treat these docs as historical planning or operator notes unless current source 
 - `docs/agent/2026-04-30-agent-mode-gaps.md` claims older class/status-header/run-state components are implemented. Re-check source first; the current live owner is `src/agent-mode/` plus REPL/task integration.
 - `docs/agent/2026-04-30-agent-mode-two-mode-prompt-plan.md` is a deployment prompt plan, not the live Agent Mode routing source. The live prompt entrypoints are `src/constants/prompts.ts`, `src/utils/systemPrompt.ts`, and `src/agent-mode/orchestratorPrompt.ts`.
 - `docs/agent/2026-04-30-agent-mode-orchestrator-system-prompt.md` is useful for comparison but may drift from the exact live string. Prefer `src/agent-mode/orchestratorPrompt.ts` and `src/constants/prompts.ts`.
-- `docs/agent/2026-04-30-agent-mode-v2-v2.3-resumable-subagents.md` is a design proposal. Many concepts now exist through durable session state, worker-control tools, and `SendMessage`, but the doc is not the source of truth.
+- `docs/agent/2026-04-30-agent-mode-v2-v2.3-resumable-subagents.md` is a design proposal. Many concepts now exist through durable session state, worker-control tools, `ResumeAgent`, and `SendMessage`, but the doc is not the source of truth.
 - `docs/agent/2026-05-02-agent-mode-v2.3-live-feedback.md` and `docs/agent/2026-05-02-agent-mode-v2.4-live-feedback.md` are live feedback logs. Use their verified-evidence sections as clues, not authority.
 - `docs/agent/2026-05-03-cat-swarm-skill.md` contains useful runtime facts about worker-control tools and `SendMessage`, but it is scoped to a local workflow, not the general Agent Mode architecture.
 - `docs/agent/2026-04-30-agent-mode-readme.md` is the closest operator-facing overview. Still verify prompt, role, compaction, and UI claims against source before editing behavior.

@@ -179,6 +179,7 @@ import { getTools, assembleToolPool } from '../tools.js';
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js';
 import { resolveAgentTools } from '../tools/AgentTool/agentToolUtils.js';
 import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
+import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
@@ -3976,12 +3977,10 @@ export function REPL({
       if (task.status === 'running') {
         queuePendingMessage(task.id, input, setAppState);
       } else {
-        const agentDisplayName = (() => {
-          for (const [name, id] of store.getState().agentNameRegistry) {
-            if (id === task.id) return `@${name}`;
-          }
-          return task.description || task.id;
-        })();
+        const agentDisplayName = await displayNameForAgent({
+          agentId: task.id,
+          appState: store.getState()
+        });
         appendLocalAgentSystemMessage(task.id, `Resuming ${agentDisplayName}...`, 'info', setAppState);
         void resumeAgentBackground({
           agentId: task.id,
