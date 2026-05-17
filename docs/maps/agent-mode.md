@@ -2,7 +2,7 @@
 
 Daily-refreshable routing map for Agent Mode ownership, integration points, and stale-doc checks.
 
-Last refreshed: 2026-05-12 against the current source tree.
+Last refreshed: 2026-05-17 against the current source tree.
 
 ## Refresh Checklist
 
@@ -15,10 +15,11 @@ When refreshing this map, verify these source paths before trusting older docs:
 5. `src/screens/REPL.tsx`
 6. `src/tools/AgentTool/`
 7. `src/tools/ResumeAgentTool/`
-8. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
-9. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
-10. commands: `src/commands/agent/`, `src/commands/agents/`
-11. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
+8. agent targeting: `src/tools/AgentTool/resolveAgentTarget.ts`, `src/utils/sessionStorage.ts` subagent metadata
+9. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
+10. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
+11. commands: `src/commands/agent/`, `src/commands/agents/`
+12. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
 
 ## Current Mental Model
 
@@ -31,6 +32,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 - existing subagent/task machinery plus Agent Mode-specific worker roles and worker-control tools.
 - a three-tool worker boundary: `Agent` spawns new workers, `ResumeAgent` continues stopped workers, and `SendMessage` queues messages into running workers.
 - `src/screens/REPL.tsx` as the operational UI hub.
+- optional friendly subagent names (`agentName`) persisted in `src/utils/sessionStorage.ts` and used for `@name` targeting via `resolveAgentTarget`.
 
 ## Routing Table
 
@@ -45,6 +47,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Per-turn Agent Mode context | `src/agent-mode/agentMode.ts` `getAgentModeUserContext()` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, `src/screens/REPL.tsx` | Injects worker tool availability, connected MCP server names, scratchpad context when gated, and formatted durable session state. |
 | Worker state persistence | `src/agent-mode/sessionState.ts` | `src/tools/AgentTool/runAgent.ts`, `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts` | Durable state lives beside transcripts as `<session-id>.agent-mode-state.json`. It tracks objective, active workers, known workers, status, resumability, synthesis status, handles, and worktree path. |
 | Worker lifecycle recording | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts` | Spawns record durable worker state when `sessionStateTracking` is present. Terminal paths record completed, failed, and killed status and set completed results to `synthesisStatus: pending`. |
+| Subagent target resolution (`@name`, IDs) | `src/tools/AgentTool/resolveAgentTarget.ts` | `src/utils/sessionStorage.ts` agent metadata, `src/agent-mode/sessionState.ts` worker handles, `src/tasks/LocalAgentTask/` | Name routing checks the live `agentNameRegistry`, durable Agent Mode worker handles, then persisted subagent metadata (`subagents/agent-*.meta.json`) before falling back to raw agent IDs. |
 | Worker control tools | `src/tools/ListWorkersTool/ListWorkersTool.ts` | `src/tools/WaitWorkersTool/WaitWorkersTool.ts`, `src/tools/GetWorkerResultTool/GetWorkerResultTool.ts`, `src/tools/CancelWorkerTool/CancelWorkerTool.ts`, `src/tools.ts` | These tools are enabled only in Agent Mode. They list workers, wait for terminal status, read and optionally synthesize results, and cancel specific workers. |
 | Worker spawn / resume / steering | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/SendMessageTool/SendMessageTool.ts` | `src/tools/AgentTool/resolveAgentTarget.ts`, `src/tools/AgentTool/resumeAgent.ts`, `src/agent-mode/sessionState.ts` | `Agent` spawns new workers. `ResumeAgent` restarts stopped workers by alias, durable handle, or raw agent ID. `SendMessage` only queues into workers that are currently running. |
 | Prior-session continuity | `src/agent-mode/sessionState.ts` `readSessionStateWithContinuity()` | `src/tools/ListWorkersTool/ListWorkersTool.ts`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/AgentTool/resolveAgentTarget.ts` | Continuity reads recent prior Agent Mode state files for completed, resumable workers and marks unavailable transcripts as stale/non-reusable. |

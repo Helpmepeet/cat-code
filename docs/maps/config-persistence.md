@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-05-17
 
 ## Purpose
 
@@ -20,7 +20,7 @@ for the config and persistence slice.
 | Settings merge behavior | `src/utils/settings/settings.ts` | `src/utils/settings/constants.ts`, `src/utils/settings/settingsCache.ts` |
 | Global config and project-keyed user state | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/envUtils.ts` |
 | Environment application from config/settings | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/utils/sessionEnvVars.ts` |
-| Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` |
+| Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
 | Persistent memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/utils/permissions/filesystem.ts` |
 | Session memory summaries | `src/services/SessionMemory/sessionMemory.ts` | `src/services/SessionMemory/sessionMemoryUtils.ts`, `src/utils/permissions/filesystem.ts` |
 | Admin/remote policy | `src/services/remoteManagedSettings/index.ts`, `src/services/policyLimits/index.ts` | `src/utils/settings/mdm/`, `src/utils/settings/managedPath.ts` |

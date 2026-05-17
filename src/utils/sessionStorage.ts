@@ -332,6 +332,8 @@ function getAgentMetadataPathForSession(
 
 export type AgentMetadata = {
   agentType: string
+  /** Friendly system/user-facing name for targeting this subagent. */
+  agentName?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -389,6 +391,45 @@ export async function readAgentMetadataForSession(
     if (isFsInaccessible(e)) return null
     throw e
   }
+}
+
+export async function listAgentMetadataForSession(
+  sessionId: string,
+): Promise<Array<{ agentId: AgentId; metadata: AgentMetadata }>> {
+  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  const dir = join(projectDir, sessionId, 'subagents')
+  let entries: Dirent[]
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch (e) {
+    if (isFsInaccessible(e)) return []
+    throw e
+  }
+
+  const results: Array<{ agentId: AgentId; metadata: AgentMetadata }> = []
+  for (const entry of entries) {
+    if (
+      !entry.isFile() ||
+      !entry.name.startsWith('agent-') ||
+      !entry.name.endsWith('.meta.json')
+    ) {
+      continue
+    }
+
+    const agentId = entry.name.slice(
+      'agent-'.length,
+      -'.meta.json'.length,
+    ) as AgentId
+    try {
+      const raw = await readFile(join(dir, entry.name), 'utf-8')
+      results.push({ agentId, metadata: JSON.parse(raw) as AgentMetadata })
+    } catch (e) {
+      logForDebugging(
+        `listAgentMetadataForSession: skipping ${entry.name}: ${String(e)}`,
+      )
+    }
+  }
+  return results
 }
 
 /**

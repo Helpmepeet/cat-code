@@ -7,6 +7,7 @@ import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
 import { asAgentId, toAgentId } from '../../types/ids.js'
 import {
   getAgentTranscriptPath,
+  listAgentMetadataForSession,
   readAgentMetadata,
   readAgentMetadataForSession,
 } from '../../utils/sessionStorage.js'
@@ -27,6 +28,11 @@ function shortAgentId(agentId: string): string {
   return agentId.length <= 12 ? agentId : `${agentId.slice(0, 12)}...`
 }
 
+function normalizeAgentTarget(input: string): string {
+  const trimmed = input.trim()
+  return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed
+}
+
 export async function displayNameForAgent({
   agentId,
   appState,
@@ -41,6 +47,7 @@ export async function displayNameForAgent({
     sourceSessionId && sourceSessionId !== currentSessionId
       ? await readAgentMetadataForSession(sourceSessionId, asAgentId(agentId))
       : await readAgentMetadata(asAgentId(agentId))
+  if (metadata?.agentName) return `@${metadata.agentName}`
   if (metadata?.description) return metadata.description
 
   const task = appState.tasks[agentId]
@@ -69,7 +76,10 @@ export async function resolveAgentTarget({
   appState: Pick<AppState, 'agentNameRegistry' | 'tasks'>
   sessionId: string
 }): Promise<ResolvedAgentTarget | null> {
-  const registered = appState.agentNameRegistry.get(input)
+  const target = normalizeAgentTarget(input)
+  if (target.length === 0) return null
+
+  const registered = appState.agentNameRegistry.get(target)
   if (registered) {
     return {
       agentId: registered,
@@ -82,7 +92,7 @@ export async function resolveAgentTarget({
     }
   }
 
-  const durableTarget = await resolveWorkerAgentTarget(sessionId, input)
+  const durableTarget = await resolveWorkerAgentTarget(sessionId, target)
   if (durableTarget) {
     return {
       agentId: durableTarget.agentId,
@@ -95,7 +105,24 @@ export async function resolveAgentTarget({
     }
   }
 
-  const rawAgentId = toAgentId(input)
+  const metadataMatches = (await listAgentMetadataForSession(sessionId)).filter(
+    entry => entry.metadata.agentName === target,
+  )
+  if (metadataMatches.length > 1) return null
+  const metadataTarget = metadataMatches[0]
+  if (metadataTarget) {
+    return {
+      agentId: metadataTarget.agentId,
+      sourceSessionId: sessionId,
+      displayName: await displayNameForAgent({
+        agentId: metadataTarget.agentId,
+        appState,
+        sourceSessionId: sessionId,
+      }),
+    }
+  }
+
+  const rawAgentId = toAgentId(target)
   if (!rawAgentId) {
     return null
   }

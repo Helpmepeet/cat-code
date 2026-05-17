@@ -10,6 +10,7 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
 import { resolveAgentTarget } from '../AgentTool/resolveAgentTarget.js'
 import {
+  AgentResumeInProgressError,
   resumeAgentBackground,
   TranscriptNotFoundError,
 } from '../AgentTool/resumeAgent.js'
@@ -154,6 +155,14 @@ export const ResumeAgentTool = buildTool({
           data: {
             success: false,
             message: `Agent "${resolved.displayName}" has no transcript to resume; it may have been cleaned up. Spawn a new agent with Agent.`,
+          },
+        }
+      }
+      if (e instanceof AgentResumeInProgressError) {
+        return {
+          data: {
+            success: false,
+            message: `Agent "${resolved.displayName}" is already running; resume is not needed. Any message you send via SendMessage will queue automatically and deliver at the next tool round.`,
           },
         }
       }

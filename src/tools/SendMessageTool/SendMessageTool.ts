@@ -74,8 +74,8 @@ const inputSchema = lazySchema(() =>
       .string()
       .describe(
         feature('UDS_INBOX')
-          ? 'Recipient: subagent raw agent ID, Agent Mode worker handle, teammate name or "*" when Agent Teams is enabled, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
-          : 'Recipient: subagent raw agent ID, Agent Mode worker handle, or teammate name/"*" when Agent Teams is enabled',
+          ? 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, teammate name or "*" when Agent Teams is enabled, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
+          : 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, or teammate name/"*" when Agent Teams is enabled',
       ),
     summary: z
       .string()
@@ -605,7 +605,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
       return { behavior: 'allow' as const, updatedInput: input }
     },
 
-    async validateInput(input, _context) {
+    async validateInput(input, context) {
       if (input.to.trim().length === 0) {
         return {
           result: false,
@@ -625,11 +625,24 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         }
       }
       if (input.to.includes('@')) {
-        return {
-          result: false,
-          message:
-            'to must be a bare teammate name or "*" — there is only one team per session',
-          errorCode: 9,
+        const isSingleLeadingAt =
+          input.to.startsWith('@') && !input.to.slice(1).includes('@')
+        let isLocalAgentTarget = false
+        if (isSingleLeadingAt && typeof input.message === 'string') {
+          isLocalAgentTarget =
+            (await resolveAgentTarget({
+              input: input.to,
+              appState: context.getAppState(),
+              sessionId: getSessionId(),
+            })) !== null
+        }
+        if (!isLocalAgentTarget) {
+          return {
+            result: false,
+            message:
+              'to must be a bare teammate name or "*" — there is only one team per session',
+            errorCode: 9,
+          }
         }
       }
       if (!isAgentSwarmsEnabled()) {
@@ -861,10 +874,13 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               }
             }
           }
+          const resumeTarget = resolved.displayName.startsWith('@')
+            ? resolved.displayName
+            : input.to.trim()
           return {
             data: {
               success: false,
-              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${agentId}", prompt }) to restart it.`,
+              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.`,
             },
           }
         }

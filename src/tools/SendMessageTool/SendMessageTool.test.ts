@@ -8,6 +8,7 @@ import {
   getSessionProjectDir,
   switchSession,
 } from '../../bootstrap/state.js'
+import { readMailbox } from '../../utils/teammateMailbox.js'
 import { getTranscriptPathForSession } from '../../utils/sessionStorage.js'
 import { createAgentId } from '../../utils/uuid.js'
 import { isDeferredTool } from '../ToolSearchTool/prompt.js'
@@ -102,12 +103,14 @@ describe('SendMessageTool durable worker handle fallback', () => {
   const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
   const originalAgentTeams = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalUserType = process.env.USER_TYPE
   let tempDir: string
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'send-message-tool-'))
     const sessionId = randomUUID()
     switchSession(sessionId, tempDir)
+    process.env.USER_TYPE = 'external'
 
     writeSessionState(sessionId, {
       sessionId,
@@ -154,6 +157,11 @@ describe('SendMessageTool durable worker handle fallback', () => {
     } else {
       process.env.CLAUDE_CONFIG_DIR = originalConfigDir
     }
+    if (originalUserType === undefined) {
+      delete process.env.USER_TYPE
+    } else {
+      process.env.USER_TYPE = originalUserType
+    }
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true })
     }
@@ -172,19 +180,19 @@ describe('SendMessageTool durable worker handle fallback', () => {
     expect(SendMessageTool.isEnabled?.()).toBe(true)
   })
 
-  test('is enabled in normal sessions for subagent resume by id', () => {
+  test('is enabled in normal sessions for running subagent targets', () => {
     delete process.env.CLAUDE_CODE_AGENT_MODE
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     expect(SendMessageTool.isEnabled?.()).toBe(true)
   })
 
-  test('schema describes resumable subagent targets', () => {
+  test('schema describes running subagent targets', () => {
     expect(SendMessageTool.inputSchema.shape.to.description).toContain(
-      'subagent raw agent ID',
+      'running subagent raw agent ID',
     )
     expect(SendMessageTool.inputSchema.shape.to.description).toContain(
-      'Agent Mode worker handle',
+      'running Agent Mode worker handle',
     )
   })
 
@@ -294,6 +302,46 @@ describe('SendMessageTool durable worker handle fallback', () => {
     expect(resumeAgentBackground).not.toHaveBeenCalled()
   })
 
+  test('queues messages to a running local subagent by displayed @name', async () => {
+    let state = {
+      agentNameRegistry: new Map([['worker-one', 'agent-running']]),
+      tasks: {
+        'agent-running': {
+          id: 'agent-running',
+          type: 'local_agent',
+          status: 'running',
+          agentId: 'agent-running',
+          agentType: 'general-purpose',
+          pendingMessages: [],
+        },
+      },
+    }
+    const context = {
+      getAppState: () => state,
+      setAppState: (updater: (prev: typeof state) => typeof state) => {
+        state = updater(state)
+      },
+    } as never
+
+    await expect(
+      SendMessageTool.validateInput?.(
+        { to: '@worker-one', summary: 'follow up', message: 'go deeper' },
+        context,
+      ),
+    ).resolves.toEqual({ result: true })
+
+    const result = await SendMessageTool.call(
+      { to: '@worker-one', summary: 'follow up', message: 'go deeper' },
+      context,
+      undefined as never,
+      { requestId: 'req-running-at' } as never,
+    )
+
+    expect(result.data.success).toBe(true)
+    expect(state.tasks['agent-running'].pendingMessages).toEqual(['go deeper'])
+    expect(resumeAgentBackground).not.toHaveBeenCalled()
+  })
+
   test('queues messages to a running raw agent id before transcript creation', async () => {
     const agentId = createAgentId()
     let state = {
@@ -367,6 +415,15 @@ describe('SendMessageTool durable worker handle fallback', () => {
         message: "Message sent to alice's inbox",
       },
     })
+    const messages = await readMailbox('alice', 'review-team')
+    expect(messages).toMatchObject([
+      {
+        from: 'team-lead',
+        text: 'status?',
+        summary: 'hello',
+        read: false,
+      },
+    ])
     expect(resumeAgentBackground).not.toHaveBeenCalled()
   })
 
@@ -390,7 +447,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
       data: {
         success: false,
         message:
-          'Agent "agent-persis..." is stopped. Use ResumeAgent({ agentId: "agent-persistent", prompt }) to restart it.',
+          'Agent "agent-persis..." is stopped. Use ResumeAgent({ agentId: "explore-1", prompt }) to restart it.',
       },
     })
   })
@@ -423,7 +480,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
       data: {
         success: false,
         message:
-          'Agent "@worker-one" is stopped. Use ResumeAgent({ agentId: "agent-persistent", prompt }) to restart it.',
+          'Agent "@worker-one" is stopped. Use ResumeAgent({ agentId: "@worker-one", prompt }) to restart it.',
       },
     })
   })
@@ -474,7 +531,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
     expect(result.data).toEqual({
       success: false,
       message:
-        'Agent "agent-prior" is stopped. Use ResumeAgent({ agentId: "agent-prior", prompt }) to restart it.',
+        'Agent "agent-prior" is stopped. Use ResumeAgent({ agentId: "explore-prior", prompt }) to restart it.',
     })
   })
 

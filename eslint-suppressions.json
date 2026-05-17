@@ -9,11 +9,6 @@
       "count": 1
     }
   },
-  "src/cli/handlers/auth.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
   "src/cli/handlers/plugins.ts": {
     "custom-rules/no-process-exit": {
       "count": 1

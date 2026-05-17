@@ -276,6 +276,7 @@ export async function* runAgent({
   useExactTools,
   worktreePath,
   description,
+  agentName,
   transcriptSubdir,
   sessionStateTracking,
   onQueryProgress,
@@ -331,6 +332,8 @@ export async function* runAgent({
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
+  /** Friendly system/user-facing name for targeting this subagent. */
+  agentName?: string
   /** Optional subdirectory under subagents/ to group this agent's transcript
    * with related ones (e.g. workflows/<runId> for workflow subagents). */
   transcriptSubdir?: string
@@ -396,6 +399,7 @@ export async function* runAgent({
     : []
   const workerName =
     persistedWorkerHandle ??
+    agentName ??
     allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles, {
       allowGeneric: Boolean(sessionStateTracking),
     })
@@ -797,6 +801,7 @@ export async function* runAgent({
   )
   void writeAgentMetadata(agentId, {
     agentType: agentDefinition.agentType,
+    ...(workerName && { agentName: workerName }),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
     parentSessionId: getSessionId(),

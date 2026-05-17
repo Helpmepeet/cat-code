@@ -1,6 +1,6 @@
 import { feature } from 'bun:bundle';
 import * as React from 'react';
-import { buildTool, type ToolDef, toolMatchesName } from 'src/Tool.js';
+import { buildTool, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
 import type { Message as MessageType, NormalizedUserMessage } from 'src/types/message.js';
 import { getQuerySourceForAgent } from 'src/utils/promptCategory.js';
 import { z } from 'zod/v4';
@@ -37,7 +37,7 @@ import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { filterDeniedAgents, getDenyRuleForAgent } from '../../utils/permissions/permissions.js';
 import { enqueueSdkEvent } from '../../utils/sdkEventQueue.js';
-import { appendSubagentSpawned, appendSubagentTerminal, getAgentTranscriptPath, getTranscriptPath, writeAgentMetadata } from '../../utils/sessionStorage.js';
+import { appendSubagentSpawned, appendSubagentTerminal, getAgentTranscriptPath, getTranscriptPath, listAgentMetadataForSession, writeAgentMetadata } from '../../utils/sessionStorage.js';
 import { sleep } from '../../utils/sleep.js';
 import { buildEffectiveSystemPrompt } from '../../utils/systemPrompt.js';
 import { asSystemPrompt } from '../../utils/systemPromptType.js';
@@ -241,6 +241,107 @@ function getAutoBackgroundMs(): number {
   return 0;
 }
 
+async function getReservedSubagentNames({
+  appState,
+  sessionId,
+  sessionStateTracking,
+}: {
+  appState: ReturnType<ToolUseContext['getAppState']>
+  sessionId: string
+  sessionStateTracking?: AgentSessionStateTracking
+}): Promise<string[]> {
+  const reserved = new Set<string>(appState.agentNameRegistry.keys())
+
+  const persistedMetadata = await listAgentMetadataForSession(sessionId)
+  for (const entry of persistedMetadata) {
+    if (entry.metadata.agentName) reserved.add(entry.metadata.agentName)
+  }
+
+  if (sessionStateTracking) {
+    const trackedState = await readSessionState(
+      sessionStateTracking.sessionId,
+      sessionStateTracking.statePath,
+    )
+    for (const worker of trackedState?.knownWorkers ?? []) {
+      if (worker.handle) reserved.add(worker.handle)
+    }
+  }
+
+  return [...reserved]
+}
+
+function normalizeExplicitSubagentName(explicitName: string): string {
+  const agentName = explicitName.trim()
+  if (agentName.length === 0) {
+    throw new Error('Subagent name must not be empty')
+  }
+  if (agentName.includes('@')) {
+    throw new Error('Subagent name must not include @')
+  }
+  if (agentName.includes(':')) {
+    throw new Error('Subagent name must not include :')
+  }
+  if (agentName === '*') {
+    throw new Error('Subagent name must not be "*"')
+  }
+  return agentName
+}
+
+export async function resolveSystemSubagentName({
+  explicitName,
+  agentType,
+  appState,
+  sessionId,
+  sessionStateTracking,
+  agentId,
+}: {
+  explicitName?: string
+  agentType: string
+  appState: ReturnType<ToolUseContext['getAppState']>
+  sessionId: string
+  sessionStateTracking?: AgentSessionStateTracking
+  agentId: string
+}): Promise<{ agentName: string; allocatedAgentName?: string }> {
+  const reservedSubagentNames = await getReservedSubagentNames({
+    appState,
+    sessionId,
+    sessionStateTracking,
+  })
+  if (explicitName) {
+    const agentName = normalizeExplicitSubagentName(explicitName)
+    if (reservedSubagentNames.includes(agentName)) {
+      throw new Error(`Subagent name "${agentName}" is already in use`)
+    }
+    return { agentName }
+  }
+
+  const allocatedAgentName = allocateWorkerName(
+    agentType,
+    reservedSubagentNames,
+    { allowGeneric: true },
+  )
+  return {
+    agentName: allocatedAgentName ?? agentId,
+    ...(allocatedAgentName ? { allocatedAgentName } : {}),
+  }
+}
+
+function registerAgentName(
+  setAppState: ToolUseContext['setAppState'],
+  agentName: string | undefined,
+  agentId: string,
+): void {
+  if (!agentName) return
+  setAppState(prev => {
+    const next = new Map(prev.agentNameRegistry)
+    next.set(agentName, asAgentId(agentId))
+    return {
+      ...prev,
+      agentNameRegistry: next
+    }
+  })
+}
+
 // Multi-agent type constants are defined inline inside gated blocks to enable dead code elimination
 
 // Base input schema without multi-agent parameters
@@ -317,6 +418,8 @@ export const outputSchema = lazySchema(() => {
   const asyncOutputSchema = z.object({
     status: z.literal('async_launched'),
     agentId: z.string().describe('The ID of the async agent'),
+    agentName: z.string().optional().describe('The friendly name of the async agent'),
+    agentType: z.string().optional().describe('The type of async agent'),
     description: z.string().describe('The description of the task'),
     prompt: z.string().describe('The prompt for the agent'),
     outputFile: z.string().describe('Path to the output file for checking agent progress'),
@@ -716,12 +819,25 @@ export const AgentTool = buildTool({
       hookBased?: boolean;
     } | null = null;
     const earlyAgentId = createAgentId();
+    const parentSessionId = getSessionId();
     const sessionStateTracking = buildAgentSessionStateTracking({
       sessionMode: getCurrentSessionMode(),
-      sessionId: getSessionId(),
+      sessionId: parentSessionId,
       threadGoalObjective: appState.threadGoal?.objective,
       description,
     });
+    const {
+      agentName,
+      allocatedAgentName,
+    } = await resolveSystemSubagentName({
+      explicitName: name,
+      agentType: selectedAgent.agentType,
+      appState,
+      sessionId: parentSessionId,
+      sessionStateTracking,
+      agentId: earlyAgentId,
+    });
+    let registeredAgentName = false;
     let runAgentParams: Parameters<typeof runAgent>[0];
     try {
       if (isForkPath) {
@@ -821,9 +937,13 @@ export const AgentTool = buildTool({
       }),
       worktreePath: worktreeInfo?.worktreePath,
       description,
+      agentName,
       sessionStateTracking,
       };
     } catch (error) {
+      if (allocatedAgentName && !registeredAgentName) {
+        releaseWorkerName(allocatedAgentName);
+      }
       if (worktreeInfo && !worktreeInfo.hookBased && worktreeInfo.worktreeBranch && worktreeInfo.gitRoot) {
         try {
           await removeAgentWorktree(worktreeInfo.worktreePath, worktreeInfo.worktreeBranch, worktreeInfo.gitRoot);
@@ -887,6 +1007,7 @@ export const AgentTool = buildTool({
           // writeAgentMetadata handling.
           void writeAgentMetadata(asAgentId(earlyAgentId), {
             agentType: selectedAgent.agentType,
+            agentName,
             description
           }).catch(_err => logForDebugging(`Failed to clear worktree metadata: ${_err}`));
           return {};
@@ -904,10 +1025,10 @@ export const AgentTool = buildTool({
     const spawnedAt = new Date().toISOString();
     const agentTranscriptPath = getAgentTranscriptPath(asAgentId(earlyAgentId));
     const parentTranscriptPath = getTranscriptPath();
-    const parentSessionId = getSessionId();
     appendSubagentSpawned(parentTranscriptPath, {
       sessionId: parentSessionId,
       agentId: asAgentId(earlyAgentId),
+      agentName,
       agentType: selectedAgent.agentType,
       description: description ?? '',
       transcriptPath: agentTranscriptPath,
@@ -922,6 +1043,11 @@ export const AgentTool = buildTool({
       description: description ?? '',
       sessionId: parentSessionId,
     });
+    registerAgentName(rootSetAppState, agentName, earlyAgentId);
+    registeredAgentName = true;
+    if (allocatedAgentName) {
+      releaseWorkerName(allocatedAgentName);
+    }
 
     if (shouldRunAsync) {
       const asyncAgentId = earlyAgentId;
@@ -941,20 +1067,6 @@ export const AgentTool = buildTool({
         ownerType: 'subagent',
         ownerLabel: description,
       });
-
-      // Register name → agentId for SendMessage routing. Post-registerAsyncAgent
-      // so we don't leave a stale entry if spawn fails. Sync agents skipped —
-      // coordinator is blocked, so SendMessage routing doesn't apply.
-      if (name) {
-        rootSetAppState(prev => {
-          const next = new Map(prev.agentNameRegistry);
-          next.set(name, asAgentId(asyncAgentId));
-          return {
-            ...prev,
-            agentNameRegistry: next
-          };
-        });
-      }
 
       // Wrap async agent execution in agent context for analytics attribution
       const asyncAgentContext = {
@@ -987,7 +1099,7 @@ export const AgentTool = buildTool({
           },
           onCacheSafeParams
         }),
-        metadata,
+        metadata: { ...metadata, agentName },
         description,
         toolUseContext,
         rootSetAppState,
@@ -1005,6 +1117,8 @@ export const AgentTool = buildTool({
           isAsync: true as const,
           status: 'async_launched' as const,
           agentId: agentBackgroundTask.agentId,
+          agentName,
+          agentType: selectedAgent.agentType,
           description: description,
           prompt: prompt,
           outputFile: getTaskOutputPath(agentBackgroundTask.agentId),
@@ -1210,6 +1324,7 @@ export const AgentTool = buildTool({
                     }
                     const agentResult = finalizeAgentTool(agentMessages, backgroundedTaskId, {
                       ...metadata,
+                      agentName,
                       totalTokensOverride: getTokenCountFromTracker(tracker)
                     });
 
@@ -1428,6 +1543,8 @@ export const AgentTool = buildTool({
                     isAsync: true as const,
                     status: 'async_launched' as const,
                     agentId: backgroundedTaskId,
+                    agentName,
+                    agentType: selectedAgent.agentType,
                     description: description,
                     prompt: prompt,
                     outputFile: getTaskOutputPath(backgroundedTaskId),
@@ -1683,6 +1800,7 @@ export const AgentTool = buildTool({
         }
         const agentResult = finalizeAgentTool(agentMessages, syncAgentId, {
           ...metadata,
+          agentName,
           totalTokensOverride: getTokenCountFromTracker(syncTracker)
         });
         if (feature('TRANSCRIPT_CLASSIFIER')) {
@@ -1809,7 +1927,16 @@ The agent is now running and will receive instructions via mailbox.`
       };
     }
     if (data.status === 'async_launched') {
-      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. While it is running, use SendMessage with to: '${data.agentId}' to queue follow-ups. After it completes or is stopped, use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue it.)\nThe agent is working in the background. You will be notified automatically when it completes.`;
+      const oneShotAsync =
+        data.agentType &&
+        ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) &&
+        !isAgentMode()
+      const target = data.agentName ? `@${data.agentName}` : data.agentId
+      const nameLine = data.agentName ? `\nagentName: ${data.agentName}` : ''
+      const continuationHint = oneShotAsync
+        ? 'internal ID - do not mention to user.'
+        : `internal ID - do not mention to user. While it is running, use SendMessage with to: '${target}' to queue follow-ups. After it completes or is stopped, use ResumeAgent({ agentId: '${target}', prompt }) to continue it.`
+      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const instructions = data.canCheckProgress ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: ${data.outputFile}\nIf asked, you can check progress before completion using ${TASK_OUTPUT_TOOL_NAME} (preferred), or ${FILE_READ_TOOL_NAME} on the output file for raw stdout.` : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.`;
       const text = `${prefix}\n${instructions}`;
       return {
@@ -1847,7 +1974,9 @@ The agent is now running and will receive instructions via mailbox.`
       const continuationText =
         data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
           ? `agentId: ${data.agentId}`
-          : `agentId: ${data.agentId} (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`;
+          : data.agentName
+            ? `agentId: ${data.agentId}\nagentName: ${data.agentName} (use ResumeAgent({ agentId: '@${data.agentName}', prompt }) to continue this agent)`
+            : `agentId: ${data.agentId} (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`;
       const usage = data.usage ?? EMPTY_USAGE;
       const changedFilesText = data.changedFiles && data.changedFiles.length > 0 ? `\n<changed_files>\n${data.changedFiles.map(file => `- ${file.path} (${file.op}, ${file.ok ? 'ok' : `error: ${file.error ?? 'unknown error'}`})`).join('\n')}${data.changedFilesTruncated ? `\n- +${data.changedFilesTruncated} more` : ''}\n</changed_files>` : '';
       const errorText = data.status === 'completed_with_error' ? `\nstatus: completed_with_error\nerror: ${data.error}` : '';

@@ -112,12 +112,13 @@ function writePriorAgentMetadata(
   sessionId: string,
   agentId: string,
   description: string,
+  agentName?: string,
 ): void {
   const path = join(projectDir, sessionId, 'subagents', `agent-${agentId}.meta.json`)
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(
     path,
-    JSON.stringify({ agentType: 'general-purpose', description }),
+    JSON.stringify({ agentType: 'general-purpose', description, agentName }),
     'utf-8',
   )
   createdFiles.push(path)
@@ -178,6 +179,27 @@ describe('resolveAgentTarget', () => {
     })
   })
 
+  test('resolves displayed aliases with a leading @', async () => {
+    const state = appState({
+      registry: new Map([['worker-one', 'agent-registered']]),
+      tasks: {
+        'agent-registered': {
+          id: 'agent-registered',
+          type: 'local_agent',
+          description: 'Registered task',
+        },
+      },
+    })
+
+    await expect(
+      resolveAgentTarget({ input: '@worker-one', appState: state, sessionId }),
+    ).resolves.toEqual({
+      agentId: 'agent-registered',
+      sourceSessionId: sessionId,
+      displayName: '@worker-one',
+    })
+  })
+
   test('resolves current-session durable worker handles', async () => {
     writeSessionState(sessionId, {
       sessionId,
@@ -200,6 +222,37 @@ describe('resolveAgentTarget', () => {
     await expect(
       resolveAgentTarget({
         input: 'explore-current',
+        appState: appState(),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      agentId: 'agent-current',
+      sourceSessionId: sessionId,
+    })
+  })
+
+  test('resolves displayed durable worker handles with a leading @', async () => {
+    writeSessionState(sessionId, {
+      sessionId,
+      mode: 'agent',
+      objective: 'Current target',
+      activeWorkers: {},
+      knownWorkers: {
+        'agent-current': {
+          agentId: 'agent-current',
+          role: 'explorer',
+          description: 'Current durable worker',
+          status: 'completed',
+          resumable: true,
+          worktreePath: null,
+          handle: 'explore-current',
+        },
+      },
+    })
+
+    await expect(
+      resolveAgentTarget({
+        input: '@explore-current',
         appState: appState(),
         sessionId,
       }),
@@ -270,6 +323,53 @@ describe('resolveAgentTarget', () => {
         appState: appState(),
         sessionId,
       }),
+    ).resolves.toBeNull()
+  })
+
+  test('resolves current-session metadata names outside Agent Mode state', async () => {
+    const agentId = createAgentId()
+    writeCurrentAgentTranscript(agentId)
+    await writeAgentMetadata(asAgentId(agentId), {
+      agentType: 'general-purpose',
+      description: 'Metadata worker',
+      agentName: 'Ada',
+    })
+
+    await expect(
+      resolveAgentTarget({ input: 'Ada', appState: appState(), sessionId }),
+    ).resolves.toEqual({
+      agentId,
+      sourceSessionId: sessionId,
+      displayName: '@Ada',
+    })
+
+    await expect(
+      resolveAgentTarget({ input: '@Ada', appState: appState(), sessionId }),
+    ).resolves.toMatchObject({
+      agentId,
+      sourceSessionId: sessionId,
+      displayName: '@Ada',
+    })
+  })
+
+  test('does not resolve ambiguous duplicate metadata names', async () => {
+    const firstAgentId = createAgentId()
+    const secondAgentId = createAgentId()
+    writeCurrentAgentTranscript(firstAgentId)
+    writeCurrentAgentTranscript(secondAgentId)
+    await writeAgentMetadata(asAgentId(firstAgentId), {
+      agentType: 'general-purpose',
+      description: 'First metadata worker',
+      agentName: 'Ada',
+    })
+    await writeAgentMetadata(asAgentId(secondAgentId), {
+      agentType: 'general-purpose',
+      description: 'Second metadata worker',
+      agentName: 'Ada',
+    })
+
+    await expect(
+      resolveAgentTarget({ input: '@Ada', appState: appState(), sessionId }),
     ).resolves.toBeNull()
   })
 
@@ -351,6 +451,7 @@ describe('resolveAgentTarget', () => {
     await writeAgentMetadata(asAgentId(metadataAgentId), {
       agentType: 'general-purpose',
       description: 'Metadata worker',
+      agentName: 'Ada',
     })
 
     await expect(
@@ -367,7 +468,7 @@ describe('resolveAgentTarget', () => {
         agentId: metadataAgentId,
         appState: appState(),
       }),
-    ).resolves.toBe('Metadata worker')
+    ).resolves.toBe('@Ada')
 
     await expect(
       displayNameForAgent({

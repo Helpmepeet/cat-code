@@ -9,7 +9,7 @@ import {
 } from 'bun:test'
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
-import { mkdir, rm, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import {
@@ -109,6 +109,10 @@ describe('resumeAgentBackground', () => {
         },
       }),
     )
+    const parentTranscript = await readFile(getTranscriptPath(), 'utf-8')
+    expect(parentTranscript).toContain('"type":"subagent-spawned"')
+    expect(parentTranscript).toContain('"toolUseId":"toolu-resume"')
+    expect(parentTranscript).toContain('"agentId":"agent-resume"')
   })
 })
 

@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-05-12 against the current source tree.
+Last refreshed: 2026-05-17 against the current source tree.
 
 ## Purpose
 
@@ -138,7 +138,7 @@ Inspect these surfaces when a tool is unexpectedly allowed, denied, or asking:
 1. `src/tools.ts` `filterToolsByDenyRules()`
    Tool can disappear from prompt exposure before runtime.
 2. `src/utils/permissions/permissions.ts`
-   Entire-tool deny rule.
+   Entire-tool deny rule. Note: a blanket deny for `Agent` also denies `ResumeAgent` (it is another subagent execution surface).
 3. `src/utils/permissions/permissions.ts`
    Entire-tool ask rule, with Bash sandbox exceptions.
 4. Tool-specific `checkPermissions()`

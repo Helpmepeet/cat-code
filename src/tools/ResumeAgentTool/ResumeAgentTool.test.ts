@@ -8,7 +8,7 @@ import {
   test,
 } from 'bun:test'
 import { randomUUID } from 'crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import {
@@ -333,6 +333,61 @@ describe('ResumeAgentTool', () => {
     )
   })
 
+  test('resumes prior-session handles through the real resume scheduler', async () => {
+    const freshSessionId = randomUUID()
+    const priorSessionId = randomUUID()
+    const priorAgentId = createAgentId()
+    switchSession(freshSessionId, tempDir)
+    sessionId = freshSessionId
+    writePriorSessionState(tempDir, priorSessionId, {
+      sessionId: priorSessionId,
+      mode: 'agent',
+      objective: 'Prior target',
+      activeWorkers: {},
+      knownWorkers: {
+        [priorAgentId]: {
+          agentId: priorAgentId,
+          role: 'explorer',
+          description: 'Prior durable worker',
+          status: 'completed',
+          resumable: true,
+          worktreePath: null,
+          handle: 'explore-prior',
+        },
+      },
+    })
+    writeAgentTranscript(priorAgentId, priorSessionId, tempDir)
+    writePriorAgentMetadata(
+      tempDir,
+      priorSessionId,
+      priorAgentId,
+      'Prior metadata worker',
+    )
+    const runAsyncAgentLifecycle = spyOn(
+      agentToolUtils,
+      'runAsyncAgentLifecycle',
+    ).mockImplementation(mock(async () => {}) as never)
+    const { context, getState } = createToolUseContext()
+
+    const result = await ResumeAgentTool.call(
+      { agentId: 'explore-prior', prompt: 'continue prior real' },
+      context,
+      undefined as never,
+      { requestId: 'req-prior-real' } as never,
+    )
+
+    expect(result.data).toEqual({
+      success: true,
+      message: 'Resumed "Prior metadata worker" in the background.',
+    })
+    expect(getState().tasks[priorAgentId]).toMatchObject({
+      status: 'running',
+      prompt: 'continue prior real',
+      description: 'Prior metadata worker',
+    })
+    expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
+  })
+
   test('returns not found for unresolved targets', async () => {
     const { context } = createToolUseContext()
 
@@ -474,41 +529,25 @@ describe('ResumeAgentTool', () => {
     ).toBe(renderedSystemPrompt)
   })
 
-  test('concurrent double resume calls both schedule without throwing', async () => {
-    const resumeAgentBackground = spyOn(
-      resumeAgentModule,
-      'resumeAgentBackground',
-    ).mockImplementation(mock(async ({ agentId, prompt, toolUseContext }) => {
-      toolUseContext.setAppState(prev => ({
-        ...prev,
-        tasks: {
-          ...prev.tasks,
-          [agentId]: {
-            ...prev.tasks[agentId],
-            id: agentId,
-            type: 'local_agent',
-            status: 'running',
-            agentId,
-            prompt,
-            agentType: 'general-purpose',
-            pendingMessages: prev.tasks[agentId]?.pendingMessages ?? [],
-          },
-        },
-      }))
-      return {
-        agentId,
-        description: prompt,
-        outputFile: join(tempDir, 'output.txt'),
-      }
-    }) as never)
+  test('concurrent double resume calls only schedule one background run', async () => {
+    const runAsyncAgentLifecycle = spyOn(
+      agentToolUtils,
+      'runAsyncAgentLifecycle',
+    ).mockImplementation(mock(async () => {}) as never)
+    const agentId = createAgentId()
+    writeAgentTranscript(agentId)
+    await writeAgentMetadata(asAgentId(agentId), {
+      agentType: 'general-purpose',
+      description: 'Race worker',
+    })
     const { context, getState } = createToolUseContext({
-      agentNameRegistry: new Map([['worker-one', 'agent-race']]),
+      agentNameRegistry: new Map([['worker-one', agentId]]),
       tasks: {
-        'agent-race': {
-          id: 'agent-race',
+        [agentId]: {
+          id: agentId,
           type: 'local_agent',
           status: 'completed',
-          agentId: 'agent-race',
+          agentId,
           agentType: 'general-purpose',
         },
       },
@@ -529,10 +568,11 @@ describe('ResumeAgentTool', () => {
       ),
     ])
 
-    expect(results.map(result => result.data.success)).toEqual([true, true])
-    expect(resumeAgentBackground).toHaveBeenCalledTimes(2)
-    expect(getState().tasks['agent-race'].status).toBe('running')
-    expect(['first', 'second']).toContain(getState().tasks['agent-race'].prompt)
+    expect(results.map(result => result.data.success)).toEqual([true, false])
+    expect(results[1].data.message).toContain('already running')
+    expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
+    expect(getState().tasks[agentId].status).toBe('running')
+    expect(getState().tasks[agentId].prompt).toBe('first')
   })
 
   test('resumes an evicted task from an on-disk transcript', async () => {
@@ -562,6 +602,9 @@ describe('ResumeAgentTool', () => {
     expect(getState().tasks[agentId].status).toBe('running')
     expect(getState().tasks[agentId].prompt).toBe('resume evicted')
     expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
+    expect(readFileSync(getTranscriptPathForSession(sessionId), 'utf-8')).toContain(
+      '"type":"subagent-spawned"',
+    )
   })
 
   test('preserves pending messages when replacing an in-state task', async () => {

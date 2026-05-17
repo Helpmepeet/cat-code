@@ -7,6 +7,7 @@ import {
 } from '../../services/mcp/mcpStringUtils.js'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { RESUME_AGENT_TOOL_NAME } from '../../tools/ResumeAgentTool/constants.js'
 import { shouldUseSandbox } from '../../tools/BashTool/shouldUseSandbox.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { POWERSHELL_TOOL_NAME } from '../../tools/PowerShellTool/toolName.js'
@@ -288,7 +289,24 @@ export function getDenyRuleForTool(
   context: ToolPermissionContext,
   tool: Pick<Tool, 'name' | 'mcpInfo'>,
 ): PermissionRule | null {
-  return getDenyRules(context).find(rule => toolMatchesRule(tool, rule)) || null
+  const rules = getDenyRules(context)
+  const directRule = rules.find(rule => toolMatchesRule(tool, rule))
+  if (directRule) return directRule
+
+  // ResumeAgent is another subagent execution surface. A blanket Agent deny
+  // must close the whole subagent boundary, while Agent(type) remains scoped to
+  // fresh spawns because ResumeAgent resolves the type only after target lookup.
+  if (tool.name === RESUME_AGENT_TOOL_NAME) {
+    return (
+      rules.find(
+        rule =>
+          rule.ruleValue.toolName === AGENT_TOOL_NAME &&
+          rule.ruleValue.ruleContent === undefined,
+      ) || null
+    )
+  }
+
+  return null
 }
 
 /**
