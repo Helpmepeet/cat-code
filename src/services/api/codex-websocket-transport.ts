@@ -874,7 +874,7 @@ async function* _streamTurnAttempt(
 
   // Diagnostic state for close/error reporting. Captured in handler closures so
   // that a mid-stream close can surface enough context for postmortem analysis
-  // (see docs/session-10c4f510-review-impl-subagent-runtime-investigation.md).
+  // (see docs/reports/2026-04-30-session-10c4f510-review-impl-subagent-runtime-investigation.md).
   let eventCount = 0
   let lastEventType: string | null = null
   let lastEventAtMs: number | null = null
@@ -966,10 +966,10 @@ async function* _streamTurnAttempt(
     )
   }
 
-  // Tracks whether any events were yielded before the WS closed. A close with
-  // zero events almost always means a server-side account rejection (disguised
-  // as a transport close), so we classify it as a usage-limit error so that
-  // withRetry can failover to another account.
+  // Tracks whether any events were yielded before the WS closed. A zero-event
+  // close is ambiguous (auth rejection, transport failure, or server-side close),
+  // so it remains a transport close unless an explicit usage-limit error event
+  // was observed.
   let eventsYielded = false
   let terminalError: Error | null = null
 
@@ -1027,18 +1027,12 @@ async function* _streamTurnAttempt(
 
     // A close before response.completed is an error, not a clean finish.
     // The real client returns Err("websocket closed by server before response.completed").
-    const codeSuffix = closeCode !== undefined ? ` (code=${closeCode} reason=${closeReason})` : ''
-    if (!eventsYielded) {
-      failStream(
-        new CodexWebSocketUsageLimitError(
-          `WebSocket closed before any events (possible account rejection)${codeSuffix}`,
-        ),
-      )
-    } else {
-      failStream(
-        new CodexWebSocketClosedBeforeCompletedError(closeCode, closeReason),
-      )
-    }
+    failStream(
+      new CodexWebSocketClosedBeforeCompletedError(
+        closeCode,
+        eventsYielded ? closeReason : `zero_events:${closeReason}`,
+      ),
+    )
   }
 
   session.ws.on('message', onMessage)

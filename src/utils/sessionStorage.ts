@@ -308,12 +308,32 @@ export function getAgentTranscriptPath(agentId: AgentId): string {
   return join(base, `agent-${agentId}.jsonl`)
 }
 
+export function getAgentTranscriptPathForSession(
+  sessionId: string,
+  agentId: AgentId,
+): string {
+  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  return join(projectDir, sessionId, 'subagents', `agent-${agentId}.jsonl`)
+}
+
 function getAgentMetadataPath(agentId: AgentId): string {
   return getAgentTranscriptPath(agentId).replace(/\.jsonl$/, '.meta.json')
 }
 
+function getAgentMetadataPathForSession(
+  sessionId: string,
+  agentId: AgentId,
+): string {
+  return getAgentTranscriptPathForSession(sessionId, agentId).replace(
+    /\.jsonl$/,
+    '.meta.json',
+  )
+}
+
 export type AgentMetadata = {
   agentType: string
+  /** Friendly system/user-facing name for targeting this subagent. */
+  agentName?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -357,6 +377,59 @@ export async function readAgentMetadata(
     if (isFsInaccessible(e)) return null
     throw e
   }
+}
+
+export async function readAgentMetadataForSession(
+  sessionId: string,
+  agentId: AgentId,
+): Promise<AgentMetadata | null> {
+  const path = getAgentMetadataPathForSession(sessionId, agentId)
+  try {
+    const raw = await readFile(path, 'utf-8')
+    return JSON.parse(raw) as AgentMetadata
+  } catch (e) {
+    if (isFsInaccessible(e)) return null
+    throw e
+  }
+}
+
+export async function listAgentMetadataForSession(
+  sessionId: string,
+): Promise<Array<{ agentId: AgentId; metadata: AgentMetadata }>> {
+  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  const dir = join(projectDir, sessionId, 'subagents')
+  let entries: Dirent[]
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch (e) {
+    if (isFsInaccessible(e)) return []
+    throw e
+  }
+
+  const results: Array<{ agentId: AgentId; metadata: AgentMetadata }> = []
+  for (const entry of entries) {
+    if (
+      !entry.isFile() ||
+      !entry.name.startsWith('agent-') ||
+      !entry.name.endsWith('.meta.json')
+    ) {
+      continue
+    }
+
+    const agentId = entry.name.slice(
+      'agent-'.length,
+      -'.meta.json'.length,
+    ) as AgentId
+    try {
+      const raw = await readFile(join(dir, entry.name), 'utf-8')
+      results.push({ agentId, metadata: JSON.parse(raw) as AgentMetadata })
+    } catch (e) {
+      logForDebugging(
+        `listAgentMetadataForSession: skipping ${entry.name}: ${String(e)}`,
+      )
+    }
+  }
+  return results
 }
 
 /**
@@ -4495,8 +4568,29 @@ export async function getAgentTranscript(agentId: AgentId): Promise<{
   messages: Message[]
   contentReplacements: ContentReplacementRecord[]
 } | null> {
-  const agentFile = getAgentTranscriptPath(agentId)
+  return getAgentTranscriptFromPath(agentId, getAgentTranscriptPath(agentId))
+}
 
+export async function getAgentTranscriptForSession(
+  sessionId: string,
+  agentId: AgentId,
+): Promise<{
+  messages: Message[]
+  contentReplacements: ContentReplacementRecord[]
+} | null> {
+  return getAgentTranscriptFromPath(
+    agentId,
+    getAgentTranscriptPathForSession(sessionId, agentId),
+  )
+}
+
+async function getAgentTranscriptFromPath(
+  agentId: AgentId,
+  agentFile: string,
+): Promise<{
+  messages: Message[]
+  contentReplacements: ContentReplacementRecord[]
+} | null> {
   try {
     const { messages, agentContentReplacements } =
       await loadTranscriptFile(agentFile)

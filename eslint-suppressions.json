@@ -9,22 +9,12 @@
       "count": 1
     }
   },
-  "src/cli/handlers/auth.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
   "src/cli/handlers/plugins.ts": {
     "custom-rules/no-process-exit": {
       "count": 1
     }
   },
   "src/cli/handlers/util.tsx": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
-  "src/cli/print.ts": {
     "custom-rules/no-process-exit": {
       "count": 1
     }
@@ -52,6 +42,11 @@
   "src/components/StatusLine.tsx": {
     "react-hooks/exhaustive-deps": {
       "count": 2
+    }
+  },
+  "src/components/WorktreeExitDialog.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
     }
   },
   "src/components/permissions/ExitPlanModePermissionRequest/ExitPlanModePermissionRequest.tsx": {

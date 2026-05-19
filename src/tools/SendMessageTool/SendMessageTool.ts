@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import { z } from 'zod/v4'
 import { isReplBridgeActive } from '../../bootstrap/state.js'
+import { getSessionId } from '../../bootstrap/state.js'
 import { getReplBridgeHandle } from '../../bridge/replBridgeHandle.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
@@ -10,7 +11,6 @@ import {
   queuePendingMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
-import { toAgentId } from '../../types/ids.js'
 import { generateRequestId } from '../../utils/agentId.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -42,7 +42,7 @@ import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
-import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
+import { resolveAgentTarget } from '../AgentTool/resolveAgentTarget.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -74,8 +74,8 @@ const inputSchema = lazySchema(() =>
       .string()
       .describe(
         feature('UDS_INBOX')
-          ? 'Recipient: teammate name, "*" for broadcast, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
-          : 'Recipient: teammate name, or "*" for broadcast to all teammates',
+          ? 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, teammate name or "*" when Agent Teams is enabled, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
+          : 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, or teammate name/"*" when Agent Teams is enabled',
       ),
     summary: z
       .string()
@@ -523,7 +523,7 @@ async function handlePlanRejection(
 export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
   buildTool({
     name: SEND_MESSAGE_TOOL_NAME,
-    searchHint: 'send messages to agent teammates (swarm protocol)',
+    searchHint: 'send messages to subagents, Agent Mode workers, or agent teammates',
     maxResultSizeChars: 100_000,
 
     userFacingName() {
@@ -534,9 +534,10 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
       return inputSchema()
     },
     shouldDefer: true,
+    alwaysLoad: true,
 
     isEnabled() {
-      return isAgentSwarmsEnabled()
+      return true
     },
 
     isReadOnly(input) {
@@ -604,7 +605,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
       return { behavior: 'allow' as const, updatedInput: input }
     },
 
-    async validateInput(input, _context) {
+    async validateInput(input, context) {
       if (input.to.trim().length === 0) {
         return {
           result: false,
@@ -624,12 +625,56 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         }
       }
       if (input.to.includes('@')) {
-        return {
-          result: false,
-          message:
-            'to must be a bare teammate name or "*" — there is only one team per session',
-          errorCode: 9,
+        const isSingleLeadingAt =
+          input.to.startsWith('@') && !input.to.slice(1).includes('@')
+        let isLocalAgentTarget = false
+        if (isSingleLeadingAt && typeof input.message === 'string') {
+          isLocalAgentTarget =
+            (await resolveAgentTarget({
+              input: input.to,
+              appState: context.getAppState(),
+              sessionId: getSessionId(),
+            })) !== null
         }
+        if (!isLocalAgentTarget) {
+          return {
+            result: false,
+            message:
+              'to must be a bare teammate name or "*" — there is only one team per session',
+            errorCode: 9,
+          }
+        }
+      }
+      if (!isAgentSwarmsEnabled()) {
+        if (input.to === '*') {
+          return {
+            result: false,
+            message: 'broadcast messaging requires Agent Teams',
+            errorCode: 9,
+          }
+        }
+        if (parseAddress(input.to).scheme !== 'other') {
+          return {
+            result: false,
+            message: 'cross-session messaging requires Agent Teams',
+            errorCode: 9,
+          }
+        }
+        if (typeof input.message !== 'string') {
+          return {
+            result: false,
+            message: 'structured messages require Agent Teams',
+            errorCode: 9,
+          }
+        }
+        if (!input.summary || input.summary.trim().length === 0) {
+          return {
+            result: false,
+            message: 'summary is required when message is a string',
+            errorCode: 9,
+          }
+        }
+        return { result: true }
       }
       if (feature('UDS_INBOX') && parseAddress(input.to).scheme === 'bridge') {
         // Structured-message rejection first — it's the permanent constraint.
@@ -741,7 +786,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
       }
     },
 
-    async call(input, context, canUseTool, assistantMessage) {
+    async call(input, context, _canUseTool, _assistantMessage) {
       if (feature('UDS_INBOX') && typeof input.message === 'string') {
         const addr = parseAddress(input.to)
         if (addr.scheme === 'bridge') {
@@ -800,13 +845,19 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         }
       }
 
-      // Route to in-process subagent by name or raw agentId before falling
-      // through to ambient-team resolution. Stopped agents are auto-resumed.
+      // Route to in-process subagent by name, durable handle, or raw agentId
+      // before falling through to ambient-team resolution. Stopped subagents
+      // are NOT auto-resumed; SendMessage targets running recipients only.
+      // Use ResumeAgent for stopped subagents.
       if (typeof input.message === 'string' && input.to !== '*') {
         const appState = context.getAppState()
-        const registered = appState.agentNameRegistry.get(input.to)
-        const agentId = registered ?? toAgentId(input.to)
-        if (agentId) {
+        const resolved = await resolveAgentTarget({
+          input: input.to,
+          appState,
+          sessionId: getSessionId(),
+        })
+        if (resolved) {
+          const { agentId } = resolved
           const task = appState.tasks[agentId]
           if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
             if (task.status === 'running') {
@@ -822,57 +873,25 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
                 },
               }
             }
-            // task exists but stopped — auto-resume
-            try {
-              const result = await resumeAgentBackground({
-                agentId,
-                prompt: input.message,
-                toolUseContext: context,
-                canUseTool,
-                invokingRequestId: assistantMessage?.requestId,
-              })
-              return {
-                data: {
-                  success: true,
-                  message: `Agent "${input.to}" was stopped (${task.status}); resumed it in the background with your message. You'll be notified when it finishes. Output: ${result.outputFile}`,
-                },
-              }
-            } catch (e) {
-              return {
-                data: {
-                  success: false,
-                  message: `Agent "${input.to}" is stopped (${task.status}) and could not be resumed: ${errorMessage(e)}`,
-                },
-              }
-            }
-          } else {
-            // task evicted from state — try resume from disk transcript.
-            // agentId is either a registered name or a format-matching raw ID
-            // (toAgentId validates the createAgentId format, so teammate names
-            // never reach this block).
-            try {
-              const result = await resumeAgentBackground({
-                agentId,
-                prompt: input.message,
-                toolUseContext: context,
-                canUseTool,
-                invokingRequestId: assistantMessage?.requestId,
-              })
-              return {
-                data: {
-                  success: true,
-                  message: `Agent "${input.to}" had no active task; resumed from transcript in the background with your message. You'll be notified when it finishes. Output: ${result.outputFile}`,
-                },
-              }
-            } catch (e) {
-              return {
-                data: {
-                  success: false,
-                  message: `Agent "${input.to}" is registered but has no transcript to resume. It may have been cleaned up. (${errorMessage(e)})`,
-                },
-              }
-            }
           }
+          const resumeTarget = resolved.displayName.startsWith('@')
+            ? resolved.displayName
+            : input.to.trim()
+          return {
+            data: {
+              success: false,
+              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.`,
+            },
+          }
+        }
+      }
+
+      if (!isAgentSwarmsEnabled()) {
+        return {
+          data: {
+            success: false,
+            message: `No running subagent or Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target running worker handles or agent IDs.`,
+          },
         }
       }
 

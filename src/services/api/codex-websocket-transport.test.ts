@@ -380,6 +380,75 @@ describe('streamTurnViaWebSocket', () => {
     ])
   })
 
+  test('second turn preserves prior web_search_call output items for continuation matching', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'search the web' }]
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          id: 'ws_123',
+          type: 'web_search_call',
+          status: 'completed',
+          action: {
+            type: 'search',
+            query: 'OpenAI web_search',
+            sources: [
+              {
+                type: 'url',
+                title: 'OpenAI docs',
+                url: 'https://platform.openai.com/docs/guides/tools-web-search',
+              },
+            ],
+          },
+        },
+      },
+      completedEvent('resp_001'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID,
+      { instructions: 'sys', input: turn1Input, reasoning: { effort: 'high' } },
+      AUTH,
+      1,
+    ))
+
+    const priorWebSearchCall = {
+      id: 'ws_123',
+      type: 'web_search_call',
+      status: 'completed',
+      action: {
+        type: 'search',
+        query: 'OpenAI web_search',
+        sources: [
+          {
+            type: 'url',
+            title: 'OpenAI docs',
+            url: 'https://platform.openai.com/docs/guides/tools-web-search',
+          },
+        ],
+      },
+    }
+    const turn2Input = [
+      { role: 'user', content: 'search the web' },
+      priorWebSearchCall,
+      { role: 'user', content: 'next' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID,
+      { instructions: 'sys', input: turn2Input, reasoning: { effort: 'high' } },
+      AUTH,
+      3,
+    ))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_001')
+    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
+  })
+
   test('canonical reconciliation tolerates omitted reasoning before tool call output', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
@@ -800,11 +869,11 @@ describe('streamTurnViaWebSocket', () => {
 
   // ── WS close before response.completed ─────────────────────────────────
 
-  test('throws CodexWebSocketUsageLimitError when WS closes before any events', async () => {
+  test('throws CodexWebSocketClosedBeforeCompletedError when WS closes before any events', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
 
-    // Deliver close event with no events — classified as account rejection.
+    // Deliver close event with no events — treated as an ambiguous transport close.
     fakeWs.send = (data: string) => {
       fakeWs['sent'].push(data)
       Promise.resolve().then(() => fakeWs.triggerClose())
@@ -812,7 +881,7 @@ describe('streamTurnViaWebSocket', () => {
 
     await expect(
       collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
-    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+    ).rejects.toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
   })
 
   // ── turnState scoping ───────────────────────────────────────────────────
@@ -992,7 +1061,7 @@ describe('streamTurnViaWebSocket', () => {
     expect(capturedEntry!['account_id_prefix']).toBe('acct-0c9')
   })
 
-  test('classifies WS close with zero events as CodexWebSocketUsageLimitError', async () => {
+  test('classifies WS close with zero events as CodexWebSocketClosedBeforeCompletedError', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
 
@@ -1004,7 +1073,7 @@ describe('streamTurnViaWebSocket', () => {
 
     await expect(
       collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
-    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+    ).rejects.toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
   })
 
   test('WS close after events yields plain transport error, not CodexWebSocketUsageLimitError', async () => {

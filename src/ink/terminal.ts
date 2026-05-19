@@ -187,6 +187,23 @@ export type Terminal = {
   stderr: Writable
 }
 
+const ITERM2_INLINE_IMAGE_PREFIX = '\x1b]1337;File='
+const ITERM2_MULTIPART_INLINE_IMAGE_PREFIX = '\x1b]1337;MultipartFile='
+const TMUX_ITERM2_INLINE_IMAGE_PREFIX = '\x1bPtmux;\x1b\x1b]1337;File='
+const TMUX_ITERM2_MULTIPART_INLINE_IMAGE_PREFIX =
+  '\x1bPtmux;\x1b\x1b]1337;MultipartFile='
+
+function diffContainsIterm2InlineImage(diff: Diff): boolean {
+  return diff.some(
+    patch =>
+      patch.type === 'stdout' &&
+      (patch.content.includes(ITERM2_INLINE_IMAGE_PREFIX) ||
+        patch.content.includes(ITERM2_MULTIPART_INLINE_IMAGE_PREFIX) ||
+        patch.content.includes(TMUX_ITERM2_INLINE_IMAGE_PREFIX) ||
+        patch.content.includes(TMUX_ITERM2_MULTIPART_INLINE_IMAGE_PREFIX)),
+  )
+}
+
 export function writeDiffToTerminal(
   terminal: Terminal,
   diff: Diff,
@@ -200,7 +217,7 @@ export function writeDiffToTerminal(
   // BSU/ESU wrapping is opt-out to keep main-screen behavior unchanged.
   // Callers pass skipSyncMarkers=true when the terminal doesn't support
   // DEC 2026 (e.g. tmux) AND the cost matters (high-frequency alt-screen).
-  const useSync = !skipSyncMarkers
+  const useSync = !skipSyncMarkers && !diffContainsIterm2InlineImage(diff)
 
   // Buffer all writes into a single string to avoid multiple write calls
   let buffer = useSync ? BSU : ''

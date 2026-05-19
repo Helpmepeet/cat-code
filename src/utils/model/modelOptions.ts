@@ -224,7 +224,7 @@ function getGpt55Option(): ModelOption {
 function getGpt54Option(): ModelOption {
   return {
     value: 'gpt-5.4',
-    label: 'GPT-5.4 (previous)',
+    label: 'GPT-5.4',
     description: 'GPT-5.4 · Previous frontier GPT model',
     descriptionForModel:
       'GPT-5.4 - previous frontier GPT model for reasoning and code generation',

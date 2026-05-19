@@ -75,6 +75,10 @@ export const isDebugMode = memoize((): boolean => {
   )
 })
 
+export function clearDebugModeCache(): void {
+  isDebugMode.cache.clear?.()
+}
+
 /**
  * Enables debug logging mid-session (e.g. via /debug). Non-ants don't write
  * debug logs by default, so this lets them start capturing without restarting

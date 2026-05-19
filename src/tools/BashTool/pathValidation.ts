@@ -752,7 +752,7 @@ export function createPathChecker(
         if (operationType === 'read') {
           // For read operations, suggest a Read rule for the directory (only if it exists)
           const dirPath = getDirectoryForPath(result.blockedPath)
-          const suggestion = createReadRuleSuggestion(dirPath, 'session')
+          const suggestion = createReadRuleSuggestion(dirPath, 'localSettings')
           if (suggestion) {
             suggestions.push(suggestion)
           }
@@ -761,7 +761,7 @@ export function createPathChecker(
           suggestions.push({
             type: 'addDirectories',
             directories: [getDirectoryForPath(result.blockedPath)],
-            destination: 'session',
+            destination: 'localSettings',
           })
         }
       }
@@ -989,7 +989,7 @@ function validateOutputRedirections(
           {
             type: 'addDirectories',
             directories: [getDirectoryForPath(resolvedPath)],
-            destination: 'session',
+            destination: 'localSettings',
           },
         ],
       }

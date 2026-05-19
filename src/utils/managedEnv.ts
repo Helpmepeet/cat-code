@@ -1,6 +1,7 @@
 import { isRemoteManagedSettingsEligible } from '../services/remoteManagedSettings/syncCache.js'
 import { clearCACertsCache } from './caCerts.js'
 import { getGlobalConfig } from './config.js'
+import { clearDebugModeCache } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import {
   isProviderManagedEnvVar,
@@ -175,6 +176,7 @@ export function applySafeConfigEnvironmentVariables(): void {
       process.env[key] = value
     }
   }
+  clearDebugModeCache()
 }
 
 /**
@@ -188,6 +190,7 @@ export function applyConfigEnvironmentVariables(): void {
   Object.assign(process.env, filterSettingsEnv(getGlobalConfig().env))
 
   Object.assign(process.env, filterSettingsEnv(getSettings_DEPRECATED()?.env))
+  clearDebugModeCache()
 
   // Clear caches so agents are rebuilt with the new env vars
   clearCACertsCache()

@@ -1,78 +1,41 @@
 # CLAUDE.md
 
-Cat Code — a personal always-on agent system, forked from Claude Code.
+Cat Code is a personal always-on agent system forked from Claude Code.
 
-Root-level operator docs stay in the repository root: `README.md`, `CLAUDE.md`, and `AGENTS.md` are the primary entrypoints.
+## Build
 
-Project planning and research docs live under `docs/`, grouped by topic. 
-
-## Progress tracking
-
-`DONE.md` records completed work by phase. See that file for format and usage rules.
-Always ask the user before writing to it.
-
-## Build commands
+Use:
 
 ```bash
-bun run build:dev:full # Dev build with all experimental features (./cli-dev) ← use this. Do not use `bun run build` / `./cli` unless explicitly asked 
+bun run build:dev:full
 ```
 
-## High-level architecture
+Do not use `bun run build` or `./cli` unless explicitly asked.
 
-- **Entry point/UI loop**: src/entrypoints/cli.tsx bootstraps the CLI, with the main interactive UI in src/screens/REPL.tsx (Ink/React).
-- **Command/tool registries**: src/commands.ts registers slash commands; src/tools.ts registers tool implementations. Implementations live in src/commands/ and src/tools/.
-- **LLM query pipeline**: src/QueryEngine.ts coordinates message flow, tool use, and model invocation.
-- **Core subsystems**:
-  - src/tools/AgentTool/: agent runtime prompt assembly and built-in subagent behavior
-  - src/services/: API clients, OAuth/MCP integration, analytics stubs
-  - src/state/: app state store
-  - src/hooks/: React hooks used by UI/flows
-  - src/components/: terminal UI components (Ink)
-  - src/skills/: skill system
-  - src/plugins/: plugin system
-  - src/bridge/: IDE bridge
-  - src/voice/: voice input
-  - src/tasks/: background task management
+## Navigation
 
+- Use `docs/maps/WORKSPACE_MAP.md` before broad source search for non-trivial questions, bugs, or features.
+- `docs/maps/WORKSPACE_MAP.md` is the map index; focused subsystem maps live under `docs/maps/`.
+- For prompt, instruction, agent behavior, or output-style work, start with `docs/prompts/2026-04-30-prompt-surfaces.md`.
+- Keep `README.md`, `CLAUDE.md`, and `AGENTS.md` as the root entrypoints. Move plans/research into topic folders under `docs/`.
+- `DONE.md` records completed phase work; ask before writing to it.
 
-# Behavioral guidelines to reduce common LLM coding mistakes. 
+## Architecture
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+- CLI/bootstrap: `src/entrypoints/cli.tsx`, `src/entrypoints/init.ts`, `src/main.tsx`.
+- Terminal UI/session loop: `src/screens/REPL.tsx`.
+- Commands/tools: `src/commands.ts`, `src/commands/`, `src/tools.ts`, `src/tools/`.
+- Query pipeline: `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/`.
+- Agent/subagent runtime: `src/agent-mode/`, `src/tools/AgentTool/`, `src/tasks/`.
+- Config/persistence: `src/utils/settings/`, `src/utils/config.ts`, `src/utils/sessionStorage.ts`, `src/memdir/`.
+- Dedicated app: `src/app-runtime/`, `src/dedicated-app/`, `scripts/validate-dedicated-app.ts`.
 
-## 1. Think Before Coding
+## Development Rules
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
+- Verify behavior in source before editing; older docs and plans can drift.
+- Keep changes surgical. Touch only files needed for the request.
+- Prefer existing local patterns over new abstractions.
+- Do not add speculative features, configurability, or broad refactors.
+- Preserve unrelated user changes in the worktree.
+- Use focused tests or validation scaled to the risk. For docs-only changes, use `git diff --check` and link/path checks.
+- If changing prompts, tools, permissions, config, persistence, or Agent Mode, inspect the matching map under `docs/maps/` first.

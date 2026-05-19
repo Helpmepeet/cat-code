@@ -119,7 +119,8 @@ const getCoordinatorUserContext: (
 const getAgentModeUserContext: (
   mcpClients: ReadonlyArray<{ name: string }>,
   scratchpadDir?: string,
-) => { [k: string]: string } = require('./agent-mode/agentMode.js').getAgentModeUserContext
+) => Promise<{ [k: string]: string }> =
+  require('./agent-mode/agentMode.js').getAgentModeUserContext
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 // Dead code elimination: conditional import for snip compaction
@@ -312,10 +313,10 @@ export class QueryEngine {
         mcpClients,
         isScratchpadEnabled() ? getScratchpadDir() : undefined,
       ),
-      ...getAgentModeUserContext(
+      ...(await getAgentModeUserContext(
         mcpClients,
         isScratchpadEnabled() ? getScratchpadDir() : undefined,
-      ),
+      )),
     }
 
     // When an SDK caller provides a custom system prompt AND has set
@@ -529,10 +530,10 @@ export class QueryEngine {
           mcpClients,
           isScratchpadEnabled() ? getScratchpadDir() : undefined,
         ),
-        ...getAgentModeUserContext(
+        ...(await getAgentModeUserContext(
           mcpClients,
           isScratchpadEnabled() ? getScratchpadDir() : undefined,
-        ),
+        )),
       }
       systemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition: undefined,

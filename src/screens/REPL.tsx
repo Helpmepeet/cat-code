@@ -3,7 +3,7 @@ import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import { webUIBus } from '../web/WebUIBus.js';
 import { spawnSync } from 'child_process';
-import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens, getTotalTokenUsage } from '../bootstrap/state.js';
+import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
 import { count } from '../utils/array.js';
 import { dirname, join } from 'path';
@@ -22,6 +22,8 @@ import { Box, Text, useStdin, useTheme, useTerminalFocus, useTerminalTitle, useT
 import type { TabStatusKind } from '../ink/hooks/use-tab-status.js';
 import { CostThresholdDialog } from '../components/CostThresholdDialog.js';
 import { IdleReturnDialog } from '../components/IdleReturnDialog.js';
+import { Select } from '../components/CustomSelect/index.js';
+import { Dialog } from '../components/design-system/Dialog.js';
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue, useLayoutEffect, type RefObject } from 'react';
 import { useNotifications } from '../context/notifications.js';
@@ -43,7 +45,7 @@ import { registerSandboxPermissionCallback } from '../hooks/useSwarmPermissionPo
 import { getTeamName, getAgentName } from '../utils/teammate.js';
 import { WorkerPendingPermission } from '../components/permissions/WorkerPendingPermission.js';
 import { injectUserMessageToTeammate, getAllInProcessTeammateTasks } from '../tasks/InProcessTeammateTask/InProcessTeammateTask.js';
-import { isLocalAgentTask, queuePendingMessage, appendMessageToLocalAgent, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
+import { isLocalAgentTask, queuePendingMessage, appendMessageToLocalAgent, appendLocalAgentSystemMessage, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerLeaderToolUseConfirmQueue, unregisterLeaderToolUseConfirmQueue, registerLeaderSetToolPermissionContext, unregisterLeaderSetToolPermissionContext } from '../utils/swarm/leaderPermissionBridge.js';
 import { endInteractionSpan } from '../utils/telemetry/sessionTracing.js';
 import { useLogMessages } from '../hooks/useLogMessages.js';
@@ -118,11 +120,11 @@ const getCoordinatorUserContext: (mcpClients: ReadonlyArray<{
 }>, scratchpadDir?: string) => {
   [k: string]: string;
 } = feature('COORDINATOR_MODE') ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext : () => ({});
-const getAgentModeUserContext: (mcpClients: ReadonlyArray<{
-  name: string;
-}>, scratchpadDir?: string) => {
-  [k: string]: string;
-} = require('../agent-mode/agentMode.js').getAgentModeUserContext;
+const getAgentModeUserContext: (
+  mcpClients: ReadonlyArray<{ name: string }>,
+  scratchpadDir?: string,
+) => Promise<{ [k: string]: string }> = require('../agent-mode/agentMode.js')
+  .getAgentModeUserContext
 const isAgentMode: () => boolean = require('../agent-mode/agentMode.js').isAgentMode;
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 import useCanUseTool from '../hooks/useCanUseTool.js';
@@ -162,6 +164,9 @@ import { useManagePlugins } from '../hooks/useManagePlugins.js';
 import { Messages } from '../components/Messages.js';
 import { TaskListV2 } from '../components/TaskListV2.js';
 import { TeammateViewHeader } from '../components/TeammateViewHeader.js';
+import { AgentModeWorkerRoster } from '../agent-mode/AgentModeWorkerRoster.js';
+import type { AgentModeSessionState } from '../agent-mode/sessionState.js';
+import { summarizeAgentModeWorkers } from '../agent-mode/workerUxSummary.js';
 import { useTasksV2WithCollapseEffect } from '../hooks/useTasksV2.js';
 import { maybeMarkProjectOnboardingComplete } from '../projectOnboardingState.js';
 import type { MCPServerConnection } from '../services/mcp/types.js';
@@ -174,11 +179,15 @@ import { getTools, assembleToolPool } from '../tools.js';
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js';
 import { resolveAgentTools } from '../tools/AgentTool/agentToolUtils.js';
 import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
+import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
 import { renderModelName } from '../utils/model/model.js';
+import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldClearThreadGoalContinuationSuppression, shouldStartThreadGoalBudgetWrapUp, shouldStartThreadGoalContinuation, shouldSuppressThreadGoalContinuationAfterTurn, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
+import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -321,39 +330,6 @@ const EMPTY_MCP_CLIENTS: MCPServerConnection[] = [];
 const HISTORY_STUB = {
   maybeLoadOlder: (_: ScrollBoxHandle) => {}
 };
-function getAgentModeWorkerSummary(tasks: Record<string, unknown>): {
-  active: number;
-  queued: number;
-  done: number;
-  failed: number;
-} {
-  let active = 0;
-  let queued = 0;
-  let done = 0;
-  let failed = 0;
-  for (const task of Object.values(tasks)) {
-    if (isInProcessTeammateTask(task)) {
-      if (task.status === 'running') active++;
-      if (task.status === 'pending') queued++;
-      if (task.status === 'completed') done++;
-      if (task.status === 'failed' || task.status === 'killed') failed++;
-      continue;
-    }
-    if (!isLocalAgentTask(task) || task.agentType === 'main-session') {
-      continue;
-    }
-    if (task.status === 'running') active++;
-    if (task.status === 'pending') queued++;
-    if (task.status === 'completed') done++;
-    if (task.status === 'failed' || task.status === 'killed') failed++;
-  }
-  return {
-    active,
-    queued,
-    done,
-    failed
-  };
-}
 // Window after a user-initiated scroll during which type-into-empty does NOT
 // repin to bottom. Josh Rosen's workflow: Claude emits long output → scroll
 // up to read the start → start typing → before this fix, snapped to bottom.
@@ -989,15 +965,16 @@ export function REPL({
   // Wall-clock time tracking refs for accurate elapsed time calculation
   const loadingStartTimeRef = React.useRef<number>(0);
   const turnGoalAtStartRef = React.useRef<ThreadGoal | null>(null);
-  const turnTotalTokensAtStartRef = React.useRef(0);
+  const turnContextTokensAtStartRef = React.useRef(0);
   const goalContinuationInFlightRef = React.useRef(false);
   const goalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
   const turnGoalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
-  const goalContinuationSuppressedRef = React.useRef(false);
+  const goalContinuationStallCountRef = React.useRef(0);
   const pendingBudgetWrapUpGoalIdRef = React.useRef<string | null>(null);
   const totalPausedMsRef = React.useRef(0);
   const pauseStartTimeRef = React.useRef<number | null>(null);
   const threadGoalContinuationResetKeyRef = React.useRef<string | null>(null);
+  const lastPromptedPausedGoalIdRef = React.useRef<string | null>(null);
   const resetTimingRefs = React.useCallback(() => {
     loadingStartTimeRef.current = Date.now();
     totalPausedMsRef.current = 0;
@@ -1005,13 +982,19 @@ export function REPL({
   }, []);
 
   useEffect(() => {
-    const resetKey = threadGoal ? `${threadGoal.goalId}:${threadGoal.objective}:${threadGoal.status}:${threadGoal.tokenBudget ?? ''}` : null;
-    if (threadGoalContinuationResetKeyRef.current !== resetKey) {
-      goalContinuationSuppressedRef.current = false;
-      if (!threadGoal) {
-        pendingBudgetWrapUpGoalIdRef.current = null;
+    const nextResetState = deriveThreadGoalContinuationResetState({
+      previousResetKey: threadGoalContinuationResetKeyRef.current,
+      goal: threadGoal
+    });
+    if (nextResetState) {
+      goalContinuationStallCountRef.current =
+        nextResetState.goalContinuationStallCount;
+      pendingBudgetWrapUpGoalIdRef.current =
+        nextResetState.pendingBudgetWrapUpGoalId;
+      if (nextResetState.shouldBumpIdleSignal) {
+        setGoalContinuationIdleSignal(signal => signal + 1);
       }
-      threadGoalContinuationResetKeyRef.current = resetKey;
+      threadGoalContinuationResetKeyRef.current = nextResetState.resetKey;
     }
   }, [threadGoal]);
 
@@ -1612,6 +1595,15 @@ export function REPL({
   // Guard on showStreamingText so toggling reducedMotion mid-stream
   // immediately hides the streaming preview.
   const visibleStreamingText = streamingText && showStreamingText ? streamingText.substring(0, streamingText.lastIndexOf('\n') + 1) || null : null;
+  const liveStreamingTokenEstimate = useMemo(() => {
+    const textTokens = streamingText
+      ? roughTokenCountEstimation(streamingText)
+      : 0;
+    const thinkingTokens = streamingThinking?.thinking
+      ? roughTokenCountEstimation(streamingThinking.thinking)
+      : 0;
+    return textTokens + thinkingTokens;
+  }, [streamingText, streamingThinking]);
   const [lastQueryCompletionTime, setLastQueryCompletionTime] = useState(0);
   const [goalContinuationIdleSignal, setGoalContinuationIdleSignal] = useState(0);
   const handledGoalContinuationIdleSignalRef = useRef(0);
@@ -1629,6 +1621,40 @@ export function REPL({
     input: string;
     idleMinutes: number;
   } | null>(null);
+  const [resumePausedGoalPrompt, setResumePausedGoalPrompt] = useState<ThreadGoal | null>(null);
+  const shouldCheckInitialPausedGoalRef = React.useRef(true);
+  useEffect(() => {
+    if (shouldCheckInitialPausedGoalRef.current) {
+      if (isLoading || initialMessage !== null) {
+        return;
+      }
+      shouldCheckInitialPausedGoalRef.current = false;
+      if (
+        shouldPromptToResumePausedGoal({
+          goal: threadGoal,
+          lastPromptedGoalId: lastPromptedPausedGoalIdRef.current,
+          isQueryActive: false
+        })
+      ) {
+        const pausedGoal = threadGoal;
+        if (!pausedGoal || pausedGoal.status !== 'paused') {
+          return;
+        }
+
+        lastPromptedPausedGoalIdRef.current = pausedGoal.goalId;
+        setResumePausedGoalPrompt(pausedGoal);
+      }
+      return;
+    }
+
+    if (
+      resumePausedGoalPrompt &&
+      (threadGoal?.goalId !== resumePausedGoalPrompt.goalId ||
+        threadGoal?.status !== 'paused')
+    ) {
+      setResumePausedGoalPrompt(null);
+    }
+  }, [threadGoal, isLoading, initialMessage, resumePausedGoalPrompt]);
   const skipIdleCheckRef = useRef(false);
   const lastQueryCompletionTimeRef = useRef(lastQueryCompletionTime);
   lastQueryCompletionTimeRef.current = lastQueryCompletionTime;
@@ -1748,9 +1774,9 @@ export function REPL({
       : turnGoalAtStart;
 
     const nowMs = Date.now();
-    const tokenDelta = Math.max(
-      0,
-      getTotalTokenUsage() - turnTotalTokensAtStartRef.current,
+    const tokenDelta = calculateThreadGoalContextTokenDelta(
+      turnContextTokensAtStartRef.current,
+      tokenCountWithEstimation(messagesRef.current),
     );
     const timeDeltaSeconds = Math.max(
       0,
@@ -2225,7 +2251,7 @@ export function REPL({
   // Permission and interactive dialogs can show even when toolJSX is set,
   // as long as shouldContinueAnimation is true. This prevents deadlocks when
   // agents set background hints while waiting for user interaction.
-  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'remote-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
+  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'resume-paused-goal' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'remote-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
     // Exit states always take precedence
     if (isExiting || exitFlow) return undefined;
 
@@ -2245,6 +2271,7 @@ export function REPL({
     if (allowDialogsWithAnimation && elicitation.queue[0]) return 'elicitation';
     if (allowDialogsWithAnimation && showingCostDialog) return 'cost';
     if (allowDialogsWithAnimation && idleReturnPending) return 'idle-return';
+    if (allowDialogsWithAnimation && resumePausedGoalPrompt) return 'resume-paused-goal';
     if (feature('ULTRAPLAN') && allowDialogsWithAnimation && !isLoading && ultraplanPendingChoice) return 'ultraplan-choice';
     if (feature('ULTRAPLAN') && allowDialogsWithAnimation && !isLoading && ultraplanLaunchPending) return 'ultraplan-launch';
 
@@ -2661,6 +2688,7 @@ export function REPL({
     };
     return {
       abortController,
+      isQueryActive: queryGuard.isActive,
       options: {
         commands,
         tools: computeTools(),
@@ -2730,7 +2758,6 @@ export function REPL({
 	      onChangeDynamicMcpConfig,
 	      onInstallIDEExtension: setIDEToInstallExtension,
 	      enterAgentModeSession,
-	      isQueryActive: queryGuard.isActive,
       nestedMemoryAttachmentTriggers: new Set<string>(),
       loadedNestedMemoryPaths: loadedNestedMemoryPathsRef.current,
       dynamicSkillDirTriggers: new Set<string>(),
@@ -3102,7 +3129,7 @@ export function REPL({
     const userContext = {
       ...baseUserContext,
       ...getCoordinatorUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined),
-      ...getAgentModeUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined),
+      ...(await getAgentModeUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined)),
       ...((feature('PROACTIVE') || feature('KAIROS')) && proactiveModule?.isProactiveActive() && !terminalFocusRef.current ? {
         terminalFocus: 'The terminal is unfocused \u2014 the user is not actively watching.'
       } : {})
@@ -3142,12 +3169,11 @@ export function REPL({
     }
     queryCheckpoint('query_end');
     const completedTurnToolCount = getTurnToolCount();
-    if (shouldSuppressThreadGoalContinuationAfterTurn({
+    goalContinuationStallCountRef.current = nextThreadGoalContinuationStallCount({
       continuationKind: turnGoalContinuationKindRef.current,
-      toolUseCount: completedTurnToolCount
-    })) {
-      goalContinuationSuppressedRef.current = true;
-    }
+      toolUseCount: completedTurnToolCount,
+      previousStallCount: goalContinuationStallCountRef.current
+    });
 
     // Capture ant-only API metrics before resetLoadingState clears the ref.
     // For multi-request turns (tool use loops), compute P50 across all requests.
@@ -3243,7 +3269,9 @@ export function REPL({
       resetTimingRefs();
       turnGoalContinuationKindRef.current = goalContinuationKindRef.current;
       turnGoalAtStartRef.current = store.getState().threadGoal;
-      turnTotalTokensAtStartRef.current = getTotalTokenUsage();
+      turnContextTokensAtStartRef.current = tokenCountWithEstimation(
+        messagesRef.current,
+      );
       setMessages(oldMessages => [...oldMessages, ...newMessages]);
       responseLengthRef.current = 0;
       if (feature('TOKEN_BUDGET')) {
@@ -3671,8 +3699,8 @@ export function REPL({
     if (activeRemote.isRemoteMode && !input.trim()) {
       return;
     }
-    if (shouldClearThreadGoalContinuationSuppression(input, inputMode)) {
-      goalContinuationSuppressedRef.current = false;
+    if (shouldResetThreadGoalContinuationStallCount(input, inputMode)) {
+      goalContinuationStallCountRef.current = 0;
     }
 
     // Idle-return: prompt returning users to start fresh when the
@@ -3949,6 +3977,11 @@ export function REPL({
       if (task.status === 'running') {
         queuePendingMessage(task.id, input, setAppState);
       } else {
+        const agentDisplayName = await displayNameForAgent({
+          agentId: task.id,
+          appState: store.getState()
+        });
+        appendLocalAgentSystemMessage(task.id, `Resuming ${agentDisplayName}...`, 'info', setAppState);
         void resumeAgentBackground({
           agentId: task.id,
           prompt: input,
@@ -3956,12 +3989,13 @@ export function REPL({
           canUseTool
         }).catch(err => {
           logForDebugging(`resumeAgentBackground failed: ${errorMessage(err)}`);
+          appendLocalAgentSystemMessage(task.id, `Failed to resume ${agentDisplayName}: ${errorMessage(err)}`, 'error', setAppState);
           addNotification({
             key: `resume-agent-failed-${task.id}`,
             jsx: <Text color="error">
-                  Failed to resume agent: {errorMessage(err)}
+                  Failed to resume {agentDisplayName}: {errorMessage(err)}
                 </Text>,
-            priority: 'low'
+            priority: 'high'
           });
         });
       }
@@ -3971,7 +4005,7 @@ export function REPL({
     setInputValue('');
     helpers.setCursorOffset(0);
     helpers.clearBuffer();
-  }, [setAppState, setInputValue, getToolUseContext, canUseTool, mainLoopModel, addNotification]);
+  }, [store, setAppState, setInputValue, getToolUseContext, canUseTool, mainLoopModel, addNotification]);
 
   // Handlers for auto-run /issue or /good-claude (defined after onSubmit)
   const handleAutoRunIssue = useCallback(() => {
@@ -4441,14 +4475,18 @@ export function REPL({
     const sessionIsIdle =
       sessionStatus === 'idle' && initialMessage === null && hasUnhandledIdleSignal;
 
-    if (shouldStartThreadGoalBudgetWrapUp({
+    const continuationAction = getThreadGoalContinuationAction({
       sessionIsIdle,
       goal: threadGoal,
       goalContinuationInFlight: goalContinuationInFlightRef.current,
+      goalContinuationStallCount: goalContinuationStallCountRef.current,
       pendingBudgetWrapUpGoalId: pendingBudgetWrapUpGoalIdRef.current,
       queuedCommandsCount: queuedCommands.length,
-      hasActiveLocalJsxUI: isShowingLocalJSXCommand
-    })) {
+      hasActiveLocalJsxUI: isShowingLocalJSXCommand,
+      isInPlanMode: toolPermissionContext.mode === 'plan'
+    });
+
+    if (continuationAction.type === 'budget-wrap-up') {
       handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
       pendingBudgetWrapUpGoalIdRef.current = null;
       goalContinuationInFlightRef.current = true;
@@ -4463,14 +4501,16 @@ export function REPL({
       return;
     }
 
-    if (!shouldStartThreadGoalContinuation({
-      sessionIsIdle,
-      goal: threadGoal,
-      goalContinuationInFlight: goalContinuationInFlightRef.current,
-      goalContinuationSuppressed: goalContinuationSuppressedRef.current,
-      queuedCommandsCount: queuedCommands.length,
-      hasActiveLocalJsxUI: isShowingLocalJSXCommand
-    })) {
+    if (continuationAction.type === 'stalled') {
+      handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
+      return;
+    }
+
+    if (continuationAction.type === 'ignored') {
+      return;
+    }
+
+    if (continuationAction.type !== 'continue') {
       if (
         sessionIsIdle &&
         !goalContinuationInFlightRef.current &&
@@ -4485,7 +4525,9 @@ export function REPL({
     handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
     goalContinuationInFlightRef.current = true;
     goalContinuationKindRef.current = 'active';
-    if (!handleIncomingPrompt(renderThreadGoalContinuationPrompt(threadGoal!), {
+    if (!handleIncomingPrompt(renderThreadGoalContinuationPrompt(threadGoal!, {
+      agentMode: isAgentMode()
+    }), {
       isMeta: true
     })) {
       goalContinuationInFlightRef.current = false;
@@ -4498,7 +4540,8 @@ export function REPL({
     threadGoal,
     queuedCommands.length,
     isShowingLocalJSXCommand,
-    handleIncomingPrompt
+    handleIncomingPrompt,
+    toolPermissionContext.mode
   ]);
 
   // Voice input integration (VOICE_MODE builds only)
@@ -4842,6 +4885,8 @@ export function REPL({
     // persists at its last screen coords after ctrl-c exits transcript.
     if (!inTranscript) setPositions(null);
   }, [inTranscript, searchQuery, setHighlight, setPositions]);
+  const [agentModeSessionState, setAgentModeSessionState] = useState<AgentModeSessionState | null>(null);
+  const [agentModeSessionStateLoaded, setAgentModeSessionStateLoaded] = useState(false);
   const globalKeybindingProps = {
     screen,
     setScreen,
@@ -4873,7 +4918,32 @@ export function REPL({
   // Auto-exit viewing mode when teammate completes or errors
   useTeammateViewAutoExit();
   const agentModeActive = isAgentMode();
-  const agentModeWorkerSummary = useMemo(() => agentModeActive ? getAgentModeWorkerSummary(tasks) : null, [agentModeActive, tasks]);
+  useEffect(() => {
+    if (!agentModeActive) {
+      setAgentModeSessionState(null);
+      setAgentModeSessionStateLoaded(false);
+      return;
+    }
+    let cancelled = false;
+    void import('../agent-mode/sessionState.js').then(({
+      readSessionStateWithContinuity
+    }) => readSessionStateWithContinuity(getSessionId())).then(state => {
+      if (!cancelled) {
+        setAgentModeSessionState(state);
+        setAgentModeSessionStateLoaded(true);
+      }
+    }).catch(error => {
+      logForDebugging(`Failed to read Agent Mode session state: ${error}`);
+      if (!cancelled) {
+        setAgentModeSessionState(null);
+        setAgentModeSessionStateLoaded(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentModeActive, tasks, messages.length]);
+  const agentModeWorkerSummary = useMemo(() => agentModeActive ? summarizeAgentModeWorkers(agentModeSessionState) : null, [agentModeActive, agentModeSessionState]);
   if (screen === 'transcript') {
     // Virtual scroll replaces the 30-message cap: everything is scrollable
     // and memory is bounded by the viewport. Without it, wrapping transcript
@@ -5001,6 +5071,13 @@ export function REPL({
   // agent — displayedMessages is a different array there, and onAgentSubmit
   // doesn't use the placeholder anyway.
   const placeholderText = userInputOnProcessing && !viewedAgentTask && displayedMessages.length <= userInputBaselineRef.current ? userInputOnProcessing : undefined;
+  const threadGoalDisplay = useMemo(() => buildThreadGoalDisplayState({
+    goal: threadGoal,
+    liveContextTokens: tokenCountWithEstimation(messages) + liveStreamingTokenEstimate,
+    turnStartContextTokens: turnContextTokensAtStartRef.current,
+    turnGoalId: turnGoalAtStartRef.current?.goalId ?? null,
+    isTurnRunning: isLoading
+  }), [threadGoal, messages, liveStreamingTokenEstimate, isLoading]);
   const toolPermissionOverlay = focusedInputDialog === 'tool-permission' ? <PermissionRequest key={toolUseConfirmQueue[0]?.toolUseID} onDone={() => setToolUseConfirmQueue(([_, ...tail]) => tail)} onReject={handleQueuedCommandOnCancel} toolUseConfirm={toolUseConfirmQueue[0]!} toolUseContext={getToolUseContext(messages, messages, abortController ?? createAbortController(), mainLoopModel)} verbose={verbose} workerBadge={toolUseConfirmQueue[0]?.workerBadge} setStickyFooter={isFullscreenEnvEnabled() ? setPermissionStickyFooter : undefined} /> : null;
 
   // Narrow terminals: companion collapses to a one-liner that REPL stacks
@@ -5292,6 +5369,34 @@ export function REPL({
               resetHistory: () => {}
             });
           }} />}
+                {focusedInputDialog === 'resume-paused-goal' && resumePausedGoalPrompt && <Dialog title="Resume paused goal?" subtitle={`Goal: ${resumePausedGoalPrompt.objective}`} onCancel={() => setResumePausedGoalPrompt(null)}>
+                  <Select options={[{
+              value: 'resume' as const,
+              label: 'Resume goal',
+              description: 'Mark it active and continue when idle'
+            }, {
+              value: 'leave-paused' as const,
+              label: 'Leave paused',
+              description: 'Keep it paused; use /goal resume later'
+            }]} defaultFocusValue="resume" onCancel={() => setResumePausedGoalPrompt(null)} onChange={async action => {
+              const promptedGoal = resumePausedGoalPrompt;
+              setResumePausedGoalPrompt(null);
+              if (action !== 'resume') return;
+              const currentGoal = store.getState().threadGoal;
+              if (!promptedGoal || currentGoal?.goalId !== promptedGoal.goalId || currentGoal.status !== 'paused') {
+                return;
+              }
+              await updateThreadGoalStatusAction({
+                context: {
+                  getAppState: () => store.getState(),
+                  setAppState
+                },
+                goal: currentGoal,
+                status: 'active',
+                objective: currentGoal.objective
+              });
+            }} />
+                </Dialog>}
                 {focusedInputDialog === 'ide-onboarding' && <IdeOnboardingDialog onDone={() => setShowIdeOnboarding(false)} installationStatus={ideInstallationStatus} />}
                 {"external" === 'ant' && focusedInputDialog === 'model-switch' && AntModelSwitchCallout && <AntModelSwitchCallout onDone={(selection: string, modelAlias?: string) => {
             setShowModelSwitchCallout(false);
@@ -5391,23 +5496,9 @@ export function REPL({
                       {/* Skill improvement survey - appears when improvements detected (ant-only) */}
                       {"external" === 'ant' && skillImprovementSurvey.suggestion && <SkillImprovementSurvey isOpen={skillImprovementSurvey.isOpen} skillName={skillImprovementSurvey.suggestion.skillName} updates={skillImprovementSurvey.suggestion.updates} handleSelect={skillImprovementSurvey.handleSelect} inputValue={inputValue} setInputValue={setInputValue} />}
                       {showIssueFlagBanner && <IssueFlagBanner />}
-                      {agentModeActive ? <Box width="100%" flexDirection="column" marginBottom={1}>
-                            <Box>
-                              <Text color="claude">◉ Agent Mode</Text>
-                              <Text dimColor> · orchestrating workers</Text>
-                            </Box>
-                            {agentModeWorkerSummary && (agentModeWorkerSummary.active > 0 || agentModeWorkerSummary.queued > 0 || agentModeWorkerSummary.done > 0 || agentModeWorkerSummary.failed > 0) ? <Box>
-                                  <Text dimColor>  workers: </Text>
-                                  <Text>{agentModeWorkerSummary.active} active</Text>
-                                  {agentModeWorkerSummary.queued > 0 ? <Text dimColor>{` · ${agentModeWorkerSummary.queued} queued`}</Text> : null}
-                                  {agentModeWorkerSummary.done > 0 ? <Text dimColor>{` · ${agentModeWorkerSummary.done} done`}</Text> : null}
-                                  {agentModeWorkerSummary.failed > 0 ? <Text color="warning">{` · ${agentModeWorkerSummary.failed} attention`}</Text> : null}
-                                </Box> : <Box>
-                                  <Text dimColor>  workers: none yet</Text>
-                                </Box>}
-                          </Box> : null}
+                      {agentModeActive ? <AgentModeWorkerRoster loaded={agentModeSessionStateLoaded} summary={agentModeWorkerSummary} compact={showSpinner} /> : null}
                       {}
-                      <PromptInput debug={debug} ideSelection={ideSelection} hasSuppressedDialogs={!!hasSuppressedDialogs} isLocalJSXCommandActive={isShowingLocalJSXCommand} getToolUseContext={getToolUseContext} toolPermissionContext={toolPermissionContext} setToolPermissionContext={setToolPermissionContext} apiKeyStatus={apiKeyStatus} commands={commands} agents={agentDefinitions.activeAgents} isLoading={isLoading} onExit={handleExit} verbose={verbose} messages={messages} onAutoUpdaterResult={setAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} input={inputValue} onInputChange={setInputValue} mode={inputMode} onModeChange={setInputMode} stashedPrompt={stashedPrompt} setStashedPrompt={setStashedPrompt} submitCount={submitCount} onShowMessageSelector={handleShowMessageSelector} onMessageActionsEnter={
+                      <PromptInput debug={debug} ideSelection={ideSelection} hasSuppressedDialogs={!!hasSuppressedDialogs} isLocalJSXCommandActive={isShowingLocalJSXCommand} getToolUseContext={getToolUseContext} toolPermissionContext={toolPermissionContext} setToolPermissionContext={setToolPermissionContext} apiKeyStatus={apiKeyStatus} commands={commands} agents={agentDefinitions.activeAgents} isLoading={isLoading} onExit={handleExit} verbose={verbose} messages={messages} threadGoalDisplay={threadGoalDisplay} onAutoUpdaterResult={setAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} input={inputValue} onInputChange={setInputValue} mode={inputMode} onModeChange={setInputMode} stashedPrompt={stashedPrompt} setStashedPrompt={setStashedPrompt} submitCount={submitCount} onShowMessageSelector={handleShowMessageSelector} onMessageActionsEnter={
             // Works during isLoading — edit cancels first; uuid selection survives appends.
             feature('MESSAGE_ACTIONS') && isFullscreenEnvEnabled() && !disableMessageActions ? enterMessageActions : undefined} mcpClients={mcpClients} pastedContents={pastedContents} setPastedContents={setPastedContents} vimMode={vimMode} setVimMode={setVimMode} showBashesDialog={showBashesDialog} setShowBashesDialog={setShowBashesDialog} onSubmit={onSubmit} onAgentSubmit={onAgentSubmit} isSearchingHistory={isSearchingHistory} setIsSearchingHistory={setIsSearchingHistory} helpOpen={isHelpOpen} setHelpOpen={setIsHelpOpen} insertTextRef={feature('VOICE_MODE') ? insertTextRef : undefined} voiceInterimRange={voice.interimRange} />
                       <SessionBackgroundHint onBackgroundSession={handleBackgroundSession} isLoading={isLoading} />

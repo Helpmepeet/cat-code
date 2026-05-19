@@ -45,7 +45,8 @@ export type SubagentContext = {
    *  session_id already bundles the whole tree. Updated on each resume. */
   invokingRequestId?: string
   /** Whether this invocation is the initial spawn or a subsequent resume
-   *  via SendMessage. Undefined when invokingRequestId is absent. */
+   *  via ResumeAgent or the REPL user-driven path. Undefined when
+   *  invokingRequestId is absent. */
   invocationKind?: 'spawn' | 'resume'
   /** Mutable flag: has this invocation's edge been emitted to telemetry yet?
    *  Reset to false on each spawn/resume; flipped true by

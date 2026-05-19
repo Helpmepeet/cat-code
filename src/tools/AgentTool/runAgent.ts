@@ -7,6 +7,7 @@ import { logForDebugging } from 'src/utils/debug.js'
 import { getProjectRoot, getSessionId } from '../../bootstrap/state.js'
 import { loadRoleFilePrompt, loadContextIndex } from '../../agent-mode/roleFiles.js'
 import {
+  readSessionState,
   readPersistedWorkerHandle,
   recordWorkerSessionSpawn,
 } from '../../agent-mode/sessionState.js'
@@ -275,6 +276,7 @@ export async function* runAgent({
   useExactTools,
   worktreePath,
   description,
+  agentName,
   transcriptSubdir,
   sessionStateTracking,
   onQueryProgress,
@@ -330,6 +332,8 @@ export async function* runAgent({
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
+  /** Friendly system/user-facing name for targeting this subagent. */
+  agentName?: string
   /** Optional subdirectory under subagents/ to group this agent's transcript
    * with related ones (e.g. workflows/<runId> for workflow subagents). */
   transcriptSubdir?: string
@@ -341,6 +345,7 @@ export async function* runAgent({
     sessionId: string
     mode: string
     objective: string
+    statePath?: string
     recordSpawn?: boolean
   }
   /** Optional callback fired on every message yielded by query() — including
@@ -376,10 +381,28 @@ export async function* runAgent({
       ? await readPersistedWorkerHandle(
           sessionStateTracking.sessionId,
           override.agentId,
+          sessionStateTracking.statePath,
         )
       : null
+  const reservedWorkerHandles = sessionStateTracking
+    ? (
+        (
+          await readSessionState(
+            sessionStateTracking.sessionId,
+            sessionStateTracking.statePath,
+          )
+        )?.knownWorkers ??
+        []
+      )
+        .map(worker => worker.handle)
+        .filter((handle): handle is string => Boolean(handle && handle.length > 0))
+    : []
   const workerName =
-    persistedWorkerHandle ?? allocateWorkerName(agentDefinition.agentType)
+    persistedWorkerHandle ??
+    agentName ??
+    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles, {
+      allowGeneric: Boolean(sessionStateTracking),
+    })
   const workerHandle = workerName ?? agentId
 
   // Route this agent's transcript into a grouping subdirectory if requested
@@ -778,6 +801,7 @@ export async function* runAgent({
   )
   void writeAgentMetadata(agentId, {
     agentType: agentDefinition.agentType,
+    ...(workerName && { agentName: workerName }),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
     parentSessionId: getSessionId(),
@@ -790,6 +814,9 @@ export async function* runAgent({
       sessionId: sessionStateTracking.sessionId,
       mode: sessionStateTracking.mode,
       objective: sessionStateTracking.objective,
+      ...(sessionStateTracking.statePath
+        ? { statePath: sessionStateTracking.statePath }
+        : {}),
       handle: workerHandle,
       agentId,
       role: agentDefinition.agentType,

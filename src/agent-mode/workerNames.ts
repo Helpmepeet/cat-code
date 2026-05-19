@@ -1,18 +1,18 @@
 const CODING_WORKER_NAMES = [
-  'Ada', 'Ari', 'Blake', 'Cameron', 'Casey', 'Charlie', 'Dana', 'Drew',
-  'Ellis', 'Felix', 'Finn', 'Gray', 'Harper', 'Indigo', 'Jasper', 'Jordan',
-  'Jules', 'Kai', 'Lane', 'Lee', 'Logan', 'Luca', 'Morgan', 'Nova',
-  'Parker', 'Phoenix', 'Quinn', 'Reese', 'Riley', 'River', 'Robin', 'Sage',
-  'Sam', 'Scout', 'Shay', 'Skylar', 'Sloane', 'Sterling', 'Tatum', 'Taylor',
-  'Teagan', 'Val', 'Winter', 'Wynne',
+  'Turing', 'Hopper', 'Curie', 'Galileo', 'Kepler', 'Lovelace', 'Ramanujan',
+  'Darwin', 'Faraday', 'Pasteur', 'Tesla', 'Euclid', 'Archimedes', 'Euler',
+  'Gauss', 'Feynman', 'Bohr', 'Sagan', 'Franklin', 'Bell',
 ]
 
 const VERIFIER_NAMES = [
-  'Avery', 'Brett', 'Brooks', 'Dallas', 'Devon', 'Emory', 'Emerson',
-  'Harlow', 'Haven', 'Hunter', 'Kelsey', 'Kendall', 'Kerry', 'Laurel',
-  'Lexi', 'Marlo', 'Merritt', 'Milan', 'Nico', 'Noel', 'Oakley', 'Onyx',
-  'Pax', 'Peyton', 'Remy', 'Roan', 'Roman', 'Rory', 'Rue', 'Sable',
-  'Sawyer', 'Sidney', 'Spencer', 'Storm', 'Sutton', 'Sydney', 'Vesper',
+  'Noether', 'Heisenberg', 'Hypatia', 'Shannon', 'Hamming', 'Knuth',
+  'Tarski', 'Godel', 'Liskov', 'Lamport', 'BernersLee', 'Dijkstra',
+  'Torvalds', 'McCarthy', 'Babbage', 'Minsky', 'Khayyam', 'Poincare',
+]
+
+const GENERIC_WORKER_NAMES = [
+  'Ada', 'Katherine', 'Johnson', 'Hamilton', 'Ritchie', 'Kay',
+  'Wilkes', 'Goldstine', 'Backus', 'Engelbart', 'Cerf', 'Barton',
 ]
 
 const NAME_POOLS: Record<string, string[]> = {
@@ -22,20 +22,50 @@ const NAME_POOLS: Record<string, string[]> = {
 
 const activeNames = new Set<string>()
 
-function pickRandom(pool: string[]): string {
-  const available = pool.filter(n => !activeNames.has(n))
+function getReservedNames(
+  reservedNames: Iterable<string> = [],
+): Set<string> {
+  const reserved = new Set(activeNames)
+  for (const name of reservedNames) {
+    reserved.add(name)
+  }
+  return reserved
+}
+
+function pickRandom(pool: string[], reservedNames: Iterable<string>): string {
+  const reserved = getReservedNames(reservedNames)
+  const available = pool.filter(n => !reserved.has(n))
   if (available.length === 0) {
-    return pool[Math.floor(Math.random() * pool.length)]!
+    const baseName = pool[Math.floor(Math.random() * pool.length)]!
+    let suffix = 2
+    let candidate = `${baseName}-${suffix}`
+
+    while (reserved.has(candidate)) {
+      suffix += 1
+      candidate = `${baseName}-${suffix}`
+    }
+
+    return candidate
   }
   return available[Math.floor(Math.random() * available.length)]!
 }
 
-export function allocateWorkerName(agentType: string): string | null {
-  const pool = NAME_POOLS[agentType]
+export function allocateWorkerName(
+  agentType: string,
+  reservedNames: Iterable<string> = [],
+  options: { allowGeneric?: boolean } = {},
+): string | null {
+  const pool = NAME_POOLS[agentType] ?? (
+    options.allowGeneric ? GENERIC_WORKER_NAMES : null
+  )
   if (!pool) return null
-  const name = pickRandom(pool)
+  const name = pickRandom(pool, reservedNames)
   activeNames.add(name)
   return name
+}
+
+export function reserveWorkerName(name: string): void {
+  activeNames.add(name)
 }
 
 export function releaseWorkerName(name: string): void {

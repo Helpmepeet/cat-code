@@ -280,7 +280,7 @@ export function getGPTAgentModeUsingToolsSection(enabledTools: Set<string>): str
       ? `TASK TRACKING: Use ${taskToolName} to track the run. Mark each task complete as soon as it is done. Do not batch completions.`
       : null,
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `DELEGATION: Plan inline on the main thread. Use ${AGENT_TOOL_NAME} selectively for broader codebase investigation via Explore, implementation passes, and independent verification. Do not delegate trivial reads, searches, planning, or synthesis you should do yourself.`
+      ? `DELEGATION: Use ${AGENT_TOOL_NAME} as your default execution path for bounded investigation, implementation, verification, and parallel workstreams. If the work is more than a tiny single-file pass, push execution to a worker and keep planning, synthesis, approval routing, and final outcome judgment on the main thread. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.`
       : null,
     `CONTEXT SHAPE: Keep context small and decision-focused. Prefer compact evidence and short handoffs over carrying raw tool output forward.`,
     `PARALLELISM: Use parallel tool calls only when ownership is clear and the results will join cleanly.`,
@@ -344,8 +344,9 @@ export function getGPTAgentModeSessionGuidanceSection(
       ? null
       : `SHELL COMMANDS: If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands in the conversation.`,
     hasAgentTool
-      ? `AGENT MODE: You are the orchestrator. Plan inline on the main thread. Use ${AGENT_TOOL_NAME} for bounded delegation when it improves the run: broader codebase investigation via Explore, implementation passes, or independent verification. Keep synthesis, approval decisions, and completion truth on the main thread. Ask for approval only for plan mode, destructive or hard-to-reverse actions, shared-state actions, worktree apply-back, permission broadening, or meaningful scope/approach shifts.`
+      ? `AGENT MODE: You are the orchestrator. Plan inline on the main thread. Keep the main thread focused on planning, synthesis, approval decisions, and completion truth. Agent Mode should feel more aggressive than normal chat by moving execution outward sooner. Use ${AGENT_TOOL_NAME} as the default execution path for bounded investigation, implementation, and verification slices that would otherwise take more than a tiny single-file pass. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default. After spawning Explore workers, avoid overlapping repo reads and searches unless you need one narrow blocking fact to steer the run.`
       : null,
+    getGPTAgentModeWorkerControlGuidance(enabledTools),
     hasSkills
       ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
       : null,
@@ -354,6 +355,29 @@ export function getGPTAgentModeSessionGuidanceSection(
 
   if (items.length === 0) return null
   return ['# Session-Specific Guidance', ...prependBullets(items)].join('\n')
+}
+
+function getGPTAgentModeWorkerControlGuidance(
+  enabledTools: Set<string>,
+): string | null {
+  const available = [
+    enabledTools.has('ListWorkers')
+      ? 'ListWorkers: inspect the worker roster before redundant spawning.'
+      : null,
+    enabledTools.has('WaitWorkers')
+      ? 'WaitWorkers: wait after parallel launches so convergence is explicit.'
+      : null,
+    enabledTools.has('GetWorkerResult')
+      ? 'GetWorkerResult: read worker output before synthesis or final completion; mark synthesized only after use.'
+      : null,
+    enabledTools.has('CancelWorker')
+      ? 'CancelWorker: cancel stale, wrong, conflicting, unsafe, or no-longer-needed workers.'
+      : null,
+  ].filter(item => item !== null)
+
+  if (available.length === 0) return null
+
+  return `WORKER CONTROL: ${available.join(' ')} If Explore already owns a question, do not keep doing the same search on the main thread. Do not both spawn Explore and then keep investigating the same area yourself. Use worker handles instead of raw task IDs or internal agent IDs.`
 }
 
 export function getGPTSessionGuidanceSection(

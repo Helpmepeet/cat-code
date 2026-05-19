@@ -1,11 +1,16 @@
 import { promises as fsp } from 'fs'
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js'
+import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
 import { getCurrentSessionMode } from '../../agent-mode/agentMode.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
-import { registerAsyncAgent } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import { registerActiveSubagent } from '../../utils/cleanupRegistry.js'
+import {
+  markAgentTaskResumed,
+  registerAsyncAgent,
+} from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { assembleToolPool } from '../../tools.js'
 import { asAgentId } from '../../types/ids.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
@@ -20,9 +25,13 @@ import {
 import { getAgentModel } from '../../utils/model/agent.js'
 import { getQuerySourceForAgent } from '../../utils/promptCategory.js'
 import {
+  getAgentTranscriptForSession,
   getAgentTranscript,
+  getAgentTranscriptPath,
   getTranscriptPath,
+  appendSubagentSpawned,
   readAgentMetadata,
+  readAgentMetadataForSession,
 } from '../../utils/sessionStorage.js'
 import { buildEffectiveSystemPrompt } from '../../utils/systemPrompt.js'
 import type { SystemPrompt } from '../../utils/systemPromptType.js'
@@ -41,19 +50,54 @@ export type ResumeAgentResult = {
   description: string
   outputFile: string
 }
-export async function resumeAgentBackground({
-  agentId,
-  prompt,
-  toolUseContext,
-  canUseTool,
-  invokingRequestId,
-}: {
+
+export class TranscriptNotFoundError extends Error {
+  constructor(agentId: string) {
+    super(`No transcript found for agent ID: ${agentId}`)
+    this.name = 'TranscriptNotFoundError'
+  }
+}
+
+export class AgentResumeInProgressError extends Error {
+  constructor(agentId: string) {
+    super(`Agent ${agentId} is already running or being resumed`)
+    this.name = 'AgentResumeInProgressError'
+  }
+}
+
+type ResumeAgentBackgroundArgs = {
   agentId: string
   prompt: string
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   invokingRequestId?: string
-}): Promise<ResumeAgentResult> {
+  sourceSessionId?: string
+}
+
+const activeResumeLaunches = new Set<string>()
+
+export async function resumeAgentBackground(
+  args: ResumeAgentBackgroundArgs,
+): Promise<ResumeAgentResult> {
+  if (activeResumeLaunches.has(args.agentId)) {
+    throw new AgentResumeInProgressError(args.agentId)
+  }
+  activeResumeLaunches.add(args.agentId)
+  try {
+    return await resumeAgentBackgroundLocked(args)
+  } finally {
+    activeResumeLaunches.delete(args.agentId)
+  }
+}
+
+async function resumeAgentBackgroundLocked({
+  agentId,
+  prompt,
+  toolUseContext,
+  canUseTool,
+  invokingRequestId,
+  sourceSessionId,
+}: ResumeAgentBackgroundArgs): Promise<ResumeAgentResult> {
   const startTime = Date.now()
   const appState = toolUseContext.getAppState()
   // In-process teammates get a no-op setAppState; setAppStateForTasks
@@ -62,12 +106,18 @@ export async function resumeAgentBackground({
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
   const permissionMode = appState.toolPermissionContext.mode
 
+  const sourceSession = sourceSessionId ?? getSessionId()
+  const currentSession = getSessionId()
   const [transcript, meta] = await Promise.all([
-    getAgentTranscript(asAgentId(agentId)),
-    readAgentMetadata(asAgentId(agentId)),
+    sourceSession === currentSession
+      ? getAgentTranscript(asAgentId(agentId))
+      : getAgentTranscriptForSession(sourceSession, asAgentId(agentId)),
+    sourceSession === currentSession
+      ? readAgentMetadata(asAgentId(agentId))
+      : readAgentMetadataForSession(sourceSession, asAgentId(agentId)),
   ])
   if (!transcript) {
-    throw new Error(`No transcript found for agent ID: ${agentId}`)
+    throw new TranscriptNotFoundError(agentId)
   }
   const resumedMessages = filterWhitespaceOnlyAssistantMessages(
     filterOrphanedThinkingOnlyMessages(
@@ -166,15 +216,17 @@ export async function resumeAgentBackground({
     : assembleToolPool(workerPermissionContext, appState.mcp.tools)
 
   const currentSessionMode = getCurrentSessionMode()
+  const parentTranscriptPath = getTranscriptPath()
+  const parentSessionId = getSessionId()
   const sessionStateTracking =
     currentSessionMode === 'agent' || currentSessionMode === 'coordinator'
       ? {
-          sessionId: getSessionId(),
+          sessionId: parentSessionId,
           mode: currentSessionMode,
           objective: meta?.description ?? 'Continue current objective',
+          statePath: getSessionStatePathFromTranscriptPath(parentTranscriptPath),
         }
       : undefined
-  const parentSessionId = getSessionId()
 
   const runAgentParams: Parameters<typeof runAgent>[0] = {
     agentDefinition: selectedAgent,
@@ -204,11 +256,44 @@ export async function resumeAgentBackground({
     // Re-persist so metadata survives runAgent's writeAgentMetadata overwrite
     worktreePath: resumedWorktreePath,
     description: meta?.description,
+    agentName: meta?.agentName,
     contentReplacementState: resumedReplacementState,
     sessionStateTracking,
   }
 
-  // Skip name-registry write — original entry persists from the initial spawn
+  const spawnedAt = new Date().toISOString()
+  const agentTranscriptPath = getAgentTranscriptPath(asAgentId(agentId))
+  appendSubagentSpawned(parentTranscriptPath, {
+    sessionId: parentSessionId,
+    agentId: asAgentId(agentId),
+    ...(meta?.agentName ? { agentName: meta.agentName } : {}),
+    agentType: selectedAgent.agentType,
+    description: uiDescription,
+    transcriptPath: agentTranscriptPath,
+    toolUseId: toolUseContext.toolUseId,
+    spawnedAt,
+  })
+  registerActiveSubagent(agentId, {
+    startedAt: startTime,
+    toolUseId: toolUseContext.toolUseId,
+    transcriptPath: agentTranscriptPath,
+    agentType: selectedAgent.agentType,
+    description: uiDescription,
+    sessionId: parentSessionId,
+  })
+
+  // Restore the friendly name in case this resume is happening after task
+  // eviction or session restore, when the live registry may be empty.
+  if (meta?.agentName) {
+    rootSetAppState(prev => {
+      const next = new Map(prev.agentNameRegistry)
+      next.set(meta.agentName!, asAgentId(agentId))
+      return {
+        ...prev,
+        agentNameRegistry: next,
+      }
+    })
+  }
   const agentBackgroundTask = registerAsyncAgent({
     agentId,
     description: uiDescription,
@@ -217,6 +302,7 @@ export async function resumeAgentBackground({
     setAppState: rootSetAppState,
     toolUseId: toolUseContext.toolUseId,
   })
+  markAgentTaskResumed(agentId, rootSetAppState)
 
   const metadata = {
     prompt,
@@ -256,7 +342,10 @@ export async function resumeAgentBackground({
             },
             onCacheSafeParams,
           }),
-        metadata,
+        metadata: {
+          ...metadata,
+          ...(meta?.agentName ? { agentName: meta.agentName } : {}),
+        },
         description: uiDescription,
         toolUseContext,
         rootSetAppState,
@@ -267,8 +356,9 @@ export async function resumeAgentBackground({
           getSdkAgentProgressSummariesEnabled(),
         getWorktreeResult: async () =>
           resumedWorktreePath ? { worktreePath: resumedWorktreePath } : {},
-        parentTranscriptPath: getTranscriptPath(),
+        parentTranscriptPath,
         parentSessionId,
+        sessionStateTracking: runAgentParams.sessionStateTracking,
       }),
     ),
   )

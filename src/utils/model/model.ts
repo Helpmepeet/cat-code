@@ -377,7 +377,7 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.1-codex-max') return 'Codex 5.1 Max'
     if (model === 'gpt-5.3-codex') return 'GPT-5.3 Codex'
     if (model === 'gpt-5.5') return 'GPT 5.5'
-    if (model === 'gpt-5.4') return 'GPT 5.4 (previous)'
+    if (model === 'gpt-5.4') return 'GPT 5.4'
     if (model === 'gpt-5.4-mini') return 'GPT 5.4 Mini'
     if (model === 'gpt-5.2') return 'GPT 5.2'
     return model

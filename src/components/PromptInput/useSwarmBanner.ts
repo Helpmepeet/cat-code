@@ -47,7 +47,12 @@ export function useSwarmBanner(): SwarmBannerInfo {
   const agent = useAppState(s => s.agent)
   // Subscribe so the banner updates on enter/exit teammate view even though
   // getActiveAgentForInput reads it from store.getState().
-  useAppState(s => s.viewingAgentTaskId)
+  const viewingAgentTaskId = useAppState(s => s.viewingAgentTaskId)
+  useAppState(s => {
+    if (!viewingAgentTaskId) return ''
+    const task = s.tasks[viewingAgentTaskId]
+    return task ? `${task.status}:${'resumedAt' in task ? task.resumedAt ?? '' : ''}` : ''
+  })
   const store = useAppStateStore()
   const [insideTmux, setInsideTmux] = React.useState<boolean | null>(null)
 
@@ -115,8 +120,10 @@ export function useSwarmBanner(): SwarmBannerInfo {
         break
       }
     }
+    const resumeStatus =
+      task.resumedAt && task.status === 'running' ? ' resumed · running' : ''
     return {
-      text: name ? `@${name}` : task.description,
+      text: name ? `@${name}${resumeStatus}` : `${task.description}${resumeStatus}`,
       bgColor: getAgentColor(task.agentType) ?? 'cyan_FOR_SUBAGENTS_ONLY',
     }
   }

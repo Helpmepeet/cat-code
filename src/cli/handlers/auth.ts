@@ -1,5 +1,7 @@
 /* eslint-disable custom-rules/no-process-exit -- CLI subcommand handler intentionally exits */
 
+import { createInterface, type Interface } from 'readline'
+
 import {
   clearAuthRelatedCaches,
   performLogout,
@@ -53,6 +55,54 @@ import {
 function hasAnyAnthropicScope(scopes: string[] | undefined): boolean {
   if (!scopes?.length) return false
   return scopes.some((s) => s.startsWith('user:') || s.startsWith('org:'))
+}
+
+function parseManualOAuthCallbackInput(
+  input: string,
+): { authorizationCode?: string; state?: string } {
+  const value = input.trim()
+  if (!value) return {}
+
+  try {
+    const url = new URL(value)
+    const queryCode = url.searchParams.get('code') ?? undefined
+    const queryState = url.searchParams.get('state') ?? undefined
+    if (queryCode && queryState) {
+      return { authorizationCode: queryCode, state: queryState }
+    }
+
+    const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
+    if (hash) {
+      if (hash.includes('#')) {
+        const [authorizationCode, state] = hash.split('#', 2)
+        return { authorizationCode, state }
+      }
+      const hashParams = new URLSearchParams(hash)
+      const hashCode = hashParams.get('code') ?? undefined
+      const hashState = hashParams.get('state') ?? undefined
+      if (hashCode && hashState) {
+        return { authorizationCode: hashCode, state: hashState }
+      }
+    }
+  } catch {
+    // Not a URL — fall through to raw manual formats.
+  }
+
+  if (value.includes('code=')) {
+    const params = new URLSearchParams(value)
+    const code = params.get('code') ?? undefined
+    const state = params.get('state') ?? undefined
+    if (code && state) {
+      return { authorizationCode: code, state }
+    }
+  }
+
+  if (value.includes('#')) {
+    const [authorizationCode, state] = value.split('#', 2)
+    return { authorizationCode, state }
+  }
+
+  return {}
 }
 
 /**
@@ -241,6 +291,15 @@ export async function authLogin({
   const resolvedLoginMethod = sso ? 'sso' : undefined
 
   const oauthService = new OAuthService()
+  let manualInputInterface: Interface | null = null
+  let manualInputClosed = false
+
+  const cleanupManualInput = (): void => {
+    if (manualInputClosed) return
+    manualInputClosed = true
+    manualInputInterface?.close()
+    manualInputInterface = null
+  }
 
   try {
     logEvent('tengu_oauth_flow_start', { loginWithClaudeAi })
@@ -249,6 +308,30 @@ export async function authLogin({
       async url => {
         process.stdout.write('Opening browser to sign in…\n')
         process.stdout.write(`If the browser didn't open, visit: ${url}\n`)
+        process.stdout.write(
+          'If login does not finish automatically, paste the final callback URL or "<code>#<state>" here and press Enter.\n',
+        )
+
+        if (process.stdin.isTTY) {
+          manualInputInterface = createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          })
+          manualInputInterface.on('line', line => {
+            const parsed = parseManualOAuthCallbackInput(line)
+            if (!parsed.authorizationCode || !parsed.state) {
+              process.stdout.write(
+                'Could not parse input. Paste the full callback URL or the exact "<code>#<state>" value.\n',
+              )
+              return
+            }
+            oauthService.handleManualAuthCodeInput({
+              authorizationCode: parsed.authorizationCode,
+              state: parsed.state,
+            })
+            cleanupManualInput()
+          })
+        }
       },
       {
         loginWithClaudeAi,
@@ -278,6 +361,7 @@ export async function authLogin({
     )
     process.exit(1)
   } finally {
+    cleanupManualInput()
     oauthService.cleanup()
   }
 }

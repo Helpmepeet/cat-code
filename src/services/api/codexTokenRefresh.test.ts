@@ -203,6 +203,92 @@ describe('codexTokenRefresh identity handling', () => {
     }
   })
 
+  test('dedupes concurrent refreshes for the same account without emitting stderr diagnostics', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const accountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const oldPath = join(accountsDir, `${accountId}.json`)
+
+    writeFileSync(
+      oldPath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            account_id: accountId,
+          },
+          alias: 'main',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [
+        buildPoolAccount({
+          accountId,
+          refreshToken: 'old-refresh',
+          alias: 'main',
+          source: 'vault',
+          vaultFilePath: oldPath,
+        }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    const originalStderrWrite = process.stderr.write
+    const stderrChunks: string[] = []
+    const refreshedAccessToken = createAccessToken(accountId)
+    let fetchCount = 0
+    let releaseFetch: (() => void) | undefined
+    const fetchGate = new Promise<void>(resolve => {
+      releaseFetch = resolve
+    })
+
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrChunks.push(
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.from(chunk).toString('utf-8'),
+      )
+      return true
+    }) as typeof process.stderr.write
+
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      await fetchGate
+      return new Response(
+        JSON.stringify({
+          access_token: refreshedAccessToken,
+          refresh_token: 'new-refresh',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      const first = refreshAccountTokens(accountId, 'old-refresh', oldPath)
+      const second = refreshAccountTokens(accountId, 'old-refresh', oldPath)
+      releaseFetch?.()
+      const results = await Promise.all([first, second])
+
+      expect(fetchCount).toBe(1)
+      expect(results[0]?.status).toBe('refreshed')
+      expect(results[1]).toEqual(results[0])
+      expect(stderrChunks).toEqual([])
+    } finally {
+      globalThis.fetch = originalFetch
+      process.stderr.write = originalStderrWrite
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test('refresh without account identity fails safely', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
     const accountsDir = join(dir, 'accounts')

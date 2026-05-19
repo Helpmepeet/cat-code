@@ -11,12 +11,16 @@ export function isRunningWithBun(): boolean {
 
 /**
  * Detects if running as a Bun-compiled standalone executable.
- * This checks for embedded files which are present in compiled binaries.
+ * In a `bun build --compile` binary, modules are served from the embedded
+ * `/$bunfs/` virtual filesystem, so `import.meta.url` starts with that prefix.
+ * `Bun.embeddedFiles` is unreliable here: it stays empty when the build has
+ * no embedded asset files, even though the JS itself is embedded.
  */
 export function isInBundledMode(): boolean {
-  return (
-    typeof Bun !== 'undefined' &&
-    Array.isArray(Bun.embeddedFiles) &&
-    Bun.embeddedFiles.length > 0
-  )
+  if (typeof Bun === 'undefined') return false
+  try {
+    return import.meta.url.startsWith('file:///$bunfs/')
+  } catch {
+    return false
+  }
 }

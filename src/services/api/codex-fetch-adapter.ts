@@ -240,10 +240,23 @@ export class CodexAccountCapError extends Error {
   }
 }
 
+export class CodexAccountAuthError extends Error {
+  public readonly status: 401 | 403
+
+  constructor(
+    public readonly accountId: string,
+    status: 401 | 403,
+  ) {
+    super(`Codex account ${accountId} authentication failed (${status})`)
+    this.name = 'CodexAccountAuthError'
+    this.status = status
+  }
+}
+
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
   { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Latest GPT' },
-  { id: 'gpt-5.4', label: 'GPT-5.4 (previous)', description: 'Previous GPT' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Previous GPT' },
   { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast GPT-5.4 model' },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Optimized Codex coding model' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
@@ -321,6 +334,7 @@ interface AnthropicMessage {
 }
 
 interface AnthropicTool {
+  type?: string
   name: string
   description?: string
   input_schema?: Record<string, unknown>
@@ -331,6 +345,8 @@ interface AnthropicTool {
     syntax: 'lark'
     definition: string
   }
+  allowed_domains?: string[]
+  blocked_domains?: string[]
 }
 
 interface OpenAIInstructionAssemblyPayload {
@@ -345,30 +361,100 @@ registerStaleResponseIdCallback((conversationId) => {
 
 // ── Tool translation: Anthropic → Codex ─────────────────────────────
 
+const OPENAI_WEB_SEARCH_SOURCES_INCLUDE = 'web_search_call.action.sources'
+
+function isAnthropicHostedWebSearchTool(tool: AnthropicTool): boolean {
+  return tool.type === 'web_search_20250305' && tool.name === 'web_search'
+}
+
+function translateHostedWebSearchTool(
+  tool: AnthropicTool,
+): Record<string, unknown> {
+  if (Array.isArray(tool.blocked_domains) && tool.blocked_domains.length > 0) {
+    throw new Error(
+      'OpenAI hosted web_search does not support blocked_domains; use allowed_domains',
+    )
+  }
+
+  const translated: Record<string, unknown> = {
+    type: 'web_search',
+    external_web_access: true,
+  }
+
+  if (Array.isArray(tool.allowed_domains) && tool.allowed_domains.length > 0) {
+    translated.filters = { allowed_domains: tool.allowed_domains }
+  }
+
+  return translated
+}
+
+function addCodexInclude(
+  codexBody: Record<string, unknown>,
+  value: string,
+): void {
+  const current = Array.isArray(codexBody.include)
+    ? codexBody.include.filter((item): item is string => typeof item === 'string')
+    : []
+  if (!current.includes(value)) {
+    current.push(value)
+  }
+  codexBody.include = current
+}
+
+function translateToolChoice(
+  anthropicChoice: unknown,
+  anthropicTools: AnthropicTool[],
+): unknown {
+  if (anthropicChoice == null) return 'auto'
+  if (typeof anthropicChoice === 'string') return anthropicChoice
+
+  if (typeof anthropicChoice !== 'object') return 'auto'
+  const choice = anthropicChoice as Record<string, unknown>
+  const type = typeof choice.type === 'string' ? choice.type : null
+
+  if (type === 'auto') return 'auto'
+  if (type === 'none') return 'none'
+  if (type === 'any') return 'required'
+  if (type === 'tool' && typeof choice.name === 'string') {
+    const target = anthropicTools.find(t => t.name === choice.name)
+    if (target && isAnthropicHostedWebSearchTool(target)) {
+      return { type: 'web_search' }
+    }
+    return { type: 'function', name: choice.name }
+  }
+  return 'auto'
+}
+
 /**
  * Translates Anthropic tool definitions to Codex format.
  * @param anthropicTools - Array of Anthropic tool definitions
  * @returns Array of Codex-compatible tool objects
  */
 function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, unknown>> {
-  return anthropicTools.filter(tool => tool.name !== SYNTHETIC_OUTPUT_TOOL_NAME).map(tool => {
-    if (tool.openai_tool_type === 'custom' && tool.openai_tool_format) {
+  return anthropicTools
+    .filter(tool => tool.name !== SYNTHETIC_OUTPUT_TOOL_NAME)
+    .map(tool => {
+      if (isAnthropicHostedWebSearchTool(tool)) {
+        return translateHostedWebSearchTool(tool)
+      }
+
+      if (tool.openai_tool_type === 'custom' && tool.openai_tool_format) {
+        return {
+          type: 'custom',
+          name: tool.name,
+          description: tool.description || '',
+          format: tool.openai_tool_format,
+        }
+      }
+
       return {
-        type: 'custom',
+        type: 'function',
         name: tool.name,
         description: tool.description || '',
-        format: tool.openai_tool_format,
+        parameters: tool.input_schema || { type: 'object', properties: {} },
+        strict: tool.strict ?? null,
       }
-    }
-
-    return {
-      type: 'function',
-      name: tool.name,
-      description: tool.description || '',
-      parameters: tool.input_schema || { type: 'object', properties: {} },
-      strict: tool.strict ?? null,
-    }
-  })
+    })
 }
 
 // ── Tool result content serialization ───────────────────────────────
@@ -655,7 +741,10 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     stream: true,
     instructions,
     input,
-    tool_choice: 'auto',
+    tool_choice: translateToolChoice(
+      anthropicBody.tool_choice,
+      anthropicTools,
+    ),
     parallel_tool_calls: true,
   }
 
@@ -666,8 +755,13 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   }
 
   // Add tools if present
-  if (anthropicTools.length > 0) {
-    codexBody.tools = translateTools(anthropicTools)
+  const translatedTools = anthropicTools.length > 0
+    ? translateTools(anthropicTools)
+    : []
+  const hasHostedWebSearch = translatedTools.some(tool => tool.type === 'web_search')
+
+  if (translatedTools.length > 0) {
+    codexBody.tools = translatedTools
   }
 
   const outputConfig = anthropicBody.output_config as
@@ -739,7 +833,11 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     // `instructions` block alone. Requesting encrypted reasoning lets us
     // round-trip it as an opaque `thinking.signature` and grow the cached
     // prefix with the real conversation.
-    codexBody.include = ['reasoning.encrypted_content']
+    addCodexInclude(codexBody, 'reasoning.encrypted_content')
+  }
+
+  if (hasHostedWebSearch) {
+    addCodexInclude(codexBody, OPENAI_WEB_SEARCH_SOURCES_INCLUDE)
   }
 
   return { codexBody, codexModel }
@@ -817,6 +915,22 @@ type HttpFallbackResult = {
 }
 
 type HttpFallbackEventsFactory = () => Promise<HttpFallbackResult>
+
+type AnthropicSseMaterializedMessage = {
+  id: string
+  type: 'message'
+  role: 'assistant'
+  content: AnthropicContentBlock[]
+  model: string
+  stop_reason: string | null
+  stop_sequence: string | null
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    cache_creation_input_tokens: number
+    cache_read_input_tokens: number
+  }
+}
 
 /**
  * Formats data as Server-Sent Events (SSE) format.
@@ -1376,10 +1490,30 @@ async function processCodexEvents(
             ) {
               const toolCall = resolveOpenToolCall(event)
               if (toolCall) {
-                toolCall.args =
+                const finalArgs =
                   (event.arguments as string) ||
                   (event.input as string) ||
                   toolCall.args
+                if (
+                  finalArgs.startsWith(toolCall.args) &&
+                  finalArgs.length > toolCall.args.length
+                ) {
+                  const argDelta = finalArgs.slice(toolCall.args.length)
+                  noteVisibleOutput()
+                  controller.enqueue(
+                    encoder.encode(
+                      formatSSE('content_block_delta', JSON.stringify({
+                        type: 'content_block_delta',
+                        index: toolCall.index,
+                        delta: {
+                          type: 'input_json_delta',
+                          partial_json: argDelta,
+                        },
+                      })),
+                    ),
+                  )
+                }
+                toolCall.args = finalArgs
               }
             }
 
@@ -1394,6 +1528,29 @@ async function processCodexEvents(
                 if (toolCall) {
                   closeOpenToolCall(toolCall)
                 }
+              } else if (item?.type === 'web_search_call') {
+                closeAllOpenReasoningBlocks()
+                if (currentTextBlockStarted) {
+                  noteVisibleOutput()
+                  controller.enqueue(
+                    encoder.encode(
+                      formatSSE('content_block_stop', JSON.stringify({
+                        type: 'content_block_stop',
+                        index: contentBlockIndex,
+                      })),
+                    ),
+                  )
+                  contentBlockIndex++
+                  currentTextBlockStarted = false
+                }
+
+                noteVisibleOutput()
+                contentBlockIndex = emitOpenAIWebSearchCall(
+                  controller,
+                  encoder,
+                  contentBlockIndex,
+                  item,
+                )
               } else if (item?.type === 'message') {
                 if (currentTextBlockStarted) {
                   noteVisibleOutput()
@@ -1503,6 +1660,13 @@ async function processCodexEvents(
                 cachedInputTokens = inputDetails?.cached_tokens || 0
               }
               completedAtMs = eventObservedAtMs
+            }
+            else if (
+              eventType === 'response.web_search_call.in_progress' ||
+              eventType === 'response.web_search_call.searching' ||
+              eventType === 'response.web_search_call.completed'
+            ) {
+              // Handled via response.output_item.done.
             }
       }
       break stream_loop
@@ -1622,6 +1786,117 @@ function closeToolCallBlock(
   )
 }
 
+function readWebSearchAction(
+  item: Record<string, unknown>,
+): {
+  input: Record<string, unknown>
+  sources: Array<{ title: string; url: string }>
+} {
+  const action = item.action as Record<string, unknown> | undefined
+  const actionType = typeof action?.type === 'string' ? action.type : 'other'
+  const query =
+    typeof action?.query === 'string'
+      ? action.query
+      : Array.isArray(action?.queries)
+        ? action.queries.filter((q): q is string => typeof q === 'string').join('; ')
+        : typeof action?.url === 'string'
+          ? action.url
+          : ''
+
+  const sources = Array.isArray(action?.sources)
+    ? action.sources.flatMap(source => {
+        if (typeof source !== 'object' || source === null) return []
+        const record = source as Record<string, unknown>
+        const url = typeof record.url === 'string' ? record.url : ''
+        if (!url) return []
+        const title = typeof record.title === 'string' && record.title.length > 0
+          ? record.title
+          : url
+        return [{ title, url }]
+      })
+    : []
+
+  const input: Record<string, unknown> = { type: actionType }
+  if (query) input.query = query
+  if (Array.isArray(action?.queries)) input.queries = action.queries
+  if (typeof action?.url === 'string') input.url = action.url
+  if (typeof action?.pattern === 'string') input.pattern = action.pattern
+
+  return { input, sources }
+}
+
+function emitOpenAIWebSearchCall(
+  controller: ReadableStreamDefaultController,
+  encoder: TextEncoder,
+  index: number,
+  item: Record<string, unknown>,
+): number {
+  const id = typeof item.id === 'string' && item.id.length > 0
+    ? item.id
+    : `ws_${Date.now()}`
+  const { input, sources } = readWebSearchAction(item)
+
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_start', JSON.stringify({
+        type: 'content_block_start',
+        index,
+        content_block: {
+          type: 'server_tool_use',
+          id,
+          name: 'web_search',
+          input: {},
+        },
+      })),
+    ),
+  )
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_delta', JSON.stringify({
+        type: 'content_block_delta',
+        index,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: JSON.stringify(input),
+        },
+      })),
+    ),
+  )
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_stop', JSON.stringify({
+        type: 'content_block_stop',
+        index,
+      })),
+    ),
+  )
+
+  const resultIndex = index + 1
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_start', JSON.stringify({
+        type: 'content_block_start',
+        index: resultIndex,
+        content_block: {
+          type: 'web_search_tool_result',
+          tool_use_id: id,
+          content: sources,
+        },
+      })),
+    ),
+  )
+  controller.enqueue(
+    encoder.encode(
+      formatSSE('content_block_stop', JSON.stringify({
+        type: 'content_block_stop',
+        index: resultIndex,
+      })),
+    ),
+  )
+
+  return resultIndex + 1
+}
+
 function emitTextBlock(
   controller: ReadableStreamDefaultController,
   encoder: TextEncoder,
@@ -1708,6 +1983,196 @@ export async function translateCodexStreamToAnthropic(
     undefined,
     transportContext,
   )
+}
+
+function parseAnthropicSseBlocks(
+  sseBody: string,
+): Array<{ event?: string, data: Record<string, unknown> }> {
+  const blocks: Array<{ event?: string, data: Record<string, unknown> }> = []
+  for (const block of sseBody.split(/\n\n+/)) {
+    let event: string | undefined
+    const dataLines: string[] = []
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event: ')) {
+        event = line.slice(7)
+      } else if (line.startsWith('data: ')) {
+        dataLines.push(line.slice(6))
+      }
+    }
+    if (dataLines.length === 0) continue
+    const dataText = dataLines.join('\n')
+    if (dataText === '[DONE]') continue
+    try {
+      blocks.push({ event, data: JSON.parse(dataText) })
+    } catch {
+      continue
+    }
+  }
+  return blocks
+}
+
+function materializeAnthropicMessageFromSse(
+  sseBody: string,
+  codexModel: string,
+): AnthropicSseMaterializedMessage {
+  let message: AnthropicSseMaterializedMessage | null = null
+  const content: AnthropicContentBlock[] = []
+  const inputJsonDeltasByIndex = new Map<number, string>()
+
+  for (const { data } of parseAnthropicSseBlocks(sseBody)) {
+    const type = data.type
+    if (type === 'message_start') {
+      const startedMessage = data.message as
+        | Partial<AnthropicSseMaterializedMessage>
+        | undefined
+      message = {
+        id: typeof startedMessage?.id === 'string' ? startedMessage.id : '',
+        type: 'message',
+        role: 'assistant',
+        content,
+        model: typeof startedMessage?.model === 'string'
+          ? startedMessage.model
+          : codexModel,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      }
+    } else if (type === 'content_block_start') {
+      const index = typeof data.index === 'number' ? data.index : content.length
+      const block = data.content_block as AnthropicContentBlock | undefined
+      if (block) {
+        content[index] = { ...block }
+      }
+    } else if (type === 'content_block_delta') {
+      const index = typeof data.index === 'number' ? data.index : content.length - 1
+      const block = content[index]
+      const delta = data.delta as Record<string, unknown> | undefined
+      if (!block || !delta) continue
+
+      if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+        block.text = `${block.text ?? ''}${delta.text}`
+      } else if (
+        delta.type === 'thinking_delta' &&
+        typeof delta.thinking === 'string'
+      ) {
+        block.thinking = `${block.thinking ?? ''}${delta.thinking}`
+      } else if (
+        delta.type === 'signature_delta' &&
+        typeof delta.signature === 'string'
+      ) {
+        block.signature = delta.signature
+      } else if (
+        delta.type === 'input_json_delta' &&
+        typeof delta.partial_json === 'string'
+      ) {
+        if (typeof block.input === 'string') {
+          block.input = `${block.input}${delta.partial_json}`
+        } else {
+          inputJsonDeltasByIndex.set(
+            index,
+            `${inputJsonDeltasByIndex.get(index) ?? ''}${delta.partial_json}`,
+          )
+        }
+      }
+    } else if (type === 'message_delta' && message) {
+      const delta = data.delta as Record<string, unknown> | undefined
+      if (typeof delta?.stop_reason === 'string') {
+        message.stop_reason = delta.stop_reason
+      }
+      if (typeof delta?.stop_sequence === 'string' || delta?.stop_sequence === null) {
+        message.stop_sequence = delta.stop_sequence
+      }
+      const usage = data.usage as Partial<AnthropicSseMaterializedMessage['usage']> | undefined
+      if (usage) {
+        message.usage = {
+          ...message.usage,
+          ...usage,
+        }
+      }
+    } else if (type === 'message_stop' && message) {
+      const usage = data.usage as Partial<AnthropicSseMaterializedMessage['usage']> | undefined
+      if (usage) {
+        message.usage = {
+          ...message.usage,
+          ...usage,
+        }
+      }
+    }
+  }
+
+  if (!message || !message.id || message.content.length === 0) {
+    throw new Error(
+      'Codex non-streaming fallback produced an empty or invalid assistant message',
+    )
+  }
+
+  message.content = message.content.filter(Boolean)
+  for (const [index, inputJson] of inputJsonDeltasByIndex) {
+    if (inputJson.length === 0) continue
+    const block = message.content[index]
+    if (!block || typeof block.input === 'string') continue
+    try {
+      const parsed = JSON.parse(inputJson)
+      block.input =
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+          ? parsed
+          : {}
+    } catch {
+      throw new Error(
+        'Codex non-streaming fallback produced invalid tool input JSON',
+      )
+    }
+  }
+  return message
+}
+
+async function* observeCodexResponseId(
+  events: AsyncIterable<Record<string, unknown>>,
+  onResponseId: (id: string) => void,
+): AsyncGenerator<Record<string, unknown>> {
+  for await (const event of events) {
+    const response = event.response as Record<string, unknown> | undefined
+    if (typeof response?.id === 'string' && response.id.length > 0) {
+      onResponseId(response.id)
+    }
+    yield event
+  }
+}
+
+async function translateCodexStreamToAnthropicMessage(
+  codexResponse: Response,
+  codexModel: string,
+  requestCacheMetadata?: CodexRequestCacheMetadata,
+  transportContext?: CodexStreamTransportContext,
+): Promise<Response> {
+  let codexResponseId: string | undefined
+  const anthropicStreamResponse = buildAnthropicStreamResponse(
+    observeCodexResponseId(httpSseToEvents(codexResponse), id => {
+      codexResponseId = id
+    }),
+    codexModel,
+    requestCacheMetadata,
+    undefined,
+    transportContext,
+  )
+  const sseBody = await anthropicStreamResponse.text()
+  const message = materializeAnthropicMessageFromSse(sseBody, codexModel)
+  if (codexResponseId) {
+    message.id = codexResponseId
+  }
+
+  return new Response(JSON.stringify(message), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': message.id,
+    },
+  })
 }
 
 /**
@@ -2043,6 +2508,7 @@ export function createCodexFetch(
 
     // Translate to Codex format
     const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
+    const isStreamingAnthropicRequest = anthropicBody.stream === true
 
     // Upstream openai/codex (codex-rs/core/src/client.rs) uses a single plain
     // UUID as the conversation identity — it becomes prompt_cache_key, session_id,
@@ -2173,8 +2639,14 @@ export function createCodexFetch(
     const httpFallbackEvents = async (): Promise<HttpFallbackResult> => {
       const { response: codexResponse, transportContext } = await performHttpRequest()
       if (!codexResponse.ok) {
-        if ((codexResponse.status === 429 || codexResponse.status === 401) && isPoolActive()) {
+        if (codexResponse.status === 429 && isPoolActive()) {
           throw new CodexAccountCapError(currentAccountId)
+        }
+        if ((codexResponse.status === 401 || codexResponse.status === 403) && isPoolActive()) {
+          throw new CodexAccountAuthError(
+            currentAccountId,
+            codexResponse.status as 401 | 403,
+          )
         }
         const errorText = await codexResponse.text()
         throw new Error(`Codex API error (${codexResponse.status}): ${errorText}`)
@@ -2193,63 +2665,71 @@ export function createCodexFetch(
       ? (codexBody.input as Array<Record<string, unknown>>)
       : []
 
-    if (!hasStickyHttpFallback(conversationId)) {
-      try {
-        schedulePrewarm(conversationId, codexBody, authHeaders)
-        const wsRequestStartedAtMs = Date.now()
-        const wsEvents = await primeCodexEvents(
-          streamTurnViaWebSocketLocked(
+    if (isStreamingAnthropicRequest) {
+      if (!hasStickyHttpFallback(conversationId)) {
+        try {
+          schedulePrewarm(conversationId, codexBody, authHeaders)
+          const wsRequestStartedAtMs = Date.now()
+          const wsEvents = await primeCodexEvents(
+            streamTurnViaWebSocketLocked(
+              conversationId,
+              codexBody,
+              authHeaders,
+              fullInput.length,
+            ),
+          )
+          logForDebugging(
+            `[codex-cache] transport=websocket conv=${conversationId.slice(0, 8)} ` +
+            `account=${currentAccountId.slice(0, 12)} model=${codexModel} ` +
+            `instructions_hash=${instructionsHash} effort=${effort} messages=${inputMessages.length}`,
+          )
+          return translateCodexWsStreamToAnthropic(
+            wsEvents,
+            codexModel,
+            requestCacheMetadata,
+            httpFallbackEvents,
+            {
+              transport: 'websocket',
+              requestStartedAtMs: wsRequestStartedAtMs,
+            },
+          )
+        } catch (wsError) {
+          clearWebSocketSession(conversationId)
+          const normalized = normalizeInitialWebSocketError(
+            wsError,
+            currentAccountId,
             conversationId,
-            codexBody,
-            authHeaders,
-            fullInput.length,
-          ),
-        )
-        logForDebugging(
-          `[codex-cache] transport=websocket conv=${conversationId.slice(0, 8)} ` +
-          `account=${currentAccountId.slice(0, 12)} model=${codexModel} ` +
-          `instructions_hash=${instructionsHash} effort=${effort} messages=${inputMessages.length}`,
-        )
-        return translateCodexWsStreamToAnthropic(
-          wsEvents,
-          codexModel,
-          requestCacheMetadata,
-          httpFallbackEvents,
-          {
-            transport: 'websocket',
-            requestStartedAtMs: wsRequestStartedAtMs,
-          },
-        )
-      } catch (wsError) {
-        clearWebSocketSession(conversationId)
-        const normalized = normalizeInitialWebSocketError(
-          wsError,
-          currentAccountId,
-          conversationId,
-        )
-        // Usage-cap errors must propagate so withRetry can trigger pool failover.
-        // All other WS errors fall through to the HTTP path below.
-        if (normalized instanceof CodexAccountCapError) {
-          throw normalized
+          )
+          // Usage-cap errors must propagate so withRetry can trigger pool failover.
+          // All other WS errors fall through to the HTTP path below.
+          if (normalized instanceof CodexAccountCapError) {
+            throw normalized
+          }
+          logForDebugging(
+            `[codex-fetch] WS unavailable, falling back to HTTP: ${wsError instanceof Error ? wsError.message : String(wsError)}`,
+            { level: 'warn' },
+          )
         }
+      } else {
         logForDebugging(
-          `[codex-fetch] WS unavailable, falling back to HTTP: ${wsError instanceof Error ? wsError.message : String(wsError)}`,
+          `[codex-fetch] sticky HTTP fallback active conv=${conversationId.slice(0, 8)} account=${currentAccountId.slice(0, 12)}`,
           { level: 'warn' },
         )
       }
-    } else {
-      logForDebugging(
-        `[codex-fetch] sticky HTTP fallback active conv=${conversationId.slice(0, 8)} account=${currentAccountId.slice(0, 12)}`,
-        { level: 'warn' },
-      )
     }
 
     // ── HTTP fallback ─────────────────────────────────────────────────
     const { response: codexResponse, transportContext } = await performHttpRequest()
 
     if (!codexResponse.ok) {
-      if ((codexResponse.status === 429 || codexResponse.status === 401) && isPoolActive()) {
+      if (codexResponse.status === 429 && isPoolActive()) {
         throw new CodexAccountCapError(currentAccountId)
+      }
+      if ((codexResponse.status === 401 || codexResponse.status === 403) && isPoolActive()) {
+        throw new CodexAccountAuthError(
+          currentAccountId,
+          codexResponse.status as 401 | 403,
+        )
       }
 
       const errorText = await codexResponse.text()
@@ -2266,11 +2746,18 @@ export function createCodexFetch(
       })
     }
 
-    return translateCodexStreamToAnthropic(
-      codexResponse,
-      codexModel,
-      requestCacheMetadata,
-      transportContext,
-    )
+    return isStreamingAnthropicRequest
+      ? translateCodexStreamToAnthropic(
+          codexResponse,
+          codexModel,
+          requestCacheMetadata,
+          transportContext,
+        )
+      : translateCodexStreamToAnthropicMessage(
+          codexResponse,
+          codexModel,
+          requestCacheMetadata,
+          transportContext,
+        )
   }
 }

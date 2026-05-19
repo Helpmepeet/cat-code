@@ -8,6 +8,42 @@
 
 ## Phase 0
 
+### 12 May 2026
+
+65. Split subagent continuation from message delivery — added `ResumeAgent` for stopped/resumable subagents, restricted `SendMessage` to running-target queueing, shared target/display-name resolution across tool and REPL paths, migrated shipped prompts to the Agent/ResumeAgent/SendMessage boundary, and added regression coverage for raw running IDs, prior-session handles, evicted transcript resume, teammate fallback, concurrent resume, and pending-message preservation.
+
+64. Fixed subagent resume UX — `SendMessage` is available for normal-session subagent resume by worker handle/raw agent ID, resumed agents show visible terminal status, direct resumed-subagent prompts append inline resume/failure transcript messages, and resume results render with clearer success/error treatment.
+
+63. Added first-class Cat Code support to Open Design — Open Design now has a dedicated `cat-code` runtime using the Claude-compatible stream-json adapter shape, `CAT_CODE_BIN` detection/configuration, Settings UI exposure, Cat Code diagnostics, managed-project `.mcp.json` MCP wiring, and regression coverage for runtime args, executable precedence, app config, diagnostics, MCP spawn, and Settings autosave.
+
+### 9 May 2026
+
+62. Fixed Codex non-streaming fallback message materialization — when a Codex WebSocket stream fails mid-turn and Cat Code falls back through the Anthropic SDK's non-streaming path, the Codex adapter now returns a real JSON assistant message instead of Anthropic SSE, preserving response IDs, text, tool calls, custom `Apply_patch` input, object-shaped function tool input, stop reasons, and usage while failing visibly on empty fallback output.
+
+61. Enabled WebSearch on the OpenAI/Codex provider — the Codex adapter translates the Anthropic `web_search_20250305` tool into OpenAI's hosted `web_search` Responses tool (`type: 'web_search'`, `external_web_access: true`, optional `filters.allowed_domains`; no unverified `search_context_size` field), normalizes streamed `web_search_call` output items into Anthropic-compatible `server_tool_use` and `web_search_tool_result` blocks so the existing `WebSearchTool` parser and UI work unchanged, merges the `web_search_call.action.sources` include alongside the reasoning include without clobbering either, throws on `blocked_domains` at the adapter (defense in depth alongside the tool-level reject) since OpenAI hosted web_search only verifies `allowed_domains`, and now passes Anthropic `tool_choice` through to the Codex request (auto/none/any/tool→OpenAI auto/none/required/{type:'function'|'web_search'}) instead of hardcoding `'auto'` so callers like the WebSearchTool small/fast-model path that force `{type:'tool', name:'web_search'}` actually take effect on Codex. Mixed tool-call streams keep `stop_reason=end_turn` for search-only output and `tool_use` when a real function call follows. Renamed the misleading `useHaiku` flag in `WebSearchTool` to `useSmallFastModel`.
+
+60. Installed the Cat Code change impact checklist skill — `checking-cat-code-change-impact` now lives in the user skills directory and prompts agents to consider logs, telemetry, docs, tests, registries, permissions, cache behavior, generated types, and stale references before claiming completion.
+
+### 5 May 2026
+
+59. Fixed auto-compaction request assembly refresh — provider instruction assembly now happens after auto-compaction updates the query messages, so both generic model input and OpenAI-native input use the compacted transcript; regression coverage locks the post-compact request payload.
+
+### 3 May 2026
+
+58. Strengthened goal completion evidence requirements — `UpdateGoal` now tells the model to mark a thread goal complete only after every explicit requirement is satisfied, real evidence supports completion, tests or green status actually cover the objective, and no required work remains; regression coverage locks the model-facing completion prompt.
+
+### 2 May 2026
+
+56. Fixed model-scaled autocompact headroom — autocompact no longer uses the same 10k recovery window for every model; the recovery window now scales with effective context size (with floor/cap), context analysis uses the same threshold logic as runtime, and regression coverage now locks the concrete windows plus blocking-limit behavior.
+
+57. Fixed goal-mode token accounting — goal usage now tracks positive context-token growth instead of cumulative API/cache token usage, stays accumulated across compaction resets, freezes after completion, and labels goal budgets as context tokens.
+
+53. Added Agent Mode worker control tools — Agent Mode can now list durable workers, wait for selected workers, read worker results, and cancel a specific worker by handle without stopping the whole run.
+
+54. Added durable worker result synthesis tracking — completed workers now record result timestamps/summaries, mark outputs as pending synthesis, and can be explicitly marked synthesized after the orchestrator incorporates the result.
+
+55. Improved Agent Mode worker/worktree UX — the REPL now surfaces a compact durable worker roster, prompt guidance requires worker-result convergence before claiming completion, and worktree copy frames isolated work as agent-managed attempts/results instead of user-managed branches.
+
 ### 1 May 2026
 
 51. Fixed cross-tab Codex "usage unavailable" inconsistency — opening multiple tabs showed different profiles as `usage unavailable` in `/accounts` because each tab's wham/usage call ran against whatever access_token was sitting in the vault file, and stale tokens (>1h old, common at startup since interactive launches don't trigger a refresh) returned HTTP 401. Two-layer fix: (1) reactive — `fetchAccountUsageResult` now refreshes the account's token on HTTP 401 and retries the usage call once, honoring the existing vault lock so concurrent tabs don't double-refresh; (2) proactive — `initAccountPool` now fires `void touchAll()` at interactive startup alongside the existing periodic-refresh setup so vault tokens are fresh before any usage or Codex API call runs.

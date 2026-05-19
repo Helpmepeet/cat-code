@@ -244,6 +244,9 @@ export const agentToolResultSchema = lazySchema(() =>
     // results verbatim without re-validation). Used to gate the sync
     // result trailer — one-shot built-ins skip the SendMessage hint.
     agentType: z.string().optional(),
+    // Optional friendly name for the subagent. Prefer this for user-facing
+    // continuation hints; raw agentId remains the durable fallback.
+    agentName: z.string().optional(),
     // Optional: the resolved model name used by the subagent. Older
     // persisted sessions won't have this field.
     model: z.string().optional(),
@@ -484,6 +487,7 @@ export function finalizeAgentTool(
     isBuiltInAgent: boolean
     startTime: number
     agentType: string
+    agentName?: string
     isAsync: boolean
     totalTokensOverride?: number
   },
@@ -494,6 +498,7 @@ export function finalizeAgentTool(
     isBuiltInAgent,
     startTime,
     agentType,
+    agentName,
     isAsync,
     totalTokensOverride,
   } = metadata
@@ -587,6 +592,7 @@ export function finalizeAgentTool(
   return {
     agentId,
     agentType,
+    ...(agentName ? { agentName } : {}),
     model: resolvedAgentModel,
     changedFiles,
     ...(changedFilesTruncated !== undefined ? { changedFilesTruncated } : {}),
@@ -762,6 +768,7 @@ export async function runAsyncAgentLifecycle({
   formatFinalMessage,
   parentTranscriptPath,
   parentSessionId,
+  sessionStateTracking,
 }: {
   taskId: string
   abortController: AbortController
@@ -786,6 +793,13 @@ export async function runAsyncAgentLifecycle({
   /** Parent session ID captured at spawn time. Must be passed explicitly for
    * the same reason as parentTranscriptPath. */
   parentSessionId: string
+  /** Durable Agent Mode/coordinator tracking context. When omitted, terminal
+   * recording must not create Agent Mode state for ordinary subagents. */
+  sessionStateTracking?: {
+    mode: string
+    objective: string
+    statePath?: string
+  }
 }): Promise<void> {
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
@@ -880,6 +894,7 @@ export async function runAsyncAgentLifecycle({
         status: 'failed',
         error: apiErrorMsg,
         outputSummary: description,
+        createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
         logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
       )
@@ -924,6 +939,7 @@ export async function runAsyncAgentLifecycle({
       agentId: taskId,
       status: 'completed',
       outputSummary: description,
+      createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
       logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
     )
@@ -997,6 +1013,7 @@ export async function runAsyncAgentLifecycle({
         agentId: taskId,
         status: 'killed',
         outputSummary: description,
+        createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
         logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
       )
@@ -1036,6 +1053,7 @@ export async function runAsyncAgentLifecycle({
       status: 'failed',
       error: msg,
       outputSummary: description,
+      createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
       logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
     )

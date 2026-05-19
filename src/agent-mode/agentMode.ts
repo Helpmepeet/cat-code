@@ -1,5 +1,5 @@
 import { feature } from 'bun:bundle'
-import { ASYNC_AGENT_ALLOWED_TOOLS } from '../constants/tools.js'
+import { getSessionId } from '../bootstrap/state.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -9,12 +9,18 @@ import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
+import { RESUME_AGENT_TOOL_NAME } from '../tools/ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import { TEAM_CREATE_TOOL_NAME } from '../tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '../tools/TeamDeleteTool/constants.js'
+import { getAsyncAgentDisplayTools } from '../constants/tools.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { getOrchestratorSystemPrompt } from './orchestratorPrompt.js'
+import {
+  formatAgentModeSessionState,
+  readSessionStateWithContinuity,
+} from './sessionState.js'
 
 function isScratchpadGateEnabled(): boolean {
   return checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_scratch')
@@ -23,6 +29,7 @@ function isScratchpadGateEnabled(): boolean {
 const INTERNAL_WORKER_TOOLS = new Set([
   TEAM_CREATE_TOOL_NAME,
   TEAM_DELETE_TOOL_NAME,
+  RESUME_AGENT_TOOL_NAME,
   SEND_MESSAGE_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
 ])
@@ -31,10 +38,11 @@ export function isAgentMode(): boolean {
   return isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
 }
 
-export function getAgentModeUserContext(
+export async function getAgentModeUserContext(
   mcpClients: ReadonlyArray<{ name: string }>,
   scratchpadDir?: string,
-): { [k: string]: string } {
+  sessionId?: string,
+): Promise<{ [k: string]: string }> {
   if (!isAgentMode()) {
     return {}
   }
@@ -43,7 +51,7 @@ export function getAgentModeUserContext(
     ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_EDIT_TOOL_NAME]
         .sort()
         .join(', ')
-    : Array.from(ASYNC_AGENT_ALLOWED_TOOLS)
+    : getAsyncAgentDisplayTools()
         .filter(name => !INTERNAL_WORKER_TOOLS.has(name))
         .sort()
         .join(', ')
@@ -59,7 +67,19 @@ export function getAgentModeUserContext(
     content += `\n\nScratchpad directory: ${scratchpadDir}\nWorkers can read and write here without permission prompts. Use this for durable cross-worker knowledge when it helps the run.`
   }
 
-  return { workerToolsContext: content }
+  const effectiveSessionId = sessionId ?? getSessionId()
+  const sessionState = await readSessionStateWithContinuity(effectiveSessionId)
+
+  return {
+    workerToolsContext: content,
+    ...(sessionState
+      ? {
+          agentModeSessionState:
+            `${formatAgentModeSessionState(sessionState)}\n\n` +
+            `Use this state to choose whether to resume an existing worker or spawn a fresh worker. Use ${RESUME_AGENT_TOOL_NAME} on a resumable worker handle when the follow-up overlaps that worker's loaded context. Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is currently running.`,
+        }
+      : {}),
+  }
 }
 
 export function getAgentModeSystemPrompt(): string {

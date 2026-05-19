@@ -57,6 +57,20 @@ export type ModelUsage = {
 
 export type SDKStatus = 'compacting' | string | null
 
+export type SDKAccountDiagnosticCode =
+  | 'account.route.selected'
+  | 'account.failover.succeeded'
+  | 'account.transient_failure'
+  | 'account.token_refresh.failed'
+  | 'account.pool.unavailable'
+  | 'quota.exhausted'
+  | 'auth.missing'
+  | 'model.provider_mismatch'
+
+export type SDKAccountDiagnosticSeverity = 'info' | 'warning' | 'error'
+
+export type SDKAccountDiagnosticProvider = 'openai' | 'anthropic' | 'unknown'
+
 export type SDKBaseMessage = {
   type: string
   subtype?: string
@@ -164,6 +178,7 @@ export type SDKSystemMessage = SDKBaseMessage & {
     | 'task_progress'
     | 'session_state_changed'
     | 'elicitation_complete'
+    | 'cat_code_account_diagnostic'
   content?: string
   model?: string
   status?: SDKStatus
@@ -210,6 +225,25 @@ export type SDKSystemMessage = SDKBaseMessage & {
 
 export type SDKCompactBoundaryMessage = SDKSystemMessage & {
   subtype: 'compact_boundary' | 'microcompact_boundary'
+}
+
+export type SDKAccountDiagnosticMessage = SDKSystemMessage & {
+  subtype: 'cat_code_account_diagnostic'
+  version: 1
+  code: SDKAccountDiagnosticCode
+  severity: SDKAccountDiagnosticSeverity
+  provider: SDKAccountDiagnosticProvider
+  recoverable: boolean
+  pool?: string
+  requested_model?: string
+  resolved_provider?: SDKAccountDiagnosticProvider
+  resolved_model?: string
+  counts?: Record<string, number>
+  account_ref?: string
+  reason?: string
+  user_message?: string
+  uuid: string
+  session_id: string
 }
 
 export type SDKToolProgressMessage = SDKBaseMessage & {
@@ -723,6 +757,7 @@ export type SDKMessage =
   | SDKResultMessage
   | SDKResultSuccess
   | SDKStatusMessage
+  | SDKAccountDiagnosticMessage
   | SDKSystemMessage
   | SDKToolProgressMessage
   | SDKUserMessage

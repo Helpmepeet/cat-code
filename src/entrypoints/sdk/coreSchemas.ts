@@ -1269,6 +1269,27 @@ export const SDKStatusSchema = lazySchema(() =>
   z.union([z.literal('compacting'), z.null()]),
 )
 
+export const SDKAccountDiagnosticCodeSchema = lazySchema(() =>
+  z.enum([
+    'account.route.selected',
+    'account.failover.succeeded',
+    'account.transient_failure',
+    'account.token_refresh.failed',
+    'account.pool.unavailable',
+    'quota.exhausted',
+    'auth.missing',
+    'model.provider_mismatch',
+  ]),
+)
+
+export const SDKAccountDiagnosticSeveritySchema = lazySchema(() =>
+  z.enum(['info', 'warning', 'error']),
+)
+
+export const SDKAccountDiagnosticProviderSchema = lazySchema(() =>
+  z.enum(['openai', 'anthropic', 'unknown']),
+)
+
 // SDKUserMessage content without uuid/session_id
 const SDKUserMessageContentSchema = lazySchema(() =>
   z.object({
@@ -1539,6 +1560,32 @@ export const SDKStatusMessageSchema = lazySchema(() =>
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
   }),
+)
+
+export const SDKAccountDiagnosticMessageSchema = lazySchema(() =>
+  z
+    .object({
+      type: z.literal('system'),
+      subtype: z.literal('cat_code_account_diagnostic'),
+      version: z.literal(1),
+      code: SDKAccountDiagnosticCodeSchema(),
+      severity: SDKAccountDiagnosticSeveritySchema(),
+      provider: SDKAccountDiagnosticProviderSchema(),
+      recoverable: z.boolean(),
+      pool: z.string().optional(),
+      requested_model: z.string().optional(),
+      resolved_provider: SDKAccountDiagnosticProviderSchema().optional(),
+      resolved_model: z.string().optional(),
+      counts: z.record(z.string(), z.number()).optional(),
+      account_ref: z.string().optional(),
+      reason: z.string().optional(),
+      user_message: z.string().optional(),
+      uuid: UUIDPlaceholder(),
+      session_id: z.string(),
+    })
+    .describe(
+      'Sanitized account-routing diagnostic event for SDK stream-json consumers.',
+    ),
 )
 
 export const SDKPostTurnSummaryMessageSchema = lazySchema(() =>
@@ -1861,6 +1908,7 @@ export const SDKMessageSchema = lazySchema(() =>
     SDKPartialAssistantMessageSchema(),
     SDKCompactBoundaryMessageSchema(),
     SDKStatusMessageSchema(),
+    SDKAccountDiagnosticMessageSchema(),
     SDKAPIRetryMessageSchema(),
     SDKLocalCommandOutputMessageSchema(),
     SDKHookStartedMessageSchema(),

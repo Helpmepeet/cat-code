@@ -32,7 +32,7 @@ const inputSchema = lazySchema(() =>
     blocked_domains: z
       .array(z.string())
       .optional()
-      .describe('Never include search results from these domains'),
+      .describe('Never include search results from these domains. Not supported on OpenAI/Codex.'),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
@@ -174,6 +174,12 @@ export const WebSearchTool = buildTool({
       return true
     }
 
+    // OpenAI/Codex uses the Responses API hosted web_search tool through the
+    // Codex adapter. The Cat Code WebSearch tool remains the user-facing wrapper.
+    if (provider === 'openai') {
+      return true
+    }
+
     // Enable for Vertex AI with supported models (Claude 4.0+)
     if (provider === 'vertex') {
       const supportsWebSearch =
@@ -249,6 +255,14 @@ export const WebSearchTool = buildTool({
         errorCode: 2,
       }
     }
+    if (getAPIProvider() === 'openai' && blocked_domains?.length) {
+      return {
+        result: false,
+        message:
+          'Error: blocked_domains is not supported for OpenAI/Codex web search; use allowed_domains instead',
+        errorCode: 3,
+      }
+    }
     return { result: true }
   },
   async call(input, context, _canUseTool, _parentMessage, onProgress) {
@@ -259,13 +273,13 @@ export const WebSearchTool = buildTool({
     })
     const toolSchema = makeToolSchema(input)
 
-    const useHaiku = getFeatureValue_CACHED_MAY_BE_STALE(
+    const useSmallFastModel = getFeatureValue_CACHED_MAY_BE_STALE(
       'tengu_plum_vx3',
       false,
     )
 
     const appState = context.getAppState()
-    const model = useHaiku ? getSmallFastModel() : context.options.mainLoopModel
+    const model = useSmallFastModel ? getSmallFastModel() : context.options.mainLoopModel
     const provider = resolveRequestProvider(
       model,
       context.options.mainLoopProvider,
@@ -275,7 +289,7 @@ export const WebSearchTool = buildTool({
       systemPrompt: asSystemPrompt([
         'You are an assistant for performing a web search tool use',
       ]),
-      thinkingConfig: useHaiku
+      thinkingConfig: useSmallFastModel
         ? { type: 'disabled' as const }
         : context.options.thinkingConfig,
       tools: [],
@@ -284,7 +298,7 @@ export const WebSearchTool = buildTool({
         getToolPermissionContext: async () => appState.toolPermissionContext,
         model,
         provider,
-        toolChoice: useHaiku ? { type: 'tool', name: 'web_search' } : undefined,
+        toolChoice: useSmallFastModel ? { type: 'tool', name: 'web_search' } : undefined,
         isNonInteractiveSession: context.options.isNonInteractiveSession,
         hasAppendSystemPrompt: !!context.options.appendSystemPrompt,
         extraToolSchemas: [toolSchema],

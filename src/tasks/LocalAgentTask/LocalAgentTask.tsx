@@ -13,7 +13,7 @@ import type { AgentToolResult } from '../../tools/AgentTool/agentToolUtils.js';
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js';
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js';
 import { asAgentId } from '../../types/ids.js';
-import type { Message } from '../../types/message.js';
+import type { Message, SystemMessageLevel } from '../../types/message.js';
 import { createAbortController, createChildAbortController } from '../../utils/abortController.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
 import { getToolSearchOrReadInfo } from '../../utils/collapseReadSearch.js';
@@ -24,6 +24,7 @@ import { PANEL_GRACE_MS, registerTask, updateTaskState } from '../../utils/task/
 import { emitTaskProgress } from '../../utils/task/sdkProgress.js';
 import { getFreshInputTokens } from '../../utils/tokens.js';
 import { logForDebugging } from '../../utils/debug.js';
+import { createSystemMessage } from '../../utils/messages.js';
 import type { TaskState } from '../types.js';
 export type ToolActivity = {
   toolName: string;
@@ -164,6 +165,8 @@ export type LocalAgentTaskState = TaskStateBase & {
   // timestamp = hide + GC-eligible after this time. Set at terminal transition
   // and on unselect; cleared on retain.
   evictAfter?: number;
+  // Last time this task was resumed after reaching a terminal state.
+  resumedAt?: number;
 };
 export function isLocalAgentTask(task: unknown): task is LocalAgentTaskState {
   return typeof task === 'object' && task !== null && 'type' in task && task.type === 'local_agent';
@@ -195,6 +198,15 @@ export function appendMessageToLocalAgent(taskId: string, message: Message, setA
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => ({
     ...task,
     messages: [...(task.messages ?? []), message]
+  }));
+}
+export function appendLocalAgentSystemMessage(taskId: string, content: string, level: SystemMessageLevel, setAppState: (f: (prev: AppState) => AppState) => void): void {
+  appendMessageToLocalAgent(taskId, createSystemMessage(content, level), setAppState);
+}
+export function markAgentTaskResumed(taskId: string, setAppState: (f: (prev: AppState) => AppState) => void): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => ({
+    ...task,
+    resumedAt: Date.now()
   }));
 }
 export function drainPendingMessages(taskId: string, getAppState: () => AppState, setAppState: (f: (prev: AppState) => AppState) => void): string[] {

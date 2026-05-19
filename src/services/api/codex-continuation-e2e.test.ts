@@ -1,7 +1,7 @@
 /**
  * End-to-end regression tests for the Codex websocket continuation pipeline.
  *
- * Bug report: docs/codex/bugs/websocket-continuation-prefix-instability-and-context-bloat.md
+ * Bug report: docs/codex/2026-04-30-bug-websocket-continuation-prefix-instability-and-context-bloat.md
  *
  * These tests exercise the full chain:
  *   normalizeMessagesForAPI() → translateMessages() → reconcileCanonicalDelta()

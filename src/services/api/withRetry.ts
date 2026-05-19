@@ -7,7 +7,10 @@ import {
 } from '@anthropic-ai/sdk'
 import type { QuerySource } from 'src/constants/querySource.js'
 import type { SystemAPIErrorMessage } from 'src/types/message.js'
-import { CodexAccountCapError } from './codex-fetch-adapter.js'
+import {
+  CodexAccountAuthError,
+  CodexAccountCapError,
+} from './codex-fetch-adapter.js'
 import {
   failoverCodexLease,
   getCodexLeaseExhaustedMessage,
@@ -15,7 +18,15 @@ import {
   getCurrentCodexLease,
   runWithCodexLeaseOwner,
 } from './codexAccountLeaseManager.js'
-import { markPoolAccountCapped, switchToAccount, isPoolActive, getActiveAccount } from './codexAccountPool.js'
+import {
+  getActiveAccount,
+  getPoolStatus,
+  isPoolActive,
+  markPoolAccountCapped,
+  markPoolAccountLastError,
+  markPoolAccountStatus,
+  switchToAccount,
+} from './codexAccountPool.js'
 import { isAwsCredentialsProviderError } from 'src/utils/aws.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logError } from 'src/utils/log.js'
@@ -55,6 +66,14 @@ import {
 } from '../rateLimitMocking.js'
 import { REPEATED_529_ERROR_MESSAGE } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
+import { emitAccountDiagnostic } from './accountDiagnostics.js'
+import { refreshAccountTokens } from './codexTokenRefresh.js'
+import {
+  failoverClaudeAccount,
+  getActiveClaudeAccount,
+  getClaudePoolStatus,
+  isClaudePoolActive,
+} from './claudeAccountPool.js'
 
 const abortError = () => new APIUserAbortError()
 
@@ -62,6 +81,86 @@ const DEFAULT_MAX_RETRIES = 5
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
 export const BASE_DELAY_MS = 500
+
+type AccountStatusCounts = Record<string, number>
+
+function countStatuses(
+  accounts: readonly { status: string }[],
+): AccountStatusCounts | undefined {
+  if (accounts.length === 0) {
+    return undefined
+  }
+
+  const counts: AccountStatusCounts = { total: accounts.length }
+  for (const account of accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  return counts
+}
+
+function emitCodexDiagnostic(
+  event: Omit<
+    Parameters<typeof emitAccountDiagnostic>[0],
+    'provider' | 'pool' | 'requested_model' | 'resolved_provider' | 'resolved_model' | 'counts'
+  > & { model: string },
+): void {
+  emitAccountDiagnostic({
+    ...event,
+    provider: 'openai',
+    pool: 'codex',
+    requested_model: event.model,
+    resolved_provider: 'openai',
+    resolved_model: event.model,
+    counts: countStatuses(getPoolStatus().accounts),
+  })
+}
+
+function emitClaudeDiagnostic(
+  event: Omit<
+    Parameters<typeof emitAccountDiagnostic>[0],
+    'provider' | 'pool' | 'requested_model' | 'resolved_provider' | 'resolved_model' | 'counts'
+  > & { model: string },
+): void {
+  emitAccountDiagnostic({
+    ...event,
+    provider: 'anthropic',
+    pool: 'claude',
+    requested_model: event.model,
+    resolved_provider: 'anthropic',
+    resolved_model: event.model,
+    counts: countStatuses(getClaudePoolStatus().accounts),
+  })
+}
+
+function getCodexExhaustionDiagnosticCode(): 'auth.missing' | 'account.pool.unavailable' | 'quota.exhausted' {
+  const counts = countStatuses(getPoolStatus().accounts)
+  if (!counts) {
+    return 'auth.missing'
+  }
+  if (counts.capped === counts.total) {
+    return 'quota.exhausted'
+  }
+  return 'account.pool.unavailable'
+}
+
+function getClaudeUnavailableDiagnosticCode(): 'auth.missing' | 'account.pool.unavailable' {
+  return countStatuses(getClaudePoolStatus().accounts) ? 'account.pool.unavailable' : 'auth.missing'
+}
+
+function emitCodexFailoverSucceeded(
+  model: string,
+  accountRef: string,
+  reason: string,
+): void {
+  emitCodexDiagnostic({
+    code: 'account.failover.succeeded',
+    severity: 'info',
+    recoverable: true,
+    account_ref: accountRef,
+    reason,
+    model,
+  })
+}
 
 // Foreground query sources where the user IS blocking on the result — these
 // retry on 529. Everything else (summaries, titles, suggestions, classifiers)
@@ -143,6 +242,8 @@ interface RetryOptions {
   querySource?: QuerySource
   ownerId?: string
   onCodexAccountSwitch?: () => void
+  isCodexRequest?: boolean
+  isClaudeOAuthRequest?: boolean
   /**
    * Pre-seed the consecutive 529 counter. Used when this retry loop is a
    * non-streaming fallback after a streaming 529 — the streaming 529 should
@@ -251,12 +352,52 @@ export async function* withRetry<T>(
         ) {
           // On 401 "token expired" or 403 "token revoked", force a token refresh
           if (
-            (lastError instanceof APIError && lastError.status === 401) ||
-            isOAuthTokenRevokedError(lastError)
+            options.isClaudeOAuthRequest === true &&
+            ((lastError instanceof APIError && lastError.status === 401) ||
+              isOAuthTokenRevokedError(lastError))
           ) {
+            const failedAccount = getActiveClaudeAccount()
             const failedAccessToken = getClaudeAIOAuthTokens()?.accessToken
-            if (failedAccessToken) {
-              await handleOAuth401Error(failedAccessToken)
+            const recovered = failedAccessToken
+              ? await handleOAuth401Error(failedAccessToken)
+              : false
+
+            if (!recovered && isClaudePoolActive() && failedAccount) {
+              emitClaudeDiagnostic({
+                code: 'account.token_refresh.failed',
+                severity: 'warning',
+                recoverable: true,
+                account_ref: failedAccount.accountUuid,
+                reason: 'active Claude account failed OAuth recovery',
+                model: retryContext.model,
+              })
+
+              const replacementAccount = failoverClaudeAccount(
+                failedAccount.accountUuid,
+                'OAuth recovery failed after 401',
+              )
+              if (replacementAccount) {
+                emitClaudeDiagnostic({
+                  code: 'account.failover.succeeded',
+                  severity: 'info',
+                  recoverable: true,
+                  account_ref: replacementAccount.accountUuid,
+                  reason: 'switched to a healthy Claude account after OAuth failure',
+                  model: retryContext.model,
+                })
+              } else {
+                emitClaudeDiagnostic({
+                  code: getClaudeUnavailableDiagnosticCode(),
+                  severity: 'error',
+                  recoverable: false,
+                  account_ref: failedAccount.accountUuid,
+                  reason: 'no healthy Claude account is available after OAuth failure',
+                  model: retryContext.model,
+                })
+                throw new Error(
+                  'No healthy Claude account is available after OAuth failure.',
+                )
+              }
             }
           }
           client = await getClient()
@@ -284,6 +425,11 @@ export async function* withRetry<T>(
               error.accountId,
               error.message,
             )
+            emitCodexFailoverSucceeded(
+              retryContext.model,
+              nextLease.accountId,
+              'usage cap failover succeeded',
+            )
             logForDebugging(
               `[codex-pool] Reassigned lease ${currentLease.ownerId} from ${error.accountId} to ${nextLease.accountId} on 429`,
             )
@@ -291,6 +437,14 @@ export async function* withRetry<T>(
             client = null
             continue
           } catch (failoverError) {
+            emitCodexDiagnostic({
+              code: getCodexExhaustionDiagnosticCode(),
+              severity: 'error',
+              recoverable: false,
+              account_ref: error.accountId,
+              reason: 'no healthy Codex account remained after usage cap failover',
+              model: retryContext.model,
+            })
             throw new CannotRetryError(
               failoverError instanceof Error
                 ? failoverError
@@ -305,6 +459,11 @@ export async function* withRetry<T>(
           markPoolAccountCapped(error.accountId, error.message)
           const next = switchToAccount(null)
           if (next) {
+            emitCodexFailoverSucceeded(
+              retryContext.model,
+              next.accountId,
+              'usage cap failover succeeded',
+            )
             logForDebugging(
               `[codex-pool] Main session rotated from ${error.accountId} to ${next.accountId} on cap error`,
             )
@@ -312,6 +471,14 @@ export async function* withRetry<T>(
             client = null
             continue
           }
+          emitCodexDiagnostic({
+            code: getCodexExhaustionDiagnosticCode(),
+            severity: 'error',
+            recoverable: false,
+            account_ref: error.accountId,
+            reason: 'no healthy Codex account remained after usage cap failover',
+            model: retryContext.model,
+          })
           // Pool exhausted — no healthy accounts left
           throw new CannotRetryError(
             new Error(getCodexLeaseExhaustedMessage()),
@@ -320,12 +487,118 @@ export async function* withRetry<T>(
         }
       }
 
-      // Codex connection-error failover: a persistent APIConnectionError against
-      // the Codex endpoint is almost always a capped/expired account rather than
-      // a real network outage. After 2 consecutive connection errors, treat it
-      // the same as a cap error and failover to the next pool account.
+      if (error instanceof CodexAccountAuthError) {
+        const currentLease =
+          getCurrentCodexLease() ??
+          (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
+        const accountId = currentLease?.accountId ?? error.accountId
+        const currentAccount = getPoolStatus().accounts.find(
+          account => account.accountId === accountId,
+        )
+
+        let refreshRecovered = false
+        if (currentAccount?.refreshToken && currentAccount.vaultFilePath) {
+          try {
+            const refreshed = await refreshAccountTokens(
+              currentAccount.accountId,
+              currentAccount.refreshToken,
+              currentAccount.vaultFilePath,
+            )
+            if (refreshed.status === 'refreshed') {
+              refreshRecovered = true
+            }
+          } catch {
+            // refreshAccountTokens already records the underlying failure state
+          }
+        }
+
+        if (refreshRecovered) {
+          client = null
+          continue
+        }
+
+        markPoolAccountStatus(
+          accountId,
+          'dead',
+          'Codex account authentication failed',
+        )
+        emitCodexDiagnostic({
+          code: 'account.token_refresh.failed',
+          severity: 'warning',
+          recoverable: true,
+          account_ref: accountId,
+          reason: 'Codex account authentication failed and refresh did not recover it',
+          model: retryContext.model,
+        })
+
+        if (currentLease) {
+          try {
+            const nextLease = failoverCodexLease(
+              currentLease.ownerId,
+              accountId,
+              'Codex account authentication failed',
+              { markAccountCapped: false },
+            )
+            emitCodexFailoverSucceeded(
+              retryContext.model,
+              nextLease.accountId,
+              'authentication failover succeeded',
+            )
+            options.onCodexAccountSwitch?.()
+            client = null
+            continue
+          } catch (failoverError) {
+            emitCodexDiagnostic({
+              code: getCodexExhaustionDiagnosticCode(),
+              severity: 'error',
+              recoverable: false,
+              account_ref: accountId,
+              reason: 'no healthy Codex account remained after authentication failure',
+              model: retryContext.model,
+            })
+            throw new CannotRetryError(
+              failoverError instanceof Error
+                ? failoverError
+                : new Error(getCodexLeaseExhaustedMessage()),
+              retryContext,
+            )
+          }
+        }
+
+        if (isPoolActive()) {
+          const next = switchToAccount(null)
+          if (next) {
+            emitCodexFailoverSucceeded(
+              retryContext.model,
+              next.accountId,
+              'authentication failover succeeded',
+            )
+            options.onCodexAccountSwitch?.()
+            client = null
+            continue
+          }
+
+          emitCodexDiagnostic({
+            code: getCodexExhaustionDiagnosticCode(),
+            severity: 'error',
+            recoverable: false,
+            account_ref: accountId,
+            reason: 'no healthy Codex account remained after authentication failure',
+            model: retryContext.model,
+          })
+          throw new CannotRetryError(
+            new Error(getCodexLeaseExhaustedMessage()),
+            retryContext,
+          )
+        }
+      }
+
+      // Codex connection-error failover: after two consecutive connection
+      // errors on a confirmed Codex request, try a different pooled account
+      // without converting the failed account into usage-cap state.
       if (
         error instanceof APIConnectionError &&
+        options.isCodexRequest === true &&
         isPoolActive() &&
         attempt >= 2
       ) {
@@ -334,12 +607,26 @@ export async function* withRetry<T>(
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
         const accountId = currentLease?.accountId ?? getActiveAccount()?.accountId
         if (accountId) {
+          emitCodexDiagnostic({
+            code: 'account.transient_failure',
+            severity: 'warning',
+            recoverable: true,
+            account_ref: accountId,
+            reason: error.message,
+            model: retryContext.model,
+          })
           if (currentLease) {
             try {
               const nextLease = failoverCodexLease(
                 currentLease.ownerId,
                 accountId,
                 error.message,
+                { markAccountCapped: false },
+              )
+              emitCodexFailoverSucceeded(
+                retryContext.model,
+                nextLease.accountId,
+                'transient connection failover succeeded',
               )
               logForDebugging(
                 `[codex-pool] Reassigned lease ${currentLease.ownerId} from ${accountId} to ${nextLease.accountId} on connection error`,
@@ -348,12 +635,25 @@ export async function* withRetry<T>(
               client = null
               continue
             } catch {
+              emitCodexDiagnostic({
+                code: getCodexExhaustionDiagnosticCode(),
+                severity: 'error',
+                recoverable: false,
+                account_ref: accountId,
+                reason: 'no healthy Codex account remained after a transient connection failure',
+                model: retryContext.model,
+              })
               // Fall through — pool exhausted, let normal retry exhaust too
             }
           } else {
-            markPoolAccountCapped(accountId, error.message)
+            markPoolAccountLastError(accountId)
             const next = switchToAccount(null)
             if (next) {
+              emitCodexFailoverSucceeded(
+                retryContext.model,
+                next.accountId,
+                'transient connection failover succeeded',
+              )
               logForDebugging(
                 `[codex-pool] Main session rotated from ${accountId} to ${next.accountId} on connection error`,
               )
@@ -361,6 +661,14 @@ export async function* withRetry<T>(
               client = null
               continue
             }
+            emitCodexDiagnostic({
+              code: getCodexExhaustionDiagnosticCode(),
+              severity: 'error',
+              recoverable: false,
+              account_ref: accountId,
+              reason: 'no healthy Codex account remained after a transient connection failure',
+              model: retryContext.model,
+            })
           }
         }
       }

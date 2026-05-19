@@ -66,6 +66,7 @@ import {
 } from 'src/utils/process.js'
 import type { Stream } from 'src/utils/stream.js'
 import { EMPTY_USAGE } from 'src/services/api/logging.js'
+import { installStreamJsonAccountDiagnosticHook } from 'src/services/api/accountDiagnostics.js'
 import {
   loadConversationForResume,
   type TurnInterruptionState,
@@ -595,6 +596,11 @@ export async function runHeadless(
   // structuredIO.write below.
   if (options.outputFormat === 'stream-json') {
     installStreamJsonStdoutGuard()
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => structuredIO.write(message),
+      getSessionId,
+      createUuid: randomUUID,
+    })
   }
 
   // #34044: if user explicitly set sandbox.enabled=true but deps are missing,

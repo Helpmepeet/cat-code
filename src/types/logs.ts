@@ -313,6 +313,7 @@ export type SubagentSpawnedMessage = {
   type: 'subagent-spawned'
   sessionId: string
   agentId: AgentId
+  agentName?: string
   agentType: string
   description: string
   transcriptPath: string

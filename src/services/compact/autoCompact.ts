@@ -70,6 +70,10 @@ export const AUTOCOMPACT_BUFFER_TOKENS = 13_000
 export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
+export const MIN_AUTOCOMPACT_RECOVERY_WINDOW_TOKENS =
+  AUTOCOMPACT_BUFFER_TOKENS - MANUAL_COMPACT_BUFFER_TOKENS
+export const AUTOCOMPACT_RECOVERY_WINDOW_PERCENTAGE = 0.08
+export const MAX_AUTOCOMPACT_RECOVERY_WINDOW_TOKENS = 50_000
 
 // Stop trying autocompact after this many consecutive failures.
 // BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
@@ -186,11 +190,28 @@ function notifyAutoCompactCircuitBreaker(toolUseContext: ToolUseContext): void {
   })
 }
 
+export function getAutoCompactRecoveryWindowTokens(model: string): number {
+  const effectiveContextWindow = getEffectiveContextWindowSize(model)
+  const scaledWindow = Math.floor(
+    effectiveContextWindow * AUTOCOMPACT_RECOVERY_WINDOW_PERCENTAGE,
+  )
+  return Math.max(
+    MIN_AUTOCOMPACT_RECOVERY_WINDOW_TOKENS,
+    Math.min(MAX_AUTOCOMPACT_RECOVERY_WINDOW_TOKENS, scaledWindow),
+  )
+}
+
+export function getAutoCompactBufferTokens(model: string): number {
+  return (
+    MANUAL_COMPACT_BUFFER_TOKENS + getAutoCompactRecoveryWindowTokens(model)
+  )
+}
+
 export function getAutoCompactThreshold(model: string): number {
   const effectiveContextWindow = getEffectiveContextWindowSize(model)
 
   const autocompactThreshold =
-    effectiveContextWindow - AUTOCOMPACT_BUFFER_TOKENS
+    effectiveContextWindow - getAutoCompactBufferTokens(model)
 
   // Override for easier testing of autocompact
   const envPercent = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
@@ -205,6 +226,21 @@ export function getAutoCompactThreshold(model: string): number {
   }
 
   return autocompactThreshold
+}
+
+export function getBlockingLimit(model: string): number {
+  const actualContextWindow = getEffectiveContextWindowSize(model)
+  const defaultBlockingLimit =
+    actualContextWindow - MANUAL_COMPACT_BUFFER_TOKENS
+
+  // Allow override for testing
+  const blockingLimitOverride = process.env.CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE
+  const parsedOverride = blockingLimitOverride
+    ? parseInt(blockingLimitOverride, 10)
+    : NaN
+  return !isNaN(parsedOverride) && parsedOverride > 0
+    ? parsedOverride
+    : defaultBlockingLimit
 }
 
 export function calculateTokenWarningState(
@@ -236,19 +272,7 @@ export function calculateTokenWarningState(
   const isAboveAutoCompactThreshold =
     isAutoCompactEnabled() && tokenUsage >= autoCompactThreshold
 
-  const actualContextWindow = getEffectiveContextWindowSize(model)
-  const defaultBlockingLimit =
-    actualContextWindow - MANUAL_COMPACT_BUFFER_TOKENS
-
-  // Allow override for testing
-  const blockingLimitOverride = process.env.CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE
-  const parsedOverride = blockingLimitOverride
-    ? parseInt(blockingLimitOverride, 10)
-    : NaN
-  const blockingLimit =
-    !isNaN(parsedOverride) && parsedOverride > 0
-      ? parsedOverride
-      : defaultBlockingLimit
+  const blockingLimit = getBlockingLimit(model)
 
   const isAtBlockingLimit = tokenUsage >= blockingLimit
 
@@ -317,13 +341,13 @@ export async function shouldAutoCompact(
 
   // Context-collapse mode: same suppression. Collapse IS the context
   // management system when it's on — the 90% commit / 95% blocking-spawn
-  // flow owns the headroom problem. Autocompact firing at effective-13k
-  // (~93% of effective) sits right between collapse's commit-start (90%)
-  // and blocking (95%), so it would race collapse and usually win, nuking
-  // granular context that collapse was about to save. Gating here rather
-  // than in isAutoCompactEnabled() keeps reactiveCompact alive as the 413
-  // fallback (it consults isAutoCompactEnabled directly) and leaves
-  // sessionMemory + manual /compact working.
+  // flow owns the headroom problem. Autocompact's threshold is model-scaled,
+  // but it still sits inside collapse's ladder and would race collapse,
+  // usually winning and nuking granular context that collapse was about to
+  // save. Gating here rather than in isAutoCompactEnabled() keeps
+  // reactiveCompact alive as the 413 fallback (it consults
+  // isAutoCompactEnabled directly) and leaves sessionMemory + manual
+  // /compact working.
   //
   // Consult isContextCollapseEnabled (not the raw gate) so the
   // CLAUDE_CONTEXT_COLLAPSE env override is honored here too. require()

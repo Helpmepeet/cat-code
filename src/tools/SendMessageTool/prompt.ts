@@ -1,8 +1,37 @@
 import { feature } from 'bun:bundle'
+import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
+import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
+import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 
 export const DESCRIPTION = 'Send a message to another agent'
 
 export function getPrompt(): string {
+  if (!isAgentSwarmsEnabled()) {
+    return `
+# SendMessage
+
+This tool targets recipients that are currently running. To restart a stopped subagent, use ${RESUME_AGENT_TOOL_NAME}. To start a fresh subagent, use ${AGENT_TOOL_NAME}.
+
+\`\`\`json
+{"to": "implement-auth", "summary": "fix failing test", "message": "The auth test is failing on the expired-token branch. Please inspect the failure and patch only your assigned files."}
+\`\`\`
+
+Use this to queue a follow-up to a relevant running worker instead of spawning a duplicate.
+
+Available without Agent Teams:
+
+- plain text messages to running worker handles
+- plain text messages to running raw agent IDs
+
+Requires Agent Teams:
+
+- broadcast with \`"*"\`
+- teammate mailbox fallback by arbitrary teammate name
+- structured protocol messages
+- cross-session UDS or bridge messages
+`.trim()
+  }
+
   const udsRow = feature('UDS_INBOX')
     ? `\n| \`"uds:/path/to.sock"\` | Local agent session's socket (same machine; use \`ListPeers\`) |
 | \`"bridge:session_..."\` | Remote Control peer session (cross-machine; use \`ListPeers\`) |`
@@ -22,7 +51,7 @@ A listed peer is alive and will process your message — no "busy" state; messag
   return `
 # SendMessage
 
-Send a message to another agent.
+Send a message to another running agent.
 
 \`\`\`json
 {"to": "researcher", "summary": "assign task 1", "message": "start on task #1"}
