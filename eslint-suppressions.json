@@ -19,11 +19,6 @@
       "count": 1
     }
   },
-  "src/cli/print.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
   "src/cli/structuredIO.ts": {
     "custom-rules/no-process-exit": {
       "count": 2
