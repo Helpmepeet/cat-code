@@ -240,6 +240,19 @@ export class CodexAccountCapError extends Error {
   }
 }
 
+export class CodexAccountAuthError extends Error {
+  public readonly status: 401 | 403
+
+  constructor(
+    public readonly accountId: string,
+    status: 401 | 403,
+  ) {
+    super(`Codex account ${accountId} authentication failed (${status})`)
+    this.name = 'CodexAccountAuthError'
+    this.status = status
+  }
+}
+
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
   { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Latest GPT' },
@@ -2626,8 +2639,14 @@ export function createCodexFetch(
     const httpFallbackEvents = async (): Promise<HttpFallbackResult> => {
       const { response: codexResponse, transportContext } = await performHttpRequest()
       if (!codexResponse.ok) {
-        if ((codexResponse.status === 429 || codexResponse.status === 401) && isPoolActive()) {
+        if (codexResponse.status === 429 && isPoolActive()) {
           throw new CodexAccountCapError(currentAccountId)
+        }
+        if ((codexResponse.status === 401 || codexResponse.status === 403) && isPoolActive()) {
+          throw new CodexAccountAuthError(
+            currentAccountId,
+            codexResponse.status as 401 | 403,
+          )
         }
         const errorText = await codexResponse.text()
         throw new Error(`Codex API error (${codexResponse.status}): ${errorText}`)
@@ -2703,8 +2722,14 @@ export function createCodexFetch(
     const { response: codexResponse, transportContext } = await performHttpRequest()
 
     if (!codexResponse.ok) {
-      if ((codexResponse.status === 429 || codexResponse.status === 401) && isPoolActive()) {
+      if (codexResponse.status === 429 && isPoolActive()) {
         throw new CodexAccountCapError(currentAccountId)
+      }
+      if ((codexResponse.status === 401 || codexResponse.status === 403) && isPoolActive()) {
+        throw new CodexAccountAuthError(
+          currentAccountId,
+          codexResponse.status as 401 | 403,
+        )
       }
 
       const errorText = await codexResponse.text()

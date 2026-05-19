@@ -7,9 +7,9 @@ Last refreshed: 2026-05-12
 Daily-refreshable routing map for Codex-backed model and account behavior in Cat
 Code. Use this to choose the first files to inspect before changing Codex
 request building, account selection, lease/pool routing, response parsing,
-continuation, or failure handling. Verify behavior in source before editing;
-older Codex docs in `docs/codex/` are useful incident history, not the live
-source of truth.
+continuation, failure handling, or structured account diagnostics. Verify
+behavior in source before editing; older Codex docs in `docs/codex/` are useful
+incident history, not the live source of truth.
 
 ## First Files To Inspect
 
@@ -29,7 +29,8 @@ Read in this order for most Codex/OpenAI work:
 | 10 | [`../../src/services/api/codex-websocket-transport.ts`](../../src/services/api/codex-websocket-transport.ts) | Incremental continuation, `previous_response_id`, prewarm, and stale-session handling. |
 | 11 | [`../../src/services/api/codexAccountPool.ts`](../../src/services/api/codexAccountPool.ts) | Global account inventory, health, active account, and usage hints. |
 | 12 | [`../../src/services/api/codexAccountLeaseManager.ts`](../../src/services/api/codexAccountLeaseManager.ts) | Per-owner account pinning and lease-local failover. |
-| 13 | [`../../src/services/api/withRetry.ts`](../../src/services/api/withRetry.ts) | Retry policy and Codex failover on cap/connection errors. |
+| 13 | [`../../src/services/api/withRetry.ts`](../../src/services/api/withRetry.ts) | Retry policy and Codex failover on cap/connection/auth errors. |
+| 14 | [`../../src/services/api/accountDiagnostics.ts`](../../src/services/api/accountDiagnostics.ts) | Structured `cat_code_account_diagnostic` emission and cross-process sanitization. |
 
 ## Codex Routing By Goal
 
@@ -77,10 +78,21 @@ src/codex-core/client.ts:runCodexLLM()
 | Pool activation and active-account fallback | `src/services/api/codexAccountPool.ts` | `src/services/api/client.ts` | `getActiveAccount()` can repair an invalid active account by finding another healthy one. |
 | Lease-aware token selection | `src/services/api/client.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts` | `resolveCodexOAuthTokensForLeaseOwner()` is the bridge between pool/lease state and API client creation. |
 | Per-owner failover | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts` | Leased owners fail over locally; unleased main-thread requests fall back to pool switching. |
+| Structured account diagnostics | `src/services/api/accountDiagnostics.ts` | `src/entrypoints/sdk/coreSchemas.ts`, `src/services/api/client.ts`, `src/services/api/withRetry.ts` | Downstream remediation only requires `version`, `code`, `severity`, `provider`, and `recoverable`; optional fields are sanitized hints. |
 | WebSocket incremental continuation | `src/services/api/codex-websocket-transport.ts` | `src/services/api/codex-continuation-e2e.test.ts`, `src/utils/messages.ts` | `responseItemsEqual()` and `getIncrementalInputDelta()` are the strict continuation gates. |
 | HTTP fallback / stream normalization | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts` | Adapter owns stream translation for both HTTP SSE and websocket-backed event flows. |
 | Standalone response parsing | `src/codex-core/response.ts` | `src/codex-core/errors.ts` | Core classifies 401/403 as auth, 429 as quota or rate-limit, 400/model text as model, else backend. |
 | Long-running token freshness | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts` | Refresh-on-timer and refresh-on-use are separate paths; check both before changing account health rules. |
+
+
+## Failure Paths And Diagnostic Codes
+
+| Path | Inspect first | Then inspect | Result |
+|---|---|---|---|
+| Usage cap / hard 429 | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts`, `src/services/api/codex-fetch-adapter.ts` | `CodexAccountCapError` is the only path that marks the failed account capped. Successful rotation emits `account.failover.succeeded`; terminal exhaustion becomes `quota.exhausted` only when every remaining account is capped. |
+| Refresh/auth failure / 401 | `src/services/api/withRetry.ts` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountPool.ts`, `src/services/api/client.ts` | `CodexAccountAuthError` tries vault refresh first, then marks the account dead, emits `account.token_refresh.failed`, and ends as `account.pool.unavailable` or `auth.missing` only if no healthy replacement remains. |
+| Transient transport / websocket rejection | `src/services/api/withRetry.ts` | `src/services/api/codex-websocket-transport.ts`, `src/services/api/codexAccountLeaseManager.ts` | Repeated `APIConnectionError` emits `account.transient_failure`, does not mark the failed account capped, and can still emit `account.failover.succeeded` when another healthy account exists. |
+| Pool unavailable before send | `src/services/api/client.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/accountDiagnostics.ts` | `resolveCodexOAuthTokensForLeaseOwner()` refuses raw config fallback when the pool is active. `getAnthropicClient()` emits `auth.missing` when no Codex account exists, `account.pool.unavailable` when accounts exist but none are healthy, and `quota.exhausted` only when all known accounts are capped. |
 
 ## Tests And Scripts
 
@@ -103,8 +115,8 @@ Use the closest test first:
 
 | Symptom | Inspect in this order | Why |
 |---|---|---|
-| `No valid Codex account found` or apparent “all accounts exhausted” | `src/services/api/client.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codexAccountPool.ts` -> `src/services/api/withRetry.ts` | Client creation refuses to fall through to raw config tokens when the pool is active but no healthy account exists. |
-| Repeated cap rotation or false account exhaustion | `src/services/api/withRetry.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codexAccountPool.ts` -> `docs/codex/2026-05-12-bug-codex-pool-false-cap-on-claude-oauth-failure.md` | Distinguish real `CodexAccountCapError` paths from generic connection-error failover. |
+| `No healthy Codex account is available for this request` or apparent “all accounts exhausted” | `src/services/api/client.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codexAccountPool.ts` -> `src/services/api/withRetry.ts` | Check the emitted diagnostic first: `auth.missing` means no configured account, `account.pool.unavailable` means accounts exist but none are healthy, and `quota.exhausted` means every known account is capped. |
+| Repeated cap rotation or false account exhaustion | `src/services/api/withRetry.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codexAccountPool.ts` -> `docs/codex/2026-05-12-bug-codex-pool-false-cap-on-claude-oauth-failure.md` | Distinguish real `CodexAccountCapError` paths from `CodexAccountAuthError` refresh/dead-account handling and `account.transient_failure` connection failover. |
 | Slow turns or full re-sends instead of incremental continuation | `src/services/api/codex-websocket-transport.ts` -> `src/services/api/codex-continuation-e2e.test.ts` -> `src/utils/messages.ts` -> `docs/codex/2026-04-30-bug-websocket-continuation-prefix-instability-and-context-bloat.md` | Continuation breaks when rebuilt input no longer matches strict canonical prefix expectations. |
 | Cache hit drops or unexpected uncached input | `src/services/api/codex-fetch-adapter.ts` -> `src/services/api/codex-websocket-transport.ts` -> `src/codex-core/response.ts` -> `docs/codex/2026-04-30-cache-context-truncation.md` | Request fields, message growth, and continuation mode all affect cache continuity; counts are only known after response parsing. |
 | Standalone `runCodexLLM()` fails before sending | `src/codex-core/client.ts` -> `src/codex-core/request.ts` -> `src/codex-core/accounts.ts` | Core validates options aggressively and does not auto-recover via pool rotation. |
@@ -116,6 +128,7 @@ Use the closest test first:
 - Do not assume the pool and lease manager are interchangeable. The pool owns inventory and health; the lease manager owns runtime pinning and owner-local failover.
 - Do not assume `conversationId` alone guarantees websocket continuation. Incremental reuse still depends on exact request-signature and canonical-prefix checks in `codex-websocket-transport.ts`.
 - Do not assume connection errors mean usage caps. `withRetry.ts` now has a separate connection-error failover path that should not mark accounts capped.
+- Do not collapse every account failure into `quota.exhausted`. Refresh/auth failures and transient transport failures now have their own diagnostic codes and should stay distinct from hard cap rotation.
 - Do not assume the standalone core has feature parity with the app path. `runCodexLLM()` is explicit-account, text-only, and non-streaming.
 - Do not assume cache numbers exist before response completion. Cache hit/miss data is parsed from completed response usage, not predicted at request time.
 - Do not treat old incident docs under `docs/codex/` as current behavior without checking the source and tests above. They are useful failure history, especially for continuation and pool bugs, but some fixes have already landed.

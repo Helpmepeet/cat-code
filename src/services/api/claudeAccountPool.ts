@@ -136,6 +136,19 @@ export function isClaudePoolActive(): boolean {
   )
 }
 
+/**
+ * True when token getters should prefer the in-memory Claude pool over
+ * keychain/config fallback. A multi-account pool remains the request-local token
+ * source after internal failover even if only one healthy replacement remains.
+ */
+export function shouldUseClaudePoolTokenSource(): boolean {
+  return (
+    pool.initialized &&
+    pool.accounts.length > 1 &&
+    pool.accounts.some((a) => a.status === 'healthy')
+  )
+}
+
 /** Returns the currently active Claude account, or null if pool empty. */
 export function getActiveClaudeAccount(): ClaudePoolAccount | null {
   if (!pool.initialized || pool.activeIndex < 0) return null
@@ -234,6 +247,35 @@ export function switchToClaudeAccount(idPrefix: string | null): ClaudePoolAccoun
   }))
 
   return pool.accounts[targetIdx]!
+}
+
+/**
+ * Mark a Claude account dead and fail over in-memory without rewriting the
+ * persisted active-account pointer. Internal request recovery uses this so the
+ * current process can keep moving without mutating global account selection.
+ */
+export function failoverClaudeAccount(
+  accountUuid: string,
+  reason: string,
+): ClaudePoolAccount | null {
+  if (!pool.initialized) return null
+
+  const failedIndex = pool.accounts.findIndex((a) => a.accountUuid === accountUuid)
+  if (failedIndex < 0) return null
+
+  const failedAccount = pool.accounts[failedIndex]!
+  failedAccount.status = 'dead'
+
+  logForDebugging(
+    `[claude-pool] Internal failover marked ${failedAccount.accountUuid} dead: ${reason}` ,
+    { level: 'warn' },
+  )
+
+  if (pool.activeIndex === failedIndex || pool.accounts[pool.activeIndex]?.status !== 'healthy') {
+    pool.activeIndex = pool.accounts.findIndex((account, index) => index !== failedIndex && account.status === 'healthy')
+  }
+
+  return pool.activeIndex >= 0 ? pool.accounts[pool.activeIndex]! : null
 }
 
 /**
@@ -614,4 +656,31 @@ function checkAccountHealth(lastRefresh: string | undefined): 'healthy' | 'dead'
   const refreshMs = new Date(lastRefresh).getTime()
   const daysSinceRefresh = (Date.now() - refreshMs) / (1000 * 60 * 60 * 24)
   return daysSinceRefresh > 7 ? 'dead' : 'healthy'
+}
+
+export function seedClaudeAccountPoolForTest({
+  accounts,
+  activeAccountUuid,
+}: {
+  accounts: ClaudePoolAccount[]
+  activeAccountUuid?: string
+}): void {
+  pool.accounts = accounts.map((account) => ({ ...account }))
+  pool.initialized = true
+
+  if (activeAccountUuid) {
+    pool.activeIndex = pool.accounts.findIndex(
+      (account) => account.accountUuid === activeAccountUuid,
+    )
+  } else {
+    pool.activeIndex = pool.accounts.findIndex(
+      (account) => account.status === 'healthy',
+    )
+  }
+}
+
+export function resetClaudeAccountPoolForTest(): void {
+  pool.accounts = []
+  pool.activeIndex = -1
+  pool.initialized = false
 }

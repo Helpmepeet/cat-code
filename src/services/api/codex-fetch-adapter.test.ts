@@ -1341,6 +1341,76 @@ describe('codex-fetch-adapter', () => {
     )
   })
 
+  test('createCodexFetch uses HTTP fallback for immediate zero-event websocket closes', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+    const fetchCalls: Array<{ input: RequestInfo | URL, init?: RequestInit }> = []
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ input, init })
+      return new Response(
+        [
+          'event: response.output_text.delta',
+          `data: ${JSON.stringify({
+            type: 'response.output_text.delta',
+            delta: 'http fallback after ws close',
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 12,
+                output_tokens: 3,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [completedWsResponse('resp_prewarm')],
+      [{ __close: { code: 1000, reason: 'policy' } }],
+    ]
+
+    try {
+      const response = await createCodexFetch(accessToken, 'conv_zero_event_close')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        },
+      )
+
+      const body = await response.text()
+      expect(body).toContain('http fallback after ws close')
+      expect(body).toContain('event: message_stop')
+      expect(fetchCalls).toHaveLength(1)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_zero_event_close')
+      resetCodexCacheContext()
+    }
+  })
+
   test('createCodexFetch surfaces immediate WS usage-limit errors as CodexAccountCapError', async () => {
     resetCodexCacheContext()
     const accessToken = createAccessToken('acct_test_streaming')

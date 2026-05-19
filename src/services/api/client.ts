@@ -1,6 +1,14 @@
-import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
+import Anthropic, {
+  APIConnectionError,
+  type ClientOptions,
+} from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import { getActiveAccount, getPoolStatus, isPoolActive } from './codexAccountPool.js'
+import {
+  getActiveClaudeAccount,
+  getClaudePoolStatus,
+  isClaudePoolActive,
+} from './claudeAccountPool.js'
 import { getCurrentCodexLease, getCodexLeaseForOwner } from './codexAccountLeaseManager.js'
 import {
   computeCch,
@@ -41,6 +49,7 @@ import {
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
 import type { PoolAccount } from './codexAccountPool.js'
+import { emitAccountDiagnostic } from './accountDiagnostics.js'
 
 /**
  * Environment variables for different client types:
@@ -108,6 +117,105 @@ type ResolvedCodexOAuthTokens = {
   refreshToken: string
   expiresAt: number
   accountId: string
+}
+
+type AccountStatusCounts = Record<string, number>
+
+function toDiagnosticProvider(provider: APIProvider | 'anthropic' | 'openai' | 'unknown'):
+  | 'openai'
+  | 'anthropic'
+  | 'unknown' {
+  if (provider === 'openai') return 'openai'
+  if (provider === 'firstParty' || provider === 'bedrock' || provider === 'vertex' || provider === 'foundry' || provider === 'anthropic') {
+    return 'anthropic'
+  }
+  return 'unknown'
+}
+
+function countStatuses(
+  accounts: readonly { status: string }[],
+): AccountStatusCounts | undefined {
+  if (accounts.length === 0) {
+    return undefined
+  }
+
+  const counts: AccountStatusCounts = { total: accounts.length }
+  for (const account of accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  return counts
+}
+
+function emitProviderMismatchDiagnostic(
+  requestedProvider: APIProvider | undefined,
+  resolvedProvider: APIProvider,
+  model: string | undefined,
+): void {
+  if (!requestedProvider || requestedProvider === resolvedProvider) {
+    return
+  }
+
+  emitAccountDiagnostic({
+    code: 'model.provider_mismatch',
+    severity: 'warning',
+    provider: toDiagnosticProvider(resolvedProvider),
+    recoverable: true,
+    requested_model: model,
+    resolved_provider: toDiagnosticProvider(resolvedProvider),
+    resolved_model: model,
+    reason: `request provider resolved to ${resolvedProvider}` ,
+  })
+}
+
+function emitRouteSelectedDiagnostic(options: {
+  provider: 'openai' | 'anthropic'
+  pool?: string
+  model?: string
+  accountRef?: string
+  counts?: AccountStatusCounts
+}): void {
+  emitAccountDiagnostic({
+    code: 'account.route.selected',
+    severity: 'info',
+    provider: options.provider,
+    recoverable: true,
+    pool: options.pool,
+    requested_model: options.model,
+    resolved_provider: options.provider,
+    resolved_model: options.model,
+    account_ref: options.accountRef,
+    counts: options.counts,
+  })
+}
+
+function emitCodexUnavailableDiagnostic(model: string | undefined): void {
+  const poolStatus = getPoolStatus()
+  const counts = countStatuses(poolStatus.accounts)
+  const code = !counts
+    ? 'auth.missing'
+    : counts.capped === counts.total
+      ? 'quota.exhausted'
+      : 'account.pool.unavailable'
+
+  emitAccountDiagnostic({
+    code,
+    severity: 'error',
+    provider: 'openai',
+    recoverable: false,
+    pool: 'codex',
+    requested_model: model,
+    resolved_provider: 'openai',
+    resolved_model: model,
+    counts,
+    reason: 'no healthy Codex account is available for this request',
+  })
+}
+
+function throwNoHealthyCodexAccount(model: string | undefined): never {
+  emitCodexUnavailableDiagnostic(model)
+  throw new APIConnectionError({
+    message: 'No healthy Codex account is available for this request.',
+  })
 }
 
 export function resolveCodexOAuthTokensForLeaseOwner({
@@ -213,6 +321,7 @@ export async function getAnthropicClient({
   }
 
   const resolvedProvider = resolveRequestProvider(model, provider)
+  emitProviderMismatchDiagnostic(provider, resolvedProvider, model)
   const resolvedFetch = buildFetch(fetchOverride, source, resolvedProvider)
 
   const ARGS = {
@@ -234,6 +343,13 @@ export async function getAnthropicClient({
       codexLeaseOwnerType,
     })
     if (codexTokens?.accessToken) {
+      emitRouteSelectedDiagnostic({
+        provider: 'openai',
+        pool: 'codex',
+        model,
+        accountRef: codexTokens.accountId,
+        counts: countStatuses(getPoolStatus().accounts),
+      })
       const codexFetch = createCodexFetch(codexTokens.accessToken, codexConversationIdOverride)
       const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
         apiKey: 'codex-placeholder', // SDK requires a key but the fetch adapter handles auth
@@ -247,12 +363,7 @@ export async function getAnthropicClient({
     // was not configured. Throw a clear error rather than falling through to the
     // Anthropic auth path, which would produce a misleading "Unable to connect
     // to API. Check your internet connection" message.
-    const { APIConnectionError } = await import('@anthropic-ai/sdk')
-    throw new APIConnectionError({
-      message:
-        'No valid Codex (OpenAI) account found. All accounts may have hit their usage limit. ' +
-        'Use /switch-account to switch to another account, or /accounts to check status.',
-    })
+    throwNoHealthyCodexAccount(model)
   }
 
   if (resolvedProvider === 'bedrock') {
@@ -409,6 +520,13 @@ export async function getAnthropicClient({
       codexLeaseOwnerType,
     })
     if (codexTokens?.accessToken) {
+      emitRouteSelectedDiagnostic({
+        provider: 'openai',
+        pool: 'codex',
+        model,
+        accountRef: codexTokens.accountId,
+        counts: countStatuses(getPoolStatus().accounts),
+      })
       const codexFetch = createCodexFetch(codexTokens.accessToken, codexConversationIdOverride)
       const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
         apiKey: 'codex-placeholder', // SDK requires a key but the fetch adapter handles auth
@@ -420,15 +538,23 @@ export async function getAnthropicClient({
     }
     // Pool is active but all accounts are exhausted — throw a clear error
     // instead of falling through to the Anthropic client path.
-    const { APIConnectionError } = await import('@anthropic-ai/sdk')
-    throw new APIConnectionError({
-      message:
-        'No valid Codex (OpenAI) account found. All accounts may have hit their usage limit. ' +
-        'Use /switch-account to switch to another account, or /accounts to check status.',
-    })
+    throwNoHealthyCodexAccount(model)
   }
 
   // Determine authentication method based on available tokens
+  if (isClaudePoolActive()) {
+    const activeClaudeAccount = getActiveClaudeAccount()
+    if (activeClaudeAccount) {
+      emitRouteSelectedDiagnostic({
+        provider: 'anthropic',
+        pool: 'claude',
+        model,
+        accountRef: activeClaudeAccount.accountUuid,
+        counts: countStatuses(getClaudePoolStatus().accounts),
+      })
+    }
+  }
+
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
     apiKey: isClaudeAISubscriber() ? null : apiKey || getAnthropicApiKey(),
     authToken: isClaudeAISubscriber()

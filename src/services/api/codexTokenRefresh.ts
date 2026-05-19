@@ -15,7 +15,6 @@ import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { extractCodexAccountId } from '../oauth/codex-client.js'
 import {
   appendAccount,
-  getPoolStatus,
   getVaultPath,
   isAccountLocked,
   markAccountDead,
@@ -37,6 +36,19 @@ export interface RefreshResult {
   refreshedAccountId?: string
 }
 
+type RefreshAccountTokensResult = {
+  accessToken: string
+  refreshToken: string
+  idToken: string
+  status: 'refreshed' | 'identity_mismatch'
+  refreshedAccountId?: string
+}
+
+const pendingRefreshesByAccountId = new Map<
+  string,
+  Promise<RefreshAccountTokensResult>
+>()
+
 // ── Token refresh ──────────────────────────────────────────────────────────
 
 /**
@@ -48,7 +60,28 @@ export async function refreshAccountTokens(
   accountId: string,
   refreshToken: string,
   vaultFilePath: string,
-): Promise<{ accessToken: string; refreshToken: string; idToken: string; status: 'refreshed' | 'identity_mismatch'; refreshedAccountId?: string }> {
+): Promise<RefreshAccountTokensResult> {
+  const pending = pendingRefreshesByAccountId.get(accountId)
+  if (pending) {
+    return pending
+  }
+
+  const refresh = refreshAccountTokensImpl(
+    accountId,
+    refreshToken,
+    vaultFilePath,
+  ).finally(() => {
+    pendingRefreshesByAccountId.delete(accountId)
+  })
+  pendingRefreshesByAccountId.set(accountId, refresh)
+  return refresh
+}
+
+async function refreshAccountTokensImpl(
+  accountId: string,
+  refreshToken: string,
+  vaultFilePath: string,
+): Promise<RefreshAccountTokensResult> {
   logForDebugging(
     `[codex-profile] refresh-start writer=codex-refresh.refreshAccountTokens account=${accountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath}`,
   )
@@ -164,7 +197,8 @@ export async function refreshAccountTokens(
     )
     // Token was refreshed server-side even if we fail to persist — the old
     // refresh_token is now invalid. Mark dead so we don't try the stale token.
-    markAccountDead(accountId, 'Refresh succeeded but vault write failed')
+    const reason = 'Refresh succeeded but vault write failed'
+    markAccountDead(accountId, reason)
     throw err
   }
 

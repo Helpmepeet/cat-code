@@ -869,11 +869,11 @@ describe('streamTurnViaWebSocket', () => {
 
   // ── WS close before response.completed ─────────────────────────────────
 
-  test('throws CodexWebSocketUsageLimitError when WS closes before any events', async () => {
+  test('throws CodexWebSocketClosedBeforeCompletedError when WS closes before any events', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
 
-    // Deliver close event with no events — classified as account rejection.
+    // Deliver close event with no events — treated as an ambiguous transport close.
     fakeWs.send = (data: string) => {
       fakeWs['sent'].push(data)
       Promise.resolve().then(() => fakeWs.triggerClose())
@@ -881,7 +881,7 @@ describe('streamTurnViaWebSocket', () => {
 
     await expect(
       collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
-    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+    ).rejects.toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
   })
 
   // ── turnState scoping ───────────────────────────────────────────────────
@@ -1061,7 +1061,7 @@ describe('streamTurnViaWebSocket', () => {
     expect(capturedEntry!['account_id_prefix']).toBe('acct-0c9')
   })
 
-  test('classifies WS close with zero events as CodexWebSocketUsageLimitError', async () => {
+  test('classifies WS close with zero events as CodexWebSocketClosedBeforeCompletedError', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
 
@@ -1073,7 +1073,7 @@ describe('streamTurnViaWebSocket', () => {
 
     await expect(
       collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
-    ).rejects.toBeInstanceOf(CodexWebSocketUsageLimitError)
+    ).rejects.toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
   })
 
   test('WS close after events yields plain transport error, not CodexWebSocketUsageLimitError', async () => {

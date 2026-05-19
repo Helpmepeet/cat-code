@@ -887,6 +887,7 @@ export async function* executeNonStreamingRequest(
     ownerId?: string
     onCodexAccountSwitch?: () => void
     isCodexRequest?: boolean
+    isClaudeOAuthRequest?: boolean
   },
   paramsFromContext: (context: RetryContext) => BetaMessageStreamParams,
   onAttempt: (attempt: number, start: number, maxOutputTokens: number) => void,
@@ -966,6 +967,7 @@ export async function* executeNonStreamingRequest(
       ownerId: retryOptions.ownerId,
       onCodexAccountSwitch: retryOptions.onCodexAccountSwitch,
       isCodexRequest: retryOptions.isCodexRequest,
+      isClaudeOAuthRequest: retryOptions.isClaudeOAuthRequest,
     },
   )
 
@@ -1953,6 +1955,8 @@ async function* queryModel(
         ownerId: getRetryOwnerId(options),
         onCodexAccountSwitch: options.onCodexAccountSwitch,
         isCodexRequest: requestProvider === 'openai',
+        isClaudeOAuthRequest:
+          requestProvider === 'firstParty' && isClaudeAISubscriber(),
       },
     )
 
@@ -2729,6 +2733,8 @@ async function* queryModel(
           ownerId: getRetryOwnerId(options),
           onCodexAccountSwitch: options.onCodexAccountSwitch,
           isCodexRequest: requestProvider === 'openai',
+          isClaudeOAuthRequest:
+            requestProvider === 'firstParty' && isClaudeAISubscriber(),
         },
         paramsFromContext,
         (attempt, _startTime, tokens) => {
@@ -2836,6 +2842,8 @@ async function* queryModel(
             ownerId: getRetryOwnerId(options),
             onCodexAccountSwitch: options.onCodexAccountSwitch,
             isCodexRequest: requestProvider === 'openai',
+            isClaudeOAuthRequest:
+              requestProvider === 'firstParty' && isClaudeAISubscriber(),
           },
           paramsFromContext,
           (attempt, _startTime, tokens) => {

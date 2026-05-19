@@ -28,7 +28,7 @@ import type { CodexTokens } from '../services/oauth/codex-client.js'
 import { getOauthProfileFromOauthToken } from '../services/oauth/getOauthProfile.js'
 import type { OAuthTokens, SubscriptionType } from '../services/oauth/types.js'
 import {
-  isClaudePoolActive,
+  shouldUseClaudePoolTokenSource,
   getActiveClaudeAccount,
   updateActiveClaudeAccountTokens,
 } from '../services/api/claudeAccountPool.js'
@@ -1289,10 +1289,10 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
     }
   }
 
-  // When the Claude multi-account pool is active, read from the pool
-  // instead of the keychain. This avoids changing the 39+ files that
-  // call this function.
-  if (isClaudePoolActive()) {
+  // When a Claude multi-account pool is available, read from the pool
+  // instead of the keychain. This remains true after internal failover
+  // leaves a single healthy replacement account in the initialized pool.
+  if (shouldUseClaudePoolTokenSource()) {
     const acct = getActiveClaudeAccount()
     if (acct) {
       return {
@@ -1486,9 +1486,9 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
     return getClaudeAIOAuthTokens()
   }
 
-  // When the Claude multi-account pool is active, read from the pool
+  // When a Claude multi-account pool is available, read from the pool
   // (same as sync version — pool tokens are in-memory, no keychain hit)
-  if (isClaudePoolActive()) {
+  if (shouldUseClaudePoolTokenSource()) {
     const acct = getActiveClaudeAccount()
     if (acct) {
       return {
