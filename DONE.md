@@ -10,6 +10,8 @@
 
 ### 21 May 2026
 
+68. Finished the Open Design Cat Code diagnostic UX follow-up — Cat Code now emits sanitized near-cap usage warnings reliably even when usage was cached before stream-json setup, Open Design pre-flights Cat Code run submission for unrecoverable diagnostics, surfaces the narrow `account.usage.warning` inline note once per run session per tab, keeps recoverable routing log-only, bounds warning throttles, preserves the no-account-picker boundary, and documents the aggregate-counts/usage-warning carve-outs.
+
 67. Finished Open Design's Cat Code diagnostics boundary — Open Design now parses structured Cat Code account-backend diagnostics from stdout/stderr, routes unrecoverable failures into user-facing errors, keeps recoverable routing log-only with sanitized metadata, preserves the profile-free boundary, and verifies Cat Code settings stay binary-path-only with focused daemon/web tests.
 
 66. Finished the account-switching fixes plan — account UI refreshes after switches, explicit no-op switches avoid side effects, Codex leases stay owner-local except intentional main/follow-main propagation, `/accounts` usage display is observational, retry failovers are bounded and body-aware, account diagnostics are wired through terminal/bridge/app/SDK paths, identity mismatches reconcile live pool state without stealing active sessions, exact account matches win over prefix ambiguity, dead turn rotation was removed, and image generation now uses lease-aware Codex auth.
