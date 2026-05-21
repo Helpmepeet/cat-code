@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-05-17 against the current source tree.
+Last refreshed: 2026-05-21 against the current source tree.
 
 ## Purpose
 
@@ -20,18 +20,19 @@ Read in this order for most tool, MCP, or permission work:
 |---|---|---|
 | 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Current map index and sub-map routing. |
 | 2 | [`../../src/tools.ts`](../../src/tools.ts) | Built-in tool registry, feature-gated exposure, deny-rule filtering, and merged tool-pool assembly. |
-| 3 | [`../../src/Tool.ts`](../../src/Tool.ts) | Core `Tool` contract, tool defaults, schema hooks, validation hooks, and name matching. |
-| 4 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) | Interactive approval flow and decision handoff into UI, classifier, and worker-specific handlers. |
-| 5 | [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Main allow / ask / deny engine, rule precedence, auto-mode classifier path, and permission updates. |
-| 6 | [`../../src/utils/permissions/permissionSetup.ts`](../../src/utils/permissions/permissionSetup.ts) | Permission-context construction, mode transitions, dangerous-rule stripping, and working-directory setup. |
-| 7 | [`../../src/utils/permissions/filesystem.ts`](../../src/utils/permissions/filesystem.ts) | Path matching, dangerous-file checks, internal path exceptions, and file permission suggestions. |
-| 8 | [`../../src/utils/permissions/pathValidation.ts`](../../src/utils/permissions/pathValidation.ts) | Shared path allow/deny logic used by file operations and shell path validation. |
-| 9 | [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Per-tool execution loop, input validation, hook integration, telemetry, and result shaping. |
-| 10 | [`../../src/services/tools/toolOrchestration.ts`](../../src/services/tools/toolOrchestration.ts) | Serial vs concurrent batching and context mutation ordering. |
-| 11 | [`../../src/services/tools/StreamingToolExecutor.ts`](../../src/services/tools/StreamingToolExecutor.ts) | Streaming-time execution, concurrency gates, and sibling cancellation behavior. |
-| 12 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | MCP connection lifecycle, MCP tool wrapping, resource exposure, and result transformation. |
-| 13 | [`../../src/services/mcp/config.ts`](../../src/services/mcp/config.ts) | MCP config layering, deduplication, validation, and scope rules. |
-| 14 | [`../../src/utils/toolSearch.ts`](../../src/utils/toolSearch.ts) | Deferred-tool policy, tool-search gating, and threshold logic. |
+| 3 | [`../../src/constants/tools.ts`](../../src/constants/tools.ts) | Base tool-name constants and shared allowlists (ex: async agent base tools). |
+| 4 | [`../../src/Tool.ts`](../../src/Tool.ts) | Core `Tool` contract, tool defaults, schema hooks, validation hooks, and name matching. |
+| 5 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) | Interactive approval flow and decision handoff into UI, classifier, and worker-specific handlers. |
+| 6 | [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Main allow / ask / deny engine, rule precedence, auto-mode classifier path, and permission updates. |
+| 7 | [`../../src/utils/permissions/permissionSetup.ts`](../../src/utils/permissions/permissionSetup.ts) | Permission-context construction, mode transitions, dangerous-rule stripping, and working-directory setup. |
+| 8 | [`../../src/utils/permissions/filesystem.ts`](../../src/utils/permissions/filesystem.ts) | Path matching, dangerous-file checks, internal path exceptions, and file permission suggestions. |
+| 9 | [`../../src/utils/permissions/pathValidation.ts`](../../src/utils/permissions/pathValidation.ts) | Shared path allow/deny logic used by file operations and shell path validation. |
+| 10 | [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Per-tool execution loop, input validation, hook integration, telemetry, and result shaping. |
+| 11 | [`../../src/services/tools/toolOrchestration.ts`](../../src/services/tools/toolOrchestration.ts) | Serial vs concurrent batching and context mutation ordering. |
+| 12 | [`../../src/services/tools/StreamingToolExecutor.ts`](../../src/services/tools/StreamingToolExecutor.ts) | Streaming-time execution, concurrency gates, and sibling cancellation behavior. |
+| 13 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | MCP connection lifecycle, MCP tool wrapping, resource exposure, and result transformation. |
+| 14 | [`../../src/services/mcp/config.ts`](../../src/services/mcp/config.ts) | MCP config layering, deduplication, validation, and scope rules. |
+| 15 | [`../../src/utils/toolSearch.ts`](../../src/utils/toolSearch.ts) | Deferred-tool policy, tool-search gating, and threshold logic. |
 
 ## Current Mental Model
 
