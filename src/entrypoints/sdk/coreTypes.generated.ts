@@ -68,6 +68,7 @@ export type SDKAccountDiagnosticCode =
   | 'account.lease.failover'
   | 'account.usage.cap'
   | 'account.usage.uncap'
+  | 'account.usage.warning'
   | 'account.retry.exhausted'
   | 'account.pool.unavailable'
   | 'quota.exhausted'

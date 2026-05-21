@@ -154,6 +154,15 @@ const goldenDiagnosticInputs = [
     reason: `usage cap cleared after ${refreshToken}`,
   },
   {
+    code: 'account.usage.warning',
+    severity: 'warning',
+    provider: 'openai',
+    recoverable: true,
+    counts: { healthy: 1, capped: 0, dead: 0, locked: 0, total: 1 },
+    account_ref: 'codex#1',
+    reason: `near cap for alias=${alias} email=${email} account_id=${accountId} ${accessToken}`,
+  },
+  {
     code: 'account.retry.exhausted',
     severity: 'error',
     provider: 'openai',
@@ -317,6 +326,66 @@ describe('accountDiagnostics', () => {
     for (const sensitiveValue of sensitiveValues) {
       expect(serializedDiagnostics).not.toContain(sensitiveValue)
     }
+  })
+
+  test('limits account.usage.warning to aggregate counts and an opaque account ref', () => {
+    const message = buildAccountDiagnosticMessage(
+      {
+        code: 'account.usage.warning',
+        severity: 'warning',
+        provider: 'openai',
+        recoverable: true,
+        pool: `codex alias=${alias}`,
+        requested_model: 'gpt-5.4',
+        resolved_provider: 'openai',
+        resolved_model: 'gpt-5.4',
+        counts: {
+          total: 2,
+          healthy: 1,
+          capped: 1,
+          dead: 0,
+          locked: 0,
+          ignoredNaN: Number.NaN,
+          'user@example.com': 1,
+          'account_id=acct-secret': 1,
+        },
+        from_account_ref: `alias=${alias} email=${email} account_id=${accountId}`,
+        account_ref: 'codex#7',
+        reason: `near cap for alias=${alias} email=${email} account_id=${accountId} ${accessToken}`,
+        user_message: rawAccountFile,
+      },
+      {
+        sessionId: 'usage-warning-session',
+        uuid: 'usage-warning-diagnostic',
+      },
+    )
+
+    expect(message).toEqual({
+      type: 'system',
+      subtype: 'cat_code_account_diagnostic',
+      uuid: 'usage-warning-diagnostic',
+      session_id: 'usage-warning-session',
+      version: 1,
+      code: 'account.usage.warning',
+      severity: 'warning',
+      provider: 'openai',
+      recoverable: true,
+      counts: {
+        total: 2,
+        healthy: 1,
+        capped: 1,
+        dead: 0,
+        locked: 0,
+      },
+      account_ref: 'codex#7',
+    })
+
+    const serializedMessage = JSON.stringify(message)
+    for (const sensitiveValue of sensitiveValues) {
+      expect(serializedMessage).not.toContain(sensitiveValue)
+    }
+    expect(serializedMessage).not.toContain('user@example.com')
+    expect(serializedMessage).not.toContain('acct-secret')
   })
 
   test('accepts and formats all Patch 5 diagnostic codes', () => {

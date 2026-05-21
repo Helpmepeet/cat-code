@@ -601,6 +601,11 @@ export async function runHeadless(
       getSessionId,
       createUuid: randomUUID,
     })
+    void import('../services/api/codexUsage.js')
+      .then(({ emitCachedUsageWarningsForActiveSink }) => {
+        emitCachedUsageWarningsForActiveSink()
+      })
+      .catch(() => {})
   }
 
   // #34044: if user explicitly set sandbox.enabled=true but deps are missing,

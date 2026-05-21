@@ -11,6 +11,10 @@ import {
   updateAccountUsageHints,
   type PoolAccount,
 } from './codexAccountPool.js'
+import {
+  emitAccountDiagnostic,
+  hasAccountDiagnosticSink,
+} from './accountDiagnostics.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,11 +66,14 @@ export type FetchPoolUsageOptions = {
 
 const WHAM_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
 const FETCH_TIMEOUT_MS = 10_000
+// Fixed product threshold for the Open Design capacity-warning diagnostic.
+const ACCOUNT_USAGE_WARNING_THRESHOLD_PERCENT = 80
 
 // ── Cache ──────────────────────────────────────────────────────────────────
 
 let cachedSnapshot: PoolUsageSnapshot | null = null
 const CACHE_TTL_MS = 60_000 // 1 minute
+const warnedNearCapAccountIds = new Set<string>()
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -145,6 +152,7 @@ export async function fetchPoolUsage(
       : forceRefreshOrOptions
   const forceRefresh = options.forceRefresh === true
   if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
+    emitCachedUsageWarningsForActiveSink()
     return cachedSnapshot
   }
 
@@ -170,6 +178,8 @@ export async function fetchPoolUsage(
 
   await Promise.all(promises)
 
+  emitUsageWarnings(results)
+
   // Display calls are observational by default (DP2/DP4). Only explicit
   // background prefetch paths may update soft routing hints for scoring.
   if (options.updateRoutingHints === true && results.length > 0) {
@@ -189,6 +199,13 @@ export async function fetchPoolUsage(
   }
   cachedSnapshot = snapshot
   return snapshot
+}
+
+export function emitCachedUsageWarningsForActiveSink(): void {
+  if (!cachedSnapshot || Date.now() - cachedSnapshot.fetchedAt >= CACHE_TTL_MS) {
+    return
+  }
+  emitUsageWarnings(cachedSnapshot.accounts)
 }
 
 /**
@@ -332,6 +349,73 @@ export function invalidateUsageCache(): void {
 }
 
 // ── Internals ──────────────────────────────────────────────────────────────
+
+function countPoolStatuses(
+  accounts: readonly Pick<PoolAccount, 'status'>[],
+): Record<string, number> {
+  const counts: Record<string, number> = {
+    total: accounts.length,
+    healthy: 0,
+    capped: 0,
+    dead: 0,
+    locked: 0,
+  }
+  for (const account of accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  return counts
+}
+
+function maxUsagePercent(usage: AccountUsage): number {
+  return Math.max(
+    usage.primaryWindow.usedPercent,
+    usage.secondaryWindow.usedPercent,
+  )
+}
+
+function emitUsageWarnings(usages: readonly AccountUsage[]): void {
+  if (usages.length === 0 || !hasAccountDiagnosticSink()) {
+    return
+  }
+
+  const poolStatus = getPoolStatus()
+  const poolAccountsById = new Map(
+    poolStatus.accounts.map((account, index) => [
+      account.accountId,
+      { account, index },
+    ] as const),
+  )
+  const counts = countPoolStatuses(poolStatus.accounts)
+
+  for (const usage of usages) {
+    const poolEntry = poolAccountsById.get(usage.accountId)
+    if (!poolEntry || poolEntry.account.status === 'capped') {
+      continue
+    }
+    if (!usage.allowed || usage.limitReached) {
+      continue
+    }
+
+    const usedPercent = maxUsagePercent(usage)
+    if (
+      usedPercent < ACCOUNT_USAGE_WARNING_THRESHOLD_PERCENT ||
+      usedPercent >= 100 ||
+      warnedNearCapAccountIds.has(usage.accountId)
+    ) {
+      continue
+    }
+
+    warnedNearCapAccountIds.add(usage.accountId)
+    emitAccountDiagnostic({
+      code: 'account.usage.warning',
+      severity: 'warning',
+      provider: 'openai',
+      recoverable: true,
+      account_ref: `codex#${poolEntry.index + 1}`,
+      counts,
+    })
+  }
+}
 
 function parseUsageResponse(
   accountId: string,

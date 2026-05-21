@@ -713,6 +713,6 @@ Parallel subagent conflicts:
 
 - Should Open Design runs use a Cat Code per-process lease that never writes global active account pointers, or is Cat Code-owned global failover acceptable?
 - Should Claude automatic failover be implemented in the first backend pass or added after Codex diagnostics land?
-- Should recoverable diagnostics remain completely log-only, or should Open Design display a generic non-account recovery status during long runs?
+- Resolved by [2026-05-21-open-design-cat-code-diagnostic-ux.md](./2026-05-21-open-design-cat-code-diagnostic-ux.md): recoverable routing diagnostics remain log-only. The only normal run UX carve-out is `account.usage.warning`, a forward-looking capacity FYI with copy `Cat Code is near provider capacity.` that is throttled once per Cat Code `session_id` per Open Design tab and carries no account vocabulary, remediation link, or identity-bearing fields.
 - Should Open Design require a minimum Cat Code version for structured diagnostics, or keep prose fallback indefinitely?
 - Should `CAT_CODE_DIAGNOSTIC` stderr fallback be considered stable public contract or only a compatibility bridge for early-start failures?
