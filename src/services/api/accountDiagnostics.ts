@@ -41,6 +41,13 @@ const ACCOUNT_DIAGNOSTIC_PROVIDERS = [
   'anthropic',
   'unknown',
 ] as const satisfies readonly SDKAccountDiagnosticProvider[]
+const ACCOUNT_DIAGNOSTIC_COUNT_KEYS = new Set([
+  'total',
+  'healthy',
+  'capped',
+  'dead',
+  'locked',
+])
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
 const UUID_PATTERN =
@@ -238,7 +245,7 @@ function sanitizeCounts(
 
   const sanitizedCounts = Object.entries(counts).reduce<Record<string, number>>(
     (result, [key, value]) => {
-      if (Number.isFinite(value)) {
+      if (ACCOUNT_DIAGNOSTIC_COUNT_KEYS.has(key) && Number.isFinite(value)) {
         result[key] = value
       }
       return result
@@ -287,7 +294,11 @@ function parseCounts(value: unknown): Record<string, number> | undefined {
 
   const counts: Record<string, number> = {}
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === 'number' && Number.isFinite(entry)) {
+    if (
+      ACCOUNT_DIAGNOSTIC_COUNT_KEYS.has(key) &&
+      typeof entry === 'number' &&
+      Number.isFinite(entry)
+    ) {
       counts[key] = entry
     }
   }

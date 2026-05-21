@@ -346,6 +346,8 @@ describe('accountDiagnostics', () => {
           dead: 0,
           locked: 0,
           ignoredNaN: Number.NaN,
+          'user@example.com': 1,
+          'account_id=acct-secret': 1,
         },
         from_account_ref: `alias=${alias} email=${email} account_id=${accountId}`,
         account_ref: 'codex#7',
@@ -382,6 +384,8 @@ describe('accountDiagnostics', () => {
     for (const sensitiveValue of sensitiveValues) {
       expect(serializedMessage).not.toContain(sensitiveValue)
     }
+    expect(serializedMessage).not.toContain('user@example.com')
+    expect(serializedMessage).not.toContain('acct-secret')
   })
 
   test('accepts and formats all Patch 5 diagnostic codes', () => {
