@@ -1,37 +1,37 @@
 {
-  "src/bridge/bridgeMain.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 15
-    }
-  },
-  "src/cli/exit.ts": {
-    "custom-rules/no-process-exit": {
+  "src/buddy/CompanionSprite.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/cli/handlers/plugins.ts": {
-    "custom-rules/no-process-exit": {
+  "src/commands/plugin/AddMarketplace.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/cli/handlers/util.tsx": {
-    "custom-rules/no-process-exit": {
+  "src/commands/plugin/ManageMarketplaces.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/cli/structuredIO.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 2
-    }
-  },
-  "src/cli/transports/ccrClient.ts": {
-    "custom-rules/no-process-exit": {
+  "src/commands/remote-setup/remote-setup.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/commands/ultraplan.tsx": {
-    "custom-rules/no-sync-fs": {
-      "count": 2
+  "src/components/AutoUpdater.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/components/MemoryUsageIndicator.tsx": {
+    "react-hooks/rules-of-hooks": {
+      "count": 1
+    }
+  },
+  "src/components/NativeAutoUpdater.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
     }
   },
   "src/components/PromptInput/PromptInput.tsx": {
@@ -44,9 +44,19 @@
       "count": 2
     }
   },
+  "src/components/VirtualMessageList.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 3
+    }
+  },
   "src/components/WorktreeExitDialog.tsx": {
     "react-hooks/exhaustive-deps": {
       "count": 1
+    }
+  },
+  "src/components/design-system/FuzzyPicker.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 2
     }
   },
   "src/components/permissions/ExitPlanModePermissionRequest/ExitPlanModePermissionRequest.tsx": {
@@ -54,41 +64,53 @@
       "count": 1
     }
   },
-  "src/hooks/fileSuggestions.ts": {
-    "custom-rules/no-sync-fs": {
+  "src/components/permissions/PowerShellPermissionRequest/PowerShellPermissionRequest.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/hooks/useAfterFirstRender.ts": {
-    "custom-rules/no-process-exit": {
+  "src/components/teams/TeamsDialog.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/ink/components/ErrorOverview.tsx": {
-    "custom-rules/no-sync-fs": {
+  "src/context/notifications.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/ink/ink.tsx": {
-    "custom-rules/no-sync-fs": {
-      "count": 4
+  "src/hooks/useAssistantHistory.ts": {
+    "react-hooks/exhaustive-deps": {
+      "count": 3
     }
   },
-  "src/ink/reconciler.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 4
-    }
-  },
-  "src/interactiveHelpers.tsx": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    },
-    "custom-rules/no-sync-fs": {
+  "src/hooks/useDiffInIDE.ts": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
-  "src/memdir/memdir.ts": {
-    "custom-rules/no-sync-fs": {
+  "src/hooks/useScheduledTasks.ts": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/hooks/useTypeahead.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/hooks/useVirtualScroll.ts": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/hooks/useVoiceEnabled.ts": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/ink/components/ScrollBox.tsx": {
+    "react-hooks/exhaustive-deps": {
       "count": 1
     }
   },
@@ -100,83 +122,13 @@
       "count": 2
     }
   },
-  "src/services/plugins/pluginCliCommands.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 6
-    }
-  },
-  "src/tools/LSPTool/symbolContext.ts": {
-    "custom-rules/no-sync-fs": {
+  "src/state/AppState.tsx": {
+    "react-hooks/rules-of-hooks": {
       "count": 1
     }
   },
-  "src/utils/asciicast.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 3
-    }
-  },
-  "src/utils/authFileDescriptor.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 4
-    }
-  },
-  "src/utils/claudeInChrome/common.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 1
-    }
-  },
-  "src/utils/computerUse/mcpServer.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
-  "src/utils/cronTasks.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 1
-    }
-  },
-  "src/utils/earlyInput.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
-  "src/utils/git.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 2
-    }
-  },
-  "src/utils/heapDumpService.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 2
-    }
-  },
-  "src/utils/log.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
-  "src/utils/model/modelCapabilities.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 1
-    }
-  },
-  "src/utils/process.ts": {
-    "custom-rules/no-process-exit": {
-      "count": 1
-    }
-  },
-  "src/utils/sandbox/sandbox-adapter.ts": {
-    "custom-rules/no-sync-fs": {
-      "count": 2
-    }
-  },
-  "src/utils/which.ts": {
-    "custom-rules/no-cross-platform-process-issues": {
-      "count": 1
-    }
-  },
-  "src/utils/windowsPaths.ts": {
-    "custom-rules/no-process-exit": {
+  "src/utils/permissions/bypassPermissionsKillswitch.ts": {
+    "react-hooks/exhaustive-deps": {
       "count": 2
     }
   }
