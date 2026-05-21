@@ -330,14 +330,6 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           'Number of days to retain chat transcripts (default: 30). Setting to 0 disables session persistence entirely: no transcripts are written and existing transcripts are deleted at startup.',
         ),
-      codexAccountRotationThreshold: z
-        .number()
-        .positive()
-        .int()
-        .optional()
-        .describe(
-          'Number of turns before rotating to the next Codex account in the pool (default: 10).',
-        ),
       codexSubagentAccountStrategy: z
         .enum(['spread', 'follow-main'])
         .optional()

@@ -4,6 +4,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from '../../services/api/codexAccountLeaseManager.js'
+import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
   type PoolAccount,
@@ -28,7 +32,6 @@ function buildPoolAccount(accountId: string): PoolAccount {
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
-    turnsUsed: 0,
   }
 }
 
@@ -45,6 +48,7 @@ function basePermissionContext(): ToolPermissionContext {
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'cat-code-image-gen-'))
+  resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
   process.env.OPENAI_API_KEY = 'test-openai-key'
   process.env.CAT_CODE_IMAGE_BACKEND = 'openai-api'
@@ -66,20 +70,32 @@ afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true })
     tempDir = undefined
   }
+  resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
 })
 
 describe('GenerateImageTool', () => {
-  test('calls the OpenAI images endpoint and writes the base64 image', async () => {
+  test('uses OPENAI_API_KEY when openai-api backend is forced even if Codex pool accounts exist', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount('main-account'),
+        buildPoolAccount('backup-account'),
+      ],
+    })
+
     const imageBytes = Buffer.from('generated image')
     let requestUrl: string | undefined
     let requestBody: Record<string, unknown> | undefined
     let authorization: string | null = null
+    let accountId: string | null = null
 
     globalThis.fetch = (async (input, init) => {
       requestUrl = String(input)
       requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
-      authorization = new Headers(init?.headers).get('authorization')
+      const headers = new Headers(init?.headers)
+      authorization = headers.get('authorization')
+      accountId = headers.get('chatgpt-account-id')
       return new Response(
         JSON.stringify({
           data: [{ b64_json: imageBytes.toString('base64') }],
@@ -101,6 +117,7 @@ describe('GenerateImageTool', () => {
 
     expect(requestUrl).toBe('https://api.openai.com/v1/images/generations')
     expect(authorization).toBe('Bearer test-openai-key')
+    expect(accountId).toBeNull()
     expect(requestBody).toMatchObject({
       model: 'gpt-image-2',
       prompt: 'a watercolor cat',
@@ -110,6 +127,45 @@ describe('GenerateImageTool', () => {
     expect(await readFile(outputPath)).toEqual(imageBytes)
     expect(result.data.filePath).toBe(outputPath)
     expect(result.data.outputFormat).toBe('png')
+  })
+
+  test('uses OPENAI_API_KEY fallback when no image backend is forced', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+
+    const imageBytes = Buffer.from('generated image')
+    let requestUrl: string | undefined
+    let authorization: string | null = null
+    let accountId: string | null = null
+
+    globalThis.fetch = (async (input, init) => {
+      requestUrl = String(input)
+      const headers = new Headers(init?.headers)
+      authorization = headers.get('authorization')
+      accountId = headers.get('chatgpt-account-id')
+      return new Response(
+        JSON.stringify({
+          data: [{ b64_json: imageBytes.toString('base64') }],
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'a watercolor cat',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+      } as ToolUseContext,
+    )
+
+    expect(requestUrl).toBe('https://api.openai.com/v1/images/generations')
+    expect(authorization).toBe('Bearer test-openai-key')
+    expect(accountId).toBeNull()
+    expect(await readFile(outputPath)).toEqual(imageBytes)
+    expect(result.data.filePath).toBe(outputPath)
   })
 
   test('rejects an existing output path unless overwrite is true', async () => {
@@ -236,6 +292,180 @@ describe('GenerateImageTool', () => {
         image_url: 'data:image/png;base64,cmVmZXJlbmNl',
       },
     ])
+  })
+
+  test('uses the subagent lease account for Codex image requests', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount('main-account'),
+        buildPoolAccount('lease-account'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'subagent-123',
+      ownerType: 'subagent',
+      ownerLabel: 'Patch 7 worker',
+      accountId: 'lease-account',
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    let authorization: string | null = null
+    let accountId: string | null = null
+
+    globalThis.fetch = (async (_input, init) => {
+      const headers = new Headers(init?.headers)
+      authorization = headers.get('authorization')
+      accountId = headers.get('chatgpt-account-id')
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'generate with the leased account',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        agentId: 'subagent-123',
+        options: { mainLoopModel: 'gpt-5.5' },
+      } as ToolUseContext,
+    )
+
+    expect(authorization).toBe('Bearer access-lease-account')
+    expect(accountId).toBe('lease-account')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+    expect(result.data.filePath).toBe(outputPath)
+  })
+
+  test('uses Codex auth when both Codex pool and OPENAI_API_KEY are available without forced backend', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount('main-account'),
+        buildPoolAccount('backup-account'),
+      ],
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    let requestUrl: string | undefined
+    let authorization: string | null = null
+    let accountId: string | null = null
+
+    globalThis.fetch = (async (input, init) => {
+      requestUrl = String(input)
+      const headers = new Headers(init?.headers)
+      authorization = headers.get('authorization')
+      accountId = headers.get('chatgpt-account-id')
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'prefer codex when available',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        options: { mainLoopModel: 'gpt-5.5' },
+      } as ToolUseContext,
+    )
+
+    expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/responses')
+    expect(authorization).toBe('Bearer access-main-account')
+    expect(accountId).toBe('main-account')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+    expect(result.data.filePath).toBe(outputPath)
+  })
+
+  test('uses the main-thread lease account for Codex image requests', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount('main-account'),
+        buildPoolAccount('lease-account'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'lease-account',
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    let authorization: string | null = null
+    let accountId: string | null = null
+
+    globalThis.fetch = (async (_input, init) => {
+      const headers = new Headers(init?.headers)
+      authorization = headers.get('authorization')
+      accountId = headers.get('chatgpt-account-id')
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'generate with the main lease',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        options: { mainLoopModel: 'gpt-5.5' },
+      } as ToolUseContext,
+    )
+
+    expect(authorization).toBe('Bearer access-lease-account')
+    expect(accountId).toBe('lease-account')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+    expect(result.data.filePath).toBe(outputPath)
   })
 
   test('sends reference image files through the Codex backend', async () => {

@@ -11,7 +11,9 @@ import {
   buildAccountDiagnosticMessage,
   emitAccountDiagnostic,
   formatAccountDiagnosticStderrLine,
+  hasAccountDiagnosticSink,
   installStreamJsonAccountDiagnosticHook,
+  withStreamJsonAccountDiagnosticHook,
 } from './accountDiagnostics.js'
 
 const email = 'person@example.com'
@@ -83,6 +85,86 @@ const goldenDiagnosticInputs = [
     account_ref: `email=${email} account_id=${accountId}`,
     reason: `oauth refresh failed: ${idToken}`,
     user_message: rawAccountFile,
+  },
+  {
+    code: 'account.identity_mismatch',
+    severity: 'warning',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    requested_model: 'gpt-5.4',
+    resolved_provider: 'openai',
+    resolved_model: 'gpt-5.4',
+    counts: { healthy: 2, dead: 1, total: 3 },
+    from_account_ref: `alias=old-${alias} email=${email} account_id=${accountId}`,
+    account_ref: `alias=new-${alias} email=${email} account_id=223e4567-e89b-12d3-a456-426614174000`,
+    reason: `refresh returned different account 223e4567-e89b-12d3-a456-426614174000`,
+  },
+  {
+    code: 'account.manual_switch',
+    severity: 'info',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    requested_model: 'gpt-5.4',
+    resolved_provider: 'openai',
+    resolved_model: 'gpt-5.4',
+    account_ref: `alias=${alias} email=${email} account_id=${accountId}`,
+    reason: 'manual switch succeeded',
+  },
+  {
+    code: 'account.active.reroll',
+    severity: 'warning',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    counts: { healthy: 2, dead: 1, total: 3 },
+    from_account_ref: `alias=old-${alias} email=${email} account_id=${accountId}`,
+    account_ref: `alias=new-${alias} email=${email} account_id=223e4567-e89b-12d3-a456-426614174000`,
+    reason: `markAccountDead rerolled active account after ${authorization}`,
+  },
+  {
+    code: 'account.lease.failover',
+    severity: 'info',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    from_account_ref: `alias=old-${alias} email=${email} account_id=${accountId}`,
+    account_ref: `alias=new-${alias} email=${email} account_id=323e4567-e89b-12d3-a456-426614174000`,
+    reason: `lease reassigned after ${refreshToken}`,
+  },
+  {
+    code: 'account.usage.cap',
+    severity: 'warning',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    counts: { healthy: 1, capped: 1, total: 2 },
+    account_ref: `alias=${alias} email=${email} account_id=${accountId}`,
+    reason: `usage cap observed from ${authorization}`,
+  },
+  {
+    code: 'account.usage.uncap',
+    severity: 'info',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    counts: { healthy: 2, total: 2 },
+    account_ref: `alias=${alias} email=${email} account_id=${accountId}`,
+    reason: `usage cap cleared after ${refreshToken}`,
+  },
+  {
+    code: 'account.retry.exhausted',
+    severity: 'error',
+    provider: 'openai',
+    recoverable: false,
+    pool: 'codex',
+    requested_model: 'gpt-5.4',
+    resolved_provider: 'openai',
+    resolved_model: 'gpt-5.4',
+    counts: { healthy: 3, total: 3 },
+    account_ref: `alias=${alias} email=${email} account_id=${accountId}`,
+    reason: `retry chain exhausted after attempts=2: ${apiKey}`,
   },
   {
     code: 'account.pool.unavailable',
@@ -237,6 +319,37 @@ describe('accountDiagnostics', () => {
     }
   })
 
+  test('accepts and formats all Patch 5 diagnostic codes', () => {
+    const patch5Diagnostics = [
+      'account.manual_switch',
+      'account.active.reroll',
+      'account.lease.failover',
+      'account.usage.cap',
+      'account.usage.uncap',
+      'account.retry.exhausted',
+    ] as const
+
+    for (const code of patch5Diagnostics) {
+      const diagnostic: AccountDiagnosticEvent = {
+        code,
+        severity: code === 'account.retry.exhausted' ? 'error' : 'info',
+        provider: 'openai',
+        recoverable: code !== 'account.retry.exhausted',
+        account_ref: `account_id=${accountId}`,
+        reason: 'patch 5 validator coverage',
+      }
+
+      const message = buildAccountDiagnosticMessage(diagnostic, {
+        sessionId: 'patch-5-session',
+        uuid: `patch-5-${code}`,
+      })
+      expect(SDKAccountDiagnosticMessageSchema().safeParse(message).success).toBe(
+        true,
+      )
+      expect(formatAccountDiagnosticStderrLine(diagnostic)).toContain(code)
+    }
+  })
+
   test('does not write raw stderr without an installed diagnostic sink by default', () => {
     const stderrChunks: string[] = []
     process.stderr.write = ((chunk: string | Uint8Array) => {
@@ -267,6 +380,123 @@ describe('accountDiagnostics', () => {
     emitAccountDiagnostic(rawDiagnostic, { allowStderrFallback: true })
 
     expect(stderrChunks.join('').startsWith(`${ACCOUNT_DIAGNOSTIC_MARKER} `)).toBe(true)
+  })
+
+  test('uses the latest installed sink and restores previous sinks when removed', () => {
+    const firstSinkMessages: unknown[] = []
+    const secondSinkMessages: unknown[] = []
+
+    const removeFirstSink = installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        firstSinkMessages.push(message)
+      },
+      getSessionId: () => 'session-first-sink',
+      createUuid: () => `first-sink-${firstSinkMessages.length + 1}`,
+    })
+    const removeSecondSink = installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        secondSinkMessages.push(message)
+      },
+      getSessionId: () => 'session-second-sink',
+      createUuid: () => `second-sink-${secondSinkMessages.length + 1}`,
+    })
+
+    expect(hasAccountDiagnosticSink()).toBe(true)
+
+    emitAccountDiagnostic(rawDiagnostic)
+
+    expect(firstSinkMessages).toHaveLength(0)
+    expect(secondSinkMessages).toHaveLength(1)
+
+    removeSecondSink()
+    emitAccountDiagnostic(rawDiagnostic)
+
+    expect(firstSinkMessages).toHaveLength(1)
+    expect(secondSinkMessages).toHaveLength(1)
+
+    removeFirstSink()
+
+    expect(hasAccountDiagnosticSink()).toBe(false)
+
+    emitAccountDiagnostic(rawDiagnostic)
+
+    expect(firstSinkMessages).toHaveLength(1)
+    expect(secondSinkMessages).toHaveLength(1)
+  })
+
+  test('uses scoped sinks as the sole recipient and restores the global sink afterward', async () => {
+    const globalSinkMessages: unknown[] = []
+    const scopedSinkMessages: unknown[] = []
+
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        globalSinkMessages.push(message)
+      },
+      getSessionId: () => 'session-global-sink',
+      createUuid: () => `global-sink-${globalSinkMessages.length + 1}`,
+    })
+
+    await withStreamJsonAccountDiagnosticHook(
+      {
+        emit: message => {
+          scopedSinkMessages.push(message)
+        },
+        getSessionId: () => 'session-scoped-sink',
+        createUuid: () => `scoped-sink-${scopedSinkMessages.length + 1}`,
+      },
+      async () => {
+        emitAccountDiagnostic(rawDiagnostic)
+      },
+    )
+
+    expect(globalSinkMessages).toHaveLength(0)
+    expect(scopedSinkMessages).toHaveLength(1)
+
+    emitAccountDiagnostic(rawDiagnostic)
+
+    expect(globalSinkMessages).toHaveLength(1)
+    expect(scopedSinkMessages).toHaveLength(1)
+  })
+
+  test('deactivates scoped sinks after synchronous callback throws', async () => {
+    const globalSinkMessages: unknown[] = []
+    const scopedSinkMessages: unknown[] = []
+    let resolveLateDiagnostic: (() => void) | undefined
+    const lateDiagnosticEmitted = new Promise<void>(resolve => {
+      resolveLateDiagnostic = resolve
+    })
+
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        globalSinkMessages.push(message)
+      },
+      getSessionId: () => 'session-global-sink',
+      createUuid: () => `global-sink-${globalSinkMessages.length + 1}`,
+    })
+
+    expect(() =>
+      withStreamJsonAccountDiagnosticHook(
+        {
+          emit: message => {
+            scopedSinkMessages.push(message)
+          },
+          getSessionId: () => 'session-scoped-sink',
+          createUuid: () => `scoped-sink-${scopedSinkMessages.length + 1}`,
+        },
+        () => {
+          setTimeout(() => {
+            emitAccountDiagnostic(rawDiagnostic)
+            resolveLateDiagnostic?.()
+          }, 0)
+          throw new Error('sync failure')
+        },
+      ),
+    ).toThrow('sync failure')
+
+    await lateDiagnosticEmitted
+
+    expect(globalSinkMessages).toHaveLength(1)
+    expect(scopedSinkMessages).toHaveLength(0)
   })
 
   test('emits sanitized stream-json system messages through the internal hook', () => {

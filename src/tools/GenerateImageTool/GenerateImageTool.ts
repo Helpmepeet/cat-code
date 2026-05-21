@@ -7,13 +7,15 @@ import { FilePathLink } from '../../components/FilePathLink.js'
 import { MessageResponse } from '../../components/MessageResponse.js'
 import { useTerminalSize } from '../../hooks/useTerminalSize.js'
 import { Box, RawAnsi, Text } from '../../ink.js'
-import { getActiveAccount, isPoolActive } from '../../services/api/codexAccountPool.js'
+import { isPoolActive } from '../../services/api/codexAccountPool.js'
+import { getSessionId } from '../../bootstrap/state.js'
+import { resolveCodexOAuthTokensForLeaseOwner } from '../../services/api/client.js'
 import { refreshCodexToken } from '../../services/oauth/codex-client.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { PNG } from 'pngjs'
 import promptingGuideText from './PROMPTING_GUIDE.md' with { type: 'text' }
 import { getXDGDataHome } from '../../utils/xdg.js'
-import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
+import { saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
 import { checkWritePermissionForTool } from '../../utils/permissions/filesystem.js'
@@ -509,7 +511,7 @@ function GeneratedImageResult({ output }: { output: Output }): React.ReactNode {
   )
 }
 
-async function getImageAuth(): Promise<ImageAuth> {
+async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
   if (process.env.CAT_CODE_IMAGE_BACKEND === 'openai-api') {
     const apiKey = process.env.OPENAI_API_KEY
     if (apiKey) {
@@ -517,19 +519,15 @@ async function getImageAuth(): Promise<ImageAuth> {
     }
   }
 
-  const poolAccount = isPoolActive() ? getActiveAccount() : null
-  if (poolAccount?.accessToken) {
-    return {
-      token: poolAccount.accessToken,
-      accountId: poolAccount.accountId,
-      backend: 'codex',
-    }
-  }
-
-  const storedTokens = getCodexOAuthTokens()
-  if (storedTokens?.accessToken) {
-    if (storedTokens.expiresAt <= Date.now() + TOKEN_REFRESH_SKEW_MS) {
-      const refreshed = await refreshCodexToken(storedTokens.refreshToken)
+  // Image requests must resolve Codex auth at request time so subagents use
+  // their leased account instead of whatever pool.activeIndex currently points at.
+  const codexTokens = resolveCodexOAuthTokensForLeaseOwner({
+    codexLeaseOwnerId: context.agentId ?? getSessionId(),
+    codexLeaseOwnerType: context.agentId ? 'subagent' : 'main',
+  })
+  if (codexTokens?.accessToken) {
+    if (!isPoolActive() && codexTokens.expiresAt <= Date.now() + TOKEN_REFRESH_SKEW_MS) {
+      const refreshed = await refreshCodexToken(codexTokens.refreshToken)
       saveCodexOAuthTokens(refreshed)
       return {
         token: refreshed.accessToken,
@@ -539,8 +537,8 @@ async function getImageAuth(): Promise<ImageAuth> {
     }
 
     return {
-      token: storedTokens.accessToken,
-      accountId: storedTokens.accountId,
+      token: codexTokens.accessToken,
+      accountId: codexTokens.accountId,
       backend: 'codex',
     }
   }
@@ -801,8 +799,8 @@ async function generateWithOpenAIImagesAPI(
   input: Input,
   outputFormat: OutputFormat,
   signal: AbortSignal,
+  auth: ImageAuth,
 ): Promise<{ b64: string; usage?: unknown; revisedPrompt?: string; model: string }> {
-  const auth = await getImageAuth()
   const model = input.model ?? DEFAULT_IMAGE_MODEL
   const body: Record<string, unknown> = {
     model,
@@ -1120,7 +1118,7 @@ Prompt rewriting:
     }
 
     const size = input.size ?? '1024x1024'
-    const auth = await getImageAuth()
+    const auth = await getImageAuth(context)
     if (auth.backend === 'openai-api' && input.reference_image_path) {
       throw new Error('Reference images require a Codex/ChatGPT account.')
     }
@@ -1130,6 +1128,7 @@ Prompt rewriting:
             input,
             outputFormat,
             context.abortController.signal,
+            auth,
           )
         : await generateWithCodexBackend(
             input,

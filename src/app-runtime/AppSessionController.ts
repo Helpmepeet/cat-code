@@ -1,5 +1,7 @@
+import { randomUUID } from 'crypto'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
+import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
 import {
   createAbortStatusEvent,
   createGoalSnapshotEvent,
@@ -54,6 +56,7 @@ export class AppSessionController {
   private goalSnapshot: AppGoalSnapshot = null
   private abortController: AbortController | null = null
   private activeTurn = false
+  private readonly fallbackDiagnosticSessionId = randomUUID()
 
   constructor(private readonly adapter: AppSessionControllerAdapter) {}
 
@@ -140,36 +143,50 @@ export class AppSessionController {
       this.updateGoalSnapshot(options.goalSnapshot ?? null)
     }
 
-    try {
-      const messages = this.adapter.runTurn({
-        prompt,
-        options: {
-          uuid: options?.uuid,
-          isMeta: options?.isMeta,
+    await withStreamJsonAccountDiagnosticHook(
+      {
+        emit: message => {
+          this.emit(createMessageEvent(message))
         },
-        signal: this.abortController.signal,
-        onPermissionRequest: request => this.waitForPermissionResponse(request),
-      })
+        getSessionId: () => this.getDiagnosticSessionId(),
+      },
+      async () => {
+        try {
+          const messages = this.adapter.runTurn({
+            prompt,
+            options: {
+              uuid: options?.uuid,
+              isMeta: options?.isMeta,
+            },
+            signal: this.abortController.signal,
+            onPermissionRequest: request => this.waitForPermissionResponse(request),
+          })
 
-      for await (const message of messages) {
-        this.emit(createMessageEvent(message))
-      }
-    } finally {
-      this.activeTurn = false
-      const signal = this.abortController.signal
-      this.abortController = null
+          for await (const message of messages) {
+            this.emit(createMessageEvent(message))
+          }
+        } finally {
+          this.activeTurn = false
+          const signal = this.abortController.signal
+          this.abortController = null
 
-      if (signal.aborted) {
-        const reason =
-          this.abortState.status === 'requested' ||
-          this.abortState.status === 'aborted'
-            ? this.abortState.reason
-            : undefined
-        this.setAbortState(
-          reason ? { status: 'aborted', reason } : { status: 'aborted' },
-        )
+          if (signal.aborted) {
+            const reason =
+              this.abortState.status === 'requested' ||
+              this.abortState.status === 'aborted'
+                ? this.abortState.reason
+                : undefined
+            this.setAbortState(
+              reason ? { status: 'aborted', reason } : { status: 'aborted' },
+            )
+          }
+        }
       }
-    }
+    )
+  }
+
+  private getDiagnosticSessionId(): string {
+    return this.goalSnapshot?.threadId ?? this.fallbackDiagnosticSessionId
   }
 
   private emit(event: AppSessionEvent): void {

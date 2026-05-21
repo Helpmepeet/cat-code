@@ -5,7 +5,7 @@
  *   1. codex-nootp vault (~/codex-vault or configured path)
  *   2. Single codexOAuth entry in ~/.claude.json (backward compat)
  *
- * Provides LRU-based turn rotation and instant failover on 429/cap errors.
+ * Provides LRU-based account selection and instant failover on 429/cap errors.
  * When the pool has ≤1 healthy account (or hasn't initialized), all code paths
  * fall through to the existing single-account behavior — zero behavioral change.
  */
@@ -19,8 +19,8 @@ import { regenerateSessionId, resetCostState } from '../../bootstrap/state.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { clearCodexOAuthTokens, getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
-import { getInitialSettings } from '../../utils/settings/settings.js'
 import { resetUserCache } from '../../utils/user.js'
+import { emitAccountDiagnostic } from './accountDiagnostics.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -32,7 +32,6 @@ export interface PoolAccount {
   source: 'vault' | 'config'
   status: 'healthy' | 'dead' | 'capped'
   lastUsedAt: number
-  turnsUsed: number
   lastError?: string
   lastRefreshIso?: string       // ISO timestamp from vault's last_refresh field
   vaultFilePath?: string        // absolute path to the vault JSON file (vault accounts only)
@@ -47,7 +46,6 @@ export interface PoolAccount {
 interface PoolState {
   accounts: PoolAccount[]
   activeIndex: number
-  turnThreshold: number
   initialized: boolean
 }
 
@@ -56,13 +54,14 @@ type VaultPlanHealth = {
   lastError?: string
 }
 
+export type PoolAccountResolutionMatchType = 'exact' | 'prefix'
+
+export type MarkPoolAccountStatusOptions = {
+  rerollActive?: boolean
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
-// Infinity = rotate only on 429 failover, never proactively.
-// Proactive rotation busts the OpenAI prompt cache (~20K+ tokens re-processed
-// from scratch on every switch), costing 1-2s latency per rotation.
-// Reactive failover (rotateOnFailure) already handles cap errors instantly.
-const DEFAULT_TURN_THRESHOLD = Infinity
 const LOCK_STALE_MS = 2 * 60 * 60 * 1000 // 2 hours, matching codex-nootp
 const DEFAULT_VAULT_PATH = join(homedir(), 'codex-vault')
 const CODEX_NOOTP_CONFIG = join(homedir(), '.codex-nootp', 'config.toml')
@@ -72,7 +71,6 @@ const CODEX_NOOTP_CONFIG = join(homedir(), '.codex-nootp', 'config.toml')
 const pool: PoolState = {
   accounts: [],
   activeIndex: -1,
-  turnThreshold: DEFAULT_TURN_THRESHOLD,
   initialized: false,
 }
 
@@ -87,6 +85,52 @@ function persistActiveCodexAccountId(accountId: string | undefined): void {
       ...current,
       activeCodexAccountId: accountId,
     }
+  })
+}
+
+function countPoolStatuses(): Record<string, number> {
+  const counts: Record<string, number> = { total: pool.accounts.length }
+  for (const account of pool.accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  return counts
+}
+
+function emitActiveRerollDiagnostic(
+  fromAccountId: string | undefined,
+  toAccountId: string | undefined,
+  reason: string,
+): void {
+  if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
+    return
+  }
+  emitAccountDiagnostic({
+    code: 'account.active.reroll',
+    severity: 'warning',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    from_account_ref: fromAccountId,
+    account_ref: toAccountId,
+    counts: countPoolStatuses(),
+    reason,
+  })
+}
+
+function emitUsageStatusDiagnostic(
+  code: 'account.usage.cap' | 'account.usage.uncap',
+  accountId: string,
+  reason: string | undefined,
+): void {
+  emitAccountDiagnostic({
+    code,
+    severity: code === 'account.usage.cap' ? 'warning' : 'info',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    account_ref: accountId,
+    counts: countPoolStatuses(),
+    reason,
   })
 }
 
@@ -118,12 +162,6 @@ export async function initAccountPool(): Promise<void> {
       pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
     }
 
-    // Read turn threshold from settings (codexAccountRotationThreshold)
-    const settings = getInitialSettings()
-    if (settings.codexAccountRotationThreshold != null) {
-      pool.turnThreshold = Math.max(1, Math.round(settings.codexAccountRotationThreshold))
-    }
-
     pool.initialized = true
 
     const healthy = pool.accounts.filter((a) => a.status === 'healthy').length
@@ -145,7 +183,7 @@ export async function initAccountPool(): Promise<void> {
     // Fire-and-forget: fetch initial usage data for scoring
     if (pool.accounts.length > 1) {
       import('./codexUsage.js').then(({ fetchPoolUsage }) => {
-        void fetchPoolUsage()
+        void fetchPoolUsage({ updateRoutingHints: true })
       }).catch(() => {})
     }
   } catch (err) {
@@ -184,9 +222,15 @@ export function getActiveAccount(): PoolAccount | null {
   const acct = pool.accounts[pool.activeIndex]
   if (!acct || acct.status !== 'healthy') {
     // Active account went bad — find another healthy one
+    const fromAccountId = acct?.accountId
     const idx = findLRUHealthy(-1)
     if (idx < 0) return null
     pool.activeIndex = idx
+    emitActiveRerollDiagnostic(
+      fromAccountId,
+      pool.accounts[idx]?.accountId,
+      'getActiveAccount: active account was not healthy',
+    )
     return pool.accounts[idx]!
   }
   return acct
@@ -205,43 +249,19 @@ export function setActiveAccount(accountId: string): PoolAccount | null {
 }
 
 /**
- * Called once per user turn. Rotates to LRU account when the current one
- * has exceeded the turn threshold and another healthy account exists.
- * Returns rotation info when a switch occurred, or null if no rotation.
+ * Like setActiveAccount, but persists the active account id so the next
+ * startup resumes on the same account. Use for intentional, durable
+ * main-thread failover decisions; in-memory-only rotations should keep
+ * using setActiveAccount.
  */
-export function selectAccountForTurn(): { from: string; to: string; turns: number } | null {
-  if (!pool.initialized || pool.accounts.length <= 1) return null
-
-  const current = pool.accounts[pool.activeIndex]
-  if (current && current.status === 'healthy') {
-    current.turnsUsed++
-    current.lastUsedAt = Date.now()
-
-    if (current.turnsUsed >= pool.turnThreshold) {
-      const next = findLRUHealthy(pool.activeIndex)
-      if (next >= 0) {
-        const fromId = truncId(current.accountId)
-        const toId = truncId(pool.accounts[next]!.accountId)
-        const turns = current.turnsUsed
-        logForDebugging(
-          `[codex-pool] Turn rotation: ${fromId} → ${toId} after ${turns} turns`,
-        )
-        pool.activeIndex = next
-        pool.accounts[next]!.turnsUsed = 0
-        persistActiveCodexAccountId(pool.accounts[next]!.accountId)
-        return { from: fromId, to: toId, turns }
-      }
-    }
-  } else {
-    // Current is not healthy, find a replacement
-    const next = findLRUHealthy(-1)
-    if (next >= 0) {
-      pool.activeIndex = next
-      pool.accounts[next]!.turnsUsed = 0
-      persistActiveCodexAccountId(pool.accounts[next]!.accountId)
-    }
+export function setActiveAccountPersisted(
+  accountId: string,
+): PoolAccount | null {
+  const result = setActiveAccount(accountId)
+  if (result) {
+    persistActiveCodexAccountId(accountId)
   }
-  return null
+  return result
 }
 
 /**
@@ -267,8 +287,12 @@ export function rotateOnFailure(): PoolAccount | null {
 
   pool.activeIndex = next
   const acct = pool.accounts[next]!
-  acct.turnsUsed = 0
   persistActiveCodexAccountId(acct.accountId)
+  emitActiveRerollDiagnostic(
+    current?.accountId,
+    acct.accountId,
+    'rotateOnFailure: usage cap hit (429)',
+  )
   acct.lastUsedAt = Date.now()
   logForDebugging(
     `[codex-pool] Failover to ${truncId(acct.accountId)}`,
@@ -276,7 +300,7 @@ export function rotateOnFailure(): PoolAccount | null {
 
   // Refresh usage data after failover (fire-and-forget)
   import('./codexUsage.js').then(({ fetchPoolUsage }) => {
-    void fetchPoolUsage(true)
+    void fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
   }).catch(() => {})
 
   return acct
@@ -304,12 +328,23 @@ export function appendAccount(tokens: {
     // Update tokens. Login should reset status, but background token refresh
     // must not wipe a known capped state.
     const acct = pool.accounts[existing]!
+    const previousStatus = acct.status
+    const previousLastError = acct.lastError
     const preserveCapped = options?.preserveCapped === true && acct.status === 'capped'
     acct.accessToken = tokens.accessToken
     acct.refreshToken = tokens.refreshToken
     acct.expiresAt = tokens.expiresAt
     acct.status = preserveCapped ? 'capped' : 'healthy'
     acct.lastError = preserveCapped ? acct.lastError : undefined
+    if (previousStatus === 'capped' && acct.status === 'healthy') {
+      emitUsageStatusDiagnostic(
+        'account.usage.uncap',
+        acct.accountId,
+        previousLastError
+          ? `usage cap cleared: ${previousLastError}`
+          : 'usage cap cleared',
+      )
+    }
     if (tokens.alias) acct.alias = tokens.alias
     if (options?.source) acct.source = options.source
     if (options?.vaultFilePath) acct.vaultFilePath = options.vaultFilePath
@@ -325,7 +360,6 @@ export function appendAccount(tokens: {
       source: options?.source ?? 'config',
       status: 'healthy',
       lastUsedAt: 0,
-      turnsUsed: 0,
       alias: tokens.alias,
       vaultFilePath: options?.vaultFilePath,
     })
@@ -356,13 +390,11 @@ export function appendAccount(tokens: {
 export function getPoolStatus(): {
   accounts: readonly PoolAccount[]
   activeIndex: number
-  turnThreshold: number
   initialized: boolean
 } {
   return {
     accounts: pool.accounts,
     activeIndex: pool.activeIndex,
-    turnThreshold: pool.turnThreshold,
     initialized: pool.initialized,
   }
 }
@@ -375,20 +407,42 @@ export function markPoolAccountStatus(
   accountId: string,
   status: PoolAccount['status'],
   reason?: string,
+  options: MarkPoolAccountStatusOptions = {},
 ): void {
   const acct = pool.accounts.find((account) => account.accountId === accountId)
   if (!acct) return
 
+  const previousStatus = acct.status
   acct.status = status
   acct.lastError = reason
 
-  if (pool.accounts[pool.activeIndex]?.accountId === accountId && status !== 'healthy') {
+  if (previousStatus !== 'capped' && status === 'capped') {
+    emitUsageStatusDiagnostic('account.usage.cap', accountId, reason)
+  } else if (previousStatus === 'capped' && status === 'healthy') {
+    emitUsageStatusDiagnostic('account.usage.uncap', accountId, reason ?? 'usage cap cleared')
+  }
+
+  if (
+    options.rerollActive !== false &&
+    pool.accounts[pool.activeIndex]?.accountId === accountId &&
+    status !== 'healthy'
+  ) {
+    const fromAccountId = pool.accounts[pool.activeIndex]?.accountId
     pool.activeIndex = findLRUHealthy(-1)
+    emitActiveRerollDiagnostic(
+      fromAccountId,
+      pool.accounts[pool.activeIndex]?.accountId,
+      `markPoolAccountStatus: ${reason ?? status}`,
+    )
   }
 }
 
-export function markPoolAccountCapped(accountId: string, reason: string): void {
-  markPoolAccountStatus(accountId, 'capped', reason)
+export function markPoolAccountCapped(
+  accountId: string,
+  reason: string,
+  options: MarkPoolAccountStatusOptions = {},
+): void {
+  markPoolAccountStatus(accountId, 'capped', reason, options)
 
   const acct = pool.accounts.find((account) => account.accountId === accountId)
   if (!acct) return
@@ -410,39 +464,78 @@ export function touchPoolAccountUsage(accountId: string): void {
 }
 
 /**
- * Allow external configuration of the turn threshold.
- * Called during init or when settings change.
+ * Resolve a Codex account by prefix. Exact alias/id match wins. Otherwise,
+ * gather alias-prefix and id-prefix matches and return a unique/ambiguous/none
+ * verdict. Pass `onlyHealthy: true` to filter out non-healthy accounts.
  */
-export function setTurnThreshold(n: number): void {
-  pool.turnThreshold = Math.max(1, Math.round(n))
+export type CodexAccountResolution =
+  | { kind: 'none' }
+  | { kind: 'unique'; account: PoolAccount; matchType: PoolAccountResolutionMatchType }
+  | { kind: 'ambiguous'; matches: PoolAccount[]; matchType: PoolAccountResolutionMatchType }
+
+export function resolveCodexAccountByPrefix(
+  prefix: string,
+  options?: { onlyHealthy?: boolean },
+): CodexAccountResolution {
+  const lower = prefix.toLowerCase()
+  const onlyHealthy = options?.onlyHealthy === true
+  const pool_ = pool.accounts.filter(
+    (a) => !onlyHealthy || a.status === 'healthy',
+  )
+
+  // Exact alias or accountId match wins
+  const exact = pool_.filter(
+    (a) => a.alias?.toLowerCase() === lower || a.accountId.toLowerCase() === lower,
+  )
+  if (exact.length === 1) {
+    return { kind: 'unique', account: exact[0]!, matchType: 'exact' }
+  }
+  if (exact.length > 1) return { kind: 'ambiguous', matches: exact, matchType: 'exact' }
+
+  // Otherwise gather alias-prefix and id-prefix matches (deduped)
+  const seen = new Set<string>()
+  const matches: PoolAccount[] = []
+  for (const a of pool_) {
+    if (a.alias && a.alias.toLowerCase().startsWith(lower)) {
+      if (!seen.has(a.accountId)) {
+        seen.add(a.accountId)
+        matches.push(a)
+      }
+    }
+  }
+  for (const a of pool_) {
+    if (a.accountId.toLowerCase().startsWith(lower)) {
+      if (!seen.has(a.accountId)) {
+        seen.add(a.accountId)
+        matches.push(a)
+      }
+    }
+  }
+
+  if (matches.length === 0) return { kind: 'none' }
+  if (matches.length === 1) {
+    return { kind: 'unique', account: matches[0]!, matchType: 'prefix' }
+  }
+  return { kind: 'ambiguous', matches, matchType: 'prefix' }
 }
 
 /**
- * Manually switch to a specific account (by ID prefix) or the next LRU healthy one.
- * Returns the new active account, or null if no match / no healthy alternative.
+ * Manually switch to a specific account (by alias/ID prefix) or the next LRU
+ * healthy one. Returns the new active account, or null if no match, ambiguous
+ * match, or no healthy alternative. Callers that want to surface the candidate
+ * list on ambiguity should call `resolveCodexAccountByPrefix` first.
  */
 export function switchToAccount(idPrefix: string | null): PoolAccount | null {
-  if (!pool.initialized || pool.accounts.length <= 1) return null
+  if (!pool.initialized || pool.accounts.length === 0) return null
 
   let targetIdx: number
   if (idPrefix) {
-    const lower = idPrefix.toLowerCase()
-    // Match by alias first (exact or prefix), then fall back to ID prefix
-    targetIdx = pool.accounts.findIndex(
-      (a) => a.alias?.toLowerCase() === lower && a.status === 'healthy',
-    )
-    if (targetIdx < 0) {
-      targetIdx = pool.accounts.findIndex(
-        (a) => a.alias?.toLowerCase().startsWith(lower) && a.status === 'healthy',
-      )
-    }
-    if (targetIdx < 0) {
-      targetIdx = pool.accounts.findIndex(
-        (a) => a.accountId.toLowerCase().startsWith(lower) && a.status === 'healthy',
-      )
-    }
+    const resolution = resolveCodexAccountByPrefix(idPrefix, { onlyHealthy: true })
+    if (resolution.kind !== 'unique') return null
+    targetIdx = pool.accounts.indexOf(resolution.account)
     if (targetIdx < 0) return null
   } else {
+    if (pool.accounts.length <= 1) return null
     targetIdx = findLRUHealthy(pool.activeIndex)
     if (targetIdx < 0) return null
   }
@@ -465,22 +558,33 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
     pool.accounts[pool.activeIndex]!.lastUsedAt = Date.now()
   }
   pool.activeIndex = targetIdx
-  pool.accounts[targetIdx]!.turnsUsed = 0
   persistActiveCodexAccountId(pool.accounts[targetIdx]!.accountId)
   return to
 }
 
 /** Mark an account as dead with a reason. Used by token refresh on unrecoverable errors. */
-export function markAccountDead(accountId: string, reason: string): void {
+export function markAccountDead(
+  accountId: string,
+  reason: string,
+  options: MarkPoolAccountStatusOptions = {},
+): void {
   const acct = pool.accounts.find((a) => a.accountId === accountId)
   if (!acct) return
   acct.status = 'dead'
   acct.lastError = reason
   // If this was the active account, find another
-  if (pool.accounts[pool.activeIndex]?.accountId === accountId) {
+  if (
+    options.rerollActive !== false &&
+    pool.accounts[pool.activeIndex]?.accountId === accountId
+  ) {
     const next = findLRUHealthy(-1)
     pool.activeIndex = next
     persistActiveCodexAccountId(pool.accounts[next]?.accountId)
+    emitActiveRerollDiagnostic(
+      accountId,
+      pool.accounts[next]?.accountId,
+      `markAccountDead: ${reason}`,
+    )
   }
   logForDebugging(
     `[codex-pool] Account ${truncId(accountId)} marked dead: ${reason}`,
@@ -505,6 +609,7 @@ export function saveCodexTokenToVault(tokens: {
   accountId: string
   alias?: string
   idToken?: string
+  expiresAt?: number
 }, options: {
   writer?: string
   expectedPreviousAccountId?: string
@@ -544,6 +649,9 @@ export function saveCodexTokenToVault(tokens: {
       refresh_token: tokens.refreshToken,
       account_id: tokens.accountId,
       ...(tokens.idToken ? { id_token: tokens.idToken } : {}),
+      ...(typeof tokens.expiresAt === 'number' && Number.isFinite(tokens.expiresAt)
+        ? { expires_at: tokens.expiresAt }
+        : {}),
     }
     data.last_refresh = new Date().toISOString()
     if (tokens.alias?.trim()) {
@@ -619,6 +727,7 @@ export function removeCodexAccount(accountId: string): boolean {
   if (idx < 0) return false
 
   const acct = pool.accounts[idx]!
+  const previousActiveAccountId = pool.accounts[pool.activeIndex]?.accountId
 
   if (acct.vaultFilePath && existsSync(acct.vaultFilePath)) {
     try {
@@ -662,6 +771,11 @@ export function removeCodexAccount(accountId: string): boolean {
       accountId: active.accountId,
     })
     persistActiveCodexAccountId(active.accountId)
+    emitActiveRerollDiagnostic(
+      previousActiveAccountId,
+      active.accountId,
+      `removeCodexAccount: removed ${accountId}`,
+    )
   } else {
     clearCodexOAuthTokens()
     persistActiveCodexAccountId(undefined)
@@ -713,6 +827,10 @@ function readVaultPath(): string | null {
   }
 }
 
+export function loadVaultAccountsForTest(vaultPath: string): PoolAccount[] {
+  return loadVaultAccounts(vaultPath)
+}
+
 function loadVaultAccounts(vaultPath: string): PoolAccount[] {
   const accountsDir = join(vaultPath, 'accounts')
   const locksDir = join(vaultPath, 'locks')
@@ -762,8 +880,15 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         continue
       }
 
-      // Check expiry from expiresAt or last_refresh
+      // last_refresh is when we refreshed, not when the token expires.
+      // Prefer the real `expires_at` written by the refresh path; fall back to
+      // 0 (forces an immediate refresh) when absent.
       const lastRefresh = data.last_refresh as string | undefined
+      const expiresAtRaw = tokens.expires_at
+      const expiresAt =
+        typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
+          ? expiresAtRaw
+          : 0
       const refreshStatus = checkAccountHealth(lastRefresh)
       const planHealth = getVaultPlanHealthFromIdToken(
         typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
@@ -774,11 +899,10 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         accountId,
         accessToken: String(tokens.access_token),
         refreshToken: String(tokens.refresh_token),
-        expiresAt: lastRefresh ? new Date(lastRefresh).getTime() : 0,
+        expiresAt,
         source: 'vault',
         status,
         lastUsedAt: 0,
-        turnsUsed: 0,
         lastRefreshIso: lastRefresh,
         vaultFilePath: join(accountsDir, file),
         alias: typeof data.alias === 'string' && data.alias ? data.alias : undefined,
@@ -811,7 +935,6 @@ function loadConfigAccount(): PoolAccount | null {
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
-    turnsUsed: 0,
   }
 }
 
@@ -1040,14 +1163,11 @@ function findLRUHealthy(skipIndex: number): number {
 export function seedCodexAccountPoolForTest({
   accounts,
   activeAccountId,
-  turnThreshold = DEFAULT_TURN_THRESHOLD,
 }: {
   accounts: PoolAccount[]
   activeAccountId?: string
-  turnThreshold?: number
 }): void {
   pool.accounts = accounts.map((account) => ({ ...account }))
-  pool.turnThreshold = turnThreshold
   pool.initialized = true
 
   if (activeAccountId) {
@@ -1064,7 +1184,6 @@ export function seedCodexAccountPoolForTest({
 export function resetCodexAccountPoolForTest(): void {
   pool.accounts = []
   pool.activeIndex = -1
-  pool.turnThreshold = DEFAULT_TURN_THRESHOLD
   pool.initialized = false
 }
 

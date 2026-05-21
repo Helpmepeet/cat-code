@@ -5,15 +5,9 @@
  * Used for display in /accounts and /usage, and as soft hints for pool scoring.
  */
 
-import { join } from 'path'
-
 import { logForDebugging } from '../../utils/debug.js'
 import {
   getPoolStatus,
-  getVaultPath,
-  isAccountLocked,
-  markPoolAccountCapped,
-  markPoolAccountStatus,
   updateAccountUsageHints,
   type PoolAccount,
 } from './codexAccountPool.js'
@@ -59,6 +53,11 @@ export interface PoolUsageDisplayAccount {
   error: string | null
 }
 
+export type FetchPoolUsageOptions = {
+  forceRefresh?: boolean
+  updateRoutingHints?: boolean
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const WHAM_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
@@ -86,18 +85,7 @@ async function fetchAccountUsageResult(
   account: PoolAccount,
 ): Promise<{ error: string | null; usage: AccountUsage | null }> {
   const first = await fetchAccountUsageOnce(account.accessToken, account.accountId)
-  if (first.status !== 401) {
-    return first.result
-  }
-
-  // Stale access_token → refresh once and retry.
-  const refreshed = await refreshAccountAccessToken(account)
-  if (!refreshed) {
-    return first.result
-  }
-
-  const second = await fetchAccountUsageOnce(refreshed, account.accountId)
-  return second.result
+  return first.result
 }
 
 async function fetchAccountUsageOnce(
@@ -144,65 +132,18 @@ async function fetchAccountUsageOnce(
 }
 
 /**
- * Refresh a single account's access_token via the OAuth refresh endpoint.
- * Returns the new access_token on success, null on failure or skip.
- *
- * Skips when:
- * - account has no refresh_token or vault file (single-config accounts)
- * - another process is mid-refresh (vault lock held) — caller will pick up
- *   the freshly-written tokens on the next fetchPoolUsage() cycle
- * - the refresh comes back as identity_mismatch (account changed identity)
- */
-async function refreshAccountAccessToken(
-  account: PoolAccount,
-): Promise<string | null> {
-  if (!account.refreshToken || !account.vaultFilePath) {
-    return null
-  }
-
-  const vaultPath = getVaultPath()
-  if (vaultPath) {
-    const locksDir = join(vaultPath, 'locks')
-    if (isAccountLocked(locksDir, account.accountId)) {
-      logForDebugging(
-        `[codex-usage] Skip refresh for ${account.accountId.slice(0, 12)}: locked by another process`,
-      )
-      return null
-    }
-  }
-
-  try {
-    const { refreshAccountTokens } = await import('./codexTokenRefresh.js')
-    const refreshed = await refreshAccountTokens(
-      account.accountId,
-      account.refreshToken,
-      account.vaultFilePath,
-    )
-    if (refreshed.status !== 'refreshed') {
-      // identity_mismatch — different account ID returned. Don't retry; the
-      // mismatch path in codexTokenRefresh has already logged + persisted.
-      return null
-    }
-    logForDebugging(
-      `[codex-usage] Refreshed stale token for ${account.accountId.slice(0, 12)} after HTTP 401`,
-    )
-    return refreshed.accessToken
-  } catch (err) {
-    logForDebugging(
-      `[codex-usage] Refresh after 401 failed for ${account.accountId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`,
-    )
-    return null
-  }
-}
-
-/**
  * Fetch usage for all pool accounts in parallel.
  * Returns a snapshot with results and any errors.
  * Caches for 1 minute to avoid hammering the endpoint.
  */
 export async function fetchPoolUsage(
-  forceRefresh = false,
+  forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,
 ): Promise<PoolUsageSnapshot> {
+  const options =
+    typeof forceRefreshOrOptions === 'boolean'
+      ? { forceRefresh: forceRefreshOrOptions }
+      : forceRefreshOrOptions
+  const forceRefresh = options.forceRefresh === true
   if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
     return cachedSnapshot
   }
@@ -229,8 +170,9 @@ export async function fetchPoolUsage(
 
   await Promise.all(promises)
 
-  // Update pool account usage hints for scoring and pre-mark capped accounts.
-  if (results.length > 0) {
+  // Display calls are observational by default (DP2/DP4). Only explicit
+  // background prefetch paths may update soft routing hints for scoring.
+  if (options.updateRoutingHints === true && results.length > 0) {
     updateAccountUsageHints(
       results.map((r) => ({
         accountId: r.accountId,
@@ -238,17 +180,6 @@ export async function fetchPoolUsage(
         weeklyPercent: r.secondaryWindow.usedPercent,
       })),
     )
-
-    for (const usage of results) {
-      if (!usage.allowed || usage.limitReached) {
-        markPoolAccountCapped(
-          usage.accountId,
-          'Usage snapshot reported account exhaustion',
-        )
-      } else {
-        markPoolAccountStatus(usage.accountId, 'healthy')
-      }
-    }
   }
 
   const snapshot: PoolUsageSnapshot = {

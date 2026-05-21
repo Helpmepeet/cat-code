@@ -4,6 +4,7 @@ import { Box, Text } from '../../ink.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import { getSubscriptionName, isClaudeAISubscriber } from '../../utils/auth.js'
 import { fetchUtilization, type Utilization } from '../../services/api/usage.js'
+import { useAppState } from '../../state/AppState.js'
 import {
   buildPoolUsageDisplayAccounts,
   fetchPoolUsage,
@@ -18,6 +19,14 @@ interface AccountsPanelProps {
   availableWidth: number
   accentColor?: string
   textColor?: string
+}
+
+interface AccountsPanelContentProps {
+  availableWidth: number
+  accentColor: string
+  textColor?: string
+  hasAnthropicAccount: boolean
+  hasCodexAccounts: boolean
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -271,6 +280,25 @@ export function AccountsPanel({ availableWidth, accentColor = 'startupAccent', t
 
   if (!hasAnthropicAccount && !hasCodexAccounts) return null
 
+  return (
+    <AccountsPanelContent
+      availableWidth={availableWidth}
+      accentColor={accentColor}
+      textColor={textColor}
+      hasAnthropicAccount={hasAnthropicAccount}
+      hasCodexAccounts={hasCodexAccounts}
+    />
+  )
+}
+
+function AccountsPanelContent({
+  availableWidth,
+  accentColor,
+  textColor,
+  hasAnthropicAccount,
+  hasCodexAccounts,
+}: AccountsPanelContentProps) {
+  const authVersion = useAppState(s => s.authVersion)
   const [utilization, setUtilization] = useState<Utilization | null | 'loading'>('loading')
   const [codexUsageSnapshot, setCodexUsageSnapshot] = useState<PoolUsageSnapshot | null>(null)
 
@@ -280,7 +308,7 @@ export function AccountsPanel({ availableWidth, accentColor = 'startupAccent', t
       .then((result) => { if (!cancelled) setUtilization(result) })
       .catch(() => { if (!cancelled) setUtilization(null) })
     return () => { cancelled = true }
-  }, [])
+  }, [authVersion])
 
   useEffect(() => {
     if (!hasCodexAccounts) return
@@ -289,7 +317,7 @@ export function AccountsPanel({ availableWidth, accentColor = 'startupAccent', t
       .then((snapshot) => { if (!cancelled) setCodexUsageSnapshot(snapshot) })
       .catch(() => { if (!cancelled) setCodexUsageSnapshot(null) })
     return () => { cancelled = true }
-  }, [hasCodexAccounts])
+  }, [hasCodexAccounts, authVersion])
 
   // Each section has a natural content width: bar(16) + label(3) + "100% "(5)
   // + "resets 99h99m"(13) + padding + account line

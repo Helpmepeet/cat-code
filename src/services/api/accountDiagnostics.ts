@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto'
+import { AsyncLocalStorage } from 'async_hooks'
 
 import type {
   SDKAccountDiagnosticCode,
@@ -15,6 +16,13 @@ const ACCOUNT_DIAGNOSTIC_CODES = [
   'account.failover.succeeded',
   'account.transient_failure',
   'account.token_refresh.failed',
+  'account.identity_mismatch',
+  'account.manual_switch',
+  'account.active.reroll',
+  'account.lease.failover',
+  'account.usage.cap',
+  'account.usage.uncap',
+  'account.retry.exhausted',
   'account.pool.unavailable',
   'quota.exhausted',
   'auth.missing',
@@ -127,6 +135,7 @@ export type AccountDiagnosticEvent = {
   resolved_provider?: SDKAccountDiagnosticProvider
   resolved_model?: string
   counts?: Record<string, number>
+  from_account_ref?: string
   account_ref?: string
   reason?: string
   user_message?: string
@@ -143,10 +152,20 @@ type StreamJsonAccountDiagnosticEmitterOptions = {
   createUuid?: () => string
 }
 
-let streamJsonEmitter: StreamJsonAccountDiagnosticEmitterOptions | undefined
+const streamJsonEmitters: StreamJsonAccountDiagnosticEmitterOptions[] = []
+type ScopedStreamJsonAccountDiagnosticEmitter =
+  StreamJsonAccountDiagnosticEmitterOptions & {
+    active: boolean
+  }
+const scopedStreamJsonEmitter =
+  new AsyncLocalStorage<ScopedStreamJsonAccountDiagnosticEmitter>()
 
 type EmitAccountDiagnosticOptions = {
   allowStderrFallback?: boolean
+}
+
+type InstallStreamJsonAccountDiagnosticHookOptions = {
+  registerForCleanup?: boolean
 }
 
 function stableRedaction(label: string, value: string): string {
@@ -305,6 +324,7 @@ function normalizeAccountDiagnosticEvent(value: unknown): AccountDiagnosticEvent
     resolved_provider: asOptionalProvider(event.resolved_provider),
     resolved_model: asOptionalString(event.resolved_model),
     counts: parseCounts(event.counts),
+    from_account_ref: asOptionalString(event.from_account_ref),
     account_ref: asOptionalString(event.account_ref),
     reason: asOptionalString(event.reason),
     user_message: asOptionalString(event.user_message),
@@ -331,6 +351,9 @@ export function buildAccountDiagnosticBody(
       ? sanitizeText(event.resolved_model)
       : undefined,
     counts: sanitizeCounts(event.counts),
+    from_account_ref: event.from_account_ref
+      ? stableRedaction('account-ref', event.from_account_ref)
+      : undefined,
     account_ref: event.account_ref
       ? stableRedaction('account-ref', event.account_ref)
       : undefined,
@@ -359,14 +382,18 @@ export function formatAccountDiagnosticStderrLine(
 }
 
 export function hasAccountDiagnosticSink(): boolean {
-  return streamJsonEmitter !== undefined
+  return getActiveScopedStreamJsonEmitter() !== undefined || streamJsonEmitters.length > 0
 }
 
 export function emitAccountDiagnostic(
   value: AccountDiagnosticEvent | Record<string, unknown>,
   options: EmitAccountDiagnosticOptions = {},
 ): void {
-  if (!streamJsonEmitter) {
+  const emitter =
+    getActiveScopedStreamJsonEmitter() ??
+    streamJsonEmitters[streamJsonEmitters.length - 1]
+
+  if (!emitter) {
     if (options.allowStderrFallback === true) {
       process.stderr.write(formatAccountDiagnosticStderrLine(value))
     }
@@ -374,24 +401,62 @@ export function emitAccountDiagnostic(
   }
 
   const message = buildAccountDiagnosticMessage(value, {
-    sessionId: streamJsonEmitter.getSessionId(),
-    uuid: streamJsonEmitter.createUuid?.() ?? randomUUID(),
+    sessionId: emitter.getSessionId(),
+    uuid: emitter.createUuid?.() ?? randomUUID(),
   })
-  void streamJsonEmitter.emit(message)
+  void emitter.emit(message)
 }
 
 export function installStreamJsonAccountDiagnosticHook(
   options: StreamJsonAccountDiagnosticEmitterOptions,
-): void {
-  streamJsonEmitter = options
+  installOptions: InstallStreamJsonAccountDiagnosticHookOptions = {},
+): () => void {
+  streamJsonEmitters.push(options)
 
-  registerCleanup(async () => {
-    if (streamJsonEmitter === options) {
-      streamJsonEmitter = undefined
+  const removeHook = (): void => {
+    const index = streamJsonEmitters.lastIndexOf(options)
+    if (index >= 0) {
+      streamJsonEmitters.splice(index, 1)
     }
-  })
+  }
+
+  if (installOptions.registerForCleanup !== false) {
+    registerCleanup(async () => {
+      removeHook()
+    })
+  }
+
+  return removeHook
+}
+
+export function withStreamJsonAccountDiagnosticHook<T>(
+  options: StreamJsonAccountDiagnosticEmitterOptions,
+  callback: () => T,
+): T {
+  const scopedOptions = { ...options, active: true }
+  let result: T
+  try {
+    result = scopedStreamJsonEmitter.run(scopedOptions, callback)
+  } catch (error) {
+    scopedOptions.active = false
+    throw error
+  }
+  if (result instanceof Promise) {
+    return result.finally(() => {
+      scopedOptions.active = false
+    }) as T
+  }
+  scopedOptions.active = false
+  return result
 }
 
 export function _resetAccountDiagnosticStreamJsonHookForTesting(): void {
-  streamJsonEmitter = undefined
+  streamJsonEmitters.length = 0
+}
+
+function getActiveScopedStreamJsonEmitter():
+  | StreamJsonAccountDiagnosticEmitterOptions
+  | undefined {
+  const emitter = scopedStreamJsonEmitter.getStore()
+  return emitter?.active ? emitter : undefined
 }

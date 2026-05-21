@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
+import { getGlobalConfig } from '../../utils/config.js'
 import { refreshAccountTokens } from './codexTokenRefresh.js'
 import {
   getPoolStatus,
@@ -10,6 +11,15 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from './codexAccountPool.js'
+import {
+  getCodexLeaseForOwner,
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from './codexAccountLeaseManager.js'
+import {
+  _resetAccountDiagnosticStreamJsonHookForTesting,
+  installStreamJsonAccountDiagnosticHook,
+} from './accountDiagnostics.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -22,7 +32,6 @@ function buildPoolAccount(
     source: overrides.source ?? 'vault',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
-    turnsUsed: overrides.turnsUsed ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -49,6 +58,8 @@ function createAccessToken(accountId?: string): string {
 describe('codexTokenRefresh identity handling', () => {
   beforeEach(() => {
     resetCodexAccountPoolForTest()
+    resetCodexLeaseManagerForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
   })
 
   test('refresh returns identity_mismatch and does not rewrite old profile', async () => {
@@ -93,6 +104,14 @@ describe('codexTokenRefresh identity handling', () => {
     })
 
     const originalFetch = globalThis.fetch
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'identity-mismatch-session',
+      createUuid: () => `identity-mismatch-${emitted.length + 1}`,
+    })
     globalThis.fetch = (async () => {
       return new Response(
         JSON.stringify({
@@ -127,6 +146,18 @@ describe('codexTokenRefresh identity handling', () => {
       expect(oldPool?.status).toBe('dead')
       expect(newPool?.accessToken).toBe(createAccessToken(newAccountId))
       expect(newPool?.source).toBe('vault')
+
+      const mismatch = emitted.find(
+        message => (message as { code?: string }).code === 'account.identity_mismatch',
+      )
+      expect(mismatch).toMatchObject({
+        code: 'account.identity_mismatch',
+        from_account_ref: expect.any(String),
+        account_ref: expect.any(String),
+      })
+      expect((mismatch as { from_account_ref?: string }).from_account_ref).not.toBe(
+        (mismatch as { account_ref?: string }).account_ref,
+      )
     } finally {
       globalThis.fetch = originalFetch
       rmSync(dir, { recursive: true, force: true })
@@ -352,6 +383,207 @@ describe('codexTokenRefresh identity handling', () => {
       const oldPool = getPoolStatus().accounts.find((a) => a.accountId === accountId)
       expect(oldPool?.status).toBe('dead')
       expect(oldPool?.lastError).toContain('missing account identity')
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('same-account refresh persists future expiresAt from expires_in', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const accountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const oldPath = join(accountsDir, `${accountId}.json`)
+
+    writeFileSync(
+      oldPath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            account_id: accountId,
+          },
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [
+        buildPoolAccount({
+          accountId,
+          refreshToken: 'old-refresh',
+          source: 'vault',
+          vaultFilePath: oldPath,
+        }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    const refreshedAccessToken = createAccessToken(accountId)
+    const expiresInSeconds = 3600
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          access_token: refreshedAccessToken,
+          refresh_token: 'new-refresh',
+          expires_in: expiresInSeconds,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as typeof globalThis.fetch
+
+    const before = Date.now()
+    try {
+      await refreshAccountTokens(accountId, 'old-refresh', oldPath)
+      const acct = getPoolStatus().accounts.find((a) => a.accountId === accountId)
+      expect(acct).toBeDefined()
+      // expiresAt must be a real future timestamp greater than now + skew.
+      expect(acct!.expiresAt).toBeGreaterThan(before + 60_000)
+      expect(acct!.expiresAt).toBeLessThanOrEqual(
+        Date.now() + expiresInSeconds * 1000 + 1000,
+      )
+
+      const written = JSON.parse(readFileSync(oldPath, 'utf-8')) as Record<string, unknown>
+      const tokens = written.tokens as Record<string, unknown>
+      expect(typeof tokens.expires_at).toBe('number')
+      expect(tokens.expires_at).toBeGreaterThan(before + 60_000)
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('identity mismatch on active+main lease account activates replacement and moves main lease', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const oldAccountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const newAccountId = '80ef361d-5bdc-411f-8bd1-a8fe2a0f18b3'
+    const oldPath = join(accountsDir, `${oldAccountId}.json`)
+    writeFileSync(
+      oldPath,
+      JSON.stringify({
+        tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: oldAccountId },
+      }),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: oldAccountId,
+      accounts: [
+        buildPoolAccount({ accountId: oldAccountId, refreshToken: 'old-refresh', source: 'vault', vaultFilePath: oldPath }),
+        buildPoolAccount({
+          accountId: '11111111-aaaa-bbbb-cccc-222222222222',
+          alias: 'backup',
+          source: 'vault',
+          vaultFilePath: join(accountsDir, 'backup.json'),
+        }),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'main',
+      accountId: oldAccountId,
+    })
+
+    const originalFetch = globalThis.fetch
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'active-identity-mismatch-session',
+      createUuid: () => `active-identity-mismatch-${emitted.length + 1}`,
+    })
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          access_token: createAccessToken(newAccountId),
+          refresh_token: 'new-refresh',
+          expires_in: 1800,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as typeof globalThis.fetch
+
+    try {
+      await refreshAccountTokens(oldAccountId, 'old-refresh', oldPath)
+      const pool = getPoolStatus()
+      const newIdx = pool.accounts.findIndex((a) => a.accountId === newAccountId)
+      expect(newIdx).toBeGreaterThanOrEqual(0)
+      expect(pool.activeIndex).toBe(newIdx)
+
+      const mainLease = getCodexLeaseForOwner('main-thread')
+      expect(mainLease?.accountId).toBe(newAccountId)
+      expect(getGlobalConfig().activeCodexAccountId).toBe(newAccountId)
+      expect(emitted.map(message => (message as { code?: string }).code)).not.toContain(
+        'account.active.reroll',
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('identity mismatch on inactive non-main account does not steal active slot', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const oldAccountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const newAccountId = '80ef361d-5bdc-411f-8bd1-a8fe2a0f18b3'
+    const activeAccountId = '11111111-aaaa-bbbb-cccc-222222222222'
+    const oldPath = join(accountsDir, `${oldAccountId}.json`)
+    writeFileSync(
+      oldPath,
+      JSON.stringify({
+        tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: oldAccountId },
+      }),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId,
+      accounts: [
+        buildPoolAccount({ accountId: activeAccountId, source: 'vault' }),
+        buildPoolAccount({ accountId: oldAccountId, refreshToken: 'old-refresh', source: 'vault', vaultFilePath: oldPath }),
+      ],
+    })
+    // Main lease lives on the activeAccountId; refreshing oldAccountId must
+    // NOT move active or the main lease.
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'main',
+      accountId: activeAccountId,
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          access_token: createAccessToken(newAccountId),
+          refresh_token: 'new-refresh',
+          expires_in: 1800,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as typeof globalThis.fetch
+
+    try {
+      await refreshAccountTokens(oldAccountId, 'old-refresh', oldPath)
+      const pool = getPoolStatus()
+      const activeIdx = pool.accounts.findIndex((a) => a.accountId === activeAccountId)
+      expect(pool.activeIndex).toBe(activeIdx)
+
+      const mainLease = getCodexLeaseForOwner('main-thread')
+      expect(mainLease?.accountId).toBe(activeAccountId)
     } finally {
       globalThis.fetch = originalFetch
       rmSync(dir, { recursive: true, force: true })

@@ -61,7 +61,6 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
-    turnsUsed: overrides.turnsUsed ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,

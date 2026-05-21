@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 21 May 2026
+
+66. Finished the account-switching fixes plan — account UI refreshes after switches, explicit no-op switches avoid side effects, Codex leases stay owner-local except intentional main/follow-main propagation, `/accounts` usage display is observational, retry failovers are bounded and body-aware, account diagnostics are wired through terminal/bridge/app/SDK paths, identity mismatches reconcile live pool state without stealing active sessions, exact account matches win over prefix ambiguity, dead turn rotation was removed, and image generation now uses lease-aware Codex auth.
+
 ### 12 May 2026
 
 65. Split subagent continuation from message delivery — added `ResumeAgent` for stopped/resumable subagents, restricted `SendMessage` to running-target queueing, shared target/display-name resolution across tool and REPL paths, migrated shipped prompts to the Agent/ResumeAgent/SendMessage boundary, and added regression coverage for raw running IDs, prior-session handles, evicted transcript resume, teammate fallback, concurrent resume, and pending-message preservation.

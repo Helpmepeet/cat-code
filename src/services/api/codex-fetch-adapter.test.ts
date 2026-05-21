@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
@@ -9,6 +9,7 @@ import {
   _hasStickyHttpFallbackForTest,
   _markStickyHttpFallbackForTest,
   _setStickyFallbackNowForTest,
+  CodexAccountAuthError,
   CodexAccountCapError,
   createCodexFetch,
   resetCodexCacheContext,
@@ -16,6 +17,10 @@ import {
   translateCodexWsStreamToAnthropic,
   translateToCodexBody,
 } from './codex-fetch-adapter.js'
+import {
+  resetCodexAccountPoolForTest,
+  seedCodexAccountPoolForTest,
+} from './codexAccountPool.js'
 
 function createAccessToken(accountId: string): string {
   const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))
@@ -118,6 +123,10 @@ function completedWsResponse(responseId = 'resp_001') {
 }
 
 describe('codex-fetch-adapter', () => {
+  afterEach(() => {
+    resetCodexAccountPoolForTest()
+  })
+
   test('translateToCodexBody sets service_tier="priority" when speed=fast', () => {
     const { codexBody } = translateToCodexBody({
       model: 'claude-sonnet-4-6',
@@ -1445,6 +1454,168 @@ describe('codex-fetch-adapter', () => {
       _setWebSocketFactoryForTest(null)
       clearWebSocketSession('conv_usage_limit')
       resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch does not classify ambiguous HTTP failures as Codex account cap or auth errors', async () => {
+    const cases = [
+      {
+        status: 500,
+        body: 'internal server error',
+      },
+      {
+        status: 403,
+        body: 'request forbidden by upstream policy',
+      },
+      {
+        status: 429,
+        body: 'rate limit exceeded; retry later',
+      },
+    ]
+
+    for (const testCase of cases) {
+      resetCodexCacheContext()
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'acct_http_classification',
+        accounts: [
+          {
+            accountId: 'acct_http_classification',
+            accessToken: createAccessToken('acct_http_classification'),
+            refreshToken: 'refresh-a',
+            expiresAt: Date.now() + 60_000,
+            source: 'vault',
+            status: 'healthy',
+            lastUsedAt: 0,
+          },
+          {
+            accountId: 'acct_http_backup',
+            accessToken: createAccessToken('acct_http_backup'),
+            refreshToken: 'refresh-b',
+            expiresAt: Date.now() + 60_000,
+            source: 'vault',
+            status: 'healthy',
+            lastUsedAt: 0,
+          },
+        ],
+      })
+
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = (async () =>
+        new Response(testCase.body, {
+          status: testCase.status,
+          headers: { 'Content-Type': 'text/plain' },
+        })) as unknown as typeof globalThis.fetch
+
+      try {
+        let thrown: unknown
+        const response = await createCodexFetch(
+          createAccessToken('acct_http_classification'),
+          `conv_ambiguous_${testCase.status}`,
+        )('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        }).catch(error => {
+          thrown = error
+          return null
+        })
+
+        expect(thrown).not.toBeInstanceOf(CodexAccountCapError)
+        expect(thrown).not.toBeInstanceOf(CodexAccountAuthError)
+        if (response) {
+          expect(response.status).toBe(testCase.status)
+        }
+      } finally {
+        globalThis.fetch = originalFetch
+        resetCodexCacheContext()
+        resetCodexAccountPoolForTest()
+      }
+    }
+  })
+
+  test('createCodexFetch classifies true HTTP cap and revoked-token responses precisely', async () => {
+    const cases = [
+      {
+        status: 429,
+        body: JSON.stringify({
+          error: {
+            code: 'usage_limit_reached',
+            message: 'Your Codex usage limit has been reached.',
+          },
+        }),
+        expected: CodexAccountCapError,
+      },
+      {
+        status: 401,
+        body: JSON.stringify({
+          error: {
+            code: 'token_revoked',
+            message: 'OAuth token has been revoked.',
+          },
+        }),
+        expected: CodexAccountAuthError,
+      },
+    ]
+
+    for (const testCase of cases) {
+      resetCodexCacheContext()
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'acct_http_classification',
+        accounts: [
+          {
+            accountId: 'acct_http_classification',
+            accessToken: createAccessToken('acct_http_classification'),
+            refreshToken: 'refresh-a',
+            expiresAt: Date.now() + 60_000,
+            source: 'vault',
+            status: 'healthy',
+            lastUsedAt: 0,
+          },
+          {
+            accountId: 'acct_http_backup',
+            accessToken: createAccessToken('acct_http_backup'),
+            refreshToken: 'refresh-b',
+            expiresAt: Date.now() + 60_000,
+            source: 'vault',
+            status: 'healthy',
+            lastUsedAt: 0,
+          },
+        ],
+      })
+
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = (async () =>
+        new Response(testCase.body, {
+          status: testCase.status,
+          headers: { 'Content-Type': 'application/json' },
+        })) as unknown as typeof globalThis.fetch
+
+      try {
+        await expect(
+          createCodexFetch(
+            createAccessToken('acct_http_classification'),
+            `conv_precise_${testCase.status}`,
+          )('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          }),
+        ).rejects.toBeInstanceOf(testCase.expected)
+      } finally {
+        globalThis.fetch = originalFetch
+        resetCodexCacheContext()
+        resetCodexAccountPoolForTest()
+      }
     }
   })
 

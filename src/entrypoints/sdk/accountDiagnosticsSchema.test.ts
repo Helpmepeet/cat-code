@@ -29,6 +29,53 @@ describe('SDK account diagnostic schema', () => {
     )
   })
 
+  test('accepts the account.identity_mismatch code', () => {
+    const message: SDKAccountDiagnosticMessage = {
+      ...VALID_ACCOUNT_DIAGNOSTIC,
+      code: 'account.identity_mismatch',
+      severity: 'warning',
+      recoverable: true,
+    }
+    expect(SDKAccountDiagnosticMessageSchema().safeParse(message).success).toBe(
+      true,
+    )
+    expect(SDKMessageSchema().safeParse(message).success).toBe(true)
+  })
+
+  test('accepts Patch 5 account diagnostic codes', () => {
+    const patch5Codes = [
+      'account.manual_switch',
+      'account.active.reroll',
+      'account.lease.failover',
+      'account.usage.cap',
+      'account.usage.uncap',
+      'account.retry.exhausted',
+    ] as const
+
+    for (const code of patch5Codes) {
+      const message: SDKAccountDiagnosticMessage = {
+        ...VALID_ACCOUNT_DIAGNOSTIC,
+        code,
+        severity:
+          code === 'account.retry.exhausted'
+            ? 'error'
+            : code === 'account.usage.cap'
+              ? 'warning'
+              : 'info',
+        recoverable: code !== 'account.retry.exhausted',
+        from_account_ref:
+          code === 'account.active.reroll' || code === 'account.lease.failover'
+            ? 'previous-account'
+            : undefined,
+        account_ref: 'current-account',
+      }
+      expect(SDKAccountDiagnosticMessageSchema().safeParse(message).success).toBe(
+        true,
+      )
+      expect(SDKMessageSchema().safeParse(message).success).toBe(true)
+    }
+  })
+
   test('rejects diagnostics missing required SDK envelope fields', () => {
     const { uuid, session_id, ...withoutEnvelope } = VALID_ACCOUNT_DIAGNOSTIC
     expect(uuid).toBeDefined()

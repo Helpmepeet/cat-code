@@ -32,6 +32,8 @@ import { getDisplayPath } from '../../utils/file.js'
 import { SMALL_MASCOTS } from './mascots.js'
 import { Mascot } from './Mascot.js'
 import { AccountsPanel } from './AccountsPanel.js'
+import { getPoolStatus } from '../../services/api/codexAccountPool.js'
+import { getAPIProvider } from '../../utils/model/providers.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const ChannelsNoticeModule =
@@ -65,12 +67,17 @@ const ACCENT_COLOR = '#F9B2D7' // pink — borders, figlet, headers, bullets
 const TEXT_COLOR = '#FFFFFF' // white — body text
 
 export function LogoV2() {
-  const username = getGlobalConfig().oauthAccount?.displayName ?? ''
   const { columns } = useTerminalSize()
   const showSandboxStatus = SandboxManager.isSandboxingEnabled()
   const agent = useAppState(_temp)
   const effortValue = useAppState(_temp2)
   const config = getGlobalConfig()
+  const provider = getAPIProvider()
+  const codexPoolStatus = provider === 'openai' ? getPoolStatus() : null
+  const activeCodexAccount = codexPoolStatus?.accounts[codexPoolStatus.activeIndex]
+  const username = provider === 'openai'
+    ? activeCodexAccount?.alias ?? activeCodexAccount?.accountId.slice(0, 12) ?? ''
+    : config.oauthAccount?.displayName ?? ''
 
   const [announcement] = useState(() => {
     const announcements = getInitialSettings().companyAnnouncements
@@ -91,6 +98,10 @@ export function LogoV2() {
   const compactBorderTitle = color('startupAccent', userTheme)(' Cat Code ')
 
   const layoutMode = getLayoutMode(columns)
+
+  // Pick a small mascot, stable across re-renders
+  const [seed] = useState(() => Math.random())
+  const mascot = SMALL_MASCOTS[Math.floor(seed * SMALL_MASCOTS.length)]!
 
   // Post-border notices (same across all layouts)
   const PostBorderNotices = (
@@ -183,10 +194,6 @@ export function LogoV2() {
 
   // ── Full startup screen ──────────────────────────────────────────────────
   // Layout: figlet title (top) + two columns: [cat | info+accounts]
-
-  // Pick a small mascot, stable across re-renders
-  const [seed] = useState(() => Math.random())
-  const mascot = SMALL_MASCOTS[Math.floor(seed * SMALL_MASCOTS.length)]!
 
   const accent = ACCENT_COLOR
   const text = TEXT_COLOR

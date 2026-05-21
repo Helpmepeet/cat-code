@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-05-21
 
 ## Purpose
 
@@ -131,13 +131,18 @@ Use the closest test first:
 | Codex vault refresh and identity mismatch | `bun test src/services/api/codexTokenRefresh.test.ts` |
 | Codex usage display and usage hint behavior | `bun test src/services/api/codexUsage.test.ts` |
 | Codex adapter auth/cap errors and transport bridge | `bun test src/services/api/codex-fetch-adapter.test.ts` |
+| Structured account diagnostics envelope + redaction | `bun test src/services/api/accountDiagnostics.test.ts` |
+| `/accounts` behavior | `bun test src/commands/accounts/accounts.test.ts` |
+| `/switch-account` behavior | `bun test src/commands/switch-account/switch-account.test.ts` |
+| `/rename-account` behavior | `bun test src/commands/rename-account/rename-account.test.ts` |
+| `/delete-account` behavior | `bun test src/commands/delete-account/delete-account.test.ts` |
 | Full documented build | `bun run build:dev:full` |
 | Docs-only changes | `git diff --check -- docs/maps/auth-accounts-oauth.md` |
 
-There are no focused command/UI tests for `/login`, `/logout`, `/accounts`,
-`/switch-account`, `/delete-account`, or `/rename-account` in the current auth
-surface. For changes there, pair source inspection with a focused manual or
-integration check.
+There are focused tests for `/switch-account` and `/rename-account`. There are
+also focused tests for `/accounts` and `/delete-account`. There are still no
+focused tests for `/login` or `/logout`; for changes there, pair source
+inspection with a focused manual or integration check.
 
 ## Common Failure Routes
 

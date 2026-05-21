@@ -26,7 +26,7 @@ export const call: LocalCommandCall = async () => {
   }
 
   // ── Codex accounts ──
-  const { accounts, activeIndex, turnThreshold, initialized } = getPoolStatus()
+  const { accounts, activeIndex, initialized } = getPoolStatus()
   const leaseSnapshot = getCodexLeaseSnapshot()
   if (initialized && accounts.length > 0) {
     if (lines.length > 0) lines.push('', '---', '')
@@ -37,7 +37,6 @@ export const call: LocalCommandCall = async () => {
     if (snapshot.accounts.length > 0) {
       lines.push(formatPoolUsage(snapshot))
       lines.push('')
-      lines.push(`Turn threshold: ${turnThreshold}`)
       lines.push(
         `Pool: ${accounts.length} accounts (${accounts.filter((a) => a.status === 'healthy').length} healthy)`,
       )
@@ -72,7 +71,6 @@ export const call: LocalCommandCall = async () => {
       const dead = accounts.filter((a) => a.status === 'dead').length
 
       lines.push('')
-      lines.push(`Turn threshold: ${turnThreshold}`)
       lines.push(
         `Total: ${accounts.length} (${healthy} healthy${capped ? `, ${capped} capped` : ''}${dead ? `, ${dead} dead` : ''})`,
       )

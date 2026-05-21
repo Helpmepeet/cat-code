@@ -1,6 +1,6 @@
 # Codex Core Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-05-21
 
 ## Purpose
 
@@ -101,6 +101,7 @@ Use the closest test first:
 | Area | Entry point |
 |---|---|
 | Minimal core request builder | `bun test src/codex-core/request.test.ts` |
+| Core account resolution and refresh | `bun test src/codex-core/accounts.test.ts` |
 | Standalone core smoke | `bun run scripts/test-codex-core.ts --account <alias> --model <model> --prompt "hello"` |
 | Standalone two-turn continuation smoke | `pnpm tsx scripts/test-codex-core-conversation.ts --account <alias> --model <model>` |
 | Adapter translation and transport fallback | `bun test src/services/api/codex-fetch-adapter.test.ts` |

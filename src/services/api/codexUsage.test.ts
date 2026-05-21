@@ -1,13 +1,16 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
+  getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from './codexAccountPool.js'
 import {
   buildPoolUsageDisplayAccounts,
+  fetchPoolUsage,
   formatPoolUsage,
+  invalidateUsageCache,
   sortPoolUsageDisplayAccounts,
   type AccountUsage,
   type PoolUsageSnapshot,
@@ -24,7 +27,6 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
-    turnsUsed: overrides.turnsUsed ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -139,6 +141,141 @@ describe('codexUsage display helpers', () => {
       'backup2',
       'backup1',
     ])
+  })
+
+  test('fetchPoolUsage does not mutate account status (observational only)', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u1',
+          email: 'main@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: false,
+            limit_reached: true,
+            primary_window: {
+              used_percent: 100,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 0,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    try {
+      await fetchPoolUsage(true)
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const status = getPoolStatus()
+    expect(status.accounts.find((a) => a.accountId === 'main-account')?.status).toBe(
+      'healthy',
+    )
+  })
+
+  test('fetchPoolUsage does not move pool.activeIndex', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'backup-account', alias: 'backup' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u',
+          email: 'x@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 50,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 0,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    const beforeIndex = getPoolStatus().activeIndex
+    invalidateUsageCache()
+    try {
+      await fetchPoolUsage(true)
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    expect(getPoolStatus().activeIndex).toBe(beforeIndex)
+  })
+
+  test('fetchPoolUsage treats HTTP 401 as observational and does not refresh tokens', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+          source: 'vault',
+          vaultFilePath: '/tmp/main-account.json',
+        }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response('unauthorized', { status: 401 })
+    }) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    try {
+      const snapshot = await fetchPoolUsage(true)
+      expect(snapshot.accounts).toEqual([])
+      expect(snapshot.errors).toEqual([
+        { accountId: 'main-account', error: 'HTTP 401' },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    expect(fetchCount).toBe(1)
+    const status = getPoolStatus()
+    expect(status.accounts[status.activeIndex]?.accountId).toBe('main-account')
+    expect(status.accounts[status.activeIndex]?.status).toBe('healthy')
   })
 
   test('formats unavailable accounts instead of dropping them from /accounts', () => {
