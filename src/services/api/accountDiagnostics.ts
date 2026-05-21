@@ -22,6 +22,7 @@ const ACCOUNT_DIAGNOSTIC_CODES = [
   'account.lease.failover',
   'account.usage.cap',
   'account.usage.uncap',
+  'account.usage.warning',
   'account.retry.exhausted',
   'account.pool.unavailable',
   'quota.exhausted',
@@ -248,6 +249,15 @@ function sanitizeCounts(
   return Object.keys(sanitizedCounts).length > 0 ? sanitizedCounts : undefined
 }
 
+function sanitizeOpaqueAccountRef(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined
+  }
+  return /^codex#\d+$/.test(value) || /^claude#\d+$/.test(value)
+    ? value
+    : stableRedaction('account-ref', value)
+}
+
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
@@ -335,6 +345,18 @@ export function buildAccountDiagnosticBody(
   value: AccountDiagnosticEvent | Record<string, unknown>,
 ): AccountDiagnosticBody {
   const event = normalizeAccountDiagnosticEvent(value)
+
+  if (event.code === 'account.usage.warning') {
+    return {
+      version: 1,
+      code: event.code,
+      severity: event.severity,
+      provider: event.provider,
+      recoverable: event.recoverable,
+      counts: sanitizeCounts(event.counts),
+      account_ref: sanitizeOpaqueAccountRef(event.account_ref),
+    }
+  }
 
   return {
     version: 1,

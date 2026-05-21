@@ -7,6 +7,10 @@ import {
   type PoolAccount,
 } from './codexAccountPool.js'
 import {
+  _resetAccountDiagnosticStreamJsonHookForTesting,
+  installStreamJsonAccountDiagnosticHook,
+} from './accountDiagnostics.js'
+import {
   buildPoolUsageDisplayAccounts,
   fetchPoolUsage,
   formatPoolUsage,
@@ -73,6 +77,13 @@ function buildUsage(
 describe('codexUsage display helpers', () => {
   beforeEach(() => {
     resetCodexAccountPoolForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+    invalidateUsageCache()
+  })
+
+  afterEach(() => {
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+    invalidateUsageCache()
   })
 
   test('keeps pool accounts visible when usage data is missing for some of them', () => {
@@ -276,6 +287,184 @@ describe('codexUsage display helpers', () => {
     const status = getPoolStatus()
     expect(status.accounts[status.activeIndex]?.accountId).toBe('main-account')
     expect(status.accounts[status.activeIndex]?.status).toBe('healthy')
+  })
+
+  test('emits a sanitized usage warning at or above 80 percent and below cap', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'near-cap-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'near-cap-account', alias: 'primary' }),
+      ],
+    })
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'usage-warning-session',
+      createUuid: () => `usage-warning-${emitted.length + 1}`,
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'user-near-cap',
+          email: 'near-cap@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 80,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 10,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'system',
+        subtype: 'cat_code_account_diagnostic',
+        code: 'account.usage.warning',
+        severity: 'warning',
+        provider: 'openai',
+        recoverable: true,
+        account_ref: 'codex#1',
+        counts: {
+          total: 1,
+          healthy: 1,
+          capped: 0,
+          dead: 0,
+          locked: 0,
+        },
+      }),
+    ])
+    expect(JSON.stringify(emitted)).not.toContain('near-cap-account')
+    expect(JSON.stringify(emitted)).not.toContain('primary')
+    expect(JSON.stringify(emitted)).not.toContain('near-cap@example.com')
+  })
+
+  test('does not emit a usage warning below the near-cap threshold', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'below-threshold-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'below-threshold-account', alias: 'primary' }),
+      ],
+    })
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'usage-warning-session',
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'user-below-threshold',
+          email: 'below-threshold@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 79,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 10,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(emitted).toEqual([])
+  })
+
+  test('does not emit a usage warning when the account is already capped', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'capped-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'capped-account',
+          alias: 'primary',
+          status: 'capped',
+        }),
+      ],
+    })
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'usage-warning-session',
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'user-capped',
+          email: 'capped@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: false,
+            limit_reached: true,
+            primary_window: {
+              used_percent: 100,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 10,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(emitted).toEqual([])
   })
 
   test('formats unavailable accounts instead of dropping them from /accounts', () => {

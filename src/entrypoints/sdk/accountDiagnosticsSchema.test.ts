@@ -49,6 +49,7 @@ describe('SDK account diagnostic schema', () => {
       'account.lease.failover',
       'account.usage.cap',
       'account.usage.uncap',
+      'account.usage.warning',
       'account.retry.exhausted',
     ] as const
 
@@ -59,7 +60,7 @@ describe('SDK account diagnostic schema', () => {
         severity:
           code === 'account.retry.exhausted'
             ? 'error'
-            : code === 'account.usage.cap'
+            : code === 'account.usage.cap' || code === 'account.usage.warning'
               ? 'warning'
               : 'info',
         recoverable: code !== 'account.retry.exhausted',
