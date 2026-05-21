@@ -180,8 +180,8 @@ export async function initAccountPool(): Promise<void> {
       void touchAll().catch(() => {})
     }
 
-    // Fire-and-forget: fetch initial usage data for scoring
-    if (pool.accounts.length > 1) {
+    // Fire-and-forget: fetch initial usage data for scoring and diagnostics.
+    if (pool.accounts.length > 0) {
       import('./codexUsage.js').then(({ fetchPoolUsage }) => {
         void fetchPoolUsage({ updateRoutingHints: true })
       }).catch(() => {})

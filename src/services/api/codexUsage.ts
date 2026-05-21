@@ -152,6 +152,7 @@ export async function fetchPoolUsage(
       : forceRefreshOrOptions
   const forceRefresh = options.forceRefresh === true
   if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
+    emitCachedUsageWarningsForActiveSink()
     return cachedSnapshot
   }
 
@@ -198,6 +199,13 @@ export async function fetchPoolUsage(
   }
   cachedSnapshot = snapshot
   return snapshot
+}
+
+export function emitCachedUsageWarningsForActiveSink(): void {
+  if (!cachedSnapshot || Date.now() - cachedSnapshot.fetchedAt >= CACHE_TTL_MS) {
+    return
+  }
+  emitUsageWarnings(cachedSnapshot.accounts)
 }
 
 /**

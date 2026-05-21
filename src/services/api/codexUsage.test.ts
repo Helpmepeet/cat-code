@@ -12,6 +12,7 @@ import {
 } from './accountDiagnostics.js'
 import {
   buildPoolUsageDisplayAccounts,
+  emitCachedUsageWarningsForActiveSink,
   fetchPoolUsage,
   formatPoolUsage,
   invalidateUsageCache,
@@ -359,6 +360,75 @@ describe('codexUsage display helpers', () => {
     expect(JSON.stringify(emitted)).not.toContain('near-cap-account')
     expect(JSON.stringify(emitted)).not.toContain('primary')
     expect(JSON.stringify(emitted)).not.toContain('near-cap@example.com')
+  })
+
+  test('emits a cached usage warning after a stream-json sink is installed without refetching', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'cached-near-cap-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'cached-near-cap-account', alias: 'primary' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response(
+        JSON.stringify({
+          user_id: 'user-cached-near-cap',
+          email: 'cached-near-cap@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 80,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 10,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    const emitted: unknown[] = []
+    try {
+      await fetchPoolUsage(true)
+      installStreamJsonAccountDiagnosticHook({
+        emit: message => {
+          emitted.push(message)
+        },
+        getSessionId: () => 'cached-usage-warning-session',
+        createUuid: () => `cached-usage-warning-${emitted.length + 1}`,
+      })
+
+      emitCachedUsageWarningsForActiveSink()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(fetchCount).toBe(1)
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        code: 'account.usage.warning',
+        severity: 'warning',
+        provider: 'openai',
+        recoverable: true,
+        account_ref: 'codex#1',
+      }),
+    ])
+    expect(JSON.stringify(emitted)).not.toContain('cached-near-cap-account')
+    expect(JSON.stringify(emitted)).not.toContain('primary')
+    expect(JSON.stringify(emitted)).not.toContain('cached-near-cap@example.com')
   })
 
   test('does not emit a usage warning below the near-cap threshold', async () => {
