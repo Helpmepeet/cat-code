@@ -34,7 +34,13 @@ import {
 } from './codexAccountPool.js'
 import { getAnthropicClient } from './client.js'
 import { getClaudeAIOAuthTokens } from '../../utils/auth.js'
-import { CannotRetryError, withRetry } from './withRetry.js'
+import { _resetKeepAliveForTesting } from '../../utils/proxy.js'
+import {
+  CannotRetryError,
+  _resetCodexNetworkOutageDelaysForTest,
+  _setCodexNetworkOutageDelaysForTest,
+  withRetry,
+} from './withRetry.js'
 
 function buildCodexToken(accountId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
@@ -133,6 +139,8 @@ describe('account recovery diagnostics', () => {
     resetClaudeAccountPoolForTest()
     getClaudeAIOAuthTokens.cache?.clear?.()
     setSessionProvider(null)
+    _resetKeepAliveForTesting()
+    _resetCodexNetworkOutageDelaysForTest()
     if (originalAnthropicApiKey === undefined) {
       delete process.env.ANTHROPIC_API_KEY
     } else {
@@ -393,6 +401,121 @@ describe('account recovery diagnostics', () => {
     const codes = diagnostics.map(diagnostic => diagnostic.code)
     expect(codes).toContain('account.transient_failure')
     expect(codes).toContain('account.failover.succeeded')
+  })
+
+  test('yields an api_retry system message before retrying a Codex connection-error failover', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-one',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-one', alias: 'main' }),
+        buildPoolAccount({ accountId: 'account-two', alias: 'backup' }),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'subagent-backoff',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Backoff',
+      accountId: 'account-one',
+    })
+
+    let attempts = 0
+    const yields: Array<unknown> = []
+    for await (const message of withRetry(
+      async () => ({}) as never,
+      async () => {
+        attempts += 1
+        if (attempts <= 2) {
+          throw new APIConnectionError({ message: 'Connection error.' })
+        }
+        return getCodexLeaseForOwner('subagent-backoff')?.accountId
+      },
+      {
+        maxRetries: 2,
+        model: 'gpt-5.4',
+        thinkingConfig: { type: 'disabled' },
+        ownerId: 'subagent-backoff',
+        isCodexRequest: true,
+      } as Parameters<typeof withRetry>[2],
+    )) {
+      yields.push(message)
+    }
+
+    expect(attempts).toBe(3)
+    // The failover path must surface a retry message so the UI sees the wait
+    // instead of a silent reconnect attempt.
+    const apiErrorYields = yields.filter(
+      message =>
+        (message as { type?: string; subtype?: string }).type === 'system' &&
+        (message as { subtype?: string }).subtype === 'api_error',
+    )
+    expect(apiErrorYields.length).toBeGreaterThanOrEqual(1)
+    expect(
+      (apiErrorYields[0] as { retryInMs: number }).retryInMs,
+    ).toBeGreaterThan(0)
+  })
+
+  test('treats repeated APIConnectionError across distinct Codex accounts as a network outage', async () => {
+    _setCodexNetworkOutageDelaysForTest(10, 20)
+    try {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'account-one',
+        accounts: [
+          buildPoolAccount({ accountId: 'account-one', alias: 'main' }),
+          buildPoolAccount({ accountId: 'account-two', alias: 'backup' }),
+        ],
+      })
+      seedCodexLeaseForTest({
+        ownerId: 'subagent-outage',
+        ownerType: 'subagent',
+        ownerLabel: 'Subagent Outage',
+        accountId: 'account-one',
+      })
+
+      let attempts = 0
+      // Attempt 1: lease=account-one fails → normal retry (attempt < 2)
+      // Attempt 2: lease=account-one fails → failover-block: set={one}, size=1, normal lease failover to account-two
+      // Attempt 3: lease=account-two fails → failover-block: set={one,two}, size=2, NETWORK OUTAGE path
+      // Attempt 4: lease=account-two succeeds
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          attempts += 1
+          if (attempts <= 3) {
+            throw new APIConnectionError({ message: 'Connection error.' })
+          }
+          return getCodexLeaseForOwner('subagent-outage')?.accountId
+        },
+        {
+          maxRetries: 4,
+          model: 'gpt-5.4',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'subagent-outage',
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // consume retry messages
+      }
+
+      expect(attempts).toBe(4)
+      // Both accounts that hit the connection error stay healthy — this isn't
+      // an account problem.
+      for (const accountId of ['account-one', 'account-two']) {
+        expect(
+          getPoolStatus().accounts.find(account => account.accountId === accountId)
+            ?.status,
+        ).toBe('healthy')
+      }
+      const outageReasons = diagnostics
+        .filter(diagnostic => diagnostic.code === 'account.transient_failure')
+        .map(diagnostic => diagnostic.reason as string | undefined)
+      expect(
+        outageReasons.some(reason =>
+          reason?.includes('suspected network outage'),
+        ),
+      ).toBe(true)
+    } finally {
+      _resetCodexNetworkOutageDelaysForTest()
+    }
   })
 
 

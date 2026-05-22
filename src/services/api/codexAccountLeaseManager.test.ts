@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { APIConnectionError } from '@anthropic-ai/sdk'
 
 import { setSessionProvider } from '../../bootstrap/state.js'
@@ -15,7 +15,13 @@ import {
 } from './codexAccountPool.js'
 import type { PoolAccount } from './codexAccountPool.js'
 import { fetchPoolUsage, invalidateUsageCache } from './codexUsage.js'
-import { CannotRetryError, withRetry } from './withRetry.js'
+import {
+  CannotRetryError,
+  _resetCodexNetworkOutageDelaysForTest,
+  _setCodexNetworkOutageDelaysForTest,
+  withRetry,
+} from './withRetry.js'
+import { _resetKeepAliveForTesting } from '../../utils/proxy.js'
 import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
@@ -65,6 +71,11 @@ describe('codexAccountLeaseManager', () => {
     invalidateUsageCache()
     moduleUnderTest.resetCodexLeaseManagerForTest()
     _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  afterEach(() => {
+    _resetCodexNetworkOutageDelaysForTest()
+    _resetKeepAliveForTesting()
   })
 
   test('stores leases and accepts follow-main strategy settings', () => {
@@ -1916,63 +1927,68 @@ describe('codexAccountLeaseManager', () => {
   })
 
   test('withRetry bounds repeated Codex connection-error failovers across accounts', async () => {
-    const emitted: unknown[] = []
-    installStreamJsonAccountDiagnosticHook({
-      emit: message => {
-        emitted.push(message)
-      },
-      getSessionId: () => 'connection-bound-session',
-      createUuid: () => `connection-bound-${emitted.length + 1}`,
-    })
-
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'account-a',
-      accounts: [
-        buildPoolAccount({ accountId: 'account-a', alias: 'a' }),
-        buildPoolAccount({ accountId: 'account-b', alias: 'b' }),
-        buildPoolAccount({ accountId: 'account-c', alias: 'c' }),
-      ],
-    })
-    moduleUnderTest.seedCodexLeaseForTest({
-      ownerId: 'main-thread',
-      ownerType: 'main',
-      ownerLabel: 'Main thread',
-      accountId: 'account-a',
-      strategy: 'follow-main',
-    })
-
-    let attempts = 0
-    let thrown: unknown
+    _setCodexNetworkOutageDelaysForTest(10, 20)
     try {
-      for await (const _message of withRetry(
-        async () => ({}) as never,
-        async () => {
-          attempts += 1
-          throw new APIConnectionError({ message: `connection failed ${attempts}` })
+      const emitted: unknown[] = []
+      installStreamJsonAccountDiagnosticHook({
+        emit: message => {
+          emitted.push(message)
         },
-        {
-          maxRetries: 2,
-          model: 'gpt-5.4',
-          thinkingConfig: { type: 'disabled' },
-          ownerId: 'main-thread',
-          isCodexRequest: true,
-        } as Parameters<typeof withRetry>[2],
-      )) {
-        // consume retry messages if any
-      }
-    } catch (error) {
-      thrown = error
-    }
+        getSessionId: () => 'connection-bound-session',
+        createUuid: () => `connection-bound-${emitted.length + 1}`,
+      })
 
-    expect(thrown).toBeInstanceOf(CannotRetryError)
-    expect(attempts).toBeLessThanOrEqual(4)
-    expect(
-      emitted.some(
-        message =>
-          (message as { code?: string }).code === 'account.retry.exhausted' &&
-          (message as { recoverable?: boolean }).recoverable === false,
-      ),
-    ).toBe(true)
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'account-a',
+        accounts: [
+          buildPoolAccount({ accountId: 'account-a', alias: 'a' }),
+          buildPoolAccount({ accountId: 'account-b', alias: 'b' }),
+          buildPoolAccount({ accountId: 'account-c', alias: 'c' }),
+        ],
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+        accountId: 'account-a',
+        strategy: 'follow-main',
+      })
+
+      let attempts = 0
+      let thrown: unknown
+      try {
+        for await (const _message of withRetry(
+          async () => ({}) as never,
+          async () => {
+            attempts += 1
+            throw new APIConnectionError({ message: `connection failed ${attempts}` })
+          },
+          {
+            maxRetries: 2,
+            model: 'gpt-5.4',
+            thinkingConfig: { type: 'disabled' },
+            ownerId: 'main-thread',
+            isCodexRequest: true,
+          } as Parameters<typeof withRetry>[2],
+        )) {
+          // consume retry messages if any
+        }
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(CannotRetryError)
+      expect(attempts).toBeLessThanOrEqual(4)
+      expect(
+        emitted.some(
+          message =>
+            (message as { code?: string }).code === 'account.retry.exhausted' &&
+            (message as { recoverable?: boolean }).recoverable === false,
+        ),
+      ).toBe(true)
+    } finally {
+      _resetCodexNetworkOutageDelaysForTest()
+    }
   })
 
   test('releaseCodexLease does not change pool.activeIndex', () => {

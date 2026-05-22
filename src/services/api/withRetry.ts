@@ -89,6 +89,24 @@ const DEFAULT_MAX_RETRIES = 5
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
 export const BASE_DELAY_MS = 500
+// Network-outage backoff window when ≥2 distinct accounts hit
+// APIConnectionError in a single retry budget. Long enough for a flaky
+// network to come back; short enough that a recovering user isn't stuck.
+let codexNetworkOutageMinDelayMs = 5_000
+let codexNetworkOutageMaxDelayMs = 10_000
+
+export function _setCodexNetworkOutageDelaysForTest(
+  minMs: number,
+  maxMs: number,
+): void {
+  codexNetworkOutageMinDelayMs = minMs
+  codexNetworkOutageMaxDelayMs = maxMs
+}
+
+export function _resetCodexNetworkOutageDelaysForTest(): void {
+  codexNetworkOutageMinDelayMs = 5_000
+  codexNetworkOutageMaxDelayMs = 10_000
+}
 
 type AccountStatusCounts = Record<string, number>
 
@@ -311,6 +329,11 @@ export async function* withRetry<T>(
   // Cap those shortcuts to the configured retry budget so a bad 429/auth
   // classification cannot rotate leases indefinitely inside one call.
   const maxCodexLeaseFailovers = Math.max(1, maxRetries)
+  // Track distinct accounts that have hit APIConnectionError inside this
+  // retry budget. Two distinct accounts failing the same way in quick
+  // succession is the signal that the *network* is down, not the accounts.
+  const codexConnectionFailureAccounts = new Set<string>()
+  let codexNetworkOutageHandled = false
 
   const throwRetryExhausted = (
     originalError: unknown,
@@ -669,6 +692,28 @@ export async function* withRetry<T>(
         }
       }
 
+      // Network-outage tracking: record every Codex APIConnectionError, even
+      // on attempt 1, so the outage trigger inside the `attempt >= 2`
+      // failover block below has the full picture. The repro pattern from
+      // the network-recovery bug report (user returns from idle, very first
+      // prompt fails) hits this code on attempt 1 — recording attempt-1
+      // failures lets a single follow-up attempt on a different account
+      // trip the outage detector instead of needing 2+ failovers.
+      if (
+        error instanceof APIConnectionError &&
+        options.isCodexRequest === true &&
+        isPoolActive()
+      ) {
+        const trackingLease =
+          getCurrentCodexLease() ??
+          (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
+        const trackingAccountId =
+          trackingLease?.accountId ?? getActiveAccount()?.accountId
+        if (trackingAccountId) {
+          codexConnectionFailureAccounts.add(trackingAccountId)
+        }
+      }
+
       // Codex connection-error failover: after two consecutive connection
       // errors on a confirmed Codex request, try a different pooled account
       // without converting the failed account into usage-cap state.
@@ -691,6 +736,46 @@ export async function* withRetry<T>(
             reason: error.message,
             model: retryContext.model,
           })
+
+          // Network-outage detection: if two distinct accounts have hit
+          // APIConnectionError in this retry budget, rotating leases is
+          // futile — the network itself is down. Recycle the HTTPS keep-alive
+          // pool (the OS may have invalidated the underlying sockets while
+          // the connection was down) and take one longer backoff so a
+          // recovering network has time to come back without burning the
+          // remaining retry budget.
+          if (
+            codexConnectionFailureAccounts.size >= 2 &&
+            !codexNetworkOutageHandled
+          ) {
+            codexNetworkOutageHandled = true
+            disableKeepAlive()
+            emitCodexDiagnostic({
+              code: 'account.transient_failure',
+              severity: 'warning',
+              recoverable: true,
+              account_ref: accountId,
+              reason:
+                'suspected network outage — multiple accounts hit connection errors in quick succession',
+              model: retryContext.model,
+            })
+            const outageDelayMs =
+              codexNetworkOutageMinDelayMs +
+              Math.random() *
+                Math.max(
+                  0,
+                  codexNetworkOutageMaxDelayMs - codexNetworkOutageMinDelayMs,
+                )
+            logForDebugging(
+              `[codex-pool] Suspected network outage after ${codexConnectionFailureAccounts.size} accounts failed with connection errors; recycling keep-alive and waiting ${Math.round(outageDelayMs)}ms`,
+            )
+            yield createSystemAPIErrorMessage(error, outageDelayMs, attempt, maxRetries)
+            await sleep(outageDelayMs, options.signal, { abortError })
+            client = null
+            continue
+          }
+
+          const failoverBackoffMs = getRetryDelay(attempt, null)
           if (currentLease) {
             try {
               assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
@@ -712,6 +797,8 @@ export async function* withRetry<T>(
               options.onCodexAccountSwitch?.()
               client = null
               noteCodexLeaseFailover()
+              yield createSystemAPIErrorMessage(error, failoverBackoffMs, attempt, maxRetries)
+              await sleep(failoverBackoffMs, options.signal, { abortError })
               continue
             } catch (failoverError) {
               if (failoverError instanceof CannotRetryError) {
@@ -741,6 +828,8 @@ export async function* withRetry<T>(
               )
               options.onCodexAccountSwitch?.()
               client = null
+              yield createSystemAPIErrorMessage(error, failoverBackoffMs, attempt, maxRetries)
+              await sleep(failoverBackoffMs, options.signal, { abortError })
               continue
             }
             emitCodexDiagnostic({

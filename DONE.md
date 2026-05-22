@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 22 May 2026
+
+70. Fixed Codex network-recovery stuck state — when a transient outage caused multiple distinct accounts to hit `APIConnectionError` in one retry budget, Cat Code used to burn all six attempts in ~800 ms and stay broken until exit + `/resume`. Now each connection-error failover sleeps with exponential backoff (~5–15 s total budget) and yields a `system / api_error` message so the UI shows the wait; when ≥2 distinct accounts fail with `APIConnectionError`, a one-shot "suspected network outage" path emits a diagnostic, recycles the keep-alive socket pool, and applies a jittered 5–10 s recovery wait without burning the lease-failover budget. Attempt-1 connection errors count toward the detector. Bug report `docs/reports/2026-05-20-network-recovery-stuck-bug-report.md` now closed against current code.
+
 ### 21 May 2026
 
 68. Finished the Open Design Cat Code diagnostic UX follow-up — Cat Code now emits sanitized near-cap usage warnings reliably even when usage was cached before stream-json setup, Open Design pre-flights Cat Code run submission for unrecoverable diagnostics, surfaces the narrow `account.usage.warning` inline note once per run session per tab, keeps recoverable routing log-only, bounds warning throttles, preserves the no-account-picker boundary, and documents the aggregate-counts/usage-warning carve-outs.

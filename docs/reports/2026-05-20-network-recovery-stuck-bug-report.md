@@ -94,28 +94,28 @@ A minimum viable fix is just #1 — it makes the 6-attempt budget span ~30 s ins
 
 ## Status / Follow-up
 
-**Do not patch this directly yet.** The account-switching implementation plan at `docs/plans/2026-05-20-account-switching-fixes-implementation-plan.md` already owns `src/services/api/withRetry.ts` under two of its patches:
+**Fixed on 2026-05-22.** The account-switching implementation plan at `docs/plans/2026-05-20-account-switching-fixes-implementation-plan.md` landed all 7 patches by 2026-05-21, including Patch 5's failover budget cap. The remaining three asks in this report (backoff before each `continue`, network-down detection, UI-visible retry yield) were not covered by Patch 5 and were implemented as a follow-up directly against the Codex connection-error failover block in `withRetry.ts`.
 
-- **Patch 2** (lease invariant / persistence) edits `withRetry.ts` for main-thread/global failover handling.
-- **Patch 5** (retry & error-classification hardening) explicitly aims to "bound pathological retry/failover loops" — the same surface as this bug. Its §16.2 test mapping even says "repeated connection errors across multiple healthy accounts; assert bounded failovers and clear terminal error", which is exactly this scenario.
-
-Patches 2 and 5 are gated behind earlier patches in the wave diagram, so they are likely still in flight when this report was written.
-
-### Action when Patches 2 and 5 land
+### Action when Patches 2 and 5 land (resolved 2026-05-22)
 
 1. Re-read `withRetry.ts` lines 599-674 (or wherever the codex connection-error failover block ends up after the edits).
 2. Verify the three proposed fixes above against the new code:
-   - [ ] Does each `continue` in the failover block now sleep with backoff before retrying?
-   - [ ] Is the 6-attempt budget actually bounded in wall-clock time (target: ≥10 s, not ~1 s)?
-   - [ ] Is "network is down" distinguishable from "account is bad" — e.g. does the code stop rotating leases when N consecutive failovers all fail with `APIConnectionError`?
-   - [ ] Is the user shown a "waiting for network" indicator instead of a bare `Connection error.`?
-3. If all four are satisfied: re-run the repro above to confirm in practice, then close this report.
+   - [x] Does each `continue` in the failover block now sleep with backoff before retrying? — Both `continue` paths in the connection-error failover block now call `yield createSystemAPIErrorMessage(...)` + `await sleep(getRetryDelay(attempt, null), ...)` before continuing.
+   - [x] Is the 6-attempt budget actually bounded in wall-clock time (target: ≥10 s, not ~1 s)? — With `BASE_DELAY_MS = 500` and exponential backoff, the budget now spans ~5–15 s instead of ~800 ms.
+   - [x] Is "network is down" distinguishable from "account is bad" — e.g. does the code stop rotating leases when N consecutive failovers all fail with `APIConnectionError`? — When ≥2 distinct accounts hit `APIConnectionError` inside one retry budget, the failover block enters a one-shot "suspected network outage" path: `disableKeepAlive()` recycles the keep-alive pool, a 5–10 s backoff fires, and the retry continues without burning the lease failover budget.
+   - [x] Is the user shown a "waiting for network" indicator instead of a bare `Connection error.`? — Each connection-error retry now `yield`s a `system / api_error` message with `retryInMs` set, which surfaces through the same UI path that existing 429/529 retries use.
+3. ✅ All four satisfied. Re-run the live repro below to confirm in practice, then close this report.
 4. If any are unsatisfied: file the delta as a follow-up patch on top of Patch 5 rather than reopening Patch 5.
 
-### Re-verification subagent prompt
+### Implementation references
 
-When ready, spawn a verification subagent with roughly:
+- `src/services/api/withRetry.ts` Codex connection-error failover block (now at lines 691–814) — added backoff before each `continue`, added `codexConnectionFailureAccounts` set + `codexNetworkOutageHandled` flag for the outage-detection arm, added `disableKeepAlive()` call for socket recycling.
+- `src/services/api/withRetry.ts` — added module-level test helpers `_setCodexNetworkOutageDelaysForTest` / `_resetCodexNetworkOutageDelaysForTest` so tests can stub the 5–10 s outage window down to ~10 ms.
+- `src/services/api/accountRecoveryDiagnostics.test.ts` — added two new tests:
+  - asserts an `api_error` system message with `retryInMs > 0` is yielded before a failover retry,
+  - asserts the network-outage path triggers when two distinct accounts fail with `APIConnectionError` and that the failing accounts stay `healthy`.
+- `src/services/api/codexAccountLeaseManager.test.ts` — updated the existing "withRetry bounds repeated Codex connection-error failovers across accounts" test to stub the outage delay (otherwise the test correctly hits the new outage backoff and times out, proving the fix works as designed).
 
-> Re-verify the bug at `docs/reports/2026-05-20-network-recovery-stuck-bug-report.md` against current `src/services/api/withRetry.ts`. Specifically check the four bullets in the "Action when Patches 2 and 5 land" section. Report which still hold and which were fixed by Patches 2/5.
+### Manual live re-verification — still pending
 
-The original verification of this report (timing burst ~800 ms, 6 failed submits on pid 26801, source claim about `continue` at 636/662 skipping `await sleep`) was done by a subagent on 2026-05-20 and is captured in the body of this report. A second verification pass is required after Patch 5 lands.
+The pfctl-based repro in §"Repro" above should be run on a real session before fully closing this report. Bun tests cover the unit-level behavior; the original symptom was a multi-process failure mode (stale keep-alive sockets persisting across a real network drop).
