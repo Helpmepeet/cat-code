@@ -8,9 +8,15 @@
 
 ## Phase 0
 
+### 23 May 2026
+
+71. Fixed `/insights` misrouting to Codex/OpenAI — when the user's `lastUsedProvider` was `openai`, the Claude-only facet extraction and section insight `sideQuery` calls were routed through the Codex adapter (model remapped to `gpt-5.5`), every call returned `null`, and `extractMissingFacetsForInsights` threw "Could not extract any usage insight facets." `SideQueryOptions` now accepts an opt-in `provider` override threaded into `resolveRequestProvider`; both `/insights` call sites pin to `firstParty` so a user's OpenAI session selection no longer breaks a Claude-specific pipeline. GPT-prefixed models still route to OpenAI regardless of the override.
+
 ### 22 May 2026
 
 70. Fixed Codex network-recovery stuck state — when a transient outage caused multiple distinct accounts to hit `APIConnectionError` in one retry budget, Cat Code used to burn all six attempts in ~800 ms and stay broken until exit + `/resume`. Now each connection-error failover sleeps with exponential backoff (~5–15 s total budget) and yields a `system / api_error` message so the UI shows the wait; when ≥2 distinct accounts fail with `APIConnectionError`, a one-shot "suspected network outage" path emits a diagnostic, recycles the keep-alive socket pool, and applies a jittered 5–10 s recovery wait without burning the lease-failover budget. Attempt-1 connection errors count toward the detector. Bug report `docs/reports/2026-05-20-network-recovery-stuck-bug-report.md` now closed against current code.
+
+69. Verified the GPT `apply_patch` UX improvements plan is resolved — the "2–4 attempts for a simple edit" failure no longer reproduces; `FilePatchTool` is live on the OpenAI provider path with canonical Codex V4A semantics covering all five root causes (BOF prepend, EOF append, anchor-out-of-order, changed-on-disk detection over a hard read-gate, full-hunk-fingerprint ambiguity rejection, remediation hints), plus beyond-plan fuzzy-match tiers and `@@` scope-hint disambiguation. Implementation diverged from the proposed `>>>BOF<<<` sentinel; only the measurement scaffolding (Phase 0 failure telemetry and the eval-suite driver for the existing 12 fixtures) remains unbuilt and is non-blocking. Plan doc updated with a status header.
 
 ### 21 May 2026
 

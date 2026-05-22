@@ -18,7 +18,7 @@ import { EMPTY_USAGE } from '../services/api/emptyUsage.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
 import { computeFingerprint } from './fingerprint.js'
 import { normalizeModelStringForAPI } from './model/model.js'
-import { resolveRequestProvider } from './model/providers.js'
+import { type APIProvider, resolveRequestProvider } from './model/providers.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -63,6 +63,17 @@ export type SideQueryOptions = {
   stop_sequences?: string[]
   /** Attributes this call in tengu_api_success for COGS joining against reporting.sampling_calls. */
   querySource: QuerySource
+  /**
+   * Optional provider override. When set, this call ignores the session/global
+   * provider preference (`getAPIProvider()`) and routes to the given provider.
+   * Use when the prompt or tool schema is provider-specific (e.g. Claude tool
+   * use with a forced `tool_choice`) and must not be misrouted to Codex/OpenAI
+   * just because the user last selected an OpenAI model.
+   *
+   * GPT-prefixed model IDs still route to OpenAI regardless of this override
+   * (existing `getProviderForModel` behavior).
+   */
+  provider?: APIProvider
 }
 
 /**
@@ -123,7 +134,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     stop_sequences,
   } = opts
 
-  const provider = resolveRequestProvider(model)
+  const provider = resolveRequestProvider(model, opts.provider)
   const client = await getAnthropicClient({
     maxRetries,
     model,
