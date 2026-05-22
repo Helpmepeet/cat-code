@@ -10,6 +10,8 @@
 
 ### 23 May 2026
 
+72. Honored `provider: 'firstParty'` overrides in `getAnthropicClient` — a session-level `isCodexSubscriber()` check was routing **every** `getAnthropicClient` call through the Codex fetch adapter whenever the user's session provider was openai, even when the caller (e.g. /insights facet extraction after entry 71) explicitly pinned the request to `firstParty`. The Codex adapter then complained "OpenAI request missing provider-native instruction assembly payload" and bubbled it up as a generic "Connection error", so /insights still showed "No data" for facet-derived charts (`Primary Friction Types`, `Inferred Satisfaction`, `Outcomes`, `What Helped Most`). The Codex fallback now requires `resolvedProvider === 'openai'` in addition to `isCodexSubscriber()`, so firstParty-pinned requests reach the Anthropic client path correctly.
+
 71. Fixed `/insights` misrouting to Codex/OpenAI — when the user's `lastUsedProvider` was `openai`, the Claude-only facet extraction and section insight `sideQuery` calls were routed through the Codex adapter (model remapped to `gpt-5.5`), every call returned `null`, and `extractMissingFacetsForInsights` threw "Could not extract any usage insight facets." `SideQueryOptions` now accepts an opt-in `provider` override threaded into `resolveRequestProvider`; both `/insights` call sites pin to `firstParty` so a user's OpenAI session selection no longer breaks a Claude-specific pipeline. GPT-prefixed models still route to OpenAI regardless of the override.
 
 ### 22 May 2026
