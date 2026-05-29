@@ -1,7 +1,12 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
+import {
+  _resetAccountDiagnosticStreamJsonHookForTesting,
+  emitAccountDiagnostic,
+  installStreamJsonAccountDiagnosticHook,
+} from '../services/api/accountDiagnostics.js'
 import { AppSessionController } from './AppSessionController.js'
 import type {
   AppPermissionResponse,
@@ -37,6 +42,10 @@ function createResultMessage(result: string): SDKMessage {
 }
 
 describe('AppSessionController', () => {
+  afterEach(() => {
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
   test('emits goal snapshot and message events for a normal turn', async () => {
     const goal: ThreadGoal = {
       threadId: 'session-1',
@@ -130,6 +139,85 @@ describe('AppSessionController', () => {
       'message',
     ])
     expect(controller.getPendingPermissionRequests()).toEqual([])
+  })
+
+  test('emits account diagnostics as message events only for the active submit turn', async () => {
+    const goal: ThreadGoal = {
+      threadId: 'session-diagnostic',
+      goalId: 'goal-diagnostic',
+      objective: 'Surface account diagnostics in the dedicated app',
+      status: 'active',
+      tokenBudget: 1000,
+      tokensUsed: 10,
+      timeUsedSeconds: 2,
+      createdAtMs: 100,
+      updatedAtMs: 200,
+    }
+    const diagnostic = {
+      code: 'account.transient_failure' as const,
+      severity: 'warning' as const,
+      provider: 'openai' as const,
+      recoverable: true,
+      reason: 'temporary failure',
+    }
+    const outerSinkMessages: SDKMessage[] = []
+    let resolveLateDiagnostic: (() => void) | undefined
+    const lateDiagnosticEmitted = new Promise<void>(resolve => {
+      resolveLateDiagnostic = resolve
+    })
+
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        outerSinkMessages.push(message)
+      },
+      getSessionId: () => 'outer-session',
+      createUuid: () => `outer-${outerSinkMessages.length + 1}`,
+    })
+
+    const controller = new AppSessionController({
+      async *runTurn() {
+        emitAccountDiagnostic(diagnostic)
+        setTimeout(() => {
+          emitAccountDiagnostic(diagnostic)
+          resolveLateDiagnostic?.()
+        }, 0)
+        yield createAssistantMessage('hello from runtime')
+      },
+    })
+    const events: AppSessionEvent[] = []
+
+    controller.subscribe(event => {
+      events.push(event)
+    })
+
+    await controller.submit('hello', { goalSnapshot: goal })
+
+    expect(outerSinkMessages).toHaveLength(0)
+    expect(events.map(event => event.type)).toEqual([
+      'goal.snapshot',
+      'message',
+      'message',
+    ])
+    expect(events[1]).toMatchObject({
+      type: 'message',
+      message: {
+        type: 'system',
+        subtype: 'cat_code_account_diagnostic',
+        session_id: 'session-diagnostic',
+        code: 'account.transient_failure',
+      },
+    })
+
+    const eventCountAfterSubmit = events.length
+    await lateDiagnosticEmitted
+
+    expect(events).toHaveLength(eventCountAfterSubmit)
+    expect(outerSinkMessages).toHaveLength(1)
+
+    emitAccountDiagnostic(diagnostic)
+
+    expect(events).toHaveLength(eventCountAfterSubmit)
+    expect(outerSinkMessages).toHaveLength(2)
   })
 
   test('abort denies pending permissions and emits abort status updates', async () => {

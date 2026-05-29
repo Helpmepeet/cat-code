@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-05-21
 
 ## Purpose
 
@@ -93,8 +93,10 @@ Codex client.
 |---|---|---|---|
 | SDK/system-event schema | `src/entrypoints/sdk/coreSchemas.ts:SDKAccountDiagnosticMessageSchema` | `src/entrypoints/sdk/coreTypes.generated.ts`, `src/entrypoints/sdk/accountDiagnosticsSchema.test.ts` | Durable cross-process contract is `type: "system"`, `subtype: "cat_code_account_diagnostic"`, `version: 1`, plus `code`, `severity`, `provider`, and `recoverable`. Downstream remediation can key off those required fields alone. |
 | Sanitized emission and stderr fallback | `src/services/api/accountDiagnostics.ts` | `src/services/api/accountDiagnostics.test.ts` | `buildAccountDiagnosticBody()` redacts aliases, emails, account IDs, tokens, API keys, auth headers, and serialized vault records before emitting stream-json or `CAT_CODE_DIAGNOSTIC ...` stderr fallback lines. |
+| Public optional fields | `src/services/api/accountDiagnostics.ts` | `/Users/pt/open-design/apps/daemon/src/claude-diagnostics.ts`, `/Users/pt/open-design/packages/contracts/src/api/connectionTest.ts` | Aggregate `counts` (`total`, `healthy`, `capped`, `dead`, `locked`) are the stable optional public field Open Design consumes for backend-readiness display. Other optional fields are support-log-only unless a future boundary review says otherwise. No public or user-facing diagnostic field may carry identity-bearing account IDs, aliases, emails, or tokens. |
 | Route-selection and pre-send diagnostics | `src/services/api/client.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/claudeAccountPool.ts` | `getAnthropicClient()` emits `account.route.selected`, `model.provider_mismatch`, and unrecoverable pool/auth diagnostics before a doomed request is sent. |
 | Retry/failover diagnostics | `src/services/api/withRetry.ts` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountLeaseManager.ts` | Retry paths emit `account.failover.succeeded`, `account.transient_failure`, `account.token_refresh.failed`, `quota.exhausted`, or `account.pool.unavailable` based on the recovery branch taken. |
+| Open Design consumer parser/display | `/Users/pt/open-design/apps/daemon/src/claude-stream.ts` | `/Users/pt/open-design/apps/daemon/src/claude-diagnostics.ts`, `/Users/pt/open-design/apps/daemon/src/server.ts`, `/Users/pt/open-design/apps/daemon/src/connectionTest.ts`, `/Users/pt/open-design/apps/web/src/components/SettingsDialog.tsx` | Open Design owns downstream parsing/display only. It should surface unrecoverable account-backend diagnostics, log recoverable diagnostics with sanitized metadata, and never select Cat Code profiles or accounts. The single non-unrecoverable diagnostic allowed in normal run UX is `account.usage.warning`, rendered as the inline FYI `Cat Code is near provider capacity.` at most once per Cat Code `session_id` per Open Design tab. It has no remediation link or account vocabulary. All recoverable routing codes remain support-log-only. |
 
 ## Codex Pool And Lease Touchpoints
 
@@ -131,13 +133,18 @@ Use the closest test first:
 | Codex vault refresh and identity mismatch | `bun test src/services/api/codexTokenRefresh.test.ts` |
 | Codex usage display and usage hint behavior | `bun test src/services/api/codexUsage.test.ts` |
 | Codex adapter auth/cap errors and transport bridge | `bun test src/services/api/codex-fetch-adapter.test.ts` |
+| Structured account diagnostics envelope + redaction | `bun test src/services/api/accountDiagnostics.test.ts` |
+| `/accounts` behavior | `bun test src/commands/accounts/accounts.test.ts` |
+| `/switch-account` behavior | `bun test src/commands/switch-account/switch-account.test.ts` |
+| `/rename-account` behavior | `bun test src/commands/rename-account/rename-account.test.ts` |
+| `/delete-account` behavior | `bun test src/commands/delete-account/delete-account.test.ts` |
 | Full documented build | `bun run build:dev:full` |
 | Docs-only changes | `git diff --check -- docs/maps/auth-accounts-oauth.md` |
 
-There are no focused command/UI tests for `/login`, `/logout`, `/accounts`,
-`/switch-account`, `/delete-account`, or `/rename-account` in the current auth
-surface. For changes there, pair source inspection with a focused manual or
-integration check.
+There are focused tests for `/switch-account` and `/rename-account`. There are
+also focused tests for `/accounts` and `/delete-account`. There are still no
+focused tests for `/login` or `/logout`; for changes there, pair source
+inspection with a focused manual or integration check.
 
 ## Common Failure Routes
 

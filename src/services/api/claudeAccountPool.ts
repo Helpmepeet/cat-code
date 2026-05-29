@@ -51,6 +51,8 @@ interface ClaudePoolState {
   initialized: boolean
 }
 
+export type ClaudeAccountResolutionMatchType = 'exact' | 'prefix'
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const DEFAULT_VAULT_PATH = join(homedir(), 'claude-vault')
@@ -176,9 +178,78 @@ export function getClaudePoolStatus(): {
 }
 
 /**
+ * Resolve a Claude account by prefix. Exact alias/email/UUID match wins.
+ * Otherwise, gather alias/email/UUID-prefix matches and return a
+ * unique/ambiguous/none verdict.
+ */
+export type ClaudeAccountResolution =
+  | { kind: 'none' }
+  | { kind: 'unique'; account: ClaudePoolAccount; matchType: ClaudeAccountResolutionMatchType }
+  | { kind: 'ambiguous'; matches: ClaudePoolAccount[]; matchType: ClaudeAccountResolutionMatchType }
+
+export function resolveClaudeAccountByPrefix(
+  prefix: string,
+  options?: { onlyHealthy?: boolean },
+): ClaudeAccountResolution {
+  const lower = prefix.toLowerCase()
+  const onlyHealthy = options?.onlyHealthy === true
+  const candidates = pool.accounts.filter(
+    (a) => !onlyHealthy || a.status === 'healthy',
+  )
+
+  // Exact match wins (alias, email, or full uuid)
+  const exact = candidates.filter(
+    (a) =>
+      a.alias?.toLowerCase() === lower ||
+      a.emailAddress.toLowerCase() === lower ||
+      a.accountUuid.toLowerCase() === lower,
+  )
+  if (exact.length === 1) {
+    return { kind: 'unique', account: exact[0]!, matchType: 'exact' }
+  }
+  if (exact.length > 1) return { kind: 'ambiguous', matches: exact, matchType: 'exact' }
+
+  // Gather prefix matches across alias/email/uuid (deduped, alias-first order)
+  const seen = new Set<string>()
+  const matches: ClaudePoolAccount[] = []
+  for (const a of candidates) {
+    if (a.alias && a.alias.toLowerCase().startsWith(lower)) {
+      if (!seen.has(a.accountUuid)) {
+        seen.add(a.accountUuid)
+        matches.push(a)
+      }
+    }
+  }
+  for (const a of candidates) {
+    if (a.emailAddress.toLowerCase().startsWith(lower)) {
+      if (!seen.has(a.accountUuid)) {
+        seen.add(a.accountUuid)
+        matches.push(a)
+      }
+    }
+  }
+  for (const a of candidates) {
+    if (a.accountUuid.toLowerCase().startsWith(lower)) {
+      if (!seen.has(a.accountUuid)) {
+        seen.add(a.accountUuid)
+        matches.push(a)
+      }
+    }
+  }
+
+  if (matches.length === 0) return { kind: 'none' }
+  if (matches.length === 1) {
+    return { kind: 'unique', account: matches[0]!, matchType: 'prefix' }
+  }
+  return { kind: 'ambiguous', matches, matchType: 'prefix' }
+}
+
+/**
  * Manually switch to a specific Claude account by alias, email, or UUID prefix.
  * Pass null to rotate to the next account.
- * Returns the new active account, or null if no match / no alternative.
+ * Returns the new active account, or null if no match, ambiguous match, or no
+ * alternative. Callers that want to surface a candidate list on ambiguity
+ * should call `resolveClaudeAccountByPrefix` first.
  *
  * IMPORTANT: This only updates the in-memory pool and persisted pointers.
  * The caller must also:
@@ -187,32 +258,16 @@ export function getClaudePoolStatus(): {
  *   - Call applyPostSwitchAccountStateRefresh()
  */
 export function switchToClaudeAccount(idPrefix: string | null): ClaudePoolAccount | null {
-  if (!pool.initialized || pool.accounts.length <= 1) return null
+  if (!pool.initialized || pool.accounts.length === 0) return null
 
   let targetIdx: number
   if (idPrefix) {
-    const lower = idPrefix.toLowerCase()
-    // Match by alias (exact → prefix), then email prefix, then UUID prefix
-    targetIdx = pool.accounts.findIndex(
-      (a) => a.alias?.toLowerCase() === lower && a.status === 'healthy',
-    )
-    if (targetIdx < 0) {
-      targetIdx = pool.accounts.findIndex(
-        (a) => a.alias?.toLowerCase().startsWith(lower) && a.status === 'healthy',
-      )
-    }
-    if (targetIdx < 0) {
-      targetIdx = pool.accounts.findIndex(
-        (a) => a.emailAddress.toLowerCase().startsWith(lower) && a.status === 'healthy',
-      )
-    }
-    if (targetIdx < 0) {
-      targetIdx = pool.accounts.findIndex(
-        (a) => a.accountUuid.toLowerCase().startsWith(lower) && a.status === 'healthy',
-      )
-    }
+    const resolution = resolveClaudeAccountByPrefix(idPrefix, { onlyHealthy: true })
+    if (resolution.kind !== 'unique') return null
+    targetIdx = pool.accounts.indexOf(resolution.account)
     if (targetIdx < 0) return null
   } else {
+    if (pool.accounts.length <= 1) return null
     // Rotate to next healthy account (simple round-robin)
     targetIdx = -1
     for (let i = 1; i < pool.accounts.length; i++) {

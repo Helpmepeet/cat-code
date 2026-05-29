@@ -7,13 +7,21 @@ import {
   appendAccount,
   getPoolStatus,
   getVaultPlanHealthFromIdToken,
+  loadVaultAccountsForTest,
+  markAccountDead,
   mergePoolAccountsForTest,
   removeCodexAccount,
   resetCodexAccountPoolForTest,
+  resolveCodexAccountByPrefix,
   saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
+  switchToAccount,
   type PoolAccount,
 } from './codexAccountPool.js'
+import {
+  _resetAccountDiagnosticStreamJsonHookForTesting,
+  installStreamJsonAccountDiagnosticHook,
+} from './accountDiagnostics.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -26,7 +34,6 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
-    turnsUsed: overrides.turnsUsed ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -51,6 +58,7 @@ function createIdToken(auth: Record<string, unknown>): string {
 describe('codexAccountPool appendAccount', () => {
   beforeEach(() => {
     resetCodexAccountPoolForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
   })
 
   test('preserves capped status during token refresh updates', () => {
@@ -82,6 +90,68 @@ describe('codexAccountPool appendAccount', () => {
     expect(updated?.lastError).toBe('Usage snapshot reported account exhaustion')
     expect(updated?.accessToken).toBe('new-access')
     expect(updated?.refreshToken).toBe('new-refresh')
+  })
+
+  test('markPoolAccountCapped emits a usage-cap diagnostic', () => {
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'usage-cap-session',
+      createUuid: () => `usage-cap-${emitted.length + 1}`,
+    })
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'backup-account', alias: 'backup' }),
+      ],
+    })
+
+    const { markPoolAccountCapped } = require('./codexAccountPool.js') as typeof import('./codexAccountPool.js')
+    markPoolAccountCapped('backup-account', 'usage cap 429')
+
+    expect(emitted.some(message =>
+      (message as { code?: string }).code === 'account.usage.cap' &&
+      (message as { account_ref?: string }).account_ref !== undefined &&
+      (message as { reason?: string }).reason === 'usage cap 429',
+    )).toBe(true)
+  })
+
+  test('appendAccount emits a usage-uncap diagnostic when a capped account becomes healthy', () => {
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'usage-uncap-session',
+      createUuid: () => `usage-uncap-${emitted.length + 1}`,
+    })
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'backup-account',
+          alias: 'backup',
+          status: 'capped',
+          lastError: 'usage cap 429',
+        }),
+      ],
+    })
+
+    appendAccount({
+      accessToken: 'fresh-access',
+      refreshToken: 'fresh-refresh',
+      expiresAt: Date.now() + 120_000,
+      accountId: 'backup-account',
+    })
+
+    expect(emitted.some(message =>
+      (message as { code?: string }).code === 'account.usage.uncap' &&
+      (message as { account_ref?: string }).account_ref !== undefined,
+    )).toBe(true)
   })
 
   test('successful refresh can revive dead accounts', () => {
@@ -142,6 +212,43 @@ describe('codexAccountPool appendAccount', () => {
     const status = getPoolStatus()
     expect(status.accounts.map((account) => account.accountId)).toEqual(['main-account'])
     expect(status.accounts[status.activeIndex]?.accountId).toBe('main-account')
+  })
+
+  test('markAccountDead reroll of active account emits account.active.reroll diagnostic', () => {
+    const emittedMessages: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emittedMessages.push(message)
+      },
+      getSessionId: () => 'active-reroll-session',
+      createUuid: () => `active-reroll-${emittedMessages.length + 1}`,
+    })
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main', lastUsedAt: 10 }),
+        buildPoolAccount({ accountId: 'backup-account', alias: 'backup', lastUsedAt: 0 }),
+      ],
+    })
+
+    markAccountDead('main-account', 'refresh token rejected')
+
+    expect(getPoolStatus().accounts[getPoolStatus().activeIndex]?.accountId).toBe(
+      'backup-account',
+    )
+    expect(emittedMessages).toHaveLength(1)
+    expect(emittedMessages[0]).toMatchObject({
+      type: 'system',
+      subtype: 'cat_code_account_diagnostic',
+      code: 'account.active.reroll',
+      severity: 'warning',
+      provider: 'openai',
+      recoverable: true,
+      reason: 'markAccountDead: refresh token rejected',
+    })
+    expect((emittedMessages[0] as { from_account_ref?: string }).from_account_ref).toBeDefined()
+    expect((emittedMessages[0] as { account_ref?: string }).account_ref).toBeDefined()
   })
 
   test('keeps the vault account unchanged when config contains the same account id', () => {
@@ -346,6 +453,84 @@ describe('codexAccountPool appendAccount', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  test('loadVaultAccounts reads real expires_at when present', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-vault-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const future = Date.now() + 4 * 3600_000
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          account_id: accountId,
+          expires_at: future,
+        },
+        last_refresh: new Date().toISOString(),
+      }),
+      'utf-8',
+    )
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0]?.expiresAt).toBe(future)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('loadVaultAccounts falls back to 0 when expires_at is missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-vault-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          account_id: accountId,
+        },
+        last_refresh: new Date().toISOString(),
+      }),
+      'utf-8',
+    )
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0]?.expiresAt).toBe(0)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('saveCodexTokenToVault persists expires_at and reloads it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-vault-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const filePath = join(accountsDir, `${accountId}.json`)
+    const future = Date.now() + 4 * 3600_000
+
+    saveCodexTokenToVault(
+      {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        accountId,
+        expiresAt: future,
+      },
+      { filePath, writer: 'test' },
+    )
+
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    const tokens = written.tokens as Record<string, unknown>
+    expect(tokens.expires_at).toBe(future)
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts[0]?.expiresAt).toBe(future)
+
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   test('appendAccount can sync vault metadata', () => {
     appendAccount(
       {
@@ -363,5 +548,141 @@ describe('codexAccountPool appendAccount', () => {
     const updated = getPoolStatus().accounts.find((account) => account.accountId === 'vault-account')
     expect(updated?.source).toBe('vault')
     expect(updated?.vaultFilePath).toBe('/tmp/vault/accounts/78c.json')
+  })
+})
+
+describe('resolveCodexAccountByPrefix', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+  })
+
+  test('returns unique on exact alias match even when another alias has it as a prefix', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-main',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-main', alias: 'main' }),
+        buildPoolAccount({ accountId: 'acct-main2', alias: 'main2' }),
+      ],
+    })
+
+    const result = resolveCodexAccountByPrefix('main')
+    expect(result.kind).toBe('unique')
+    if (result.kind === 'unique') {
+      expect(result.account.accountId).toBe('acct-main')
+    }
+  })
+
+  test('returns ambiguous when two aliases share a prefix and there is no exact match', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-backup1',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-backup1', alias: 'backup1' }),
+        buildPoolAccount({ accountId: 'acct-backup2', alias: 'backup2' }),
+      ],
+    })
+
+    const result = resolveCodexAccountByPrefix('backup')
+    expect(result.kind).toBe('ambiguous')
+    if (result.kind === 'ambiguous') {
+      expect(result.matches.map((a) => a.accountId).sort()).toEqual([
+        'acct-backup1',
+        'acct-backup2',
+      ])
+    }
+  })
+
+  test('returns ambiguous when one matches alias prefix and another matches id prefix', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-abc-1',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-abc-1', alias: 'abc-alias' }),
+        buildPoolAccount({ accountId: 'abc-id-account', alias: 'other' }),
+      ],
+    })
+
+    const result = resolveCodexAccountByPrefix('abc')
+    expect(result.kind).toBe('ambiguous')
+    if (result.kind === 'ambiguous') {
+      expect(result.matches.length).toBe(2)
+    }
+  })
+
+  test('returns none when nothing matches', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-main',
+      accounts: [buildPoolAccount({ accountId: 'acct-main', alias: 'main' })],
+    })
+
+    expect(resolveCodexAccountByPrefix('xyz').kind).toBe('none')
+  })
+
+  test('onlyHealthy:true filters out non-healthy accounts', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-backupA',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-backupA', alias: 'backupA' }),
+        buildPoolAccount({ accountId: 'acct-backupB', alias: 'backupB', status: 'capped' }),
+      ],
+    })
+
+    // Without filter, two aliases prefix 'backup' -> ambiguous
+    expect(resolveCodexAccountByPrefix('backup').kind).toBe('ambiguous')
+    // With filter, only 'backupA' remains
+    const filtered = resolveCodexAccountByPrefix('backup', { onlyHealthy: true })
+    expect(filtered.kind).toBe('unique')
+    if (filtered.kind === 'unique') {
+      expect(filtered.account.accountId).toBe('acct-backupA')
+    }
+  })
+})
+
+describe('switchToAccount', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+  })
+
+  test('returns null when prefix is ambiguous', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-main',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-main', alias: 'main' }),
+        buildPoolAccount({ accountId: 'acct-backup1', alias: 'backup1' }),
+        buildPoolAccount({ accountId: 'acct-backup2', alias: 'backup2' }),
+      ],
+    })
+
+    expect(switchToAccount('backup')).toBeNull()
+    // active account should not have moved
+    expect(getPoolStatus().accounts[getPoolStatus().activeIndex]?.accountId).toBe('acct-main')
+  })
+
+  test('still switches successfully for a unique alias', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-main',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-main', alias: 'main' }),
+        buildPoolAccount({ accountId: 'acct-backup1', alias: 'backup1' }),
+      ],
+    })
+
+    const result = switchToAccount('backup1')
+    expect(result?.accountId).toBe('acct-backup1')
+    expect(getPoolStatus().accounts[getPoolStatus().activeIndex]?.accountId).toBe('acct-backup1')
+  })
+})
+
+describe('getPoolStatus', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+  })
+
+  test('does not expose turnThreshold', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-main',
+      accounts: [buildPoolAccount({ accountId: 'acct-main', alias: 'main' })],
+    })
+
+    const status = getPoolStatus()
+    expect(Object.keys(status)).not.toContain('turnThreshold')
   })
 })

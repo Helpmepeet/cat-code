@@ -514,7 +514,11 @@ export async function getAnthropicClient({
   }
 
   // ── Codex (OpenAI) provider via fetch adapter ─────────────────────
-  if (isCodexSubscriber()) {
+  // Only route through Codex when this specific request resolves to openai.
+  // Callers that explicitly pin to firstParty (e.g. /insights facet extraction)
+  // must reach the Anthropic client path even when the user's session
+  // provider is openai.
+  if (resolvedProvider === 'openai' && isCodexSubscriber()) {
     const codexTokens = resolveCodexOAuthTokensForLeaseOwner({
       codexLeaseOwnerId,
       codexLeaseOwnerType,

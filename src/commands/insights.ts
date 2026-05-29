@@ -1013,6 +1013,7 @@ Return the session facets using the ${insightsToolName} tool.`
 
     const result = await sideQuery({
       model: getAnalysisModel(),
+      provider: 'firstParty',
       system: asSystemPrompt([]),
       messages: [{ role: 'user', content: prompt }],
       tools: [
@@ -1623,6 +1624,7 @@ async function generateSectionInsight(
   try {
     const result = await sideQuery({
       model: getInsightsModel(),
+      provider: 'firstParty',
       system: asSystemPrompt([]),
       messages: [
         {

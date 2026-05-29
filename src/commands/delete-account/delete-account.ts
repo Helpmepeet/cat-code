@@ -3,15 +3,18 @@ import {
   applyPostCodexAccountSwitchRefresh,
   getPoolStatus,
   removeCodexAccount,
+  resolveCodexAccountByPrefix,
 } from '../../services/api/codexAccountPool.js'
 import {
   getClaudePoolStatus,
   removeClaudeAccount,
+  resolveClaudeAccountByPrefix,
   syncClaudeAccountToStorage,
 } from '../../services/api/claudeAccountPool.js'
 import {
   reassignCodexLeaseToActiveAccount,
   releaseCodexLease,
+  repairLeasesForDeletedAccount,
 } from '../../services/api/codexAccountLeaseManager.js'
 import { clearOAuthTokenCache } from '../../utils/auth.js'
 import { resetCodexCacheContext } from '../../services/api/codex-fetch-adapter.js'
@@ -31,49 +34,6 @@ function applyPostDeleteAccountStateRefresh(
   }))
 }
 
-function findCodexMatch(target: string) {
-  const { accounts } = getPoolStatus()
-  const exact = accounts.find(
-    (a) => a.alias?.toLowerCase() === target || a.accountId.toLowerCase() === target,
-  )
-  if (exact) return { match: exact, ambiguous: false }
-
-  const byAlias = accounts.filter((a) => a.alias?.toLowerCase().startsWith(target))
-  if (byAlias.length > 1) return { match: null, ambiguous: true, matches: byAlias.map((a) => a.alias ?? a.accountId.slice(0, 12)) }
-  if (byAlias.length === 1) return { match: byAlias[0]!, ambiguous: false }
-
-  const byId = accounts.filter((a) => a.accountId.toLowerCase().startsWith(target))
-  if (byId.length > 1) return { match: null, ambiguous: true, matches: byId.map((a) => a.alias ?? a.accountId.slice(0, 12)) }
-  if (byId.length === 1) return { match: byId[0]!, ambiguous: false }
-
-  return null
-}
-
-function findClaudeMatch(target: string) {
-  const { accounts } = getClaudePoolStatus()
-  const exact = accounts.find(
-    (a) =>
-      a.alias?.toLowerCase() === target ||
-      a.emailAddress.toLowerCase() === target ||
-      a.accountUuid.toLowerCase() === target,
-  )
-  if (exact) return { match: exact, ambiguous: false }
-
-  const byAlias = accounts.filter((a) => a.alias?.toLowerCase().startsWith(target))
-  if (byAlias.length > 1) return { match: null, ambiguous: true, matches: byAlias.map((a) => a.alias ?? a.emailAddress) }
-  if (byAlias.length === 1) return { match: byAlias[0]!, ambiguous: false }
-
-  const byEmail = accounts.filter((a) => a.emailAddress.toLowerCase().startsWith(target))
-  if (byEmail.length > 1) return { match: null, ambiguous: true, matches: byEmail.map((a) => a.alias ?? a.emailAddress) }
-  if (byEmail.length === 1) return { match: byEmail[0]!, ambiguous: false }
-
-  const byUuid = accounts.filter((a) => a.accountUuid.toLowerCase().startsWith(target))
-  if (byUuid.length > 1) return { match: null, ambiguous: true, matches: byUuid.map((a) => a.alias ?? a.emailAddress) }
-  if (byUuid.length === 1) return { match: byUuid[0]!, ambiguous: false }
-
-  return null
-}
-
 export const call: LocalCommandCall = async (args, context) => {
   const parts = args.trim().split(/\s+/)
   const confirmed = parts.includes('--confirm')
@@ -86,15 +46,60 @@ export const call: LocalCommandCall = async (args, context) => {
     }
   }
 
-  const codexResult = findCodexMatch(target)
+  const codexResolution = resolveCodexAccountByPrefix(target)
+  const claudeResolution = resolveClaudeAccountByPrefix(target)
+  const codexExact =
+    codexResolution.kind === 'unique' && codexResolution.matchType === 'exact'
+      ? codexResolution.account
+      : null
+  const claudeExact =
+    claudeResolution.kind === 'unique' && claudeResolution.matchType === 'exact'
+      ? claudeResolution.account
+      : null
 
-  if (codexResult) {
-    if ('ambiguous' in codexResult && codexResult.ambiguous) {
-      const list = (codexResult.matches as string[]).map((m) => `  ${m}`).join('\n')
-      return { type: 'text', value: `Multiple Codex accounts match "${target}":\n${list}\n\nUse a more specific name.` }
+  let selected:
+    | { provider: 'codex'; account: NonNullable<typeof codexExact> }
+    | { provider: 'claude'; account: NonNullable<typeof claudeExact> }
+    | null = null
+
+  if (codexExact && claudeExact) {
+    const codexLabel = codexExact.alias ?? codexExact.accountId.slice(0, 12)
+    const claudeLabel = claudeExact.alias ?? claudeExact.emailAddress
+    return {
+      type: 'text',
+      value: `Ambiguous: "${target}" matches Codex account "${codexLabel}" and Claude account "${claudeLabel}". Use a more specific name.`,
     }
+  }
 
-    const codexAcct = codexResult.match!
+  if (claudeExact) {
+    selected = { provider: 'claude', account: claudeExact }
+  } else if (codexExact) {
+    selected = { provider: 'codex', account: codexExact }
+  } else if (codexResolution.kind === 'ambiguous') {
+    const list = codexResolution.matches
+      .map((account) => `  ${account.alias ?? account.accountId.slice(0, 12)}`)
+      .join('\n')
+    return { type: 'text', value: `Multiple Codex accounts match "${target}":\n${list}\n\nUse a more specific name.` }
+  } else if (claudeResolution.kind === 'ambiguous') {
+    const list = claudeResolution.matches
+      .map((account) => `  ${account.alias ?? account.emailAddress}`)
+      .join('\n')
+    return { type: 'text', value: `Multiple Claude accounts match "${target}":\n${list}\n\nUse a more specific name.` }
+  } else if (codexResolution.kind === 'unique' && claudeResolution.kind === 'unique') {
+    const codexLabel = codexResolution.account.alias ?? codexResolution.account.accountId.slice(0, 12)
+    const claudeLabel = claudeResolution.account.alias ?? claudeResolution.account.emailAddress
+    return {
+      type: 'text',
+      value: `Ambiguous: "${target}" matches Codex account "${codexLabel}" and Claude account "${claudeLabel}". Use a more specific name.`,
+    }
+  } else if (codexResolution.kind === 'unique') {
+    selected = { provider: 'codex', account: codexResolution.account }
+  } else if (claudeResolution.kind === 'unique') {
+    selected = { provider: 'claude', account: claudeResolution.account }
+  }
+
+  if (selected?.provider === 'codex') {
+    const codexAcct = selected.account
     if (!codexAcct.vaultFilePath) {
       return {
         type: 'text',
@@ -126,10 +131,16 @@ export const call: LocalCommandCall = async (args, context) => {
       return { type: 'text', value: lines.join('\n') }
     }
 
-    const ok = removeCodexAccount(codexAcct.accountId)
+    const deletedAccountId = codexAcct.accountId
+    const ok = removeCodexAccount(deletedAccountId)
     if (!ok) {
       return { type: 'text', value: 'Failed to delete account. Check logs for details.' }
     }
+
+    // Repair every lease that was pointing at the deleted account (main or
+    // subagent) before refreshing UI. Leases that cannot find a healthy
+    // alternative are released.
+    repairLeasesForDeletedAccount(deletedAccountId)
 
     if (getPoolStatus().activeIndex >= 0) {
       reassignCodexLeaseToActiveAccount('main-thread')
@@ -152,15 +163,8 @@ export const call: LocalCommandCall = async (args, context) => {
     return { type: 'text', value: `Deleted ${deletedLabel}.` }
   }
 
-  const claudeResult = findClaudeMatch(target)
-
-  if (claudeResult) {
-    if ('ambiguous' in claudeResult && claudeResult.ambiguous) {
-      const list = (claudeResult.matches as string[]).map((m) => `  ${m}`).join('\n')
-      return { type: 'text', value: `Multiple Claude accounts match "${target}":\n${list}\n\nUse a more specific name.` }
-    }
-
-    const claudeAcct = claudeResult.match!
+  if (selected?.provider === 'claude') {
+    const claudeAcct = selected.account
     if (!claudeAcct.vaultFilePath) {
       return {
         type: 'text',

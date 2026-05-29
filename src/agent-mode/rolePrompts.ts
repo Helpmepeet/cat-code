@@ -19,6 +19,7 @@ import { ASK_ORCHESTRATOR_TOOL_NAME as ASK_ORCHESTRATOR_PROMPT_TOOL_NAME } from 
 import { FILE_PATCH_TOOL_NAME } from 'src/tools/FilePatchTool/constants.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from 'src/tools/ExitPlanModeTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from 'src/tools/NotebookEditTool/constants.js'
+import { CLAUDE_CLI_TOOL_NAME } from 'src/tools/ClaudeCliTool/constants.js'
 
 // ---------------------------------------------------------------------------
 // Coding Worker (V2)
@@ -44,6 +45,7 @@ TOOL DOCTRINE:
 - Use ${FILE_READ_TOOL_NAME}, ${GLOB_TOOL_NAME}, and ${GREP_TOOL_NAME} for targeted investigation.
 - Use ${FILE_EDIT_TOOL_NAME} and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for build, test, lint, and other local commands.
+- Use ${CLAUDE_CLI_TOOL_NAME} only when a bounded task needs a separate external Claude CLI pass. Provide a self-contained prompt and choose model/effort when useful.
 - You may use ${AGENT_TOOL_NAME} only to spawn the Explore agent for deeper read-only investigation when that is clearly better than doing the search yourself.
 - Do NOT use ${AGENT_TOOL_NAME} to spawn other coding workers, planners, or verifiers.
 - Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. After calling it, stop your turn immediately and return a blocked handoff with the question.
@@ -95,6 +97,7 @@ Keep the whole response compact and operational.`
 - Use ${FILE_READ_TOOL_NAME}, ${GLOB_TOOL_NAME}, and ${GREP_TOOL_NAME} for targeted investigation.
 - Use ${FILE_EDIT_TOOL_NAME} and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for local build, test, lint, and repo commands.
+- Use ${CLAUDE_CLI_TOOL_NAME} only when a bounded task needs a separate external Claude CLI pass. Provide a self-contained prompt and choose model/effort when useful.
 - You may use ${AGENT_TOOL_NAME} only to spawn the Explore agent for deeper read-only investigation when that is clearly better than doing the search yourself.
 - Do not use ${AGENT_TOOL_NAME} to spawn other coding workers, planners, or verifiers.
 - Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. After calling it, stop your turn immediately and return a blocked handoff with the question.
@@ -143,6 +146,7 @@ export const AGENT_MODE_CODING_WORKER: BuiltInAgentDefinition = {
     FILE_WRITE_TOOL_NAME,
     GLOB_TOOL_NAME,
     GREP_TOOL_NAME,
+    CLAUDE_CLI_TOOL_NAME,
     ASK_ORCHESTRATOR_TOOL_DEF_NAME,
   ],
   disallowedTools: [

@@ -15,17 +15,58 @@ import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { extractCodexAccountId } from '../oauth/codex-client.js'
 import {
   appendAccount,
+  getPoolStatus,
   getVaultPath,
   isAccountLocked,
   markAccountDead,
   saveCodexTokenToVault,
+  setActiveAccountPersisted,
 } from './codexAccountPool.js'
+import { getCodexLeaseForOwner, reassignCodexLeaseToActiveAccount } from './codexAccountLeaseManager.js'
+import { emitAccountDiagnostic } from './accountDiagnostics.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const TOKEN_REFRESH_URL = 'https://auth.openai.com/oauth/token'
 const TOKEN_REFRESH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const DEFAULT_REFRESH_INTERVAL_HOURS = 4
+// Fallback expiry when the OAuth response omits expires_in. Chosen to match the
+// typical 1h token TTL so the next request still refreshes before expiry.
+const DEFAULT_TOKEN_EXPIRY_MS = 60 * 60 * 1000
+
+function countPoolStatuses(): Record<string, number> {
+  const accounts = getPoolStatus().accounts
+  const counts: Record<string, number> = { total: accounts.length }
+  for (const account of accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  return counts
+}
+
+function emitIdentityMismatchDiagnostic(
+  oldAccountId: string,
+  newAccountId: string,
+): void {
+  emitAccountDiagnostic({
+    code: 'account.identity_mismatch',
+    severity: 'warning',
+    provider: 'openai',
+    pool: 'codex',
+    recoverable: true,
+    from_account_ref: oldAccountId,
+    account_ref: newAccountId,
+    reason: `refresh returned different account ${newAccountId}`,
+    counts: countPoolStatuses(),
+  })
+}
+
+function parseExpiresAt(data: Record<string, unknown>): number {
+  const expiresIn = data.expires_in
+  if (typeof expiresIn === 'number' && Number.isFinite(expiresIn) && expiresIn > 0) {
+    return Date.now() + expiresIn * 1000
+  }
+  return Date.now() + DEFAULT_TOKEN_EXPIRY_MS
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -135,18 +176,34 @@ async function refreshAccountTokensImpl(
   }
 
   const sameAccount = refreshedAccountId === accountId
+  const expiresAt = parseExpiresAt(data)
   if (!sameAccount) {
     logForDebugging(
       `[codex-profile] identity-mismatch writer=codex-refresh.refreshAccountTokens before_account=${accountId} after_account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} action=save-as-new-profile`,
       { level: 'warn' },
     )
-    markAccountDead(accountId, `Refresh returned different account ${refreshedAccountId}`)
+    // Snapshot whether the old account was active or held the main lease before
+    // we mark it dead — markAccountDead may reroll activeIndex away from it.
+    const poolBefore = getPoolStatus()
+    const wasActive =
+      poolBefore.activeIndex >= 0 &&
+      poolBefore.accounts[poolBefore.activeIndex]?.accountId === accountId
+    const mainLease = getCodexLeaseForOwner('main-thread')
+    const wasMain = mainLease?.accountId === accountId
+    const wasActiveOrMain = wasActive || wasMain
+
+    markAccountDead(
+      accountId,
+      `Refresh returned different account ${refreshedAccountId}`,
+      { rerollActive: false },
+    )
     const saved = saveCodexTokenToVault(
       {
         accessToken: newAccessToken,
         refreshToken: newRefreshToken,
         accountId: refreshedAccountId,
         idToken: newIdToken,
+        expiresAt,
       },
       {
         writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
@@ -159,7 +216,7 @@ async function refreshAccountTokensImpl(
       {
         accessToken: newAccessToken,
         refreshToken: newRefreshToken,
-        expiresAt: Date.now(),
+        expiresAt,
         accountId: refreshedAccountId,
       },
       {
@@ -167,8 +224,17 @@ async function refreshAccountTokensImpl(
         writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
         source: saved ? 'vault' : 'config',
         vaultFilePath: saved?.filePath,
+        activate: wasActiveOrMain,
       },
     )
+
+    if (wasActiveOrMain) {
+      setActiveAccountPersisted(refreshedAccountId)
+      reassignCodexLeaseToActiveAccount('main-thread')
+    }
+
+    emitIdentityMismatchDiagnostic(accountId, refreshedAccountId)
+
     return {
       accessToken: newAccessToken,
       refreshToken: newRefreshToken,
@@ -186,6 +252,7 @@ async function refreshAccountTokensImpl(
     tokens.access_token = newAccessToken
     tokens.refresh_token = newRefreshToken
     tokens.account_id = refreshedAccountId
+    tokens.expires_at = expiresAt
     if (newIdToken) tokens.id_token = newIdToken
     existing.tokens = tokens
     existing.last_refresh = nowIso
@@ -206,7 +273,7 @@ async function refreshAccountTokensImpl(
   appendAccount({
     accessToken: newAccessToken,
     refreshToken: newRefreshToken,
-    expiresAt: Date.now(),
+    expiresAt,
     accountId: refreshedAccountId,
   }, {
     preserveCapped: true,

@@ -25,8 +25,16 @@ import {
   markPoolAccountCapped,
   markPoolAccountLastError,
   markPoolAccountStatus,
+  setActiveAccountPersisted,
   switchToAccount,
 } from './codexAccountPool.js'
+import type { CodexLease } from './codexAccountLeaseManager.js'
+
+function persistMainLeaseActiveAccount(lease: CodexLease | undefined): void {
+  if (lease?.ownerType === 'main') {
+    setActiveAccountPersisted(lease.accountId)
+  }
+}
 import { isAwsCredentialsProviderError } from 'src/utils/aws.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logError } from 'src/utils/log.js'
@@ -81,6 +89,24 @@ const DEFAULT_MAX_RETRIES = 5
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
 export const BASE_DELAY_MS = 500
+// Network-outage backoff window when ≥2 distinct accounts hit
+// APIConnectionError in a single retry budget. Long enough for a flaky
+// network to come back; short enough that a recovering user isn't stuck.
+let codexNetworkOutageMinDelayMs = 5_000
+let codexNetworkOutageMaxDelayMs = 10_000
+
+export function _setCodexNetworkOutageDelaysForTest(
+  minMs: number,
+  maxMs: number,
+): void {
+  codexNetworkOutageMinDelayMs = minMs
+  codexNetworkOutageMaxDelayMs = maxMs
+}
+
+export function _resetCodexNetworkOutageDelaysForTest(): void {
+  codexNetworkOutageMinDelayMs = 5_000
+  codexNetworkOutageMaxDelayMs = 10_000
+}
 
 type AccountStatusCounts = Record<string, number>
 
@@ -298,6 +324,60 @@ export async function* withRetry<T>(
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
   let lastError: unknown
   let persistentAttempt = 0
+  let codexLeaseFailovers = 0
+  // A failover short-circuits the normal retry-delay path with `continue`.
+  // Cap those shortcuts to the configured retry budget so a bad 429/auth
+  // classification cannot rotate leases indefinitely inside one call.
+  const maxCodexLeaseFailovers = Math.max(1, maxRetries)
+  // Track distinct accounts that have hit APIConnectionError inside this
+  // retry budget. Two distinct accounts failing the same way in quick
+  // succession is the signal that the *network* is down, not the accounts.
+  const codexConnectionFailureAccounts = new Set<string>()
+  let codexNetworkOutageHandled = false
+
+  const throwRetryExhausted = (
+    originalError: unknown,
+    attemptCount: number,
+    accountRef?: string,
+  ): never => {
+    if (
+      options.isCodexRequest === true ||
+      originalError instanceof CodexAccountCapError ||
+      originalError instanceof CodexAccountAuthError ||
+      (options.ownerId !== undefined && isPoolActive())
+    ) {
+      emitCodexDiagnostic({
+        code: 'account.retry.exhausted',
+        severity: 'error',
+        recoverable: false,
+        account_ref: accountRef,
+        reason: `retry chain exhausted after attempts=${attemptCount}: ${errorMessage(originalError)}`,
+        model: retryContext.model,
+      })
+    }
+    throw new CannotRetryError(originalError, retryContext)
+  }
+
+  const assertCodexLeaseFailoverBudget = (
+    originalError: unknown,
+    attemptCount: number,
+    accountRef?: string,
+  ): void => {
+    if (codexLeaseFailovers >= maxCodexLeaseFailovers) {
+      throwRetryExhausted(
+        originalError instanceof Error
+          ? originalError
+          : new Error('Codex lease failover limit reached'),
+        attemptCount,
+        accountRef,
+      )
+    }
+  }
+
+  const noteCodexLeaseFailover = (): void => {
+    codexLeaseFailovers++
+  }
+
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     if (options.signal?.aborted) {
       throw new APIUserAbortError()
@@ -420,11 +500,13 @@ export async function* withRetry<T>(
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
         if (currentLease) {
           try {
+            assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
             const nextLease = failoverCodexLease(
               currentLease.ownerId,
               error.accountId,
               error.message,
             )
+            persistMainLeaseActiveAccount(nextLease)
             emitCodexFailoverSucceeded(
               retryContext.model,
               nextLease.accountId,
@@ -435,8 +517,12 @@ export async function* withRetry<T>(
             )
             options.onCodexAccountSwitch?.()
             client = null
+            noteCodexLeaseFailover()
             continue
           } catch (failoverError) {
+            if (failoverError instanceof CannotRetryError) {
+              throw failoverError
+            }
             emitCodexDiagnostic({
               code: getCodexExhaustionDiagnosticCode(),
               severity: 'error',
@@ -445,18 +531,21 @@ export async function* withRetry<T>(
               reason: 'no healthy Codex account remained after usage cap failover',
               model: retryContext.model,
             })
-            throw new CannotRetryError(
+            throwRetryExhausted(
               failoverError instanceof Error
                 ? failoverError
                 : new Error(getCodexLeaseExhaustedMessage()),
-              retryContext,
+              attempt,
+              error.accountId,
             )
           }
         }
         // No active lease — this is a main-session (no subagent) request.
         // Directly rotate the pool's active account and retry.
         if (isPoolActive()) {
-          markPoolAccountCapped(error.accountId, error.message)
+          markPoolAccountCapped(error.accountId, error.message, {
+            rerollActive: false,
+          })
           const next = switchToAccount(null)
           if (next) {
             emitCodexFailoverSucceeded(
@@ -480,9 +569,10 @@ export async function* withRetry<T>(
             model: retryContext.model,
           })
           // Pool exhausted — no healthy accounts left
-          throw new CannotRetryError(
+          throwRetryExhausted(
             new Error(getCodexLeaseExhaustedMessage()),
-            retryContext,
+            attempt,
+            error.accountId,
           )
         }
       }
@@ -521,6 +611,7 @@ export async function* withRetry<T>(
           accountId,
           'dead',
           'Codex account authentication failed',
+          { rerollActive: false },
         )
         emitCodexDiagnostic({
           code: 'account.token_refresh.failed',
@@ -533,12 +624,14 @@ export async function* withRetry<T>(
 
         if (currentLease) {
           try {
+            assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
             const nextLease = failoverCodexLease(
               currentLease.ownerId,
               accountId,
               'Codex account authentication failed',
               { markAccountCapped: false },
             )
+            persistMainLeaseActiveAccount(nextLease)
             emitCodexFailoverSucceeded(
               retryContext.model,
               nextLease.accountId,
@@ -546,8 +639,12 @@ export async function* withRetry<T>(
             )
             options.onCodexAccountSwitch?.()
             client = null
+            noteCodexLeaseFailover()
             continue
           } catch (failoverError) {
+            if (failoverError instanceof CannotRetryError) {
+              throw failoverError
+            }
             emitCodexDiagnostic({
               code: getCodexExhaustionDiagnosticCode(),
               severity: 'error',
@@ -556,11 +653,12 @@ export async function* withRetry<T>(
               reason: 'no healthy Codex account remained after authentication failure',
               model: retryContext.model,
             })
-            throw new CannotRetryError(
+            throwRetryExhausted(
               failoverError instanceof Error
                 ? failoverError
                 : new Error(getCodexLeaseExhaustedMessage()),
-              retryContext,
+              attempt,
+              accountId,
             )
           }
         }
@@ -586,10 +684,33 @@ export async function* withRetry<T>(
             reason: 'no healthy Codex account remained after authentication failure',
             model: retryContext.model,
           })
-          throw new CannotRetryError(
+          throwRetryExhausted(
             new Error(getCodexLeaseExhaustedMessage()),
-            retryContext,
+            attempt,
+            accountId,
           )
+        }
+      }
+
+      // Network-outage tracking: record every Codex APIConnectionError, even
+      // on attempt 1, so the outage trigger inside the `attempt >= 2`
+      // failover block below has the full picture. The repro pattern from
+      // the network-recovery bug report (user returns from idle, very first
+      // prompt fails) hits this code on attempt 1 — recording attempt-1
+      // failures lets a single follow-up attempt on a different account
+      // trip the outage detector instead of needing 2+ failovers.
+      if (
+        error instanceof APIConnectionError &&
+        options.isCodexRequest === true &&
+        isPoolActive()
+      ) {
+        const trackingLease =
+          getCurrentCodexLease() ??
+          (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
+        const trackingAccountId =
+          trackingLease?.accountId ?? getActiveAccount()?.accountId
+        if (trackingAccountId) {
+          codexConnectionFailureAccounts.add(trackingAccountId)
         }
       }
 
@@ -615,14 +736,56 @@ export async function* withRetry<T>(
             reason: error.message,
             model: retryContext.model,
           })
+
+          // Network-outage detection: if two distinct accounts have hit
+          // APIConnectionError in this retry budget, rotating leases is
+          // futile — the network itself is down. Recycle the HTTPS keep-alive
+          // pool (the OS may have invalidated the underlying sockets while
+          // the connection was down) and take one longer backoff so a
+          // recovering network has time to come back without burning the
+          // remaining retry budget.
+          if (
+            codexConnectionFailureAccounts.size >= 2 &&
+            !codexNetworkOutageHandled
+          ) {
+            codexNetworkOutageHandled = true
+            disableKeepAlive()
+            emitCodexDiagnostic({
+              code: 'account.transient_failure',
+              severity: 'warning',
+              recoverable: true,
+              account_ref: accountId,
+              reason:
+                'suspected network outage — multiple accounts hit connection errors in quick succession',
+              model: retryContext.model,
+            })
+            const outageDelayMs =
+              codexNetworkOutageMinDelayMs +
+              Math.random() *
+                Math.max(
+                  0,
+                  codexNetworkOutageMaxDelayMs - codexNetworkOutageMinDelayMs,
+                )
+            logForDebugging(
+              `[codex-pool] Suspected network outage after ${codexConnectionFailureAccounts.size} accounts failed with connection errors; recycling keep-alive and waiting ${Math.round(outageDelayMs)}ms`,
+            )
+            yield createSystemAPIErrorMessage(error, outageDelayMs, attempt, maxRetries)
+            await sleep(outageDelayMs, options.signal, { abortError })
+            client = null
+            continue
+          }
+
+          const failoverBackoffMs = getRetryDelay(attempt, null)
           if (currentLease) {
             try {
+              assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
               const nextLease = failoverCodexLease(
                 currentLease.ownerId,
                 accountId,
                 error.message,
                 { markAccountCapped: false },
               )
+              persistMainLeaseActiveAccount(nextLease)
               emitCodexFailoverSucceeded(
                 retryContext.model,
                 nextLease.accountId,
@@ -633,8 +796,14 @@ export async function* withRetry<T>(
               )
               options.onCodexAccountSwitch?.()
               client = null
+              noteCodexLeaseFailover()
+              yield createSystemAPIErrorMessage(error, failoverBackoffMs, attempt, maxRetries)
+              await sleep(failoverBackoffMs, options.signal, { abortError })
               continue
-            } catch {
+            } catch (failoverError) {
+              if (failoverError instanceof CannotRetryError) {
+                throw failoverError
+              }
               emitCodexDiagnostic({
                 code: getCodexExhaustionDiagnosticCode(),
                 severity: 'error',
@@ -659,6 +828,8 @@ export async function* withRetry<T>(
               )
               options.onCodexAccountSwitch?.()
               client = null
+              yield createSystemAPIErrorMessage(error, failoverBackoffMs, attempt, maxRetries)
+              await sleep(failoverBackoffMs, options.signal, { abortError })
               continue
             }
             emitCodexDiagnostic({
@@ -735,7 +906,7 @@ export async function* withRetry<T>(
           query_source:
             options.querySource as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         })
-        throw new CannotRetryError(error, retryContext)
+        throwRetryExhausted(error, attempt)
       }
 
       // Track consecutive 529 errors
@@ -771,9 +942,9 @@ export async function* withRetry<T>(
             !isPersistentRetryEnabled()
           ) {
             logEvent('tengu_api_custom_529_overloaded_error', {})
-            throw new CannotRetryError(
+            throwRetryExhausted(
               new Error(REPEATED_529_ERROR_MESSAGE),
-              retryContext,
+              attempt,
             )
           }
         }
@@ -783,7 +954,7 @@ export async function* withRetry<T>(
       const persistent =
         isPersistentRetryEnabled() && isTransientCapacityError(error)
       if (attempt > maxRetries && !persistent) {
-        throw new CannotRetryError(error, retryContext)
+        throwRetryExhausted(error, attempt)
       }
 
       // AWS/GCP errors aren't always APIError, but can be retried
@@ -793,7 +964,7 @@ export async function* withRetry<T>(
         !handledCloudAuthError &&
         (!(error instanceof APIError) || !shouldRetry(error))
       ) {
-        throw new CannotRetryError(error, retryContext)
+        throwRetryExhausted(error, attempt)
       }
 
       // Handle max tokens context overflow errors by adjusting max_tokens for the next attempt
@@ -928,7 +1099,7 @@ export async function* withRetry<T>(
     }
   }
 
-  throw new CannotRetryError(lastError, retryContext)
+  throwRetryExhausted(lastError, maxRetries + 1)
 }
 
 function getRetryAfter(error: unknown): string | null {

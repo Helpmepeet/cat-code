@@ -2,24 +2,26 @@
 
 Daily-refreshable routing map for Agent Mode ownership, integration points, and stale-doc checks.
 
-Last refreshed: 2026-05-17 against the current source tree.
+Last refreshed: 2026-05-21 against the current source tree.
 
 ## Refresh Checklist
 
 When refreshing this map, verify these source paths before trusting older docs:
 
 1. `src/agent-mode/`
-2. `src/constants/prompts.ts` Agent Mode sections
-3. `src/utils/systemPrompt.ts`
-4. `src/QueryEngine.ts`
-5. `src/screens/REPL.tsx`
-6. `src/tools/AgentTool/`
-7. `src/tools/ResumeAgentTool/`
-8. agent targeting: `src/tools/AgentTool/resolveAgentTarget.ts`, `src/utils/sessionStorage.ts` subagent metadata
-9. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
-10. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
-11. commands: `src/commands/agent/`, `src/commands/agents/`
-12. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
+2. worker role prompts and allowed tools: `src/agent-mode/rolePrompts.ts`, `src/constants/tools.ts`
+3. `src/constants/prompts.ts` Agent Mode sections
+4. `src/utils/systemPrompt.ts`
+5. `src/QueryEngine.ts`
+6. `src/screens/REPL.tsx`
+7. `src/tools/AgentTool/`
+8. `src/tools/ResumeAgentTool/`
+9. agent targeting: `src/tools/AgentTool/resolveAgentTarget.ts`, `src/utils/sessionStorage.ts` subagent metadata
+10. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
+11. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
+12. commands: `src/commands/agent/`, `src/commands/agents/`
+13. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
+14. external delegated Claude CLI tool: `src/tools/ClaudeCliTool/`
 
 ## Current Mental Model
 

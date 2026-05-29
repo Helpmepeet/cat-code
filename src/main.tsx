@@ -37,6 +37,7 @@ import { hasGrowthBookEnvOverride, initializeGrowthBook, refreshGrowthBookAfterA
 import { fetchBootstrapData } from './services/api/bootstrap.js';
 import { type DownloadResult, downloadSessionFiles, type FilesApiConfig, parseFileSpecs } from './services/api/filesApi.js';
 import { prefetchPassesEligibility } from './services/api/referral.js';
+import { installStreamJsonAccountDiagnosticHook } from './services/api/accountDiagnostics.js';
 import { prefetchOfficialMcpUrls } from './services/mcp/officialRegistry.js';
 import type { McpSdkServerConfig, McpServerConfig, ScopedMcpServerConfig } from './services/mcp/types.js';
 import { isPolicyAllowed, loadPolicyLimits, refreshPolicyLimits, waitForPolicyLimitsToLoad } from './services/policyLimits/index.js';
@@ -931,6 +932,23 @@ async function run(): Promise<CommanderCommand> {
     // → isRemoteManagedSettingsEligible → sync keychain reads otherwise ~65ms).
     await Promise.all([ensureMdmSettingsLoaded(), ensureKeychainPrefetchCompleted()]);
     profileCheckpoint('preAction_after_mdm');
+
+    if (!getIsNonInteractiveSession()) {
+      installStreamJsonAccountDiagnosticHook({
+        emit: message => {
+          logForDiagnosticsNoPII(
+            message.severity === 'error'
+              ? 'error'
+              : message.severity === 'warning'
+                ? 'warn'
+                : 'info',
+            'account_diagnostic_emitted',
+            message,
+          );
+        },
+        getSessionId,
+      });
+    }
     await init();
     profileCheckpoint('preAction_after_init');
 

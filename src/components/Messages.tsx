@@ -29,6 +29,7 @@ import { isEnvTruthy } from '../utils/envUtils.js';
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js';
 import { applyGrouping } from '../utils/groupToolUses.js';
 import { buildMessageLookups, createAssistantMessage, deriveUUID, getMessagesAfterCompactBoundary, getToolUseID, getToolUseIDs, hasUnresolvedHooksFromLookup, isNotEmptyMessage, normalizeMessages, reorderMessagesInUI, type StreamingThinking, type StreamingToolUse, shouldShowUserMessage } from '../utils/messages.js';
+import { useAppState } from '../state/AppState.js';
 import { plural } from '../utils/stringUtils.js';
 import { renderableSearchText } from '../utils/transcriptSearch.js';
 import { Divider } from './design-system/Divider.js';
@@ -375,6 +376,7 @@ const MessagesImpl = ({
   const {
     columns
   } = useTerminalSize();
+  const authVersion = useAppState(s => s.authVersion);
   const toggleShowAllShortcut = useShortcutDisplay('transcript:toggleShowAll', 'Transcript', 'Ctrl+E');
   const normalizedMessages = useMemo(() => normalizeMessages(messages).filter(isNotEmptyMessage), [messages]);
 
@@ -676,7 +678,7 @@ const MessagesImpl = ({
   }, [tools, lookups_0]);
   return <>
       {/* Logo */}
-      {!hideLogo && !(renderRange && renderRange[0] > 0) && <LogoHeader key={conversationId} agentDefinitions={agentDefinitions} />}
+      {!hideLogo && !(renderRange && renderRange[0] > 0) && <LogoHeader key={`${conversationId}:${authVersion}`} agentDefinitions={agentDefinitions} />}
 
       {/* Truncation indicator */}
       {hasTruncatedMessages_0 && <Divider title={`${toggleShowAllShortcut} to show ${chalk.bold(hiddenMessageCount_0)} previous messages`} width={columns} />}

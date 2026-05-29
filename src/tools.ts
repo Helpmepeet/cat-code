@@ -15,6 +15,7 @@ import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js'
 import { TaskStopTool } from './tools/TaskStopTool/TaskStopTool.js'
 import { CancelWorkerTool } from './tools/CancelWorkerTool/CancelWorkerTool.js'
 import { BriefTool } from './tools/BriefTool/BriefTool.js'
+import { ClaudeCliTool } from './tools/ClaudeCliTool/ClaudeCliTool.js'
 // Dead code elimination: conditional import for ant-only tools
 /* eslint-disable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 const REPLTool =
@@ -231,6 +232,7 @@ export function getAllBaseTools(): Tools {
     GenerateImageTool,
     TodoWriteTool,
     WebSearchTool,
+    ClaudeCliTool,
     TaskStopTool,
     ListWorkersTool,
     WaitWorkersTool,

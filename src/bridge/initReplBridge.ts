@@ -19,6 +19,7 @@ import { getOriginalCwd, getSessionId } from '../bootstrap/state.js'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { SDKControlResponse } from '../entrypoints/sdk/controlTypes.js'
 import { getFeatureValue_CACHED_WITH_REFRESH } from '../services/analytics/growthbook.js'
+import { installStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
 import { getOrganizationUUID } from '../services/oauth/client.js'
 import {
   isPolicyAllowed,
@@ -71,6 +72,25 @@ import type { BridgeState, ReplBridgeHandle } from './replBridge.js'
 import { initBridgeCore } from './replBridge.js'
 import { setCseShimGate } from './sessionIdCompat.js'
 import type { BridgeWorkerType } from './types.js'
+
+function installBridgeAccountDiagnosticHook(
+  handle: ReplBridgeHandle,
+): ReplBridgeHandle {
+  const removeAccountDiagnosticHook = installStreamJsonAccountDiagnosticHook({
+    emit: message => {
+      handle.writeSdkMessages([message])
+    },
+    getSessionId,
+  }, { registerForCleanup: false })
+
+  const teardown = handle.teardown.bind(handle)
+
+  handle.teardown = async () => {
+    removeAccountDiagnosticHook()
+    await teardown()
+  }
+  return handle
+}
 
 export type InitBridgeOptions = {
   onInboundMessage?: (msg: SDKMessage) => void | Promise<void>
@@ -422,7 +442,7 @@ export async function initReplBridge(
       '[bridge:repl] Using env-less bridge path (tengu_bridge_repl_v2)',
     )
     const { initEnvLessBridgeCore } = await import('./remoteBridgeCore.js')
-    return initEnvLessBridgeCore({
+    const handle = await initEnvLessBridgeCore({
       baseUrl,
       orgUUID,
       title,
@@ -449,6 +469,7 @@ export async function initReplBridge(
       outboundOnly,
       tags,
     })
+    return installBridgeAccountDiagnosticHook(handle)
   }
 
   // ── v1 path: env-based (register/poll/ack/heartbeat) ──────────────────
@@ -487,7 +508,7 @@ export async function initReplBridge(
   // 6. Delegate. BridgeCoreHandle is a structural superset of
   // ReplBridgeHandle (adds writeSdkMessages which REPL callers don't use),
   // so no adapter needed — just the narrower type on the way out.
-  return initBridgeCore({
+  const handle = await initBridgeCore({
     dir: getOriginalCwd(),
     machineName: hostname(),
     branch,
@@ -542,6 +563,7 @@ export async function initReplBridge(
     onStateChange,
     perpetual,
   })
+  return installBridgeAccountDiagnosticHook(handle)
 }
 
 const TITLE_MAX_LEN = 50

@@ -62,6 +62,14 @@ export type SDKAccountDiagnosticCode =
   | 'account.failover.succeeded'
   | 'account.transient_failure'
   | 'account.token_refresh.failed'
+  | 'account.identity_mismatch'
+  | 'account.manual_switch'
+  | 'account.active.reroll'
+  | 'account.lease.failover'
+  | 'account.usage.cap'
+  | 'account.usage.uncap'
+  | 'account.usage.warning'
+  | 'account.retry.exhausted'
   | 'account.pool.unavailable'
   | 'quota.exhausted'
   | 'auth.missing'
@@ -239,6 +247,7 @@ export type SDKAccountDiagnosticMessage = SDKSystemMessage & {
   resolved_provider?: SDKAccountDiagnosticProvider
   resolved_model?: string
   counts?: Record<string, number>
+  from_account_ref?: string
   account_ref?: string
   reason?: string
   user_message?: string

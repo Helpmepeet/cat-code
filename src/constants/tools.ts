@@ -33,6 +33,7 @@ import { ENTER_WORKTREE_TOOL_NAME } from '../tools/EnterWorktreeTool/constants.j
 import { EXIT_WORKTREE_TOOL_NAME } from '../tools/ExitWorktreeTool/constants.js'
 import { WORKFLOW_TOOL_NAME } from '../tools/WorkflowTool/constants.js'
 import { ASK_ORCHESTRATOR_TOOL_NAME } from '../tools/AskOrchestratorTool/prompt.js'
+import { CLAUDE_CLI_TOOL_NAME } from '../tools/ClaudeCliTool/constants.js'
 import { isTodoV2Enabled } from '../utils/tasks.js'
 import {
   CRON_CREATE_TOOL_NAME,
@@ -77,6 +78,7 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   NOTEBOOK_EDIT_TOOL_NAME,
   SKILL_TOOL_NAME,
   ASK_ORCHESTRATOR_TOOL_NAME,
+  CLAUDE_CLI_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
   TOOL_SEARCH_TOOL_NAME,
   ENTER_WORKTREE_TOOL_NAME,

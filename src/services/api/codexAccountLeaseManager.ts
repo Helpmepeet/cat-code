@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
+import { logForDebugging } from '../../utils/debug.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import {
   getPoolAccountUsageScore,
@@ -8,10 +9,10 @@ import {
   hasFreshPoolAccountUsageHint,
   markPoolAccountCapped,
   markPoolAccountLastError,
-  setActiveAccount,
   touchPoolAccountUsage,
   type PoolAccount,
 } from './codexAccountPool.js'
+import { emitAccountDiagnostic } from './accountDiagnostics.js'
 
 export type CodexLeaseStrategy = 'spread' | 'follow-main'
 export type CodexLeaseOwnerType = 'main' | 'subagent'
@@ -230,13 +231,27 @@ export function reassignCodexLeaseToActiveAccount(ownerId: string): void {
   touchPoolAccountUsage(account.accountId)
 }
 
-export function releaseCodexLease(ownerId: string): void {
-  const releasedLease = codexLeasesByOwnerId.get(ownerId)
-  codexLeasesByOwnerId.delete(ownerId)
+export function reassignCodexLeasesToActiveAccount(): void {
+  const pool = getPoolStatus()
+  if (pool.activeIndex < 0) return
+  const account = pool.accounts[pool.activeIndex]
+  if (!account) return
 
-  if (releasedLease && getPoolStatus().activeIndex < 0) {
-    setActiveAccount(releasedLease.accountId)
+  reassignCodexLeaseToActiveAccount('main-thread')
+  for (const lease of codexLeasesByOwnerId.values()) {
+    if (
+      lease.ownerType !== 'subagent' ||
+      lease.strategy !== 'follow-main' ||
+      lease.state !== 'active'
+    ) {
+      continue
+    }
+    reassignCodexLeaseToActiveAccount(lease.ownerId)
   }
+}
+
+export function releaseCodexLease(ownerId: string): void {
+  codexLeasesByOwnerId.delete(ownerId)
 }
 
 export function failoverCodexLease(
@@ -259,7 +274,9 @@ export function failoverCodexLease(
   const markAccountCapped = options.markAccountCapped ?? true
   markPoolAccountLastError(existingLease.accountId)
   if (markAccountCapped) {
-    markPoolAccountCapped(existingLease.accountId, reason)
+    markPoolAccountCapped(existingLease.accountId, reason, {
+      rerollActive: false,
+    })
   }
 
   try {
@@ -278,8 +295,17 @@ export function failoverCodexLease(
     }
 
     codexLeasesByOwnerId.set(ownerId, replacementLease)
-    setActiveAccount(selection.account.accountId)
     touchPoolAccountUsage(selection.account.accountId)
+    emitAccountDiagnostic({
+      code: 'account.lease.failover',
+      severity: 'info',
+      provider: 'openai',
+      recoverable: true,
+      pool: 'codex',
+      from_account_ref: failedAccountId,
+      account_ref: selection.account.accountId,
+      reason,
+    })
     return replacementLease
   } catch (error) {
     if (!markAccountCapped) {
@@ -297,6 +323,52 @@ export function failoverCodexLease(
     codexLeasesByOwnerId.set(ownerId, failedLease)
     throw error
   }
+}
+
+/**
+ * Re-resolve or release every lease that was pointing at a now-deleted
+ * account. Called from /delete-account after the pool has dropped the
+ * account. Each affected lease tries to acquire a fresh account using its
+ * own strategy; leases that cannot find a healthy alternative are dropped
+ * so they don't keep pointing at storage that no longer exists.
+ */
+export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
+  const affected = Array.from(codexLeasesByOwnerId.values()).filter(
+    (lease) => lease.accountId === deletedAccountId,
+  ).sort((left, right) => leaseRepairRank(left) - leaseRepairRank(right))
+
+  for (const lease of affected) {
+    try {
+      const selection =
+        lease.ownerType === 'main'
+          ? selectMainAccountForLease()
+          : selectAccountForLease(lease.strategy)
+      const now = Date.now()
+      codexLeasesByOwnerId.set(lease.ownerId, {
+        ...lease,
+        accountId: selection.account.accountId,
+        state: 'active',
+        selectionReason: `repaired after deletion of ${deletedAccountId}`,
+        updatedAt: now,
+      })
+      touchPoolAccountUsage(selection.account.accountId)
+    } catch (error) {
+      codexLeasesByOwnerId.delete(lease.ownerId)
+      logForDebugging(
+        `[codex-pool] Dropping lease ${lease.ownerId} after deletion of ${deletedAccountId}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+}
+
+function leaseRepairRank(lease: CodexLease): number {
+  if (lease.ownerType === 'main') {
+    return 0
+  }
+  if (lease.strategy === 'follow-main') {
+    return 1
+  }
+  return 2
 }
 
 function synthesizeMainLease(
@@ -469,4 +541,3 @@ function resolveDefaultLeaseStrategy(ownerType: CodexLeaseOwnerType): CodexLease
 
   return getInitialSettings().codexSubagentAccountStrategy ?? 'spread'
 }
-

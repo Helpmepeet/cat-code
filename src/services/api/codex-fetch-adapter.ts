@@ -253,6 +253,61 @@ export class CodexAccountAuthError extends Error {
   }
 }
 
+function codexErrorTextIndicatesUsageCap(status: number, body: string): boolean {
+  if (status !== 429) {
+    return false
+  }
+  const text = body.toLowerCase()
+  return (
+    text.includes('usage_limit') ||
+    text.includes('limit_reached') ||
+    text.includes('usage limit') ||
+    text.includes('usage cap') ||
+    text.includes('quota exhausted') ||
+    text.includes('quota exceeded')
+  )
+}
+
+function codexErrorTextIndicatesRevokedAuth(
+  status: number,
+  body: string,
+): status is 401 | 403 {
+  if (status !== 401 && status !== 403) {
+    return false
+  }
+  const text = body.toLowerCase()
+  return (
+    (status === 401 && text.includes('unauthorized')) ||
+    (status === 401 && text.includes('unauthenticated')) ||
+    (status === 401 && text.includes('authentication failed')) ||
+    text.includes('token_revoked') ||
+    text.includes('oauth token has been revoked') ||
+    text.includes('invalid_grant') ||
+    text.includes('invalid token') ||
+    text.includes('expired token')
+  )
+}
+
+function classifyCodexHttpAccountError(
+  status: number,
+  body: string,
+  accountId: string,
+): CodexAccountCapError | CodexAccountAuthError | null {
+  if (codexErrorTextIndicatesUsageCap(status, body)) {
+    return new CodexAccountCapError(accountId)
+  }
+  if (codexErrorTextIndicatesRevokedAuth(status, body)) {
+    return new CodexAccountAuthError(accountId, status)
+  }
+  return null
+}
+
+function createRetryableCodexHttpError(status: number, body: string): APIConnectionError {
+  return new APIConnectionError({
+    message: `Codex API error (${status}): ${body}`,
+  })
+}
+
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
   { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Latest GPT' },
@@ -2639,17 +2694,18 @@ export function createCodexFetch(
     const httpFallbackEvents = async (): Promise<HttpFallbackResult> => {
       const { response: codexResponse, transportContext } = await performHttpRequest()
       if (!codexResponse.ok) {
-        if (codexResponse.status === 429 && isPoolActive()) {
-          throw new CodexAccountCapError(currentAccountId)
-        }
-        if ((codexResponse.status === 401 || codexResponse.status === 403) && isPoolActive()) {
-          throw new CodexAccountAuthError(
-            currentAccountId,
-            codexResponse.status as 401 | 403,
-          )
-        }
         const errorText = await codexResponse.text()
-        throw new Error(`Codex API error (${codexResponse.status}): ${errorText}`)
+        if (isPoolActive()) {
+          const accountError = classifyCodexHttpAccountError(
+            codexResponse.status,
+            errorText,
+            currentAccountId,
+          )
+          if (accountError) {
+            throw accountError
+          }
+        }
+        throw createRetryableCodexHttpError(codexResponse.status, errorText)
       }
       return {
         events: httpSseToEvents(codexResponse),
@@ -2722,17 +2778,17 @@ export function createCodexFetch(
     const { response: codexResponse, transportContext } = await performHttpRequest()
 
     if (!codexResponse.ok) {
-      if (codexResponse.status === 429 && isPoolActive()) {
-        throw new CodexAccountCapError(currentAccountId)
-      }
-      if ((codexResponse.status === 401 || codexResponse.status === 403) && isPoolActive()) {
-        throw new CodexAccountAuthError(
-          currentAccountId,
-          codexResponse.status as 401 | 403,
-        )
-      }
-
       const errorText = await codexResponse.text()
+      if (isPoolActive()) {
+        const accountError = classifyCodexHttpAccountError(
+          codexResponse.status,
+          errorText,
+          currentAccountId,
+        )
+        if (accountError) {
+          throw accountError
+        }
+      }
       const errorBody = {
         type: 'error',
         error: {

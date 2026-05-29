@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { APIConnectionError } from '@anthropic-ai/sdk'
 
 import { setSessionProvider } from '../../bootstrap/state.js'
+import { getGlobalConfig } from '../../utils/config.js'
 import { SettingsSchema } from '../../utils/settings/types.js'
 import { getRetryOwnerId } from './claude.js'
 import { createCodexFetch, CodexAccountCapError } from './codex-fetch-adapter.js'
@@ -14,7 +15,17 @@ import {
 } from './codexAccountPool.js'
 import type { PoolAccount } from './codexAccountPool.js'
 import { fetchPoolUsage, invalidateUsageCache } from './codexUsage.js'
-import { CannotRetryError, withRetry } from './withRetry.js'
+import {
+  CannotRetryError,
+  _resetCodexNetworkOutageDelaysForTest,
+  _setCodexNetworkOutageDelaysForTest,
+  withRetry,
+} from './withRetry.js'
+import { _resetKeepAliveForTesting } from '../../utils/proxy.js'
+import {
+  _resetAccountDiagnosticStreamJsonHookForTesting,
+  installStreamJsonAccountDiagnosticHook,
+} from './accountDiagnostics.js'
 
 function buildCodexToken(accountId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
@@ -41,7 +52,6 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
-    turnsUsed: overrides.turnsUsed ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -60,6 +70,12 @@ describe('codexAccountLeaseManager', () => {
     resetCodexAccountPoolForTest()
     invalidateUsageCache()
     moduleUnderTest.resetCodexLeaseManagerForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  afterEach(() => {
+    _resetCodexNetworkOutageDelaysForTest()
+    _resetKeepAliveForTesting()
   })
 
   test('stores leases and accepts follow-main strategy settings', () => {
@@ -478,7 +494,7 @@ describe('codexAccountLeaseManager', () => {
     expect(getPoolStatus()).toEqual(poolBefore)
   })
 
-  test('usage refresh marks limit-reached accounts capped before lease selection', async () => {
+  test('usage refresh updates usage hints without mutating account status (observational)', async () => {
     const realFetch = globalThis.fetch
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -559,14 +575,14 @@ describe('codexAccountLeaseManager', () => {
     }) as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
     } finally {
       globalThis.fetch = realFetch
     }
 
     expect(getPoolStatus().accounts.find((account) => account.accountId === 'main-account'))
       .toMatchObject({
-        status: 'capped',
+        status: 'healthy',
         usagePrimary: 100,
       })
 
@@ -577,7 +593,10 @@ describe('codexAccountLeaseManager', () => {
       strategy: 'follow-main',
     })
 
-    expect(lease.accountId).toBe('worker-a')
+    // follow-main stays on main even when usage hints show 100% — DP2 says
+    // observational polling does not pre-emptively reroute leases. The real
+    // 429 will drive failover in the request path.
+    expect(lease.accountId).toBe('main-account')
   })
 
   test('withRetry classifies exhausted lease failures as usage exhaustion instead of connectivity', async () => {
@@ -960,108 +979,6 @@ describe('codexAccountLeaseManager', () => {
       failoverCount: 1,
       lastFailureReason: 'Codex account main-account hit usage cap',
     })
-  })
-
-  test('usage refresh marks limit-reached accounts capped before lease selection', async () => {
-    const realFetch = globalThis.fetch
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'main-account',
-      accounts: [
-        buildPoolAccount({
-          accountId: 'main-account',
-          alias: 'main',
-        }),
-        buildPoolAccount({
-          accountId: 'worker-a',
-        }),
-      ],
-    })
-
-    globalThis.fetch = (async (_input, init) => {
-      const authHeader = new Headers(init?.headers).get('Authorization')
-      if (authHeader === `Bearer ${buildCodexToken('main-account')}`) {
-        return new Response(
-          JSON.stringify({
-            user_id: 'user-main',
-            email: 'main@example.com',
-            plan_type: 'pro',
-            rate_limit: {
-              allowed: false,
-              limit_reached: true,
-              primary_window: {
-                used_percent: 100,
-                limit_window_seconds: 18000,
-                reset_after_seconds: 60,
-                reset_at: Date.now() + 60_000,
-              },
-              secondary_window: {
-                used_percent: 100,
-                limit_window_seconds: 604800,
-                reset_after_seconds: 3600,
-                reset_at: Date.now() + 3_600_000,
-              },
-            },
-            credits: {
-              has_credits: false,
-              unlimited: false,
-              balance: '0',
-            },
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        )
-      }
-
-      return new Response(
-        JSON.stringify({
-          user_id: 'user-worker',
-          email: 'worker@example.com',
-          plan_type: 'pro',
-          rate_limit: {
-            allowed: true,
-            limit_reached: false,
-            primary_window: {
-              used_percent: 10,
-              limit_window_seconds: 18000,
-              reset_after_seconds: 60,
-              reset_at: Date.now() + 60_000,
-            },
-            secondary_window: {
-              used_percent: 5,
-              limit_window_seconds: 604800,
-              reset_after_seconds: 3600,
-              reset_at: Date.now() + 3_600_000,
-            },
-          },
-          credits: {
-            has_credits: true,
-            unlimited: false,
-            balance: '10',
-          },
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )
-    }) as typeof globalThis.fetch
-
-    try {
-      await fetchPoolUsage(true)
-    } finally {
-      globalThis.fetch = realFetch
-    }
-
-    expect(getPoolStatus().accounts.find((account) => account.accountId === 'main-account'))
-      .toMatchObject({
-        status: 'capped',
-        usagePrimary: 100,
-      })
-
-    const lease = moduleUnderTest.createCodexLeaseForTest({
-      ownerId: 'usage-refreshed-subagent',
-      ownerType: 'subagent',
-      ownerLabel: 'Usage Refreshed Subagent',
-      strategy: 'follow-main',
-    })
-
-    expect(lease.accountId).toBe('worker-a')
   })
 
   test('withRetry classifies exhausted lease failures as usage exhaustion instead of connectivity', async () => {
@@ -1755,5 +1672,446 @@ describe('codexAccountLeaseManager', () => {
         status: 'healthy',
         usagePrimary: undefined,
       })
+  })
+
+  test('subagent failoverCodexLease does not move pool.activeIndex', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+        buildPoolAccount({ accountId: 'backup', alias: 'backup' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-x',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent X',
+      accountId: 'worker-a',
+      strategy: 'spread',
+    })
+
+    const before = getPoolStatus()
+    expect(before.accounts[before.activeIndex]?.accountId).toBe('main-account')
+
+    moduleUnderTest.failoverCodexLease(
+      'subagent-x',
+      'worker-a',
+      'usage cap 429',
+    )
+
+    const after = getPoolStatus()
+    expect(after.accounts[after.activeIndex]?.accountId).toBe('main-account')
+  })
+
+  test('subagent failover from the globally active account leaves pool.activeIndex unchanged', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'worker-a',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+        buildPoolAccount({ accountId: 'backup', alias: 'backup' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-active',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Active',
+      accountId: 'worker-a',
+      strategy: 'spread',
+    })
+
+    moduleUnderTest.failoverCodexLease(
+      'subagent-active',
+      'worker-a',
+      'usage cap 429',
+    )
+
+    const after = getPoolStatus()
+    expect(after.accounts[after.activeIndex]?.accountId).toBe('worker-a')
+    expect(after.accounts[after.activeIndex]?.status).toBe('capped')
+  })
+
+  test('manual active-account reassignment updates main and follow-main leases only', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'new-main',
+      accounts: [
+        buildPoolAccount({ accountId: 'old-main', alias: 'old' }),
+        buildPoolAccount({ accountId: 'new-main', alias: 'main' }),
+        buildPoolAccount({ accountId: 'spread-account', alias: 'spread' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'old-main',
+      strategy: 'follow-main',
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'follow-worker',
+      ownerType: 'subagent',
+      ownerLabel: 'Follow Worker',
+      accountId: 'old-main',
+      strategy: 'follow-main',
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'spread-worker',
+      ownerType: 'subagent',
+      ownerLabel: 'Spread Worker',
+      accountId: 'spread-account',
+      strategy: 'spread',
+    })
+
+    moduleUnderTest.reassignCodexLeasesToActiveAccount()
+
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe('new-main')
+    expect(moduleUnderTest.getCodexLeaseForOwner('follow-worker')?.accountId).toBe('new-main')
+    expect(moduleUnderTest.getCodexLeaseForOwner('spread-worker')?.accountId).toBe('spread-account')
+  })
+
+  test('failoverCodexLease emits lease failover diagnostic with old and new account refs', () => {
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'lease-diag-session',
+      createUuid: () => `lease-diag-${emitted.length + 1}`,
+    })
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-diag',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Diagnostic',
+      accountId: 'worker-a',
+      strategy: 'spread',
+    })
+
+    moduleUnderTest.failoverCodexLease(
+      'subagent-diag',
+      'worker-a',
+      'usage cap 429',
+    )
+
+    const leaseFailover = emitted.find(
+      message => (message as { code?: string }).code === 'account.lease.failover',
+    )
+    expect(leaseFailover).toMatchObject({
+      type: 'system',
+      subtype: 'cat_code_account_diagnostic',
+      code: 'account.lease.failover',
+      severity: 'info',
+      provider: 'openai',
+      recoverable: true,
+      reason: 'usage cap 429',
+    })
+    expect((leaseFailover as { from_account_ref?: string }).from_account_ref).toBeDefined()
+    expect((leaseFailover as { account_ref?: string }).account_ref).toBeDefined()
+    expect((leaseFailover as { from_account_ref?: string }).from_account_ref).not.toBe(
+      (leaseFailover as { account_ref?: string }).account_ref,
+    )
+  })
+
+  test('withRetry bounds repeated Codex cap failovers and emits retry exhausted diagnostic', async () => {
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'retry-bound-session',
+      createUuid: () => `retry-bound-${emitted.length + 1}`,
+    })
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-a',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-a', alias: 'a' }),
+        buildPoolAccount({ accountId: 'account-b', alias: 'b' }),
+        buildPoolAccount({ accountId: 'account-c', alias: 'c' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'account-a',
+      strategy: 'follow-main',
+    })
+
+    let switchCount = 0
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          const currentLease = moduleUnderTest.getCodexLeaseForOwner('main-thread')
+          throw new CodexAccountCapError(currentLease?.accountId ?? 'account-a')
+        },
+        {
+          maxRetries: 1,
+          model: 'gpt-5.4',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'main-thread',
+          isCodexRequest: true,
+          onCodexAccountSwitch: () => {
+            switchCount += 1
+          },
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // consume retry messages if any
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect(switchCount).toBeLessThanOrEqual(1)
+    expect(
+      emitted.some(
+        message =>
+          (message as { code?: string }).code === 'account.retry.exhausted' &&
+          (message as { recoverable?: boolean }).recoverable === false,
+      ),
+    ).toBe(true)
+  })
+
+  test('withRetry global Codex cap failover uses the replacement account instead of falsely exhausting', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-a',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-a', alias: 'a', lastUsedAt: 0 }),
+        buildPoolAccount({ accountId: 'account-b', alias: 'b', lastUsedAt: 100 }),
+      ],
+    })
+
+    let attempts = 0
+    let secondAttemptActiveAccountId: string | undefined
+
+    for await (const _message of withRetry(
+      async () => ({}) as never,
+      async () => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new CodexAccountCapError('account-a')
+        }
+        const status = getPoolStatus()
+        secondAttemptActiveAccountId = status.accounts[status.activeIndex]?.accountId
+        return secondAttemptActiveAccountId
+      },
+      {
+        maxRetries: 1,
+        model: 'gpt-5.4',
+        thinkingConfig: { type: 'disabled' },
+        isCodexRequest: true,
+      } as Parameters<typeof withRetry>[2],
+    )) {
+      // consume retry messages if any
+    }
+
+    expect(attempts).toBe(2)
+    expect(secondAttemptActiveAccountId).toBe('account-b')
+    expect(getGlobalConfig().activeCodexAccountId).toBe('account-b')
+  })
+
+  test('withRetry bounds repeated Codex connection-error failovers across accounts', async () => {
+    _setCodexNetworkOutageDelaysForTest(10, 20)
+    try {
+      const emitted: unknown[] = []
+      installStreamJsonAccountDiagnosticHook({
+        emit: message => {
+          emitted.push(message)
+        },
+        getSessionId: () => 'connection-bound-session',
+        createUuid: () => `connection-bound-${emitted.length + 1}`,
+      })
+
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'account-a',
+        accounts: [
+          buildPoolAccount({ accountId: 'account-a', alias: 'a' }),
+          buildPoolAccount({ accountId: 'account-b', alias: 'b' }),
+          buildPoolAccount({ accountId: 'account-c', alias: 'c' }),
+        ],
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+        accountId: 'account-a',
+        strategy: 'follow-main',
+      })
+
+      let attempts = 0
+      let thrown: unknown
+      try {
+        for await (const _message of withRetry(
+          async () => ({}) as never,
+          async () => {
+            attempts += 1
+            throw new APIConnectionError({ message: `connection failed ${attempts}` })
+          },
+          {
+            maxRetries: 2,
+            model: 'gpt-5.4',
+            thinkingConfig: { type: 'disabled' },
+            ownerId: 'main-thread',
+            isCodexRequest: true,
+          } as Parameters<typeof withRetry>[2],
+        )) {
+          // consume retry messages if any
+        }
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(CannotRetryError)
+      expect(attempts).toBeLessThanOrEqual(4)
+      expect(
+        emitted.some(
+          message =>
+            (message as { code?: string }).code === 'account.retry.exhausted' &&
+            (message as { recoverable?: boolean }).recoverable === false,
+        ),
+      ).toBe(true)
+    } finally {
+      _resetCodexNetworkOutageDelaysForTest()
+    }
+  })
+
+  test('releaseCodexLease does not change pool.activeIndex', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-y',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Y',
+      accountId: 'worker-a',
+      strategy: 'spread',
+    })
+
+    const before = getPoolStatus()
+    expect(before.accounts[before.activeIndex]?.accountId).toBe('main-account')
+
+    moduleUnderTest.releaseCodexLease('subagent-y')
+
+    const after = getPoolStatus()
+    expect(after.accounts[after.activeIndex]?.accountId).toBe('main-account')
+    expect(moduleUnderTest.getCodexLeaseForOwner('subagent-y')).toBeUndefined()
+  })
+
+  test('repairLeasesForDeletedAccount reassigns leases pointing at the deleted account', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-on-deleted',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent On Deleted',
+      accountId: 'gone-account',
+      strategy: 'spread',
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-untouched',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Untouched',
+      accountId: 'worker-a',
+      strategy: 'spread',
+    })
+
+    moduleUnderTest.repairLeasesForDeletedAccount('gone-account')
+
+    const snapshot = moduleUnderTest.getCodexLeaseSnapshotForTest()
+    const repaired = snapshot.leases.find(
+      (lease) => lease.ownerId === 'subagent-on-deleted',
+    )
+    const untouched = snapshot.leases.find(
+      (lease) => lease.ownerId === 'subagent-untouched',
+    )
+
+    expect(repaired).toBeDefined()
+    expect(repaired?.accountId).not.toBe('gone-account')
+    expect(repaired?.state).toBe('active')
+    expect(untouched).toBeDefined()
+    expect(untouched?.accountId).toBe('worker-a')
+    expect(untouched?.state).toBe('active')
+  })
+
+  test('repairLeasesForDeletedAccount releases leases when no healthy alternative exists', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'dead-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'dead-account',
+          alias: 'dead',
+          status: 'capped',
+        }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'orphan',
+      ownerType: 'subagent',
+      ownerLabel: 'Orphan',
+      accountId: 'gone-account',
+      strategy: 'spread',
+    })
+
+    moduleUnderTest.repairLeasesForDeletedAccount('gone-account')
+
+    expect(moduleUnderTest.getCodexLeaseForOwner('orphan')).toBeUndefined()
+  })
+
+  test('repairLeasesForDeletedAccount repairs main before follow-main leases', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'new-main',
+      accounts: [
+        buildPoolAccount({ accountId: 'new-main', alias: 'main', lastUsedAt: 100 }),
+        buildPoolAccount({ accountId: 'other-account', alias: 'other', lastUsedAt: 0 }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'follow-worker',
+      ownerType: 'subagent',
+      ownerLabel: 'Follow Worker',
+      accountId: 'gone-account',
+      strategy: 'follow-main',
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'gone-account',
+      strategy: 'follow-main',
+    })
+
+    moduleUnderTest.repairLeasesForDeletedAccount('gone-account')
+
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe('new-main')
+    expect(moduleUnderTest.getCodexLeaseForOwner('follow-worker')?.accountId).toBe('new-main')
   })
 })

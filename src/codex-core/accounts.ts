@@ -1,12 +1,17 @@
 import {
+  appendAccount,
   initAccountPool,
   getPoolStatus,
+  markAccountDead,
   saveCodexTokenToVault,
+  setActiveAccountPersisted,
   type PoolAccount,
 } from '../services/api/codexAccountPool.js'
+import { getCodexLeaseForOwner, reassignCodexLeaseToActiveAccount } from '../services/api/codexAccountLeaseManager.js'
 import { refreshCodexToken } from '../services/oauth/codex-client.js'
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../utils/auth.js'
 import { logForDebugging } from '../utils/debug.js'
+import { emitAccountDiagnostic } from '../services/api/accountDiagnostics.js'
 import { CodexCoreError } from './errors.js'
 
 export type CodexCoreAccount = {
@@ -103,6 +108,15 @@ function matchesProfile(
   return lowerId.startsWith(lower) || lowerAlias?.startsWith(lower) === true
 }
 
+function countCodexPoolStatuses(): Record<string, number> {
+  const accounts = getPoolStatus().accounts
+  const counts: Record<string, number> = { total: accounts.length }
+  for (const account of accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  return counts
+}
+
 async function maybeRefreshAccount(
   account: CodexCoreAccount,
 ): Promise<CodexCoreAccount> {
@@ -138,6 +152,7 @@ async function maybeRefreshAccount(
         refreshToken: refreshed.refreshToken,
         accountId: refreshed.accountId,
         alias: sameAccount ? account.alias : undefined,
+        expiresAt: refreshed.expiresAt,
       }, {
         writer: 'codex-core.maybeRefreshAccount',
         expectedPreviousAccountId: account.accountId,
@@ -150,6 +165,52 @@ async function maybeRefreshAccount(
         `[codex-profile] identity-mismatch writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} action=do-not-transfer-alias`,
         { level: 'warn' },
       )
+      // Live pool reconciliation: mark the old account dead and append the
+      // refreshed identity so subsequent selection does not keep returning
+      // the stale account record. The vault was already written above; do not
+      // write it a second time here.
+      const poolBefore = getPoolStatus()
+      const wasActive =
+        poolBefore.activeIndex >= 0 &&
+        poolBefore.accounts[poolBefore.activeIndex]?.accountId === account.accountId
+      const mainLease = getCodexLeaseForOwner('main-thread')
+      const wasMain = mainLease?.accountId === account.accountId
+
+      markAccountDead(
+        account.accountId,
+        `Refresh returned different account ${refreshed.accountId}`,
+        { rerollActive: false },
+      )
+      appendAccount(
+        {
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+          expiresAt: refreshed.expiresAt,
+          accountId: refreshed.accountId,
+        },
+        {
+          preserveCapped: true,
+          writer: 'codex-core.maybeRefreshAccount.identity-mismatch',
+          source: account.source === 'config' ? 'config' : 'vault',
+          vaultFilePath: savedVaultPath,
+          activate: wasActive || wasMain,
+        },
+      )
+      if (wasActive || wasMain) {
+        setActiveAccountPersisted(refreshed.accountId)
+        reassignCodexLeaseToActiveAccount('main-thread')
+      }
+      emitAccountDiagnostic({
+        code: 'account.identity_mismatch',
+        severity: 'warning',
+        provider: 'openai',
+        pool: 'codex',
+        recoverable: true,
+        from_account_ref: account.accountId,
+        account_ref: refreshed.accountId,
+        reason: `refresh returned different account ${refreshed.accountId}`,
+        counts: countCodexPoolStatuses(),
+      })
     }
     logForDebugging(
       `[codex-profile] core-refresh-done writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} result=${sameAccount ? 'same-account' : 'changed-account'}`,

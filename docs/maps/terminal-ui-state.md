@@ -1,6 +1,6 @@
 # Terminal UI And State Routing Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-05-21
 
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
@@ -19,6 +19,7 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | Area | Inspect first | Then inspect | Routing notes |
 |---|---|---|---|
 | REPL session loop | `src/screens/REPL.tsx` | `src/replLauncher.tsx`, `src/main.tsx` | `REPL.tsx` owns the main screen assembly, local session state, query lifecycle, displayed transcript selection, and modal priority. |
+| Startup splash / logo | `src/components/LogoV2/LogoV2.tsx` | `src/components/LogoV2/AccountsPanel.tsx`, `src/components/LogoV2/LogoV2.test.tsx` | Startup header and account-status rendering lives under `LogoV2/`; REPL decides when the logo shows. |
 | Shared terminal/app state | `src/state/AppStateStore.ts` | `src/state/AppState.tsx`, `src/state/store.ts`, `src/state/onChangeAppState.ts` | Shared state shape lives in `AppStateStore.ts`; selector subscriptions and store access live in `AppState.tsx`. |
 | Derived routing for viewed agents | `src/state/selectors.ts` | `src/state/teammateViewHelpers.ts`, `src/screens/REPL.tsx` | `getActiveAgentForInput()` decides whether input targets the leader, a viewed teammate, or a named local agent. |
 | Query and prompt submission | `src/screens/REPL.tsx` | `src/utils/handlePromptSubmit.ts`, `src/query.ts`, `src/utils/processUserInput/` | `REPL.tsx` handles immediate command paths, queue handoff, history/paste preparation, and main-thread query start. |
