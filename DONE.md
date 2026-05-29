@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 29 May 2026
+
+75. Installed a portable `codex-subscription-client` skill for building/reviewing subscription-backed Codex backend integrations — it now teaches the single-account default flow (OpenAI/Codex OAuth, secure token refresh/storage, Codex request adapter, HTTP/WebSocket streaming, scoped cache, and error handling), keeps OpenAI API-key billing and `codex app-server` separate, treats vaults/account pools/leases as optional multi-account infrastructure, and avoids Cat Code-only file references so agents can use it in other workspaces.
+
 ### 23 May 2026
 
 73. Tightened the Agent tool's `model`-param guidance to stop the orchestrator clobbering built-in model defaults — analysis of 501 real subagent spawns showed the orchestrator passed an explicit `model` on ~46% of calls and chose `gpt-5.4` for ~90% of those overrides, both downgrading heavy `general-purpose` work below its own tier (50/50 with omitting, no consistent rule) and forcing `Explore` off its cheap `gpt-5.4-mini` pin for trivial searches. The old description ("Optional… takes precedence… omit for built-ins") read as permission; the rewrite leads with "OMIT this by default," names the exact waste, and whitelists only deliberate uses (cross-family reviewer, upgrading from a weaker parent, or a misconfigured custom agent) so the built-in resolution path takes effect while preserving the intentional `sonnet`-reviewer pattern. Prompt-only change; no resolution logic touched. Two independent model evaluations confirmed it's a miscalibrated reflex (not a routing strategy) with no measured quality harm, and that a hard code-side strip would wrongly kill the legitimate override paths.
