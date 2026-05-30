@@ -8,9 +8,15 @@
 
 ## Phase 0
 
+### 30 May 2026
+
+76. Enabled auto mode and made it the default — auto mode (a classifier reviews each consequential tool call, auto-approving safe actions and blocking risky ones) was already ported from upstream but compiled out and missing its classifier prompts. Turned it on in every build, authored the missing classifier system prompt and external permissions policy (conservative deny rules covering irreversible destruction, out-of-workdir writes, remote code execution, secret/env-var exposure, network exfiltration, persistence, privilege escalation, and publishing/deploying; explicit user boundaries like "don't push" hard-block even otherwise-allowed actions), and wired `--enable-auto-mode` to start a session directly in auto mode. Verified by build and classifier-prompt parsing; live allow/block behavior in a real session not yet exercised.
+
 ### 29 May 2026
 
 75. Installed a portable `codex-subscription-client` skill for building/reviewing subscription-backed Codex backend integrations — it now teaches the single-account default flow (OpenAI/Codex OAuth, secure token refresh/storage, Codex request adapter, HTTP/WebSocket streaming, scoped cache, and error handling), keeps OpenAI API-key billing and `codex app-server` separate, treats vaults/account pools/leases as optional multi-account infrastructure, and avoids Cat Code-only file references so agents can use it in other workspaces.
+
+74. Fully isolated `cat-code` configuration paths, project-level settings, worktrees, skills, cron tasks, and permissions from the upstream `Claude Code` configurations (`.claude`). All global/project settings and cache directories now read/write under `.cat-code/` or `~/.cat-code/` dynamically. Updated the local installer wrapper generation, agent folder mappings, and wizard UIs to match, while retaining fallback legacy `.claude` permissions/launch paths for compatibility.
 
 ### 23 May 2026
 

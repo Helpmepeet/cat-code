@@ -689,9 +689,11 @@ function isSymlinkTo({
 export function initialPermissionModeFromCLI({
   permissionModeCli,
   dangerouslySkipPermissions,
+  enableAutoMode,
 }: {
   permissionModeCli: string | undefined
   dangerouslySkipPermissions: boolean | undefined
+  enableAutoMode?: boolean
 }): { mode: PermissionMode; notification?: string } {
   const settings = getSettings_DEPRECATED() || {}
 
@@ -738,6 +740,19 @@ export function initialPermissionModeFromCLI({
       }
     } else {
       orderedModes.push(parsedMode)
+    }
+  }
+  // --enable-auto-mode activates auto mode directly. Lower precedence than an
+  // explicit --permission-mode (handled above) but above settings defaultMode.
+  // Goes through the same circuit-breaker guard as --permission-mode auto.
+  if (feature('TRANSCRIPT_CLASSIFIER') && enableAutoMode) {
+    if (autoModeCircuitBrokenSync) {
+      logForDebugging(
+        'auto mode circuit breaker active (cached) — --enable-auto-mode falling back to default',
+        { level: 'warn' },
+      )
+    } else {
+      orderedModes.push('auto')
     }
   }
   if (settings.permissions?.defaultMode) {

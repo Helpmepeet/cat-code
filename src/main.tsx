@@ -1516,7 +1516,8 @@ async function run(): Promise<CommanderCommand> {
       notification: permissionModeNotification
     } = initialPermissionModeFromCLI({
       permissionModeCli,
-      dangerouslySkipPermissions
+      dangerouslySkipPermissions,
+      enableAutoMode: feature('TRANSCRIPT_CLASSIFIER') ? (options as { enableAutoMode?: boolean }).enableAutoMode : undefined
     });
 
     // Store session bypass permissions mode for trust dialog check
@@ -3963,7 +3964,7 @@ async function run(): Promise<CommanderCommand> {
     program.option('--agent-teams', '[ANT-ONLY] Force Claude to use multi-agent mode for solving problems', () => true);
   }
   if (feature('TRANSCRIPT_CLASSIFIER')) {
-    program.addOption(new Option('--enable-auto-mode', 'Opt in to auto mode').hideHelp());
+    program.addOption(new Option('--enable-auto-mode', 'Start the session in auto mode').hideHelp());
   }
   if (feature('PROACTIVE') || feature('KAIROS')) {
     program.addOption(new Option('--proactive', 'Start in proactive autonomous mode'));
