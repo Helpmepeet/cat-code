@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 1 Jun 2026
+
+80. Fixed Codex session-title request shaping and clipboard native-module fallback noise — forced `StructuredOutput` tool choices are no longer sent to Codex after the internal tool is filtered from the request, preventing `Tool choice 'function' not found in 'tools' parameter` errors on `side/title` calls. Clipboard image fast paths now treat missing `image-processor-napi` as an optional fallback case without `logError` spam while still logging unexpected native clipboard failures. Added focused regression coverage and updated the older Codex incident note.
+
 ### 31 May 2026
 
 79. Fixed Auto Mode wrongly blocking Bash on transient Codex classifier failures — the `gpt-5.5` safety classifier only fell back to `gpt-5.4` on a narrow `503/529` status set, so common transient Codex outages (bare `500/502/504`, and WS→HTTP-fallback errors where the SDK strips the numeric status into an `APIConnectionError`) failed closed and blocked the tool with a misleading "temporarily unavailable" message. Broadened the transient set to `408/429/500/502/504/529`, recovered the status embedded in `Codex API error (NNN)` messages, and added generic backend-body keywords. Included non-cap `429` (the classifier path has no app-level account failover, so a generic rate limit would otherwise block) while explicitly excluding true `CodexAccountCapError`/`CodexAccountAuthError` by name so account caps still fail closed and preserve their signal. Covered with focused regression tests including a real SDK `APIError`, non-cap-429 fallback, and cap/auth no-fallback guards.

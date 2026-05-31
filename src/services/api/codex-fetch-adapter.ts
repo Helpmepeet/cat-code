@@ -471,6 +471,9 @@ function translateToolChoice(
   if (type === 'none') return 'none'
   if (type === 'any') return 'required'
   if (type === 'tool' && typeof choice.name === 'string') {
+    if (choice.name === SYNTHETIC_OUTPUT_TOOL_NAME) {
+      return 'auto'
+    }
     const target = anthropicTools.find(t => t.name === choice.name)
     if (target && isAnthropicHostedWebSearchTool(target)) {
       return { type: 'web_search' }

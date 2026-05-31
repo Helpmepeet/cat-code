@@ -21,6 +21,7 @@ import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
 } from './codexAccountPool.js'
+import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 
 function createAccessToken(accountId: string): string {
   const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))
@@ -382,6 +383,33 @@ describe('codex-fetch-adapter', () => {
       _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
     }).codexBody
     expect(defaultChoice.tool_choice).toBe('auto')
+  })
+
+  test('translateToCodexBody does not force filtered StructuredOutput tool choice', () => {
+    const body = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          name: SYNTHETIC_OUTPUT_TOOL_NAME,
+          description: 'Return structured output',
+          input_schema: {
+            type: 'object',
+            properties: { title: { type: 'string' } },
+            required: ['title'],
+            additionalProperties: false,
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: SYNTHETIC_OUTPUT_TOOL_NAME },
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+
+    expect(body.tool_choice).toBe('auto')
+    expect(
+      Array.isArray(body.tools)
+        ? body.tools.some(tool => tool.name === SYNTHETIC_OUTPUT_TOOL_NAME)
+        : false,
+    ).toBe(false)
   })
 
   test('translateToCodexBody preserves reasoning include when thinking is disabled and web search is enabled', () => {
