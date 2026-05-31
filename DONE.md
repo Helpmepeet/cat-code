@@ -8,6 +8,14 @@
 
 ## Phase 0
 
+### 31 May 2026
+
+79. Fixed Auto Mode wrongly blocking Bash on transient Codex classifier failures — the `gpt-5.5` safety classifier only fell back to `gpt-5.4` on a narrow `503/529` status set, so common transient Codex outages (bare `500/502/504`, and WS→HTTP-fallback errors where the SDK strips the numeric status into an `APIConnectionError`) failed closed and blocked the tool with a misleading "temporarily unavailable" message. Broadened the transient set to `408/429/500/502/504/529`, recovered the status embedded in `Codex API error (NNN)` messages, and added generic backend-body keywords. Included non-cap `429` (the classifier path has no app-level account failover, so a generic rate limit would otherwise block) while explicitly excluding true `CodexAccountCapError`/`CodexAccountAuthError` by name so account caps still fail closed and preserve their signal. Covered with focused regression tests including a real SDK `APIError`, non-cap-429 fallback, and cap/auth no-fallback guards.
+
+77. Made auto mode usable from GPT/Codex sessions — GPT-prefixed main models now satisfy the auto-mode support gate, and Shift+Tab/session availability uses an enabled fallback when no remote auto-mode config has been cached yet. Kept the shared `getAutoModeEnabledState()` default conservative for migration safety, added a separate availability helper for UI/session surfaces, and covered the GPT eligibility plus Shift+Tab carousel behavior with focused regression tests.
+
+78. Fixed status-line effort display for session-only `/effort max` — status-line command input now includes the resolved `effortLevel` and refreshes when effort changes, so custom status-line scripts no longer fall back to persisted settings and show stale `high`; added regression coverage and updated the status-line payload docs.
+
 ### 30 May 2026
 
 76. Enabled auto mode and made it the default — auto mode (a classifier reviews each consequential tool call, auto-approving safe actions and blocking risky ones) was already ported from upstream but compiled out and missing its classifier prompts. Turned it on in every build, authored the missing classifier system prompt and external permissions policy (conservative deny rules covering irreversible destruction, out-of-workdir writes, remote code execution, secret/env-var exposure, network exfiltration, persistence, privilege escalation, and publishing/deploying; explicit user boundaries like "don't push" hard-block even otherwise-allowed actions), and wired `--enable-auto-mode` to start a session directly in auto mode. Verified by build and classifier-prompt parsing; live allow/block behavior in a real session not yet exercised.
