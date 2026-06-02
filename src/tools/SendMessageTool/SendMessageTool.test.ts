@@ -188,12 +188,14 @@ describe('SendMessageTool durable worker handle fallback', () => {
   })
 
   test('schema describes running subagent targets', () => {
-    expect(SendMessageTool.inputSchema.shape.to.description).toContain(
-      'running subagent raw agent ID',
-    )
-    expect(SendMessageTool.inputSchema.shape.to.description).toContain(
-      'running Agent Mode worker handle',
-    )
+    const description = SendMessageTool.inputSchema.shape.to.description
+    // Must convey the target has to be running, accept name/handle/raw ID, and
+    // point at ResumeAgent for stopped targets.
+    expect(description).toContain('must be currently running')
+    expect(description).toContain('friendly name/alias')
+    expect(description).toContain('worker handle')
+    expect(description).toContain('raw agent ID')
+    expect(description).toContain('use ResumeAgent instead')
   })
 
   test('is not deferred in Agent Mode', () => {

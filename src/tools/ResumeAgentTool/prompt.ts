@@ -2,7 +2,8 @@ import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from './constants.js'
 
-export const DESCRIPTION = 'Resume a stopped subagent in the background'
+export const DESCRIPTION =
+  'Restart a stopped subagent with a new prompt, keeping its prior context (background)'
 
 export function getPrompt(): string {
   return `

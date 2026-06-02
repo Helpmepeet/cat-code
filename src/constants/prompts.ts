@@ -456,6 +456,9 @@ function getSessionSpecificGuidanceSection(
           `For broader codebase exploration and deep research, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType}. This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
         ]
       : []),
+    hasAgentTool
+      ? `When the ${AGENT_TOOL_NAME} tool's available-agent list includes implementor or verification, use those subagent types for bounded implementation slices or independent checks where delegation helps; keep the scope tight and report results yourself.`
+      : null,
     hasSkills
       ? `/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.`
       : null,

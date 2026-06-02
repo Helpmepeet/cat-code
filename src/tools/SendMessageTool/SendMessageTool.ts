@@ -74,8 +74,8 @@ const inputSchema = lazySchema(() =>
       .string()
       .describe(
         feature('UDS_INBOX')
-          ? 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, teammate name or "*" when Agent Teams is enabled, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
-          : 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, or teammate name/"*" when Agent Teams is enabled',
+          ? 'Recipient (must be currently running): a running subagent by its friendly name/alias, worker handle, or raw agent ID; a teammate name or "*" when Agent Teams is enabled; "uds:<socket-path>" for a local peer; or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover). If the subagent has stopped, use ResumeAgent instead.'
+          : 'Recipient (must be currently running): a running subagent by its friendly name/alias, worker handle, or raw agent ID; or a teammate name/"*" when Agent Teams is enabled. If the subagent has stopped, use ResumeAgent instead.',
       ),
     summary: z
       .string()

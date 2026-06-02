@@ -21,7 +21,9 @@ const inputSchema = lazySchema(() =>
   z.strictObject({
     agentId: z
       .string()
-      .describe('Subagent alias, Agent Mode worker handle, or raw agent ID to resume'),
+      .describe(
+        'Which stopped subagent to restart: its friendly name/alias, Agent Mode worker handle, or raw agent ID (all accepted — same value SendMessage takes as `to`). Use SendMessage instead if the target is still running.',
+      ),
     prompt: z.string().describe('New prompt to send to the resumed subagent'),
   }),
 )

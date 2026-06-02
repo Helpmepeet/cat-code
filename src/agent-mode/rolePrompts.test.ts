@@ -1,4 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
+import { rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { getAgentModePromptInjections } from './roleFiles.js'
 
 // Temporary source-level assertions: importing the runtime prompt builders in
 // this repo snapshot currently trips a pre-existing initialization issue in the
@@ -32,5 +37,112 @@ describe('Agent Mode role prompts', () => {
     expect(promptSource).toContain('safe to apply')
     expect(promptSource).toContain('should be discarded')
     expect(promptSource).toContain('Do not expose raw paths unless needed for evidence')
+  })
+})
+
+// Source-text assertions only: importing implementorAgent.ts (or any agent
+// definition) trips the same pre-existing circular tool-graph init issue noted
+// at the top of this file (`Cannot access 'FILE_READ_TOOL_NAME' before
+// initialization`). We verify the source directly so the coverage actually
+// runs; the runtime wiring is exercised by the build.
+const implementorSource = await Bun.file(
+  new URL('../tools/AgentTool/built-in/implementorAgent.ts', import.meta.url),
+).text()
+
+describe('Normal-mode implementor prompt', () => {
+  test('uses a normal-mode-native contract instead of orchestrator framing', () => {
+    expect(implementorSource).toContain("agentType: 'implementor'")
+    // Reports to the main agent, not an orchestrator.
+    expect(implementorSource).toContain('You report to the main agent')
+    expect(implementorSource).toContain('main agent decides what to report to the user')
+    // Block-and-return-don't-widen discipline is present.
+    expect(implementorSource).toContain('block and return the exact question')
+    expect(implementorSource).toContain('do not widen the task')
+    // No orchestrator framing or orchestrator tool anywhere in the source.
+    expect(implementorSource).not.toContain('orchestrator')
+    expect(implementorSource).not.toContain('ask_orchestrator')
+    expect(implementorSource).not.toContain('ASK_ORCHESTRATOR_TOOL')
+  })
+
+  test('does not map the implementor type to .cat-code/roles/implementor.md injection', async () => {
+    // getAgentModePromptInjections is keyed by agentType; it must NOT inject the
+    // Agent-Mode implementor role file for the normal-mode 'implementor' type.
+    const tempProjectDir = mkdtempSync(join(tmpdir(), 'normal-implementor-role-'))
+    mkdirSync(join(tempProjectDir, '.cat-code', 'roles'), { recursive: true })
+    writeFileSync(
+      join(tempProjectDir, '.cat-code', 'roles', 'implementor.md'),
+      'Agent Mode-only role file',
+    )
+
+    try {
+      const injections = await getAgentModePromptInjections(
+        'implementor',
+        tempProjectDir,
+      )
+
+      expect(injections.join('\n')).not.toContain(
+        '.cat-code/roles/implementor.md',
+      )
+      expect(injections.join('\n')).not.toContain('Agent Mode-only role file')
+    } finally {
+      await rm(tempProjectDir, { recursive: true, force: true })
+    }
+  })
+
+  test('exposes implementation tools without orchestrator or peer-worker routing tools', () => {
+    // Tools are listed by constant name in source; assert on the constant
+    // identifiers rather than resolved string values.
+    const toolsBlock = implementorSource.slice(
+      implementorSource.indexOf('tools: ['),
+    )
+    expect(toolsBlock).toContain('BASH_TOOL_NAME')
+    expect(toolsBlock).toContain('FILE_READ_TOOL_NAME')
+    expect(toolsBlock).toContain('FILE_EDIT_TOOL_NAME')
+    expect(toolsBlock).toContain('FILE_PATCH_TOOL_NAME')
+    expect(toolsBlock).toContain('FILE_WRITE_TOOL_NAME')
+    expect(toolsBlock).toContain('GLOB_TOOL_NAME')
+    expect(toolsBlock).toContain('GREP_TOOL_NAME')
+    // The implementor must NOT carry Agent (no nested spawning) or the
+    // orchestrator/peer-worker routing tools.
+    expect(implementorSource).not.toContain('AGENT_TOOL_NAME')
+    expect(implementorSource).toContain('disallowedTools: [')
+    expect(implementorSource).toContain('SEND_MESSAGE_TOOL_NAME')
+    expect(implementorSource).toContain('TEAM_CREATE_TOOL_NAME')
+    expect(implementorSource).toContain('TEAM_DELETE_TOOL_NAME')
+  })
+})
+
+describe('AskOrchestrator tool-name resolution', () => {
+  // Regression: two constants both named ASK_ORCHESTRATOR_TOOL_NAME used to hold
+  // different values ('ask_orchestrator' in prompt.ts, 'AskOrchestrator' in
+  // constants.ts). The tool registers under the prompt.ts value, but the role
+  // `tools` arrays import the constants.ts value, so exact-match tool lookup
+  // missed and the Agent Mode workers never received the orchestrator tool.
+  test('both constant modules export the same canonical tool name', async () => {
+    const promptConst = await import('../tools/AskOrchestratorTool/prompt.js')
+    const defConst = await import('../tools/AskOrchestratorTool/constants.js')
+    expect(promptConst.ASK_ORCHESTRATOR_TOOL_NAME).toBe('ask_orchestrator')
+    expect(defConst.ASK_ORCHESTRATOR_TOOL_NAME).toBe(
+      promptConst.ASK_ORCHESTRATOR_TOOL_NAME,
+    )
+  })
+
+  test('the tool registers under the same name the role arrays reference', async () => {
+    const { AskOrchestratorTool } = await import(
+      '../tools/AskOrchestratorTool/AskOrchestratorTool.js'
+    )
+    const { ASK_ORCHESTRATOR_TOOL_NAME: roleArrayName } = await import(
+      '../tools/AskOrchestratorTool/constants.js'
+    )
+    // The value the role `tools` arrays use must equal the tool's runtime name,
+    // or exact-match resolution drops the tool from the workers' tool set.
+    expect(AskOrchestratorTool.name).toBe(roleArrayName)
+  })
+
+  test('role tool arrays reference the orchestrator constant', () => {
+    // The coding worker and verifier definitions both list the orchestrator tool
+    // via ASK_ORCHESTRATOR_TOOL_DEF_NAME in their `tools` arrays.
+    const occurrences = promptSource.split('ASK_ORCHESTRATOR_TOOL_DEF_NAME,').length - 1
+    expect(occurrences).toBe(2)
   })
 })

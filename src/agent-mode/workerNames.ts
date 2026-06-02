@@ -17,6 +17,7 @@ const GENERIC_WORKER_NAMES = [
 
 const NAME_POOLS: Record<string, string[]> = {
   'agent-mode-coding-worker': CODING_WORKER_NAMES,
+  implementor: CODING_WORKER_NAMES,
   'agent-mode-verifier': VERIFIER_NAMES,
 }
 

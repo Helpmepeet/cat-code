@@ -1,13 +1,18 @@
 import { DIAMOND_FILLED, DIAMOND_OPEN } from '../constants/figures.js'
 import { count } from '../utils/array.js'
-import type { BackgroundTaskState } from './types.js'
+import figures from 'figures'
+import type {
+  LocalAgentTaskState,
+  VerificationVerdict,
+} from './LocalAgentTask/LocalAgentTask.js'
+import type { TaskState } from './types.js'
 
 /**
  * Produces the compact footer-pill label for a set of background tasks.
  * Used by both the footer pill and the turn-duration transcript line so the
  * two surfaces agree on terminology.
  */
-export function getPillLabel(tasks: BackgroundTaskState[]): string {
+export function getPillLabel(tasks: TaskState[]): string {
   const n = tasks.length
   const allSameType = tasks.every(t => t.type === tasks[0]!.type)
 
@@ -35,7 +40,9 @@ export function getPillLabel(tasks: BackgroundTaskState[]): string {
         return teamCount === 1 ? '1 team' : `${teamCount} teams`
       }
       case 'local_agent':
-        return n === 1 ? '1 local agent' : `${n} local agents`
+        return getLocalAgentPillLabel(
+          tasks.filter((t): t is LocalAgentTaskState => t.type === 'local_agent'),
+        )
       case 'remote_agent': {
         const first = tasks[0]!
         // Per design mockup: ◇ open diamond while running/needs-input,
@@ -63,6 +70,24 @@ export function getPillLabel(tasks: BackgroundTaskState[]): string {
     }
   }
 
+  const localAgents = tasks.filter(
+    (t): t is LocalAgentTaskState => t.type === 'local_agent',
+  )
+  if (localAgents.length > 0) {
+    const blockedCount = localAgents.filter(isBlockedLocalAgent).length
+    const failedCount = localAgents.filter(t => t.status === 'failed').length
+    if (blockedCount > 0) {
+      const runningCount = localAgents.filter(t => t.status === 'running').length
+      return [
+        `${figures.questionMarkPrefix} ${blockedCount} needs input`,
+        runningCount > 0 ? `${runningCount} running` : undefined,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
+    if (failedCount > 0) return `${figures.cross} ${failedCount} failed`
+  }
+
   return `${n} background ${n === 1 ? 'task' : 'tasks'}`
 }
 
@@ -71,7 +96,10 @@ export function getPillLabel(tasks: BackgroundTaskState[]): string {
  * Per the state diagram: only the two attention states (needs_input,
  * plan_ready) surface the CTA; plain running shows just the diamond + label.
  */
-export function pillNeedsCta(tasks: BackgroundTaskState[]): boolean {
+export function pillNeedsCta(tasks: TaskState[]): boolean {
+  if (tasks.some(t => t.type === 'local_agent' && isBlockedLocalAgent(t))) {
+    return true
+  }
   if (tasks.length !== 1) return false
   const t = tasks[0]!
   return (
@@ -79,4 +107,72 @@ export function pillNeedsCta(tasks: BackgroundTaskState[]): boolean {
     t.isUltraplan === true &&
     t.ultraplanPhase !== undefined
   )
+}
+
+export function pillCtaText(tasks: TaskState[]): string | undefined {
+  if (tasks.some(t => t.type === 'local_agent' && isBlockedLocalAgent(t))) {
+    return '↵ to open'
+  }
+  if (pillNeedsCta(tasks)) return `${figures.arrowDown} to view`
+  return undefined
+}
+
+export function isBlockedLocalAgent(task: LocalAgentTaskState): boolean {
+  return task.handoffStatus === 'blocked'
+}
+
+export function localAgentStatusIcon(task: LocalAgentTaskState): string {
+  if (isBlockedLocalAgent(task)) return figures.questionMarkPrefix
+  if (task.agentType === 'verification' && task.verdict) {
+    return verdictIcon(task.verdict)
+  }
+  if (task.status === 'running') {
+    return task.progress?.recentActivities?.length ? figures.play : figures.ellipsis
+  }
+  if (task.status === 'completed') return figures.tick
+  if (task.status === 'failed' || task.status === 'killed') return figures.cross
+  return figures.bullet
+}
+
+function verdictIcon(verdict: VerificationVerdict): string {
+  switch (verdict) {
+    case 'PASS':
+      return figures.tick
+    case 'FAIL':
+      return figures.cross
+    case 'PARTIAL':
+      return figures.questionMarkPrefix
+  }
+}
+
+function getLocalAgentPillLabel(tasks: LocalAgentTaskState[]): string {
+  if (tasks.length === 1) return getSingleLocalAgentPillLabel(tasks[0]!)
+
+  if (tasks.length <= 2 && tasks.every(t => t.status !== 'running')) {
+    return tasks.map(getSingleLocalAgentPillLabel).join(' · ')
+  }
+
+  const blockedCount = tasks.filter(isBlockedLocalAgent).length
+  if (blockedCount > 0) {
+    const runningCount = tasks.filter(t => t.status === 'running').length
+    return [
+      `${figures.questionMarkPrefix} ${blockedCount} needs input`,
+      runningCount > 0 ? `${runningCount} running` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  }
+
+  return `${tasks.length} subagents`
+}
+
+function getSingleLocalAgentPillLabel(task: LocalAgentTaskState): string {
+  const icon = localAgentStatusIcon(task)
+  const identity = task.agentName
+    ? `@${task.agentName} · ${task.agentType}`
+    : task.agentType
+  const blockedSuffix = isBlockedLocalAgent(task) ? ' — needs input' : ''
+  const verdictSuffix =
+    task.agentType === 'verification' && task.verdict ? ` — ${task.verdict}` : ''
+  return `${icon} ${identity}${blockedSuffix}${verdictSuffix}`
 }

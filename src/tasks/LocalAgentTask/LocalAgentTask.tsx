@@ -43,6 +43,7 @@ export type AgentProgress = {
   recentActivities?: ToolActivity[];
   summary?: string;
 };
+export type VerificationVerdict = 'PASS' | 'FAIL' | 'PARTIAL';
 const MAX_RECENT_ACTIVITIES = 5;
 export type ProgressTracker = {
   toolUseCount: number;
@@ -136,6 +137,7 @@ export function createActivityDescriptionResolver(tools: Tools): ActivityDescrip
 export type LocalAgentTaskState = TaskStateBase & {
   type: 'local_agent';
   agentId: string;
+  agentName?: string;
   prompt: string;
   selectedAgent?: AgentDefinition;
   agentType: string;
@@ -167,6 +169,9 @@ export type LocalAgentTaskState = TaskStateBase & {
   evictAfter?: number;
   // Last time this task was resumed after reaching a terminal state.
   resumedAt?: number;
+  handoffStatus?: 'done' | 'blocked';
+  blockReason?: string;
+  verdict?: VerificationVerdict;
 };
 export function isLocalAgentTask(task: unknown): task is LocalAgentTaskState {
   return typeof task === 'object' && task !== null && 'type' in task && task.type === 'local_agent';
@@ -446,22 +451,58 @@ export function updateAgentSummary(taskId: string, summary: string, setAppState:
   }
 }
 
+function getResultText(result: AgentToolResult): string {
+  return result.content.map(block => block.text).join('\n');
+}
+
+function extractHandoffStatus(text: string): 'done' | 'blocked' | undefined {
+  const match = text.match(/^\s*(?:\*\*)?status\s*:\s*(?:\*\*)?\s*(done|blocked)\b/im);
+  return match?.[1]?.toLowerCase() as 'done' | 'blocked' | undefined;
+}
+
+function extractBlockReason(text: string): string | undefined {
+  const blockerMatch = text.match(/open questions \/ blockers:\s*\n\s*(?:[-*]\s*)?([^\n]+)/i);
+  const blocker = blockerMatch?.[1]?.trim();
+  if (blocker) return blocker;
+  return text.split('\n').map(line => line.trim()).find(line => line.length > 0);
+}
+
+function extractVerificationVerdict(text: string): VerificationVerdict | undefined {
+  const match = text.match(/^\s*VERDICT:\s*(PASS|FAIL|PARTIAL)\b/im);
+  return match?.[1] as VerificationVerdict | undefined;
+}
+
+function getResultMetadata(result: AgentToolResult): Pick<LocalAgentTaskState, 'handoffStatus' | 'blockReason' | 'verdict'> {
+  const text = getResultText(result);
+  const handoffStatus = extractHandoffStatus(text);
+  const verdict = extractVerificationVerdict(text);
+  return {
+    ...(handoffStatus ? { handoffStatus } : {}),
+    ...(handoffStatus === 'blocked' ? { blockReason: extractBlockReason(text) } : {}),
+    ...(verdict ? { verdict } : {})
+  };
+}
+
 /**
  * Complete an agent task with result.
  */
 export function completeAgentTask(result: AgentToolResult, setAppState: SetAppState): void {
   const taskId = result.agentId;
+  const resultMetadata = getResultMetadata(result);
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running') {
       return task;
     }
     task.unregisterCleanup?.();
+    const isBlocked = resultMetadata.handoffStatus === 'blocked';
     return {
       ...task,
       status: 'completed',
+      agentName: result.agentName ?? task.agentName,
       result,
+      ...resultMetadata,
       endTime: Date.now(),
-      evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
+      evictAfter: task.retain || isBlocked ? undefined : Date.now() + PANEL_GRACE_MS,
       abortController: undefined,
       unregisterCleanup: undefined,
       selectedAgent: undefined
@@ -512,6 +553,7 @@ export function registerAsyncAgent({
   description,
   prompt,
   selectedAgent,
+  agentName,
   setAppState,
   parentAbortController,
   toolUseId
@@ -520,6 +562,7 @@ export function registerAsyncAgent({
   description: string;
   prompt: string;
   selectedAgent: AgentDefinition;
+  agentName?: string;
   setAppState: SetAppState;
   parentAbortController?: AbortController;
   toolUseId?: string;
@@ -533,6 +576,7 @@ export function registerAsyncAgent({
     type: 'local_agent',
     status: 'running',
     agentId,
+    ...(agentName ? { agentName } : {}),
     prompt,
     selectedAgent,
     agentType: selectedAgent.agentType ?? 'general-purpose',
@@ -572,6 +616,7 @@ export function registerAgentForeground({
   description,
   prompt,
   selectedAgent,
+  agentName,
   setAppState,
   autoBackgroundMs,
   toolUseId
@@ -580,6 +625,7 @@ export function registerAgentForeground({
   description: string;
   prompt: string;
   selectedAgent: AgentDefinition;
+  agentName?: string;
   setAppState: SetAppState;
   autoBackgroundMs?: number;
   toolUseId?: string;
@@ -598,6 +644,7 @@ export function registerAgentForeground({
     type: 'local_agent',
     status: 'running',
     agentId,
+    ...(agentName ? { agentName } : {}),
     prompt,
     selectedAgent,
     agentType: selectedAgent.agentType ?? 'general-purpose',

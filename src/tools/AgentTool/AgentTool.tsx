@@ -374,9 +374,21 @@ const fullInputSchema = lazySchema(() => {
 // type, but call() destructures via the explicit AgentToolInput type below
 // which always includes all optional fields.
 export const inputSchema = lazySchema(() => {
-  const schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
+  let schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
     cwd: true
   });
+
+  // The multi-agent params (name/team_name/mode) only do anything in the
+  // agent-teams/swarm spawn path: `name` is the teammate's required roster
+  // identity that routes call() into spawnTeammate(), and team_name/mode are
+  // teammate-only. When swarms are off they are dead weight on every ordinary
+  // subagent spawn — the model shouldn't pick a name for a subagent that is
+  // already auto-named for handle/UI purposes. Hide them so they never appear.
+  // call() still destructures them via the explicit AgentToolInput type, so the
+  // teammate path keeps working when swarms are enabled.
+  if (!isAgentSwarmsEnabled()) {
+    schema = schema.omit({ name: true, team_name: true, mode: true });
+  }
 
   // GrowthBook-in-lazySchema is acceptable here (unlike subagent_type, which
   // was removed in 906da6c723): the divergence window is one-session-per-
@@ -1056,6 +1068,7 @@ export const AgentTool = buildTool({
         description,
         prompt,
         selectedAgent,
+        agentName,
         setAppState: rootSetAppState,
         // Don't link to parent's abort controller -- background agents should
         // survive when the user presses ESC to cancel the main thread.
@@ -1184,6 +1197,7 @@ export const AgentTool = buildTool({
             description,
             prompt,
             selectedAgent,
+            agentName,
             setAppState: rootSetAppState,
             toolUseId: toolUseContext.toolUseId,
             autoBackgroundMs: getAutoBackgroundMs() || undefined
