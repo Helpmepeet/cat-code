@@ -349,7 +349,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['sonnet', 'opus', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']).optional().describe("Optional model override. Built-in agents already resolve to a sensible model (Explore uses a fast cheap model; Plan/general-purpose/etc. inherit your model), so OMIT this by default — passing it overrides that default and usually just wastes it (e.g. forcing Explore off its cheap pin, or downgrading heavy general-purpose work below your own tier). Only set it for a deliberate reason: (1) an independent reviewer in a different model family (e.g. sonnet to audit your work), (2) upgrading a subagent when you yourself are on a weaker model, or (3) a custom/user-defined agent whose configured model is wrong for the task. Do not pass it just to fill the field."),
+  model: z.enum(['sonnet', 'opus', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it (don't match yourself to a specific id like gpt-5.4)."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));
 
