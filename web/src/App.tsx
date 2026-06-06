@@ -174,15 +174,25 @@ export function App() {
   const { send, connected, reconnecting, lastError } = useWebSocket(onMessage);
 
   useEffect(() => {
-    setAppState(prev => ({
-      ...prev,
-      status: {
-        ...prev.status,
-        connected,
-        reconnecting,
-        notice: lastError ?? prev.status.notice,
-      },
-    }));
+    setAppState(prev => {
+      const hasStaleWebSocketNotice =
+        prev.status.notice === "WebSocket connection failed." ||
+        prev.status.notice === "Received an invalid server message.";
+
+      return {
+        ...prev,
+        status: {
+          ...prev.status,
+          connected,
+          reconnecting,
+          notice:
+            lastError ??
+            (connected && hasStaleWebSocketNotice
+              ? undefined
+              : prev.status.notice),
+        },
+      };
+    });
   }, [connected, reconnecting, lastError]);
 
   const resizeTextarea = useCallback(() => {
