@@ -70,7 +70,16 @@ export type AppPermissionRequest = {
 };
 
 export type AppClientMessage =
-  | { type: "app.submit"; requestId: string; prompt: string }
+  | {
+      type: "app.submit";
+      requestId: string;
+      prompt: string;
+      options?: {
+        uuid?: string;
+        isMeta?: boolean;
+        goalSnapshot?: unknown;
+      };
+    }
   | { type: "app.abort"; requestId: string; reason?: string }
   | {
       type: "permission.response";
@@ -96,4 +105,5 @@ export type AppClientMessage =
               | "user_permanent"
               | "user_reject";
           };
-    };
+    }
+  | { type: "app.ping"; nonce: string };

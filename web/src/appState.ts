@@ -46,6 +46,8 @@ export function reduceAppServerMessage(
       ...state,
       status: {
         ...state.status,
+        connected: true,
+        reconnecting: false,
         inputEnabled: message.inputEnabled,
       },
       abort: message.abort,
@@ -81,16 +83,52 @@ export function reduceAppServerMessage(
   }
 
   if (event.type === "message.replace") {
+    const existingIndex = state.messages.findIndex(
+      candidate => candidate.id === event.message.id,
+    );
+
+    if (existingIndex === -1) {
+      return { ...state, messages: [...state.messages, event.message] };
+    }
+
     return {
       ...state,
-      messages: [
-        ...state.messages.filter(candidate => candidate.id !== event.message.id),
-        event.message,
-      ],
+      messages: state.messages.map((candidate, index) =>
+        index === existingIndex ? event.message : candidate,
+      ),
     };
   }
 
   if (event.type === "message.delta") {
+    if (event.id !== undefined) {
+      const existingIndex = state.messages.findIndex(
+        candidate => candidate.id === event.id,
+      );
+
+      if (existingIndex !== -1) {
+        return {
+          ...state,
+          messages: state.messages.map((candidate, index) =>
+            index === existingIndex
+              ? { ...candidate, content: candidate.content + event.delta }
+              : candidate,
+          ),
+        };
+      }
+
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            id: event.id,
+            role: "assistant",
+            content: event.delta,
+          },
+        ],
+      };
+    }
+
     const last = state.messages[state.messages.length - 1];
     if (last?.role === "assistant") {
       return {
@@ -107,7 +145,7 @@ export function reduceAppServerMessage(
       messages: [
         ...state.messages,
         {
-          id: event.id ?? `assistant-${crypto.randomUUID()}`,
+          id: `assistant-${crypto.randomUUID()}`,
           role: "assistant",
           content: event.delta,
         },

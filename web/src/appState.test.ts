@@ -13,6 +13,8 @@ describe("web app state reducer", () => {
       pendingPermissionRequests: [],
     });
 
+    expect(state.status.connected).toBe(true);
+    expect(state.status.reconnecting).toBe(false);
     expect(state.status.inputEnabled).toBe(true);
     expect(state.abort).toEqual({ status: "idle" });
   });
@@ -44,6 +46,126 @@ describe("web app state reducer", () => {
         role: "assistant",
         content: "hello world",
       },
+    ]);
+  });
+
+  test("applies deltas to matching message ids", () => {
+    let state = createInitialAppState();
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "message.append",
+        message: {
+          id: "assistant-1",
+          role: "assistant",
+          content: "first",
+        },
+      },
+    });
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "message.append",
+        message: {
+          id: "assistant-2",
+          role: "assistant",
+          content: "second",
+        },
+      },
+    });
+
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "message.delta",
+        id: "assistant-1",
+        delta: " updated",
+      },
+    });
+
+    expect(state.messages).toEqual([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "first updated",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        content: "second",
+      },
+    ]);
+  });
+
+  test("appends deltas with unknown message ids", () => {
+    let state = createInitialAppState();
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "message.append",
+        message: {
+          id: "assistant-1",
+          role: "assistant",
+          content: "first",
+        },
+      },
+    });
+
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "message.delta",
+        id: "assistant-2",
+        delta: "second",
+      },
+    });
+
+    expect(state.messages).toEqual([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "first",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        content: "second",
+      },
+    ]);
+  });
+
+  test("replaces messages in place", () => {
+    let state = createInitialAppState();
+    for (const message of [
+      { id: "message-1", role: "user" as const, content: "one" },
+      { id: "message-2", role: "assistant" as const, content: "two" },
+      { id: "message-3", role: "system" as const, content: "three" },
+    ]) {
+      state = reduceAppServerMessage(state, {
+        type: "app.event",
+        event: {
+          type: "message.append",
+          message,
+        },
+      });
+    }
+
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "message.replace",
+        message: {
+          id: "message-2",
+          role: "assistant",
+          content: "two replaced",
+        },
+      },
+    });
+
+    expect(state.messages).toEqual([
+      { id: "message-1", role: "user", content: "one" },
+      { id: "message-2", role: "assistant", content: "two replaced" },
+      { id: "message-3", role: "system", content: "three" },
     ]);
   });
 
