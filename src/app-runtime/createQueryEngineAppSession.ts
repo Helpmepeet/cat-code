@@ -16,6 +16,7 @@ export type QueryEngineAppSessionConfig = Omit<
   abortController?: AbortController
   canUseTool?: QueryEngineConfig['canUseTool']
   createRequestId?: () => string
+  createEngine?: (config: QueryEngineConfig) => QueryEngineSessionLike
 }
 
 export function createQueryEngineAppSession(
@@ -23,7 +24,7 @@ export function createQueryEngineAppSession(
 ): QueryEngineSessionLike {
   let currentPermissionHandler: AppPermissionRequestHandler | undefined
   const abortController = config.abortController ?? createAbortController()
-  const engine = new QueryEngine({
+  const engineConfig = {
     ...config,
     abortController,
     canUseTool: createAppRuntimeCanUseTool({
@@ -31,10 +32,12 @@ export function createQueryEngineAppSession(
       createRequestId: config.createRequestId,
       getPermissionRequestHandler: () => currentPermissionHandler,
     }),
-  })
+  }
+  const engine = config.createEngine?.(engineConfig) ?? new QueryEngine(engineConfig)
 
   return {
     async *submitMessage(prompt, options?: QueryEngineSessionOptions) {
+      engine.refreshAbortController?.()
       currentPermissionHandler = options?.onPermissionRequest
       try {
         yield* engine.submitMessage(prompt, {
@@ -46,7 +49,10 @@ export function createQueryEngineAppSession(
       }
     },
     interrupt() {
-      abortController.abort()
+      engine.interrupt?.()
+    },
+    refreshAbortController() {
+      return engine.refreshAbortController?.() ?? abortController
     },
   }
 }

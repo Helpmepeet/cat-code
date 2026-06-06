@@ -23,6 +23,7 @@ export type QueryEngineSessionLike = {
     options?: QueryEngineSessionOptions,
   ): AsyncIterable<SDKMessage>
   interrupt?: () => void
+  refreshAbortController?: () => AbortController
 }
 
 export function createQueryEngineSessionAdapter(

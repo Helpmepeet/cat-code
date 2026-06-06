@@ -1217,6 +1217,13 @@ export class QueryEngine {
     this.abortController.abort()
   }
 
+  refreshAbortController(): AbortController {
+    if (this.abortController.signal.aborted) {
+      this.abortController = createAbortController()
+    }
+    return this.abortController
+  }
+
   getMessages(): readonly Message[] {
     return this.mutableMessages
   }
