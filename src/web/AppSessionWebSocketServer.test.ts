@@ -11,12 +11,18 @@ afterEach(async () => {
   }
 })
 
-function connect(url: string, token?: string): Promise<WebSocket> {
+type ConnectOptions = {
+  origin?: string | null
+}
+
+function connect(
+  url: string,
+  token?: string,
+  { origin = 'http://localhost:5173' }: ConnectOptions = {},
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const options = { headers: { Origin: 'http://localhost:5173' } }
-    const ws = token
-      ? new WebSocket(url, [`cat-code.${token}`], options)
-      : new WebSocket(url, [], options)
+    const options = origin === null ? undefined : { headers: { Origin: origin } }
+    const ws = new WebSocket(url, token ? [`cat-code.${token}`] : [], options)
     ws.once('open', () => resolve(ws))
     ws.on('error', error => {
       reject(
@@ -46,6 +52,23 @@ describe('AppSessionWebSocketServer', () => {
     servers.push(server)
 
     await expect(connect(`ws://127.0.0.1:${server.port}/ws`)).rejects.toThrow()
+  })
+
+  test('requires an allowed origin', async () => {
+    const controller = new AppSessionController({
+      async *runTurn() {},
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+
+    await expect(
+      connect(`ws://127.0.0.1:${server.port}/ws`, 'secret', { origin: null }),
+    ).rejects.toThrow()
   })
 
   test('sends ready then submits a prompt and relays mapped messages', async () => {

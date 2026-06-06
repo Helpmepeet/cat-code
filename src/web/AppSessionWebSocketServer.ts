@@ -43,8 +43,8 @@ export async function startAppSessionWebSocketServer({
         .map(protocol => protocol.trim())
       if (!protocols.includes(requiredProtocol)) return false
 
-      const origin = info.origin
-      if (origin && !allowedOrigins.includes(origin)) return false
+      const origin = info.origin?.trim()
+      if (!origin || !allowedOrigins.includes(origin)) return false
 
       const host = info.req.headers.host ?? ''
       return host.startsWith('127.0.0.1:') || host.startsWith('localhost:')
