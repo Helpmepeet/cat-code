@@ -8,6 +8,7 @@ import type {
 import { outputSchema as permissionResponseSchema } from '../utils/permissions/PermissionPromptToolResultSchema.js'
 
 const requestIdSchema = z.string().min(1)
+const presentUnknownSchema = z.unknown().refine(value => value !== undefined)
 
 const appSubmitMessageSchema = z.object({
   type: z.literal('app.submit'),
@@ -52,6 +53,11 @@ const abortStateSchema = z.union([
   z.object({ status: z.literal('aborted'), reason: z.string().optional() }),
 ])
 
+const permissionRequestSchema = z.object({
+  requestId: requestIdSchema,
+  request: presentUnknownSchema,
+})
+
 const browserMessageSchema = z.object({
   id: z.string().min(1),
   role: z.enum(['user', 'assistant', 'system']),
@@ -86,16 +92,16 @@ const appBrowserEventSchema = z.union([
   }),
   z.object({
     type: z.literal('goal.snapshot'),
-    snapshot: z.unknown(),
+    snapshot: presentUnknownSchema,
   }),
   z.object({
     type: z.literal('permission.requested'),
-    request: z.unknown(),
+    request: permissionRequestSchema,
   }),
   z.object({
     type: z.literal('permission.resolved'),
-    requestId: z.string(),
-    response: z.unknown(),
+    requestId: requestIdSchema,
+    response: permissionResponseSchema(),
   }),
   z.object({
     type: z.literal('abort.status'),
@@ -109,8 +115,8 @@ export const appServerMessageSchema = z.union([
     protocolVersion: z.literal(1),
     inputEnabled: z.boolean(),
     abort: abortStateSchema,
-    goalSnapshot: z.unknown(),
-    pendingPermissionRequests: z.array(z.unknown()),
+    goalSnapshot: presentUnknownSchema,
+    pendingPermissionRequests: z.array(permissionRequestSchema),
   }),
   z.object({
     type: z.literal('app.event'),

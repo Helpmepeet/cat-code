@@ -105,4 +105,56 @@ describe('app session web protocol', () => {
       }),
     ).toMatchObject({ type: 'app.event' })
   })
+
+  test('rejects malformed server messages', () => {
+    expect(() =>
+      appServerMessageSchema.parse({
+        type: 'app.ready',
+        protocolVersion: 1,
+        inputEnabled: true,
+        abort: { status: 'idle' },
+        pendingPermissionRequests: [],
+      }),
+    ).toThrow()
+
+    expect(() =>
+      appServerMessageSchema.parse({
+        type: 'app.ready',
+        protocolVersion: 1,
+        inputEnabled: true,
+        abort: { status: 'idle' },
+        goalSnapshot: null,
+        pendingPermissionRequests: [undefined],
+      }),
+    ).toThrow()
+
+    expect(() =>
+      appServerMessageSchema.parse({
+        type: 'app.event',
+        event: {
+          type: 'goal.snapshot',
+        },
+      }),
+    ).toThrow()
+
+    expect(() =>
+      appServerMessageSchema.parse({
+        type: 'app.event',
+        event: {
+          type: 'permission.requested',
+        },
+      }),
+    ).toThrow()
+
+    expect(() =>
+      appServerMessageSchema.parse({
+        type: 'app.event',
+        event: {
+          type: 'permission.resolved',
+          requestId: 'perm-1',
+          response: { behavior: 'allow' },
+        },
+      }),
+    ).toThrow()
+  })
 })
