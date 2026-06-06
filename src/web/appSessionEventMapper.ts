@@ -19,6 +19,10 @@ export function createAppSessionEventMapper({
     return activeAssistantMessageId
   }
 
+  function clearActiveAssistantMessageId() {
+    activeAssistantMessageId = undefined
+  }
+
   return {
     map(event: AppSessionEvent): AppBrowserEvent[] {
       if (event.type === 'goal.snapshot') {
@@ -40,6 +44,7 @@ export function createAppSessionEventMapper({
       }
 
       if (event.type === 'abort.status') {
+        clearActiveAssistantMessageId()
         return [{ type: 'abort.status', abort: event.abort }]
       }
 
@@ -48,12 +53,20 @@ export function createAppSessionEventMapper({
       }
 
       const mapped = mapSdkMessage(event.message, activeAssistantMessageId)
-      if (event.message.type === 'assistant') {
-        activeAssistantMessageId = undefined
+      if (isAssistantStreamTerminalMessage(event.message)) {
+        clearActiveAssistantMessageId()
       }
       return mapped
     },
   }
+}
+
+function isAssistantStreamTerminalMessage(message: SDKMessage): boolean {
+  return (
+    message.type === 'assistant' ||
+    message.type === 'result' ||
+    message.type === 'assistant_error'
+  )
 }
 
 function mapSdkMessage(
@@ -96,6 +109,8 @@ function mapSdkMessage(
   }
 
   if (message.type === 'system') {
+    if (message.subtype !== 'cat_code_account_diagnostic') return []
+
     const content =
       typeof message.user_message === 'string'
         ? message.user_message
@@ -138,20 +153,6 @@ function mapSdkMessage(
           content,
           sdkType: message.type,
           sdkSubtype: message.subtype,
-        },
-      },
-    ]
-  }
-
-  if (message.type === 'assistant_error') {
-    return [
-      {
-        type: 'message.append',
-        message: {
-          id: message.uuid ?? message.request_id ?? 'assistant-error',
-          role: 'system',
-          content: message.message ?? message.error ?? 'Assistant error',
-          sdkType: message.type,
         },
       },
     ]

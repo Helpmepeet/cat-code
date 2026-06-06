@@ -58,20 +58,20 @@ describe('createAppSessionEventMapper', () => {
         type: 'message',
         message: {
           type: 'stream_event',
-          uuid: 'stream-start',
+          uuid: '00000000-0000-4000-8000-000000000001',
           event: {
             type: 'message_start',
             message: { usage: {} },
           },
         },
-      } as AppSessionEvent),
+      }),
     ).toEqual([])
 
     const deltaEvent: AppSessionEvent = {
       type: 'message',
       message: {
         type: 'stream_event',
-        uuid: 'stream-1',
+        uuid: '00000000-0000-4000-8000-000000000002',
         event: {
           type: 'content_block_delta',
           delta: { type: 'text_delta', text: 'partial' },
@@ -111,6 +111,136 @@ describe('createAppSessionEventMapper', () => {
     ])
   })
 
+  test('clears stream state after result errors before later assistant text', () => {
+    const mapper = createAppSessionEventMapper({
+      createId: () => 'assistant-stream-1',
+    })
+
+    expect(
+      mapper.map({
+        type: 'message',
+        message: {
+          type: 'stream_event',
+          uuid: '00000000-0000-4000-8000-000000000003',
+          event: {
+            type: 'content_block_delta',
+            delta: { type: 'text_delta', text: 'partial' },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'message.delta',
+        id: 'assistant-stream-1',
+        delta: 'partial',
+      },
+    ])
+
+    expect(
+      mapper.map({
+        type: 'message',
+        message: {
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          result: 'failed',
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'message.append',
+        message: {
+          id: 'result-error',
+          role: 'system',
+          content: 'failed',
+          sdkType: 'result',
+          sdkSubtype: 'error_during_execution',
+        },
+      },
+    ])
+
+    expect(
+      mapper.map({
+        type: 'message',
+        message: {
+          type: 'assistant',
+          uuid: 'assistant-after-result-error',
+          message: {
+            content: [{ type: 'text', text: 'next assistant' }],
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'message.append',
+        message: {
+          id: 'assistant-after-result-error',
+          role: 'assistant',
+          content: 'next assistant',
+          sdkType: 'assistant',
+        },
+      },
+    ])
+  })
+
+  test('clears stream state after abort before later assistant text', () => {
+    const mapper = createAppSessionEventMapper({
+      createId: () => 'assistant-stream-1',
+    })
+
+    expect(
+      mapper.map({
+        type: 'message',
+        message: {
+          type: 'stream_event',
+          uuid: '00000000-0000-4000-8000-000000000004',
+          event: {
+            type: 'content_block_delta',
+            delta: { type: 'text_delta', text: 'partial' },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'message.delta',
+        id: 'assistant-stream-1',
+        delta: 'partial',
+      },
+    ])
+
+    expect(
+      mapper.map({
+        type: 'abort.status',
+        abort: { status: 'requested', reason: 'stop' },
+      }),
+    ).toEqual([
+      { type: 'abort.status', abort: { status: 'requested', reason: 'stop' } },
+    ])
+
+    expect(
+      mapper.map({
+        type: 'message',
+        message: {
+          type: 'assistant',
+          uuid: 'assistant-after-abort',
+          message: {
+            content: [{ type: 'text', text: 'next assistant' }],
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'message.append',
+        message: {
+          id: 'assistant-after-abort',
+          role: 'assistant',
+          content: 'next assistant',
+          sdkType: 'assistant',
+        },
+      },
+    ])
+  })
+
   test('maps visible system diagnostics to system messages', () => {
     const mapper = createAppSessionEventMapper({ createId: () => 'generated-1' })
     const event: AppSessionEvent = {
@@ -135,6 +265,23 @@ describe('createAppSessionEventMapper', () => {
         },
       },
     ])
+  })
+
+  test('ignores non-diagnostic system messages in phase 1', () => {
+    const mapper = createAppSessionEventMapper({ createId: () => 'generated-1' })
+
+    expect(
+      mapper.map({
+        type: 'message',
+        message: {
+          type: 'system',
+          subtype: 'post_turn_summary',
+          uuid: 'summary-1',
+          content: 'internal content',
+          summary: 'internal summary',
+        },
+      }),
+    ).toEqual([])
   })
 
   test('maps result errors but ignores success results', () => {
@@ -210,6 +357,34 @@ describe('createAppSessionEventMapper', () => {
             input: { command: 'pwd' },
             tool_use_id: 'toolu_1',
           },
+        },
+      },
+    ])
+
+    expect(
+      mapper.map({
+        type: 'permission.resolved',
+        request: {
+          requestId: 'perm-1',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'Bash',
+            input: { command: 'pwd' },
+            tool_use_id: 'toolu_1',
+          },
+        },
+        response: {
+          behavior: 'allow',
+          updatedInput: { command: 'pwd' },
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'permission.resolved',
+        requestId: 'perm-1',
+        response: {
+          behavior: 'allow',
+          updatedInput: { command: 'pwd' },
         },
       },
     ])
