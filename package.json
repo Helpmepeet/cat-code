@@ -13,12 +13,9 @@
   },
   "scripts": {
     "build": "bun run ./scripts/build.ts",
-    "build:dedicated-app": "bun build ./src/dedicated-app/index.ts --outdir ./dist/dedicated-app --target browser && bun build ./src/dedicated-app/host.ts --outdir ./dist/dedicated-app --target bun",
     "build:dev": "bun run ./scripts/build.ts --dev",
     "build:dev:full": "bun run lint && bun run ./scripts/build.ts --dev --feature-set=dev-full && ./cli-dev --version",
-    "validate:dedicated-app": "bun run ./scripts/validate-dedicated-app.ts",
     "lint": "eslint --suppressions-location eslint-suppressions.json --suppress-rule react-hooks/rules-of-hooks --suppress-rule react-hooks/exhaustive-deps --suppress-rule custom-rules/prefer-use-terminal-size $(git diff --name-only main...HEAD | grep -E '\\.(ts|tsx)$' | grep -v '^web/' | while IFS= read -r f; do [ -f \"$f\" ] && printf '%s ' \"$f\"; done)",
-    "serve:dedicated-app": "bun run ./src/dedicated-app/host.ts",
     "compile": "bun run ./scripts/build.ts --compile",
     "dev": "bun run ./src/entrypoints/cli.tsx"
   },

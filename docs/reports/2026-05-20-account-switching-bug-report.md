@@ -367,7 +367,7 @@ On switch, delete all non-main leases. Next request from each subagent hits the 
 
 **Unverified:**
 
-- Whether the dedicated-app surface (`src/app-runtime/`, `src/dedicated-app/`) has its own switch-account path that bypasses this code.
+- Whether the app-runtime controller has its own switch-account path that bypasses this code.
 - Whether a `LocalAgentTask` that crashes without calling `failAgentTask` leaks a lease into the next process invocation (probably not — lease map is in-memory only).
 
 ---
@@ -491,7 +491,7 @@ A remount from Freeze A's fix already discards local state, so this is redundant
 #### Unverified
 
 - Whether `bun run build:dev:full` regenerates the compiled `Messages.tsx` from source or whether the patch must land in the committed compiled form. The file currently in repo is post-compiler output. This matters for the fix path — check before patching.
-- Whether the dedicated-app surface has its own LogoV2 component (likely not, but worth a check).
+- Whether any non-terminal surface has its own LogoV2 component (likely not, but worth a check).
 
 ---
 
@@ -603,7 +603,7 @@ The second is cleaner: lease failovers stay lease-local and in-memory; only `swi
 >
 > Also: the current `log.debug(...)` is not user-visible unless debug mode is on (`src/utils/debug.ts:230-253`), so today the only signal is silence.
 >
-> **[CONFIRMED — second verification pass]** Worse than expected: even **emitting** a structured diagnostic from this path wouldn't help in terminal mode — the diagnostic sink isn't installed in interactive TUI / bridge / dedicated-app modes (§15.5.1). Any "add `account.identity_mismatch` diagnostic" fix must be **preceded** by installing a default sink for these modes. Without that pre-requisite, Patch 3's diagnostic additions are noop for terminal users.
+> **[CONFIRMED — second verification pass]** Worse than expected: even **emitting** a structured diagnostic from this path wouldn't help in terminal mode — the diagnostic sink isn't installed in interactive TUI / bridge / app-runtime controller modes (§15.5.1). Any "add `account.identity_mismatch` diagnostic" fix must be **preceded** by installing a default sink for these modes. Without that pre-requisite, Patch 3's diagnostic additions are noop for terminal users.
 
 `src/codex-core/accounts.ts:148-153`:
 
@@ -1097,7 +1097,7 @@ The user de-scoped Claude from the deep-dives, but the breadth audit found real 
 > Several items resolved by the second verification pass (§15.5). Strikethrough = resolved; arrow points to the resolution.
 
 - ~~Whether `bun run build:dev:full` regenerates compiled `Messages.tsx` from source~~ → **§15.5.5 Resolved.** `Messages.tsx` is source-of-truth; direct edit survives the build.
-- Whether the dedicated-app surface (`src/app-runtime/`, `src/dedicated-app/`) has its own switch-account path bypassing the TUI command.
+- Whether the app-runtime controller has its own switch-account path bypassing the TUI command.
 - ~~Whether Bug #6's symptom (re-refresh loop) is observable at runtime~~ → **§15.5.2 Resolved.** Yes for codex-core path; less for chat path. Restart reconstructs bad expiry from `last_refresh`.
 - ~~Whether `getActiveAccount` lazy reslot (`codexAccountPool.ts`) actually fires in production~~ → **§15.5.3 / §15.5.4 Resolved.** Real, unpersisted, fires whenever current active is missing/unhealthy.
 - Whether `codex-fetch-adapter.ts`'s WebSocket transport re-derives the auth token per reconnect or holds the original closure.
@@ -1163,7 +1163,7 @@ Per-mode verdict from source inspection (no runtime):
 | **Terminal / interactive TUI** | **No** | Dropped silently. `init()` (`src/entrypoints/init.ts:86-97`) installs no sink; `launchRepl()` (`src/main.tsx:3916-3924`) installs no sink. Production emitters in `client.ts:158-211` and `withRetry.ts:107-132` call without `allowStderrFallback`. **No `CAT_CODE_DIAGNOSTIC` lines reach the user.** |
 | **SDK / `--print --output-format=stream-json`** | Yes | `runHeadless()` installs the hook only when `outputFormat === 'stream-json'` (`src/cli/print.ts:597-603`), writes via `structuredIO.write()` (`src/cli/structuredIO.ts:465-467`). `--sdk-url` auto-enables (`src/main.tsx:1342-1358`). Reaches observers as NDJSON system messages. |
 | **Bridge / remote-control from REPL** | **No** for local diagnostics | `initReplBridge()` (`src/bridge/initReplBridge.ts:490-544`) installs no account diagnostic hook. Bridge only forwards eligible REPL `Message[]` (`bridgeMessaging.ts:72-88` allows user/assistant/local-command only). A direct-connect client forwards SDK messages it receives (`directConnectManager.ts:102-112`), but nothing is emitted into that stream locally. |
-| **Dedicated app** | **No** | `createQueryEngineAppSession()` (`src/app-runtime/createQueryEngineAppSession.ts:21-52`) installs no hook. `AppSessionController.submit()` only emits messages yielded by its adapter (`AppSessionController.ts:143-156`). Global diagnostics never enter app events. |
+| **App-runtime controller** | **No** | `createQueryEngineAppSession()` (`src/app-runtime/createQueryEngineAppSession.ts:21-52`) installs no hook. `AppSessionController.submit()` only emits messages yielded by its adapter (`AppSessionController.ts:143-156`). Global diagnostics never enter app events. |
 
 **Test evidence:** `accountDiagnostics.test.ts:240-254` confirms no-sink emission writes nothing; `:256-270` confirms fallback is opt-in only; `accountRecoveryDiagnostics.test.ts:119-125` manually installs a sink in `beforeEach`. The behavior is by-design — tests assert it.
 
@@ -1171,7 +1171,7 @@ Per-mode verdict from source inspection (no runtime):
 
 - Terminal: install a sink during interactive startup. Prefer debug log / UI event over raw stderr (raw stderr would pollute terminal output).
 - Bridge: install a sink after `initBridgeCore()` returns and forward via `handle.writeSdkMessages([message])`.
-- Dedicated app: install a per-turn sink in `AppSessionController.submit()` that emits `createMessageEvent(message)`.
+- App-runtime controller: install a per-turn sink in `AppSessionController.submit()` that emits `createMessageEvent(message)`.
 
 #### 15.5.2 Bug #6 restart behavior — CONFIRMED bad on reload
 
@@ -1310,11 +1310,11 @@ Covers Bugs #5, #6, #7.
 
 **Patch 6 — Diagnostic sink wiring (pre-requisite for any diagnostic-adding fix)**
 
-Per §15.5.1, diagnostics are silently dropped in terminal, bridge, and dedicated-app modes today. Without this patch, every "add diagnostic X" elsewhere in the plan is noop for users in those modes.
+Per §15.5.1, diagnostics are silently dropped in terminal, bridge, and app-runtime controller modes today. Without this patch, every "add diagnostic X" elsewhere in the plan is noop for users in those modes.
 
 - Terminal: install a sink during interactive startup that emits to debug log or a UI event (not raw stderr — would pollute terminal). Likely site: `src/main.tsx:3916-3924` near `launchRepl()`, or `src/entrypoints/init.ts:86-97`.
 - Bridge: install a sink after `initBridgeCore()` in `src/bridge/initReplBridge.ts:490-544`; forward via `handle.writeSdkMessages([message])`.
-- Dedicated app: install a per-turn sink in `AppSessionController.submit()` (`src/app-runtime/AppSessionController.ts:143-156`); emit via `createMessageEvent(message)`.
+- App-runtime controller: install a per-turn sink in `AppSessionController.submit()` (`src/app-runtime/AppSessionController.ts:143-156`); emit via `createMessageEvent(message)`.
 - SDK / `--print --output-format=stream-json` already wires this correctly (`src/cli/print.ts:597-603`); leave alone.
 
 **Should land before Patch 3.** Otherwise the new `account.identity_mismatch` event is invisible to the same users who would benefit most.
@@ -1362,7 +1362,7 @@ These are decisions for a product owner, not implementation details. Each fix ab
 2. **Usage polling state mutation.** Should `fetchPoolUsage` be **observational only** (display-only), or should it be allowed to mutate account health and active selection? Current behavior mutates; current `/accounts` and `AccountsPanel` invocations trigger that mutation as a side effect.
 3. **Turn-based rotation.** Bug #8 — keep the feature and wire it up, or delete it entirely? Partial cleanup leaves confusing UI/config.
 4. ~~`GenerateImageTool` lease awareness.~~ → **§15.5.6 answered.** Confirmed accidental bypass. Recommendation: make lease-aware request-time resolution universal. Implementation in Patch 7.
-5. ~~Diagnostic sink installation in production.~~ → **§15.5.1 answered.** Confirmed dropped in terminal / bridge / dedicated-app modes. Recommendation: install per-mode default sinks. Implementation in Patch 6.
+5. ~~Diagnostic sink installation in production.~~ → **§15.5.1 answered.** Confirmed dropped in terminal / bridge / app-runtime controller modes. Recommendation: install per-mode default sinks. Implementation in Patch 6.
 6. **(New)** `/accounts` mutating state as a side effect (§15.5.4) — is it acceptable that running `/accounts` can silently change the active account? Most users would not expect a read-only "show me my accounts" command to have side effects. This is part of the bigger §16.3.2 question but worth calling out specifically.
 
 ---

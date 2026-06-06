@@ -1,10 +1,9 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-05-12 against `CLAUDE.md`,
+Last refreshed: 2026-06-06 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
-`scripts/validate-dedicated-app.ts`, `scripts/test-codex-*.ts`,
-`src/migrations/`, update/release/upgrade command surfaces, and colocated
-tests.
+`scripts/test-codex-*.ts`, `src/migrations/`,
+update/release/upgrade command surfaces, and colocated tests.
 
 Use this as the daily-refreshable routing layer for build, development,
 compile, release-note, updater, migration, validation, lint, and test-routing
@@ -38,9 +37,6 @@ files, then verify current source before changing code.
 | Development build | `scripts/build.ts` | `package.json` | `bun run build:dev` emits `./cli-dev`, sets development macros, experimental-build env, dev semver suffix, and git-log changelog macro. |
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
-| Dedicated app build | `package.json` | `src/dedicated-app/`, `docs/maps/dedicated-app.md` | `bun run build:dedicated-app` bundles browser `index.ts` and Bun `host.ts` into `dist/dedicated-app`. |
-| Dedicated app validation | `scripts/validate-dedicated-app.ts` | `src/app-runtime/`, `src/dedicated-app/` | `bun run validate:dedicated-app` enforces runtime/shell import boundaries. |
-| Dedicated app host | `package.json` | `src/dedicated-app/host.ts` | `bun run serve:dedicated-app` serves the source host. |
 | Shell update command | `src/main.tsx` | `src/entrypoints/cli.tsx`, `src/cli/update.ts` | `program.command('update').alias('upgrade')` delegates to `src/cli/update.ts`. Early CLI rewrites `--update` and `--upgrade` to the `update` subcommand. |
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
@@ -140,8 +136,6 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Validation | Command | Owner |
 |---|---|---|
 | Full repo build gate requested by root docs | `bun run build:dev:full` | `CLAUDE.md`, `package.json`, `scripts/build.ts` |
-| Dedicated app import boundary | `bun run validate:dedicated-app` | `scripts/validate-dedicated-app.ts` |
-| Dedicated app bundles | `bun run build:dedicated-app` | `package.json`, `src/dedicated-app/` |
 | Docs-only whitespace/path sanity | `git diff --check` | Git diff |
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
 | Codex standalone smoke | `bun run scripts/test-codex-core.ts --account <alias> --model <model> --prompt "hello"` | `scripts/test-codex-core.ts` |
@@ -219,8 +213,6 @@ actual command expansion before trusting a clean lint result.
 - Release-note code still references upstream Claude changelog URLs. Verify
   source before assuming Cat Code has a separate release directory or bundled
   changelog file.
-- `scripts/validate-dedicated-app.ts` checks import boundaries only. It does
-  not prove the dedicated app runtime is feature-complete.
 - `bun run lint` can miss unchanged files affected by API changes. Run focused
   tests and, for shared type changes, broaden lint/test selection manually.
 - Some checked-in TSX files include React compiler artifacts or source maps.

@@ -50,7 +50,7 @@ describe('AppSessionController', () => {
     const goal: ThreadGoal = {
       threadId: 'session-1',
       goalId: 'goal-1',
-      objective: 'Finish the dedicated app runtime boundary',
+      objective: 'Finish the app runtime boundary',
       status: 'active',
       tokenBudget: 1000,
       tokensUsed: 10,
@@ -145,7 +145,7 @@ describe('AppSessionController', () => {
     const goal: ThreadGoal = {
       threadId: 'session-diagnostic',
       goalId: 'goal-diagnostic',
-      objective: 'Surface account diagnostics in the dedicated app',
+      objective: 'Surface account diagnostics in app runtime events',
       status: 'active',
       tokenBudget: 1000,
       tokensUsed: 10,

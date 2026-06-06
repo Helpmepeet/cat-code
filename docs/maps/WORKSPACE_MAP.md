@@ -23,7 +23,6 @@ Keep detailed domain content in these sub-maps:
 | [`tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. |
 | [`tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. |
 | [`terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. |
-| [`dedicated-app.md`](dedicated-app.md) | Dedicated app runtime boundary, shell wiring, validation, and terminal-vs-app separation. |
 | [`codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. |
 | [`query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. |
 | [`config-persistence.md`](config-persistence.md) | Settings layers, config files, transcripts, memory, migrations, and persistence scope. |
@@ -48,7 +47,6 @@ Keep detailed domain content in these sub-maps:
 | Agent Mode and delegated workers | `src/agent-mode/` | `src/tools/AgentTool/`, `src/tasks/`, `src/screens/REPL.tsx`, `src/QueryEngine.ts` | [`agent-mode.md`](agent-mode.md), [`tasks-workers.md`](tasks-workers.md) |
 | Built-in tools, MCP, permissions, sandboxing | `src/tools.ts`, `src/hooks/useCanUseTool.tsx` | `src/tools/`, `src/services/mcp/`, `src/utils/permissions/`, `src/utils/sandbox/` | [`tools-permissions.md`](tools-permissions.md) |
 | Background tasks and task UI | `src/tasks.ts` | `src/tasks/`, `src/components/tasks/`, `src/hooks/useBackgroundTaskNavigation.ts` | [`tasks-workers.md`](tasks-workers.md) |
-| Dedicated app runtime and shell | `src/app-runtime/` | `src/dedicated-app/`, `scripts/validate-dedicated-app.ts`, dedicated-app package scripts | [`dedicated-app.md`](dedicated-app.md) |
 | Query/provider runtime | `src/QueryEngine.ts`, `src/query.ts` | `src/services/api/client.ts`, `src/services/api/claude.ts`, `src/utils/model/`, `src/context.ts` | [`query-provider-runtime.md`](query-provider-runtime.md) |
 | Codex-backed API behavior | `src/codex-core/`, `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/codexAccountLeaseManager.ts`, Codex transport surfaces | [`codex-core.md`](codex-core.md) |
 | Settings, config, persistence, memory | `src/utils/settings/settings.ts`, `src/utils/config.ts` | `src/utils/sessionStorage.ts`, `src/memdir/`, `src/services/SessionMemory/`, migrations | [`config-persistence.md`](config-persistence.md) |

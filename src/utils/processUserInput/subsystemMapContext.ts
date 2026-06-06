@@ -104,16 +104,6 @@ export const KEYWORD_MAP: ReadonlyArray<{ map: string; keywords: string[] }> = [
     ],
   },
   {
-    map: 'dedicated-app.md',
-    keywords: [
-      'dedicated app',
-      'app runtime',
-      'app-runtime',
-      'shell wiring',
-      'terminal-vs-app',
-    ],
-  },
-  {
     map: 'query-provider-runtime.md',
     keywords: [
       'query loop',

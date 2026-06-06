@@ -6,14 +6,14 @@
 
 **Architecture:** Treat the Codex lease map as request-routing truth and `pool.activeIndex` as global active-session state. Manual/global account changes may update and persist active state; lease-local failover must stay lease-local. Diagnostic additions must be observable before new emitters are added.
 
-**Tech Stack:** Bun tests, TypeScript, Ink/React terminal UI, Codex account pool/lease modules, SDK stream-json diagnostics, bridge transport, dedicated app runtime.
+**Tech Stack:** Bun tests, TypeScript, Ink/React terminal UI, Codex account pool/lease modules, SDK stream-json diagnostics, bridge transport, app-runtime controller events.
 
 ---
 
 ## Source Inputs
 
 - Primary investigation: `docs/reports/2026-05-20-account-switching-bug-report.md`, especially §§15-16.
-- Routing maps read before planning: `docs/maps/WORKSPACE_MAP.md`, `docs/maps/auth-accounts-oauth.md`, `docs/maps/codex-core.md`, `docs/maps/terminal-ui-state.md`, `docs/maps/analytics-diagnostics.md`, `docs/maps/bridge-remote-cli.md`, `docs/maps/dedicated-app.md`.
+- Routing maps read before planning: `docs/maps/WORKSPACE_MAP.md`, `docs/maps/auth-accounts-oauth.md`, `docs/maps/codex-core.md`, `docs/maps/terminal-ui-state.md`, `docs/maps/analytics-diagnostics.md`, `docs/maps/bridge-remote-cli.md`.
 - Repo rule: docs-only changes should run `git diff --check`; behavior changes should use `bun run build:dev:full` rather than `bun run build`.
 
 This plan intentionally contains no implementation code. The writing-plans skill normally asks for code snippets, but the direct user instruction for this deliverable was plan only.
@@ -195,7 +195,7 @@ You are implementing Patch 2 from the account-switching report. `failoverCodexLe
 
 ## Patch 6: Diagnostic Sink Wiring
 
-**Goal:** Make existing and future account diagnostics observable in terminal, bridge, and dedicated app modes before adding new diagnostic codes.
+**Goal:** Make existing and future account diagnostics observable in terminal, bridge, and app-runtime controller modes before adding new diagnostic codes.
 
 **Files:**
 
@@ -212,7 +212,7 @@ You are implementing Patch 2 from the account-switching report. `failoverCodexLe
 
 **Subagent brief:**
 
-You are implementing Patch 6 from §16.1. `emitAccountDiagnostic` currently drops diagnostics when no stream-json sink is installed. SDK stream-json already works in `src/cli/print.ts`; leave that behavior intact. Add production sinks for terminal interactive mode, bridge mode, and dedicated app mode. Do not use raw stderr for terminal mode because it pollutes the Ink UI. If `accountDiagnostics.ts` needs a scoped or restorable sink API to avoid global sink leaks across app turns, add that API with tests. Bridge diagnostics should be forwarded through `handle.writeSdkMessages([message])` after `initBridgeCore()` returns. Dedicated app diagnostics emitted during `AppSessionController.submit()` should become normal `message` events using `createMessageEvent(message)`.
+You are implementing Patch 6 from §16.1. `emitAccountDiagnostic` currently drops diagnostics when no stream-json sink is installed. SDK stream-json already works in `src/cli/print.ts`; leave that behavior intact. Add production sinks for terminal interactive mode, bridge mode, and app-runtime controller mode. Do not use raw stderr for terminal mode because it pollutes the Ink UI. If `accountDiagnostics.ts` needs a scoped or restorable sink API to avoid global sink leaks across app turns, add that API with tests. Bridge diagnostics should be forwarded through `handle.writeSdkMessages([message])` after `initBridgeCore()` returns. App-runtime controller diagnostics emitted during `AppSessionController.submit()` should become normal `message` events using `createMessageEvent(message)`.
 
 **Steps:**
 
@@ -221,7 +221,7 @@ You are implementing Patch 6 from §16.1. `emitAccountDiagnostic` currently drop
 - [x] Add or update `AppSessionController` tests proving an emitted account diagnostic during a turn becomes a `message` event.
 - [x] Install the terminal sink without raw stderr output.
 - [x] Install the bridge sink after bridge handle creation and ensure teardown does not leave stale handles.
-- [x] Install the dedicated app per-turn sink and restore the previous sink after submit finishes.
+- [x] Install the app-runtime controller per-turn sink and restore the previous sink after submit finishes.
 - [x] Run focused diagnostics/app tests and SDK schema tests.
 
 **Verification:**

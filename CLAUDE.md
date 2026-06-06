@@ -28,7 +28,7 @@ Do not use `bun run build` or `./cli` unless explicitly asked.
 - Query pipeline: `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/`.
 - Agent/subagent runtime: `src/agent-mode/`, `src/tools/AgentTool/`, `src/tasks/`.
 - Config/persistence: `src/utils/settings/`, `src/utils/config.ts`, `src/utils/sessionStorage.ts`, `src/memdir/`.
-- Dedicated app: `src/app-runtime/`, `src/dedicated-app/`, `scripts/validate-dedicated-app.ts`.
+- App runtime: `src/app-runtime/`.
 
 ## Development Rules
 

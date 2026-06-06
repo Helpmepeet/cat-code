@@ -271,7 +271,7 @@ export async function processUserInput({
   // Built-in: surface the matching subsystem map for interactive prompts only.
   // processUserInput has two callers: the REPL (querySource starts with
   // 'repl_main_thread', incl. output-style-prefixed variants) and QueryEngine
-  // (querySource 'sdk', covering print/SDK/dedicated-app). Gating on the
+  // (querySource 'sdk', covering print/SDK turns). Gating on the
   // repl_main_thread family is the precise interactive check — it excludes
   // headless/scripted turns so we never inject map pointers into print output
   // or add latency/tokens to SDK turns. mode === 'prompt' excludes bash-mode
