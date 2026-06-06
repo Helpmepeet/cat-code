@@ -21,7 +21,6 @@ type StartedAppSessionWebSocketServer = {
 }
 
 const MAX_MESSAGE_BYTES = 128 * 1024
-const STOP_CLOSE_FALLBACK_MS = 25
 
 export async function startAppSessionWebSocketServer({
   port,
@@ -199,11 +198,12 @@ export async function startAppSessionWebSocketServer({
     protocol: requiredProtocol,
     async stop() {
       unsubscribe()
-      const closeClients = Array.from(
-        new Set([...clients, ...server.clients]),
-        closeClient,
-      )
-      await Promise.all(closeClients)
+      for (const client of new Set([...clients, ...server.clients])) {
+        if (client.readyState === client.OPEN) {
+          client.close()
+        }
+      }
+      await waitForClientsClosed(server)
       await closeServer(server)
     },
   }
@@ -220,46 +220,41 @@ function broadcastTurnStatus(clients: Set<WebSocket>, activeTurn: boolean): void
   })
 }
 
-function closeClient(client: WebSocket): Promise<void> {
+function waitForClientsClosed(server: WebSocketServer): Promise<void> {
   return new Promise(resolve => {
-    if (client.readyState === client.CLOSED) {
-      resolve()
-      return
+    const wait = () => {
+      if (server.clients.size === 0) {
+        resolve()
+        return
+      }
+      setTimeout(wait, 0)
     }
-
-    let fallback: ReturnType<typeof setTimeout> | undefined
-    let settled = false
-    const done = () => {
-      if (settled) return
-      settled = true
-      if (fallback) clearTimeout(fallback)
-      client.off('close', done)
-      client.off('error', done)
-      resolve()
-    }
-    client.once('close', done)
-    client.once('error', done)
-    client.terminate()
-    fallback = setTimeout(done, STOP_CLOSE_FALLBACK_MS)
+    wait()
   })
 }
 
 function closeServer(server: WebSocketServer): Promise<void> {
   return new Promise((resolve, reject) => {
-    let fallback: ReturnType<typeof setTimeout> | undefined
     let settled = false
     const done = (error?: Error) => {
       if (settled) return
       settled = true
-      if (fallback) clearTimeout(fallback)
       if (error) {
         reject(error)
         return
       }
       resolve()
     }
+    const waitUntilClosed = () => {
+      if (server.address() === null) {
+        done()
+        return
+      }
+      setTimeout(waitUntilClosed, 0)
+    }
+
     server.close(done)
-    fallback = setTimeout(done, STOP_CLOSE_FALLBACK_MS)
+    waitUntilClosed()
   })
 }
 

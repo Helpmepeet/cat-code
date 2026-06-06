@@ -43,6 +43,20 @@ function nextJson(ws: WebSocket): Promise<unknown> {
   })
 }
 
+function closeWebSocket(ws: WebSocket): Promise<void> {
+  return new Promise(resolve => {
+    if (ws.readyState === ws.CLOSED) {
+      resolve()
+      return
+    }
+
+    ws.once('close', () => resolve())
+    if (ws.readyState === ws.OPEN) {
+      ws.close()
+    }
+  })
+}
+
 function collectJsonFor(ws: WebSocket, timeoutMs: number): Promise<unknown[]> {
   return new Promise(resolve => {
     const messages: unknown[] = []
@@ -160,6 +174,22 @@ describe('AppSessionWebSocketServer', () => {
     ).rejects.toThrow()
   })
 
+  test('stops accepting connections after stop resolves', async () => {
+    const controller = new AppSessionController({
+      async *runTurn() {},
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+
+    await server.stop()
+
+    await expect(connect(server.url, 'secret')).rejects.toThrow()
+  })
+
   test('does not report idle when a concurrent submit is rejected', async () => {
     let releaseTurn: (() => void) | undefined
     const turnReleased = new Promise<void>(resolve => {
@@ -247,8 +277,10 @@ describe('AppSessionWebSocketServer', () => {
         inputEnabled: true,
       },
     })
-    firstClient.close()
-    secondClient.close()
+    await Promise.all([
+      closeWebSocket(firstClient),
+      closeWebSocket(secondClient),
+    ])
   })
 
   test('sends input disabled in ready while a turn is active', async () => {
@@ -307,8 +339,10 @@ describe('AppSessionWebSocketServer', () => {
     })
 
     releaseTurn?.()
-    activeClient.close()
-    midTurnClient.close()
+    await Promise.all([
+      closeWebSocket(activeClient),
+      closeWebSocket(midTurnClient),
+    ])
   })
 
   test('sends ready then submits a prompt and relays mapped messages', async () => {
@@ -372,7 +406,7 @@ describe('AppSessionWebSocketServer', () => {
       },
     })
     expect(prompts).toEqual(['hi'])
-    ws.close()
+    await closeWebSocket(ws)
   })
 
   test('responds to pending permissions and aborts active turns', async () => {
@@ -465,6 +499,6 @@ describe('AppSessionWebSocketServer', () => {
       },
     })
     releaseTurn?.()
-    ws.close()
+    await closeWebSocket(ws)
   })
 })
