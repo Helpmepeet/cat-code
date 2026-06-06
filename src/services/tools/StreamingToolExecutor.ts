@@ -9,6 +9,10 @@ import { findToolByName, type Tools, type ToolUseContext } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { createChildAbortController } from '../../utils/abortController.js'
+import {
+  createPtcloveToolStatusTracker,
+  type PtcloveToolStatusTracker,
+} from './ptcloveToolStatus.js'
 import { runToolUse } from './toolExecution.js'
 
 type MessageUpdate = {
@@ -49,6 +53,7 @@ export class StreamingToolExecutor {
   private discarded = false
   // Signal to wake up getRemainingResults when progress is available
   private progressAvailableResolve?: () => void
+  private ptcloveToolStatus: PtcloveToolStatusTracker
 
   constructor(
     private readonly toolDefinitions: Tools,
@@ -59,6 +64,7 @@ export class StreamingToolExecutor {
     this.siblingAbortController = createChildAbortController(
       toolUseContext.abortController,
     )
+    this.ptcloveToolStatus = createPtcloveToolStatusTracker(toolUseContext)
   }
 
   /**
@@ -68,6 +74,7 @@ export class StreamingToolExecutor {
    */
   discard(): void {
     this.discarded = true
+    this.ptcloveToolStatus.clear()
   }
 
   /**
@@ -264,6 +271,7 @@ export class StreamingToolExecutor {
    */
   private async executeTool(tool: TrackedTool): Promise<void> {
     tool.status = 'executing'
+    this.ptcloveToolStatus.start(tool.block)
     this.toolUseContext.setInProgressToolUseIDs(prev =>
       new Set(prev).add(tool.id),
     )
@@ -275,123 +283,127 @@ export class StreamingToolExecutor {
 
     const collectResults = async () => {
       // If already aborted (by error or user), generate synthetic error block instead of running the tool
-      const initialAbortReason = this.getAbortReason(tool)
-      if (initialAbortReason) {
-        messages.push(
-          this.createSyntheticErrorMessage(
-            tool.id,
-            initialAbortReason,
-            tool.assistantMessage,
-          ),
+      try {
+        const initialAbortReason = this.getAbortReason(tool)
+        if (initialAbortReason) {
+          messages.push(
+            this.createSyntheticErrorMessage(
+              tool.id,
+              initialAbortReason,
+              tool.assistantMessage,
+            ),
+          )
+          tool.results = messages
+          tool.contextModifiers = contextModifiers
+          tool.status = 'completed'
+          this.updateInterruptibleState()
+          return
+        }
+
+        // Per-tool child controller. Lets siblingAbortController kill running
+        // subprocesses (Bash spawns listen to this signal) when a Bash error
+        // cascades. Permission-dialog rejection also aborts this controller
+        // (PermissionContext.ts cancelAndAbort) — that abort must bubble up to
+        // the query controller so the query loop's post-tool abort check ends
+        // the turn. Without bubble-up, ExitPlanMode "clear context + auto"
+        // sends REJECT_MESSAGE to the model instead of aborting (#21056 regression).
+        const toolAbortController = createChildAbortController(
+          this.siblingAbortController,
         )
+        toolAbortController.signal.addEventListener(
+          'abort',
+          () => {
+            if (
+              toolAbortController.signal.reason !== 'sibling_error' &&
+              !this.toolUseContext.abortController.signal.aborted &&
+              !this.discarded
+            ) {
+              this.toolUseContext.abortController.abort(
+                toolAbortController.signal.reason,
+              )
+            }
+          },
+          { once: true },
+        )
+
+        const generator = runToolUse(
+          tool.block,
+          tool.assistantMessage,
+          this.canUseTool,
+          { ...this.toolUseContext, abortController: toolAbortController },
+        )
+
+        // Track if this specific tool has produced an error result.
+        // This prevents the tool from receiving a duplicate "sibling error"
+        // message when it is the one that caused the error.
+        let thisToolErrored = false
+
+        for await (const update of generator) {
+          // Check if we were aborted by a sibling tool error or user interruption.
+          // Only add the synthetic error if THIS tool didn't produce the error.
+          const abortReason = this.getAbortReason(tool)
+          if (abortReason && !thisToolErrored) {
+            messages.push(
+              this.createSyntheticErrorMessage(
+                tool.id,
+                abortReason,
+                tool.assistantMessage,
+              ),
+            )
+            break
+          }
+
+          const isErrorResult =
+            update.message.type === 'user' &&
+            Array.isArray(update.message.message.content) &&
+            update.message.message.content.some(
+              _ => _.type === 'tool_result' && _.is_error === true,
+            )
+
+          if (isErrorResult) {
+            thisToolErrored = true
+            // Only Bash errors cancel siblings. Bash commands often have implicit
+            // dependency chains (e.g. mkdir fails → subsequent commands pointless).
+            // Read/WebFetch/etc are independent — one failure shouldn't nuke the rest.
+            if (tool.block.name === BASH_TOOL_NAME) {
+              this.hasErrored = true
+              this.erroredToolDescription = this.getToolDescription(tool)
+              this.siblingAbortController.abort('sibling_error')
+            }
+          }
+
+          if (update.message) {
+            // Progress messages go to pendingProgress for immediate yielding
+            if (update.message.type === 'progress') {
+              tool.pendingProgress.push(update.message)
+              // Signal that progress is available
+              if (this.progressAvailableResolve) {
+                this.progressAvailableResolve()
+                this.progressAvailableResolve = undefined
+              }
+            } else {
+              messages.push(update.message)
+            }
+          }
+          if (update.contextModifier) {
+            contextModifiers.push(update.contextModifier.modifyContext)
+          }
+        }
         tool.results = messages
         tool.contextModifiers = contextModifiers
         tool.status = 'completed'
         this.updateInterruptibleState()
-        return
-      }
 
-      // Per-tool child controller. Lets siblingAbortController kill running
-      // subprocesses (Bash spawns listen to this signal) when a Bash error
-      // cascades. Permission-dialog rejection also aborts this controller
-      // (PermissionContext.ts cancelAndAbort) — that abort must bubble up to
-      // the query controller so the query loop's post-tool abort check ends
-      // the turn. Without bubble-up, ExitPlanMode "clear context + auto"
-      // sends REJECT_MESSAGE to the model instead of aborting (#21056 regression).
-      const toolAbortController = createChildAbortController(
-        this.siblingAbortController,
-      )
-      toolAbortController.signal.addEventListener(
-        'abort',
-        () => {
-          if (
-            toolAbortController.signal.reason !== 'sibling_error' &&
-            !this.toolUseContext.abortController.signal.aborted &&
-            !this.discarded
-          ) {
-            this.toolUseContext.abortController.abort(
-              toolAbortController.signal.reason,
-            )
-          }
-        },
-        { once: true },
-      )
-
-      const generator = runToolUse(
-        tool.block,
-        tool.assistantMessage,
-        this.canUseTool,
-        { ...this.toolUseContext, abortController: toolAbortController },
-      )
-
-      // Track if this specific tool has produced an error result.
-      // This prevents the tool from receiving a duplicate "sibling error"
-      // message when it is the one that caused the error.
-      let thisToolErrored = false
-
-      for await (const update of generator) {
-        // Check if we were aborted by a sibling tool error or user interruption.
-        // Only add the synthetic error if THIS tool didn't produce the error.
-        const abortReason = this.getAbortReason(tool)
-        if (abortReason && !thisToolErrored) {
-          messages.push(
-            this.createSyntheticErrorMessage(
-              tool.id,
-              abortReason,
-              tool.assistantMessage,
-            ),
-          )
-          break
-        }
-
-        const isErrorResult =
-          update.message.type === 'user' &&
-          Array.isArray(update.message.message.content) &&
-          update.message.message.content.some(
-            _ => _.type === 'tool_result' && _.is_error === true,
-          )
-
-        if (isErrorResult) {
-          thisToolErrored = true
-          // Only Bash errors cancel siblings. Bash commands often have implicit
-          // dependency chains (e.g. mkdir fails → subsequent commands pointless).
-          // Read/WebFetch/etc are independent — one failure shouldn't nuke the rest.
-          if (tool.block.name === BASH_TOOL_NAME) {
-            this.hasErrored = true
-            this.erroredToolDescription = this.getToolDescription(tool)
-            this.siblingAbortController.abort('sibling_error')
+        // NOTE: we currently don't support context modifiers for concurrent
+        //       tools. None are actively being used, but if we want to use
+        //       them in concurrent tools, we need to support that here.
+        if (!tool.isConcurrencySafe && contextModifiers.length > 0) {
+          for (const modifier of contextModifiers) {
+            this.toolUseContext = modifier(this.toolUseContext)
           }
         }
-
-        if (update.message) {
-          // Progress messages go to pendingProgress for immediate yielding
-          if (update.message.type === 'progress') {
-            tool.pendingProgress.push(update.message)
-            // Signal that progress is available
-            if (this.progressAvailableResolve) {
-              this.progressAvailableResolve()
-              this.progressAvailableResolve = undefined
-            }
-          } else {
-            messages.push(update.message)
-          }
-        }
-        if (update.contextModifier) {
-          contextModifiers.push(update.contextModifier.modifyContext)
-        }
-      }
-      tool.results = messages
-      tool.contextModifiers = contextModifiers
-      tool.status = 'completed'
-      this.updateInterruptibleState()
-
-      // NOTE: we currently don't support context modifiers for concurrent
-      //       tools. None are actively being used, but if we want to use
-      //       them in concurrent tools, we need to support that here.
-      if (!tool.isConcurrencySafe && contextModifiers.length > 0) {
-        for (const modifier of contextModifiers) {
-          this.toolUseContext = modifier(this.toolUseContext)
-        }
+      } finally {
+        this.ptcloveToolStatus.complete(tool.id)
       }
     }
 

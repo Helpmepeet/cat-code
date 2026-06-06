@@ -22,7 +22,7 @@ import { getAgentTranscriptPath } from '../../utils/sessionStorage.js';
 import { evictTaskOutput, getTaskOutputPath, initTaskOutputAsSymlink } from '../../utils/task/diskOutput.js';
 import { PANEL_GRACE_MS, registerTask, updateTaskState } from '../../utils/task/framework.js';
 import { emitTaskProgress } from '../../utils/task/sdkProgress.js';
-import { getFreshInputTokens } from '../../utils/tokens.js';
+import { getFreshInputTokens, getTokenCountFromUsage } from '../../utils/tokens.js';
 import { logForDebugging } from '../../utils/debug.js';
 import { createSystemMessage } from '../../utils/messages.js';
 import type { TaskState } from '../types.js';
@@ -39,6 +39,9 @@ export type ToolActivity = {
 export type AgentProgress = {
   toolUseCount: number;
   tokenCount: number;
+  // Full context-window size of the latest API response (input + cache + output).
+  // The true size replayed on resume, distinct from the display-oriented tokenCount.
+  contextTokenCount?: number;
   lastActivity?: ToolActivity;
   recentActivities?: ToolActivity[];
   summary?: string;
@@ -52,6 +55,10 @@ export type ProgressTracker = {
   // so we keep the latest value. output_tokens is per-turn, so we sum those.
   latestInputTokens: number;
   cumulativeOutputTokens: number;
+  // Full context-window size of the latest API response (input + cache + output).
+  // Unlike the display counter above, this is the true size that would be replayed
+  // on resume, so resume-vs-spawn decisions can read it. See getProgressUpdate.
+  latestContextTokens: number;
   recentActivities: ToolActivity[];
 };
 export function createProgressTracker(): ProgressTracker {
@@ -59,6 +66,7 @@ export function createProgressTracker(): ProgressTracker {
     toolUseCount: 0,
     latestInputTokens: 0,
     cumulativeOutputTokens: 0,
+    latestContextTokens: 0,
     recentActivities: []
   };
 }
@@ -94,6 +102,9 @@ export function updateProgressFromMessage(tracker: ProgressTracker, message: Mes
   // masquerade as newly-consumed tokens in progress UI.
   tracker.latestInputTokens = getFreshInputTokens(usage);
   tracker.cumulativeOutputTokens += usage.output_tokens;
+  // Full context size of this response (includes cache_read), kept separately
+  // from the display counter so resume-vs-spawn can read the real replay size.
+  tracker.latestContextTokens = getTokenCountFromUsage(usage);
   for (const content of message.message.content) {
     if (content.type === 'tool_use') {
       tracker.toolUseCount++;
@@ -119,6 +130,7 @@ export function getProgressUpdate(tracker: ProgressTracker): AgentProgress {
   return {
     toolUseCount: tracker.toolUseCount,
     tokenCount: getTokenCountFromTracker(tracker),
+    contextTokenCount: tracker.latestContextTokens > 0 ? tracker.latestContextTokens : undefined,
     lastActivity: tracker.recentActivities.length > 0 ? tracker.recentActivities[tracker.recentActivities.length - 1] : undefined,
     recentActivities: [...tracker.recentActivities]
   };

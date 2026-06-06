@@ -14,10 +14,16 @@ import {
 } from '../../services/api/codexAccountPool.js'
 import {
   appendLocalAgentSystemMessage,
+  completeAgentTask,
   markAgentTaskResumed,
   unregisterAgentForeground,
   registerAgentForeground,
 } from './LocalAgentTask.js'
+import { getPillLabel, pillNeedsCta } from '../pillLabel.js'
+import {
+  getTaskStatusIcon,
+  shouldHideTasksFooter,
+} from '../../components/tasks/taskStatusUtils.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -127,5 +133,220 @@ describe('LocalAgentTask foreground cleanup', () => {
       level: 'info',
       isMeta: false,
     })
+  })
+
+  test('registerAgentForeground stores the resolved friendly agent name', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-4',
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: {
+        name: 'implementor',
+        agentType: 'implementor',
+        prompt: 'test prompt',
+      },
+      agentName: 'Curie',
+      setAppState,
+    })
+
+    expect(appState.tasks['sync-agent-4']).toMatchObject({
+      type: 'local_agent',
+      agentName: 'Curie',
+      agentType: 'implementor',
+    })
+  })
+
+  test('completeAgentTask records blocked handoff metadata from the result', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-5',
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: {
+        name: 'implementor',
+        agentType: 'implementor',
+        prompt: 'test prompt',
+      },
+      agentName: 'Curie',
+      setAppState,
+    })
+
+    completeAgentTask(
+      {
+        agentId: 'sync-agent-5',
+        agentType: 'implementor',
+        agentName: 'Curie',
+        model: 'gpt-5.4',
+        content: [
+          {
+            type: 'text',
+            text:
+              'I need a decision before editing.\n\n' +
+              'status: blocked\n\n' +
+              'Changed files:\n' +
+              '- none\n\n' +
+              'Checks run:\n' +
+              '- none\n\n' +
+              'Open questions / blockers:\n' +
+              '- Should I update the public API too?',
+          },
+        ],
+        totalToolUseCount: 0,
+        totalDurationMs: 100,
+        totalTokens: 10,
+      },
+      setAppState,
+    )
+
+    expect(appState.tasks['sync-agent-5']).toMatchObject({
+      type: 'local_agent',
+      status: 'completed',
+      handoffStatus: 'blocked',
+      blockReason: 'Should I update the public API too?',
+    })
+  })
+
+  test('local agent pill label shows name role blocked state and CTA', () => {
+    const task = {
+      ...appState.tasks['missing'],
+      id: 'sync-agent-6',
+      type: 'local_agent',
+      status: 'completed',
+      description: 'Sync foreground agent',
+      startTime: Date.now(),
+      outputFile: '',
+      outputOffset: 0,
+      notified: false,
+      agentId: 'sync-agent-6',
+      prompt: 'test prompt',
+      agentName: 'Curie',
+      agentType: 'implementor',
+      retrieved: false,
+      lastReportedToolCount: 0,
+      lastReportedTokenCount: 0,
+      isBackgrounded: true,
+      pendingMessages: [],
+      retain: false,
+      diskLoaded: false,
+      handoffStatus: 'blocked',
+      blockReason: 'Need a decision.',
+    } as const
+
+    expect(getPillLabel([task])).toBe(
+      `${getTaskStatusIcon('completed', { awaitingApproval: true })} @Curie · implementor — needs input`,
+    )
+    expect(pillNeedsCta([task])).toBe(true)
+  })
+
+  test('verification pill label includes terminal verdict', () => {
+    const task = {
+      ...appState.tasks['missing'],
+      id: 'sync-agent-7',
+      type: 'local_agent',
+      status: 'completed',
+      description: 'Verification agent',
+      startTime: Date.now(),
+      outputFile: '',
+      outputOffset: 0,
+      notified: false,
+      agentId: 'sync-agent-7',
+      prompt: 'test prompt',
+      agentName: 'Noether',
+      agentType: 'verification',
+      retrieved: false,
+      lastReportedToolCount: 0,
+      lastReportedTokenCount: 0,
+      isBackgrounded: true,
+      pendingMessages: [],
+      retain: false,
+      diskLoaded: false,
+      verdict: 'FAIL',
+    } as const
+
+    expect(getPillLabel([task])).toBe(
+      `${getTaskStatusIcon('failed')} @Noether · verification — FAIL`,
+    )
+  })
+
+  test('two terminal local agent pill labels keep friendly names and suffixes', () => {
+    const blockedTask = {
+      ...appState.tasks['missing'],
+      id: 'sync-agent-8',
+      type: 'local_agent',
+      status: 'completed',
+      description: 'Implementor agent',
+      startTime: Date.now(),
+      outputFile: '',
+      outputOffset: 0,
+      notified: true,
+      agentId: 'sync-agent-8',
+      prompt: 'test prompt',
+      agentName: 'Curie',
+      agentType: 'implementor',
+      retrieved: false,
+      lastReportedToolCount: 0,
+      lastReportedTokenCount: 0,
+      isBackgrounded: true,
+      pendingMessages: [],
+      retain: false,
+      diskLoaded: false,
+      handoffStatus: 'blocked',
+      blockReason: 'Need a decision.',
+    } as const
+    const verificationTask = {
+      ...appState.tasks['missing'],
+      id: 'sync-agent-9',
+      type: 'local_agent',
+      status: 'completed',
+      description: 'Verification agent',
+      startTime: Date.now(),
+      outputFile: '',
+      outputOffset: 0,
+      notified: true,
+      agentId: 'sync-agent-9',
+      prompt: 'test prompt',
+      agentName: 'Noether',
+      agentType: 'verification',
+      retrieved: false,
+      lastReportedToolCount: 0,
+      lastReportedTokenCount: 0,
+      isBackgrounded: true,
+      pendingMessages: [],
+      retain: false,
+      diskLoaded: false,
+      verdict: 'PARTIAL',
+    } as const
+
+    expect(getPillLabel([blockedTask, verificationTask])).toBe(
+      `${getTaskStatusIcon('completed', { awaitingApproval: true })} @Curie · implementor — needs input · ${getTaskStatusIcon('completed', { awaitingApproval: true })} @Noether · verification — PARTIAL`,
+    )
+  })
+
+  test('blocked terminal local agents keep task footer visible in spinner tree mode', () => {
+    const task = {
+      ...appState.tasks['missing'],
+      id: 'sync-agent-10',
+      type: 'local_agent',
+      status: 'completed',
+      description: 'Implementor agent',
+      startTime: Date.now(),
+      outputFile: '',
+      outputOffset: 0,
+      notified: true,
+      agentId: 'sync-agent-10',
+      prompt: 'test prompt',
+      agentName: 'Curie',
+      agentType: 'implementor',
+      retrieved: false,
+      lastReportedToolCount: 0,
+      lastReportedTokenCount: 0,
+      isBackgrounded: true,
+      pendingMessages: [],
+      retain: false,
+      diskLoaded: false,
+      handoffStatus: 'blocked',
+      blockReason: 'Need a decision.',
+    } as const
+
+    expect(shouldHideTasksFooter({ [task.id]: task }, true)).toBe(false)
   })
 })

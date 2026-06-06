@@ -52,6 +52,12 @@ describe('workerNames', () => {
     expect(allocateWorkerName('agent-mode-coding-worker')).toBe('Turing')
   })
 
+  test('allocates coding-themed handles for normal implementors', () => {
+    Math.random = () => 0
+
+    expect(allocateWorkerName('implementor')).toBe('Turing')
+  })
+
   test('allocates themed handles for verifiers from a separate pool', () => {
     Math.random = () => 0
 

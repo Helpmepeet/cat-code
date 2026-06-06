@@ -298,10 +298,13 @@ function PromptInput({
   const replBridgeConnected = useAppState(s => s.replBridgeConnected);
   const replBridgeExplicit = useAppState(s => s.replBridgeExplicit);
   const replBridgeReconnecting = useAppState(s => s.replBridgeReconnecting);
+  const ptcloveBridgeConnected = useAppState(s => s.ptcloveBridgeConnected);
+  const ptcloveBridgeAttemptedHello = useAppState(s => s.ptcloveBridgeAttemptedHello);
   // Must match BridgeStatusIndicator's render condition (PromptInputFooter.tsx) —
   // the pill returns null for implicit-and-not-reconnecting, so nav must too,
   // otherwise bridge becomes an invisible selection stop.
   const bridgeFooterVisible = replBridgeConnected && (replBridgeExplicit || replBridgeReconnecting);
+  const ptcloveFooterVisible = ptcloveBridgeAttemptedHello && !ptcloveBridgeConnected;
   // Tmux pill (ant-only) — visible when there's an active tungsten session
   const hasTungstenSession = useAppState(s => "external" === 'ant' && s.tungstenActiveSession !== undefined);
   const tmuxFooterVisible = "external" === 'ant' && hasTungstenSession;
@@ -466,7 +469,7 @@ function PromptInput({
   // something is running.
   const tasksFooterVisible = (runningTaskCount > 0 || "external" === 'ant' && coordinatorTaskCount > 0) && !shouldHideTasksFooter(tasks, showSpinnerTree);
   const teamsFooterVisible = cachedTeams.length > 0;
-  const footerItems = useMemo(() => [tasksFooterVisible && 'tasks', tmuxFooterVisible && 'tmux', bagelFooterVisible && 'bagel', teamsFooterVisible && 'teams', bridgeFooterVisible && 'bridge', companionFooterVisible && 'companion'].filter(Boolean) as FooterItem[], [tasksFooterVisible, tmuxFooterVisible, bagelFooterVisible, teamsFooterVisible, bridgeFooterVisible, companionFooterVisible]);
+  const footerItems = useMemo(() => [tasksFooterVisible && 'tasks', tmuxFooterVisible && 'tmux', bagelFooterVisible && 'bagel', teamsFooterVisible && 'teams', bridgeFooterVisible && 'bridge', ptcloveFooterVisible && 'ptclove', companionFooterVisible && 'companion'].filter(Boolean) as FooterItem[], [tasksFooterVisible, tmuxFooterVisible, bagelFooterVisible, teamsFooterVisible, bridgeFooterVisible, ptcloveFooterVisible, companionFooterVisible]);
 
   // Effective selection: null if the selected pill stopped rendering (bridge
   // disconnected, task finished). The derivation makes the UI correct
@@ -487,6 +490,7 @@ function PromptInput({
   const bagelSelected = footerItemSelected === 'bagel';
   const teamsSelected = footerItemSelected === 'teams';
   const bridgeSelected = footerItemSelected === 'bridge';
+  const ptcloveSelected = footerItemSelected === 'ptclove';
   function selectFooterItem(item: FooterItem | null): void {
     setAppState(prev => prev.footerSelection === item ? prev : {
       ...prev,
@@ -2289,7 +2293,7 @@ function PromptInput({
             {textInputElement}
           </Box>
         </Box>}
-      <PromptInputFooter apiKeyStatus={apiKeyStatus} debug={debug} exitMessage={exitMessage} vimMode={isVimModeEnabled() ? vimMode : undefined} mode={mode} autoUpdaterResult={autoUpdaterResult} isAutoUpdating={isAutoUpdating} verbose={verbose} onAutoUpdaterResult={onAutoUpdaterResult} onChangeIsUpdating={setIsAutoUpdating} suggestions={suggestions} selectedSuggestion={selectedSuggestion} maxColumnWidth={maxColumnWidth} toolPermissionContext={effectiveToolPermissionContext} helpOpen={helpOpen} suppressHint={input.length > 0} isLoading={isLoading} tasksSelected={tasksSelected} teamsSelected={teamsSelected} bridgeSelected={bridgeSelected} tmuxSelected={tmuxSelected} teammateFooterIndex={teammateFooterIndex} ideSelection={ideSelection} mcpClients={mcpClients} isPasting={isPasting} isInputWrapped={isInputWrapped} messages={messages} threadGoalDisplay={threadGoalDisplay} isSearching={isSearchingHistory} historyQuery={historyQuery} setHistoryQuery={setHistoryQuery} historyFailedMatch={historyFailedMatch} onOpenTasksDialog={isFullscreenEnvEnabled() ? handleOpenTasksDialog : undefined} />
+      <PromptInputFooter apiKeyStatus={apiKeyStatus} debug={debug} exitMessage={exitMessage} vimMode={isVimModeEnabled() ? vimMode : undefined} mode={mode} autoUpdaterResult={autoUpdaterResult} isAutoUpdating={isAutoUpdating} verbose={verbose} onAutoUpdaterResult={onAutoUpdaterResult} onChangeIsUpdating={setIsAutoUpdating} suggestions={suggestions} selectedSuggestion={selectedSuggestion} maxColumnWidth={maxColumnWidth} toolPermissionContext={effectiveToolPermissionContext} helpOpen={helpOpen} suppressHint={input.length > 0} isLoading={isLoading} tasksSelected={tasksSelected} teamsSelected={teamsSelected} bridgeSelected={bridgeSelected} ptcloveSelected={ptcloveSelected} tmuxSelected={tmuxSelected} teammateFooterIndex={teammateFooterIndex} ideSelection={ideSelection} mcpClients={mcpClients} isPasting={isPasting} isInputWrapped={isInputWrapped} messages={messages} threadGoalDisplay={threadGoalDisplay} isSearching={isSearchingHistory} historyQuery={historyQuery} setHistoryQuery={setHistoryQuery} historyFailedMatch={historyFailedMatch} onOpenTasksDialog={isFullscreenEnvEnabled() ? handleOpenTasksDialog : undefined} />
       {isFullscreenEnvEnabled() ? null : autoModeOptInDialog}
       {isFullscreenEnvEnabled() ?
     // position=absolute takes zero layout height so the spinner

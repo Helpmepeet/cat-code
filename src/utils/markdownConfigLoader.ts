@@ -221,10 +221,10 @@ function resolveStopBoundary(cwd: string): string | null {
 
 /**
  * Traverses from the current directory up to the git root (or home directory if not in a git repo),
- * collecting all .claude directories along the way.
+ * collecting all .cat-code directories along the way.
  *
  * Stopping at git root prevents commands/skills from parent directories outside the repository
- * from leaking into projects. For example, if ~/projects/.claude/commands/ exists, it won't
+ * from leaking into projects. For example, if ~/projects/.cat-code/commands/ exists, it won't
  * appear in ~/projects/my-repo/ if my-repo is a git repository.
  *
  * @param subdir Subdirectory (eg. "commands", "agents")
@@ -250,7 +250,7 @@ export function getProjectDirsUpToHome(
       break
     }
 
-    const claudeSubdir = join(current, '.claude', subdir)
+    const claudeSubdir = join(current, '.cat-code', subdir)
     // Filter to existing dirs. This is a perf filter (avoids spawning
     // ripgrep on non-existent dirs downstream) and the worktree fallback
     // in loadMarkdownFilesForSubdir relies on it. statSync + explicit error
@@ -301,17 +301,17 @@ export const loadMarkdownFilesForSubdir = memoize(
   ): Promise<MarkdownFile[]> {
     const searchStartTime = Date.now()
     const userDir = join(getClaudeConfigHomeDir(), subdir)
-    const managedDir = join(getManagedFilePath(), '.claude', subdir)
+    const managedDir = join(getManagedFilePath(), '.cat-code', subdir)
     const projectDirs = getProjectDirsUpToHome(subdir, cwd)
 
-    // For git worktrees where the worktree does NOT have .claude/<subdir> checked
+    // For git worktrees where the worktree does NOT have .cat-code/<subdir> checked
     // out (e.g. sparse-checkout), fall back to the main repository's copy.
     // getProjectDirsUpToHome stops at the worktree root (where the .git file is),
     // so it never sees the main repo on its own.
     //
-    // Only add the main repo's copy when the worktree root's .claude/<subdir>
+    // Only add the main repo's copy when the worktree root's .cat-code/<subdir>
     // is absent. A standard `git worktree add` checks out the full tree, so the
-    // worktree already has identical .claude/<subdir> content — loading the main
+    // worktree already has identical .cat-code/<subdir> content — loading the main
     // repo's copy too would duplicate every command/agent/skill
     // (anthropics/claude-code#29599, #28182, #26992).
     //
@@ -321,13 +321,13 @@ export const loadMarkdownFilesForSubdir = memoize(
     const canonicalRoot = findCanonicalGitRoot(cwd)
     if (gitRoot && canonicalRoot && canonicalRoot !== gitRoot) {
       const worktreeSubdir = normalizePathForComparison(
-        join(gitRoot, '.claude', subdir),
+        join(gitRoot, '.cat-code', subdir),
       )
       const worktreeHasSubdir = projectDirs.some(
         dir => normalizePathForComparison(dir) === worktreeSubdir,
       )
       if (!worktreeHasSubdir) {
-        const mainClaudeSubdir = join(canonicalRoot, '.claude', subdir)
+        const mainClaudeSubdir = join(canonicalRoot, '.cat-code', subdir)
         if (!projectDirs.includes(mainClaudeSubdir)) {
           projectDirs.push(mainClaudeSubdir)
         }
@@ -378,7 +378,7 @@ export const loadMarkdownFilesForSubdir = memoize(
     const allFiles = [...managedFiles, ...userFiles, ...projectFiles]
 
     // Deduplicate files that resolve to the same physical file (same inode).
-    // This prevents the same file from appearing multiple times when ~/.claude is
+    // This prevents the same file from appearing multiple times when ~/.cat-code is
     // symlinked to a directory within the project hierarchy, causing the same
     // physical file to be discovered through different paths.
     const fileIdentities = await Promise.all(
@@ -540,7 +540,7 @@ async function findMarkdownFilesNative(
 
 /**
  * Generic function to load markdown files from specified directories
- * @param dir Directory (eg. "~/.claude/commands")
+ * @param dir Directory (eg. "~/.cat-code/commands")
  * @returns Array of parsed markdown files with metadata
  */
 async function loadMarkdownFiles(dir: string): Promise<

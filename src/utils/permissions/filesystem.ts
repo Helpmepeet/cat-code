@@ -110,12 +110,20 @@ export function getClaudeSkillScope(
 
   const bases = [
     {
+      dir: expandPath(join(getOriginalCwd(), '.cat-code', 'skills')),
+      prefix: '/.cat-code/skills/',
+    },
+    {
       dir: expandPath(join(getOriginalCwd(), '.claude', 'skills')),
       prefix: '/.claude/skills/',
     },
     {
       dir: expandPath(join(getClaudeConfigHomeDir(), 'skills')),
       prefix: '~/.cat-code/skills/',
+    },
+    {
+      dir: expandPath(join(homedir(), '.claude', 'skills')),
+      prefix: '~/.claude/skills/',
     },
   ]
 
@@ -212,10 +220,12 @@ export function isClaudeSettingsPath(filePath: string): boolean {
 
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
   if (
+    normalizedPath.endsWith(`${sep}.cat-code${sep}settings.json`) ||
+    normalizedPath.endsWith(`${sep}.cat-code${sep}settings.local.json`) ||
     normalizedPath.endsWith(`${sep}.claude${sep}settings.json`) ||
     normalizedPath.endsWith(`${sep}.claude${sep}settings.local.json`)
   ) {
-    // Include .claude/settings.json even for other projects
+    // Include settings.json even for other projects
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)
@@ -231,17 +241,23 @@ function isClaudeConfigFilePath(filePath: string): boolean {
     return true
   }
 
-  // Check if file is within .claude/commands or .claude/agents directories
+  // Check if file is within .cat-code/commands, .cat-code/agents, .cat-code/skills, or legacy .claude equivalents
   // using proper path segment validation (not string matching with includes())
   // pathInWorkingPath now handles case-insensitive comparison to prevent bypasses
-  const commandsDir = join(getOriginalCwd(), '.claude', 'commands')
-  const agentsDir = join(getOriginalCwd(), '.claude', 'agents')
-  const skillsDir = join(getOriginalCwd(), '.claude', 'skills')
+  const commandsDir = join(getOriginalCwd(), '.cat-code', 'commands')
+  const agentsDir = join(getOriginalCwd(), '.cat-code', 'agents')
+  const skillsDir = join(getOriginalCwd(), '.cat-code', 'skills')
+  const legacyCommandsDir = join(getOriginalCwd(), '.claude', 'commands')
+  const legacyAgentsDir = join(getOriginalCwd(), '.claude', 'agents')
+  const legacySkillsDir = join(getOriginalCwd(), '.claude', 'skills')
 
   return (
     pathInWorkingPath(filePath, commandsDir) ||
     pathInWorkingPath(filePath, agentsDir) ||
-    pathInWorkingPath(filePath, skillsDir)
+    pathInWorkingPath(filePath, skillsDir) ||
+    pathInWorkingPath(filePath, legacyCommandsDir) ||
+    pathInWorkingPath(filePath, legacyAgentsDir) ||
+    pathInWorkingPath(filePath, legacySkillsDir)
   )
 }
 
@@ -457,17 +473,17 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
         continue
       }
 
-      // Special case: .claude/worktrees/ is a structural path (where Claude stores
-      // git worktrees), not a user-created dangerous directory. Skip the .claude
-      // segment when it's followed by 'worktrees'. Any nested .claude directories
+      // Special case: .cat-code/worktrees/ is a structural path (where Claude stores
+      // git worktrees), not a user-created dangerous directory. Skip the .cat-code
+      // segment when it's followed by 'worktrees'. Any nested .cat-code directories
       // within the worktree (not followed by 'worktrees') are still blocked.
-      if (dir === '.claude') {
+      if (dir === '.cat-code' || dir === '.claude') {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
           normalizeCaseForComparison(nextSegment) === 'worktrees'
         ) {
-          break // Skip this .claude, continue checking other segments
+          break // Skip this segment, continue checking other segments
         }
       }
 
@@ -1275,20 +1291,22 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     'allow',
   )
   if (claudeFolderAllowRule) {
-    // Check if this rule is scoped under .claude/ (project or global).
-    // Accepts both the broad patterns ('/.claude/**', '~/.claude/**') and
-    // narrowed ones like '/.claude/skills/my-skill/**' so users can grant
+    // Check if this rule is scoped under .cat-code/ or legacy .claude/ (project or global).
+    // Accepts both the broad patterns ('/.cat-code/**', '~/.cat-code/**', '/.claude/**', '~/.claude/**') and
+    // narrowed ones like '/.cat-code/skills/my-skill/**' so users can grant
     // session access to a single skill without also exposing settings.json
     // or hooks/. The rule already matched the path via matchingRuleForInput;
     // this is an additional scope check. Reject '..' to prevent a rule like
-    // '/.claude/../**' from leaking this bypass outside .claude/.
+    // '/.cat-code/../**' from leaking this bypass outside .cat-code/.
     const ruleContent = claudeFolderAllowRule.ruleValue.ruleContent
     if (
       ruleContent &&
       (ruleContent.startsWith(CLAUDE_FOLDER_PERMISSION_PATTERN.slice(0, -2)) ||
         ruleContent.startsWith(
           GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN.slice(0, -2),
-        )) &&
+        ) ||
+        ruleContent.startsWith('/.claude/') ||
+        ruleContent.startsWith('~/.claude/')) &&
       !ruleContent.includes('..') &&
       ruleContent.endsWith('/**')
     ) {
@@ -1515,7 +1533,7 @@ export function checkEditableInternalPath(
   // Template job's own directory. Env key hardcoded (vs importing JOB_ENV_KEY
   // from jobs/state) so tree-shaking eliminates the string from external
   // builds — spawn.test.ts asserts the string matches. Hijack guard: the env
-  // var value must itself resolve under ~/.claude/jobs/. Symlink guard: every
+  // var value must itself resolve under ~/.cat-code/jobs/. Symlink guard: every
   // resolved form of the target (lexical + symlink chain) must fall under some
   // resolved form of the job dir, so a symlink inside the job dir pointing at
   // e.g. ~/.ssh/authorized_keys does not get a free write. Resolving both
@@ -1529,7 +1547,7 @@ export function checkEditableInternalPath(
       const jobsRootForms = getPathsForPermissionCheck(jobsRoot).map(normalize)
       // Hijack guard: every resolved form of the job dir must sit under
       // some resolved form of the jobs root. Resolving both sides handles
-      // the case where ~/.claude is a symlink (e.g. to /data/claude-config).
+      // the case where ~/.cat-code is a symlink (e.g. to /data/cat-code-config).
       const isUnderJobsRoot = jobDirForms.every(jd =>
         jobsRootForms.some(jr => jd.startsWith(jr + sep)),
       )
@@ -1561,14 +1579,14 @@ export function checkEditableInternalPath(
       updatedInput: input,
       decisionReason: {
         type: 'other',
-        reason: 'Agent memory files are allowed for writing',
+        reason: 'agent memory files are allowed for writing',
       },
     }
   }
 
   // Memdir directory (persistent memory for cross-session learning)
   // This pre-safety-check carve-out exists because the default path is under
-  // ~/.claude/, which is in DANGEROUS_DIRECTORIES. The CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
+  // ~/.cat-code/, which is in DANGEROUS_DIRECTORIES. The CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
   // override is an arbitrary caller-designated directory with no such conflict,
   // so it gets NO special permission treatment here — writes go through normal
   // permission flow (step 5 → ask). SDK callers who want silent memory should
@@ -1584,16 +1602,17 @@ export function checkEditableInternalPath(
     }
   }
 
-  // .claude/launch.json — desktop preview config (dev server command + port).
+  // .cat-code/launch.json or legacy .claude/launch.json — desktop preview config (dev server command + port).
   // The desktop's preview_start MCP tool instructs Claude to create/update
   // this file as part of the preview workflow. Without this carve-out the
-  // .claude/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
+  // config directories check prompts for it, which in SDK mode
   // cascades: user clicks "Always allow" → setMode:acceptEdits suggestion
   // applied → silent downgrade from auto mode. Matches the project-level
-  // .claude/ only (not ~/.claude/) since launch.json is per-project.
+  // config directories only (not global) since launch.json is per-project.
+  const pathComparison = normalizeCaseForComparison(normalizedPath)
   if (
-    normalizeCaseForComparison(normalizedPath) ===
-    normalizeCaseForComparison(join(getOriginalCwd(), '.claude', 'launch.json'))
+    pathComparison === normalizeCaseForComparison(join(getOriginalCwd(), '.cat-code', 'launch.json')) ||
+    pathComparison === normalizeCaseForComparison(join(getOriginalCwd(), '.claude', 'launch.json'))
   ) {
     return {
       behavior: 'allow',
@@ -1728,7 +1747,7 @@ export function checkReadableInternalPath(
     }
   }
 
-  // Tasks directory (~/.claude/tasks/) for swarm task coordination
+  // Tasks directory (~/.cat-code/tasks/) for swarm task coordination
   const tasksDir = join(getClaudeConfigHomeDir(), 'tasks') + sep
   if (
     normalizedPath === tasksDir.slice(0, -1) ||
@@ -1744,7 +1763,7 @@ export function checkReadableInternalPath(
     }
   }
 
-  // Teams directory (~/.claude/teams/) for swarm coordination
+  // Teams directory (~/.cat-code/teams/) for swarm coordination
   const teamsReadDir = join(getClaudeConfigHomeDir(), 'teams') + sep
   if (
     normalizedPath === teamsReadDir.slice(0, -1) ||

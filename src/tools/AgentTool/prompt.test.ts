@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { getBuiltInAgents } from './builtInAgents.js'
 import { getPrompt } from './prompt.js'
 
 describe('Agent tool prompt in Agent Mode', () => {
   const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
   const originalOpenAiApiKey = process.env.OPENAI_API_KEY
+  const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
+  const originalAgentListInMessages =
+    process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES
 
   beforeEach(() => {
     process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
@@ -22,6 +26,39 @@ describe('Agent tool prompt in Agent Mode', () => {
     } else {
       process.env.OPENAI_API_KEY = originalOpenAiApiKey
     }
+
+    if (originalAgentMode === undefined) {
+      delete process.env.CLAUDE_CODE_AGENT_MODE
+    } else {
+      process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
+    }
+
+    if (originalAgentListInMessages === undefined) {
+      delete process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES
+    } else {
+      process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES =
+        originalAgentListInMessages
+    }
+  })
+
+  test('advertises normal-mode implementor and verification agent types', async () => {
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+    process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES = 'false'
+
+    const prompt = await getPrompt(
+      getBuiltInAgents(),
+      false,
+      undefined,
+      'openai',
+      false,
+    )
+
+    expect(prompt).toContain('- implementor:')
+    expect(prompt).toContain('- verification:')
+    expect(prompt).toContain('Read-only async verification tools')
+    expect(prompt).not.toContain('- verification: Use this agent to verify that implementation work is correct before reporting completion. Invoke after non-trivial tasks (3+ file edits, backend/API changes, infrastructure changes). Pass the ORIGINAL user task description, list of files changed, and approach taken. The agent runs builds, tests, linters, and checks to produce a PASS/FAIL/PARTIAL verdict with evidence. (Tools: All tools except')
+    expect(prompt).not.toContain('- agent-mode-coding-worker:')
+    expect(prompt).not.toContain('- agent-mode-verifier:')
   })
 
   test('makes worker-first execution and verifier use more concrete at runtime', async () => {

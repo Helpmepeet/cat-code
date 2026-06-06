@@ -42,7 +42,10 @@ import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
-import { resolveAgentTarget } from '../AgentTool/resolveAgentTarget.js'
+import {
+  formatContextSizeHint,
+  resolveAgentTarget,
+} from '../AgentTool/resolveAgentTarget.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -880,7 +883,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           return {
             data: {
               success: false,
-              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.`,
+              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.${formatContextSizeHint(resolved.contextTokens)}`,
             },
           }
         }

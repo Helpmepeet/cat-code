@@ -61,16 +61,14 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (supported3P !== undefined) {
     return supported3P
   }
-  if (model.toLowerCase().includes('opus-4-6')) {
+  const m = model.toLowerCase()
+  if (m.includes('opus-4-6')) {
     return true
   }
   // OpenAI/Codex: 'max' maps to reasoning.effort='xhigh'. Codex variants
   // support it, and GPT-5.5/GPT-5.4 also support it.
-  if (getAPIProvider() === 'openai') {
-    const m = model.toLowerCase()
-    if (m.includes('codex') || m === 'gpt-5.5' || m === 'gpt-5.4') {
-      return true
-    }
+  if (m.includes('codex') || m === 'gpt-5.5' || m === 'gpt-5.4') {
+    return true
   }
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
     return true

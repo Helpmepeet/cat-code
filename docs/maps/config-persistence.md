@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-05-17
+Last refreshed: 2026-06-06
 
 ## Purpose
 
@@ -20,6 +20,7 @@ for the config and persistence slice.
 | Settings merge behavior | `src/utils/settings/settings.ts` | `src/utils/settings/constants.ts`, `src/utils/settings/settingsCache.ts` |
 | Global config and project-keyed user state | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/envUtils.ts` |
 | Environment application from config/settings | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/utils/sessionEnvVars.ts` |
+| Instruction memory and rule discovery | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/settings/constants.ts` |
 | Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
 | Persistent memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/utils/permissions/filesystem.ts` |
 | Session memory summaries | `src/services/SessionMemory/sessionMemory.ts` | `src/services/SessionMemory/sessionMemoryUtils.ts`, `src/utils/permissions/filesystem.ts` |
@@ -30,7 +31,7 @@ for the config and persistence slice.
 | If you want to change or verify X | Inspect first | Then inspect | Notes |
 |---|---|---|---|
 | Normal settings precedence | `src/utils/settings/settings.ts` | `src/utils/settings/constants.ts`, `src/utils/settings/settingsCache.ts` | `loadSettingsFromDisk()` starts with plugin settings, then enabled sources in `SETTING_SOURCES` order. `flagSettings` and `policySettings` are always included by `getEnabledSettingSources()`. |
-| Which settings files exist | `src/utils/settings/settings.ts` | `src/utils/envUtils.ts`, `src/utils/settings/managedPath.ts` | User settings are under `getClaudeConfigHomeDir()` as `settings.json` or `cowork_settings.json`; project settings are `.claude/settings.json`; local settings are `.claude/settings.local.json`. |
+| Which settings files exist | `src/utils/settings/settings.ts` | `src/utils/envUtils.ts`, `src/utils/settings/managedPath.ts` | User settings are under `getClaudeConfigHomeDir()` as `settings.json` or `cowork_settings.json`; project settings are `.cat-code/settings.json`; local settings are `.cat-code/settings.local.json`. |
 | `--setting-sources` behavior | `src/utils/settings/constants.ts` | `src/bootstrap/state.ts`, `src/main.tsx` | The flag can narrow user/project/local loading. It does not exclude `flagSettings` or `policySettings`. |
 | Inline or file-backed flag settings | `src/utils/settings/settings.ts` | `src/bootstrap/state.ts` | `flagSettings` can come from a `--settings` path and inline SDK settings. Inline settings merge on top of the flag file. |
 | Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. Arrays replace during source writes but concat/dedupe during normal merged reads. |
@@ -38,6 +39,7 @@ for the config and persistence slice.
 | Initial merged settings snapshot | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts` | `getInitialSettings()`/`getSettings_DEPRECATED()` use a session cache. Reset that cache through the established change paths, not per listener. |
 | Global config file location | `src/utils/env.ts` | `src/utils/envUtils.ts`, `src/constants/oauth.ts` | `getGlobalClaudeFile()` uses legacy `~/.cat-code/.config.json` if present, otherwise `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`. The suffix can vary for OAuth config. |
 | Global config reads and writes | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/lockfile.ts` | `enableConfigs()` gates reads. `saveGlobalConfig()` uses a lock, backups, cache write-through, and an auth-loss guard. |
+| Project instruction files and rule globs | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/markdownConfigLoader.ts` | Project instruction discovery now checks `CLAUDE.md`, `.cat-code/CLAUDE.md`, and `.cat-code/rules/*.md` before legacy `.claude` fallbacks, across cwd ancestors and additional dirs. |
 | Project-keyed user state | `src/utils/config.ts` | `src/utils/git.ts`, `src/utils/path.ts` | `getProjectPathForConfig()` keys by canonical git root when available, otherwise original cwd. Values are stored inside the global config `projects` object, not in repo files. |
 | Trust persistence | `src/utils/config.ts` | `src/bootstrap/state.ts`, `src/components/TrustDialog/` | Trust can be session-only for some cases, or persisted as `projects[projectPath].hasTrustDialogAccepted`. Parent-directory checks are part of trust lookup. |
 | Legacy config migrations | `src/utils/config.ts` | `src/main.tsx`, `src/migrations/` | `config.ts` has local field migrations and backup behavior. Startup migrations handle renamed settings/config fields elsewhere. |
@@ -75,8 +77,8 @@ for the config and persistence slice.
 | User-global settings | `~/.cat-code/settings.json` or `~/.cat-code/cowork_settings.json` | `src/utils/settings/settings.ts` |
 | User-global config | `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`, with legacy `~/.cat-code/.config.json` fallback | `src/utils/env.ts`, `src/utils/config.ts` |
 | User-global project-keyed state | global config `projects[canonicalGitRootOrCwd]` | `src/utils/config.ts` |
-| Project-shared settings | `.claude/settings.json` | `src/utils/settings/settings.ts` |
-| Project-local settings | `.claude/settings.local.json` | `src/utils/settings/settings.ts` |
+| Project-shared settings | `.cat-code/settings.json` | `src/utils/settings/settings.ts` |
+| Project-local settings | `.cat-code/settings.local.json` | `src/utils/settings/settings.ts` |
 | Managed settings files | `/etc/claude-code`, `/Library/Application Support/ClaudeCode`, or `C:\Program Files\ClaudeCode` | `src/utils/settings/managedPath.ts`, `src/utils/settings/settings.ts` |
 | Remote managed settings cache | `~/.cat-code/remote-settings.json` | `src/services/remoteManagedSettings/` |
 | Policy limits cache | `~/.cat-code/policy-limits.json` | `src/services/policyLimits/index.ts` |

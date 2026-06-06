@@ -29,6 +29,36 @@ function resetCaptures() {
 }
 
 describe('sideQuery', () => {
+  test('includes OpenAI instruction assembly for Codex-routed requests', async () => {
+    resetCaptures()
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    ;(globalThis as typeof globalThis & { MACRO?: { VERSION: string } }).MACRO =
+      { VERSION: 'test' }
+    const { sideQuery } = await import('./sideQuery.js')
+
+    await sideQuery({
+      model: 'gpt-5.5',
+      system: 'Use structured output.',
+      messages: [{ role: 'user', content: 'Summarize this.' }],
+      skipSystemPromptPrefix: true,
+      querySource: 'insights',
+    })
+
+    expect(capturedBody).not.toBeNull()
+    expect(capturedBody).toMatchObject({
+      _openaiInstructionAssembly: {
+        inputMessages: [{ role: 'user', content: 'Summarize this.' }],
+      },
+    })
+    expect(
+      (
+        capturedBody?._openaiInstructionAssembly as
+          | { instructions?: string }
+          | undefined
+      )?.instructions,
+    ).toContain('Use structured output.')
+  })
+
   test('respects explicit provider override for Claude models', async () => {
     resetCaptures()
     process.env.ANTHROPIC_API_KEY = 'test-key'
@@ -48,6 +78,7 @@ describe('sideQuery', () => {
       })
 
       expect(capturedBody).not.toBeNull()
+      expect(capturedBody?._openaiInstructionAssembly).toBeUndefined()
       expect(capturedClientArgs).toMatchObject({ provider: 'firstParty' })
     } finally {
       delete process.env.CLAUDE_CODE_USE_OPENAI
@@ -73,6 +104,7 @@ describe('sideQuery', () => {
       })
 
       expect(capturedBody).not.toBeNull()
+      expect(capturedBody?._openaiInstructionAssembly).toBeUndefined()
       expect(capturedClientArgs).toMatchObject({ provider: 'firstParty' })
     } finally {
       delete process.env.CLAUDE_CODE_USE_OPENAI

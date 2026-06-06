@@ -1,6 +1,6 @@
 # Bridge, Remote, And CLI Transport Map
 
-Last refreshed: 2026-05-12 against the current source tree.
+Last refreshed: 2026-06-06 against the current source tree.
 
 ## Purpose
 
@@ -47,9 +47,11 @@ Read in this order for most bridge or remote-control work:
 | 10 | [`../../src/cli/structuredIO.ts`](../../src/cli/structuredIO.ts) | Stream-json parsing, control request/response lifecycle, permission prompt protocol, sandbox asks. |
 | 11 | [`../../src/cli/remoteIO.ts`](../../src/cli/remoteIO.ts) | `--sdk-url` transport wrapper, CCR v2 client setup, session keepalive, internal event hooks. |
 | 12 | [`../../src/cli/transports/transportUtils.ts`](../../src/cli/transports/transportUtils.ts) | Transport selection between SSE, hybrid, and WebSocket. |
-| 13 | [`../../src/remote/RemoteSessionManager.ts`](../../src/remote/RemoteSessionManager.ts) | Local TUI client for CCR remote sessions: subscribe, send message, permissions, interrupt. |
-| 14 | [`../../src/server/createDirectConnectSession.ts`](../../src/server/createDirectConnectSession.ts) | Direct-connect session creation and response validation. |
-| 15 | [`../../src/upstreamproxy/upstreamproxy.ts`](../../src/upstreamproxy/upstreamproxy.ts) | CCR container proxy bootstrap, CA fetch, relay startup, env injection. |
+| 13 | [`../../src/hooks/usePtcloveBridge.ts`](../../src/hooks/usePtcloveBridge.ts) | Local ptclove socket bridge setup, hello/auth flow, permission relay, and status broadcast hookup. |
+| 14 | [`../../src/bridge/ptcloveBridgeProtocol.ts`](../../src/bridge/ptcloveBridgeProtocol.ts) | Local bridge message schema, approval surfacing rules, and status text shaping. |
+| 15 | [`../../src/remote/RemoteSessionManager.ts`](../../src/remote/RemoteSessionManager.ts) | Local TUI client for CCR remote sessions: subscribe, send message, permissions, interrupt. |
+| 16 | [`../../src/server/createDirectConnectSession.ts`](../../src/server/createDirectConnectSession.ts) | Direct-connect session creation and response validation. |
+| 17 | [`../../src/upstreamproxy/upstreamproxy.ts`](../../src/upstreamproxy/upstreamproxy.ts) | CCR container proxy bootstrap, CA fetch, relay startup, env injection. |
 
 ## Entry Points
 
@@ -59,6 +61,7 @@ Read in this order for most bridge or remote-control work:
 | Standalone Remote Control CLI | `src/bridge/bridgeMain.ts` | `src/bridge/bridgeApi.ts`, `src/bridge/createSession.ts`, `src/bridge/sessionRunner.ts` | Owns `cat-code remote-control` args, env registration, polling, spawned session workers, archive/deregister, and headless daemon helpers. |
 | In-REPL bridge toggle | `src/hooks/useReplBridge.tsx` | `src/bridge/initReplBridge.ts`, `src/bridge/replBridgeHandle.ts` | REPL state enables the bridge; the hook owns connection lifecycle and forwards messages/control events. |
 | Env-less REPL bridge | `src/bridge/remoteBridgeCore.ts` | `src/bridge/codeSessionApi.ts`, `src/bridge/replBridgeTransport.ts` | Uses `/v1/code/sessions` then `/bridge`; no environment register/poll/ack/heartbeat layer. |
+| Local ptclove socket bridge | `src/hooks/usePtcloveBridge.ts` | `src/bridge/ptcloveBridgeProtocol.ts`, `src/bridge/bridgeBroadcaster.ts`, `src/bridge/mergeBridgePermissionCallbacks.ts` | Local-only NDJSON socket that mirrors session state/activity and can surface approval requests; used to drive an external UI/controller without CCR. |
 | Env-based bridge | `src/bridge/replBridge.ts`, `src/bridge/bridgeMain.ts` | `src/bridge/bridgeApi.ts`, `src/bridge/workSecret.ts` | Registers a bridge environment, polls for work, decodes work secrets, and uses session-ingress or CCR v2 transport for sessions. |
 | Child SDK transport | `src/cli/remoteIO.ts` | `src/cli/transports/`, `src/cli/print.ts` | `--sdk-url` creates `RemoteIO`, which extends `StructuredIO` and chooses WebSocket/hybrid/SSE transport by env and URL. |
 | Structured SDK protocol | `src/cli/structuredIO.ts` | SDK control schemas and `src/cli/print.ts` | Owns NDJSON line parsing, `control_request`, `control_response`, duplicate response suppression, and permission prompt requests. |

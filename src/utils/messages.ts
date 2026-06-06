@@ -291,7 +291,7 @@ export function buildClassifierUnavailableMessage(
   classifierModel: string,
 ): string {
   return (
-    `${classifierModel} is temporarily unavailable, so auto mode cannot determine the safety of ${toolName} right now. ` +
+    `The auto mode classifier request using ${classifierModel} is temporarily unavailable, so auto mode cannot determine the safety of ${toolName} right now. ` +
     `Wait briefly and then try this action again. ` +
     `If it keeps failing, continue with other tasks that don't require this action and come back to it later. ` +
     `Note: reading files, searching code, and other read-only operations do not require the classifier and can still be used.`
@@ -4237,6 +4237,17 @@ You have exited auto mode. The user may now want to interact more directly. You 
           content: wrapInSystemReminder(
             `${attachment.hookName} hook additional context: ${attachment.content.join('\n')}`,
           ),
+          isMeta: true,
+        }),
+      ]
+    }
+    case 'auto_map_context': {
+      if (attachment.content === '') {
+        return []
+      }
+      return [
+        createUserMessage({
+          content: wrapInSystemReminder(attachment.content),
           isMeta: true,
         }),
       ]

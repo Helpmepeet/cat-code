@@ -270,6 +270,90 @@ describe('GenerateImageTool', () => {
     })
   })
 
+  test('accepts the Codex image-generation request parameters in the input schema', () => {
+    const result = GenerateImageTool.inputSchema.safeParse({
+      prompt: 'a watercolor cat',
+      output_path: join(tempDir!, 'generated.webp'),
+      output_format: 'webp',
+      output_compression: 80,
+      action: 'generate',
+      input_fidelity: 'high',
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  test('passes optional Codex image-generation request parameters to the built-in tool', () => {
+    const body =
+      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
+        {
+          prompt: 'a watercolor cat',
+          output_path: join(tempDir!, 'generated.webp'),
+          output_compression: 80,
+          action: 'generate',
+          input_fidelity: 'high',
+        },
+        'webp',
+        'gpt-5.5',
+      )
+    const tool = body.tools[0] as Record<string, unknown>
+
+    expect(tool.output_compression).toBe(80)
+    expect(tool.action).toBe('generate')
+    expect(tool.input_fidelity).toBe('high')
+  })
+
+  test('defaults Codex action to auto without a reference image', () => {
+    const body =
+      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
+        {
+          prompt: 'a watercolor cat',
+          output_path: join(tempDir!, 'generated.png'),
+        },
+        'png',
+        'gpt-5.5',
+      )
+    const tool = body.tools[0] as Record<string, unknown>
+
+    expect(tool.action).toBe('auto')
+  })
+
+  test('defaults Codex action to edit with a reference image', () => {
+    const body =
+      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
+        {
+          prompt: 'a watercolor cat',
+          output_path: join(tempDir!, 'generated.png'),
+          reference_image_path: join(tempDir!, 'reference.png'),
+        },
+        'png',
+        'gpt-5.5',
+        {
+          imageUrl: 'data:image/png;base64,cmVmZXJlbmNl',
+        },
+      )
+    const tool = body.tools[0] as Record<string, unknown>
+
+    expect(tool.action).toBe('edit')
+  })
+
+  test('rejects output compression for PNG output', async () => {
+    const validation = await GenerateImageTool.validateInput?.(
+      {
+        prompt: 'a watercolor cat',
+        output_path: join(tempDir!, 'generated.png'),
+        output_compression: 80,
+      },
+      {} as ToolUseContext,
+    )
+
+    expect(validation).toEqual({
+      result: false,
+      message: 'output_compression is only supported for jpeg and webp output.',
+      errorCode: 8,
+    })
+  })
+
   test('includes a reference image in Codex Responses requests', () => {
     const body =
       _generateImageToolInternalsForTest.buildCodexImageGenerationBody(

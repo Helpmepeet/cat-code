@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-05-21 against the current source tree.
+Last refreshed: 2026-06-06 against the current source tree.
 
 ## Purpose
 
@@ -63,9 +63,10 @@ The live tool system is assembled in layers:
 | Tool contract and defaults | `src/Tool.ts` | tool implementation file, `src/utils/api.ts` | Start here when changing what every tool can declare: schemas, concurrency, permission hooks, prompt text, deferred loading, result rendering, or MCP metadata. |
 | Tool pool visible to the model | `src/tools.ts` | `src/services/mcp/client.ts`, `src/utils/toolSearch.ts` | `getTools()`, `assembleToolPool()`, and `getMergedTools()` are the main assembly points. Blanket deny rules can remove tools before prompt exposure. |
 | Interactive permission prompts | `src/hooks/useCanUseTool.tsx` | `src/hooks/toolPermission/`, `src/components/permissions/PermissionRequest.tsx` | This is the main UI-side approval path. It handles config allows, config denies, coordinator waits, swarm-worker behavior, classifier shortcuts, and interactive prompt display. |
+| Bridge-mediated approvals | `src/hooks/useCanUseTool.tsx` | `src/bridge/mergeBridgePermissionCallbacks.ts`, `src/hooks/usePtcloveBridge.ts`, `src/hooks/useReplBridge.tsx` | Approval prompts can be mirrored to both REPL bridge and ptclove bridge callbacks before the local dialog resolves. |
 | Rule-based permission engine | `src/utils/permissions/permissions.ts` | `src/utils/permissions/PermissionRule.ts`, `src/utils/permissions/PermissionResult.ts`, `src/utils/permissions/permissionRuleParser.ts` | Use this when changing rule precedence, bypass behavior, ask/deny matching, or auto-mode classifier routing. |
 | Permission-context construction | `src/utils/permissions/permissionSetup.ts` | `src/utils/permissions/permissionsLoader.ts`, `src/utils/settings/settings.ts`, `src/commands/add-dir/validation.ts` | This is where session mode, additional working dirs, auto-mode safety stripping, and on-disk rule loading are assembled into `ToolPermissionContext`. |
-| File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
+| File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.cat-code` plus legacy `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
 | Sandbox integration | `src/utils/permissions/pathValidation.ts` | `src/utils/sandbox/sandbox-adapter.ts`, `src/tools/BashTool/shouldUseSandbox.ts`, `src/utils/permissions/permissions.ts` | The path validator treats sandbox write allowlists as an extra write scope for out-of-working-dir paths. Bash sandbox auto-allow is decided higher up in permissions. |
 | Tool execution lifecycle | `src/services/tools/toolExecution.ts` | `src/services/tools/toolHooks.ts`, `src/hooks/useCanUseTool.tsx`, `src/utils/toolResultStorage.ts` | Main per-call pipeline: schema parsing, validation, hook execution, permission decision, tool call, result processing, and failure handling. |
 | Concurrent tool orchestration | `src/services/tools/toolOrchestration.ts` | `src/services/tools/StreamingToolExecutor.ts`, tool `isConcurrencySafe()` implementations | Non-read-only or non-concurrency-safe tools serialize. Read-only safe batches can run together. Context modifiers are applied after concurrent batches complete. |

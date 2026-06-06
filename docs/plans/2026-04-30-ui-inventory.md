@@ -911,6 +911,7 @@ The following are the **non-negotiable behaviors** that must be preserved in a w
 | Field | Source |
 |-------|--------|
 | `model.id` / `model.display_name` | `useMainLoopModel()` → AppState |
+| `effortLevel` | `getDisplayedEffortLevel()` from model and AppState effort |
 | `workspace.current_dir` | `getCwd()` |
 | `workspace.project_dir` | `getOriginalCwd()` |
 | `workspace.added_dirs` | `toolPermissionContext.additionalWorkingDirectories` |
@@ -939,6 +940,7 @@ The following are the **non-negotiable behaviors** that must be preserved in a w
 - `permissionMode` changes
 - `vimMode` changes
 - `mainLoopModel` changes
+- `effortValue` changes
 - `statusLineRefreshKey` bumped externally (e.g. `/switch-account`)
 - StatusLine command text changes (hot reload via settings)
 

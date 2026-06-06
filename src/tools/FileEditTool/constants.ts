@@ -1,8 +1,8 @@
 // In its own file to avoid circular dependencies
 export const FILE_EDIT_TOOL_NAME = 'Edit'
 
-// Permission pattern for granting session-level access to the project's .claude/ folder
-export const CLAUDE_FOLDER_PERMISSION_PATTERN = '/.claude/**'
+// Permission pattern for granting session-level access to the project's .cat-code/ folder
+export const CLAUDE_FOLDER_PERMISSION_PATTERN = '/.cat-code/**'
 
 // Permission pattern for granting session-level access to the global ~/.cat-code/ folder
 export const GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN = '~/.cat-code/**'

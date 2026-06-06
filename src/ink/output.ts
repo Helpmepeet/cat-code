@@ -26,6 +26,8 @@ import {
 import { stringWidth } from './stringWidth.js'
 import { widestLine } from './widest-line.js'
 
+let lastHighWriteRatioLogAt = 0
+
 /**
  * A grapheme cluster with precomputed terminal width, styleId, and hyperlink.
  * Built once per unique line (cached via charCache), so the per-char hot loop
@@ -584,7 +586,9 @@ export default class Output {
 
     // Log blit/write ratio for debugging - high write count suggests blitting isn't working
     const totalCells = blitCells + writeCells
-    if (totalCells > 1000 && writeCells > blitCells) {
+    const now = Date.now()
+    if (totalCells > 1000 && writeCells > blitCells && now - lastHighWriteRatioLogAt >= 30_000) {
+      lastHighWriteRatioLogAt = now
       logForDebugging(
         `High write ratio: blit=${blitCells}, write=${writeCells} (${((writeCells / totalCells) * 100).toFixed(1)}% writes), screen=${screenHeight}x${screenWidth}`,
       )

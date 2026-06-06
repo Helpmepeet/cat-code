@@ -5,7 +5,12 @@ import { setSessionProvider } from '../../bootstrap/state.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import { SettingsSchema } from '../../utils/settings/types.js'
 import { getRetryOwnerId } from './claude.js'
-import { createCodexFetch, CodexAccountCapError } from './codex-fetch-adapter.js'
+import {
+  _markStickyHttpFallbackForTest,
+  createCodexFetch,
+  CodexAccountCapError,
+  resetCodexCacheContext,
+} from './codex-fetch-adapter.js'
 import { classifyAPIError } from './errors.js'
 import {
   getPoolStatus,
@@ -1438,6 +1443,142 @@ describe('codexAccountLeaseManager', () => {
       failoverCount: 1,
       lastFailureReason: 'Codex account main-account hit usage cap',
     })
+  })
+
+  test('withRetry retries leased Codex streams when response.failed reports a usage limit before output', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+          lastUsedAt: 0,
+        }),
+        buildPoolAccount({
+          accountId: 'worker-a',
+          lastUsedAt: 100,
+        }),
+      ],
+    })
+
+    const currentLease = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'subagent-response-failed',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Response Failed',
+    })
+
+    const originalFetch = globalThis.fetch
+    const conversationId = 'conv_response_failed_retry'
+    const seenAccountIds: string[] = []
+
+    _markStickyHttpFallbackForTest(conversationId, 'test')
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers)
+      const accountId = headers.get('chatgpt-account-id') ?? 'missing'
+      seenAccountIds.push(accountId)
+
+      if (accountId === currentLease.accountId) {
+        return new Response(
+          [
+            'event: response.failed',
+            `data: ${JSON.stringify({
+              type: 'response.failed',
+              response: {
+                error: {
+                  code: 'usage_limit_reached',
+                  message: 'usage limit reached',
+                },
+              },
+            })}`,
+            '',
+          ].join('\n'),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          },
+        )
+      }
+
+      return new Response(
+        [
+          'event: response.output_text.delta',
+          `data: ${JSON.stringify({
+            type: 'response.output_text.delta',
+            delta: 'retried successfully',
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 4,
+                output_tokens: 2,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      let attempts = 0
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          attempts += 1
+          const response = await createCodexFetch(
+            buildCodexToken('main-account'),
+            conversationId,
+          )('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              stream: true,
+              model: 'gpt-5.4',
+              _openaiInstructionAssembly: {
+                instructions: 'test instructions',
+                inputMessages: [],
+              },
+            }),
+          })
+          const body = await response.text()
+          expect(body).toContain('retried successfully')
+          return body
+        },
+        {
+          maxRetries: 1,
+          model: 'gpt-5.4',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'subagent-response-failed',
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // consume system retry messages
+      }
+
+      expect(attempts).toBe(2)
+      expect(seenAccountIds).toEqual([currentLease.accountId, 'main-account'])
+      expect(moduleUnderTest.getCodexLeaseForOwner('subagent-response-failed'))
+        .toMatchObject({
+          accountId: 'main-account',
+          failoverCount: 1,
+        })
+      expect(
+        getPoolStatus().accounts.find((account) => account.accountId === currentLease.accountId),
+      ).toMatchObject({
+        status: 'capped',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
   })
 
   test('cool-down deprioritises a recently-errored account over a clean one', () => {

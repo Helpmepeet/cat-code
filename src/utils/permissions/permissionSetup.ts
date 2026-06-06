@@ -786,6 +786,15 @@ export function initialPermissionModeFromCLI({
       orderedModes.push(settingsMode)
     }
   }
+  if (
+    feature('TRANSCRIPT_CLASSIFIER') &&
+    !settings.permissions?.defaultMode &&
+    !autoModeCircuitBrokenSync &&
+    !isAutoModeDisabledBySettings() &&
+    modelSupportsAutoMode(getMainLoopModel())
+  ) {
+    orderedModes.push('auto')
+  }
 
   let result: { mode: PermissionMode; notification?: string } | undefined
 
@@ -1105,7 +1114,10 @@ export async function verifyAutoModeGateAccess(
     enabled?: AutoModeEnabledState
     disableFastMode?: boolean
   }>('tengu_auto_mode_config', {})
-  const enabledState = parseAutoModeEnabledState(autoModeConfig?.enabled)
+  const enabledState = parseAutoModeEnabledState(
+    autoModeConfig?.enabled,
+    AUTO_MODE_AVAILABILITY_DEFAULT,
+  )
   const disabledBySettings = isAutoModeDisabledBySettings()
   // Treat settings-disable the same as GrowthBook 'disabled' for circuit-breaker
   // semantics — blocks SDK/explicit re-entry via isAutoModeGateEnabled().
@@ -1114,7 +1126,8 @@ export async function verifyAutoModeGateAccess(
   )
 
   // Carousel availability: not circuit-broken, not disabled-by-settings,
-  // model supports it, disableFastMode breaker not firing, and (enabled or opted-in)
+  // model supports it, and disableFastMode breaker is not firing. First-time
+  // users can cycle to Auto so the opt-in dialog can collect consent.
   const mainModel = getMainLoopModel()
   // Temp circuit breaker: tengu_auto_mode_config.disableFastMode blocks auto
   // mode when fast mode is on. Checks runtime AppState.fastMode (if provided)
@@ -1130,8 +1143,7 @@ export async function verifyAutoModeGateAccess(
     modelSupportsAutoMode(mainModel) && !disableFastModeBreakerFires
   let carouselAvailable = false
   if (enabledState !== 'disabled' && !disabledBySettings && modelSupported) {
-    carouselAvailable =
-      enabledState === 'enabled' || hasAutoModeOptInAnySource()
+    carouselAvailable = true
   }
   // canEnterAuto gates explicit entry (--permission-mode auto, defaultMode: auto)
   // — explicit entry IS an opt-in, so we only block on circuit breaker + settings + model
@@ -1324,12 +1336,16 @@ export function getAutoModeUnavailableReason(): AutoModeUnavailableReason | null
 export type AutoModeEnabledState = 'enabled' | 'disabled' | 'opt-in'
 
 const AUTO_MODE_ENABLED_DEFAULT: AutoModeEnabledState = 'disabled'
+const AUTO_MODE_AVAILABILITY_DEFAULT: AutoModeEnabledState = 'enabled'
 
-function parseAutoModeEnabledState(value: unknown): AutoModeEnabledState {
+function parseAutoModeEnabledState(
+  value: unknown,
+  defaultValue: AutoModeEnabledState = AUTO_MODE_ENABLED_DEFAULT,
+): AutoModeEnabledState {
   if (value === 'enabled' || value === 'disabled' || value === 'opt-in') {
     return value
   }
-  return AUTO_MODE_ENABLED_DEFAULT
+  return defaultValue
 }
 
 /**
@@ -1343,6 +1359,16 @@ export function getAutoModeEnabledState(): AutoModeEnabledState {
     enabled?: AutoModeEnabledState
   }>('tengu_auto_mode_config', {})
   return parseAutoModeEnabledState(config?.enabled)
+}
+
+export function getAutoModeAvailabilityEnabledState(): AutoModeEnabledState {
+  const config = getFeatureValue_CACHED_MAY_BE_STALE<{
+    enabled?: AutoModeEnabledState
+  }>('tengu_auto_mode_config', {})
+  return parseAutoModeEnabledState(
+    config?.enabled,
+    AUTO_MODE_AVAILABILITY_DEFAULT,
+  )
 }
 
 const NO_CACHED_AUTO_MODE_CONFIG = Symbol('no-cached-auto-mode-config')

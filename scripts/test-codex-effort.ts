@@ -29,8 +29,8 @@ const cases: Case[] = [
   { effort: 'max', model: 'gpt-5.4', expect: 'xhigh', note: 'max on previous base gpt → xhigh' },
   { effort: 'max', model: 'gpt-5.2', expect: 'high', note: 'max on base gpt-5.2 → high' },
 
-  // minimal passes through
-  { effort: 'minimal', model: 'gpt-5.5', expect: 'minimal', note: 'minimal on latest base gpt' },
+  // minimal: GPT-5.5 rejects minimal and accepts none; GPT-5.4 keeps existing minimal behavior.
+  { effort: 'minimal', model: 'gpt-5.5', expect: 'none', note: 'minimal on latest base gpt → none' },
   { effort: 'minimal', model: 'gpt-5.4', expect: 'minimal', note: 'minimal on base gpt' },
 
   // undefined / auto / garbage → omit

@@ -192,6 +192,15 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   }
 
   const normalizedModel = normalizeModelStringForAPI(model)
+  const openAIInstructionAssembly =
+    provider === 'openai'
+      ? {
+          _openaiInstructionAssembly: {
+            instructions: systemBlocks.map(block => block.text).join('\n\n'),
+            inputMessages: messages,
+          },
+        }
+      : {}
   const start = Date.now()
   // biome-ignore lint/plugin: this IS the wrapper that handles OAuth attribution
   const response = await client.beta.messages.create(
@@ -200,6 +209,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
       max_tokens,
       system: systemBlocks,
       messages,
+      ...openAIInstructionAssembly,
       ...(tools && { tools }),
       ...(tool_choice && { tool_choice }),
       ...(output_format && { output_config: { format: output_format } }),

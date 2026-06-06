@@ -150,22 +150,33 @@ export function _hasStickyHttpFallbackForTest(conversationId: string): boolean {
   return hasStickyHttpFallback(conversationId)
 }
 
+/**
+ * Maps a transport conversation ID back to the prompt-cache tracking key that
+ * promptCacheBreakDetection keys `previousStateBySource` by (see getTrackingKey
+ * there). The mapping must produce the *raw* tracking key, not a querySource:
+ *   - Main thread: the conversation ID is a bare session UUID (no `/`) and the
+ *     tracked state lives under `repl_main_thread`.
+ *   - Subagents: the override is `${sessionId}/${agentId}` (claude.ts
+ *     getCodexConversationIdOverride), and the state is keyed by the raw
+ *     agentId — so we return the agentId segment, NOT `agent:${id}`.
+ *   - Session-title side query: `side/title/<uuid>` is untracked
+ *     (generate_session_title isn't a tracked prefix), so the lookup is a
+ *     harmless no-op; we map it to its querySource for clarity.
+ */
+export function mapConversationIdToTrackingKey(conversationId: string): string {
+  if (conversationId.startsWith('side/title/')) {
+    return 'generate_session_title'
+  }
+  if (conversationId.includes('/')) {
+    return conversationId.split('/')[1]
+  }
+  return 'repl_main_thread'
+}
+
 // Register the stale-response-id callback so promptCacheBreakDetection gets
 // notified when the WS transport retries a turn after server evicts the chain.
-// Default/main-thread conversations do not include `/` and map to
-// repl_main_thread. Explicit subagent overrides use a sessionId/agentId suffix
-// and have their own short-lived detection contexts.
 registerStaleResponseIdCallback((conversationId: string) => {
-  // Map conversationId back to the querySource for detection state lookup.
-  // Main thread uses the session UUID, subagents use sessionId/agentId, and
-  // isolated side queries reserve side/<name>/... prefixes.
-  let querySource = 'repl_main_thread'
-  if (conversationId.startsWith('side/title/')) {
-    querySource = 'generate_session_title'
-  } else if (conversationId.includes('/')) {
-    querySource = `agent:${conversationId.split('/')[1]}`
-  }
-  notifyStaleResponseIdRetry(querySource)
+  notifyStaleResponseIdRetry(mapConversationIdToTrackingKey(conversationId))
 })
 
 // Register the send-path logger so WS turn completions are recorded to the
@@ -253,19 +264,52 @@ export class CodexAccountAuthError extends Error {
   }
 }
 
+type CodexResponseFailure = {
+  code: string
+  message: string
+  type?: string
+}
+
+export class CodexResponseFailedError extends Error {
+  constructor(public readonly failure: CodexResponseFailure) {
+    super(`Codex response.failed (${failure.code}): ${failure.message}`)
+    this.name = 'CodexResponseFailedError'
+  }
+}
+
+const CODEX_ACCOUNT_LIMIT_ERROR_CODES = new Set([
+  'usage_limit_reached',
+  'rate_limit_exceeded',
+  'quota_exceeded',
+  'insufficient_quota',
+  'usage_not_included',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function codexFailureTextIndicatesUsageCap(text: string): boolean {
+  const lower = text.toLowerCase()
+  return (
+    lower.includes('usage_limit') ||
+    lower.includes('limit_reached') ||
+    lower.includes('usage limit') ||
+    lower.includes('usage cap') ||
+    lower.includes('quota exhausted') ||
+    lower.includes('quota exceeded')
+  )
+}
+
 function codexErrorTextIndicatesUsageCap(status: number, body: string): boolean {
   if (status !== 429) {
     return false
   }
-  const text = body.toLowerCase()
-  return (
-    text.includes('usage_limit') ||
-    text.includes('limit_reached') ||
-    text.includes('usage limit') ||
-    text.includes('usage cap') ||
-    text.includes('quota exhausted') ||
-    text.includes('quota exceeded')
-  )
+  return codexFailureTextIndicatesUsageCap(body)
 }
 
 function codexErrorTextIndicatesRevokedAuth(
@@ -300,6 +344,62 @@ function classifyCodexHttpAccountError(
     return new CodexAccountAuthError(accountId, status)
   }
   return null
+}
+
+function extractCodexResponseFailure(
+  event: Record<string, unknown>,
+): CodexResponseFailure {
+  const response = isRecord(event.response) ? event.response : undefined
+  const responseError = isRecord(response?.error) ? response.error : undefined
+  const topLevelError = isRecord(event.error) ? event.error : undefined
+  const error = responseError ?? topLevelError
+
+  const code =
+    readNonEmptyString(error?.code) ??
+    readNonEmptyString(response?.code) ??
+    'unknown_error'
+  const message =
+    readNonEmptyString(error?.message) ??
+    readNonEmptyString(response?.message) ??
+    'Codex response failed'
+  const type =
+    readNonEmptyString(error?.type) ??
+    readNonEmptyString(response?.type)
+
+  return {
+    code,
+    message,
+    ...(type ? { type } : {}),
+  }
+}
+
+function codexResponseFailureIndicatesAccountCap(
+  failure: CodexResponseFailure,
+): boolean {
+  const code = failure.code.toLowerCase()
+  if (CODEX_ACCOUNT_LIMIT_ERROR_CODES.has(code)) {
+    return true
+  }
+  return codexFailureTextIndicatesUsageCap(failure.message)
+}
+
+function createCodexResponseFailedError(
+  event: Record<string, unknown>,
+  requestCacheMetadata?: CodexRequestCacheMetadata,
+  emittedVisibleOutput = false,
+): Error {
+  const failure = extractCodexResponseFailure(event)
+  if (requestCacheMetadata) {
+    clearWebSocketSession(requestCacheMetadata.conversationId)
+  }
+  if (
+    !emittedVisibleOutput &&
+    requestCacheMetadata &&
+    codexResponseFailureIndicatesAccountCap(failure)
+  ) {
+    return new CodexAccountCapError(requestCacheMetadata.accountId)
+  }
+  return new CodexResponseFailedError(failure)
 }
 
 function createRetryableCodexHttpError(status: number, body: string): APIConnectionError {
@@ -409,10 +509,6 @@ interface OpenAIInstructionAssemblyPayload {
   inputMessages: AnthropicMessage[]
   developerContext?: string
 }
-
-registerStaleResponseIdCallback((conversationId) => {
-  notifyStaleResponseIdRetry(conversationId)
-})
 
 // ── Tool translation: Anthropic → Codex ─────────────────────────────
 
@@ -852,9 +948,10 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
 
   // Translate effort → Codex reasoning.effort.
   // claude.ts:configureEffortParams writes the user's /effort choice into
-  // output_config.effort. Codex accepts minimal|low|medium|high|xhigh on
-  // reasoning.effort (model-dependent). Mapping:
+  // output_config.effort. Codex accepts low|medium|high|xhigh plus
+  // model-specific none/minimal values on reasoning.effort. Mapping:
   //   low|medium|high    → pass through
+  //   minimal            → model-specific no/low-reasoning value
   //   max                → xhigh on codex variants, else high
   //   anything else/undef→ omit (Codex server default kicks in, typically high)
   //
@@ -865,14 +962,19 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   // Thinking-disabled override: callers like streamCompactSummary pass
   // `thinking: { type: 'disabled' }` to signal "this is a pure-output task, do
   // not spend reasoning tokens". On Anthropic that short-circuits extended
-  // thinking; the equivalent on Codex is reasoning.effort = "minimal". Without
-  // this override the signal is silently dropped and the server defaults to
-  // high effort — which made GPT-5.4 compaction take 5+ minutes.
-  const thinking = anthropicBody.thinking as { type?: string } | undefined
-  const thinkingDisabled = thinking?.type === 'disabled'
+  // thinking; the equivalent on Codex is the model's minimal reasoning effort.
+  // Without this override the signal is silently dropped and the server defaults
+  // to high effort — which made GPT-5.4 compaction take 5+ minutes.
+  const thinking = anthropicBody.thinking as
+    | { type?: string }
+    | false
+    | undefined
+  const thinkingDisabled =
+    thinking === false ||
+    (typeof thinking === 'object' && thinking?.type === 'disabled')
   const rawEffort = outputConfig?.effort
   const codexEffort = thinkingDisabled
-    ? 'minimal'
+    ? mapEffortToCodex('minimal', codexModel)
     : mapEffortToCodex(rawEffort, codexModel)
   if (codexEffort) {
     const summaryDetail = thinkingDisabled
@@ -912,7 +1014,9 @@ export function mapEffortToCodex(
   if (!effort) return undefined
   const e = effort.toLowerCase()
   if (e === 'low' || e === 'medium' || e === 'high') return e
-  if (e === 'minimal') return 'minimal'
+  if (e === 'minimal') {
+    return codexModel.toLowerCase() === 'gpt-5.5' ? 'none' : 'minimal'
+  }
   if (e === 'max') {
     // xhigh is supported by codex variants, GPT-5.5, and GPT-5.4.
     const model = codexModel.toLowerCase()
@@ -1719,6 +1823,13 @@ async function processCodexEvents(
               }
               completedAtMs = eventObservedAtMs
             }
+            else if (eventType === 'response.failed') {
+              throw createCodexResponseFailedError(
+                event,
+                requestCacheMetadata,
+                emittedVisibleOutput,
+              )
+            }
             else if (
               eventType === 'response.web_search_call.in_progress' ||
               eventType === 'response.web_search_call.searching' ||
@@ -2202,6 +2313,45 @@ async function* observeCodexResponseId(
   }
 }
 
+function responseFailedErrorForInitialEvent(
+  event: Record<string, unknown>,
+  requestCacheMetadata?: CodexRequestCacheMetadata,
+): Error | null {
+  if (event.type !== 'response.failed') {
+    return null
+  }
+  return createCodexResponseFailedError(event, requestCacheMetadata, false)
+}
+
+function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean {
+  const eventType = event.type
+  if (
+    eventType === 'response.output_text.delta' ||
+    eventType === 'response.reasoning_summary_text.delta' ||
+    eventType === 'response.reasoning_text.delta' ||
+    eventType === 'response.function_call_arguments.delta' ||
+    eventType === 'response.custom_tool_call_input.delta'
+  ) {
+    return typeof event.delta === 'string' && event.delta.length > 0
+  }
+
+  if (eventType === 'response.reasoning_summary_part.added') {
+    return true
+  }
+
+  if (eventType === 'response.output_item.added') {
+    const item = isRecord(event.item) ? event.item : undefined
+    return item?.type === 'function_call' || item?.type === 'custom_tool_call'
+  }
+
+  if (eventType === 'response.output_item.done') {
+    const item = isRecord(event.item) ? event.item : undefined
+    return item?.type === 'web_search_call' || item?.type === 'reasoning'
+  }
+
+  return false
+}
+
 async function translateCodexStreamToAnthropicMessage(
   codexResponse: Response,
   codexModel: string,
@@ -2443,16 +2593,42 @@ function createPartialStreamReplaySkippedError(
 
 async function primeCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
+  requestCacheMetadata?: CodexRequestCacheMetadata,
 ): Promise<AsyncIterable<Record<string, unknown>>> {
   const iterator = events[Symbol.asyncIterator]()
-  const first = await iterator.next()
-  if (first.done) {
-    throw new Error('Codex stream ended before first event')
+  const bufferedEvents: Array<Record<string, unknown>> = []
+
+  while (true) {
+    const next = await iterator.next()
+    if (next.done) {
+      if (bufferedEvents.length === 0) {
+        throw new Error('Codex stream ended before first event')
+      }
+      break
+    }
+
+    const responseFailedError = responseFailedErrorForInitialEvent(
+      next.value,
+      requestCacheMetadata,
+    )
+    if (responseFailedError) {
+      throw responseFailedError
+    }
+
+    bufferedEvents.push(next.value)
+    if (
+      codexEventBeginsVisibleOutput(next.value) ||
+      next.value.type === 'response.completed'
+    ) {
+      break
+    }
   }
 
   return {
     async *[Symbol.asyncIterator]() {
-      yield first.value
+      for (const event of bufferedEvents) {
+        yield event
+      }
       while (true) {
         const next = await iterator.next()
         if (next.done) {
@@ -2469,6 +2645,14 @@ function normalizeInitialWebSocketError(
   accountId: string,
   conversationId?: string,
 ): Error {
+  if (error instanceof CodexAccountCapError) {
+    return error
+  }
+
+  if (error instanceof CodexResponseFailedError) {
+    return error
+  }
+
   if (error instanceof CodexWebSocketUsageLimitError) {
     logForDebugging(
       `[codex-adapter] initial_ws_error_classified class=CodexAccountCapError ` +
@@ -2711,7 +2895,10 @@ export function createCodexFetch(
         throw createRetryableCodexHttpError(codexResponse.status, errorText)
       }
       return {
-        events: httpSseToEvents(codexResponse),
+        events: await primeCodexEvents(
+          httpSseToEvents(codexResponse),
+          requestCacheMetadata,
+        ),
         transportContext,
       }
     }
@@ -2736,6 +2923,7 @@ export function createCodexFetch(
               authHeaders,
               fullInput.length,
             ),
+            requestCacheMetadata,
           )
           logForDebugging(
             `[codex-cache] transport=websocket conv=${conversationId.slice(0, 8)} ` +
@@ -2759,9 +2947,13 @@ export function createCodexFetch(
             currentAccountId,
             conversationId,
           )
-          // Usage-cap errors must propagate so withRetry can trigger pool failover.
-          // All other WS errors fall through to the HTTP path below.
-          if (normalized instanceof CodexAccountCapError) {
+          // Explicit upstream response failures must propagate. Cap errors let
+          // withRetry fail over; non-cap failures preserve the upstream error
+          // instead of replaying the turn over HTTP.
+          if (
+            normalized instanceof CodexAccountCapError ||
+            normalized instanceof CodexResponseFailedError
+          ) {
             throw normalized
           }
           logForDebugging(
@@ -2805,18 +2997,25 @@ export function createCodexFetch(
       })
     }
 
-    return isStreamingAnthropicRequest
-      ? translateCodexStreamToAnthropic(
-          codexResponse,
-          codexModel,
-          requestCacheMetadata,
-          transportContext,
-        )
-      : translateCodexStreamToAnthropicMessage(
-          codexResponse,
-          codexModel,
-          requestCacheMetadata,
-          transportContext,
-        )
+    if (isStreamingAnthropicRequest) {
+      const events = await primeCodexEvents(
+        httpSseToEvents(codexResponse),
+        requestCacheMetadata,
+      )
+      return buildAnthropicStreamResponse(
+        events,
+        codexModel,
+        requestCacheMetadata,
+        undefined,
+        transportContext,
+      )
+    }
+
+    return translateCodexStreamToAnthropicMessage(
+      codexResponse,
+      codexModel,
+      requestCacheMetadata,
+      transportContext,
+    )
   }
 }

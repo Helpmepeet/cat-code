@@ -11,6 +11,7 @@ import {
 } from '../../services/analytics/index.js'
 import {
   clearSkillCaches,
+  getAdditionalDirSkillsPath,
   getSkillsPath,
   onDynamicSkillsLoaded,
 } from '../../skills/loadSkillsDir.js'
@@ -168,7 +169,7 @@ export function dispose(): Promise<void> {
  */
 export const subscribe = skillsChanged.subscribe
 
-async function getWatchablePaths(): Promise<string[]> {
+export async function getWatchablePaths(): Promise<string[]> {
   const fs = getFsImplementation()
   const paths: string[] = []
 
@@ -222,7 +223,7 @@ async function getWatchablePaths(): Promise<string[]> {
 
   // Additional directories (--add-dir) skills
   for (const dir of getAdditionalDirectoriesForClaudeMd()) {
-    const additionalSkillsPath = platformPath.join(dir, '.claude', 'skills')
+    const additionalSkillsPath = getAdditionalDirSkillsPath(dir)
     try {
       await fs.stat(additionalSkillsPath)
       paths.push(additionalSkillsPath)

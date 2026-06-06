@@ -28,7 +28,10 @@ export function getLocalClaudePath(): string {
  */
 export function isRunningFromLocalInstallation(): boolean {
   const execPath = process.argv[1] || ''
-  return execPath.includes('/.claude/local/node_modules/')
+  return (
+    execPath.includes('/.cat-code/local/node_modules/') ||
+    execPath.includes('/.claude/local/node_modules/')
+  )
 }
 
 /**
@@ -64,22 +67,33 @@ export async function ensureLocalPackageEnvironment(): Promise<boolean> {
     await writeIfMissing(
       join(localInstallDir, 'package.json'),
       jsonStringify(
-        { name: 'claude-local', version: '0.0.1', private: true },
+        { name: 'cat-code-local', version: '0.0.1', private: true },
         null,
         2,
       ),
     )
 
     // Create the wrapper script if it doesn't exist
-    const wrapperPath = join(localInstallDir, 'claude')
+    const wrapperPath = join(localInstallDir, 'cat-code')
     const created = await writeIfMissing(
       wrapperPath,
-      `#!/bin/sh\nexec "${localInstallDir}/node_modules/.bin/claude" "$@"`,
+      `#!/bin/sh\nexec "${localInstallDir}/node_modules/.bin/cat-code" "$@"`,
       0o755,
     )
     if (created) {
       // Mode in writeFile is masked by umask; chmod to ensure executable bit.
       await chmod(wrapperPath, 0o755)
+    }
+
+    // Also keep/create legacy 'claude' wrapper script for backwards compatibility
+    const legacyWrapperPath = join(localInstallDir, 'claude')
+    const legacyCreated = await writeIfMissing(
+      legacyWrapperPath,
+      `#!/bin/sh\nexec "${localInstallDir}/node_modules/.bin/cat-code" "$@"`,
+      0o755,
+    )
+    if (legacyCreated) {
+      await chmod(legacyWrapperPath, 0o755)
     }
 
     return true
@@ -143,10 +157,15 @@ export async function installOrUpdateClaudePackage(
  */
 export async function localInstallationExists(): Promise<boolean> {
   try {
-    await access(join(getLocalInstallDir(), 'node_modules', '.bin', 'claude'))
+    await access(join(getLocalInstallDir(), 'node_modules', '.bin', 'cat-code'))
     return true
   } catch {
-    return false
+    try {
+      await access(join(getLocalInstallDir(), 'node_modules', '.bin', 'claude'))
+      return true
+    } catch {
+      return false
+    }
   }
 }
 

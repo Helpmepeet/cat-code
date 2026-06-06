@@ -54,6 +54,11 @@ import {
 } from '../messages.js'
 import { queryCheckpoint } from '../queryProfiler.js'
 import { parseSlashCommand } from '../slashCommandParsing.js'
+import { getProjectRoot } from '../../bootstrap/state.js'
+import {
+  buildMapContextReminder,
+  matchSubsystemMaps,
+} from './subsystemMapContext.js'
 import {
   hasUltraplanKeyword,
   replaceUltraplanKeyword,
@@ -262,6 +267,37 @@ export async function processUserInput({
     }
   }
   queryCheckpoint('query_hooks_end')
+
+  // Built-in: surface the matching subsystem map for interactive prompts only.
+  // processUserInput has two callers: the REPL (querySource starts with
+  // 'repl_main_thread', incl. output-style-prefixed variants) and QueryEngine
+  // (querySource 'sdk', covering print/SDK/dedicated-app). Gating on the
+  // repl_main_thread family is the precise interactive check — it excludes
+  // headless/scripted turns so we never inject map pointers into print output
+  // or add latency/tokens to SDK turns. mode === 'prompt' excludes bash-mode
+  // input (e.g. `!grep oauth …`) from matching maps spuriously. Slash commands
+  // (e.g. `/review codex`) flow through here with shouldQuery=true once expanded,
+  // so exclude raw `/...` input — the user's intent is the command, not a map.
+  const isSlashInput = typeof input === 'string' && input.trimStart().startsWith('/')
+  if (
+    mode === 'prompt' &&
+    !isSlashInput &&
+    querySource?.startsWith('repl_main_thread')
+  ) {
+    const mapMatches = matchSubsystemMaps(inputMessage, {
+      projectRoot: getProjectRoot(),
+    })
+    const mapReminder = buildMapContextReminder(mapMatches)
+    if (mapReminder) {
+      result.messages.push(
+        createAttachmentMessage({
+          type: 'auto_map_context',
+          content: mapReminder,
+        }),
+      )
+      logEvent('tengu_auto_map_context_injected', { maps: mapMatches.length })
+    }
+  }
 
   // Happy path: onQuery will clear userInputOnProcessing via startTransition
   // so it resolves in the same frame as deferredMessages (no flicker gap).

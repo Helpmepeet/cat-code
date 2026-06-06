@@ -12,6 +12,48 @@ Related: `docs/plans/2026-04-30-apply-patch-tool-plan.md` (original tool plan)
 
 ---
 
+## Status: behavior shipped — verified 2026-05-22
+
+The original failure ("2–4 attempts for a simple edit") **no longer
+reproduces.** `FilePatchTool` is live on the GPT path (`src/tools.ts:213`,
+`getProviderFileEditTool` returns it when provider is OpenAI). All five root
+causes are addressed and covered by the test suite (30 passing).
+
+**Implementation diverged from this plan — for the better.** Rather than the
+`>>>BOF<<<` sentinel + strict-only matching this doc proposed, the code
+adopted **canonical Codex V4A semantics**:
+
+- **BOF (root cause 1):** a pure-insert first hunk prepends; no sentinel.
+  `applier.ts:230`. The `BOF_SENTINEL` constant was never added.
+- **EOF:** `*** End of File` marker with tail-first-then-full-scan search.
+  `applier.ts:227,249`. (Plan left this as "test, add if needed" — it's in.)
+- **Anchor-out-of-order (root cause 2):** fixed.
+- **Read-gate (root cause 3):** no hard gate; instead a changed-on-disk
+  detector compares against the cached read and says so explicitly.
+  `applier.ts:277`, threaded via `cachedFiles` in `FilePatchTool.tsx:280`.
+- **Remediation hints (root cause 4):** every throw site carries a "how to
+  fix" suffix. `applier.ts:235,265,287,295`.
+- **Full-hunk-fingerprint uniqueness (root cause 5):** `findHunkPosition`
+  scans the whole file and throws `PATCH_ANCHOR_AMBIGUOUS` listing collision
+  line numbers. `applier.ts:259-267`.
+- **Beyond plan:** 4-tier fuzzy matching (exact → trimEnd → trim →
+  unicode-normalize) and `@@` scope-hint disambiguation
+  (`disambiguateWithScopeHints`). The plan had explicitly deferred fuzzy
+  matching pending Phase 0 telemetry; it shipped anyway.
+
+**Outstanding (measurement scaffolding only — not behavior):**
+
+1. **Phase 0 telemetry never landed.** `fileOperationAnalytics.ts` has no
+   `file_patch_failure` event or drift tags. Ironically this was meant to
+   justify the fuzzy-matching decision that shipped without it.
+2. **Eval suite is half-built.** All 12 fixtures exist under `__fixtures__/`
+   but no `applier.eval.test.ts` driver references them — they're dead files.
+
+Neither blocks the fix. Pick them up only if future tuning needs the data.
+The phased plan below is the original proposal, retained for history.
+
+---
+
 ## Motivation
 
 Testing the new `FilePatchTool` against a simple "add a comment at the top of

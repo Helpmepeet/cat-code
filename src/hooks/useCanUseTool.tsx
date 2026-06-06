@@ -12,6 +12,7 @@ import { consumeSpeculativeClassifierCheck, peekSpeculativeClassifierCheck } fro
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js';
 import type { AssistantMessage } from '../types/message.js';
 import { recordAutoModeDenial } from '../utils/autoModeDenials.js';
+import { mergeBridgePermissionCallbacks } from '../bridge/mergeBridgePermissionCallbacks.js';
 import { clearClassifierChecking, setClassifierApproval, setYoloClassifierApproval } from '../utils/classifierApprovals.js';
 import { logForDebugging } from '../utils/debug.js';
 import { AbortError } from '../utils/errors.js';
@@ -162,7 +163,7 @@ function useCanUseTool(setToolUseConfirmQueue, setToolPermissionContext) {
                 description,
                 result,
                 awaitAutomatedChecksBeforeDialog: appState.toolPermissionContext.awaitAutomatedChecksBeforeDialog,
-                bridgeCallbacks: feature("BRIDGE_MODE") ? appState.replBridgePermissionCallbacks : undefined,
+                bridgeCallbacks: mergeBridgePermissionCallbacks(feature("BRIDGE_MODE") ? appState.replBridgePermissionCallbacks : undefined, appState.ptcloveBridgePermissionCallbacks),
                 channelCallbacks: feature("KAIROS") || feature("KAIROS_CHANNELS") ? appState.channelPermissionCallbacks : undefined
               }, resolve);
               return;

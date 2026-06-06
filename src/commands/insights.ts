@@ -88,7 +88,7 @@ const getRemoteHostSessionCount: (hs: string) => Promise<number> =
           'ssh',
           [
             `${homespace}.coder`,
-            'find /root/.claude/projects -name "*.jsonl" 2>/dev/null | wc -l',
+            'find /root/.cat-code/projects /root/.claude/projects -name "*.jsonl" 2>/dev/null | wc -l',
           ],
           { timeout: 30000 },
         )
@@ -110,11 +110,18 @@ const collectFromRemoteHost: (
 
         try {
           // SCP the projects folder
-          const scpResult = await execFileNoThrow(
+          let scpResult = await execFileNoThrow(
             'scp',
-            ['-rq', `${homespace}.coder:/root/.claude/projects/`, tempDir],
+            ['-rq', `${homespace}.coder:/root/.cat-code/projects/`, tempDir],
             { timeout: 300000 },
           )
+          if (scpResult.code !== 0) {
+            scpResult = await execFileNoThrow(
+              'scp',
+              ['-rq', `${homespace}.coder:/root/.claude/projects/`, tempDir],
+              { timeout: 300000 },
+            )
+          }
           if (scpResult.code !== 0) {
             // SCP failed
             return result
@@ -1084,6 +1091,55 @@ Return the session facets using the ${insightsToolName} tool.`
   }
 }
 
+const FACET_EXTRACTION_CONCURRENCY = 3
+
+export async function extractMissingFacetsForInsights(
+  toExtract: Array<{ log: LogOption; sessionId: string }>,
+  options?: {
+    concurrency?: number
+    extractFacets?: (
+      log: LogOption,
+      sessionId: string,
+    ) => Promise<SessionFacets | null>
+    saveFacets?: (facets: SessionFacets) => Promise<void>
+  },
+): Promise<Map<string, SessionFacets>> {
+  const concurrency = Math.max(
+    1,
+    Math.floor(options?.concurrency ?? FACET_EXTRACTION_CONCURRENCY),
+  )
+  const extractFacets = options?.extractFacets ?? extractFacetsFromAPI
+  const saveFacetsFn = options?.saveFacets ?? saveFacets
+  const facets = new Map<string, SessionFacets>()
+
+  for (let i = 0; i < toExtract.length; i += concurrency) {
+    const batch = toExtract.slice(i, i + concurrency)
+    const results = await Promise.all(
+      batch.map(async ({ log, sessionId }) => {
+        const newFacets = await extractFacets(log, sessionId)
+        return { sessionId, newFacets }
+      }),
+    )
+
+    const facetsToSave: SessionFacets[] = []
+    for (const { sessionId, newFacets } of results) {
+      if (newFacets) {
+        facets.set(sessionId, newFacets)
+        facetsToSave.push(newFacets)
+      }
+    }
+    await Promise.all(facetsToSave.map(f => saveFacetsFn(f)))
+  }
+
+  if (toExtract.length > 0 && facets.size === 0) {
+    throw new Error(
+      'Could not extract any usage insight facets. Check network/account status and rerun /insights.',
+    )
+  }
+
+  return facets
+}
+
 /**
  * Detects multi-clauding (using multiple Claude sessions concurrently).
  * Uses a sliding window to find the pattern: session1 -> session2 -> session1
@@ -1362,6 +1418,8 @@ type InsightSection = {
   maxTokens: number
 }
 
+const insightsToolName = 'record_insight'
+
 // Sections that run in parallel first
 const INSIGHT_SECTIONS: InsightSection[] = [
   {
@@ -1429,11 +1487,11 @@ Include 3 friction categories with 2 examples each.`,
    - Good for: database queries, Slack integration, GitHub issue lookup, connecting to internal APIs
 
 2. **Custom Skills**: Reusable prompts you define as markdown files that run with a single /command.
-   - How to use: Create \`.claude/skills/commit/SKILL.md\` with instructions. Then type \`/commit\` to run it.
+   - How to use: Create \`.cat-code/skills/commit/SKILL.md\` with instructions. Then type \`/commit\` to run it.
    - Good for: repetitive workflows - /commit, /review, /test, /deploy, /pr, or complex multi-step workflows
 
 3. **Hooks**: Shell commands that auto-run at specific lifecycle events.
-   - How to use: Add to \`.claude/settings.json\` under "hooks" key.
+   - How to use: Add to \`.cat-code/settings.json\` under "hooks" key.
    - Good for: auto-formatting code, running type checks, enforcing conventions
 
 4. **Headless Mode**: Run Claude non-interactively from scripts and CI/CD.
@@ -1523,8 +1581,6 @@ Find something genuinely interesting or amusing from the session summaries.`,
     maxTokens: 8192,
   },
 ]
-
-const insightsToolName = 'record_insight'
 
 const sessionFacetsSchema = lazySchema(() =>
   z.object({
@@ -2870,6 +2926,9 @@ export async function generateUsageReport(options?: {
   // Phase 1: Lite scan — filesystem metadata only (no JSONL parsing)
   const allScannedSessions = await scanAllSessions()
   const totalSessionsScanned = allScannedSessions.length
+  const sessionPathById = new Map(
+    allScannedSessions.map(session => [session.sessionId, session.path]),
+  )
 
   // Phase 2: Load SessionMeta — use cache where available, parse only uncached
   // Read cached metas in parallel batches to avoid blocking the event loop
@@ -2945,6 +3004,35 @@ export async function generateUsageReport(options?: {
     await Promise.all(metasToSave.map(meta => saveSessionMeta(meta)))
   }
 
+  const loadLogForFacetExtraction = async (
+    sessionId: string,
+  ): Promise<LogOption | null> => {
+    const cachedLog = logsForFacets.get(sessionId)
+    if (cachedLog) return cachedLog
+
+    const sessionPath = sessionPathById.get(sessionId)
+    if (!sessionPath) return null
+
+    let logs: LogOption[]
+    try {
+      logs = await loadAllLogsFromSessionFile(sessionPath)
+    } catch {
+      return null
+    }
+
+    const entries: Array<{ log: LogOption; meta: SessionMeta }> = []
+    for (const log of logs) {
+      if (isMetaSession(log) || !hasValidDates(log)) continue
+      if (getSessionIdFromLog(log) !== sessionId) continue
+      entries.push({ log, meta: logToSessionMeta(log) })
+    }
+
+    const best = deduplicateSessionBranches(entries)[0]
+    if (!best) return null
+    logsForFacets.set(sessionId, best.log)
+    return best.log
+  }
+
   // Deduplicate session branches (keep the one with most user messages per session_id)
   // This prevents inflated totals when a session has multiple conversation branches
   const bestBySession = new Map<string, SessionMeta>()
@@ -2998,33 +3086,17 @@ export async function generateUsageReport(options?: {
   for (const { sessionId, cached } of cachedFacetResults) {
     if (cached) {
       facets.set(sessionId, cached)
-    } else {
-      const log = logsForFacets.get(sessionId)
-      if (log && toExtract.length < MAX_FACET_EXTRACTIONS) {
+    } else if (toExtract.length < MAX_FACET_EXTRACTIONS) {
+      const log = await loadLogForFacetExtraction(sessionId)
+      if (log) {
         toExtract.push({ log, sessionId })
       }
     }
   }
 
-  // Extract facets for sessions that need them (50 concurrent)
-  const CONCURRENCY = 50
-  for (let i = 0; i < toExtract.length; i += CONCURRENCY) {
-    const batch = toExtract.slice(i, i + CONCURRENCY)
-    const results = await Promise.all(
-      batch.map(async ({ log, sessionId }) => {
-        const newFacets = await extractFacetsFromAPI(log, sessionId)
-        return { sessionId, newFacets }
-      }),
-    )
-    // Collect facets synchronously, save in parallel (independent writes)
-    const facetsToSave: SessionFacets[] = []
-    for (const { sessionId, newFacets } of results) {
-      if (newFacets) {
-        facets.set(sessionId, newFacets)
-        facetsToSave.push(newFacets)
-      }
-    }
-    await Promise.all(facetsToSave.map(f => saveFacets(f)))
+  const extractedFacets = await extractMissingFacetsForInsights(toExtract)
+  for (const [sessionId, newFacets] of extractedFacets) {
+    facets.set(sessionId, newFacets)
   }
 
   // Filter out warmup/minimal sessions (matching Python's is_minimal)

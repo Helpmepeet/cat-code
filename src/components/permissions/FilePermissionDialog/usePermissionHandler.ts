@@ -57,7 +57,7 @@ export type PermissionHandlerOptions = {
   hasFeedback?: boolean
   feedback?: string
   enteredFeedbackMode?: boolean
-  scope?: 'claude-folder' | 'global-claude-folder'
+  scope?: 'cat-code-folder' | 'global-cat-code-folder'
 }
 
 function handleAcceptOnce(
@@ -101,13 +101,13 @@ function handleAcceptSession(
 
   logPermissionEvent('accept', completionType, languageName, messageId)
 
-  // For claude-folder scope, grant session-level access to all .claude/ files
+  // For cat-code-folder scope, grant session-level access to all .cat-code/ files
   if (
-    options?.scope === 'claude-folder' ||
-    options?.scope === 'global-claude-folder'
+    options?.scope === 'cat-code-folder' ||
+    options?.scope === 'global-cat-code-folder'
   ) {
     const pattern =
-      options.scope === 'global-claude-folder'
+      options.scope === 'global-cat-code-folder'
         ? GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN
         : CLAUDE_FOLDER_PERMISSION_PATTERN
     const suggestions: PermissionUpdate[] = [
