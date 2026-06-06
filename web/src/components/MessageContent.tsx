@@ -83,15 +83,15 @@ export function MessageContent({ content, role }: MessageContentProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          code({ inline, className, children }) {
+          code({ className, children }) {
             const value = String(children).replace(/\n$/, "");
-            const language = /language-(\w+)/.exec(className || "")?.[1] ?? "text";
+            const match = /language-(\w+)/.exec(className ?? "");
 
-            if (inline) {
+            if (!match) {
               return <InlineCode>{children}</InlineCode>;
             }
 
-            return <CodeBlock code={value} language={language} />;
+            return <CodeBlock code={value} language={match[1]} />;
           },
           table({ children }) {
             return (
@@ -115,6 +115,7 @@ export function MessageContent({ content, role }: MessageContentProps) {
                 href={href}
                 target="_blank"
                 rel="noreferrer"
+                referrerPolicy="no-referrer"
                 className="text-pink-300 underline decoration-pink-400/40 underline-offset-4 transition hover:text-pink-200"
               >
                 {children}

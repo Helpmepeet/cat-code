@@ -185,11 +185,14 @@ export function App() {
   }, []);
 
   const onMessage = useCallback((data: WebUIIncomingEvent) => {
-    if (data.type === "message" && data.message) {
+    if (data.type === "message") {
+      const incomingMessage = data.message;
+      if (!incomingMessage) return;
+
       setMessages((prev) => {
-        const role = (data.message.role as Role) ?? "assistant";
-        const content = data.message.content ?? "";
-        if (data.message.replaceLast) {
+        const role = incomingMessage.role ?? "assistant";
+        const content = incomingMessage.content ?? "";
+        if (incomingMessage.replaceLast) {
           const last = prev[prev.length - 1];
           if (last?.role === role) {
             return [...prev.slice(0, -1), { ...last, content }];
