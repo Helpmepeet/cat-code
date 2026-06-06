@@ -71,6 +71,42 @@ describe('AppSessionWebSocketServer', () => {
     ).rejects.toThrow()
   })
 
+  test('rejects empty origin headers', async () => {
+    const controller = new AppSessionController({
+      async *runTurn() {},
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+
+    await expect(
+      connect(`ws://127.0.0.1:${server.port}/ws`, 'secret', { origin: '' }),
+    ).rejects.toThrow()
+  })
+
+  test('rejects disallowed origin headers', async () => {
+    const controller = new AppSessionController({
+      async *runTurn() {},
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+
+    await expect(
+      connect(`ws://127.0.0.1:${server.port}/ws`, 'secret', {
+        origin: 'http://evil.localhost:5173',
+      }),
+    ).rejects.toThrow()
+  })
+
   test('sends ready then submits a prompt and relays mapped messages', async () => {
     const prompts: unknown[] = []
     const controller = new AppSessionController({
