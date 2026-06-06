@@ -174,7 +174,7 @@ describe('AppSessionWebSocketServer', () => {
     ).rejects.toThrow()
   })
 
-  test('stops accepting connections after stop resolves', async () => {
+  test('stops accepting connections after repeated stop resolves', async () => {
     const controller = new AppSessionController({
       async *runTurn() {},
     })
@@ -185,7 +185,7 @@ describe('AppSessionWebSocketServer', () => {
       controller,
     })
 
-    await server.stop()
+    await Promise.all([server.stop(), server.stop()])
 
     await expect(connect(server.url, 'secret')).rejects.toThrow()
   })

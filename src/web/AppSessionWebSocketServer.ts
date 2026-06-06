@@ -20,6 +20,12 @@ type StartedAppSessionWebSocketServer = {
   stop(): Promise<void>
 }
 
+type WebSocketServerWithHttpServer = WebSocketServer & {
+  _server?: {
+    closeAllConnections?: () => void
+  }
+}
+
 const MAX_MESSAGE_BYTES = 128 * 1024
 
 export async function startAppSessionWebSocketServer({
@@ -58,6 +64,7 @@ export async function startAppSessionWebSocketServer({
   })
 
   const clients = new Set<WebSocket>()
+  let stopPromise: Promise<void> | undefined
   let activeTurn = false
   const mapper = createAppSessionEventMapper()
   const unsubscribe = controller.subscribe(event => {
@@ -197,14 +204,13 @@ export async function startAppSessionWebSocketServer({
     url: `ws://127.0.0.1:${actualPort}/ws`,
     protocol: requiredProtocol,
     async stop() {
-      unsubscribe()
-      for (const client of new Set([...clients, ...server.clients])) {
-        if (client.readyState === client.OPEN) {
-          client.close()
-        }
-      }
-      await waitForClientsClosed(server)
-      await closeServer(server)
+      stopPromise ??= (async () => {
+        unsubscribe()
+        await terminateClients(clients, server)
+        closeAllHttpConnections(server)
+        await closeServer(server)
+      })()
+      await stopPromise
     },
   }
 }
@@ -220,41 +226,42 @@ function broadcastTurnStatus(clients: Set<WebSocket>, activeTurn: boolean): void
   })
 }
 
-function waitForClientsClosed(server: WebSocketServer): Promise<void> {
+async function terminateClients(
+  clients: Set<WebSocket>,
+  server: WebSocketServer,
+): Promise<void> {
+  await Promise.all(
+    [...new Set([...clients, ...server.clients])].map(client =>
+      terminateClient(client),
+    ),
+  )
+}
+
+function terminateClient(client: WebSocket): Promise<void> {
+  if (client.readyState === client.CLOSED) {
+    return Promise.resolve()
+  }
+
   return new Promise(resolve => {
-    const wait = () => {
-      if (server.clients.size === 0) {
-        resolve()
-        return
-      }
-      setTimeout(wait, 0)
-    }
-    wait()
+    client.once('close', () => resolve())
+    client.terminate()
   })
+}
+
+function closeAllHttpConnections(server: WebSocketServer): void {
+  const httpServer = (server as WebSocketServerWithHttpServer)._server
+  httpServer?.closeAllConnections?.()
 }
 
 function closeServer(server: WebSocketServer): Promise<void> {
   return new Promise((resolve, reject) => {
-    let settled = false
-    const done = (error?: Error) => {
-      if (settled) return
-      settled = true
+    server.close(error => {
       if (error) {
         reject(error)
         return
       }
       resolve()
-    }
-    const waitUntilClosed = () => {
-      if (server.address() === null) {
-        done()
-        return
-      }
-      setTimeout(waitUntilClosed, 0)
-    }
-
-    server.close(done)
-    waitUntilClosed()
+    })
   })
 }
 
