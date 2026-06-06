@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Children, isValidElement, useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeToHtml } from "shiki";
@@ -58,7 +58,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   );
 }
 
-function InlineCode({ children }: { children: React.ReactNode }) {
+function InlineCode({ children }: { children: ReactNode }) {
   return (
     <code className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[0.92em] text-pink-200">
       {children}
@@ -83,15 +83,18 @@ export function MessageContent({ content, role }: MessageContentProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          code({ className, children }) {
-            const value = String(children).replace(/\n$/, "");
-            const match = /language-(\w+)/.exec(className ?? "");
-
-            if (!match) {
-              return <InlineCode>{children}</InlineCode>;
+          pre({ children }) {
+            const codeElement = Children.toArray(children).find(isValidElement);
+            if (codeElement && isValidElement<{ className?: string; children?: ReactNode }>(codeElement)) {
+              const value = String(codeElement.props.children).replace(/\n$/, "");
+              const language = /language-(\w+)/.exec(codeElement.props.className ?? "")?.[1] ?? "text";
+              return <CodeBlock code={value} language={language} />;
             }
 
-            return <CodeBlock code={value} language={match[1]} />;
+            return <pre>{children}</pre>;
+          },
+          code({ children }) {
+            return <InlineCode>{children}</InlineCode>;
           },
           table({ children }) {
             return (
