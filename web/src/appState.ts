@@ -61,12 +61,14 @@ export function reduceAppServerMessage(
   }
 
   if (message.type === "app.error") {
+    const fallbackRequestId = `${message.code}-${state.messages.length}`;
+
     return {
       ...state,
       messages: [
         ...state.messages,
         {
-          id: `error-${message.requestId ?? crypto.randomUUID()}`,
+          id: `error-${message.requestId ?? fallbackRequestId}`,
           role: "system",
           content: message.message,
           sdkType: "app.error",
@@ -145,7 +147,7 @@ export function reduceAppServerMessage(
       messages: [
         ...state.messages,
         {
-          id: `assistant-${crypto.randomUUID()}`,
+          id: `assistant-delta-${state.messages.length}`,
           role: "assistant",
           content: event.delta,
         },

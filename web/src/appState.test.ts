@@ -134,6 +134,21 @@ describe("web app state reducer", () => {
     ]);
   });
 
+  test("appends idless deltas deterministically", () => {
+    const state = createInitialAppState();
+    const message = {
+      type: "app.event" as const,
+      event: {
+        type: "message.delta" as const,
+        delta: "hello",
+      },
+    };
+
+    expect(reduceAppServerMessage(state, message)).toEqual(
+      reduceAppServerMessage(state, message),
+    );
+  });
+
   test("replaces messages in place", () => {
     let state = createInitialAppState();
     for (const message of [
@@ -214,5 +229,19 @@ describe("web app state reducer", () => {
       role: "system",
       content: "Session turn already running",
     });
+  });
+
+  test("records requestless errors deterministically", () => {
+    const state = createInitialAppState();
+    const message = {
+      type: "app.error" as const,
+      code: "internal_error",
+      message: "Internal error",
+      retryable: true,
+    };
+
+    expect(reduceAppServerMessage(state, message)).toEqual(
+      reduceAppServerMessage(state, message),
+    );
   });
 });
