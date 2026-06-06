@@ -1,25 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useWebSocket, type WebUIIncomingEvent } from "./hooks/useWebSocket";
 import { MessageContent } from "./components/MessageContent";
-
-type Role = "user" | "assistant" | "system";
-
-type Message = {
-  id: string;
-  role: Role;
-  content: string;
-};
-
-type StatusState = {
-  connected: boolean;
-  reconnecting: boolean;
-  model?: string;
-  effort?: string;
-  contextTokens?: number;
-  activeProfile?: string;
-  inputEnabled: boolean;
-  notice?: string;
-};
+import type { AppServerMessage, BrowserMessage } from "./appProtocol";
+import {
+  createInitialAppState,
+  reduceAppServerMessage,
+} from "./appState";
+import { useWebSocket } from "./hooks/useWebSocket";
 
 const DRAFT_STORAGE_KEY = "cat-code:web:draft";
 
@@ -68,7 +54,7 @@ function EmptyState() {
   );
 }
 
-function MessageRow({ message }: { message: Message }) {
+function MessageRow({ message }: { message: BrowserMessage }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -129,15 +115,12 @@ function formatTokenCount(value?: number) {
 }
 
 export function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [appState, setAppState] = useState(createInitialAppState);
+  const messages = appState.messages;
+  const status = appState.status;
   const [input, setInput] = useState(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(DRAFT_STORAGE_KEY) ?? "";
-  });
-  const [status, setStatus] = useState<StatusState>({
-    connected: false,
-    reconnecting: true,
-    inputEnabled: false,
   });
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
@@ -184,73 +167,23 @@ export function App() {
     textareaRef.current?.focus();
   }, []);
 
-  const onMessage = useCallback((data: WebUIIncomingEvent) => {
-    if (data.type === "message") {
-      const incomingMessage = data.message;
-      if (!incomingMessage) return;
-
-      setMessages((prev) => {
-        const role = incomingMessage.role ?? "assistant";
-        const content = incomingMessage.content ?? "";
-        if (incomingMessage.replaceLast) {
-          const last = prev[prev.length - 1];
-          if (last?.role === role) {
-            return [...prev.slice(0, -1), { ...last, content }];
-          }
-        }
-        return [
-          ...prev,
-          {
-            id: messageId(role),
-            role,
-            content,
-          },
-        ];
-      });
-      return;
-    }
-
-    if (data.type === "delta") {
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "assistant") {
-          return [
-            ...prev.slice(0, -1),
-            { ...last, content: last.content + (data.delta ?? "") },
-          ];
-        }
-        return [
-          ...prev,
-          { id: messageId("assistant"), role: "assistant", content: data.delta ?? "" },
-        ];
-      });
-      return;
-    }
-
-    if (data.type === "status") {
-      setStatus((prev) => ({
-        ...prev,
-        connected: Boolean(data.connected),
-        reconnecting: Boolean(data.reconnecting),
-        model: data.model ?? prev.model,
-        effort: data.effort ?? prev.effort,
-        contextTokens: data.contextTokens ?? prev.contextTokens,
-        activeProfile: data.activeProfile ?? prev.activeProfile,
-        inputEnabled: data.inputEnabled ?? prev.inputEnabled,
-        notice: data.notice ?? prev.notice,
-      }));
-    }
+  const onMessage = useCallback((data: AppServerMessage) => {
+    setAppState(prev => reduceAppServerMessage(prev, data));
   }, []);
 
-  const { send, connected, reconnecting } = useWebSocket(onMessage);
+  const { send, connected, reconnecting, lastError } = useWebSocket(onMessage);
 
   useEffect(() => {
-    setStatus((prev) => ({
+    setAppState(prev => ({
       ...prev,
-      connected,
-      reconnecting,
+      status: {
+        ...prev.status,
+        connected,
+        reconnecting,
+        notice: lastError ?? prev.status.notice,
+      },
     }));
-  }, [connected, reconnecting]);
+  }, [connected, reconnecting, lastError]);
 
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
@@ -267,11 +200,18 @@ export function App() {
     const text = input.trim();
     if (!text || !connected || !status.inputEnabled) return;
 
-    setMessages((prev) => [
+    setAppState(prev => ({
       ...prev,
-      { id: messageId("user"), role: "user", content: text },
-    ]);
-    send({ type: "user_input", text });
+      messages: [
+        ...prev.messages,
+        { id: messageId("user"), role: "user", content: text },
+      ],
+    }));
+    send({
+      type: "app.submit",
+      requestId: crypto.randomUUID(),
+      prompt: text,
+    });
     setInput("");
     window.localStorage.removeItem(DRAFT_STORAGE_KEY);
     shouldStickToBottomRef.current = true;
@@ -296,6 +236,7 @@ export function App() {
     if (status.reconnecting) return "Reconnecting";
     return "Disconnected";
   }, [status.connected, status.reconnecting]);
+  const pendingPermission = appState.pendingPermissions[0];
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(244,114,182,0.16),_transparent_28%),linear-gradient(180deg,_#09090b_0%,_#09090b_42%,_#050506_100%)] text-zinc-100">
@@ -330,11 +271,90 @@ export function App() {
                 label="Context"
                 value={status.contextTokens !== undefined ? `${formatTokenCount(status.contextTokens)} tokens` : undefined}
               />
-              <FooterChip label="Profile" value={status.activeProfile} />
               <FooterChip label="State" value={connectionLabel} />
             </div>
 
-            <div className="mx-auto w-full max-w-3xl rounded-[28px] border border-white/10 bg-zinc-950/90 p-3 shadow-[0_24px_120px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+            {pendingPermission ? (
+              <div className="pointer-events-auto mx-auto w-full max-w-3xl rounded-2xl border border-amber-300/20 bg-amber-500/[0.08] p-4 text-sm text-amber-50">
+                <div className="font-medium">
+                  {pendingPermission.request.display_name ??
+                    pendingPermission.request.tool_name} wants permission
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-xs text-amber-100/80">
+                  <span>Tool: {pendingPermission.request.tool_name}</span>
+                  {pendingPermission.request.agent_id ? (
+                    <span>Worker: {pendingPermission.request.agent_id}</span>
+                  ) : null}
+                  {pendingPermission.request.blocked_path ? (
+                    <span>Path: {pendingPermission.request.blocked_path}</span>
+                  ) : null}
+                </div>
+                {pendingPermission.request.decision_reason ? (
+                  <p className="mt-2 text-xs text-amber-100/80">
+                    {pendingPermission.request.decision_reason}
+                  </p>
+                ) : null}
+                <pre className="mt-2 max-h-40 overflow-auto rounded-xl bg-black/30 p-3 text-xs text-amber-100">
+                  {JSON.stringify(pendingPermission.request.input, null, 2)}
+                </pre>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({
+                        type: "permission.response",
+                        requestId: pendingPermission.requestId,
+                        response: {
+                          behavior: "allow",
+                          updatedInput: pendingPermission.request.input,
+                          decisionClassification: "user_temporary",
+                        },
+                      })
+                    }
+                    className="rounded-full bg-amber-300 px-3 py-1.5 text-xs font-medium text-zinc-950"
+                  >
+                    Allow once
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({
+                        type: "permission.response",
+                        requestId: pendingPermission.requestId,
+                        response: {
+                          behavior: "deny",
+                          message: "Denied in browser app",
+                          decisionClassification: "user_reject",
+                        },
+                      })
+                    }
+                    className="rounded-full border border-amber-200/20 px-3 py-1.5 text-xs text-amber-50"
+                  >
+                    Deny
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({
+                        type: "permission.response",
+                        requestId: pendingPermission.requestId,
+                        response: {
+                          behavior: "deny",
+                          message: "Cancelled in browser app",
+                          interrupt: true,
+                          decisionClassification: "user_reject",
+                        },
+                      })
+                    }
+                    className="rounded-full border border-red-200/20 px-3 py-1.5 text-xs text-red-100"
+                  >
+                    Cancel turn
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="pointer-events-auto mx-auto w-full max-w-3xl rounded-[28px] border border-white/10 bg-zinc-950/90 p-3 shadow-[0_24px_120px_rgba(0,0,0,0.5)] backdrop-blur-xl">
               <div className="flex items-end gap-3">
                 <textarea
                   ref={textareaRef}
@@ -346,12 +366,26 @@ export function App() {
                       ? "Waiting for connection..."
                       : status.inputEnabled
                         ? "Message Cat Code..."
-                        : "Browser UI connected. Sending is not wired without the REPL backend yet."
+                        : "Cat Code is not ready for input yet."
                   }
                   disabled={!connected || !status.inputEnabled}
                   rows={1}
                   className="max-h-[40vh] min-h-12 flex-1 resize-none bg-transparent px-3 py-3 text-[15px] leading-7 text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed disabled:text-zinc-500"
                 />
+                <button
+                  type="button"
+                  onClick={() =>
+                    send({
+                      type: "app.abort",
+                      requestId: crypto.randomUUID(),
+                      reason: "Stopped from browser",
+                    })
+                  }
+                  disabled={!connected || !status.activeTurn}
+                  className="mb-1 inline-flex h-11 shrink-0 items-center justify-center rounded-full border border-white/10 px-4 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08] disabled:text-zinc-600"
+                >
+                  Stop
+                </button>
                 <button
                   type="button"
                   onClick={handleSubmit}
@@ -365,7 +399,7 @@ export function App() {
                 <span>
                   {status.inputEnabled
                     ? "Enter to send · Shift+Enter for newline"
-                    : status.notice ?? "Browser send is currently disabled in web mode."}
+                    : status.notice ?? "Cat Code is currently not accepting input."}
                 </span>
                 <span>{connectionLabel}</span>
               </div>

@@ -1,38 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { AppClientMessage, AppServerMessage } from "../appProtocol";
 
-type IncomingMessage = {
-  type: "message";
-  message?: {
-    role: "user" | "assistant" | "system";
-    content?: string;
-    replaceLast?: boolean;
-  };
-};
+function getWebSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${protocol}://${window.location.host}/ws`;
+}
 
-type IncomingDelta = {
-  type: "delta";
-  delta?: string;
-};
+function getWebSocketProtocols() {
+  const token = import.meta.env.VITE_CAT_CODE_WS_TOKEN as string | undefined;
+  return token ? [`cat-code.${token}`] : undefined;
+}
 
-type IncomingStatus = {
-  type: "status";
-  connected: boolean;
-  reconnecting?: boolean;
-  model?: string;
-  effort?: string;
-  contextTokens?: number;
-  activeProfile?: string;
-  inputEnabled?: boolean;
-  notice?: string;
-};
-
-export type WebUIIncomingEvent = IncomingMessage | IncomingDelta | IncomingStatus;
-
-const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
-
-export function useWebSocket(onMessage: (data: WebUIIncomingEvent) => void) {
+export function useWebSocket(onMessage: (data: AppServerMessage) => void) {
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(true);
+  const [lastError, setLastError] = useState<string | undefined>();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const onMessageRef = useRef(onMessage);
@@ -46,20 +28,21 @@ export function useWebSocket(onMessage: (data: WebUIIncomingEvent) => void) {
         setReconnecting(true);
       }
 
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(getWebSocketUrl(), getWebSocketProtocols());
       wsRef.current = ws;
 
       ws.onopen = () => {
         setConnected(true);
         setReconnecting(false);
+        setLastError(undefined);
       };
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as WebUIIncomingEvent;
+          const data = JSON.parse(event.data) as AppServerMessage;
           onMessageRef.current(data);
         } catch {
-          // ignore malformed messages
+          setLastError("Received an invalid server message.");
         }
       };
 
@@ -71,6 +54,7 @@ export function useWebSocket(onMessage: (data: WebUIIncomingEvent) => void) {
       };
 
       ws.onerror = () => {
+        setLastError("WebSocket connection failed.");
         ws.close();
       };
     }
@@ -86,11 +70,11 @@ export function useWebSocket(onMessage: (data: WebUIIncomingEvent) => void) {
     };
   }, []);
 
-  const send = useCallback((data: unknown) => {
+  const send = useCallback((data: AppClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
     }
   }, []);
 
-  return { send, connected, reconnecting };
+  return { send, connected, reconnecting, lastError };
 }
