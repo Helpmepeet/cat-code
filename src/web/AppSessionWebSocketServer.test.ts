@@ -12,16 +12,21 @@ afterEach(async () => {
 })
 
 type ConnectOptions = {
+  host?: string
   origin?: string | null
 }
 
 function connect(
   url: string,
   token?: string,
-  { origin = 'http://localhost:5173' }: ConnectOptions = {},
+  { host, origin = 'http://localhost:5173' }: ConnectOptions = {},
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const options = origin === null ? undefined : { headers: { Origin: origin } }
+    const headers: Record<string, string> = {}
+    if (origin !== null) headers.Origin = origin
+    if (host) headers.Host = host
+    const options =
+      Object.keys(headers).length > 0 ? { headers } : undefined
     const ws = new WebSocket(url, token ? [`cat-code.${token}`] : [], options)
     ws.once('open', () => resolve(ws))
     ws.on('error', error => {
@@ -36,6 +41,35 @@ function nextJson(ws: WebSocket): Promise<unknown> {
   return new Promise(resolve => {
     ws.once('message', raw => resolve(JSON.parse(String(raw))))
   })
+}
+
+function collectJsonFor(ws: WebSocket, timeoutMs: number): Promise<unknown[]> {
+  return new Promise(resolve => {
+    const messages: unknown[] = []
+    const onMessage = (raw: Buffer) => {
+      messages.push(JSON.parse(String(raw)))
+    }
+    ws.on('message', onMessage)
+    setTimeout(() => {
+      ws.off('message', onMessage)
+      resolve(messages)
+    }, timeoutMs)
+  })
+}
+
+function isIdleStatus(message: unknown): boolean {
+  return (
+    isObject(message) &&
+    message.type === 'app.event' &&
+    isObject(message.event) &&
+    message.event.type === 'status.update' &&
+    message.event.activeTurn === false &&
+    message.event.inputEnabled === true
+  )
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 describe('AppSessionWebSocketServer', () => {
@@ -105,6 +139,176 @@ describe('AppSessionWebSocketServer', () => {
         origin: 'http://evil.localhost:5173',
       }),
     ).rejects.toThrow()
+  })
+
+  test('rejects bad host headers', async () => {
+    const controller = new AppSessionController({
+      async *runTurn() {},
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+
+    await expect(
+      connect(`ws://127.0.0.1:${server.port}/ws`, 'secret', {
+        host: 'evil.example:5173',
+      }),
+    ).rejects.toThrow()
+  })
+
+  test('does not report idle when a concurrent submit is rejected', async () => {
+    let releaseTurn: (() => void) | undefined
+    const turnReleased = new Promise<void>(resolve => {
+      releaseTurn = resolve
+    })
+    const controller = new AppSessionController({
+      async *runTurn() {
+        await turnReleased
+      },
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+    const firstClient = await connect(
+      `ws://127.0.0.1:${server.port}/ws`,
+      'secret',
+    )
+    await nextJson(firstClient)
+    const secondClient = await connect(
+      `ws://127.0.0.1:${server.port}/ws`,
+      'secret',
+    )
+    await nextJson(secondClient)
+
+    firstClient.send(
+      JSON.stringify({
+        type: 'app.submit',
+        requestId: 'submit-1',
+        prompt: 'first',
+      }),
+    )
+    expect(await nextJson(firstClient)).toEqual({
+      type: 'app.ack',
+      requestId: 'submit-1',
+    })
+    expect(await nextJson(firstClient)).toEqual({
+      type: 'app.event',
+      event: {
+        type: 'status.update',
+        activeTurn: true,
+        inputEnabled: false,
+      },
+    })
+    const firstClientMessagesAfterSecondSubmit = collectJsonFor(firstClient, 50)
+    const secondClientMessagesAfterSecondSubmit = collectJsonFor(secondClient, 50)
+    secondClient.send(
+      JSON.stringify({
+        type: 'app.submit',
+        requestId: 'submit-2',
+        prompt: 'second',
+      }),
+    )
+    const secondClientMessages = await secondClientMessagesAfterSecondSubmit
+    expect(secondClientMessages).toContainEqual({
+      type: 'app.ack',
+      requestId: 'submit-2',
+    })
+    expect(
+      secondClientMessages.find(
+        message =>
+          isObject(message) &&
+          message.type === 'app.error' &&
+          message.requestId === 'submit-2',
+      ),
+    ).toMatchObject({
+      type: 'app.error',
+      requestId: 'submit-2',
+      code: 'turn_already_running',
+      retryable: true,
+    })
+    expect(
+      (await firstClientMessagesAfterSecondSubmit).some(isIdleStatus),
+    ).toBe(false)
+
+    releaseTurn?.()
+    expect(await nextJson(firstClient)).toEqual({
+      type: 'app.event',
+      event: {
+        type: 'status.update',
+        activeTurn: false,
+        inputEnabled: true,
+      },
+    })
+    firstClient.close()
+    secondClient.close()
+  })
+
+  test('sends input disabled in ready while a turn is active', async () => {
+    let releaseTurn: (() => void) | undefined
+    const turnReleased = new Promise<void>(resolve => {
+      releaseTurn = resolve
+    })
+    const controller = new AppSessionController({
+      async *runTurn() {
+        await turnReleased
+      },
+    })
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+    const activeClient = await connect(
+      `ws://127.0.0.1:${server.port}/ws`,
+      'secret',
+    )
+    expect(await nextJson(activeClient)).toMatchObject({
+      type: 'app.ready',
+      inputEnabled: true,
+    })
+
+    activeClient.send(
+      JSON.stringify({
+        type: 'app.submit',
+        requestId: 'submit-1',
+        prompt: 'first',
+      }),
+    )
+    expect(await nextJson(activeClient)).toEqual({
+      type: 'app.ack',
+      requestId: 'submit-1',
+    })
+    expect(await nextJson(activeClient)).toEqual({
+      type: 'app.event',
+      event: {
+        type: 'status.update',
+        activeTurn: true,
+        inputEnabled: false,
+      },
+    })
+
+    const midTurnClient = await connect(
+      `ws://127.0.0.1:${server.port}/ws`,
+      'secret',
+    )
+    expect(await nextJson(midTurnClient)).toMatchObject({
+      type: 'app.ready',
+      inputEnabled: false,
+    })
+
+    releaseTurn?.()
+    activeClient.close()
+    midTurnClient.close()
   })
 
   test('sends ready then submits a prompt and relays mapped messages', async () => {

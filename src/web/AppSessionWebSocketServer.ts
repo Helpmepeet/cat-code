@@ -21,6 +21,7 @@ type StartedAppSessionWebSocketServer = {
 }
 
 const MAX_MESSAGE_BYTES = 128 * 1024
+const STOP_CLOSE_FALLBACK_MS = 25
 
 export async function startAppSessionWebSocketServer({
   port,
@@ -33,6 +34,7 @@ export async function startAppSessionWebSocketServer({
     host: '127.0.0.1',
     port,
     path: '/ws',
+    maxPayload: MAX_MESSAGE_BYTES,
     handleProtocols(protocols) {
       return protocols.has(requiredProtocol) ? requiredProtocol : false
     },
@@ -57,6 +59,7 @@ export async function startAppSessionWebSocketServer({
   })
 
   const clients = new Set<WebSocket>()
+  let activeTurn = false
   const mapper = createAppSessionEventMapper()
   const unsubscribe = controller.subscribe(event => {
     for (const mappedEvent of mapper.map(event)) {
@@ -70,7 +73,7 @@ export async function startAppSessionWebSocketServer({
     send(ws, {
       type: 'app.ready',
       protocolVersion: 1,
-      inputEnabled: true,
+      inputEnabled: !activeTurn,
       abort: controller.getAbortState(),
       goalSnapshot: controller.getGoalSnapshot(),
       pendingPermissionRequests: controller.getPendingPermissionRequests(),
@@ -147,14 +150,19 @@ export async function startAppSessionWebSocketServer({
       }
 
       send(ws, { type: 'app.ack', requestId: message.requestId })
-      broadcast(clients, {
-        type: 'app.event',
-        event: {
-          type: 'status.update',
-          activeTurn: true,
-          inputEnabled: false,
-        },
-      })
+      if (activeTurn) {
+        send(ws, {
+          type: 'app.error',
+          requestId: message.requestId,
+          code: 'turn_already_running',
+          message: 'Session turn already running',
+          retryable: true,
+        })
+        return
+      }
+
+      activeTurn = true
+      broadcastTurnStatus(clients, true)
       void controller
         .submit(message.prompt, message.options)
         .catch(error => {
@@ -172,14 +180,8 @@ export async function startAppSessionWebSocketServer({
           })
         })
         .finally(() => {
-          broadcast(clients, {
-            type: 'app.event',
-            event: {
-              type: 'status.update',
-              activeTurn: false,
-              inputEnabled: true,
-            },
-          })
+          activeTurn = false
+          broadcastTurnStatus(clients, false)
         })
     })
 
@@ -197,15 +199,68 @@ export async function startAppSessionWebSocketServer({
     protocol: requiredProtocol,
     async stop() {
       unsubscribe()
-      for (const client of clients) {
-        client.terminate()
-      }
-      for (const client of server.clients) {
-        client.terminate()
-      }
-      server.close()
+      const closeClients = Array.from(
+        new Set([...clients, ...server.clients]),
+        closeClient,
+      )
+      await Promise.all(closeClients)
+      await closeServer(server)
     },
   }
+}
+
+function broadcastTurnStatus(clients: Set<WebSocket>, activeTurn: boolean): void {
+  broadcast(clients, {
+    type: 'app.event',
+    event: {
+      type: 'status.update',
+      activeTurn,
+      inputEnabled: !activeTurn,
+    },
+  })
+}
+
+function closeClient(client: WebSocket): Promise<void> {
+  return new Promise(resolve => {
+    if (client.readyState === client.CLOSED) {
+      resolve()
+      return
+    }
+
+    let fallback: ReturnType<typeof setTimeout> | undefined
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      if (fallback) clearTimeout(fallback)
+      client.off('close', done)
+      client.off('error', done)
+      resolve()
+    }
+    client.once('close', done)
+    client.once('error', done)
+    client.terminate()
+    fallback = setTimeout(done, STOP_CLOSE_FALLBACK_MS)
+  })
+}
+
+function closeServer(server: WebSocketServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let fallback: ReturnType<typeof setTimeout> | undefined
+    let settled = false
+    const done = (error?: Error) => {
+      if (settled) return
+      settled = true
+      if (fallback) clearTimeout(fallback)
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    }
+    server.close(done)
+    fallback = setTimeout(done, STOP_CLOSE_FALLBACK_MS)
+  })
 }
 
 function broadcast(clients: Set<WebSocket>, message: AppServerMessage): void {
