@@ -37,8 +37,8 @@ export function getShellConfigPaths(
 }
 
 /**
- * Filter out installer-created claude aliases from an array of lines
- * Only removes aliases pointing to $HOME/.claude/local/claude
+ * Filter out installer-created cat-code/claude aliases from an array of lines
+ * Only removes aliases pointing to $HOME/.cat-code/local/cat-code
  * Preserves custom user aliases that point to other locations
  * Returns the filtered lines and whether our default installer alias was found
  */

@@ -50,6 +50,7 @@ import { registerLeaderToolUseConfirmQueue, unregisterLeaderToolUseConfirmQueue,
 import { endInteractionSpan } from '../utils/telemetry/sessionTracing.js';
 import { useLogMessages } from '../hooks/useLogMessages.js';
 import { useReplBridge } from '../hooks/useReplBridge.js';
+import { usePtcloveBridge } from '../hooks/usePtcloveBridge.js';
 import { type Command, type CommandResultDisplay, type ResumeEntrypoint, getCommandName, isCommandEnabled } from '../commands.js';
 import type { PromptInputMode, QueuedCommand, VimMode } from '../types/textInputTypes.js';
 import { MessageSelector, selectableUserMessagesFilter, messagesAfterAreOnlySynthetic } from '../components/MessageSelector.js';
@@ -1884,7 +1885,7 @@ export function REPL({
     if (wt.creationDurationMs < 15_000) return;
     worktreeTipShownRef.current = true;
     const secs = Math.round(wt.creationDurationMs / 1000);
-    setMessages(prev => [...prev, createSystemMessage(`Worktree creation took ${secs}s. For large repos, set \`worktree.sparsePaths\` in .claude/settings.json to check out only the directories you need — e.g. \`{"worktree": {"sparsePaths": ["src", "packages/foo"]}}\`.`, 'info')]);
+    setMessages(prev => [...prev, createSystemMessage(`Worktree creation took ${secs}s. For large repos, set \`worktree.sparsePaths\` in .cat-code/settings.json to check out only the directories you need — e.g. \`{"worktree": {"sparsePaths": ["src", "packages/foo"]}}\`.`, 'info')]);
   }, [setMessages]);
 
   // Hide spinner when the only in-progress tool is Sleep
@@ -4277,6 +4278,10 @@ export function REPL({
   const {
     sendBridgeResult
   } = useReplBridge(messages, setMessages, abortControllerRef, commands, mainLoopModel);
+  usePtcloveBridge(isLoading, {
+    onAbortTurn: onCancel,
+    getTurnStartedAt: () => loadingStartTimeRef.current || null
+  });
   sendBridgeResultRef.current = sendBridgeResult;
   useAfterFirstRender();
 

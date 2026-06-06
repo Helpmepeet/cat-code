@@ -51,6 +51,7 @@ type Props = {
   tasksSelected: boolean;
   teamsSelected: boolean;
   bridgeSelected: boolean;
+  ptcloveSelected: boolean;
   tmuxSelected: boolean;
   teammateFooterIndex?: number;
   ideSelection: IDESelection | undefined;
@@ -86,6 +87,7 @@ function PromptInputFooter({
   tasksSelected,
   teamsSelected,
   bridgeSelected,
+  ptcloveSelected,
   tmuxSelected,
   teammateFooterIndex,
   ideSelection,
@@ -153,12 +155,25 @@ function PromptInputFooter({
           {"external" === 'ant' && isUndercover() && <Text dimColor>undercover</Text>}
           <GoalStatusIndicator goalDisplay={threadGoalDisplay} />
           <BridgeStatusIndicator bridgeSelected={bridgeSelected} />
+          <PtcloveFooterHint selected={ptcloveSelected} />
         </Box>
       </Box>
       {"external" === 'ant' && <CoordinatorTaskPanel />}
     </>;
 }
 export default memo(PromptInputFooter);
+
+function PtcloveFooterHint({
+  selected,
+}: {
+  selected: boolean;
+}): React.ReactNode {
+  const attempted = useAppState(s => s.ptcloveBridgeAttemptedHello);
+  const connected = useAppState(s => s.ptcloveBridgeConnected);
+  if (!attempted || connected) return null;
+  return <Text color={selected ? 'background' : 'gray'} inverse={selected} wrap="truncate">(PTClove not running)</Text>;
+}
+
 function GoalStatusIndicator({
   goalDisplay,
 }: {

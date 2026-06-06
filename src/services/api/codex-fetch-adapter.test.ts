@@ -12,6 +12,8 @@ import {
   CodexAccountAuthError,
   CodexAccountCapError,
   createCodexFetch,
+  mapConversationIdToTrackingKey,
+  mapEffortToCodex,
   resetCodexCacheContext,
   translateCodexStreamToAnthropic,
   translateCodexWsStreamToAnthropic,
@@ -21,6 +23,7 @@ import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
 } from './codexAccountPool.js'
+import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 
 function createAccessToken(accountId: string): string {
   const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))
@@ -384,6 +387,33 @@ describe('codex-fetch-adapter', () => {
     expect(defaultChoice.tool_choice).toBe('auto')
   })
 
+  test('translateToCodexBody does not force filtered StructuredOutput tool choice', () => {
+    const body = translateToCodexBody({
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          name: SYNTHETIC_OUTPUT_TOOL_NAME,
+          description: 'Return structured output',
+          input_schema: {
+            type: 'object',
+            properties: { title: { type: 'string' } },
+            required: ['title'],
+            additionalProperties: false,
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: SYNTHETIC_OUTPUT_TOOL_NAME },
+      _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
+    }).codexBody
+
+    expect(body.tool_choice).toBe('auto')
+    expect(
+      Array.isArray(body.tools)
+        ? body.tools.some(tool => tool.name === SYNTHETIC_OUTPUT_TOOL_NAME)
+        : false,
+    ).toBe(false)
+  })
+
   test('translateToCodexBody preserves reasoning include when thinking is disabled and web search is enabled', () => {
     const { codexBody } = translateToCodexBody({
       model: 'claude-sonnet-4-6',
@@ -405,6 +435,53 @@ describe('codex-fetch-adapter', () => {
       'reasoning.encrypted_content',
       'web_search_call.action.sources',
     ])
+  })
+
+  test('translateToCodexBody maps disabled thinking to none for gpt-5.5', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.5',
+      thinking: { type: 'disabled' },
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'none' })
+  })
+
+  test('translateToCodexBody maps boolean disabled thinking to none for gpt-5.5', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.5',
+      thinking: false,
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'none' })
+  })
+
+  test('translateToCodexBody preserves minimal disabled thinking for gpt-5.4', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.4',
+      thinking: { type: 'disabled' },
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'minimal' })
+  })
+
+  test('mapEffortToCodex maps explicit minimal to none for gpt-5.5', () => {
+    expect(mapEffortToCodex('minimal', 'gpt-5.5')).toBe('none')
+  })
+
+  test('mapEffortToCodex preserves explicit minimal for gpt-5.4', () => {
+    expect(mapEffortToCodex('minimal', 'gpt-5.4')).toBe('minimal')
   })
 
   test('translateToCodexBody merges web search sources include with reasoning include', () => {
@@ -1314,6 +1391,77 @@ describe('codex-fetch-adapter', () => {
     await expect(response.text()).rejects.toThrow('WebSocket closed before response.completed')
   })
 
+  test('translateCodexWsStreamToAnthropic surfaces usage-limit response.failed after visible output without account failover', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'visible text' }
+        yield {
+          type: 'response.failed',
+          response: {
+            error: {
+              code: 'usage_limit_reached',
+              message: 'usage limit reached',
+            },
+          },
+        }
+      })(),
+      'gpt-5.4',
+      {
+        accountId: 'acct_test_streaming',
+        model: 'gpt-5.4',
+        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        conversationId: 'conv_visible_response_failed',
+      },
+    )
+
+    let thrown: unknown
+    try {
+      await response.text()
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).not.toBeInstanceOf(CodexAccountCapError)
+    expect((thrown as Error).message).toContain('usage_limit_reached')
+    expect((thrown as Error).message).toContain('usage limit reached')
+  })
+
+  test('translateCodexStreamToAnthropic surfaces non-account response.failed instead of completing', async () => {
+    const codexResponse = new Response(
+      [
+        'event: response.failed',
+        `data: ${JSON.stringify({
+          type: 'response.failed',
+          response: {
+            error: {
+              code: 'invalid_request_error',
+              message: 'bad request',
+            },
+          },
+        })}`,
+        '',
+      ].join('\n'),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    )
+
+    const response = await translateCodexStreamToAnthropic(
+      codexResponse,
+      'gpt-5.4',
+      {
+        accountId: 'acct_test_streaming',
+        model: 'gpt-5.4',
+        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        conversationId: 'conv_non_cap_response_failed',
+      },
+    )
+
+    await expect(response.text()).rejects.toThrow(/invalid_request_error.*bad request/)
+  })
+
   test('translateCodexWsStreamToAnthropic refuses replay after visible output has started', async () => {
     const response = translateCodexWsStreamToAnthropic(
       (async function* () {
@@ -1453,6 +1601,189 @@ describe('codex-fetch-adapter', () => {
       globalThis.fetch = originalFetch
       _setWebSocketFactoryForTest(null)
       clearWebSocketSession('conv_usage_limit')
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch surfaces pre-visible WS response.failed usage limits as CodexAccountCapError', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+
+    globalThis.fetch = (async () => {
+      throw new Error('HTTP fallback should not run for immediate WS response.failed cap errors')
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [completedWsResponse('resp_prewarm')],
+      [
+        {
+          type: 'response.failed',
+          response: {
+            error: {
+              code: 'usage_limit_reached',
+              message: 'usage limit reached',
+            },
+          },
+        },
+      ],
+    ]
+
+    try {
+      await expect(
+        createCodexFetch(accessToken, 'conv_usage_limit_response_failed')(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              stream: true,
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          },
+        ),
+      ).rejects.toBeInstanceOf(CodexAccountCapError)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_usage_limit_response_failed')
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch surfaces pre-visible WS response.failed after response.created as CodexAccountCapError', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+
+    globalThis.fetch = (async () => {
+      throw new Error('HTTP fallback should not run for pre-visible WS response.failed cap errors')
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [completedWsResponse('resp_prewarm')],
+      [
+        {
+          type: 'response.created',
+          response: { id: 'resp_previsible_failed' },
+        },
+        {
+          type: 'response.failed',
+          response: {
+            id: 'resp_previsible_failed',
+            error: {
+              code: 'usage_limit_reached',
+              message: 'usage limit reached',
+            },
+          },
+        },
+      ],
+    ]
+
+    try {
+      await expect(
+        createCodexFetch(accessToken, 'conv_usage_limit_precreated')(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              stream: true,
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          },
+        ),
+      ).rejects.toBeInstanceOf(CodexAccountCapError)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_usage_limit_precreated')
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch surfaces pre-visible non-account WS response.failed without HTTP fallback', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+    let httpFallbackCalls = 0
+
+    globalThis.fetch = (async () => {
+      httpFallbackCalls += 1
+      return new Response(
+        [
+          'event: response.output_text.delta',
+          `data: ${JSON.stringify({
+            type: 'response.output_text.delta',
+            delta: 'http fallback should not run',
+          })}`,
+          '',
+          'event: response.completed',
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              usage: {
+                input_tokens: 1,
+                output_tokens: 1,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [completedWsResponse('resp_prewarm')],
+      [
+        {
+          type: 'response.failed',
+          response: {
+            error: {
+              code: 'invalid_request_error',
+              message: 'bad request from websocket',
+            },
+          },
+        },
+      ],
+    ]
+
+    try {
+      await expect(
+        createCodexFetch(accessToken, 'conv_non_cap_response_failed_ws')(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              stream: true,
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          },
+        ),
+      ).rejects.toThrow(/invalid_request_error.*bad request from websocket/)
+      expect(httpFallbackCalls).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_non_cap_response_failed_ws')
       resetCodexCacheContext()
     }
   })
@@ -1744,5 +2075,31 @@ describe('codex-fetch-adapter', () => {
       clearWebSocketSession('conv_http_sticky')
       resetCodexCacheContext()
     }
+  })
+
+  test('mapConversationIdToTrackingKey maps a bare session UUID to repl_main_thread', () => {
+    // Main-thread conversations have no override, so the conversation ID is a
+    // bare session UUID with no `/`. It must resolve to the repl_main_thread
+    // tracking key that promptCacheBreakDetection stores main-thread state under.
+    expect(
+      mapConversationIdToTrackingKey('11111111-2222-3333-4444-555555555555'),
+    ).toBe('repl_main_thread')
+  })
+
+  test('mapConversationIdToTrackingKey maps a subagent sessionId/agentId to the raw agentId', () => {
+    // Subagent overrides are `${sessionId}/${agentId}`; the tracking key is the
+    // raw agentId (getTrackingKey returns `agentId || querySource`), NOT
+    // `agent:${id}` — that was the prior bug that made the subagent path miss.
+    expect(
+      mapConversationIdToTrackingKey(
+        '11111111-2222-3333-4444-555555555555/agent_abc123',
+      ),
+    ).toBe('agent_abc123')
+  })
+
+  test('mapConversationIdToTrackingKey maps the session-title side query to its querySource', () => {
+    expect(
+      mapConversationIdToTrackingKey('side/title/99999999-0000-1111-2222-333333333333'),
+    ).toBe('generate_session_title')
   })
 })

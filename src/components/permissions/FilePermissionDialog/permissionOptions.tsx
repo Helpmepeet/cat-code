@@ -9,40 +9,40 @@ import { expandPath, getDirectoryForPath } from '../../../utils/path.js';
 import { normalizeCaseForComparison, pathInAllowedWorkingPath } from '../../../utils/permissions/filesystem.js';
 import type { OptionWithDescription } from '../../CustomSelect/select.js';
 /**
- * Check if a path is within the project's .claude/ folder.
- * This is used to determine whether to show the special ".claude folder" permission option.
+ * Check if a path is within the project's .cat-code/ folder.
+ * This is used to determine whether to show the special ".cat-code folder" permission option.
  */
-export function isInClaudeFolder(filePath: string): boolean {
+export function isInCatCodeFolder(filePath: string): boolean {
   const absolutePath = expandPath(filePath);
-  const claudeFolderPath = expandPath(`${getOriginalCwd()}/.claude`);
+  const catCodeFolderPath = expandPath(`${getOriginalCwd()}/.cat-code`);
 
-  // Check if the path is within the project's .claude folder
+  // Check if the path is within the project's .cat-code folder
   const normalizedAbsolutePath = normalizeCaseForComparison(absolutePath);
-  const normalizedClaudeFolderPath = normalizeCaseForComparison(claudeFolderPath);
+  const normalizedCatCodeFolderPath = normalizeCaseForComparison(catCodeFolderPath);
 
-  // Path must start with the .claude folder path (and be inside it, not just the folder itself)
-  return normalizedAbsolutePath.startsWith(normalizedClaudeFolderPath + sep.toLowerCase()) ||
+  // Path must start with the .cat-code folder path (and be inside it, not just the folder itself)
+  return normalizedAbsolutePath.startsWith(normalizedCatCodeFolderPath + sep.toLowerCase()) ||
   // Also match case where sep is / on posix systems
-  normalizedAbsolutePath.startsWith(normalizedClaudeFolderPath + '/');
+  normalizedAbsolutePath.startsWith(normalizedCatCodeFolderPath + '/');
 }
 
 /**
- * Check if a path is within the global ~/.claude/ folder.
- * This is used to determine whether to show the special ".claude folder" permission option
+ * Check if a path is within the global ~/.cat-code/ folder.
+ * This is used to determine whether to show the special ".cat-code folder" permission option
  * for files in the user's home directory.
  */
-export function isInGlobalClaudeFolder(filePath: string): boolean {
+export function isInGlobalCatCodeFolder(filePath: string): boolean {
   const absolutePath = expandPath(filePath);
-  const globalClaudeFolderPath = getClaudeConfigHomeDir();
+  const globalCatCodeFolderPath = getClaudeConfigHomeDir();
   const normalizedAbsolutePath = normalizeCaseForComparison(absolutePath);
-  const normalizedGlobalClaudeFolderPath = normalizeCaseForComparison(globalClaudeFolderPath);
-  return normalizedAbsolutePath.startsWith(normalizedGlobalClaudeFolderPath + sep.toLowerCase()) || normalizedAbsolutePath.startsWith(normalizedGlobalClaudeFolderPath + '/');
+  const normalizedGlobalCatCodeFolderPath = normalizeCaseForComparison(globalCatCodeFolderPath);
+  return normalizedAbsolutePath.startsWith(normalizedGlobalCatCodeFolderPath + sep.toLowerCase()) || normalizedAbsolutePath.startsWith(normalizedGlobalCatCodeFolderPath + '/');
 }
 export type PermissionOption = {
   type: 'accept-once';
 } | {
   type: 'accept-session';
-  scope?: 'claude-folder' | 'global-claude-folder';
+  scope?: 'cat-code-folder' | 'global-cat-code-folder';
 } | {
   type: 'reject';
 };
@@ -76,7 +76,7 @@ export function getFilePermissionOptions({
       type: 'input',
       label: 'Yes',
       value: 'yes',
-      placeholder: 'and tell Claude what to do next',
+      placeholder: 'and tell Cat Code what to do next',
       onChange: onAcceptFeedbackChange,
       allowEmptySubmitToCancel: true,
       option: {
@@ -94,21 +94,21 @@ export function getFilePermissionOptions({
   }
   const inAllowedPath = pathInAllowedWorkingPath(filePath, toolPermissionContext);
 
-  // Check if this is a .claude/ folder path (project or global)
-  const inClaudeFolder = isInClaudeFolder(filePath);
-  const inGlobalClaudeFolder = isInGlobalClaudeFolder(filePath);
+  // Check if this is a .cat-code/ folder path (project or global)
+  const inCatCodeFolder = isInCatCodeFolder(filePath);
+  const inGlobalCatCodeFolder = isInGlobalCatCodeFolder(filePath);
 
-  // Option 2: For .claude/ folder, show special option instead of generic session option
+  // Option 2: For .cat-code/ folder, show special option instead of generic session option
   // Note: Session-level options are always shown since they only affect in-memory state,
   // not persisted settings. The allowManagedPermissionRulesOnly setting only restricts
   // persisted permission rules.
-  if ((inClaudeFolder || inGlobalClaudeFolder) && operationType !== 'read') {
+  if ((inCatCodeFolder || inGlobalCatCodeFolder) && operationType !== 'read') {
     options.push({
-      label: 'Yes, and allow Claude to edit its own settings for this session',
-      value: 'yes-claude-folder',
+      label: 'Yes, and allow Cat Code to edit its own settings for this session',
+      value: 'yes-cat-code-folder',
       option: {
         type: 'accept-session',
-        scope: inGlobalClaudeFolder ? 'global-claude-folder' : 'claude-folder'
+        scope: inGlobalCatCodeFolder ? 'global-cat-code-folder' : 'cat-code-folder'
       }
     });
   } else {

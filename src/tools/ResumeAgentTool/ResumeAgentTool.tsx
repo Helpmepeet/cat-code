@@ -8,7 +8,10 @@ import { isLocalAgentTask } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { errorMessage } from '../../utils/errors.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
-import { resolveAgentTarget } from '../AgentTool/resolveAgentTarget.js'
+import {
+  formatContextSizeHint,
+  resolveAgentTarget,
+} from '../AgentTool/resolveAgentTarget.js'
 import {
   AgentResumeInProgressError,
   resumeAgentBackground,
@@ -21,7 +24,9 @@ const inputSchema = lazySchema(() =>
   z.strictObject({
     agentId: z
       .string()
-      .describe('Subagent alias, Agent Mode worker handle, or raw agent ID to resume'),
+      .describe(
+        'Which stopped subagent to restart, identified by its friendly name/alias, Agent Mode worker handle, or raw agent ID. Only local subagents/workers are accepted — not teammate names, "*", or uds:/bridge: targets. Use SendMessage instead if the target is still running.',
+      ),
     prompt: z.string().describe('New prompt to send to the resumed subagent'),
   }),
 )
@@ -146,7 +151,7 @@ export const ResumeAgentTool = buildTool({
       return {
         data: {
           success: true,
-          message: `Resumed "${result.description}" in the background.`,
+          message: `Resumed "${result.description}" in the background.${formatContextSizeHint(resolved.contextTokens)}`,
         },
       }
     } catch (e) {

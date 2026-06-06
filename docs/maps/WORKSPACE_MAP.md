@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-05-21
+Last refreshed: 2026-06-06
 
 ## Purpose
 

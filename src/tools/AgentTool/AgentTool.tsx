@@ -349,7 +349,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['sonnet', 'opus', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']).optional().describe("Optional model override. Built-in agents already resolve to a sensible model (Explore uses a fast cheap model; Plan/general-purpose/etc. inherit your model), so OMIT this by default — passing it overrides that default and usually just wastes it (e.g. forcing Explore off its cheap pin, or downgrading heavy general-purpose work below your own tier). Only set it for a deliberate reason: (1) an independent reviewer in a different model family (e.g. sonnet to audit your work), (2) upgrading a subagent when you yourself are on a weaker model, or (3) a custom/user-defined agent whose configured model is wrong for the task. Do not pass it just to fill the field."),
+  model: z.enum(['sonnet', 'opus', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it (don't match yourself to a specific id like gpt-5.4)."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));
 
@@ -374,9 +374,21 @@ const fullInputSchema = lazySchema(() => {
 // type, but call() destructures via the explicit AgentToolInput type below
 // which always includes all optional fields.
 export const inputSchema = lazySchema(() => {
-  const schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
+  let schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
     cwd: true
   });
+
+  // The multi-agent params (name/team_name/mode) only do anything in the
+  // agent-teams/swarm spawn path: `name` is the teammate's required roster
+  // identity that routes call() into spawnTeammate(), and team_name/mode are
+  // teammate-only. When swarms are off they are dead weight on every ordinary
+  // subagent spawn — the model shouldn't pick a name for a subagent that is
+  // already auto-named for handle/UI purposes. Hide them so they never appear.
+  // call() still destructures them via the explicit AgentToolInput type, so the
+  // teammate path keeps working when swarms are enabled.
+  if (!isAgentSwarmsEnabled()) {
+    schema = schema.omit({ name: true, team_name: true, mode: true });
+  }
 
   // GrowthBook-in-lazySchema is acceptable here (unlike subagent_type, which
   // was removed in 906da6c723): the divergence window is one-session-per-
@@ -1056,6 +1068,7 @@ export const AgentTool = buildTool({
         description,
         prompt,
         selectedAgent,
+        agentName,
         setAppState: rootSetAppState,
         // Don't link to parent's abort controller -- background agents should
         // survive when the user presses ESC to cancel the main thread.
@@ -1184,6 +1197,7 @@ export const AgentTool = buildTool({
             description,
             prompt,
             selectedAgent,
+            agentName,
             setAppState: rootSetAppState,
             toolUseId: toolUseContext.toolUseId,
             autoBackgroundMs: getAutoBackgroundMs() || undefined

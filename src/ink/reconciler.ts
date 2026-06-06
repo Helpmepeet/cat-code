@@ -336,7 +336,19 @@ const reconciler = createReconciler<
     internalHandle?: unknown,
   ): DOMElement {
     if (hostContext.isInsideText && originalType === 'ink-box') {
-      throw new Error(`<Box> can't be nested inside <Text> component`)
+      const ownerChain = getOwnerChain(internalHandle)
+      const debugMessage = [
+        `<Box> can't be nested inside <Text> component`,
+        `React owner chain: ${ownerChain.length ? ownerChain.join(' < ') : '(none captured)'}`,
+      ].join('\n')
+      if (process.env.CAT_CODE_INK_NESTING_LOG) {
+        // eslint-disable-next-line custom-rules/no-sync-fs -- crash diagnostics before throwing
+        appendFileSync(
+          process.env.CAT_CODE_INK_NESTING_LOG,
+          `${debugMessage}\n\n`,
+        )
+      }
+      throw new Error(debugMessage)
     }
 
     const type =

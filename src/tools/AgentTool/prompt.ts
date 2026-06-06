@@ -15,6 +15,10 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 import { type APIProvider } from '../../utils/model/providers.js'
 
 function getToolsDescription(agent: AgentDefinition): string {
+  if (agent.agentType === 'verification') {
+    return 'Read-only async verification tools when available: Bash, Read, search, web, and MCP tools; excludes edit/write, orchestrator, recursive-agent, and worker-control tools'
+  }
+
   const { tools, disallowedTools } = agent
   const hasAllowlist = tools && tools.length > 0
   const hasDenylist = disallowedTools && disallowedTools.length > 0
@@ -389,7 +393,7 @@ ${usageHeader}
 - **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.${isGPTPromptStyle ? ' **IMPORTANT: run_in_background: true is REQUIRED for true parallel execution — without it, the parent agent is fully blocked waiting for each subagent to finish, even if you emit multiple spawns in the same turn.**' : ''}`
       : ''
   }
-- To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes with its full context preserved. Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
+- To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes from its prior transcript. Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered at the worker's next tool round and does not interrupt its current work. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
 - The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.

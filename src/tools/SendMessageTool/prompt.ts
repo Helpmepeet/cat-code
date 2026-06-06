@@ -16,7 +16,7 @@ This tool targets recipients that are currently running. To restart a stopped su
 {"to": "implement-auth", "summary": "fix failing test", "message": "The auth test is failing on the expired-token branch. Please inspect the failure and patch only your assigned files."}
 \`\`\`
 
-Use this to queue a follow-up to a relevant running worker instead of spawning a duplicate.
+Use this to queue a follow-up to a relevant running worker instead of spawning a duplicate. A queued message is delivered at the worker's next tool round — it does not interrupt the worker's current work.
 
 Available without Agent Teams:
 
@@ -62,7 +62,7 @@ Send a message to another running agent.
 | \`"researcher"\` | Teammate by name |
 | \`"*"\` | Broadcast to all teammates — expensive (linear in team size), use only when everyone genuinely needs it |${udsRow}
 
-Your plain text output is NOT visible to other agents — to communicate, you MUST call this tool. Messages from teammates are delivered automatically; you don't check an inbox. Refer to teammates by name, never by UUID. When relaying, don't quote the original — it's already rendered to the user.${udsSection}
+Your plain text output is NOT visible to other agents — to communicate, you MUST call this tool. A message is delivered at the recipient's next tool round; it does not interrupt their current work. Messages from teammates are delivered automatically; you don't check an inbox. Refer to teammates by name, never by UUID. When relaying, don't quote the original — it's already rendered to the user.${udsSection}
 
 ## Protocol responses (legacy)
 

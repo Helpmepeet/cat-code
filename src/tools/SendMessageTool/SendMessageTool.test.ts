@@ -188,12 +188,14 @@ describe('SendMessageTool durable worker handle fallback', () => {
   })
 
   test('schema describes running subagent targets', () => {
-    expect(SendMessageTool.inputSchema.shape.to.description).toContain(
-      'running subagent raw agent ID',
-    )
-    expect(SendMessageTool.inputSchema.shape.to.description).toContain(
-      'running Agent Mode worker handle',
-    )
+    const description = SendMessageTool.inputSchema.shape.to.description
+    // Must convey the target has to be running, accept name/handle/raw ID, and
+    // point at ResumeAgent for stopped targets.
+    expect(description).toContain('must be currently running')
+    expect(description).toContain('friendly name/alias')
+    expect(description).toContain('worker handle')
+    expect(description).toContain('raw agent ID')
+    expect(description).toContain('use ResumeAgent instead')
   })
 
   test('is not deferred in Agent Mode', () => {
@@ -528,10 +530,11 @@ describe('SendMessageTool durable worker handle fallback', () => {
     )
 
     expect(resumeAgentBackground).not.toHaveBeenCalled()
-    expect(result.data).toEqual({
+    expect(result.data).toMatchObject({
       success: false,
-      message:
+      message: expect.stringContaining(
         'Agent "agent-prior" is stopped. Use ResumeAgent({ agentId: "explore-prior", prompt }) to restart it.',
+      ),
     })
   })
 
@@ -579,9 +582,11 @@ describe('SendMessageTool durable worker handle fallback', () => {
     )
 
     expect(resumeAgentBackground).not.toHaveBeenCalled()
-    expect(result.data).toEqual({
+    expect(result.data).toMatchObject({
       success: false,
-      message: `Agent "${priorAgentId.slice(0, 12)}..." is stopped. Use ResumeAgent({ agentId: "${priorAgentId}", prompt }) to restart it.`,
+      message: expect.stringContaining(
+        `Agent "${priorAgentId.slice(0, 12)}..." is stopped. Use ResumeAgent({ agentId: "${priorAgentId}", prompt }) to restart it.`,
+      ),
     })
   })
 })

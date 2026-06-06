@@ -6,8 +6,8 @@ import { useTerminalSize } from 'src/hooks/useTerminalSize.js';
 import { stringWidth } from 'src/ink/stringWidth.js';
 import { useAppState, useSetAppState } from 'src/state/AppState.js';
 import { enterTeammateView, exitTeammateView } from 'src/state/teammateViewHelpers.js';
-import { isPanelAgentTask } from 'src/tasks/LocalAgentTask/LocalAgentTask.js';
-import { getPillLabel, pillNeedsCta } from 'src/tasks/pillLabel.js';
+import { isLocalAgentTask, isPanelAgentTask } from 'src/tasks/LocalAgentTask/LocalAgentTask.js';
+import { getPillLabel, pillCtaText } from 'src/tasks/pillLabel.js';
 import { type BackgroundTaskState, isBackgroundTask, type TaskState } from 'src/tasks/types.js';
 import { calculateHorizontalScrollWindow } from 'src/utils/horizontalScroll.js';
 import { Box, Text } from '../../ink.js';
@@ -215,7 +215,8 @@ export function BackgroundTaskStatus(t0) {
   }
   let t10;
   if ($[43] !== runningTasks) {
-    t10 = pillNeedsCta(runningTasks) && <Text dimColor={true}> · {figures.arrowDown} to view</Text>;
+    const ctaText = pillCtaText(runningTasks);
+    t10 = ctaText && <Text dimColor={true}> · {ctaText}</Text>;
     $[43] = runningTasks;
     $[44] = t10;
   } else {
@@ -269,7 +270,7 @@ function _temp4(s_1) {
   return s_1.expandedView;
 }
 function _temp3(t) {
-  return isBackgroundTask(t) && !(false && isPanelAgentTask(t));
+  return isVisibleBackgroundTask(t) && !(false && isPanelAgentTask(t));
 }
 function _temp2(s_0) {
   return s_0.viewingAgentTaskId;
@@ -418,6 +419,10 @@ function SummaryPill(t0) {
     t5 = $[7];
   }
   return t5;
+}
+function isVisibleBackgroundTask(task: TaskState): boolean {
+  if (isBackgroundTask(task)) return true;
+  return isLocalAgentTask(task) && task.isBackgrounded && task.status !== "running";
 }
 function getAgentThemeColor(colorName: string | undefined): keyof Theme | undefined {
   if (!colorName) return undefined;

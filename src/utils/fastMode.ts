@@ -112,7 +112,10 @@ export function getFastModeUnavailableReason(): string | null {
   // Only available for 1P (not Bedrock/Vertex/Foundry)
   if (getAPIProvider() !== 'firstParty') {
     const reason = 'Fast mode is not available on Bedrock, Vertex, or Foundry'
-    logForDebugging(`Fast mode unavailable: ${reason}`)
+    if (!hasLoggedProviderUnavailable) {
+      hasLoggedProviderUnavailable = true
+      logForDebugging(`Fast mode unavailable: ${reason}`)
+    }
     return reason
   }
 
@@ -186,6 +189,7 @@ export type FastModeRuntimeState =
 
 let runtimeState: FastModeRuntimeState = { status: 'active' }
 let hasLoggedCooldownExpiry = false
+let hasLoggedProviderUnavailable = false
 
 // --- Cooldown event listeners ---
 export type CooldownReason = 'rate_limit' | 'overloaded'

@@ -1,4 +1,5 @@
 import { BASH_TOOL_NAME } from 'src/tools/BashTool/toolName.js'
+import { ASK_ORCHESTRATOR_TOOL_NAME } from 'src/tools/AskOrchestratorTool/prompt.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from 'src/tools/ExitPlanModeTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from 'src/tools/FileEditTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from 'src/tools/FileWriteTool/prompt.js'
@@ -230,6 +231,7 @@ export const VERIFICATION_AGENT: BuiltInAgentDefinition = {
     FILE_EDIT_TOOL_NAME,
     FILE_WRITE_TOOL_NAME,
     NOTEBOOK_EDIT_TOOL_NAME,
+    ASK_ORCHESTRATOR_TOOL_NAME,
   ],
   source: 'built-in',
   baseDir: 'built-in',

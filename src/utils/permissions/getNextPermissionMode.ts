@@ -47,7 +47,13 @@ export function getNextPermissionMode(
         }
         return 'default'
       }
+      if (canCycleToAuto(toolPermissionContext)) {
+        return 'auto'
+      }
       return 'acceptEdits'
+
+    case 'auto':
+      return process.env.USER_TYPE === 'ant' ? 'default' : 'acceptEdits'
 
     case 'acceptEdits':
       return 'plan'
@@ -62,9 +68,6 @@ export function getNextPermissionMode(
       return 'default'
 
     case 'bypassPermissions':
-      if (canCycleToAuto(toolPermissionContext)) {
-        return 'auto'
-      }
       return 'default'
 
     case 'dontAsk':
@@ -73,7 +76,7 @@ export function getNextPermissionMode(
 
 
     default:
-      // Covers auto (when TRANSCRIPT_CLASSIFIER is enabled) and any future modes — always fall back to default
+      // Covers any future modes — always fall back to default
       return 'default'
   }
 }

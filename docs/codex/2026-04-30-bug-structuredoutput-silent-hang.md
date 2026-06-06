@@ -91,7 +91,7 @@ At `08:20:13`, immediately after the third loop, this error fires:
 [ERROR] ResolveMessage: Cannot find package 'image-processor-napi' from '/$bunfs/root/cli.js'
 ```
 
-This is unrelated to the hang but caused a cascade of ~100 Ink re-render events (`blit=0, write=4896, 100% writes`) that locked the terminal. The package is presumably a native image-processing addon that's absent from the Bun bundle. It needs either bundling or a try/catch with graceful fallback to prevent the render storm.
+This is unrelated to the hang but caused a cascade of ~100 Ink re-render events (`blit=0, write=4896, 100% writes`) that locked the terminal. The package is a native image-processing addon that's absent from the Bun bundle in some environments. Clipboard image paths now treat the native import as an optional fast path and fall back without reporting the missing package as an error.
 
 ---
 
@@ -102,4 +102,4 @@ This is unrelated to the hang but caused a cascade of ~100 Ink re-render events 
 | `src/services/tools/toolExecution.ts:369` | Count consecutive same-name unknown-tool errors per turn; abort + surface error after threshold (2) |
 | Conversation history / replay layer | Strip `StructuredOutput` tool calls and their results from history before Codex sends |
 | `src/tools/SyntheticOutputTool/SyntheticOutputTool.ts:20` | Consider renaming to `cc_StructuredOutput` to reduce collision risk |
-| Wherever `image-processor-napi` is imported | Wrap in try/catch with graceful fallback |
+| Clipboard `image-processor-napi` imports | Fixed: missing optional native module falls back without `logError` spam |

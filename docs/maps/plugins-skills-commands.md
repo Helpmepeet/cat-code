@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-06-06
 
 ## Purpose
 
@@ -21,7 +21,8 @@ memoized and several surfaces load lazily or only under feature flags.
 | Why is a command visible or hidden? | `src/commands.ts` `getCommands`, `meetsAvailabilityRequirement` | `src/types/command.ts` `isCommandEnabled`, command `isEnabled` callbacks |
 | Why is a command unavailable in remote/bridge mode? | `src/commands.ts` `REMOTE_SAFE_COMMANDS`, `BRIDGE_SAFE_COMMANDS`, `isBridgeSafeCommand` | `src/main.tsx`, `src/screens/REPL.tsx` |
 | How is command source shown in UI? | `src/commands.ts` `formatDescriptionWithSource` | `src/components/`, help/typeahead owners |
-| How does `/plugin` expose plugin management? | `src/commands/plugin/index.tsx`, `src/commands/plugin/plugin.tsx` | `src/commands/plugin/PluginSettings.tsx`, `src/commands/plugin/parseArgs.ts` |
+| How do `/init` and `/init-verifiers` scaffold repo-local instructions? | `src/commands/init.ts`, `src/commands/init-verifiers.ts` | `src/skills/loadSkillsDir.ts`, `src/utils/claudemd.ts`, `src/utils/settings/settings.ts` |
+| How does `/plugin` expose plugin management? | `src/commands/plugin/index.tsx`, `src/commands/plugin/plugin.tsx` | `src/commands/plugin/PluginSettings.tsx`, `src/commands/plugin/ManagePlugins.tsx`, `src/commands/plugin/parseArgs.ts` |
 | How do non-interactive `cat-code plugin ...` subcommands work? | `src/main.tsx` plugin commander registration | `src/cli/handlers/plugins.ts`, `src/services/plugins/pluginCliCommands.ts` |
 
 `src/commands.ts` is the aggregation owner. Static built-ins live in
@@ -30,7 +31,7 @@ memoized and several surfaces load lazily or only under feature flags.
 
 1. bundled skills
 2. built-in-plugin skills
-3. filesystem skills from `.claude/skills` and legacy `.claude/commands`
+3. filesystem skills from `.cat-code/skills` plus legacy commands compatibility
 4. workflow commands when `WORKFLOW_SCRIPTS` is enabled
 5. plugin commands
 6. plugin skills
@@ -39,6 +40,11 @@ memoized and several surfaces load lazily or only under feature flags.
 `getCommands(cwd)` then applies availability and `isEnabled` filters. Dynamic
 skills discovered later in the session are deduped and inserted before built-in
 commands, so they behave like late-arriving non-built-in prompt commands.
+
+`/init` and `/init-verifiers` now steer users toward `.cat-code/skills`,
+`.cat-code/rules`, `.cat-code/settings*.json`, and `~/.cat-code/...`
+instruction imports. Keep legacy `.claude` mentions only where the loader still
+supports compatibility reads.
 
 ## Skill and Model-Invocable Command Indexes
 
@@ -54,12 +60,12 @@ commands, so they behave like late-arriving non-built-in prompt commands.
 
 | Source | Owner | Behavior |
 |---|---|---|
-| Managed skills | `src/skills/loadSkillsDir.ts` | Loads `${managed}/.claude/skills` unless disabled by `CLAUDE_CODE_DISABLE_POLICY_SKILLS`. |
-| User skills | `src/skills/loadSkillsDir.ts` | Loads `$CLAUDE_CONFIG_DIR/skills` and `~/.claude/skills` compatibility dir when distinct. |
+| Managed skills | `src/skills/loadSkillsDir.ts` | Loads `${managed}/.cat-code/skills` unless disabled by `CLAUDE_CODE_DISABLE_POLICY_SKILLS`. |
+| User skills | `src/skills/loadSkillsDir.ts` | Loads `$CLAUDE_CONFIG_DIR/skills` (now the primary `~/.cat-code/skills` home location). |
 | Project skills | `src/skills/loadSkillsDir.ts` | Walks project dirs up to home via `getProjectDirsUpToHome('skills', cwd)`. |
-| `--add-dir` project skills | `src/skills/loadSkillsDir.ts` | Loads `<add-dir>/.claude/skills` when project settings are enabled. |
+| `--add-dir` project skills | `src/skills/loadSkillsDir.ts` | Loads `<add-dir>/.cat-code/skills` when project settings are enabled. |
 | Legacy commands-as-skills | `src/skills/loadSkillsDir.ts` | Loads `.claude/commands` markdown and `SKILL.md` directories as `loadedFrom: 'commands_DEPRECATED'`. |
-| Conditional/dynamic skills | `src/skills/loadSkillsDir.ts` | `paths` frontmatter stores conditional skills; file operations can activate them. Nested `.claude/skills` dirs can be discovered dynamically below cwd, excluding gitignored dirs. |
+| Conditional/dynamic skills | `src/skills/loadSkillsDir.ts` | `paths` frontmatter stores conditional skills; file operations can activate them. Nested `.cat-code/skills` dirs can be discovered dynamically below cwd, excluding gitignored dirs. |
 
 Filesystem skills support only `skill-name/SKILL.md` in `/skills/` dirs.
 Legacy `/commands/` supports both single `.md` files and directories with

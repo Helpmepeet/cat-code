@@ -5,8 +5,7 @@ import React from 'react'
 import { z } from 'zod/v4'
 import { FilePathLink } from '../../components/FilePathLink.js'
 import { MessageResponse } from '../../components/MessageResponse.js'
-import { useTerminalSize } from '../../hooks/useTerminalSize.js'
-import { Box, RawAnsi, Text } from '../../ink.js'
+import { Box, Text } from '../../ink.js'
 import { isPoolActive } from '../../services/api/codexAccountPool.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import { resolveCodexOAuthTokensForLeaseOwner } from '../../services/api/client.js'
@@ -76,6 +75,27 @@ const inputSchema = lazySchema(() =>
       .enum(outputFormats)
       .optional()
       .describe('Image file format. Defaults to the output_path extension.'),
+    output_compression: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional()
+      .describe(
+        'Output compression level from 0 to 100 for jpeg and webp output formats. Ignored for PNG.',
+      ),
+    action: z
+      .enum(['auto', 'generate', 'edit'])
+      .optional()
+      .describe(
+        'Controls whether the model generates a new image or edits an existing one. Defaults to auto, or edit when reference_image_path is set.',
+      ),
+    input_fidelity: z
+      .enum(['high', 'low'])
+      .optional()
+      .describe(
+        'Reference image fidelity to use when a reference_image_path is provided.',
+      ),
     moderation: z
       .enum(['low', 'auto'])
       .optional()
@@ -433,35 +453,6 @@ function getCachedTerminalImagePreview(
 }
 
 function GeneratedImageResult({ output }: { output: Output }): React.ReactNode {
-  const { columns } = useTerminalSize()
-  const previewWidth = Math.max(
-    16,
-    Math.min(TERMINAL_PREVIEW_WIDTH_COLUMNS, columns - 12),
-  )
-  const [preview, setPreview] = React.useState<
-    TerminalImagePreview | 'loading' | 'unsupported' | { error: string }
-  >('loading')
-
-  React.useEffect(() => {
-    let cancelled = false
-    setPreview('loading')
-    void getCachedTerminalImagePreview(output, previewWidth)
-      .then(renderedPreview => {
-        if (!cancelled) {
-          // null means the format isn't decodable (e.g. JPEG/WebP) — show
-          // the file link without a noisy error.
-          setPreview(renderedPreview ?? 'unsupported')
-        }
-      })
-      .catch(error => {
-        if (!cancelled) setPreview({ error: errorMessage(error) })
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [output.bytes, output.filePath, previewWidth])
-
   const displayPath = getDisplayPath(output.filePath)
   const details = `${output.model} · ${output.size} · ${output.outputFormat.toUpperCase()} · ${formatFileSize(output.bytes)}`
 
@@ -482,31 +473,6 @@ function GeneratedImageResult({ output }: { output: Output }): React.ReactNode {
         ),
       ),
       React.createElement(Text, { dimColor: true }, details),
-      preview === 'loading'
-        ? React.createElement(Text, { dimColor: true }, 'Rendering preview…')
-        : preview === 'unsupported'
-          ? null
-          : 'error' in preview
-            ? React.createElement(
-                Text,
-                { dimColor: true },
-                `Preview unavailable (${preview.error.slice(0, 120)}). Open the linked file to view the image.`,
-              )
-            : preview.kind === 'iterm2'
-              ? React.createElement(RawAnsi, {
-                  // Single chunk: terminal consumes the OSC sequence and draws
-                  // an image occupying `cellHeight` rows. We pad with blank
-                  // lines so Yoga reserves the right vertical space.
-                  lines: [
-                    preview.sequence,
-                    ...Array(Math.max(0, preview.cellHeight - 1)).fill(''),
-                  ],
-                  width: preview.width,
-                })
-              : React.createElement(RawAnsi, {
-                  lines: preview.lines,
-                  width: preview.width,
-                }),
     ),
   )
 }
@@ -630,6 +596,11 @@ function buildCodexImageGenerationBody(
         quality: input.quality ?? 'auto',
         moderation: input.moderation ?? 'auto',
         output_format: outputFormat,
+        action: input.action ?? (input.reference_image_path ? 'edit' : 'auto'),
+        ...(input.output_compression !== undefined
+          ? { output_compression: input.output_compression }
+          : {}),
+        ...(input.input_fidelity ? { input_fidelity: input.input_fidelity } : {}),
         ...(input.background ? { background: input.background } : {}),
       },
     ],
@@ -1062,6 +1033,14 @@ Prompt rewriting:
         result: false,
         message: 'Transparent backgrounds require png or webp output.',
         errorCode: 3,
+      }
+    }
+
+    if (input.output_compression !== undefined && outputFormat === 'png') {
+      return {
+        result: false,
+        message: 'output_compression is only supported for jpeg and webp output.',
+        errorCode: 8,
       }
     }
 

@@ -90,6 +90,15 @@ export type ImageWithDimensions = {
   dimensions?: ImageDimensions
 }
 
+export function shouldLogNativeClipboardFallbackError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return !(
+    (message.includes('Cannot find package') &&
+      message.includes('image-processor-napi')) ||
+    message.includes('native clipboard reader unavailable')
+  )
+}
+
 /**
  * Check if clipboard contains an image without retrieving it.
  */
@@ -111,7 +120,10 @@ export async function hasImageInClipboard(): Promise<boolean> {
         return hasImage()
       }
     } catch (e) {
-      logError(e as Error)
+      if (shouldLogNativeClipboardFallbackError(e)) {
+        logError(e as Error)
+      }
+      // Fall through to osascript fallback.
     }
   }
   const result = await execFileNoThrowWithCwd('osascript', [
@@ -178,7 +190,9 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
         },
       }
     } catch (e) {
-      logError(e as Error)
+      if (shouldLogNativeClipboardFallbackError(e)) {
+        logError(e as Error)
+      }
       // Fall through to osascript fallback.
     }
   }

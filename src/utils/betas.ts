@@ -160,9 +160,12 @@ export function modelSupportsStructuredOutputs(model: string): boolean {
 export function modelSupportsAutoMode(model: string): boolean {
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     const m = getCanonicalName(model)
-    // External: firstParty-only at launch (PI probes not wired for
-    // Bedrock/Vertex/Foundry yet). Checked before allowModels so the GB
-    // override can't enable auto mode on unsupported providers.
+    if (m.startsWith('gpt-')) {
+      return true
+    }
+    // External Claude classifier models: firstParty-only at launch (PI probes
+    // not wired for Bedrock/Vertex/Foundry yet). Checked before allowModels so
+    // the GB override can't enable auto mode on unsupported providers.
     if (process.env.USER_TYPE !== 'ant' && getAPIProvider() !== 'firstParty') {
       return false
     }

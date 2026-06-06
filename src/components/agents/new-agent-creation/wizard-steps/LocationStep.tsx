@@ -19,7 +19,7 @@ export function LocationStep() {
   let t0;
   if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
     t0 = {
-      label: "Project (.claude/agents/)",
+      label: "Project (.cat-code/agents/)",
       value: "projectSettings" as SettingSource
     };
     $[0] = t0;

@@ -13,6 +13,8 @@ import { TASK_UPDATE_TOOL_NAME } from '../../tools/TaskUpdateTool/constants.js'
 import { TODO_WRITE_TOOL_NAME } from '../../tools/TodoWriteTool/constants.js'
 import { getTools } from '../../tools.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
+import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
+import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
 import { resolveAgentTools } from './agentToolUtils.js'
 
 function getAsyncWorkerToolNames(): string[] {
@@ -78,5 +80,52 @@ describe('resolveAgentTools task-management availability for async workers', () 
 
     expect(deniedToolNames).not.toContain(AGENT_TOOL_NAME)
     expect(deniedToolNames).not.toContain(RESUME_AGENT_TOOL_NAME)
+  })
+})
+
+describe('resolveAgentTools built-in normal-mode agents', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  test('resolves implementor tools without recursive or orchestrator routing tools', () => {
+    const availableTools = getTools(getEmptyToolPermissionContext())
+    const resolved = resolveAgentTools(IMPLEMENTOR_AGENT, availableTools, true)
+    const toolNames = resolved.resolvedTools.map(tool => tool.name)
+
+    expect(toolNames).toContain('Bash')
+    expect(toolNames).toContain('Read')
+    expect(toolNames).toContain('Write')
+    expect(toolNames.some(name => name === 'Edit' || name === 'Apply_patch')).toBe(
+      true,
+    )
+    expect(toolNames).not.toContain('Agent')
+    expect(toolNames).not.toContain('ask_orchestrator')
+    expect(toolNames).not.toContain('SendMessage')
+    expect(toolNames).not.toContain('TeamCreate')
+    expect(toolNames).not.toContain('TeamDelete')
+    expect(toolNames).not.toContain('ListWorkers')
+    expect(toolNames).not.toContain('WaitWorkers')
+    expect(toolNames).not.toContain('GetWorkerResult')
+    expect(toolNames).not.toContain('CancelWorker')
+  })
+
+  test('resolves verification tools as read-only and caller-oriented', () => {
+    const availableTools = getTools(getEmptyToolPermissionContext())
+    const resolved = resolveAgentTools(VERIFICATION_AGENT, availableTools, true)
+    const toolNames = resolved.resolvedTools.map(tool => tool.name)
+
+    expect(toolNames).toContain('Bash')
+    expect(toolNames).toContain('Read')
+    expect(toolNames).not.toContain('Agent')
+    expect(toolNames).not.toContain('Edit')
+    expect(toolNames).not.toContain('Apply_patch')
+    expect(toolNames).not.toContain('Write')
+    expect(toolNames).not.toContain('NotebookEdit')
+    expect(toolNames).not.toContain('ask_orchestrator')
+    expect(toolNames).not.toContain('ListWorkers')
+    expect(toolNames).not.toContain('WaitWorkers')
+    expect(toolNames).not.toContain('GetWorkerResult')
+    expect(toolNames).not.toContain('CancelWorker')
   })
 })

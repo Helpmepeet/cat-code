@@ -589,6 +589,10 @@ export type Attachment =
       content: string
     }
   | {
+      type: 'auto_map_context'
+      content: string
+    }
+  | {
       type: 'plan_file_reference'
       planFilePath: string
       planContent: string

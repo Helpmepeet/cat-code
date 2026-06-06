@@ -42,7 +42,10 @@ import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
-import { resolveAgentTarget } from '../AgentTool/resolveAgentTarget.js'
+import {
+  formatContextSizeHint,
+  resolveAgentTarget,
+} from '../AgentTool/resolveAgentTarget.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -74,8 +77,8 @@ const inputSchema = lazySchema(() =>
       .string()
       .describe(
         feature('UDS_INBOX')
-          ? 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, teammate name or "*" when Agent Teams is enabled, "uds:<socket-path>" for a local peer, or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover)'
-          : 'Recipient: running subagent raw agent ID, running Agent Mode worker handle, or teammate name/"*" when Agent Teams is enabled',
+          ? 'Recipient (must be currently running): a running subagent by its friendly name/alias, worker handle, or raw agent ID; a teammate name or "*" when Agent Teams is enabled; "uds:<socket-path>" for a local peer; or "bridge:<session-id>" for a Remote Control peer (use ListPeers to discover). If the subagent has stopped, use ResumeAgent instead.'
+          : 'Recipient (must be currently running): a running subagent by its friendly name/alias, worker handle, or raw agent ID; or a teammate name/"*" when Agent Teams is enabled. If the subagent has stopped, use ResumeAgent instead.',
       ),
     summary: z
       .string()
@@ -880,7 +883,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           return {
             data: {
               success: false,
-              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.`,
+              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.${formatContextSizeHint(resolved.contextTokens)}`,
             },
           }
         }

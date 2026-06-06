@@ -3,6 +3,7 @@ import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import { findToolByName, type ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { all } from '../../utils/generators.js'
+import { createPtcloveToolStatusTracker } from './ptcloveToolStatus.js'
 import { type MessageUpdateLazy, runToolUse } from './toolExecution.js'
 
 function getMaxToolUseConcurrency(): number {
@@ -122,30 +123,36 @@ async function* runToolsSerially(
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdate, void> {
   let currentContext = toolUseContext
+  const ptcloveToolStatus = createPtcloveToolStatusTracker(toolUseContext)
 
   for (const toolUse of toolUseMessages) {
+    ptcloveToolStatus.start(toolUse)
     toolUseContext.setInProgressToolUseIDs(prev =>
       new Set(prev).add(toolUse.id),
     )
-    for await (const update of runToolUse(
-      toolUse,
-      assistantMessages.find(_ =>
-        _.message.content.some(
-          _ => _.type === 'tool_use' && _.id === toolUse.id,
-        ),
-      )!,
-      canUseTool,
-      currentContext,
-    )) {
-      if (update.contextModifier) {
-        currentContext = update.contextModifier.modifyContext(currentContext)
+    try {
+      for await (const update of runToolUse(
+        toolUse,
+        assistantMessages.find(_ =>
+          _.message.content.some(
+            _ => _.type === 'tool_use' && _.id === toolUse.id,
+          ),
+        )!,
+        canUseTool,
+        currentContext,
+      )) {
+        if (update.contextModifier) {
+          currentContext = update.contextModifier.modifyContext(currentContext)
+        }
+        yield {
+          message: update.message,
+          newContext: currentContext,
+        }
       }
-      yield {
-        message: update.message,
-        newContext: currentContext,
-      }
+    } finally {
+      ptcloveToolStatus.complete(toolUse.id)
+      markToolUseAsComplete(toolUseContext, toolUse.id)
     }
-    markToolUseAsComplete(toolUseContext, toolUse.id)
   }
 }
 
@@ -155,22 +162,28 @@ async function* runToolsConcurrently(
   canUseTool: CanUseToolFn,
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
+  const ptcloveToolStatus = createPtcloveToolStatusTracker(toolUseContext)
   yield* all(
     toolUseMessages.map(async function* (toolUse) {
+      ptcloveToolStatus.start(toolUse)
       toolUseContext.setInProgressToolUseIDs(prev =>
         new Set(prev).add(toolUse.id),
       )
-      yield* runToolUse(
-        toolUse,
-        assistantMessages.find(_ =>
-          _.message.content.some(
-            _ => _.type === 'tool_use' && _.id === toolUse.id,
-          ),
-        )!,
-        canUseTool,
-        toolUseContext,
-      )
-      markToolUseAsComplete(toolUseContext, toolUse.id)
+      try {
+        yield* runToolUse(
+          toolUse,
+          assistantMessages.find(_ =>
+            _.message.content.some(
+              _ => _.type === 'tool_use' && _.id === toolUse.id,
+            ),
+          )!,
+          canUseTool,
+          toolUseContext,
+        )
+      } finally {
+        ptcloveToolStatus.complete(toolUse.id)
+        markToolUseAsComplete(toolUseContext, toolUse.id)
+      }
     }),
     getMaxToolUseConcurrency(),
   )

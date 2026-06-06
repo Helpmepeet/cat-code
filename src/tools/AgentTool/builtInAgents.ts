@@ -5,6 +5,7 @@ import { isEnvTruthy } from '../../utils/envUtils.js'
 import { CLAUDE_CODE_GUIDE_AGENT } from './built-in/claudeCodeGuideAgent.js'
 import { EXPLORE_AGENT } from './built-in/exploreAgent.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
+import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
 import { PLAN_AGENT } from './built-in/planAgent.js'
 import { STATUSLINE_SETUP_AGENT } from './built-in/statuslineSetup.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
@@ -59,6 +60,8 @@ export function getBuiltInAgents(): AgentDefinition[] {
   const agents: AgentDefinition[] = [
     GENERAL_PURPOSE_AGENT,
     STATUSLINE_SETUP_AGENT,
+    IMPLEMENTOR_AGENT,
+    VERIFICATION_AGENT,
   ]
 
   if (areExplorePlanAgentsEnabled()) {
@@ -73,13 +76,6 @@ export function getBuiltInAgents(): AgentDefinition[] {
 
   if (isNonSdkEntrypoint) {
     agents.push(CLAUDE_CODE_GUIDE_AGENT)
-  }
-
-  if (
-    feature('VERIFICATION_AGENT') &&
-    getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)
-  ) {
-    agents.push(VERIFICATION_AGENT)
   }
 
   return agents

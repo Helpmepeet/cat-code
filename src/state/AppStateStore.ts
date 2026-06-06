@@ -85,6 +85,7 @@ export type FooterItem =
   | 'bagel'
   | 'teams'
   | 'bridge'
+  | 'ptclove'
   | 'companion'
 
 export type AppState = DeepImmutable<{
@@ -460,6 +461,20 @@ export type AppState = DeepImmutable<{
   isUltraplanMode?: boolean
   // Always-on bridge: permission callbacks for bidirectional permission checks
   replBridgePermissionCallbacks?: BridgePermissionCallbacks
+  // Local PTClove bridge: permission callbacks for the macOS notch surface.
+  // Races against local UI, Remote Control, channels, hooks, and classifiers.
+  ptcloveBridgePermissionCallbacks?: BridgePermissionCallbacks
+  // Local PTClove bridge: this session created its PTClove socket listener.
+  ptcloveBridgeAttemptedHello: boolean
+  // Local PTClove bridge: PTClove is connected and authenticated.
+  ptcloveBridgeConnected: boolean
+  // Local PTClove bridge: current in-flight tool for notch status.
+  ptcloveCurrentTool: {
+    name: string
+    summary: string
+    targetPath?: string
+    toolUseID: string
+  } | null
   // Channel permission callbacks — permission prompts over Telegram/iMessage/etc.
   // Races against local UI + bridge + hooks + classifier via claim() in
   // interactiveHandler.ts. Constructed once in useManageMCPConnections.
@@ -514,6 +529,9 @@ export function getDefaultAppState(): AppState {
     replBridgeError: undefined,
     replBridgeInitialName: undefined,
     showRemoteCallout: false,
+    ptcloveBridgeAttemptedHello: false,
+    ptcloveBridgeConnected: false,
+    ptcloveCurrentTool: null,
     toolPermissionContext: {
       ...getEmptyToolPermissionContext(),
       mode: initialMode,

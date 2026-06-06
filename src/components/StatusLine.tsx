@@ -22,6 +22,7 @@ import { calculateContextPercentages } from '../utils/context.js';
 import { getEffectiveContextWindowSize } from '../services/compact/autoCompact.js';
 import { getCwd } from '../utils/cwd.js';
 import { logForDebugging } from '../utils/debug.js';
+import { getDisplayedEffortLevel, type EffortValue } from '../utils/effort.js';
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js';
 import { createBaseHookInput, executeStatusLineCommand } from '../utils/hooks.js';
 import { getLastAssistantMessage } from '../utils/messages.js';
@@ -36,7 +37,7 @@ export function statusLineShouldDisplay(settings: ReadonlySettings): boolean {
   if (feature('KAIROS') && getKairosActive()) return false;
   return settings?.statusLine !== undefined;
 }
-function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200kTokens: boolean, settings: ReadonlySettings, messages: Message[], addedDirs: string[], mainLoopModel: ModelName, vimMode?: VimMode): StatusLineCommandInput {
+function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200kTokens: boolean, settings: ReadonlySettings, messages: Message[], addedDirs: string[], mainLoopModel: ModelName, vimMode?: VimMode, effortValue?: EffortValue): StatusLineCommandInput {
   const agentType = getMainThreadAgentType();
   const worktreeSession = getCurrentWorktreeSession();
   const runtimeModel = getRuntimeMainLoopModel({
@@ -74,6 +75,7 @@ function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200k
       id: runtimeModel,
       display_name: renderModelName(runtimeModel)
     },
+    effortLevel: getDisplayedEffortLevel(runtimeModel, effortValue),
     workspace: {
       current_dir: getCwd(),
       project_dir: getOriginalCwd(),
@@ -181,6 +183,7 @@ function StatusLineInner({
   const additionalWorkingDirectories = useAppState(s => s.toolPermissionContext.additionalWorkingDirectories);
   const statusLineText = useAppState(s => s.statusLineText);
   const statusLineRefreshKey = useAppState(s => s.statusLineRefreshKey);
+  const effortValue = useAppState(s => s.effortValue);
   const setAppState = useSetAppState();
   const settings = useSettings();
   const {
@@ -202,6 +205,8 @@ function StatusLineInner({
   addedDirsRef.current = additionalWorkingDirectories;
   const mainLoopModelRef = useRef(mainLoopModel);
   mainLoopModelRef.current = mainLoopModel;
+  const effortValueRef = useRef(effortValue);
+  effortValueRef.current = effortValue;
 
   // Track previous state to detect changes and cache expensive calculations
   const previousStateRef = useRef<{
@@ -211,13 +216,15 @@ function StatusLineInner({
     permissionMode: PermissionMode;
     vimMode: VimMode | undefined;
     mainLoopModel: ModelName;
+    effortValue: EffortValue | undefined;
   }>({
     messageId: null,
     latestUsageSignature: null,
     exceeds200kTokens: false,
     permissionMode,
     vimMode,
-    mainLoopModel
+    mainLoopModel,
+    effortValue
   });
 
   // Debounce timer ref
@@ -245,7 +252,7 @@ function StatusLineInner({
         previousStateRef.current.messageId = currentMessageId;
         previousStateRef.current.exceeds200kTokens = exceeds200kTokens;
       }
-      const statusInput = buildStatusLineCommandInput(permissionModeRef.current, exceeds200kTokens, settingsRef.current, msgs, Array.from(addedDirsRef.current.keys()), mainLoopModelRef.current, vimModeRef.current);
+      const statusInput = buildStatusLineCommandInput(permissionModeRef.current, exceeds200kTokens, settingsRef.current, msgs, Array.from(addedDirsRef.current.keys()), mainLoopModelRef.current, vimModeRef.current, effortValueRef.current);
       const text = await executeStatusLineCommand(statusInput, controller.signal, undefined, logResult);
       if (!controller.signal.aborted) {
         setAppState(prev => {
@@ -275,16 +282,17 @@ function StatusLineInner({
   // Trigger update when assistant identity changes, usage changes within the
   // same assistant response, or other status-line-relevant state changes.
   useEffect(() => {
-    if (lastAssistantMessageId !== previousStateRef.current.messageId || latestUsageSignature !== previousStateRef.current.latestUsageSignature || permissionMode !== previousStateRef.current.permissionMode || vimMode !== previousStateRef.current.vimMode || mainLoopModel !== previousStateRef.current.mainLoopModel) {
+    if (lastAssistantMessageId !== previousStateRef.current.messageId || latestUsageSignature !== previousStateRef.current.latestUsageSignature || permissionMode !== previousStateRef.current.permissionMode || vimMode !== previousStateRef.current.vimMode || mainLoopModel !== previousStateRef.current.mainLoopModel || effortValue !== previousStateRef.current.effortValue) {
       // Don't update messageId here — let doUpdate handle it so
       // exceeds200kTokens is recalculated with the latest messages
       previousStateRef.current.latestUsageSignature = latestUsageSignature;
       previousStateRef.current.permissionMode = permissionMode;
       previousStateRef.current.vimMode = vimMode;
       previousStateRef.current.mainLoopModel = mainLoopModel;
+      previousStateRef.current.effortValue = effortValue;
       scheduleUpdate();
     }
-  }, [lastAssistantMessageId, latestUsageSignature, permissionMode, vimMode, mainLoopModel, scheduleUpdate]);
+  }, [lastAssistantMessageId, latestUsageSignature, permissionMode, vimMode, mainLoopModel, effortValue, scheduleUpdate]);
 
   // Trigger update when external code bumps statusLineRefreshKey (e.g. /switch-account)
   useEffect(() => {

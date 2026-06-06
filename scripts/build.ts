@@ -79,7 +79,7 @@ function getVersionChangelog(): string {
   )
 }
 
-const defaultFeatures = ['VOICE_MODE']
+const defaultFeatures = ['TRANSCRIPT_CLASSIFIER', 'VOICE_MODE']
 const featureSet = new Set(defaultFeatures)
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i]

@@ -6,6 +6,7 @@ import { pathToFileURL } from 'url'
 import { color } from '../components/design-system/color.js'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
 import { logForDebugging } from './debug.js'
+import { getClaudeConfigHomeDir } from './envUtils.js'
 import { isENOENT } from './errors.js'
 import { execFileNoThrow } from './execFileNoThrow.js'
 import { logError } from './log.js'
@@ -24,7 +25,7 @@ type ShellInfo = {
 function detectShell(): ShellInfo | null {
   const shell = process.env.SHELL || ''
   const home = homedir()
-  const claudeDir = join(home, '.claude')
+  const claudeDir = getClaudeConfigHomeDir()
 
   if (shell.endsWith('/zsh') || shell.endsWith('/zsh.exe')) {
     const cacheFile = join(claudeDir, 'completion.zsh')
@@ -83,13 +84,13 @@ export async function setupShellCompletion(theme: ThemeName): Promise<string> {
     await mkdir(dirname(shell.cacheFile), { recursive: true })
   } catch (e: unknown) {
     logError(e)
-    return `${EOL}${color('warning', theme)(`Could not write ${shell.name} completion cache`)}${EOL}${chalk.dim(`Run manually: claude completion ${shell.shellFlag} > ${shell.cacheFile}`)}${EOL}`
+    return `${EOL}${color('warning', theme)(`Could not write ${shell.name} completion cache`)}${EOL}${chalk.dim(`Run manually: cat-code completion ${shell.shellFlag} > ${shell.cacheFile}`)}${EOL}`
   }
 
   // Generate the completion script by writing directly to the cache file.
   // Using --output avoids piping through stdout where process.exit() can
   // truncate output before the pipe buffer drains.
-  const claudeBin = process.argv[1] || 'claude'
+  const claudeBin = process.argv[1] || 'cat-code'
   const result = await execFileNoThrow(claudeBin, [
     'completion',
     shell.shellFlag,
@@ -97,7 +98,7 @@ export async function setupShellCompletion(theme: ThemeName): Promise<string> {
     shell.cacheFile,
   ])
   if (result.code !== 0) {
-    return `${EOL}${color('warning', theme)(`Could not generate ${shell.name} shell completions`)}${EOL}${chalk.dim(`Run manually: claude completion ${shell.shellFlag} > ${shell.cacheFile}`)}${EOL}`
+    return `${EOL}${color('warning', theme)(`Could not generate ${shell.name} shell completions`)}${EOL}${chalk.dim(`Run manually: cat-code completion ${shell.shellFlag} > ${shell.cacheFile}`)}${EOL}`
   }
 
   // Check if rc file already sources completions
@@ -105,6 +106,7 @@ export async function setupShellCompletion(theme: ThemeName): Promise<string> {
   try {
     existing = await readFile(shell.rcFile, { encoding: 'utf-8' })
     if (
+      existing.includes('cat-code completion') ||
       existing.includes('claude completion') ||
       existing.includes(shell.cacheFile)
     ) {
@@ -134,8 +136,8 @@ export async function setupShellCompletion(theme: ThemeName): Promise<string> {
 }
 
 /**
- * Regenerate cached shell completion scripts in ~/.claude/.
- * Called after `claude update` so completions stay in sync with the new binary.
+ * Regenerate cached shell completion scripts in ~/.cat-code/.
+ * Called after `cat-code update` so completions stay in sync with the new binary.
  */
 export async function regenerateCompletionCache(): Promise<void> {
   const shell = detectShell()
@@ -145,7 +147,7 @@ export async function regenerateCompletionCache(): Promise<void> {
 
   logForDebugging(`update: Regenerating ${shell.name} completion cache`)
 
-  const claudeBin = process.argv[1] || 'claude'
+  const claudeBin = process.argv[1] || 'cat-code'
   const result = await execFileNoThrow(claudeBin, [
     'completion',
     shell.shellFlag,

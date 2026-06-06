@@ -299,6 +299,7 @@ async function resumeAgentBackgroundLocked({
     description: uiDescription,
     prompt,
     selectedAgent,
+    agentName: meta?.agentName,
     setAppState: rootSetAppState,
     toolUseId: toolUseContext.toolUseId,
   })

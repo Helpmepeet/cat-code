@@ -236,21 +236,27 @@ export function convertToSandboxRuntimeConfig(
   denyWrite.push(getManagedSettingsDropInDir())
 
   // Also block settings files in the current working directory if it differs from original
-  // This handles the case where the user has cd'd to a different directory
+  // This handles the case where the user has cd'd to a different directory.
+  // Real config lives under .cat-code/; .claude paths are kept for legacy.
   const cwd = getCwdState()
   const originalCwd = getOriginalCwd()
   if (cwd !== originalCwd) {
+    denyWrite.push(resolve(cwd, '.cat-code', 'settings.json'))
+    denyWrite.push(resolve(cwd, '.cat-code', 'settings.local.json'))
     denyWrite.push(resolve(cwd, '.claude', 'settings.json'))
     denyWrite.push(resolve(cwd, '.claude', 'settings.local.json'))
   }
 
-  // Block writes to .claude/skills in both original and current working directories.
-  // The sandbox-runtime's getDangerousDirectories() protects .claude/commands and
-  // .claude/agents but not .claude/skills. Skills have the same privilege level
-  // (auto-discovered, auto-loaded, full Claude capabilities) so they need the
-  // same OS-level sandbox protection.
+  // Block writes to the skills directory in both original and current working
+  // directories. The sandbox-runtime's getDangerousDirectories() protects
+  // .claude/commands and .claude/agents but not skills. Skills have the same
+  // privilege level (auto-discovered, auto-loaded, full Claude capabilities) so
+  // they need the same OS-level sandbox protection. Real skills live under
+  // .cat-code/skills; .claude/skills is kept for legacy.
+  denyWrite.push(resolve(originalCwd, '.cat-code', 'skills'))
   denyWrite.push(resolve(originalCwd, '.claude', 'skills'))
   if (cwd !== originalCwd) {
+    denyWrite.push(resolve(cwd, '.cat-code', 'skills'))
     denyWrite.push(resolve(cwd, '.claude', 'skills'))
   }
 

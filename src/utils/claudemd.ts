@@ -2,8 +2,8 @@
  * Files are loaded in the following order:
  *
  * 1. Managed memory (eg. /etc/claude-code/CLAUDE.md) - Global instructions for all users
- * 2. User memory (~/.claude/CLAUDE.md) - Private global instructions for all projects
- * 3. Project memory (CLAUDE.md, .claude/CLAUDE.md, and .claude/rules/*.md in project roots) - Instructions checked into the codebase
+ * 2. User memory (~/.cat-code/CLAUDE.md) - Private global instructions for all projects
+ * 3. Project memory (CLAUDE.md, .cat-code/CLAUDE.md, and .cat-code/rules/*.md in project roots) - Instructions checked into the codebase
  * 4. Local memory (CLAUDE.local.md in project roots) - Private project-specific instructions
  *
  * Files are loaded in reverse order of priority, i.e. the latest files are highest priority
@@ -13,7 +13,7 @@
  * - User memory is loaded from the user's home directory
  * - Project and Local files are discovered by traversing from the current directory up to root
  * - Files closer to the current directory have higher priority (loaded later)
- * - CLAUDE.md, .claude/CLAUDE.md, and all .md files in .claude/rules/ are checked in each directory for Project memory
+ * - CLAUDE.md, .cat-code/CLAUDE.md, and all .md files in .cat-code/rules/ are checked in each directory for Project memory
  *
  * Memory @include directive:
  * - Memory files can include other files using @ notation
@@ -685,7 +685,7 @@ export async function processMemoryFile(
 }
 
 /**
- * Processes all .md files in the .claude/rules/ directory and its subdirectories
+ * Processes all .md files in the .cat-code/rules/ directory and its subdirectories
  * @param rulesDir The path to the rules directory
  * @param type Type of memory file (User, Project, Local)
  * @param processedPaths Set of already processed file paths
@@ -810,7 +810,7 @@ export const getMemoryFiles = memoize(
         includeExternal,
       )),
     )
-    // Process Managed .claude/rules/*.md files
+    // Process Managed .cat-code/rules/*.md files
     const managedClaudeRulesDir = getManagedClaudeRulesDir()
     result.push(
       ...(await processMdRules({
@@ -833,7 +833,7 @@ export const getMemoryFiles = memoize(
           true, // User memory can always include external files
         )),
       )
-      // Process User ~/.claude/rules/*.md files
+      // Process User ~/.cat-code/rules/*.md files
       const userClaudeRulesDir = getUserClaudeRulesDir()
       result.push(
         ...(await processMdRules({
@@ -857,9 +857,9 @@ export const getMemoryFiles = memoize(
     }
 
     // When running from a git worktree nested inside its main repo (e.g.,
-    // .claude/worktrees/<name>/ from `claude -w`), the upward walk passes
+    // .cat-code/worktrees/<name>/ from `claude -w`), the upward walk passes
     // through both the worktree root and the main repo root. Both contain
-    // checked-in files like CLAUDE.md and .claude/rules/*.md, so the same
+    // checked-in files like CLAUDE.md and .cat-code/rules/*.md, so the same
     // content gets loaded twice. Skip Project-type (checked-in) files from
     // directories above the worktree but within the main repo — the worktree
     // already has its own checkout. CLAUDE.local.md is gitignored so it only
@@ -895,7 +895,18 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/CLAUDE.md (Project)
+        // Try reading .cat-code/CLAUDE.md (Project)
+        const dotCatCodePath = join(dir, '.cat-code', 'CLAUDE.md')
+        result.push(
+          ...(await processMemoryFile(
+            dotCatCodePath,
+            'Project',
+            processedPaths,
+            includeExternal,
+          )),
+        )
+
+        // Try reading .claude/CLAUDE.md (Project) (fallback/legacy)
         const dotClaudePath = join(dir, '.claude', 'CLAUDE.md')
         result.push(
           ...(await processMemoryFile(
@@ -906,7 +917,19 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/rules/*.md files (Project)
+        // Try reading .cat-code/rules/*.md files (Project)
+        const catCodeRulesDir = join(dir, '.cat-code', 'rules')
+        result.push(
+          ...(await processMdRules({
+            rulesDir: catCodeRulesDir,
+            type: 'Project',
+            processedPaths,
+            includeExternal,
+            conditionalRule: false,
+          })),
+        )
+
+        // Try reading .claude/rules/*.md files (Project) (fallback/legacy)
         const rulesDir = join(dir, '.claude', 'rules')
         result.push(
           ...(await processMdRules({
@@ -951,7 +974,18 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/CLAUDE.md from the additional directory
+        // Try reading .cat-code/CLAUDE.md from the additional directory
+        const dotCatCodePath = join(dir, '.cat-code', 'CLAUDE.md')
+        result.push(
+          ...(await processMemoryFile(
+            dotCatCodePath,
+            'Project',
+            processedPaths,
+            includeExternal,
+          )),
+        )
+
+        // Try reading .claude/CLAUDE.md from the additional directory (fallback/legacy)
         const dotClaudePath = join(dir, '.claude', 'CLAUDE.md')
         result.push(
           ...(await processMemoryFile(
@@ -962,7 +996,19 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/rules/*.md files from the additional directory
+        // Try reading .cat-code/rules/*.md files from the additional directory
+        const catCodeRulesDir = join(dir, '.cat-code', 'rules')
+        result.push(
+          ...(await processMdRules({
+            rulesDir: catCodeRulesDir,
+            type: 'Project',
+            processedPaths,
+            includeExternal,
+            conditionalRule: false,
+          })),
+        )
+
+        // Try reading .claude/rules/*.md files from the additional directory (fallback/legacy)
         const rulesDir = join(dir, '.claude', 'rules')
         result.push(
           ...(await processMdRules({
@@ -1253,12 +1299,21 @@ export async function getMemoryFilesForNestedDirectory(
 ): Promise<MemoryFileInfo[]> {
   const result: MemoryFileInfo[] = []
 
-  // Process project memory files (CLAUDE.md and .claude/CLAUDE.md)
+  // Process project memory files (CLAUDE.md, .cat-code/CLAUDE.md, and .claude/CLAUDE.md)
   if (isSettingSourceEnabled('projectSettings')) {
     const projectPath = join(dir, 'CLAUDE.md')
     result.push(
       ...(await processMemoryFile(
         projectPath,
+        'Project',
+        processedPaths,
+        false,
+      )),
+    )
+    const dotCatCodePath = join(dir, '.cat-code', 'CLAUDE.md')
+    result.push(
+      ...(await processMemoryFile(
+        dotCatCodePath,
         'Project',
         processedPaths,
         false,
@@ -1283,11 +1338,21 @@ export async function getMemoryFilesForNestedDirectory(
     )
   }
 
+  const catCodeRulesDir = join(dir, '.cat-code', 'rules')
   const rulesDir = join(dir, '.claude', 'rules')
 
-  // Process project unconditional .claude/rules/*.md files, which were not eagerly loaded
+  // Process project unconditional .cat-code/rules/*.md and .claude/rules/*.md files, which were not eagerly loaded
   // Use a separate processedPaths set to avoid marking conditional rule files as processed
   const unconditionalProcessedPaths = new Set(processedPaths)
+  result.push(
+    ...(await processMdRules({
+      rulesDir: catCodeRulesDir,
+      type: 'Project',
+      processedPaths: unconditionalProcessedPaths,
+      includeExternal: false,
+      conditionalRule: false,
+    })),
+  )
   result.push(
     ...(await processMdRules({
       rulesDir,
@@ -1298,7 +1363,16 @@ export async function getMemoryFilesForNestedDirectory(
     })),
   )
 
-  // Process project conditional .claude/rules/*.md files
+  // Process project conditional .cat-code/rules/*.md and .claude/rules/*.md files
+  result.push(
+    ...(await processConditionedMdRules(
+      targetPath,
+      catCodeRulesDir,
+      'Project',
+      processedPaths,
+      false,
+    )),
+  )
   result.push(
     ...(await processConditionedMdRules(
       targetPath,
@@ -1331,18 +1405,29 @@ export async function getConditionalRulesForCwdLevelDirectory(
   targetPath: string,
   processedPaths: Set<string>,
 ): Promise<MemoryFileInfo[]> {
+  const catCodeRulesDir = join(dir, '.cat-code', 'rules')
   const rulesDir = join(dir, '.claude', 'rules')
-  return processConditionedMdRules(
-    targetPath,
-    rulesDir,
-    'Project',
-    processedPaths,
-    false,
-  )
+  const results = await Promise.all([
+    processConditionedMdRules(
+      targetPath,
+      catCodeRulesDir,
+      'Project',
+      processedPaths,
+      false,
+    ),
+    processConditionedMdRules(
+      targetPath,
+      rulesDir,
+      'Project',
+      processedPaths,
+      false,
+    ),
+  ])
+  return results.flat()
 }
 
 /**
- * Processes all .md files in the .claude/rules/ directory and its subdirectories,
+ * Processes all .md files in the .cat-code/rules/ directory and its subdirectories,
  * filtering to only include files with frontmatter paths that match the target path
  * @param targetPath The file path to match against frontmatter glob patterns
  * @param rulesDir The path to the rules directory
@@ -1372,11 +1457,11 @@ export async function processConditionedMdRules(
       return false
     }
 
-    // For Project rules: glob patterns are relative to the directory containing .claude
+    // For Project rules: glob patterns are relative to the directory containing .cat-code or .claude
     // For Managed/User rules: glob patterns are relative to the original CWD
     const baseDir =
       type === 'Project'
-        ? dirname(dirname(rulesDir)) // Parent of .claude
+        ? dirname(dirname(rulesDir)) // Parent of .cat-code or .claude
         : getOriginalCwd() // Project root for managed/user rules
 
     const relativePath = isAbsolute(targetPath)
@@ -1430,7 +1515,7 @@ export async function shouldShowClaudeMdExternalIncludesWarning(): Promise<boole
 }
 
 /**
- * Check if a file path is a memory file (CLAUDE.md, CLAUDE.local.md, or .claude/rules/*.md)
+ * Check if a file path is a memory file (CLAUDE.md, CLAUDE.local.md, .cat-code/rules/*.md, or .claude/rules/*.md)
  */
 export function isMemoryFilePath(filePath: string): boolean {
   const name = basename(filePath)
@@ -1440,10 +1525,11 @@ export function isMemoryFilePath(filePath: string): boolean {
     return true
   }
 
-  // .md files in .claude/rules/ directories
+  // .md files in .cat-code/rules/ or .claude/rules/ directories
   if (
     name.endsWith('.md') &&
-    filePath.includes(`${sep}.claude${sep}rules${sep}`)
+    (filePath.includes(`${sep}.cat-code${sep}rules${sep}`) ||
+      filePath.includes(`${sep}.claude${sep}rules${sep}`))
   ) {
     return true
   }

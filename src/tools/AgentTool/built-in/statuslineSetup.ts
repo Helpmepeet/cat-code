@@ -30,7 +30,7 @@ EXECUTION CONTRACT:
 6. If no PS1 is found and the user did not provide other instructions, ask for further instructions.
 
 INPUT CONTRACT:
-The statusLine command receives JSON via stdin with session, workspace, model, context window, rate limit, vim, agent, and worktree details.
+The statusLine command receives JSON via stdin with session, workspace, model, effortLevel, context window, rate limit, vim, agent, and worktree details.
 - You can read values inline, for example: $(cat | jq -r '.model.display_name')
 - Or store the JSON in a variable first and read multiple fields from it.
 
@@ -95,6 +95,7 @@ How to use the statusLine command:
        "id": "string",           // Model ID (e.g., "claude-3-5-sonnet-20241022")
        "display_name": "string"  // Display name (e.g., "Claude 3.5 Sonnet")
      },
+     "effortLevel": "low" | "medium" | "high" | "max", // Current resolved effort level
      "workspace": {
        "current_dir": "string",  // Current working directory path
        "project_dir": "string",  // Project root directory path
@@ -145,6 +146,7 @@ How to use the statusLine command:
    
    You can use this JSON data in your command like:
    - $(cat | jq -r '.model.display_name')
+   - $(cat | jq -r '.effortLevel')
    - $(cat | jq -r '.workspace.current_dir')
    - $(cat | jq -r '.output_style.name')
 

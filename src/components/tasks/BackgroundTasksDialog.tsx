@@ -121,8 +121,12 @@ const MonitorMcpDetailDialog = feature('MONITOR_TOOL') ? (require('./MonitorMcpD
 
 // Helper to get filtered background tasks (excludes foregrounded local_agent)
 function getSelectableBackgroundTasks(tasks: Record<string, TaskState> | undefined, foregroundedTaskId: string | undefined): TaskState[] {
-  const backgroundTasks = Object.values(tasks ?? {}).filter(isBackgroundTask);
+  const backgroundTasks = Object.values(tasks ?? {}).filter(isVisibleBackgroundTask);
   return backgroundTasks.filter(task => !(task.type === 'local_agent' && task.id === foregroundedTaskId));
+}
+function isVisibleBackgroundTask(task: TaskState): boolean {
+  if (isBackgroundTask(task)) return true;
+  return task.type === 'local_agent' && task.isBackgrounded && task.status !== 'running';
 }
 export function BackgroundTasksDialog({
   onDone,
@@ -178,8 +182,8 @@ export function BackgroundTasksDialog({
     dreamTasks: dreamTasks_0,
     allSelectableItems
   } = useMemo(() => {
-    // Filter to only show running/pending background tasks, matching the status bar count
-    const backgroundTasks = Object.values(typedTasks ?? {}).filter(isBackgroundTask);
+	    // Keep terminal local agents visible so blocked/completed handoffs can be opened.
+	    const backgroundTasks = Object.values(typedTasks ?? {}).filter(isVisibleBackgroundTask);
     const allItems_0 = backgroundTasks.map(toListItem);
     const sorted = allItems_0.sort((a, b) => {
       const aStatus = a.status;
@@ -327,7 +331,7 @@ export function BackgroundTasksDialog({
       const task = (typedTasks ?? {})[viewState.itemId];
       // Workflow tasks get a grace: their detail view stays open through
       // completion so the user sees the final state before eviction.
-      if (!task || task.type !== 'local_workflow' && !isBackgroundTask(task)) {
+	      if (!task || task.type !== 'local_workflow' && !isVisibleBackgroundTask(task)) {
         // Task was removed or is no longer a background task (e.g. killed).
         // If we skipped the list on mount, close the dialog entirely.
         if (skippedListOnMount.current) {

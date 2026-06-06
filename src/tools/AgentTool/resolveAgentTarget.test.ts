@@ -17,6 +17,7 @@ import {
 import { createAgentId } from '../../utils/uuid.js'
 import {
   displayNameForAgent,
+  formatContextSizeHint,
   resolveAgentTarget,
 } from './resolveAgentTarget.js'
 
@@ -303,6 +304,7 @@ describe('resolveAgentTarget', () => {
       agentId: 'agent-prior',
       sourceSessionId: priorSessionId,
       displayName: 'Prior metadata worker',
+      contextTokens: expect.any(Number),
     })
   })
 
@@ -491,5 +493,33 @@ describe('resolveAgentTarget', () => {
         appState: appState(),
       }),
     ).resolves.toBe('agent-123456...')
+  })
+})
+
+describe('formatContextSizeHint', () => {
+  test('returns empty string when size is unknown', () => {
+    expect(formatContextSizeHint(undefined)).toBe('')
+  })
+
+  test('returns empty string for zero or negative', () => {
+    expect(formatContextSizeHint(0)).toBe('')
+    expect(formatContextSizeHint(-5)).toBe('')
+  })
+
+  test('suppresses the hint below the 1k floor (avoids "~2 tokens" noise)', () => {
+    expect(formatContextSizeHint(2)).toBe('')
+    expect(formatContextSizeHint(999)).toBe('')
+  })
+
+  test('renders a rounded k-token hint at and above the floor', () => {
+    expect(formatContextSizeHint(1000)).toContain('~1k tokens')
+    expect(formatContextSizeHint(1500)).toContain('~2k tokens')
+    expect(formatContextSizeHint(148_000)).toContain('~148k tokens')
+  })
+
+  test('the hint is a leading-space trailing clause callers can append unconditionally', () => {
+    const hint = formatContextSizeHint(150_000)
+    expect(hint.startsWith(' ')).toBe(true)
+    expect(hint).toContain('a fresh agent may be cheaper than resuming')
   })
 })

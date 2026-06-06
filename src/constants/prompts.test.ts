@@ -107,3 +107,13 @@ describe('Agent Mode static delegation guidance', () => {
     expect(gptPromptSource).toContain('If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.')
   })
 })
+
+describe('Normal mode static delegation guidance', () => {
+  test('suggests implementor and verification without Agent Mode worker doctrine', () => {
+    expect(promptsSource).toContain('available-agent list includes implementor or verification')
+    expect(gptPromptSource).toContain('available-agent list includes implementor or verification')
+    expect(promptsSource).not.toContain(
+      'In normal mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files',
+    )
+  })
+})

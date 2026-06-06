@@ -8,6 +8,7 @@ import { join } from 'path'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
 import { readSessionState } from '../../agent-mode/sessionState.js'
 import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js'
+import { getBuiltInAgents } from './builtInAgents.js'
 import {
   AgentTool,
   buildAgentSessionStateTracking,
@@ -17,12 +18,60 @@ import {
 } from './AgentTool.js'
 
 const originalRandom = Math.random
+const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
+const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
+const originalSdkDisableBuiltins =
+  process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
 
 afterEach(() => {
   Math.random = originalRandom
   releaseWorkerName('Ada')
   releaseWorkerName('Katherine')
+  if (originalAgentMode === undefined) {
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+  } else {
+    process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
+  }
+  if (originalCoordinatorMode === undefined) {
+    delete process.env.CLAUDE_CODE_COORDINATOR_MODE
+  } else {
+    process.env.CLAUDE_CODE_COORDINATOR_MODE = originalCoordinatorMode
+  }
+  if (originalSdkDisableBuiltins === undefined) {
+    delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
+  } else {
+    process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS =
+      originalSdkDisableBuiltins
+  }
   resetStateForTests()
+})
+
+describe('getBuiltInAgents in normal mode', () => {
+  test('registers normal implementor and verification agents without Agent Mode gates', () => {
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+    delete process.env.CLAUDE_CODE_COORDINATOR_MODE
+    delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
+
+    const agentTypes = getBuiltInAgents().map(agent => agent.agentType)
+
+    expect(agentTypes).toContain('implementor')
+    expect(agentTypes).toContain('verification')
+    expect(agentTypes).not.toContain('agent-mode-coding-worker')
+    expect(agentTypes).not.toContain('agent-mode-verifier')
+  })
+
+  test('keeps Agent Mode worker roles separate from normal-mode roles', () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    delete process.env.CLAUDE_CODE_COORDINATOR_MODE
+    delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
+
+    const agentTypes = getBuiltInAgents().map(agent => agent.agentType)
+
+    expect(agentTypes).toContain('agent-mode-coding-worker')
+    expect(agentTypes).toContain('agent-mode-verifier')
+    expect(agentTypes).not.toContain('implementor')
+    expect(agentTypes).not.toContain('verification')
+  })
 })
 
 describe('resolveSystemSubagentName', () => {

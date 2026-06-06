@@ -798,6 +798,10 @@ export function renderGroupedAgentToolUse(toolUses: Array<{
     } | undefined)?.status;
     const backgroundedMidExecution = outputStatus === 'async_launched' || outputStatus === 'remote_launched';
     const isAsync = launchedAsAsync || backgroundedMidExecution || isTeammateSpawn;
+    // `name` is passed separately (not folded into agentType) for the
+    // non-teammate branch above. AgentProgressLine renders it as a "@name · "
+    // prefix; don't drop it here assuming it's unused — see the contract note
+    // in src/components/AgentProgressLine.tsx.
     const name = parsedInput.success ? parsedInput.data.name : undefined;
     return {
       id: param.id,

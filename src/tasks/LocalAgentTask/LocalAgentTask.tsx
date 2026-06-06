@@ -22,7 +22,7 @@ import { getAgentTranscriptPath } from '../../utils/sessionStorage.js';
 import { evictTaskOutput, getTaskOutputPath, initTaskOutputAsSymlink } from '../../utils/task/diskOutput.js';
 import { PANEL_GRACE_MS, registerTask, updateTaskState } from '../../utils/task/framework.js';
 import { emitTaskProgress } from '../../utils/task/sdkProgress.js';
-import { getFreshInputTokens } from '../../utils/tokens.js';
+import { getFreshInputTokens, getTokenCountFromUsage } from '../../utils/tokens.js';
 import { logForDebugging } from '../../utils/debug.js';
 import { createSystemMessage } from '../../utils/messages.js';
 import type { TaskState } from '../types.js';
@@ -39,10 +39,14 @@ export type ToolActivity = {
 export type AgentProgress = {
   toolUseCount: number;
   tokenCount: number;
+  // Full context-window size of the latest API response (input + cache + output).
+  // The true size replayed on resume, distinct from the display-oriented tokenCount.
+  contextTokenCount?: number;
   lastActivity?: ToolActivity;
   recentActivities?: ToolActivity[];
   summary?: string;
 };
+export type VerificationVerdict = 'PASS' | 'FAIL' | 'PARTIAL';
 const MAX_RECENT_ACTIVITIES = 5;
 export type ProgressTracker = {
   toolUseCount: number;
@@ -51,6 +55,10 @@ export type ProgressTracker = {
   // so we keep the latest value. output_tokens is per-turn, so we sum those.
   latestInputTokens: number;
   cumulativeOutputTokens: number;
+  // Full context-window size of the latest API response (input + cache + output).
+  // Unlike the display counter above, this is the true size that would be replayed
+  // on resume, so resume-vs-spawn decisions can read it. See getProgressUpdate.
+  latestContextTokens: number;
   recentActivities: ToolActivity[];
 };
 export function createProgressTracker(): ProgressTracker {
@@ -58,6 +66,7 @@ export function createProgressTracker(): ProgressTracker {
     toolUseCount: 0,
     latestInputTokens: 0,
     cumulativeOutputTokens: 0,
+    latestContextTokens: 0,
     recentActivities: []
   };
 }
@@ -93,6 +102,9 @@ export function updateProgressFromMessage(tracker: ProgressTracker, message: Mes
   // masquerade as newly-consumed tokens in progress UI.
   tracker.latestInputTokens = getFreshInputTokens(usage);
   tracker.cumulativeOutputTokens += usage.output_tokens;
+  // Full context size of this response (includes cache_read), kept separately
+  // from the display counter so resume-vs-spawn can read the real replay size.
+  tracker.latestContextTokens = getTokenCountFromUsage(usage);
   for (const content of message.message.content) {
     if (content.type === 'tool_use') {
       tracker.toolUseCount++;
@@ -118,6 +130,7 @@ export function getProgressUpdate(tracker: ProgressTracker): AgentProgress {
   return {
     toolUseCount: tracker.toolUseCount,
     tokenCount: getTokenCountFromTracker(tracker),
+    contextTokenCount: tracker.latestContextTokens > 0 ? tracker.latestContextTokens : undefined,
     lastActivity: tracker.recentActivities.length > 0 ? tracker.recentActivities[tracker.recentActivities.length - 1] : undefined,
     recentActivities: [...tracker.recentActivities]
   };
@@ -136,6 +149,7 @@ export function createActivityDescriptionResolver(tools: Tools): ActivityDescrip
 export type LocalAgentTaskState = TaskStateBase & {
   type: 'local_agent';
   agentId: string;
+  agentName?: string;
   prompt: string;
   selectedAgent?: AgentDefinition;
   agentType: string;
@@ -167,6 +181,9 @@ export type LocalAgentTaskState = TaskStateBase & {
   evictAfter?: number;
   // Last time this task was resumed after reaching a terminal state.
   resumedAt?: number;
+  handoffStatus?: 'done' | 'blocked';
+  blockReason?: string;
+  verdict?: VerificationVerdict;
 };
 export function isLocalAgentTask(task: unknown): task is LocalAgentTaskState {
   return typeof task === 'object' && task !== null && 'type' in task && task.type === 'local_agent';
@@ -446,22 +463,58 @@ export function updateAgentSummary(taskId: string, summary: string, setAppState:
   }
 }
 
+function getResultText(result: AgentToolResult): string {
+  return result.content.map(block => block.text).join('\n');
+}
+
+function extractHandoffStatus(text: string): 'done' | 'blocked' | undefined {
+  const match = text.match(/^\s*(?:\*\*)?status\s*:\s*(?:\*\*)?\s*(done|blocked)\b/im);
+  return match?.[1]?.toLowerCase() as 'done' | 'blocked' | undefined;
+}
+
+function extractBlockReason(text: string): string | undefined {
+  const blockerMatch = text.match(/open questions \/ blockers:\s*\n\s*(?:[-*]\s*)?([^\n]+)/i);
+  const blocker = blockerMatch?.[1]?.trim();
+  if (blocker) return blocker;
+  return text.split('\n').map(line => line.trim()).find(line => line.length > 0);
+}
+
+function extractVerificationVerdict(text: string): VerificationVerdict | undefined {
+  const match = text.match(/^\s*VERDICT:\s*(PASS|FAIL|PARTIAL)\b/im);
+  return match?.[1] as VerificationVerdict | undefined;
+}
+
+function getResultMetadata(result: AgentToolResult): Pick<LocalAgentTaskState, 'handoffStatus' | 'blockReason' | 'verdict'> {
+  const text = getResultText(result);
+  const handoffStatus = extractHandoffStatus(text);
+  const verdict = extractVerificationVerdict(text);
+  return {
+    ...(handoffStatus ? { handoffStatus } : {}),
+    ...(handoffStatus === 'blocked' ? { blockReason: extractBlockReason(text) } : {}),
+    ...(verdict ? { verdict } : {})
+  };
+}
+
 /**
  * Complete an agent task with result.
  */
 export function completeAgentTask(result: AgentToolResult, setAppState: SetAppState): void {
   const taskId = result.agentId;
+  const resultMetadata = getResultMetadata(result);
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running') {
       return task;
     }
     task.unregisterCleanup?.();
+    const isBlocked = resultMetadata.handoffStatus === 'blocked';
     return {
       ...task,
       status: 'completed',
+      agentName: result.agentName ?? task.agentName,
       result,
+      ...resultMetadata,
       endTime: Date.now(),
-      evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
+      evictAfter: task.retain || isBlocked ? undefined : Date.now() + PANEL_GRACE_MS,
       abortController: undefined,
       unregisterCleanup: undefined,
       selectedAgent: undefined
@@ -512,6 +565,7 @@ export function registerAsyncAgent({
   description,
   prompt,
   selectedAgent,
+  agentName,
   setAppState,
   parentAbortController,
   toolUseId
@@ -520,6 +574,7 @@ export function registerAsyncAgent({
   description: string;
   prompt: string;
   selectedAgent: AgentDefinition;
+  agentName?: string;
   setAppState: SetAppState;
   parentAbortController?: AbortController;
   toolUseId?: string;
@@ -533,6 +588,7 @@ export function registerAsyncAgent({
     type: 'local_agent',
     status: 'running',
     agentId,
+    ...(agentName ? { agentName } : {}),
     prompt,
     selectedAgent,
     agentType: selectedAgent.agentType ?? 'general-purpose',
@@ -572,6 +628,7 @@ export function registerAgentForeground({
   description,
   prompt,
   selectedAgent,
+  agentName,
   setAppState,
   autoBackgroundMs,
   toolUseId
@@ -580,6 +637,7 @@ export function registerAgentForeground({
   description: string;
   prompt: string;
   selectedAgent: AgentDefinition;
+  agentName?: string;
   setAppState: SetAppState;
   autoBackgroundMs?: number;
   toolUseId?: string;
@@ -598,6 +656,7 @@ export function registerAgentForeground({
     type: 'local_agent',
     status: 'running',
     agentId,
+    ...(agentName ? { agentName } : {}),
     prompt,
     selectedAgent,
     agentType: selectedAgent.agentType ?? 'general-purpose',

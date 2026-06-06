@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-05-12.
+Last refreshed: 2026-06-06.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -52,7 +52,8 @@ Then inspect:
 - `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, partial-result extraction, and terminal Agent Mode worker records.
 - `src/tools/AgentTool/runAgent.ts` for sidechain transcript writes, agent-specific MCP/hook/skill setup, subagent context isolation, and cleanup of agent-scoped shell/monitor tasks when an agent exits.
 - `src/tools/AgentTool/resumeAgent.ts` for resuming a retained/completed local agent in the background from its transcript and metadata.
-- `src/tasks/LocalAgentTask/LocalAgentTask.tsx` for task state fields: progress, `pendingMessages`, `retain`, `diskLoaded`, and `evictAfter`.
+- `src/tasks/LocalAgentTask/LocalAgentTask.tsx` for task state fields: progress, `pendingMessages`, `retain`, `diskLoaded`, `evictAfter`, blocked handoff metadata, and verification verdict extraction.
+- `src/tasks/pillLabel.ts` for the canonical compact label/icon rules that blocked handoffs and verification agents share with the footer pill and transcript status lines.
 
 ## Shell Task Routing
 
@@ -95,14 +96,14 @@ Remote reviews and ultraplan are specialized `remote_agent` states, not separate
 | UI concern | Owner | Notes |
 |---|---|---|
 | Footer/status pill | `src/components/tasks/BackgroundTaskStatus.tsx` | Filters with `isBackgroundTask()`, excludes panel-managed local agents in ant builds, special-cases teammate spinner tree and viewed-agent mode. |
-| One-line task rendering | `src/components/tasks/BackgroundTask.tsx` | Switches by task type; delegates shell/remote progress to `ShellProgress` and `RemoteSessionProgress`. |
+| One-line task rendering | `src/components/tasks/BackgroundTask.tsx` | Switches by task type; delegates shell/remote progress to `ShellProgress` and `RemoteSessionProgress`, and colors local-agent rows from blocked-handoff / verification verdict state. |
 | Task dialog/list | `src/components/tasks/BackgroundTasksDialog.tsx` | Sorts running first, newest first; groups teammate/leader, shell, monitor, remote, local agent, workflow, dream. `x` stops, `f` foregrounds teammates/leader, Enter opens detail. |
 | Shell details | `src/components/tasks/ShellDetailDialog.tsx` | Reads output tail from `getTaskOutputPath()` and refreshes while running. |
-| Local agent details | `src/components/tasks/AsyncAgentDetailDialog.tsx` | Shows prompt/plan, progress activity, status, and `x` stop. |
+| Local agent details | `src/components/tasks/AsyncAgentDetailDialog.tsx` | Shows prompt/plan, progress activity, blocked-handoff reason or verification verdict, status, and `x` stop. |
 | Teammate details | `src/components/tasks/InProcessTeammateDetailDialog.tsx` | Shows teammate identity/activity, prompt, progress, `x` stop, and `f` foreground. |
 | Remote details | `src/components/tasks/RemoteSessionDetailDialog.tsx` | Normal remote, remote-review, and ultraplan detail variants; supports browser open and confirmed stop for web sessions. |
 | Dream details | `src/components/tasks/DreamDetailDialog.tsx` | UI-only memory consolidation status and recent turns. |
-| Shared status helpers | `src/components/tasks/taskStatusUtils.tsx` | Icons/colors/activity descriptions and footer hide predicate. |
+| Shared status helpers | `src/components/tasks/taskStatusUtils.tsx` | Icons/colors/activity descriptions and footer hide predicate; shared by notifications and task rows when local agents need input or report verification verdicts. |
 
 REPL wiring lives in `src/screens/REPL.tsx`:
 
