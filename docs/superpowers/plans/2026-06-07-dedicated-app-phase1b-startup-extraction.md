@@ -179,7 +179,7 @@ import type { Command } from '../commands.js'
 import type { MCPServerConnection } from '../services/mcp/types.js'
 import type { AppState } from '../state/AppStateStore.js'
 import type { Tool } from '../Tool.js'
-import type { SDKStatus } from '../types/sdk.js'
+import type { SDKStatus } from '../entrypoints/agentSdkTypes.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { FileStateCache } from '../utils/fileStateCache.js'
 import type { ThinkingConfig } from '../utils/thinking.js'
@@ -549,11 +549,19 @@ function baseConfig(): QueryEngineAppSessionConfig {
 }
 
 describe('startRuntimeBackedWebMode', () => {
-  test('starts the app-session server before waiting forever', async () => {
+  test('starts the app-session server before waiting forever and cleans up after release', async () => {
     const calls: string[] = []
     let serverController: AppSessionController | undefined
+    let markWaitStarted: (() => void) | undefined
+    let releaseWait: (() => void) | undefined
+    const waitStarted = new Promise<void>(resolve => {
+      markWaitStarted = resolve
+    })
+    const waitReleased = new Promise<void>(resolve => {
+      releaseWait = resolve
+    })
 
-    await startRuntimeBackedWebMode({
+    const routePromise = startRuntimeBackedWebMode({
       queryEngineConfig: baseConfig(),
       webDir: '/repo/web',
       token: 'token-1',
@@ -587,13 +595,26 @@ describe('startRuntimeBackedWebMode', () => {
       },
       waitForever: async () => {
         calls.push('wait')
+        markWaitStarted?.()
+        await waitReleased
       },
       log: () => {},
       writeError: () => {},
     })
 
+    await waitStarted
     expect(serverController).toBeDefined()
     expect(calls).toEqual(['server', 'launcher:token-1:5173', 'wait'])
+
+    releaseWait?.()
+    await routePromise
+    expect(calls).toEqual([
+      'server',
+      'launcher:token-1:5173',
+      'wait',
+      'launcher.stop',
+      'server.stop',
+    ])
   })
 
   test('stops started resources when waiting rejects', async () => {
