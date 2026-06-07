@@ -16,6 +16,7 @@
 - The current `--web` branch imports `src/web/WebSocketServer.ts`, starts the legacy relay server, spawns `bun run dev` in `web/`, opens the Vite URL after parsing Vite output, prints that browser input is disabled, waits forever, and returns.
 - Normal setup, command loading, agent loading, MCP config/resource assembly, AppState construction, and REPL session config construction all happen later in `src/main.tsx` and are skipped by the current `--web` branch.
 - `src/main.tsx` currently assembles a REPL `sessionConfig` object with `commands`, `initialTools`, `mcpClients`, system prompt fields, and `thinkingConfig`; it does not assemble a standalone `QueryEngineAppSessionConfig` for browser app sessions.
+- Interactive startup currently starts MCP connection work before the REPL via `prefetchAllMcpResources(...)` in `src/main.tsx`, backed by `getMcpToolsCommandsAndResources(...)` in `src/services/mcp/client.ts`; terminal mode can render before those promises settle because `src/services/mcp/useManageMCPConnections.ts` and `src/screens/REPL.tsx` later read fresh `appState.mcp` values. The `--web` path has no mounted REPL hook, so it must await and populate that same startup MCP connection result before creating the runtime-backed app-session config.
 - `src/QueryEngine.ts` defines base `QueryEngineConfig` with required `cwd`, `tools`, `commands`, `mcpClients`, `agents`, `canUseTool`, `getAppState`, `setAppState`, and `readFileCache`, plus model, thinking, budget, prompt, partial-message, SDK-status, and abort-related fields. `src/app-runtime/createQueryEngineAppSession.ts` exposes `QueryEngineAppSessionConfig`, where `canUseTool` is optional because app runtime wraps it with `createAppRuntimeCanUseTool(...)`.
 - `src/app-runtime/createRuntimeBackedWebAppSession.ts` already forces `includePartialMessages: true` when it wraps `createQueryEngineAppSession(...)`.
 - `src/web/AppSessionWebSocketServer.ts` is the runtime-backed browser transport and already binds to `127.0.0.1`, requires a `cat-code.<token>` subprotocol, checks origin and host, sends `app.ready`, forwards submits/aborts, replays pending permissions on ready, and rejects stale permission response ids with `permission_not_found`.
@@ -58,12 +59,14 @@ cd /Users/pt/cat-code && sed -n '130,180p' src/QueryEngine.ts
 
 - Create `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts` — pure adapter from normal interactive startup outputs to `QueryEngineAppSessionConfig`.
 - Create `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts` — focused unit tests proving the adapter preserves startup-owned configuration fields.
+- Modify `/Users/pt/cat-code/src/services/mcp/client.ts` — keep `prefetchAllMcpResources(...)` as the shared startup MCP connection path and return the fetched per-server resource map along with clients/tools/commands.
 - Create `/Users/pt/cat-code/src/web/launchWebAppDevServer.ts` — Vite launcher that binds the browser app to `127.0.0.1`, injects the WebSocket token through environment, opens the browser URL without putting the token in the URL, and shuts down the child process.
 - Create `/Users/pt/cat-code/src/web/launchWebAppDevServer.test.ts` — focused unit tests for spawn arguments, environment, browser URL, and cleanup behavior.
 - Create `/Users/pt/cat-code/src/web/startRuntimeBackedWebMode.ts` — runtime-backed `--web` bootstrap helper that creates the app-session controller, starts `startAppSessionWebSocketServer(...)`, launches Vite, and waits until process shutdown.
 - Create `/Users/pt/cat-code/src/web/startRuntimeBackedWebMode.test.ts` — tests that the server starts before the wait point and the browser launcher is stopped when bootstrap fails or shutdown begins.
 - Modify `/Users/pt/cat-code/src/main.tsx` — move the `--web` branch to after normal setup/AppState/QueryEngine config assembly, call the runtime-backed helper, and skip `launchRepl(...)` only after the runtime-backed server is ready.
-- Optionally modify `/Users/pt/cat-code/src/web/appSessionProtocol.ts`, `/Users/pt/cat-code/web/src/appProtocol.ts`, `/Users/pt/cat-code/web/src/appState.ts`, `/Users/pt/cat-code/web/src/appState.test.ts`, and `/Users/pt/cat-code/web/src/App.tsx` only for the permission coverage task if the existing protocol, reducer, or permission panel does not carry and display the required permission metadata.
+- Optionally modify `/Users/pt/cat-code/src/web/appSessionProtocol.ts`, `/Users/pt/cat-code/web/src/appProtocol.ts`, `/Users/pt/cat-code/web/src/appState.ts`, and `/Users/pt/cat-code/web/src/appState.test.ts` only for the permission coverage task if the existing protocol or reducer does not carry the required permission metadata.
+- Modify `/Users/pt/cat-code/web/src/App.tsx` for the permission coverage task so the browser panel can edit `updatedInput`, select valid persistent `updatedPermissions`, allow once without persistence, deny, and cancel as an interrupting deny.
 
 ## Task 1: Extract QueryEngine App Session Config Assembly
 
@@ -80,7 +83,7 @@ Create `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSessionConfigFrom
 ```ts
 import { describe, expect, test } from 'bun:test'
 import type { Command } from '../commands.js'
-import type { MCPServerConnection } from '../services/mcp/types.js'
+import type { MCPServerConnection, ServerResource } from '../services/mcp/types.js'
 import { getDefaultAppState, type AppState } from '../state/AppStateStore.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { Tool } from '../Tool.js'
@@ -92,6 +95,7 @@ const mcpCommand = { name: 'mcp-command' } as Command
 const tool = { name: 'Read' } as Tool
 const mcpTool = { name: 'mcp__server__tool' } as Tool
 const mcpClient = { name: 'server', type: 'connected' } as MCPServerConnection
+const mcpResource = { uri: 'file://demo', name: 'demo-resource' } as ServerResource
 const agent = { agentType: 'builder' } as AgentDefinition
 describe('createQueryEngineAppSessionConfigFromSetup', () => {
   test('preserves normal startup owners for runtime-backed web sessions', () => {
@@ -115,6 +119,7 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
       mcpTools: [mcpTool],
       mcpCommands: [mcpCommand],
       mcpClients: [mcpClient],
+      mcpResources: { server: [mcpResource] },
       agents: [agent],
       getAppState: () => state,
       setAppState: update => {
@@ -138,6 +143,12 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     expect(config.tools).toEqual([tool, mcpTool])
     expect(config.commands).toEqual([command, mcpCommand])
     expect(config.mcpClients).toEqual([mcpClient])
+    expect(config.getAppState().mcp).toMatchObject({
+      clients: [mcpClient],
+      tools: [mcpTool],
+      commands: [mcpCommand],
+      resources: { server: [mcpResource] },
+    })
     expect(config.agents).toEqual([agent])
     expect(config.canUseTool).toBeUndefined()
     expect(config.getAppState().toolPermissionContext.mode).toBe('plan')
@@ -176,7 +187,7 @@ Create `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSessionConfigFrom
 
 ```ts
 import type { Command } from '../commands.js'
-import type { MCPServerConnection } from '../services/mcp/types.js'
+import type { MCPServerConnection, ServerResource } from '../services/mcp/types.js'
 import type { AppState } from '../state/AppStateStore.js'
 import type { Tool } from '../Tool.js'
 import type { SDKStatus } from '../entrypoints/agentSdkTypes.js'
@@ -192,6 +203,7 @@ export type QueryEngineAppSessionConfigFromSetupInput = {
   mcpTools: Tool[]
   mcpCommands: Command[]
   mcpClients: MCPServerConnection[]
+  mcpResources: Record<string, ServerResource[]>
   agents: AgentDefinition[]
   getAppState: () => AppState
   setAppState: (update: (prev: AppState) => AppState) => void
@@ -217,6 +229,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
   mcpTools,
   mcpCommands,
   mcpClients,
+  mcpResources,
   agents,
   getAppState,
   setAppState,
@@ -234,13 +247,27 @@ export function createQueryEngineAppSessionConfigFromSetup({
   replayUserMessages,
   setSDKStatus,
 }: QueryEngineAppSessionConfigFromSetupInput): QueryEngineAppSessionConfig {
+  const getMcpBackedAppState = () => {
+    const state = getAppState()
+    return {
+      ...state,
+      mcp: {
+        ...state.mcp,
+        clients: mcpClients,
+        tools: mcpTools,
+        commands: mcpCommands,
+        resources: mcpResources,
+      },
+    }
+  }
+
   return {
     cwd,
     tools: [...tools, ...mcpTools],
     commands: [...commands, ...mcpCommands],
     mcpClients,
     agents,
-    getAppState,
+    getAppState: getMcpBackedAppState,
     setAppState,
     readFileCache,
     customSystemPrompt,
@@ -278,7 +305,7 @@ Run:
 cd /Users/pt/cat-code && rg -n "export type QueryEngineConfig|includePartialMessages|readFileCache|setSDKStatus" src/QueryEngine.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts
 ```
 
-Expected result: matches show the helper provides `readFileCache`, preserves `setSDKStatus`, sets `includePartialMessages: true`, and does not require a React-owned `canUseTool` function from `src/main.tsx`.
+Expected result: matches show the helper provides `readFileCache`, preserves `setSDKStatus`, sets `includePartialMessages: true`, preserves populated MCP clients/tools/commands/resources in `getAppState().mcp`, and does not require a React-owned `canUseTool` function from `src/main.tsx`.
 
 ## Task 2: Add Browser Dev Server Launcher
 
@@ -772,9 +799,12 @@ Expected result after implementation: pass.
 
 **Files:**
 - Modify: `/Users/pt/cat-code/src/main.tsx`
+- Modify: `/Users/pt/cat-code/src/services/mcp/client.ts`
 - Read: `/Users/pt/cat-code/src/main.tsx:1220-1306`
 - Read: `/Users/pt/cat-code/src/main.tsx:2029-3227`
 - Read: `/Users/pt/cat-code/src/main.tsx:3271-3319`
+- Read: `/Users/pt/cat-code/src/services/mcp/client.ts:2228-2475`
+- Read: `/Users/pt/cat-code/src/services/mcp/useManageMCPConnections.ts:204-322`
 
 - [ ] **Step 1: Remove the early legacy `--web` branch**
 
@@ -786,7 +816,116 @@ const webModeEnabled = (options as { web?: boolean }).web === true;
 
 After this edit, `--web` must continue into the normal `setup(...)`, command, agent, MCP, model, permission, and AppState assembly path.
 
-- [ ] **Step 2: Create a read-file cache owner beside the interactive AppState store**
+- [ ] **Step 2: Preserve MCP resources in the shared startup MCP promise**
+
+Update `/Users/pt/cat-code/src/services/mcp/client.ts` so `prefetchAllMcpResources(...)` keeps using `getMcpToolsCommandsAndResources(...)` but returns resources too:
+
+```ts
+export function prefetchAllMcpResources(
+  mcpConfigs: Record<string, ScopedMcpServerConfig>,
+): Promise<{
+  clients: MCPServerConnection[]
+  tools: Tool[]
+  commands: Command[]
+  resources: Record<string, ServerResource[]>
+}> {
+  return new Promise(resolve => {
+    let pendingCount = 0
+    let completedCount = 0
+
+    pendingCount = Object.keys(mcpConfigs).length
+
+    if (pendingCount === 0) {
+      void resolve({
+        clients: [],
+        tools: [],
+        commands: [],
+        resources: {},
+      })
+      return
+    }
+
+    const clients: MCPServerConnection[] = []
+    const tools: Tool[] = []
+    const commands: Command[] = []
+    const resources: Record<string, ServerResource[]> = {}
+
+    getMcpToolsCommandsAndResources(result => {
+      clients.push(result.client)
+      tools.push(...result.tools)
+      commands.push(...result.commands)
+      if (result.resources && result.resources.length > 0) {
+        resources[result.client.name] = result.resources
+      }
+
+      completedCount++
+      if (completedCount >= pendingCount) {
+        const commandsMetadataLength = commands.reduce((sum, command) => {
+          const commandMetadataLength =
+            command.name.length +
+            (command.description ?? '').length +
+            (command.argumentHint ?? '').length
+          return sum + commandMetadataLength
+        }, 0)
+        logEvent('tengu_mcp_tools_commands_loaded', {
+          tools_count: tools.length,
+          commands_count: commands.length,
+          commands_metadata_length: commandsMetadataLength,
+        })
+
+        void resolve({
+          clients,
+          tools,
+          commands,
+          resources,
+        })
+      }
+    }, mcpConfigs).catch(error => {
+      logMCPError(
+        'prefetchAllMcpResources',
+        `Failed to get MCP resources: ${errorMessage(error)}`,
+      )
+      void resolve({
+        clients: [],
+        tools: [],
+        commands: [],
+        resources: {},
+      })
+    })
+  })
+}
+```
+
+Also update the empty interactive startup promises in `/Users/pt/cat-code/src/main.tsx` and the merge result for `mcpPromise` so every branch has the same shape:
+
+```ts
+const localMcpPromise = isNonInteractiveSession
+  ? Promise.resolve({ clients: [], tools: [], commands: [], resources: {} })
+  : prefetchAllMcpResources(regularMcpConfigs)
+const claudeaiMcpPromise = isNonInteractiveSession
+  ? Promise.resolve({ clients: [], tools: [], commands: [], resources: {} })
+  : claudeaiConfigPromise.then(configs =>
+      Object.keys(configs).length > 0
+        ? prefetchAllMcpResources(configs)
+        : { clients: [], tools: [], commands: [], resources: {} },
+    )
+
+const mcpPromise = Promise.all([localMcpPromise, claudeaiMcpPromise]).then(
+  ([local, claudeai]) => ({
+    clients: [...local.clients, ...claudeai.clients],
+    tools: uniqBy([...local.tools, ...claudeai.tools], 'name'),
+    commands: uniqBy([...local.commands, ...claudeai.commands], 'name'),
+    resources: {
+      ...local.resources,
+      ...claudeai.resources,
+    },
+  }),
+)
+```
+
+Terminal mode must still allow the REPL to render before `mcpPromise` settles; only the `--web` branch added below awaits it because web mode will not mount `/Users/pt/cat-code/src/services/mcp/useManageMCPConnections.ts`.
+
+- [ ] **Step 3: Create a read-file cache owner beside the interactive AppState store**
 
 Near the existing interactive AppState assembly in `/Users/pt/cat-code/src/main.tsx`, add imports if they are not already present:
 
@@ -807,7 +946,36 @@ const readFileCache = createFileStateCacheWithSizeLimit(READ_FILE_STATE_CACHE_SI
 
 If `createStore` or `onChangeAppState` already has a local owner in this section, reuse that existing owner and keep a single store for both `--web` and terminal mode.
 
-- [ ] **Step 3: Build the runtime app-session config from the normal startup values**
+- [ ] **Step 4: Await and populate startup MCP state before creating the web config**
+
+Immediately after `appStateStore` and `readFileCache` are created, add a web-only await that resolves the existing startup MCP promise and writes the same clients/tools/commands/resources shape into the shared AppState store:
+
+```ts
+let mcpStartupState: Awaited<typeof mcpPromise> = {
+  clients: mcpClients,
+  tools: mcpTools,
+  commands: mcpCommands,
+  resources: {},
+}
+
+if (webModeEnabled) {
+  mcpStartupState = await mcpPromise
+  appStateStore.setState(prev => ({
+    ...prev,
+    mcp: {
+      ...prev.mcp,
+      clients: mcpStartupState.clients,
+      tools: mcpStartupState.tools,
+      commands: mcpStartupState.commands,
+      resources: mcpStartupState.resources,
+    },
+  }))
+}
+```
+
+This is the critical Phase 1B MCP handoff: runtime-backed web must not create `queryEngineAppSessionConfig` from the initial empty `mcpClients`, `mcpTools`, and `mcpCommands` arrays. It must use the populated `mcpStartupState` returned by `prefetchAllMcpResources(...)`, which itself delegates to `getMcpToolsCommandsAndResources(...)`, the same current source path used to fetch MCP clients, tools, commands, and resources before terminal setup hands ongoing updates to `useManageMCPConnections(...)`.
+
+- [ ] **Step 5: Build the runtime app-session config from the normal startup values**
 
 Add these imports to `/Users/pt/cat-code/src/main.tsx`:
 
@@ -823,9 +991,10 @@ const queryEngineAppSessionConfig = createQueryEngineAppSessionConfigFromSetup({
   cwd: currentCwd,
   tools,
   commands,
-  mcpTools,
-  mcpCommands,
-  mcpClients,
+  mcpTools: mcpStartupState.tools,
+  mcpCommands: mcpStartupState.commands,
+  mcpClients: mcpStartupState.clients,
+  mcpResources: mcpStartupState.resources,
   agents: agentDefinitions.activeAgents,
   getAppState: appStateStore.getState,
   setAppState: appStateStore.setState,
@@ -846,7 +1015,7 @@ const queryEngineAppSessionConfig = createQueryEngineAppSessionConfigFromSetup({
 
 Do not pass a terminal `useCanUseTool` value here. Terminal permissions are React-hook-owned inside `/Users/pt/cat-code/src/screens/REPL.tsx`, while app sessions are mediated by `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSession.ts`, which wraps the optional `config.canUseTool` with `createAppRuntimeCanUseTool(...)`. For Phase 1B, omit `canUseTool` from startup config so app-runtime permission requests are surfaced through the browser handler instead of trying to reuse a nonexistent non-React terminal callback.
 
-- [ ] **Step 4: Start runtime-backed web mode before any `launchRepl(...)` call**
+- [ ] **Step 6: Start runtime-backed web mode before any `launchRepl(...)` call**
 
 Place this branch after `queryEngineAppSessionConfig` is created and before the first terminal `launchRepl(...)` branch:
 
@@ -868,11 +1037,11 @@ if (webModeEnabled) {
 
 Use the repository's existing UUID helper instead of `crypto.randomUUID()` if `/Users/pt/cat-code/src/main.tsx` already imports a local UUID generator in nearby startup code. The token must not be printed and must not be appended to the browser URL.
 
-- [ ] **Step 5: Keep terminal mode launch unchanged**
+- [ ] **Step 7: Keep terminal mode launch unchanged**
 
-Where terminal mode calls `launchRepl(root, ...)`, keep existing arguments and branches unchanged except for replacing any duplicated state store with the shared `appStateStore` from Step 2. Terminal mode must still mount Ink and call `launchRepl(...)` when `webModeEnabled` is false.
+Where terminal mode calls `launchRepl(root, ...)`, keep existing arguments and branches unchanged except for replacing any duplicated state store with the shared `appStateStore` from Step 3. Terminal mode must still mount Ink and call `launchRepl(...)` when `webModeEnabled` is false.
 
-- [ ] **Step 6: Run focused startup extraction checks**
+- [ ] **Step 8: Run focused startup extraction checks**
 
 Run:
 
@@ -880,9 +1049,10 @@ Run:
 cd /Users/pt/cat-code && bun test src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.test.ts
 cd /Users/pt/cat-code && rg -n "startWebUIServer|Web mode is browser-first|Browser input is intentionally disabled" src/main.tsx
 cd /Users/pt/cat-code && rg -n "startRuntimeBackedWebMode|createQueryEngineAppSessionConfigFromSetup|launchRepl\(" src/main.tsx
+cd /Users/pt/cat-code && rg -n "resources: Record<string, ServerResource\\[\\]>|await mcpPromise|mcpStartupState|mcpResources" src/main.tsx src/services/mcp/client.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts
 ```
 
-Expected result: tests pass; the legacy disabled-input strings are absent; `startRuntimeBackedWebMode(...)` appears before terminal `launchRepl(...)` branches in the startup flow.
+Expected result: tests pass; the legacy disabled-input strings are absent; `startRuntimeBackedWebMode(...)` appears before terminal `launchRepl(...)` branches in the startup flow; web config creation uses `mcpStartupState` after `await mcpPromise`; `prefetchAllMcpResources(...)` returns resources; and the adapter test proves `config.getAppState().mcp` contains populated MCP clients/tools/commands/resources.
 
 ## Task 5: Complete Phase 1B Permission Coverage
 
@@ -981,13 +1151,14 @@ Expected result: pass if existing permission update suggestions are already pres
 If the test fails because suggestion fields are dropped, update `/Users/pt/cat-code/src/app-runtime/appRuntimeCanUseTool.ts` so the request object is created with the existing fields intact:
 
 ```ts
+const updatedInput = permissionResult.updatedInput ?? input
 const request = {
   subtype: 'can_use_tool' as const,
   tool_name: tool.name,
-  input: decision.updatedInput ?? input,
-  permission_suggestions: decision.suggestions ?? [],
-  blocked_path: decision.blockedPath,
-  decision_reason: decision.message,
+  input: updatedInput,
+  permission_suggestions: permissionResult.suggestions ?? [],
+  blocked_path: permissionResult.blockedPath,
+  decision_reason: permissionResult.message,
   tool_use_id: toolUseId,
   agent_id: context.agentId,
 }
@@ -1195,7 +1366,7 @@ type PermissionUpdate =
     }
   | {
       type: 'setMode';
-      mode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+      mode: 'acceptEdits' | 'bypassPermissions' | 'default' | 'dontAsk' | 'plan';
       destination: PermissionUpdateDestination;
     }
   | {
@@ -1206,6 +1377,36 @@ type PermissionUpdate =
 ```
 
 `permission_suggestions` and `updatedPermissions` must use `PermissionUpdate[]`; invalid entries should continue to be caught or stripped by the existing permission prompt result schema.
+
+Use these exact valid sample shapes in tests or manual browser fixtures; they match `/Users/pt/cat-code/src/types/permissions.ts`:
+
+```ts
+const allowBashRuleUpdate: PermissionUpdate = {
+  type: 'addRules',
+  rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+  behavior: 'allow',
+  destination: 'projectSettings',
+}
+
+const denyBashRuleUpdate: PermissionUpdate = {
+  type: 'addRules',
+  rules: [{ toolName: 'Bash', ruleContent: 'rm -rf /tmp/demo' }],
+  behavior: 'deny',
+  destination: 'localSettings',
+}
+
+const setDontAskModeUpdate: PermissionUpdate = {
+  type: 'setMode',
+  mode: 'dontAsk',
+  destination: 'userSettings',
+}
+
+const addWorkingDirectoryUpdate: PermissionUpdate = {
+  type: 'addDirectories',
+  directories: ['/repo/subdir'],
+  destination: 'session',
+}
+```
 
 Then rerun:
 
@@ -1306,6 +1507,165 @@ cd /Users/pt/cat-code && bun --cwd web test
 
 Expected result: pass. Manual smoke in Task 8 must verify the permission panel visibly shows the display name or tool name, worker id from `agent_id`, blocked path, decision reason, JSON input, and sandbox/network distinction text when the runtime includes those fields.
 
+- [ ] **Step 8: Add minimal browser permission response controls**
+
+Modify `/Users/pt/cat-code/web/src/App.tsx`. Keep the permission panel local to the chat screen; do not add a settings page. Add UI state that resets for each pending permission request:
+
+```tsx
+const pendingPermission = appState.pendingPermissions[0];
+const permissionSuggestions =
+  pendingPermission?.request.permission_suggestions ?? [];
+const [permissionInputDraft, setPermissionInputDraft] = useState("");
+const [permissionInputError, setPermissionInputError] = useState<string | null>(null);
+const [selectedPermissionUpdateIndexes, setSelectedPermissionUpdateIndexes] =
+  useState<number[]>([]);
+
+useEffect(() => {
+  if (!pendingPermission) {
+    setPermissionInputDraft("");
+    setPermissionInputError(null);
+    setSelectedPermissionUpdateIndexes([]);
+    return;
+  }
+  setPermissionInputDraft(
+    JSON.stringify(pendingPermission.request.input, null, 2),
+  );
+  setPermissionInputError(null);
+  setSelectedPermissionUpdateIndexes([]);
+}, [pendingPermission?.requestId]);
+
+const selectedPermissionUpdates = selectedPermissionUpdateIndexes.map(
+  index => permissionSuggestions[index],
+);
+
+function parsePermissionInputDraft() {
+  try {
+    const parsed = JSON.parse(permissionInputDraft) as Record<string, unknown>;
+    setPermissionInputError(null);
+    return parsed;
+  } catch (error) {
+    setPermissionInputError(
+      error instanceof Error ? error.message : "Invalid JSON input",
+    );
+    return null;
+  }
+}
+```
+
+Replace the read-only `<pre>` input display with an editable JSON textarea:
+
+```tsx
+<label className="mt-3 block text-xs text-amber-100/80">
+  Input sent when allowed
+  <textarea
+    value={permissionInputDraft}
+    onChange={event => setPermissionInputDraft(event.target.value)}
+    className="mt-1 min-h-28 w-full rounded-xl bg-black/30 p-3 font-mono text-xs text-amber-100 outline-none ring-1 ring-amber-200/10 focus:ring-amber-200/30"
+  />
+</label>
+{permissionInputError ? (
+  <p className="mt-1 text-xs text-red-200">{permissionInputError}</p>
+) : null}
+```
+
+Render valid suggestion checkboxes from `permissionSuggestions` and send only selected entries as `updatedPermissions: PermissionUpdate[]`:
+
+```tsx
+{permissionSuggestions.length > 0 ? (
+  <div className="mt-3 space-y-2 rounded-xl border border-amber-200/10 p-3 text-xs">
+    <div className="font-medium text-amber-100">Persist selected permission updates</div>
+    {permissionSuggestions.map((suggestion, index) => (
+      <label key={index} className="flex gap-2">
+        <input
+          type="checkbox"
+          checked={selectedPermissionUpdateIndexes.includes(index)}
+          onChange={event => {
+            setSelectedPermissionUpdateIndexes(current =>
+              event.target.checked
+                ? [...current, index]
+                : current.filter(value => value !== index),
+            );
+          }}
+        />
+        <span className="font-mono">{JSON.stringify(suggestion)}</span>
+      </label>
+    ))}
+  </div>
+) : null}
+```
+
+Use these exact response shapes for the buttons:
+
+```tsx
+const updatedInput = parsePermissionInputDraft();
+if (!updatedInput) return;
+send({
+  type: "permission.response",
+  requestId: pendingPermission.requestId,
+  response: {
+    behavior: "allow",
+    updatedInput,
+    decisionClassification: "user_temporary",
+  },
+});
+```
+
+```tsx
+const updatedInput = parsePermissionInputDraft();
+if (!updatedInput) return;
+send({
+  type: "permission.response",
+  requestId: pendingPermission.requestId,
+  response: {
+    behavior: "allow",
+    updatedInput,
+    updatedPermissions: selectedPermissionUpdates,
+    decisionClassification: "user_permanent",
+  },
+});
+```
+
+```tsx
+send({
+  type: "permission.response",
+  requestId: pendingPermission.requestId,
+  response: {
+    behavior: "deny",
+    message: "Denied in browser app",
+    decisionClassification: "user_reject",
+  },
+});
+```
+
+```tsx
+send({
+  type: "permission.response",
+  requestId: pendingPermission.requestId,
+  response: {
+    behavior: "deny",
+    message: "Cancelled in browser app",
+    interrupt: true,
+    decisionClassification: "user_reject",
+  },
+});
+```
+
+Required button labels:
+
+- `Allow once` sends an allow response with edited `updatedInput` and no `updatedPermissions`.
+- `Allow and remember selected` is enabled only when at least one suggestion is selected, and sends edited `updatedInput` plus selected `updatedPermissions`.
+- `Deny` sends a deny response without `interrupt`.
+- `Cancel turn` sends `{ behavior: "deny", interrupt: true }`.
+
+Run:
+
+```bash
+cd /Users/pt/cat-code && bun --cwd web test
+cd /Users/pt/cat-code && bun --cwd web run typecheck
+```
+
+Expected result: pass. If there is no browser component test harness yet, the reducer/protocol tests plus the manual smoke checklist below are the browser-side verification for this UI change.
+
 ## Task 6: Add Web Smoke Script Or Manual Checklist
 
 **Files:**
@@ -1326,9 +1686,12 @@ Manual smoke checklist:
 5. Type `Say hello from the runtime-backed app session` in the browser composer.
 6. Confirm the browser receives streamed assistant text through `app.event` messages.
 7. Trigger a permission request with a harmless command prompt such as `run pwd`.
-8. Deny the request in the browser and confirm the terminal process stays alive.
-9. Refresh the browser during a pending permission request and confirm the request is replayed.
-10. Stop the terminal process with Ctrl-C and confirm the Vite child process exits.
+8. Edit the permission input JSON from `{ "command": "pwd" }` to `{ "command": "pwd && true" }`, click `Allow once`, and confirm the response sent over the browser WebSocket contains `updatedInput` with the edited command and no `updatedPermissions`.
+9. Trigger another permission request, select a valid suggestion such as `{ "type": "addRules", "rules": [{ "toolName": "Bash", "ruleContent": "pwd" }], "behavior": "allow", "destination": "projectSettings" }`, click `Allow and remember selected`, and confirm the response contains `updatedPermissions` with that exact selected `PermissionUpdate[]`.
+10. Trigger another permission request, click `Deny`, and confirm the response is `{ "behavior": "deny", "message": "Denied in browser app", "decisionClassification": "user_reject" }`.
+11. Trigger another permission request, click `Cancel turn`, and confirm the response includes `{ "behavior": "deny", "interrupt": true }` and the active turn stops.
+12. Refresh the browser during a pending permission request and confirm the request is replayed with its input and suggestions intact.
+13. Stop the terminal process with Ctrl-C and confirm the Vite child process exits.
 ```
 
 - [ ] **Step 2: If adding a local script, use this exact package script**
@@ -1459,7 +1822,10 @@ Checklist:
 - Browser opens `http://127.0.0.1:5173` without a token query parameter.
 - Browser input is enabled after `app.ready`.
 - A prompt submitted from the browser produces streamed app-runtime messages.
-- Permission allow, deny, cancel-as-deny-with-interrupt, updated input, and persistent permission update flows complete from the browser.
+- Permission `Allow once` completes with edited `updatedInput` and no `updatedPermissions`.
+- Permission `Allow and remember selected` completes with edited `updatedInput` and selected `updatedPermissions: PermissionUpdate[]` from current valid suggestions only, for example `{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'pwd' }], behavior: 'allow', destination: 'projectSettings' }`.
+- Permission `Deny` completes as a non-interrupting deny.
+- Permission `Cancel turn` completes as `{ behavior: 'deny', interrupt: true }`.
 - Worker identity from `agent_id` is visible when a worker-owned permission request is shown.
 - Sandbox and network distinction is visible when present in current request or decision fields such as `decision_reason`, `blocked_path`, or another first-class runtime field; do not expect it to be invented from `permission_suggestions`.
 - A pending permission request reappears after browser reconnect.
@@ -1498,7 +1864,7 @@ Run:
 
 ```bash
 cd /Users/pt/cat-code && git status --short
-cd /Users/pt/cat-code && git diff -- src/main.tsx src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts web/src/App.tsx package.json
+cd /Users/pt/cat-code && git diff -- src/main.tsx src/services/mcp/client.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts web/src/App.tsx package.json
 ```
 
 Expected result: no unrelated docs/maps/source changes are included.
@@ -1508,7 +1874,7 @@ Expected result: no unrelated docs/maps/source changes are included.
 Run one `git add` command with the exact files changed by the implementation. Example for the full expected set:
 
 ```bash
-cd /Users/pt/cat-code && git add src/main.tsx src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts web/src/App.tsx package.json
+cd /Users/pt/cat-code && git add src/main.tsx src/services/mcp/client.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts web/src/App.tsx package.json
 ```
 
 If `package.json` or protocol files did not change, omit them from the command rather than staging unchanged files.
@@ -1526,10 +1892,10 @@ Expected result: commit succeeds without bypassing hooks.
 ## Self-Review Checklist For Plan Executors
 
 - Every Phase 1B code task starts with a focused failing test or source inspection that explains why the edit is safe.
-- The final `--web` path uses normal `setup(...)`, commands, agents, MCP clients/tools/commands, permission mode, AppState, and QueryEngine config owners.
+- The final `--web` path uses normal `setup(...)`, commands, agents, resolved startup MCP clients/tools/commands/resources, permission mode, AppState, and QueryEngine config owners.
 - The browser token is passed with `VITE_CAT_CODE_WS_TOKEN` and the opened URL never contains the token.
 - Runtime-backed web mode starts `startAppSessionWebSocketServer(...)`, not `startWebUIServer(...)`.
 - Ink `launchRepl(...)` is skipped only after the runtime-backed server and browser launcher are ready.
 - Terminal mode still reaches existing `launchRepl(...)` branches when `--web` is false.
-- Permission coverage includes cancel as `behavior: "deny"` with `interrupt: true`, updated input, `updatedPermissions`, worker identity from `agent_id`, sandbox/network distinction, pending replay after reconnect, and stale permission id rejection.
+- Permission coverage includes cancel as `behavior: "deny"` with `interrupt: true`, browser-edited updated input, allow once without persistence, selected valid `updatedPermissions`, worker identity from `agent_id`, sandbox/network distinction, pending replay after reconnect, and stale permission id rejection.
 - Final checks include `bun test src/app-runtime/*.test.ts src/web/*.test.ts`, `bun --cwd web test`, `bun --cwd web run typecheck`, `bun --cwd web run build`, `bun run build:dev:full`, manual `bun run dev -- --web`, and manual terminal startup.
