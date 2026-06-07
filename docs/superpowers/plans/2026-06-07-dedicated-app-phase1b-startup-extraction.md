@@ -16,9 +16,10 @@
 - The current `--web` branch imports `src/web/WebSocketServer.ts`, starts the legacy relay server, spawns `bun run dev` in `web/`, opens the Vite URL after parsing Vite output, prints that browser input is disabled, waits forever, and returns.
 - Normal setup, command loading, agent loading, MCP config/resource assembly, AppState construction, and REPL session config construction all happen later in `src/main.tsx` and are skipped by the current `--web` branch.
 - `src/main.tsx` currently assembles a REPL `sessionConfig` object with `commands`, `initialTools`, `mcpClients`, system prompt fields, and `thinkingConfig`; it does not assemble a standalone `QueryEngineAppSessionConfig` for browser app sessions.
-- `src/QueryEngine.ts` defines `QueryEngineConfig` with required `cwd`, `tools`, `commands`, `mcpClients`, `agents`, `canUseTool`, `getAppState`, `setAppState`, and `readFileCache`, plus model, thinking, budget, prompt, partial-message, SDK-status, and abort-related fields.
+- `src/QueryEngine.ts` defines base `QueryEngineConfig` with required `cwd`, `tools`, `commands`, `mcpClients`, `agents`, `canUseTool`, `getAppState`, `setAppState`, and `readFileCache`, plus model, thinking, budget, prompt, partial-message, SDK-status, and abort-related fields. `src/app-runtime/createQueryEngineAppSession.ts` exposes `QueryEngineAppSessionConfig`, where `canUseTool` is optional because app runtime wraps it with `createAppRuntimeCanUseTool(...)`.
 - `src/app-runtime/createRuntimeBackedWebAppSession.ts` already forces `includePartialMessages: true` when it wraps `createQueryEngineAppSession(...)`.
 - `src/web/AppSessionWebSocketServer.ts` is the runtime-backed browser transport and already binds to `127.0.0.1`, requires a `cat-code.<token>` subprotocol, checks origin and host, sends `app.ready`, forwards submits/aborts, replays pending permissions on ready, and rejects stale permission response ids with `permission_not_found`.
+- `web/vite.config.ts` currently proxies browser `/ws` connections to fixed `ws://127.0.0.1:3456`, so Phase 1B must bind the runtime-backed app-session server to port `3456` unless a later plan changes Vite/browser port discovery.
 
 ## Scope Boundary
 
@@ -43,6 +44,7 @@ Read these files in this order before editing Phase 1B code:
 13. `/Users/pt/cat-code/src/web/AppSessionWebSocketServer.ts`
 14. `/Users/pt/cat-code/src/web/appSessionProtocol.ts`
 15. `/Users/pt/cat-code/web/src/hooks/useWebSocket.ts`
+16. `/Users/pt/cat-code/web/vite.config.ts`
 
 Run these source inspections first and keep the findings above true or update the implementation approach before editing:
 
@@ -61,7 +63,7 @@ cd /Users/pt/cat-code && sed -n '130,180p' src/QueryEngine.ts
 - Create `/Users/pt/cat-code/src/web/startRuntimeBackedWebMode.ts` — runtime-backed `--web` bootstrap helper that creates the app-session controller, starts `startAppSessionWebSocketServer(...)`, launches Vite, and waits until process shutdown.
 - Create `/Users/pt/cat-code/src/web/startRuntimeBackedWebMode.test.ts` — tests that the server starts before the wait point and the browser launcher is stopped when bootstrap fails or shutdown begins.
 - Modify `/Users/pt/cat-code/src/main.tsx` — move the `--web` branch to after normal setup/AppState/QueryEngine config assembly, call the runtime-backed helper, and skip `launchRepl(...)` only after the runtime-backed server is ready.
-- Optionally modify `/Users/pt/cat-code/src/web/appSessionProtocol.ts`, `/Users/pt/cat-code/web/src/appProtocol.ts`, `/Users/pt/cat-code/web/src/appState.ts`, and `/Users/pt/cat-code/web/src/appState.test.ts` only for the permission coverage task if the existing protocol or reducer does not carry the required permission metadata.
+- Optionally modify `/Users/pt/cat-code/src/web/appSessionProtocol.ts`, `/Users/pt/cat-code/web/src/appProtocol.ts`, `/Users/pt/cat-code/web/src/appState.ts`, `/Users/pt/cat-code/web/src/appState.test.ts`, and `/Users/pt/cat-code/web/src/App.tsx` only for the permission coverage task if the existing protocol, reducer, or permission panel does not carry and display the required permission metadata.
 
 ## Task 1: Extract QueryEngine App Session Config Assembly
 
@@ -77,11 +79,10 @@ Create `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSessionConfigFrom
 
 ```ts
 import { describe, expect, test } from 'bun:test'
-import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import type { Command } from '../commands.js'
-import type { MCPServerConnection } from '../services/mcp/client.js'
+import type { MCPServerConnection } from '../services/mcp/types.js'
 import { getDefaultAppState, type AppState } from '../state/AppStateStore.js'
-import type { AgentDefinition } from '../utils/agents.js'
+import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { Tool } from '../Tool.js'
 import { createFileStateCacheWithSizeLimit } from '../utils/fileStateCache.js'
 import { createQueryEngineAppSessionConfigFromSetup } from './createQueryEngineAppSessionConfigFromSetup.js'
@@ -92,8 +93,6 @@ const tool = { name: 'Read' } as Tool
 const mcpTool = { name: 'mcp__server__tool' } as Tool
 const mcpClient = { name: 'server', type: 'connected' } as MCPServerConnection
 const agent = { agentType: 'builder' } as AgentDefinition
-const canUseTool: CanUseToolFn = async () => ({ behavior: 'allow' })
-
 describe('createQueryEngineAppSessionConfigFromSetup', () => {
   test('preserves normal startup owners for runtime-backed web sessions', () => {
     let state: AppState = {
@@ -117,7 +116,6 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
       mcpCommands: [mcpCommand],
       mcpClients: [mcpClient],
       agents: [agent],
-      canUseTool,
       getAppState: () => state,
       setAppState: update => {
         state = update(state)
@@ -141,7 +139,7 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     expect(config.commands).toEqual([command, mcpCommand])
     expect(config.mcpClients).toEqual([mcpClient])
     expect(config.agents).toEqual([agent])
-    expect(config.canUseTool).toBe(canUseTool)
+    expect(config.canUseTool).toBeUndefined()
     expect(config.getAppState().toolPermissionContext.mode).toBe('plan')
     config.setAppState(prev => ({ ...prev, verbose: true }))
     expect(state.verbose).toBe(true)
@@ -178,12 +176,11 @@ Create `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSessionConfigFrom
 
 ```ts
 import type { Command } from '../commands.js'
-import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
-import type { MCPServerConnection } from '../services/mcp/client.js'
+import type { MCPServerConnection } from '../services/mcp/types.js'
 import type { AppState } from '../state/AppStateStore.js'
 import type { Tool } from '../Tool.js'
 import type { SDKStatus } from '../types/sdk.js'
-import type { AgentDefinition } from '../utils/agents.js'
+import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { FileStateCache } from '../utils/fileStateCache.js'
 import type { ThinkingConfig } from '../utils/thinking.js'
 import type { QueryEngineAppSessionConfig } from './createQueryEngineAppSession.js'
@@ -196,7 +193,6 @@ export type QueryEngineAppSessionConfigFromSetupInput = {
   mcpCommands: Command[]
   mcpClients: MCPServerConnection[]
   agents: AgentDefinition[]
-  canUseTool: CanUseToolFn
   getAppState: () => AppState
   setAppState: (update: (prev: AppState) => AppState) => void
   readFileCache: FileStateCache
@@ -222,7 +218,6 @@ export function createQueryEngineAppSessionConfigFromSetup({
   mcpCommands,
   mcpClients,
   agents,
-  canUseTool,
   getAppState,
   setAppState,
   readFileCache,
@@ -245,7 +240,6 @@ export function createQueryEngineAppSessionConfigFromSetup({
     commands: [...commands, ...mcpCommands],
     mcpClients,
     agents,
-    canUseTool,
     getAppState,
     setAppState,
     readFileCache,
@@ -284,7 +278,7 @@ Run:
 cd /Users/pt/cat-code && rg -n "export type QueryEngineConfig|includePartialMessages|readFileCache|setSDKStatus" src/QueryEngine.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts
 ```
 
-Expected result: matches show the helper provides `readFileCache`, preserves `setSDKStatus`, and sets `includePartialMessages: true`.
+Expected result: matches show the helper provides `readFileCache`, preserves `setSDKStatus`, sets `includePartialMessages: true`, and does not require a React-owned `canUseTool` function from `src/main.tsx`.
 
 ## Task 2: Add Browser Dev Server Launcher
 
@@ -547,7 +541,6 @@ function baseConfig(): QueryEngineAppSessionConfig {
     commands: [],
     mcpClients: [],
     agents: [],
-    canUseTool: async () => ({ behavior: 'allow' }),
     getAppState: () => getDefaultAppState(),
     setAppState: () => {},
     readFileCache: createFileStateCacheWithSizeLimit(20),
@@ -564,16 +557,17 @@ describe('startRuntimeBackedWebMode', () => {
       queryEngineConfig: baseConfig(),
       webDir: '/repo/web',
       token: 'token-1',
-      wsPort: 0,
+      wsPort: 3456,
       webPort: 5173,
       allowedOrigins: ['http://127.0.0.1:5173'],
       createController: () => ({}) as AppSessionController,
       startServer: async options => {
         calls.push('server')
         serverController = options.controller
+        expect(options.port).toBe(3456)
         return {
-          port: 41325,
-          url: 'ws://127.0.0.1:41325/ws',
+          port: 3456,
+          url: 'ws://127.0.0.1:3456/ws',
           protocol: 'cat-code.token-1',
           stop: async () => {
             calls.push('server.stop')
@@ -610,13 +604,13 @@ describe('startRuntimeBackedWebMode', () => {
         queryEngineConfig: baseConfig(),
         webDir: '/repo/web',
         token: 'token-1',
-        wsPort: 0,
+        wsPort: 3456,
         webPort: 5173,
         allowedOrigins: ['http://127.0.0.1:5173'],
         createController: () => ({}) as AppSessionController,
         startServer: async () => ({
-          port: 41325,
-          url: 'ws://127.0.0.1:41325/ws',
+          port: 3456,
+          url: 'ws://127.0.0.1:3456/ws',
           protocol: 'cat-code.token-1',
           stop: async () => {
             calls.push('server.stop')
@@ -693,7 +687,7 @@ export async function startRuntimeBackedWebMode({
   queryEngineConfig,
   webDir,
   token,
-  wsPort = 0,
+  wsPort = 3456,
   webPort = 5173,
   allowedOrigins = [`http://127.0.0.1:${webPort}`],
   createController = createRuntimeBackedWebAppSession,
@@ -780,7 +774,7 @@ import {
   createFileStateCacheWithSizeLimit,
   READ_FILE_STATE_CACHE_SIZE,
 } from './utils/fileStateCache.js';
-import { createStore } from './state/createStore.js';
+import { createStore } from './state/store.js';
 ```
 
 Then place this immediately after `const initialTools = mcpTools;`:
@@ -812,7 +806,6 @@ const queryEngineAppSessionConfig = createQueryEngineAppSessionConfigFromSetup({
   mcpCommands,
   mcpClients,
   agents: agentDefinitions.activeAgents,
-  canUseTool,
   getAppState: appStateStore.getState,
   setAppState: appStateStore.setState,
   readFileCache,
@@ -830,7 +823,7 @@ const queryEngineAppSessionConfig = createQueryEngineAppSessionConfigFromSetup({
 });
 ```
 
-If `canUseTool` is not in scope at this exact point, pass the same `canUseTool` function that terminal `REPL` receives through its props. Do not create a permissive replacement for web mode.
+Do not pass a terminal `useCanUseTool` value here. Terminal permissions are React-hook-owned inside `/Users/pt/cat-code/src/screens/REPL.tsx`, while app sessions are mediated by `/Users/pt/cat-code/src/app-runtime/createQueryEngineAppSession.ts`, which wraps the optional `config.canUseTool` with `createAppRuntimeCanUseTool(...)`. For Phase 1B, omit `canUseTool` from startup config so app-runtime permission requests are surfaced through the browser handler instead of trying to reuse a nonexistent non-React terminal callback.
 
 - [ ] **Step 4: Start runtime-backed web mode before any `launchRepl(...)` call**
 
@@ -844,7 +837,7 @@ if (webModeEnabled) {
     queryEngineConfig: queryEngineAppSessionConfig,
     webDir,
     token,
-    wsPort: 0,
+    wsPort: 3456,
     webPort: 5173,
     allowedOrigins: ['http://127.0.0.1:5173'],
   });
@@ -881,6 +874,7 @@ Expected result: tests pass; the legacy disabled-input strings are absent; `star
 - Modify as needed: `/Users/pt/cat-code/web/src/appProtocol.ts`
 - Modify as needed: `/Users/pt/cat-code/web/src/appState.test.ts`
 - Modify as needed: `/Users/pt/cat-code/web/src/appState.ts`
+- Modify as needed: `/Users/pt/cat-code/web/src/App.tsx`
 - Read: `/Users/pt/cat-code/docs/design/dedicated-app/migration-scope.md:159-173`
 
 - [ ] **Step 1: Extend app-runtime permission tests for cancel, updated input, worker identity, and sandbox/network metadata**
@@ -993,70 +987,45 @@ Expected result: pass.
 
 - [ ] **Step 4: Add server protocol coverage for persistent updates, replay, and stale ids**
 
-Add this test to `/Users/pt/cat-code/src/web/AppSessionWebSocketServer.test.ts`:
+Add this complete executable test to `/Users/pt/cat-code/src/web/AppSessionWebSocketServer.test.ts`:
 
 ```ts
 test('replays pending permissions and rejects stale permission ids', async () => {
   let permissionResponse: unknown
-  let releasePermission: ((value: unknown) => void) | undefined
-  const permissionStarted = new Promise<void>(resolve => {
-    const controller = new AppSessionController({
-      async *runTurn({ onPermissionRequest }) {
-        resolve()
-        permissionResponse = await onPermissionRequest({
-          requestId: 'perm-replay',
-          request: {
-            subtype: 'can_use_tool',
-            tool_name: 'Bash',
-            input: { command: 'pwd' },
-            updated_input: { command: 'pwd' },
-            tool_use_id: 'toolu_replay',
-            agent_id: 'worker-1',
-            permission_suggestions: [
-              {
-                type: 'permission_rule',
-                ruleValue: 'Bash(pwd)',
-                ruleDisplay: 'Bash pwd',
-                behavior: 'allow',
-                destination: 'project',
-                metadata: { sandbox: 'read-only', network: false },
-              },
-            ],
-          } as never,
-        })
-      },
-    })
-    void controller
+  let releaseTurn: (() => void) | undefined
+  const turnReleased = new Promise<void>(resolve => {
+    releaseTurn = resolve
   })
 
   const controller = new AppSessionController({
     async *runTurn({ onPermissionRequest }) {
-      await permissionStarted
-      permissionResponse = await new Promise(resolve => {
-        releasePermission = resolve
-        void onPermissionRequest({
-          requestId: 'perm-replay',
-          request: {
-            subtype: 'can_use_tool',
-            tool_name: 'Bash',
-            input: { command: 'pwd' },
-            tool_use_id: 'toolu_replay',
-            agent_id: 'worker-1',
-            permission_suggestions: [
-              {
-                type: 'permission_rule',
-                ruleValue: 'Bash(pwd)',
-                ruleDisplay: 'Bash pwd',
-                behavior: 'allow',
-                destination: 'project',
-                metadata: { sandbox: 'read-only', network: false },
-              },
-            ],
-          } as never,
-        }).then(resolve)
+      permissionResponse = await onPermissionRequest({
+        requestId: 'perm-replay',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          display_name: 'Run shell command',
+          input: { command: 'pwd' },
+          tool_use_id: 'toolu_replay',
+          agent_id: 'worker-1',
+          blocked_path: '/repo',
+          decision_reason: 'Need shell approval',
+          permission_suggestions: [
+            {
+              type: 'permission_rule',
+              ruleValue: 'Bash(pwd)',
+              ruleDisplay: 'Bash pwd',
+              behavior: 'allow',
+              destination: 'project',
+              metadata: { sandbox: 'read-only', network: false },
+            },
+          ],
+        } as never,
       })
+      await turnReleased
     },
   })
+
   const server = await startAppSessionWebSocketServer({
     port: 0,
     token: 'secret',
@@ -1067,9 +1036,17 @@ test('replays pending permissions and rejects stale permission ids', async () =>
 
   const firstClient = await connect(`ws://127.0.0.1:${server.port}/ws`, 'secret')
   await nextJson(firstClient)
-  firstClient.send(JSON.stringify({ type: 'app.submit', requestId: 'submit-1', prompt: 'hi' }))
-  await nextJson(firstClient)
-  await nextJson(firstClient)
+  firstClient.send(
+    JSON.stringify({ type: 'app.submit', requestId: 'submit-1', prompt: 'hi' }),
+  )
+  expect(await nextJson(firstClient)).toEqual({
+    type: 'app.ack',
+    requestId: 'submit-1',
+  })
+  expect(await nextJson(firstClient)).toEqual({
+    type: 'app.event',
+    event: { type: 'status.update', activeTurn: true, inputEnabled: false },
+  })
   expect(await nextJson(firstClient)).toMatchObject({
     type: 'app.event',
     event: {
@@ -1077,7 +1054,12 @@ test('replays pending permissions and rejects stale permission ids', async () =>
       request: {
         requestId: 'perm-replay',
         request: {
+          display_name: 'Run shell command',
+          tool_name: 'Bash',
           agent_id: 'worker-1',
+          blocked_path: '/repo',
+          decision_reason: 'Need shell approval',
+          input: { command: 'pwd' },
           permission_suggestions: [
             expect.objectContaining({
               metadata: expect.objectContaining({ sandbox: 'read-only', network: false }),
@@ -1092,7 +1074,10 @@ test('replays pending permissions and rejects stale permission ids', async () =>
   expect(await nextJson(reconnectClient)).toMatchObject({
     type: 'app.ready',
     pendingPermissionRequests: [
-      expect.objectContaining({ requestId: 'perm-replay' }),
+      expect.objectContaining({
+        requestId: 'perm-replay',
+        request: expect.objectContaining({ agent_id: 'worker-1' }),
+      }),
     ],
   })
 
@@ -1114,8 +1099,17 @@ test('replays pending permissions and rejects stale permission ids', async () =>
       },
     }),
   )
-  expect(await nextJson(reconnectClient)).toEqual({ type: 'app.ack', requestId: 'perm-replay' })
-  releasePermission?.({ behavior: 'allow' })
+  expect(await nextJson(reconnectClient)).toEqual({
+    type: 'app.ack',
+    requestId: 'perm-replay',
+  })
+  expect(await nextJson(reconnectClient)).toMatchObject({
+    type: 'app.event',
+    event: {
+      type: 'permission.resolved',
+      requestId: 'perm-replay',
+    },
+  })
   expect(permissionResponse).toMatchObject({
     behavior: 'allow',
     updatedInput: { command: 'pwd' },
@@ -1136,11 +1130,10 @@ test('replays pending permissions and rejects stale permission ids', async () =>
     retryable: false,
   })
 
+  releaseTurn?.()
   await Promise.all([closeWebSocket(firstClient), closeWebSocket(reconnectClient)])
 })
 ```
-
-If this exact test is hard to fit around current helper utilities, keep the same assertions and remove the unused local `permissionStarted` scaffolding while preserving pending replay, persistent update, metadata, and stale-id checks.
 
 - [ ] **Step 5: Run server permission tests**
 
@@ -1190,28 +1183,97 @@ cd /Users/pt/cat-code && bun --cwd web test
 
 Expected result: pass.
 
-- [ ] **Step 7: Confirm browser state displays worker identity and sandbox/network distinction**
+- [ ] **Step 7: Confirm browser state preserves and UI reads permission display fields**
 
-Add or update a reducer test in `/Users/pt/cat-code/web/src/appState.test.ts` with this assertion shape:
+Add this concrete reducer test to `/Users/pt/cat-code/web/src/appState.test.ts`:
 
 ```ts
-expect(state.pendingPermissions[0]).toMatchObject({
-  requestId: 'perm-1',
-  request: {
-    agent_id: 'worker-1',
-    permission_suggestions: [
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          sandbox: 'read-only',
-          network: false,
-        }),
-      }),
-    ],
-  },
-})
+test('preserves pending permission display fields for the browser panel', () => {
+  let state = createInitialAppState();
+  state = reduceAppServerMessage(state, {
+    type: 'app.event',
+    event: {
+      type: 'permission.requested',
+      request: {
+        requestId: 'perm-1',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          display_name: 'Run shell command',
+          input: { command: 'pwd' },
+          permission_suggestions: [
+            {
+              type: 'permission_rule',
+              ruleValue: 'Bash(pwd)',
+              ruleDisplay: 'Bash pwd',
+              behavior: 'allow',
+              destination: 'project',
+              metadata: { sandbox: 'read-only', network: false },
+            },
+          ],
+          blocked_path: '/repo',
+          decision_reason: 'Need shell approval',
+          tool_use_id: 'toolu_1',
+          agent_id: 'worker-1',
+        },
+      },
+    },
+  });
+
+  expect(state.pendingPermissions).toEqual([
+    {
+      requestId: 'perm-1',
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: 'Bash',
+        display_name: 'Run shell command',
+        input: { command: 'pwd' },
+        permission_suggestions: [
+          expect.objectContaining({
+            ruleValue: 'Bash(pwd)',
+            metadata: expect.objectContaining({
+              sandbox: 'read-only',
+              network: false,
+            }),
+          }),
+        ],
+        blocked_path: '/repo',
+        decision_reason: 'Need shell approval',
+        tool_use_id: 'toolu_1',
+        agent_id: 'worker-1',
+      },
+    },
+  ]);
+});
 ```
 
-If `/Users/pt/cat-code/web/src/appState.ts` stores a flattened display model instead of the raw request, assert the flattened fields are named explicitly, for example `workerIdentity: 'worker-1'`, `sandbox: 'read-only'`, and `network: false`.
+If `/Users/pt/cat-code/web/src/App.tsx` does not display sandbox/network metadata yet, add this helper above `export function App()`:
+
+```tsx
+function permissionSuggestionLabels(permissionSuggestions?: unknown[]) {
+  return (permissionSuggestions ?? []).flatMap(suggestion => {
+    if (typeof suggestion !== 'object' || suggestion === null) return [];
+    const metadata = (suggestion as { metadata?: unknown }).metadata;
+    if (typeof metadata !== 'object' || metadata === null) return [];
+    const sandbox = (metadata as { sandbox?: unknown }).sandbox;
+    const network = (metadata as { network?: unknown }).network;
+    const labels: string[] = [];
+    if (typeof sandbox === 'string') labels.push(`Sandbox: ${sandbox}`);
+    if (typeof network === 'boolean') {
+      labels.push(network ? 'Network: requested' : 'Network: not requested');
+    }
+    return labels;
+  });
+}
+```
+
+Then add these labels inside the existing permission metadata row in `/Users/pt/cat-code/web/src/App.tsx`, immediately after the `blocked_path` span:
+
+```tsx
+{permissionSuggestionLabels(pendingPermission.request.permission_suggestions).map(label => (
+  <span key={label}>{label}</span>
+))}
+```
 
 Run:
 
@@ -1219,7 +1281,7 @@ Run:
 cd /Users/pt/cat-code && bun --cwd web test
 ```
 
-Expected result: pass.
+Expected result: pass. Manual smoke in Task 8 must verify the permission panel visibly shows the display name or tool name, worker id from `agent_id`, blocked path, decision reason, JSON input, and sandbox/network labels when the runtime includes those fields.
 
 ## Task 6: Add Web Smoke Script Or Manual Checklist
 
@@ -1235,7 +1297,7 @@ Manual smoke checklist:
 
 ```markdown
 1. Run: `cd /Users/pt/cat-code && bun run dev -- --web`
-2. Confirm terminal prints `App session WebSocket listening on ws://127.0.0.1:<port>/ws`.
+2. Confirm terminal prints `App session WebSocket listening on ws://127.0.0.1:3456/ws`.
 3. Confirm terminal prints `Web mode is runtime-backed: skipping the Ink REPL.`
 4. Confirm the opened browser URL is `http://127.0.0.1:5173` with no query string token.
 5. Type `Say hello from the runtime-backed app session` in the browser composer.
@@ -1365,7 +1427,7 @@ cd /Users/pt/cat-code && bun run dev -- --web
 Expected result:
 
 ```text
-App session WebSocket listening on ws://127.0.0.1:<port>/ws
+App session WebSocket listening on ws://127.0.0.1:3456/ws
 Web mode is runtime-backed: skipping the Ink REPL.
 ```
 
