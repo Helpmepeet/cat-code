@@ -65,7 +65,7 @@ cd /Users/pt/cat-code && sed -n '130,180p' src/QueryEngine.ts
 - Create `/Users/pt/cat-code/src/web/startRuntimeBackedWebMode.ts` — runtime-backed `--web` bootstrap helper that creates the app-session controller, starts `startAppSessionWebSocketServer(...)`, launches Vite, and waits until process shutdown.
 - Create `/Users/pt/cat-code/src/web/startRuntimeBackedWebMode.test.ts` — tests that the server starts before the wait point and the browser launcher is stopped when bootstrap fails or shutdown begins.
 - Modify `/Users/pt/cat-code/src/main.tsx` — move the `--web` branch to after normal setup/AppState/QueryEngine config assembly, call the runtime-backed helper, and skip `launchRepl(...)` only after the runtime-backed server is ready.
-- Optionally modify `/Users/pt/cat-code/src/web/appSessionProtocol.ts`, `/Users/pt/cat-code/web/src/appProtocol.ts`, `/Users/pt/cat-code/web/src/appState.ts`, and `/Users/pt/cat-code/web/src/appState.test.ts` only for the permission coverage task if the existing protocol or reducer does not carry the required permission metadata.
+- Modify `/Users/pt/cat-code/web/src/appProtocol.ts` for the permission coverage task so browser-side types include the concrete `PermissionUpdate` union below; optionally modify `/Users/pt/cat-code/src/web/appSessionProtocol.ts`, `/Users/pt/cat-code/web/src/appState.ts`, and `/Users/pt/cat-code/web/src/appState.test.ts` only if the existing protocol or reducer does not carry the required permission metadata.
 - Modify `/Users/pt/cat-code/web/src/App.tsx` for the permission coverage task so the browser panel can edit `updatedInput`, select valid persistent `updatedPermissions`, allow once without persistence, deny, and cancel as an interrupting deny.
 
 ## Task 1: Extract QueryEngine App Session Config Assembly
@@ -1097,7 +1097,6 @@ test('preserves permission update suggestions and maps cancel to deny with inter
         behavior: 'deny',
         message: 'cancelled in browser',
         interrupt: true,
-        updatedInput: request.request.input,
       }
     },
   })
@@ -1131,7 +1130,6 @@ test('preserves permission update suggestions and maps cancel to deny with inter
   expect(decision).toMatchObject({
     behavior: 'deny',
     interrupt: true,
-    updatedInput: { command: 'curl https://example.com' },
   })
 })
 ```
@@ -1340,9 +1338,9 @@ cd /Users/pt/cat-code && bun test src/web/AppSessionWebSocketServer.test.ts
 
 Expected result: pass if the server already carries these fields; otherwise fail on the precise schema or handoff gap.
 
-- [ ] **Step 6: Patch protocol schemas only if Step 5 fails on wire shape**
+- [ ] **Step 6: Update browser permission types and patch server schemas only if Step 5 fails on wire shape**
 
-If schema parsing strips or rejects `updatedInput`, `updatedPermissions`, `agent_id`, or current permission update suggestions, update `/Users/pt/cat-code/src/web/appSessionProtocol.ts` to keep using `/Users/pt/cat-code/src/utils/permissions/PermissionPromptToolResultSchema.ts` for `permission.response` validation, and update `/Users/pt/cat-code/web/src/appProtocol.ts` so browser-side types accept current `PermissionUpdate` shapes:
+Always update `/Users/pt/cat-code/web/src/appProtocol.ts` so browser-side types accept current `PermissionUpdate` shapes, including `mode: 'dontAsk'`, and so `permission_suggestions` and response `updatedPermissions` are typed as `PermissionUpdate[]`. If schema parsing strips or rejects `updatedInput`, `updatedPermissions`, `agent_id`, or current permission update suggestions, also update `/Users/pt/cat-code/src/web/appSessionProtocol.ts` to keep using `/Users/pt/cat-code/src/utils/permissions/PermissionPromptToolResultSchema.ts` for `permission.response` validation:
 
 ```ts
 type PermissionRuleValue = {
