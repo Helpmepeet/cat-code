@@ -898,27 +898,22 @@ Expected result: tests pass; the legacy disabled-input strings are absent; `star
 - Modify as needed: `/Users/pt/cat-code/web/src/App.tsx`
 - Read: `/Users/pt/cat-code/docs/design/dedicated-app/migration-scope.md:159-173`
 
-- [ ] **Step 1: Extend app-runtime permission tests for cancel, updated input, worker identity, and sandbox/network metadata**
+- [ ] **Step 1: Extend app-runtime permission tests for cancel, updated input, worker identity, and permission update suggestions**
 
 Add this test to `/Users/pt/cat-code/src/app-runtime/appRuntimeCanUseTool.test.ts`:
 
 ```ts
-test('preserves permission metadata and maps cancel to deny with interrupt', async () => {
+test('preserves permission update suggestions and maps cancel to deny with interrupt', async () => {
   const baseCanUseTool: CanUseToolFn = async () => ({
     behavior: 'ask',
     message: 'Need sandboxed network approval',
     updatedInput: { command: 'curl https://example.com' },
     suggestions: [
       {
-        type: 'permission_rule',
-        ruleValue: 'Bash(curl https://example.com)',
-        ruleDisplay: 'Bash curl https://example.com',
+        type: 'addRules',
+        rules: [{ toolName: 'Bash', ruleContent: 'curl https://example.com' }],
         behavior: 'allow',
-        destination: 'project',
-        metadata: {
-          sandbox: 'workspace-write',
-          network: true,
-        },
+        destination: 'projectSettings',
       },
     ],
   } as never)
@@ -954,10 +949,10 @@ test('preserves permission metadata and maps cancel to deny with interrupt', asy
         agent_id: 'worker-7',
         permission_suggestions: [
           expect.objectContaining({
-            metadata: expect.objectContaining({
-              sandbox: 'workspace-write',
-              network: true,
-            }),
+            type: 'addRules',
+            rules: [{ toolName: 'Bash', ruleContent: 'curl https://example.com' }],
+            behavior: 'allow',
+            destination: 'projectSettings',
           }),
         ],
       }),
@@ -979,11 +974,11 @@ Run:
 cd /Users/pt/cat-code && bun test src/app-runtime/appRuntimeCanUseTool.test.ts
 ```
 
-Expected result: pass if existing metadata is already preserved; otherwise fail on the exact missing field.
+Expected result: pass if existing permission update suggestions are already preserved; otherwise fail on the exact missing field.
 
 - [ ] **Step 3: Patch app-runtime permission request mapping only if Step 2 fails**
 
-If the test fails because metadata is dropped, update `/Users/pt/cat-code/src/app-runtime/appRuntimeCanUseTool.ts` so the request object is created with the existing fields intact:
+If the test fails because suggestion fields are dropped, update `/Users/pt/cat-code/src/app-runtime/appRuntimeCanUseTool.ts` so the request object is created with the existing fields intact:
 
 ```ts
 const request = {
@@ -1033,12 +1028,10 @@ test('replays pending permissions and rejects stale permission ids', async () =>
           decision_reason: 'Need shell approval',
           permission_suggestions: [
             {
-              type: 'permission_rule',
-              ruleValue: 'Bash(pwd)',
-              ruleDisplay: 'Bash pwd',
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
               behavior: 'allow',
-              destination: 'project',
-              metadata: { sandbox: 'read-only', network: false },
+              destination: 'projectSettings',
             },
           ],
         } as never,
@@ -1083,7 +1076,10 @@ test('replays pending permissions and rejects stale permission ids', async () =>
           input: { command: 'pwd' },
           permission_suggestions: [
             expect.objectContaining({
-              metadata: expect.objectContaining({ sandbox: 'read-only', network: false }),
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+              behavior: 'allow',
+              destination: 'projectSettings',
             }),
           ],
         },
@@ -1111,10 +1107,10 @@ test('replays pending permissions and rejects stale permission ids', async () =>
         updatedInput: { command: 'pwd' },
         updatedPermissions: [
           {
-            type: 'permission_rule',
-            ruleValue: 'Bash(pwd)',
-            destination: 'project',
+            type: 'addRules',
+            rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
             behavior: 'allow',
+            destination: 'projectSettings',
           },
         ],
       },
@@ -1134,7 +1130,14 @@ test('replays pending permissions and rejects stale permission ids', async () =>
   expect(permissionResponse).toMatchObject({
     behavior: 'allow',
     updatedInput: { command: 'pwd' },
-    updatedPermissions: [expect.objectContaining({ ruleValue: 'Bash(pwd)' })],
+    updatedPermissions: [
+      expect.objectContaining({
+        type: 'addRules',
+        rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+        behavior: 'allow',
+        destination: 'projectSettings',
+      }),
+    ],
   })
 
   reconnectClient.send(
@@ -1168,32 +1171,41 @@ Expected result: pass if the server already carries these fields; otherwise fail
 
 - [ ] **Step 6: Patch protocol schemas only if Step 5 fails on wire shape**
 
-If schema parsing strips or rejects `updatedInput`, `updatedPermissions`, `agent_id`, or suggestion metadata, update `/Users/pt/cat-code/src/web/appSessionProtocol.ts` and `/Users/pt/cat-code/web/src/appProtocol.ts` to accept the explicit fields:
+If schema parsing strips or rejects `updatedInput`, `updatedPermissions`, `agent_id`, or current permission update suggestions, update `/Users/pt/cat-code/src/web/appSessionProtocol.ts` to keep using `/Users/pt/cat-code/src/utils/permissions/PermissionPromptToolResultSchema.ts` for `permission.response` validation, and update `/Users/pt/cat-code/web/src/appProtocol.ts` so browser-side types accept current `PermissionUpdate` shapes:
 
 ```ts
-const permissionRuleUpdateSchema = z.object({
-  type: z.literal('permission_rule'),
-  ruleValue: z.string(),
-  ruleDisplay: z.string().optional(),
-  destination: z.enum(['user', 'project', 'local']).optional(),
-  behavior: z.enum(['allow', 'deny', 'ask']).optional(),
-  metadata: z
-    .object({
-      sandbox: z.string().optional(),
-      network: z.boolean().optional(),
-    })
-    .passthrough()
-    .optional(),
-})
+type PermissionRuleValue = {
+  toolName: string;
+  ruleContent?: string;
+};
 
-const permissionResponseSchema = z.object({
-  behavior: z.enum(['allow', 'deny']),
-  message: z.string().optional(),
-  interrupt: z.boolean().optional(),
-  updatedInput: z.unknown().optional(),
-  updatedPermissions: z.array(permissionRuleUpdateSchema).optional(),
-})
+type PermissionUpdateDestination =
+  | 'userSettings'
+  | 'projectSettings'
+  | 'localSettings'
+  | 'session'
+  | 'cliArg';
+
+type PermissionUpdate =
+  | {
+      type: 'addRules' | 'replaceRules' | 'removeRules';
+      rules: PermissionRuleValue[];
+      behavior: 'allow' | 'deny' | 'ask';
+      destination: PermissionUpdateDestination;
+    }
+  | {
+      type: 'setMode';
+      mode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+      destination: PermissionUpdateDestination;
+    }
+  | {
+      type: 'addDirectories' | 'removeDirectories';
+      directories: string[];
+      destination: PermissionUpdateDestination;
+    };
 ```
+
+`permission_suggestions` and `updatedPermissions` must use `PermissionUpdate[]`; invalid entries should continue to be caught or stripped by the existing permission prompt result schema.
 
 Then rerun:
 
@@ -1224,12 +1236,10 @@ test('preserves pending permission display fields for the browser panel', () => 
           input: { command: 'pwd' },
           permission_suggestions: [
             {
-              type: 'permission_rule',
-              ruleValue: 'Bash(pwd)',
-              ruleDisplay: 'Bash pwd',
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
               behavior: 'allow',
-              destination: 'project',
-              metadata: { sandbox: 'read-only', network: false },
+              destination: 'projectSettings',
             },
           ],
           blocked_path: '/repo',
@@ -1251,11 +1261,10 @@ test('preserves pending permission display fields for the browser panel', () => 
         input: { command: 'pwd' },
         permission_suggestions: [
           expect.objectContaining({
-            ruleValue: 'Bash(pwd)',
-            metadata: expect.objectContaining({
-              sandbox: 'read-only',
-              network: false,
-            }),
+            type: 'addRules',
+            rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+            behavior: 'allow',
+            destination: 'projectSettings',
           }),
         ],
         blocked_path: '/repo',
@@ -1268,33 +1277,26 @@ test('preserves pending permission display fields for the browser panel', () => 
 });
 ```
 
-If `/Users/pt/cat-code/web/src/App.tsx` does not display sandbox/network metadata yet, add this helper above `export function App()`:
+Confirm `/Users/pt/cat-code/web/src/App.tsx` reads these pending permission fields in its permission panel:
 
 ```tsx
-function permissionSuggestionLabels(permissionSuggestions?: unknown[]) {
-  return (permissionSuggestions ?? []).flatMap(suggestion => {
-    if (typeof suggestion !== 'object' || suggestion === null) return [];
-    const metadata = (suggestion as { metadata?: unknown }).metadata;
-    if (typeof metadata !== 'object' || metadata === null) return [];
-    const sandbox = (metadata as { sandbox?: unknown }).sandbox;
-    const network = (metadata as { network?: unknown }).network;
-    const labels: string[] = [];
-    if (typeof sandbox === 'string') labels.push(`Sandbox: ${sandbox}`);
-    if (typeof network === 'boolean') {
-      labels.push(network ? 'Network: requested' : 'Network: not requested');
-    }
-    return labels;
-  });
-}
+<div className="font-medium">
+  {pendingPermission.request.display_name ?? pendingPermission.request.tool_name} wants permission
+</div>
+<span>Tool: {pendingPermission.request.tool_name}</span>
+{pendingPermission.request.agent_id ? (
+  <span>Worker: {pendingPermission.request.agent_id}</span>
+) : null}
+{pendingPermission.request.blocked_path ? (
+  <span>Path: {pendingPermission.request.blocked_path}</span>
+) : null}
+{pendingPermission.request.decision_reason ? (
+  <p>{pendingPermission.request.decision_reason}</p>
+) : null}
+<pre>{JSON.stringify(pendingPermission.request.input, null, 2)}</pre>
 ```
 
-Then add these labels inside the existing permission metadata row in `/Users/pt/cat-code/web/src/App.tsx`, immediately after the `blocked_path` span:
-
-```tsx
-{permissionSuggestionLabels(pendingPermission.request.permission_suggestions).map(label => (
-  <span key={label}>{label}</span>
-))}
-```
+Do not parse sandbox/network labels out of `permission_suggestions`; those entries are `PermissionUpdate[]` and do not currently carry sandbox/network metadata. Manual smoke should verify sandbox/network distinction only when a current runtime field such as `decision_reason`, `blocked_path`, or another existing request/decision field carries it. A richer dedicated sandbox/network display belongs in a later transport-schema change if the runtime exposes first-class fields for it.
 
 Run:
 
@@ -1302,7 +1304,7 @@ Run:
 cd /Users/pt/cat-code && bun --cwd web test
 ```
 
-Expected result: pass. Manual smoke in Task 8 must verify the permission panel visibly shows the display name or tool name, worker id from `agent_id`, blocked path, decision reason, JSON input, and sandbox/network labels when the runtime includes those fields.
+Expected result: pass. Manual smoke in Task 8 must verify the permission panel visibly shows the display name or tool name, worker id from `agent_id`, blocked path, decision reason, JSON input, and sandbox/network distinction text when the runtime includes those fields.
 
 ## Task 6: Add Web Smoke Script Or Manual Checklist
 
@@ -1459,7 +1461,7 @@ Checklist:
 - A prompt submitted from the browser produces streamed app-runtime messages.
 - Permission allow, deny, cancel-as-deny-with-interrupt, updated input, and persistent permission update flows complete from the browser.
 - Worker identity from `agent_id` is visible when a worker-owned permission request is shown.
-- Sandbox and network metadata are visible when present in permission suggestions or decision metadata.
+- Sandbox and network distinction is visible when present in current request or decision fields such as `decision_reason`, `blocked_path`, or another first-class runtime field; do not expect it to be invented from `permission_suggestions`.
 - A pending permission request reappears after browser reconnect.
 - A stale permission request id receives `permission_not_found` and does not resolve a current request.
 - Ctrl-C stops the main process and the Vite child process.
@@ -1496,7 +1498,7 @@ Run:
 
 ```bash
 cd /Users/pt/cat-code && git status --short
-cd /Users/pt/cat-code && git diff -- src/main.tsx src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts package.json
+cd /Users/pt/cat-code && git diff -- src/main.tsx src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts web/src/App.tsx package.json
 ```
 
 Expected result: no unrelated docs/maps/source changes are included.
@@ -1506,7 +1508,7 @@ Expected result: no unrelated docs/maps/source changes are included.
 Run one `git add` command with the exact files changed by the implementation. Example for the full expected set:
 
 ```bash
-cd /Users/pt/cat-code && git add src/main.tsx src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts package.json
+cd /Users/pt/cat-code && git add src/main.tsx src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/web/launchWebAppDevServer.ts src/web/launchWebAppDevServer.test.ts src/web/startRuntimeBackedWebMode.ts src/web/startRuntimeBackedWebMode.test.ts src/app-runtime/appRuntimeCanUseTool.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/web/AppSessionWebSocketServer.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.ts web/src/appProtocol.ts web/src/appState.ts web/src/appState.test.ts web/src/App.tsx package.json
 ```
 
 If `package.json` or protocol files did not change, omit them from the command rather than staging unchanged files.
