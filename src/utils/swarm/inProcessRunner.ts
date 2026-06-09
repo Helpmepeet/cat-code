@@ -92,8 +92,10 @@ import {
   getLastPeerDmSummary,
   isPermissionResponse,
   isShutdownRequest,
+  type MailboxSignature,
   markMessageAsReadByIndex,
   readMailbox,
+  readMailboxIfChanged,
   writeToMailbox,
 } from '../teammateMailbox.js'
 import {
@@ -117,6 +119,9 @@ import { TEAMMATE_SYSTEM_PROMPT_ADDENDUM } from './teammatePromptAddendum.js'
 type SetAppStateFn = (updater: (prev: AppState) => AppState) => void
 
 const PERMISSION_POLL_INTERVAL_MS = 500
+const IDLE_POLL_INTERVAL_MS = 500
+const IDLE_POLL_MAX_INTERVAL_MS = 2000
+const IDLE_POLL_FAST_EMPTY_POLLS = 2
 
 /**
  * Creates a canUseTool function for in-process teammates that properly resolves
@@ -674,6 +679,17 @@ async function tryClaimNextTask(
   }
 }
 
+function getIdlePollDelayMs(consecutiveEmptyPolls: number): number {
+  const backoffSteps = Math.max(
+    0,
+    consecutiveEmptyPolls - IDLE_POLL_FAST_EMPTY_POLLS,
+  )
+  return Math.min(
+    IDLE_POLL_MAX_INTERVAL_MS,
+    IDLE_POLL_INTERVAL_MS * 2 ** backoffSteps,
+  )
+}
+
 /**
  * Result of waiting for messages.
  */
@@ -694,9 +710,23 @@ type WaitResult =
       type: 'aborted'
     }
 
+type IdleWaitDeps = {
+  sleep: typeof sleep
+  readMailboxIfChanged: typeof readMailboxIfChanged
+  markMessageAsReadByIndex: typeof markMessageAsReadByIndex
+  tryClaimNextTask: typeof tryClaimNextTask
+}
+
+const defaultIdleWaitDeps: IdleWaitDeps = {
+  sleep,
+  readMailboxIfChanged,
+  markMessageAsReadByIndex,
+  tryClaimNextTask,
+}
+
 /**
  * Waits for new prompts or shutdown request.
- * Polls the teammate's mailbox every 500ms, checking for:
+ * Polls the teammate's mailbox, checking for:
  * - Shutdown request from leader (returned to caller for model decision)
  * - New messages/prompts from leader
  * - Abort signal
@@ -711,14 +741,15 @@ async function waitForNextPromptOrShutdown(
   getAppState: () => AppState,
   setAppState: SetAppStateFn,
   taskListId: string,
+  deps: IdleWaitDeps = defaultIdleWaitDeps,
 ): Promise<WaitResult> {
-  const POLL_INTERVAL_MS = 500
-
   logForDebugging(
     `[inProcessRunner] ${identity.agentName} starting poll loop (abort=${abortController.signal.aborted})`,
   )
 
   let pollCount = 0
+  let consecutiveEmptyPolls = 0
+  let mailboxSignature: MailboxSignature | undefined
   while (!abortController.signal.aborted) {
     // Check for in-memory pending messages on every iteration (from transcript viewing)
     const appState = getAppState()
@@ -758,7 +789,10 @@ async function waitForNextPromptOrShutdown(
 
     // Wait before next poll (skip on first iteration to check immediately)
     if (pollCount > 0) {
-      await sleep(POLL_INTERVAL_MS)
+      await deps.sleep(
+        getIdlePollDelayMs(consecutiveEmptyPolls),
+        abortController.signal,
+      )
     }
     pollCount++
 
@@ -778,10 +812,13 @@ async function waitForNextPromptOrShutdown(
       // Read all messages and scan unread for shutdown requests first.
       // Shutdown requests are prioritized over regular messages to prevent
       // starvation when peer-to-peer messages flood the queue.
-      const allMessages = await readMailbox(
+      const mailbox = await deps.readMailboxIfChanged(
         identity.agentName,
         identity.teamName,
+        mailboxSignature,
       )
+      mailboxSignature = mailbox.signature
+      const allMessages = mailbox.changed ? mailbox.messages : []
 
       // Scan all unread messages for shutdown requests (highest priority).
       // readMailbox() already reads all messages from disk, so this scan
@@ -809,7 +846,7 @@ async function waitForNextPromptOrShutdown(
         logForDebugging(
           `[inProcessRunner] ${identity.agentName} received shutdown request from ${shutdownParsed?.from} (prioritized over ${skippedUnread} unread messages)`,
         )
-        await markMessageAsReadByIndex(
+        await deps.markMessageAsReadByIndex(
           identity.agentName,
           identity.teamName,
           shutdownIndex,
@@ -847,7 +884,7 @@ async function waitForNextPromptOrShutdown(
           logForDebugging(
             `[inProcessRunner] ${identity.agentName} received new message from ${msg.from} (index ${selectedIndex})`,
           )
-          await markMessageAsReadByIndex(
+          await deps.markMessageAsReadByIndex(
             identity.agentName,
             identity.teamName,
             selectedIndex,
@@ -869,7 +906,10 @@ async function waitForNextPromptOrShutdown(
     }
 
     // Check the team's task list for unclaimed tasks
-    const taskPrompt = await tryClaimNextTask(taskListId, identity.agentName)
+    const taskPrompt = await deps.tryClaimNextTask(
+      taskListId,
+      identity.agentName,
+    )
     if (taskPrompt) {
       return {
         type: 'new_message',
@@ -877,12 +917,33 @@ async function waitForNextPromptOrShutdown(
         from: 'task-list',
       }
     }
+    consecutiveEmptyPolls++
   }
 
   logForDebugging(
     `[inProcessRunner] ${identity.agentName} exiting poll loop (abort=${abortController.signal.aborted}, polls=${pollCount})`,
   )
   return { type: 'aborted' }
+}
+
+export function waitForNextPromptOrShutdownForTest(params: {
+  identity: TeammateIdentity
+  abortController: AbortController
+  taskId: string
+  getAppState: () => AppState
+  setAppState: SetAppStateFn
+  taskListId: string
+  deps: IdleWaitDeps
+}): Promise<WaitResult> {
+  return waitForNextPromptOrShutdown(
+    params.identity,
+    params.abortController,
+    params.taskId,
+    params.getAppState,
+    params.setAppState,
+    params.taskListId,
+    params.deps,
+  )
 }
 
 /**

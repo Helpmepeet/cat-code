@@ -56,6 +56,7 @@ import {
   isModeSetRequest,
   isPermissionRequest,
   isPermissionResponse,
+  type MailboxSignature,
   isPlanApprovalRequest,
   isPlanApprovalResponse,
   isSandboxPermissionRequest,
@@ -64,7 +65,7 @@ import {
   isShutdownRequest,
   isTeamPermissionUpdate,
   markMessagesAsRead,
-  readUnreadMessages,
+  readMailboxIfChanged,
   type TeammateMessage,
   writeToMailbox,
 } from '../utils/teammateMailbox.js'
@@ -142,6 +143,8 @@ export function useInboxPoller({
   const setAppState = useSetAppState()
   const inboxMessageCount = useAppState(s => s.inbox.messages.length)
   const terminal = useTerminalNotification()
+  const mailboxSignatureRef = useRef<MailboxSignature | undefined>(undefined)
+  const mailboxKeyRef = useRef<string | undefined>(undefined)
 
   const poll = useCallback(async () => {
     if (!enabled) return
@@ -150,11 +153,22 @@ export function useInboxPoller({
     const currentAppState = store.getState()
     const agentName = getAgentNameToPoll(currentAppState)
     if (!agentName) return
+    const teamName = currentAppState.teamContext?.teamName
+    const mailboxKey = `${teamName ?? ''}\0${agentName}`
+    if (mailboxKeyRef.current !== mailboxKey) {
+      mailboxKeyRef.current = mailboxKey
+      mailboxSignatureRef.current = undefined
+    }
 
-    const unread = await readUnreadMessages(
+    const mailbox = await readMailboxIfChanged(
       agentName,
-      currentAppState.teamContext?.teamName,
+      teamName,
+      mailboxSignatureRef.current,
     )
+    mailboxSignatureRef.current = mailbox.signature
+    if (!mailbox.changed) return
+
+    const unread = mailbox.messages.filter(m => !m.read)
 
     if (unread.length === 0) return
 

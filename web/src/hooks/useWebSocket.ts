@@ -11,12 +11,26 @@ function getWebSocketProtocols() {
   return token ? [`cat-code.${token}`] : undefined;
 }
 
+const RECONNECT_INITIAL_DELAY_MS = 1500;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
+// Backs off exponentially so a tab whose backend has gone away (e.g. the
+// cat-code session exited but the dev server kept serving the page) doesn't
+// retry every 1.5s forever.
+export function getReconnectDelayMs(failedAttempts: number): number {
+  return Math.min(
+    RECONNECT_INITIAL_DELAY_MS * 2 ** Math.max(0, failedAttempts),
+    RECONNECT_MAX_DELAY_MS,
+  );
+}
+
 export function useWebSocket(onMessage: (data: AppServerMessage) => void) {
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(true);
   const [lastError, setLastError] = useState<string | undefined>();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const failedAttemptsRef = useRef(0);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
 
@@ -32,6 +46,7 @@ export function useWebSocket(onMessage: (data: AppServerMessage) => void) {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        failedAttemptsRef.current = 0;
         setConnected(true);
         setReconnecting(false);
         setLastError(undefined);
@@ -50,7 +65,9 @@ export function useWebSocket(onMessage: (data: AppServerMessage) => void) {
         setConnected(false);
         if (closedByCleanup) return;
         setReconnecting(true);
-        reconnectTimerRef.current = window.setTimeout(() => connect(), 1500);
+        const delay = getReconnectDelayMs(failedAttemptsRef.current);
+        failedAttemptsRef.current += 1;
+        reconnectTimerRef.current = window.setTimeout(() => connect(), delay);
       };
 
       ws.onerror = () => {

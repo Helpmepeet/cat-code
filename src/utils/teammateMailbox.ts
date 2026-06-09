@@ -1,13 +1,13 @@
 /**
  * Teammate Mailbox - File-based messaging system for agent swarms
  *
- * Each teammate has an inbox file at .claude/teams/{team_name}/inboxes/{agent_name}.json
+ * Each teammate has an inbox file at .cat-code/teams/{team_name}/inboxes/{agent_name}.json
  * Other teammates can write messages to it, and the recipient sees them as attachments.
  *
  * Note: Inboxes are keyed by agent name within a team.
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
 import {
@@ -74,9 +74,11 @@ const TeammateMailboxMessageSchema = z.object({
 
 const TeammateMailboxFileSchema = z.array(TeammateMailboxMessageSchema)
 
+export type MailboxSignature = string | null
+
 /**
  * Get the path to a teammate's inbox file
- * Structure: ~/.claude/teams/{team_name}/inboxes/{agent_name}.json
+ * Structure: ~/.cat-code/teams/{team_name}/inboxes/{agent_name}.json
  */
 export function getInboxPath(agentName: string, teamName?: string): string {
   const team = teamName || getTeamName() || 'default'
@@ -137,6 +139,45 @@ export async function readMailbox(
     logForDebugging(`Failed to read inbox for ${agentName}: ${error}`)
     logError(error)
     return []
+  }
+}
+
+async function getMailboxSignature(
+  agentName: string,
+  teamName?: string,
+): Promise<MailboxSignature> {
+  const inboxPath = getInboxPath(agentName, teamName)
+  try {
+    const stats = await stat(inboxPath)
+    if (!stats.isFile()) return null
+    return `${stats.mtimeMs}:${stats.size}`
+  } catch (error) {
+    const code = getErrnoCode(error)
+    if (code === 'ENOENT') return null
+    logForDebugging(`Failed to stat inbox for ${agentName}: ${error}`)
+    logError(error)
+    return null
+  }
+}
+
+export async function readMailboxIfChanged(
+  agentName: string,
+  teamName?: string,
+  previousSignature?: MailboxSignature,
+): Promise<{
+  changed: boolean
+  signature: MailboxSignature | undefined
+  messages: TeammateMessage[]
+}> {
+  const signature = await getMailboxSignature(agentName, teamName)
+  if (previousSignature !== undefined && signature === previousSignature) {
+    return { changed: false, signature, messages: [] }
+  }
+  const messages = await readMailbox(agentName, teamName)
+  return {
+    changed: true,
+    signature: messages.some(m => !m.read) ? undefined : signature,
+    messages,
   }
 }
 

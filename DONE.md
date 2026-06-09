@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 10 Jun 2026
+
+84. Cut idle/background energy usage — teammate mailbox polling (the 1s inbox poller and the 500ms in-process teammate wait loop) now stats the inbox file for an mtime+size signature and skips reading/parsing unchanged mailboxes, with the in-process idle loop backing off 500ms→2s when empty; web mode no longer leaks the vite dev server on exit (the global SIGINT handler's `process.exit(0)` skipped the async cleanup, orphaning vite+esbuild — one orphan had run for 2¼ days — fixed with a `process.on('exit')` hook that SIGTERMs the child); and the browser web app's WebSocket reconnect backs off exponentially 1.5s→30s instead of hammering a dead backend every 1.5s forever. Verified live: an idle interactive session now measures ~0.3% CPU, ~0.3 wakeups/s, macOS power score 0.0. A long active session's ~1GB RSS was diagnosed as JS-heap retention plus allocator slack (not a leak, not battery-relevant).
+
 ### 6 Jun 2026
 
 83. Stopped the model from forcing subagents onto GPT-5.4. GPT-5.5 main sessions were spawning normal subagents (and Explore) pinned to GPT-5.4 — traced to the model volunteering a `model` argument on `Agent` calls, not a defaulting bug (subagents already default to `inherit`, and no instruction anywhere told the model to pick GPT-5.4; it was choosing it from the bare `model` enum). Tightened the `Agent` tool's `model` parameter description to a bright-line rule — omit it (inherit your model or the agent's own pin) and set it only when the user explicitly named a model, with GPT-5.4 called out as the anti-pattern — and dropped the stale "sonnet to audit your work" example since Claude models are retired on the Codex backend. Prompt-only; no model-resolution code changed.
