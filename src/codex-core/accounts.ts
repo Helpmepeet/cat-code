@@ -185,6 +185,7 @@ async function maybeRefreshAccount(
         {
           accessToken: refreshed.accessToken,
           refreshToken: refreshed.refreshToken,
+          idToken: refreshed.idToken || undefined,
           expiresAt: refreshed.expiresAt,
           accountId: refreshed.accountId,
         },

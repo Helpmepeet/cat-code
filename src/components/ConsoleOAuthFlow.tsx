@@ -9,7 +9,7 @@ import { Box, Link, Text } from '../ink.js';
 import { useKeybinding } from '../keybindings/useKeybinding.js';
 import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
-import { runCodexOAuthFlow } from '../services/oauth/codex-client.js';
+import { runCodexOAuthFlow, type CodexTokens } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
 import { getOauthAccountInfo, saveCodexOAuthTokens, validateForceLoginOrg } from '../utils/auth.js';
 import { logError } from '../utils/log.js';
@@ -46,7 +46,7 @@ type OAuthStatus = {
   nextState: OAuthStatus;
 } | {
   state: 'waiting_for_alias';
-  codexTokens: { accessToken: string; refreshToken: string; expiresAt: number; accountId: string };
+  codexTokens: CodexTokens;
 } | {
   state: 'success';
   token?: string;
@@ -179,7 +179,7 @@ export function ConsoleOAuthFlow({
     }
   }, [pastedCode, oauthStatus, showPastePrompt, urlCopied]);
   const persistCodexLogin = useCallback(async (
-    codexTokens: { accessToken: string; refreshToken: string; expiresAt: number; accountId: string },
+    codexTokens: CodexTokens,
     alias?: string,
   ) => {
     saveCodexOAuthTokens(codexTokens);
@@ -198,7 +198,7 @@ export function ConsoleOAuthFlow({
       },
     );
   }, []);
-  async function handleSubmitAlias(alias: string, codexTokens: { accessToken: string; refreshToken: string; expiresAt: number; accountId: string }) {
+  async function handleSubmitAlias(alias: string, codexTokens: CodexTokens) {
     try {
       const trimmed = alias.trim();
       if (trimmed) {

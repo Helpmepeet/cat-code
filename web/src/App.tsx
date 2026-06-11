@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageContent } from "./components/MessageContent";
-import type { AppServerMessage, BrowserMessage } from "./appProtocol";
+import type {
+  AppServerMessage,
+  BrowserMessage,
+  PermissionUpdate,
+} from "./appProtocol";
 import {
   createInitialAppState,
   reduceAppServerMessage,
@@ -247,6 +251,53 @@ export function App() {
     return "Disconnected";
   }, [status.connected, status.reconnecting]);
   const pendingPermission = appState.pendingPermissions[0];
+  const permissionSuggestions =
+    pendingPermission?.request.permission_suggestions ?? [];
+  const [permissionInputDraft, setPermissionInputDraft] = useState("");
+  const [permissionInputError, setPermissionInputError] = useState<string | null>(
+    null,
+  );
+  const [selectedPermissionUpdateIndexes, setSelectedPermissionUpdateIndexes] =
+    useState<number[]>([]);
+
+  useEffect(() => {
+    if (!pendingPermission) {
+      setPermissionInputDraft("");
+      setPermissionInputError(null);
+      setSelectedPermissionUpdateIndexes([]);
+      return;
+    }
+
+    setPermissionInputDraft(
+      JSON.stringify(pendingPermission.request.input, null, 2),
+    );
+    setPermissionInputError(null);
+    setSelectedPermissionUpdateIndexes([]);
+  }, [pendingPermission?.requestId]);
+
+  const selectedPermissionUpdates: PermissionUpdate[] =
+    selectedPermissionUpdateIndexes.map(index => permissionSuggestions[index]);
+
+  function parsePermissionInputDraft() {
+    try {
+      const parsed = JSON.parse(permissionInputDraft) as unknown;
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        setPermissionInputError("Permission input must be a JSON object");
+        return null;
+      }
+      setPermissionInputError(null);
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      setPermissionInputError(
+        error instanceof Error ? error.message : "Invalid JSON input",
+      );
+      return null;
+    }
+  }
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(244,114,182,0.16),_transparent_28%),linear-gradient(180deg,_#09090b_0%,_#09090b_42%,_#050506_100%)] text-zinc-100">
@@ -304,26 +355,84 @@ export function App() {
                     {pendingPermission.request.decision_reason}
                   </p>
                 ) : null}
-                <pre className="mt-2 max-h-40 overflow-auto rounded-xl bg-black/30 p-3 text-xs text-amber-100">
-                  {JSON.stringify(pendingPermission.request.input, null, 2)}
-                </pre>
+                <label className="mt-3 block text-xs text-amber-100/80">
+                  Input sent when allowed
+                  <textarea
+                    value={permissionInputDraft}
+                    onChange={event => setPermissionInputDraft(event.target.value)}
+                    className="mt-1 min-h-28 w-full rounded-xl bg-black/30 p-3 font-mono text-xs text-amber-100 outline-none ring-1 ring-amber-200/10 focus:ring-amber-200/30"
+                  />
+                </label>
+                {permissionInputError ? (
+                  <p className="mt-1 text-xs text-red-200">
+                    {permissionInputError}
+                  </p>
+                ) : null}
+                {permissionSuggestions.length > 0 ? (
+                  <div className="mt-3 space-y-2 rounded-xl border border-amber-200/10 p-3 text-xs">
+                    <div className="font-medium text-amber-100">
+                      Persist selected permission updates
+                    </div>
+                    {permissionSuggestions.map((suggestion, index) => (
+                      <label key={index} className="flex gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedPermissionUpdateIndexes.includes(index)}
+                          onChange={event => {
+                            setSelectedPermissionUpdateIndexes(current =>
+                              event.target.checked
+                                ? [...current, index]
+                                : current.filter(value => value !== index),
+                            );
+                          }}
+                        />
+                        <span className="font-mono">
+                          {JSON.stringify(suggestion)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      const updatedInput = parsePermissionInputDraft();
+                      if (!updatedInput) return;
                       send({
                         type: "permission.response",
                         requestId: pendingPermission.requestId,
                         response: {
                           behavior: "allow",
-                          updatedInput: pendingPermission.request.input,
+                          updatedInput,
                           decisionClassification: "user_temporary",
                         },
-                      })
-                    }
+                      });
+                    }}
                     className="rounded-full bg-amber-300 px-3 py-1.5 text-xs font-medium text-zinc-950"
                   >
                     Allow once
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updatedInput = parsePermissionInputDraft();
+                      if (!updatedInput) return;
+                      send({
+                        type: "permission.response",
+                        requestId: pendingPermission.requestId,
+                        response: {
+                          behavior: "allow",
+                          updatedInput,
+                          updatedPermissions: selectedPermissionUpdates,
+                          decisionClassification: "user_permanent",
+                        },
+                      });
+                    }}
+                    disabled={selectedPermissionUpdateIndexes.length === 0}
+                    className="rounded-full border border-amber-200/20 px-3 py-1.5 text-xs text-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Allow and remember selected
                   </button>
                   <button
                     type="button"

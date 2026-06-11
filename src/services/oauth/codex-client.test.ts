@@ -28,6 +28,7 @@ describe('Codex OAuth callback page', () => {
     try {
       const tokens = await exchangeCodexCode('auth-code', 'verifier')
       expect(tokens.accountEmail).toBe('person@example.com')
+      expect(tokens.idToken).toBe(createJwt({ email: 'person@example.com' }))
     } finally {
       globalThis.fetch = originalFetch
     }

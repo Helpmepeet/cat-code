@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-06-06
+Last refreshed: 2026-06-08
 
 ## Purpose
 
@@ -29,6 +29,7 @@ Keep detailed domain content in these sub-maps:
 | [`auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. |
 | [`plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. |
 | [`bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. |
+| [`web-app-runtime.md`](web-app-runtime.md) | Browser chat runtime, app-session controller, localhost WebSocket transport, browser state, and web-mode startup seams. |
 | [`ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. |
 | [`native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. |
 | [`proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. |
@@ -52,6 +53,7 @@ Keep detailed domain content in these sub-maps:
 | Settings, config, persistence, memory | `src/utils/settings/settings.ts`, `src/utils/config.ts` | `src/utils/sessionStorage.ts`, `src/memdir/`, `src/services/SessionMemory/`, migrations | [`config-persistence.md`](config-persistence.md) |
 | Auth, login, account state | `src/utils/auth.ts` | `src/services/oauth/`, `src/commands/login/`, `src/commands/accounts/`, secure storage, account pool touchpoints | [`auth-accounts-oauth.md`](auth-accounts-oauth.md) |
 | Bridge, remote control, structured IO | `src/bridge/initReplBridge.ts`, `src/cli/structuredIO.ts` | `src/bridge/`, `src/remote/`, `src/server/`, `src/cli/transports/`, `src/upstreamproxy/` | [`bridge-remote-cli.md`](bridge-remote-cli.md) |
+| Browser chat and app runtime | `src/main.tsx`, `src/web/startRuntimeBackedWebMode.ts`, `src/web/AppSessionWebSocketServer.ts` | `src/app-runtime/AppSessionController.ts`, `src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts`, `web/src/App.tsx`, `web/src/appState.ts` | [`web-app-runtime.md`](web-app-runtime.md), [`build-release-testing.md`](build-release-testing.md) |
 | IDE and LSP integration | `src/services/lsp/manager.ts`, `src/commands/ide/` | `src/tools/LSPTool/`, IDE components/hooks/utils, plugin LSP integration | [`ide-lsp.md`](ide-lsp.md) |
 | Native/browser/client integrations | `src/utils/claudeInChrome/`, `src/utils/computerUse/` | `src/native-ts/`, `src/voice/`, desktop/mobile/chrome/voice commands | [`native-client-integrations.md`](native-client-integrations.md) |
 | Proactive and assistant services | `src/proactive/` | `src/services/autoDream/`, `src/services/MagicDocs/`, `src/services/tips/`, trigger/sleep/brief surfaces | [`proactive-assistant-services.md`](proactive-assistant-services.md) |

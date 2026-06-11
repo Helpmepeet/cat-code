@@ -11,6 +11,7 @@ import {
   CodexAccountCapError,
   resetCodexCacheContext,
 } from './codex-fetch-adapter.js'
+import { resolveCodexOAuthTokensForLeaseOwner } from './client.js'
 import { classifyAPIError } from './errors.js'
 import {
   getPoolStatus,
@@ -56,13 +57,18 @@ function buildPoolAccount(
     expiresAt: overrides.expiresAt ?? Date.now() + 60_000,
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
+    statusReason: overrides.statusReason,
     lastUsedAt: overrides.lastUsedAt ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
     usageWeekly: overrides.usageWeekly,
+    usageAllowed: overrides.usageAllowed,
+    usageLimitReached: overrides.usageLimitReached,
     usageFetchedAt:
       'usageFetchedAt' in overrides ? overrides.usageFetchedAt : Date.now(),
+    planType: overrides.planType,
+    planExpiresAt: overrides.planExpiresAt,
   }
 }
 
@@ -228,6 +234,106 @@ describe('codexAccountLeaseManager', () => {
         ownerLabel: 'No account left',
       }),
     ).toThrow('All Codex accounts are capped or unavailable')
+  })
+
+  test('main-thread lease skips a blocked active account', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'active-capped',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'active-capped',
+          alias: 'active',
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: Date.now(),
+        }),
+        buildPoolAccount({ accountId: 'backup-clean', alias: 'backup' }),
+      ],
+    })
+
+    const lease = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'main thread',
+    })
+
+    expect(lease.accountId).toBe('backup-clean')
+  })
+
+  test('token resolution falls back when the leased account is blocked', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'backup-clean',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'leased-capped',
+          alias: 'leased',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          lastError: 'Usage cap hit (429)',
+        }),
+        buildPoolAccount({ accountId: 'backup-clean', alias: 'backup' }),
+      ],
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'leased-capped',
+      strategy: 'follow-main',
+    })
+
+    const tokens = resolveCodexOAuthTokensForLeaseOwner({
+      codexLeaseOwnerType: 'main',
+    })
+
+    expect(tokens?.accountId).toBe('backup-clean')
+  })
+
+  test('spread lease prefers a clean account over a warned one', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'warned-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'warned-account',
+          alias: 'warned',
+          planType: 'plus',
+          planExpiresAt: '2020-01-01T00:00:00.000Z',
+        }),
+        buildPoolAccount({ accountId: 'clean-account', alias: 'clean' }),
+      ],
+    })
+
+    const lease = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'agent-1',
+      ownerType: 'subagent',
+      ownerLabel: 'agent 1',
+      strategy: 'spread',
+    })
+
+    expect(lease.accountId).toBe('clean-account')
+  })
+
+  test('spread lease uses a warned account when no clean account exists', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'warned-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'warned-account',
+          alias: 'warned',
+          planType: 'plus',
+          planExpiresAt: '2020-01-01T00:00:00.000Z',
+        }),
+      ],
+    })
+
+    const lease = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'agent-2',
+      ownerType: 'subagent',
+      ownerLabel: 'agent 2',
+      strategy: 'spread',
+    })
+
+    expect(lease.accountId).toBe('warned-account')
   })
 
   test('follow-main chooses the healthy main account directly', () => {
@@ -499,7 +605,7 @@ describe('codexAccountLeaseManager', () => {
     expect(getPoolStatus()).toEqual(poolBefore)
   })
 
-  test('usage refresh updates usage hints without mutating account status (observational)', async () => {
+  test('usage refresh blocks route selection without mutating account status', async () => {
     const realFetch = globalThis.fetch
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -589,6 +695,8 @@ describe('codexAccountLeaseManager', () => {
       .toMatchObject({
         status: 'healthy',
         usagePrimary: 100,
+        usageAllowed: false,
+        usageLimitReached: true,
       })
 
     const lease = moduleUnderTest.createCodexLeaseForTest({
@@ -598,10 +706,9 @@ describe('codexAccountLeaseManager', () => {
       strategy: 'follow-main',
     })
 
-    // follow-main stays on main even when usage hints show 100% — DP2 says
-    // observational polling does not pre-emptively reroute leases. The real
-    // 429 will drive failover in the request path.
-    expect(lease.accountId).toBe('main-account')
+    // Usage observations do not mutate internal status, but fresh usage caps
+    // should block new route selection before another request hits a known cap.
+    expect(lease.accountId).toBe('worker-a')
   })
 
   test('withRetry classifies exhausted lease failures as usage exhaustion instead of connectivity', async () => {

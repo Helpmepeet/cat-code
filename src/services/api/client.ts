@@ -3,7 +3,12 @@ import Anthropic, {
   type ClientOptions,
 } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
-import { getActiveAccount, getPoolStatus, isPoolActive } from './codexAccountPool.js'
+import {
+  getActiveAccount,
+  getPoolStatus,
+  isCodexAccountLeaseSelectable,
+  isPoolActive,
+} from './codexAccountPool.js'
 import {
   getActiveClaudeAccount,
   getClaudePoolStatus,
@@ -241,9 +246,13 @@ export function resolveCodexOAuthTokensForLeaseOwner({
             : undefined)
         : undefined
 
-  const poolAccount = leasedAccountId
+  const leasedAccount = leasedAccountId
     ? poolAccountById.get(leasedAccountId)
-    : getActiveAccount()
+    : null
+  const poolAccount =
+    leasedAccount && isCodexAccountLeaseSelectable(leasedAccount)
+      ? leasedAccount
+      : getActiveAccount()
 
   if (poolAccount) {
     return {

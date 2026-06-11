@@ -13,6 +13,36 @@ export type AppAbortState =
   | { status: "requested"; reason?: string }
   | { status: "aborted"; reason?: string };
 
+export type PermissionRuleValue = {
+  toolName: string;
+  ruleContent?: string;
+};
+
+export type PermissionUpdateDestination =
+  | "userSettings"
+  | "projectSettings"
+  | "localSettings"
+  | "session"
+  | "cliArg";
+
+export type PermissionUpdate =
+  | {
+      type: "addRules" | "replaceRules" | "removeRules";
+      rules: PermissionRuleValue[];
+      behavior: "allow" | "deny" | "ask";
+      destination: PermissionUpdateDestination;
+    }
+  | {
+      type: "setMode";
+      mode: "acceptEdits" | "bypassPermissions" | "default" | "dontAsk" | "plan";
+      destination: PermissionUpdateDestination;
+    }
+  | {
+      type: "addDirectories" | "removeDirectories";
+      directories: string[];
+      destination: PermissionUpdateDestination;
+    };
+
 export type AppBrowserEvent =
   | { type: "message.append"; message: BrowserMessage }
   | { type: "message.replace"; message: BrowserMessage }
@@ -58,7 +88,7 @@ export type AppPermissionRequest = {
     subtype: "can_use_tool";
     tool_name: string;
     input: Record<string, unknown>;
-    permission_suggestions?: unknown[];
+    permission_suggestions?: PermissionUpdate[];
     blocked_path?: string;
     decision_reason?: string;
     title?: string;
@@ -88,7 +118,7 @@ export type AppClientMessage =
         | {
             behavior: "allow";
             updatedInput: Record<string, unknown>;
-            updatedPermissions?: unknown[];
+	            updatedPermissions?: PermissionUpdate[];
             toolUseID?: string;
             decisionClassification?:
               | "user_temporary"

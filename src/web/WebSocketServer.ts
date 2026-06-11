@@ -1,5 +1,5 @@
 /**
- * WebSocket server for the Cat Code web UI.
+ * Legacy WebSocket relay server for the Cat Code web UI.
  *
  * Listens on port 3456, relays engine events to browser clients,
  * and forwards browser input back to the engine via WebUIBus.
@@ -57,7 +57,7 @@ export function startWebUIServer(): { port: number } {
       connected: true,
       reconnecting: false,
       inputEnabled: false,
-      notice: "Web mode is browser-first now, but the backend still depends on the terminal REPL path. Sending is intentionally disabled until that backend path is split out.",
+      notice: "This legacy relay server does not accept browser submissions. Runtime-backed web mode uses the app-session WebSocket server.",
     }));
   });
 

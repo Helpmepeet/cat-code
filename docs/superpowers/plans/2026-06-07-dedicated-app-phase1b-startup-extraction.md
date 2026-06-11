@@ -1410,7 +1410,7 @@ Then rerun:
 
 ```bash
 cd /Users/pt/cat-code && bun test src/web/appSessionProtocol.test.ts src/web/AppSessionWebSocketServer.test.ts
-cd /Users/pt/cat-code && bun --cwd web test
+cd /Users/pt/cat-code && bun run --cwd web test
 ```
 
 Expected result: pass.
@@ -1500,7 +1500,7 @@ Do not parse sandbox/network labels out of `permission_suggestions`; those entri
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun --cwd web test
+cd /Users/pt/cat-code && bun run --cwd web test
 ```
 
 Expected result: pass. Manual smoke in Task 8 must verify the permission panel visibly shows the display name or tool name, worker id from `agent_id`, blocked path, decision reason, JSON input, and sandbox/network distinction text when the runtime includes those fields.
@@ -1658,8 +1658,8 @@ Required button labels:
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun --cwd web test
-cd /Users/pt/cat-code && bun --cwd web run typecheck
+cd /Users/pt/cat-code && bun run --cwd web test
+cd /Users/pt/cat-code && bun run --cwd web typecheck
 ```
 
 Expected result: pass. If there is no browser component test harness yet, the reducer/protocol tests plus the manual smoke checklist below are the browser-side verification for this UI change.
@@ -1765,7 +1765,7 @@ Expected result: pass.
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun --cwd web test
+cd /Users/pt/cat-code && bun run --cwd web test
 ```
 
 Expected result: pass.
@@ -1775,7 +1775,7 @@ Expected result: pass.
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun --cwd web run typecheck
+cd /Users/pt/cat-code && bun run --cwd web typecheck
 ```
 
 Expected result: pass.
@@ -1785,7 +1785,7 @@ Expected result: pass.
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun --cwd web run build
+cd /Users/pt/cat-code && bun run --cwd web build
 ```
 
 Expected result: pass.
@@ -1896,4 +1896,4 @@ Expected result: commit succeeds without bypassing hooks.
 - Ink `launchRepl(...)` is skipped only after the runtime-backed server and browser launcher are ready.
 - Terminal mode still reaches existing `launchRepl(...)` branches when `--web` is false.
 - Permission coverage includes cancel as `behavior: "deny"` with `interrupt: true`, browser-edited updated input, allow once without persistence, selected valid `updatedPermissions`, worker identity from `agent_id`, sandbox/network distinction, pending replay after reconnect, and stale permission id rejection.
-- Final checks include `bun test src/app-runtime/*.test.ts src/web/*.test.ts`, `bun --cwd web test`, `bun --cwd web run typecheck`, `bun --cwd web run build`, `bun run build:dev:full`, manual `bun run dev -- --web`, and manual terminal startup.
+- Final checks include `bun test src/app-runtime/*.test.ts src/web/*.test.ts`, `bun run --cwd web test`, `bun run --cwd web typecheck`, `bun run --cwd web build`, `bun run build:dev:full`, manual `bun run dev -- --web`, and manual terminal startup.

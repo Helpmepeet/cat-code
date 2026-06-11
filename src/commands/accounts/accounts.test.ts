@@ -8,6 +8,7 @@ import {
 } from '../../services/api/codexAccountLeaseManager.js'
 import {
   getPoolStatus,
+  isCodexAccountSwitchable,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
   type PoolAccount,
@@ -74,7 +75,7 @@ describe('/accounts', () => {
     resetCodexLeaseManagerForTest()
   })
 
-  test('usage display remains observational and does not reroll the active Codex account', async () => {
+  test('usage display records availability without rerolling the active Codex account', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -99,10 +100,12 @@ describe('/accounts', () => {
     expect(pool.accounts[pool.activeIndex]?.accountId).toBe('main-account')
     const mainAccount = pool.accounts.find(account => account.accountId === 'main-account')
     expect(mainAccount?.status).toBe('healthy')
-    expect(mainAccount?.usagePrimary).toBeUndefined()
+    expect(mainAccount?.usagePrimary).toBe(100)
+    expect(mainAccount?.usageLimitReached).toBe(true)
+    expect(mainAccount ? isCodexAccountSwitchable(mainAccount) : false).toBe(false)
   })
 
-  test('usage display does not change next spread lease selection', async () => {
+  test('usage display records availability for later spread lease selection', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -139,7 +142,7 @@ describe('/accounts', () => {
       ownerLabel: 'Probe After',
       strategy: 'spread',
     })
-    expect(afterProbe.accountId).toBe('worker-old')
+    expect(afterProbe.accountId).toBe('worker-new')
     expect(getCodexLeaseForOwner('main-thread')?.accountId).toBe('main-account')
   })
 })

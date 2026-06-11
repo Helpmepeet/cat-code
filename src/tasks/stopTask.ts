@@ -28,6 +28,26 @@ type StopTaskResult = {
   command: string | undefined
 }
 
+function getStoppedTaskDisplay(task: TaskStateBase): string | undefined {
+  if (isLocalShellTask(task)) {
+    return task.command
+  }
+
+  if (task.type === 'local_agent') {
+    const agentTask = task as TaskStateBase & {
+      agentName?: unknown
+      agentType?: unknown
+    }
+    if (typeof agentTask.agentName === 'string' && agentTask.agentName) {
+      return typeof agentTask.agentType === 'string' && agentTask.agentType
+        ? `@${agentTask.agentName} · ${agentTask.agentType}`
+        : `@${agentTask.agentName}`
+    }
+  }
+
+  return task.description
+}
+
 /**
  * Look up a task by ID, validate it is running, kill it, and mark it as notified.
  *
@@ -94,7 +114,7 @@ export async function stopTask(
     }
   }
 
-  const command = isLocalShellTask(task) ? task.command : task.description
+  const command = getStoppedTaskDisplay(task)
 
   return { taskId, taskType: task.type, command }
 }

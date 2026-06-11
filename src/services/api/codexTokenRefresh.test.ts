@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { getGlobalConfig } from '../../utils/config.js'
 import { refreshAccountTokens } from './codexTokenRefresh.js'
 import {
+  getCodexAccountAvailability,
   getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
@@ -31,13 +32,18 @@ function buildPoolAccount(
     expiresAt: overrides.expiresAt ?? Date.now() + 60_000,
     source: overrides.source ?? 'vault',
     status: overrides.status ?? 'healthy',
+    statusReason: overrides.statusReason,
     lastUsedAt: overrides.lastUsedAt ?? 0,
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
     usageWeekly: overrides.usageWeekly,
+    usageAllowed: overrides.usageAllowed,
+    usageLimitReached: overrides.usageLimitReached,
     usageFetchedAt: overrides.usageFetchedAt,
     lastErrorAt: overrides.lastErrorAt,
+    planType: overrides.planType,
+    planExpiresAt: overrides.planExpiresAt,
     lastRefreshIso: overrides.lastRefreshIso,
     vaultFilePath: overrides.vaultFilePath,
   }
@@ -50,6 +56,16 @@ function createAccessToken(accountId?: string): string {
       'https://api.openai.com/auth': accountId
         ? { chatgpt_account_id: accountId }
         : {},
+    }),
+  ).toString('base64url')
+  return `${header}.${payload}.signature`
+}
+
+function createIdToken(auth: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
+  const payload = Buffer.from(
+    JSON.stringify({
+      'https://api.openai.com/auth': auth,
     }),
   ).toString('base64url')
   return `${header}.${payload}.signature`
@@ -162,6 +178,68 @@ describe('codexTokenRefresh identity handling', () => {
       globalThis.fetch = originalFetch
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  test('refresh updates plan metadata facts from a fresh id_token without restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const accountId = '78c15115-7a20-4568-9aec-cfa886dd71ae'
+    const filePath = join(accountsDir, `${accountId}.json`)
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        tokens: {
+          access_token: 'old-access',
+          refresh_token: 'old-refresh',
+          account_id: accountId,
+        },
+        last_refresh: new Date().toISOString(),
+      }),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [
+        buildPoolAccount({
+          accountId,
+          refreshToken: 'old-refresh',
+          vaultFilePath: filePath,
+          planType: 'plus',
+          planExpiresAt: '2020-01-01T00:00:00.000Z',
+        }),
+      ],
+    })
+
+    const freshIdToken = createIdToken({
+      chatgpt_plan_type: 'plus',
+      chatgpt_subscription_active_until: '2999-01-01T00:00:00.000Z',
+    })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      return new Response(
+        JSON.stringify({
+          access_token: createAccessToken(accountId),
+          refresh_token: 'new-refresh',
+          expires_in: 3600,
+          id_token: freshIdToken,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      await refreshAccountTokens(accountId, 'old-refresh', filePath)
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+
+    const account = getPoolStatus().accounts[0]!
+    expect(account.planExpiresAt).toBe('2999-01-01T00:00:00.000Z')
+    expect(getCodexAccountAvailability(account)).toEqual({ kind: 'available' })
   })
 
   test('refresh same account preserves metadata and updates token fields', async () => {

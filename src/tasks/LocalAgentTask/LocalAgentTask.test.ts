@@ -15,6 +15,7 @@ import {
 import {
   appendLocalAgentSystemMessage,
   completeAgentTask,
+  enqueueAgentNotification,
   markAgentTaskResumed,
   unregisterAgentForeground,
   registerAgentForeground,
@@ -24,6 +25,7 @@ import {
   getTaskStatusIcon,
   shouldHideTasksFooter,
 } from '../../components/tasks/taskStatusUtils.js'
+import { dequeue, resetCommandQueue } from '../../utils/messageQueueManager.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -56,6 +58,7 @@ describe('LocalAgentTask foreground cleanup', () => {
     appState = getDefaultAppState()
     resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
+    resetCommandQueue()
   })
 
   test('unregisterAgentForeground releases the foreground agent codex lease', () => {
@@ -348,5 +351,33 @@ describe('LocalAgentTask foreground cleanup', () => {
     } as const
 
     expect(shouldHideTasksFooter({ [task.id]: task }, true)).toBe(false)
+  })
+
+  test('agent notifications prefer the friendly agent name in the visible summary', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-11',
+      description: 'Check renderer paths',
+      prompt: 'test prompt',
+      selectedAgent: {
+        name: 'general-purpose',
+        agentType: 'general-purpose',
+        prompt: 'test prompt',
+      },
+      agentName: 'Ada',
+      setAppState,
+    })
+
+    enqueueAgentNotification({
+      taskId: 'sync-agent-11',
+      description: 'Check renderer paths',
+      status: 'completed',
+      setAppState,
+    })
+
+    const queued = dequeue()
+    expect(queued?.origin).toMatchObject({
+      kind: 'task-notification',
+      summary: 'Agent @Ada completed',
+    })
   })
 })

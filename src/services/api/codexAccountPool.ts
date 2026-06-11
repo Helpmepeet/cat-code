@@ -31,6 +31,7 @@ export interface PoolAccount {
   expiresAt: number
   source: 'vault' | 'config'
   status: 'healthy' | 'dead' | 'capped'
+  statusReason?: PoolAccountStatusReason
   lastUsedAt: number
   lastError?: string
   lastRefreshIso?: string       // ISO timestamp from vault's last_refresh field
@@ -39,7 +40,13 @@ export interface PoolAccount {
   // Soft usage hints from wham/usage (best-effort, may be stale)
   usagePrimary?: number         // 5h window used_percent (0-100)
   usageWeekly?: number          // weekly window used_percent (0-100)
+  usageAllowed?: boolean
+  usageLimitReached?: boolean
   usageFetchedAt?: number       // when usage was last fetched
+  usageResetAt?: number
+  // Saved id_token plan metadata. May be stale — warning only, never a blocker.
+  planType?: string
+  planExpiresAt?: string        // raw ISO string from chatgpt_subscription_active_until
   lastErrorAt?: number          // epoch ms of most recent turn error (any kind)
 }
 
@@ -49,15 +56,21 @@ interface PoolState {
   initialized: boolean
 }
 
-type VaultPlanHealth = {
-  status: 'healthy' | 'capped'
-  lastError?: string
+export type CodexPlanMetadata = {
+  planType?: string
+  planExpiresAt?: string
 }
 
 export type PoolAccountResolutionMatchType = 'exact' | 'prefix'
+export type PoolAccountStatusReason =
+  | 'usage_cap'
+  | 'auth_dead'
+  | 'runtime_cap'
+  | 'unknown'
 
 export type MarkPoolAccountStatusOptions = {
   rerollActive?: boolean
+  statusReason?: PoolAccountStatusReason
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -220,7 +233,7 @@ export function hasAnyPoolAccount(): boolean {
 export function getActiveAccount(): PoolAccount | null {
   if (!pool.initialized || pool.activeIndex < 0) return null
   const acct = pool.accounts[pool.activeIndex]
-  if (!acct || acct.status !== 'healthy') {
+  if (!acct || !isCodexAccountSwitchable(acct)) {
     // Active account went bad — find another healthy one
     const fromAccountId = acct?.accountId
     const idx = findLRUHealthy(-1)
@@ -238,7 +251,7 @@ export function getActiveAccount(): PoolAccount | null {
 
 export function setActiveAccount(accountId: string): PoolAccount | null {
   const nextIndex = pool.accounts.findIndex(
-    (account) => account.accountId === accountId && account.status === 'healthy',
+    (account) => account.accountId === accountId && isCodexAccountSwitchable(account),
   )
   if (nextIndex < 0) {
     return null
@@ -272,7 +285,10 @@ export function rotateOnFailure(): PoolAccount | null {
   const current = pool.accounts[pool.activeIndex]
   if (current) {
     current.status = 'capped'
+    current.statusReason = 'usage_cap'
     current.usagePrimary = 100 // Mark as fully used
+    current.usageAllowed = false
+    current.usageLimitReached = true
     current.lastError = 'Usage cap hit (429)'
     logForDebugging(
       `[codex-pool] Account ${truncId(current.accountId)} capped`,
@@ -336,6 +352,7 @@ export function appendAccount(tokens: {
     acct.expiresAt = tokens.expiresAt
     acct.status = preserveCapped ? 'capped' : 'healthy'
     acct.lastError = preserveCapped ? acct.lastError : undefined
+    acct.statusReason = preserveCapped ? acct.statusReason : undefined
     if (previousStatus === 'capped' && acct.status === 'healthy') {
       emitUsageStatusDiagnostic(
         'account.usage.uncap',
@@ -348,6 +365,11 @@ export function appendAccount(tokens: {
     if (tokens.alias) acct.alias = tokens.alias
     if (options?.source) acct.source = options.source
     if (options?.vaultFilePath) acct.vaultFilePath = options.vaultFilePath
+    if (tokens.idToken) {
+      const planMetadata = getCodexPlanMetadataFromIdToken(tokens.idToken)
+      acct.planType = planMetadata.planType
+      acct.planExpiresAt = planMetadata.planExpiresAt
+    }
     logForDebugging(
       `[codex-profile] profile-save writer=${options?.writer ?? 'appendAccount'} account=${tokens.accountId} action=updated-memory`,
     )
@@ -362,6 +384,7 @@ export function appendAccount(tokens: {
       lastUsedAt: 0,
       alias: tokens.alias,
       vaultFilePath: options?.vaultFilePath,
+      ...(tokens.idToken ? getCodexPlanMetadataFromIdToken(tokens.idToken) : {}),
     })
     logForDebugging(
       `[codex-profile] profile-save writer=${options?.writer ?? 'appendAccount'} account=${tokens.accountId} action=added-memory`,
@@ -374,10 +397,11 @@ export function appendAccount(tokens: {
     if (idx >= 0) pool.activeIndex = idx
   } else if (
     pool.activeIndex < 0 ||
-    pool.accounts[pool.activeIndex]?.status !== 'healthy'
+    !pool.accounts[pool.activeIndex] ||
+    !isCodexAccountSwitchable(pool.accounts[pool.activeIndex]!)
   ) {
     // Fall back: activate only if no healthy account is currently active
-    const idx = pool.accounts.findIndex((a) => a.status === 'healthy')
+    const idx = pool.accounts.findIndex((a) => isCodexAccountSwitchable(a))
     if (idx >= 0) pool.activeIndex = idx
   }
   if (pool.activeIndex >= 0) {
@@ -415,6 +439,10 @@ export function markPoolAccountStatus(
   const previousStatus = acct.status
   acct.status = status
   acct.lastError = reason
+  acct.statusReason =
+    status === 'healthy'
+      ? undefined
+      : options.statusReason ?? (status === 'dead' ? 'auth_dead' : acct.statusReason)
 
   if (previousStatus !== 'capped' && status === 'capped') {
     emitUsageStatusDiagnostic('account.usage.cap', accountId, reason)
@@ -442,12 +470,17 @@ export function markPoolAccountCapped(
   reason: string,
   options: MarkPoolAccountStatusOptions = {},
 ): void {
-  markPoolAccountStatus(accountId, 'capped', reason, options)
+  markPoolAccountStatus(accountId, 'capped', reason, {
+    ...options,
+    statusReason: options.statusReason ?? 'usage_cap',
+  })
 
   const acct = pool.accounts.find((account) => account.accountId === accountId)
   if (!acct) return
 
   acct.usagePrimary = 100
+  acct.usageAllowed = false
+  acct.usageLimitReached = true
 }
 
 export function markPoolAccountLastError(accountId: string): void {
@@ -466,7 +499,8 @@ export function touchPoolAccountUsage(accountId: string): void {
 /**
  * Resolve a Codex account by prefix. Exact alias/id match wins. Otherwise,
  * gather alias-prefix and id-prefix matches and return a unique/ambiguous/none
- * verdict. Pass `onlyHealthy: true` to filter out non-healthy accounts.
+ * verdict. Pass `onlyHealthy: true` to filter out non-healthy accounts or
+ * `onlySwitchable: true` to also exclude accounts blocked by fresh usage.
  */
 export type CodexAccountResolution =
   | { kind: 'none' }
@@ -475,12 +509,16 @@ export type CodexAccountResolution =
 
 export function resolveCodexAccountByPrefix(
   prefix: string,
-  options?: { onlyHealthy?: boolean },
+  options?: { onlyHealthy?: boolean; onlySwitchable?: boolean },
 ): CodexAccountResolution {
   const lower = prefix.toLowerCase()
   const onlyHealthy = options?.onlyHealthy === true
+  const onlySwitchable = options?.onlySwitchable === true
   const pool_ = pool.accounts.filter(
-    (a) => !onlyHealthy || a.status === 'healthy',
+    (a) =>
+      onlySwitchable
+        ? isCodexAccountSwitchable(a)
+        : !onlyHealthy || a.status === 'healthy',
   )
 
   // Exact alias or accountId match wins
@@ -530,7 +568,7 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
 
   let targetIdx: number
   if (idPrefix) {
-    const resolution = resolveCodexAccountByPrefix(idPrefix, { onlyHealthy: true })
+    const resolution = resolveCodexAccountByPrefix(idPrefix, { onlySwitchable: true })
     if (resolution.kind !== 'unique') return null
     targetIdx = pool.accounts.indexOf(resolution.account)
     if (targetIdx < 0) return null
@@ -572,6 +610,7 @@ export function markAccountDead(
   if (!acct) return
   acct.status = 'dead'
   acct.lastError = reason
+  acct.statusReason = options.statusReason ?? 'auth_dead'
   // If this was the active account, find another
   if (
     options.rerollActive !== false &&
@@ -761,7 +800,7 @@ export function removeCodexAccount(accountId: string): boolean {
     pool.activeIndex = findLRUHealthy(-1)
   }
 
-  const active = pool.accounts[pool.activeIndex] ?? pool.accounts.find((account) => account.status === 'healthy') ?? pool.accounts[0]
+  const active = pool.accounts[pool.activeIndex] ?? pool.accounts.find((account) => isCodexAccountSwitchable(account)) ?? pool.accounts[0]
 
   if (active) {
     saveCodexOAuthTokens({
@@ -889,11 +928,10 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
           ? expiresAtRaw
           : 0
-      const refreshStatus = checkAccountHealth(lastRefresh)
-      const planHealth = getVaultPlanHealthFromIdToken(
+      const status = checkAccountHealth(lastRefresh)
+      const planMetadata = getCodexPlanMetadataFromIdToken(
         typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
       )
-      const status = refreshStatus === 'dead' ? 'dead' : planHealth.status
 
       results.push({
         accountId,
@@ -906,11 +944,11 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         lastRefreshIso: lastRefresh,
         vaultFilePath: join(accountsDir, file),
         alias: typeof data.alias === 'string' && data.alias ? data.alias : undefined,
+        planType: planMetadata.planType,
+        planExpiresAt: planMetadata.planExpiresAt,
         ...(status === 'dead'
-          ? { lastError: 'Token expired (>7 days since last refresh)' }
-          : planHealth.lastError
-            ? { lastError: planHealth.lastError }
-            : {}),
+          ? { lastError: 'Token expired (>7 days since last refresh)', statusReason: 'auth_dead' as const }
+          : {}),
       })
       logForDebugging(
         `[codex-profile] profile-load source=vault account=${accountId} alias=${typeof data.alias === 'string' && data.alias ? data.alias : 'none'} file=${file} status=${status} last_refresh=${lastRefresh ?? 'none'}`,
@@ -1014,14 +1052,10 @@ function checkAccountHealth(lastRefresh: string | undefined): 'healthy' | 'dead'
   return daysSinceRefresh > 7 ? 'dead' : 'healthy'
 }
 
-export function getVaultPlanHealthFromIdToken(
+export function getCodexPlanMetadataFromIdToken(
   idToken: string | undefined,
-  now = Date.now(),
-): VaultPlanHealth {
-  if (!idToken) {
-    return { status: 'healthy' }
-  }
-
+): CodexPlanMetadata {
+  if (!idToken) return {}
   try {
     const payload = JSON.parse(
       Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf-8'),
@@ -1029,36 +1063,17 @@ export function getVaultPlanHealthFromIdToken(
     const auth = payload['https://api.openai.com/auth'] as Record<string, unknown> | undefined
     const planType = typeof auth?.chatgpt_plan_type === 'string'
       ? auth.chatgpt_plan_type.toLowerCase()
-      : null
-    const subscriptionActiveUntil = typeof auth?.chatgpt_subscription_active_until === 'string'
+      : undefined
+    const planExpiresAt = typeof auth?.chatgpt_subscription_active_until === 'string'
       ? auth.chatgpt_subscription_active_until
-      : null
-    const subscriptionActiveUntilMs = subscriptionActiveUntil
-      ? Date.parse(subscriptionActiveUntil)
-      : Number.NaN
-
-    if (planType === 'free') {
-      return {
-        status: 'capped',
-        lastError: 'Plan type free is not eligible for Codex usage',
-      }
-    }
-
-    if (
-      subscriptionActiveUntil &&
-      Number.isFinite(subscriptionActiveUntilMs) &&
-      subscriptionActiveUntilMs <= now
-    ) {
-      return {
-        status: 'capped',
-        lastError: `Plan expired (${subscriptionActiveUntil})`,
-      }
+      : undefined
+    return {
+      ...(planType ? { planType } : {}),
+      ...(planExpiresAt ? { planExpiresAt } : {}),
     }
   } catch {
-    return { status: 'healthy' }
+    return {}
   }
-
-  return { status: 'healthy' }
 }
 
 /**
@@ -1066,7 +1081,14 @@ export function getVaultPlanHealthFromIdToken(
  * Called by codexUsage after fetching. These are soft hints only.
  */
 export function updateAccountUsageHints(
-  hints: Array<{ accountId: string; primaryPercent: number; weeklyPercent: number }>,
+  hints: Array<{
+    accountId: string
+    primaryPercent: number
+    weeklyPercent: number
+    allowed?: boolean
+    limitReached?: boolean
+    resetAt?: number
+  }>,
 ): void {
   const now = Date.now()
   for (const hint of hints) {
@@ -1075,6 +1097,27 @@ export function updateAccountUsageHints(
       acct.usagePrimary = hint.primaryPercent
       acct.usageWeekly = hint.weeklyPercent
       acct.usageFetchedAt = now
+      acct.usageAllowed = hint.allowed
+      acct.usageLimitReached = hint.limitReached
+      acct.usageResetAt = hint.resetAt
+      if (
+        hint.allowed === true &&
+        hint.limitReached === false &&
+        acct.status === 'capped' &&
+        acct.statusReason === 'usage_cap'
+      ) {
+        const previousLastError = acct.lastError
+        acct.status = 'healthy'
+        acct.statusReason = undefined
+        acct.lastError = undefined
+        emitUsageStatusDiagnostic(
+          'account.usage.uncap',
+          acct.accountId,
+          previousLastError
+            ? `usage cap cleared: ${previousLastError}`
+            : 'usage cap cleared',
+        )
+      }
     }
   }
 }
@@ -1110,6 +1153,76 @@ export function getPoolAccountUsageScore(
   )
 }
 
+export type CodexAccountAvailabilityWarningCode =
+  | 'plan_metadata_expired'
+  | 'plan_metadata_ineligible'
+
+export type CodexAccountAvailabilityWarning = {
+  code: CodexAccountAvailabilityWarningCode
+  message: string
+}
+
+export type CodexAccountAvailability =
+  | { kind: 'available' }
+  | { kind: 'warned'; warnings: CodexAccountAvailabilityWarning[] }
+  | { kind: 'blocked'; reason: string }
+
+function getPlanMetadataWarnings(
+  account: PoolAccount,
+  now: number,
+): CodexAccountAvailabilityWarning[] {
+  const warnings: CodexAccountAvailabilityWarning[] = []
+  if (account.planType === 'free') {
+    warnings.push({
+      code: 'plan_metadata_ineligible',
+      message: `saved plan metadata says plan type ${account.planType} is not eligible for Codex; live usage decides availability`,
+    })
+  }
+  const expiresAtMs = account.planExpiresAt ? Date.parse(account.planExpiresAt) : Number.NaN
+  if (Number.isFinite(expiresAtMs) && expiresAtMs <= now) {
+    warnings.push({
+      code: 'plan_metadata_expired',
+      message: `saved plan metadata says expired (${account.planExpiresAt}); live usage decides availability`,
+    })
+  }
+  return warnings
+}
+
+export function getCodexAccountAvailability(
+  account: PoolAccount,
+  now = Date.now(),
+): CodexAccountAvailability {
+  if (account.status === 'dead') {
+    return { kind: 'blocked', reason: account.lastError ?? 'account auth is unavailable' }
+  }
+  if (account.status === 'capped') {
+    return { kind: 'blocked', reason: account.lastError ?? 'account is capped' }
+  }
+  if (
+    hasFreshPoolAccountUsageHint(account, now) &&
+    (account.usageAllowed === false || account.usageLimitReached === true)
+  ) {
+    return { kind: 'blocked', reason: 'fresh usage data reports this account is capped' }
+  }
+
+  const warnings = getPlanMetadataWarnings(account, now)
+  return warnings.length > 0 ? { kind: 'warned', warnings } : { kind: 'available' }
+}
+
+export function isCodexAccountSwitchable(
+  account: PoolAccount,
+  now = Date.now(),
+): boolean {
+  return getCodexAccountAvailability(account, now).kind !== 'blocked'
+}
+
+export function isCodexAccountLeaseSelectable(
+  account: PoolAccount,
+  now = Date.now(),
+): boolean {
+  return getCodexAccountAvailability(account, now).kind !== 'blocked'
+}
+
 /**
  * Find the best healthy account, excluding `skipIndex`.
  * When fresh usage data is available, prefers the account with the lowest
@@ -1122,36 +1235,41 @@ function findLRUHealthy(skipIndex: number): number {
   for (let i = 0; i < pool.accounts.length; i++) {
     if (i === skipIndex) continue
     const acct = pool.accounts[i]!
-    if (acct.status === 'healthy') {
+    if (isCodexAccountSwitchable(acct, now)) {
       candidates.push({ idx: i, acct })
     }
   }
 
   if (candidates.length === 0) return -1
 
+  const cleanCandidates = candidates.filter(
+    (candidate) => getCodexAccountAvailability(candidate.acct, now).kind === 'available',
+  )
+  const rankable = cleanCandidates.length > 0 ? cleanCandidates : candidates
+
   // Check if any candidate has fresh usage data
-  const hasFreshUsage = candidates.some((c) =>
+  const hasFreshUsage = rankable.some((c) =>
     hasFreshPoolAccountUsageHint(c.acct, now),
   )
 
   if (hasFreshUsage) {
     // Sort by usage score: 5h window * 3 + weekly (lower = better)
     // Accounts without fresh usage data get a neutral score of 150
-    candidates.sort((a, b) => {
+    rankable.sort((a, b) => {
       const scoreA = getPoolAccountUsageScore(a.acct, now)
       const scoreB = getPoolAccountUsageScore(b.acct, now)
       return scoreA - scoreB
     })
     logForDebugging(
-      `[codex-pool] Usage-aware selection: ${truncId(candidates[0]!.acct.accountId)} (5h: ${candidates[0]!.acct.usagePrimary}%, wk: ${candidates[0]!.acct.usageWeekly}%)`,
+      `[codex-pool] Usage-aware selection: ${truncId(rankable[0]!.acct.accountId)} (5h: ${rankable[0]!.acct.usagePrimary}%, wk: ${rankable[0]!.acct.usageWeekly}%)`,
     )
-    return candidates[0]!.idx
+    return rankable[0]!.idx
   }
 
   // Fallback: LRU
   let bestIdx = -1
   let bestTime = Infinity
-  for (const { idx, acct } of candidates) {
+  for (const { idx, acct } of rankable) {
     if (acct.lastUsedAt < bestTime) {
       bestTime = acct.lastUsedAt
       bestIdx = idx
@@ -1176,7 +1294,7 @@ export function seedCodexAccountPoolForTest({
     )
   } else {
     pool.activeIndex = pool.accounts.findIndex(
-      (account) => account.status === 'healthy',
+      (account) => isCodexAccountSwitchable(account),
     )
   }
 }

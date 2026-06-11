@@ -21,7 +21,8 @@ startKeychainPrefetch();
 import { feature } from 'bun:bundle';
 import { Command as CommanderCommand, InvalidArgumentError, Option } from '@commander-js/extra-typings';
 import chalk from 'chalk';
-import { createWriteStream, readFileSync } from 'fs';
+import { randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
 import mapValues from 'lodash-es/mapValues.js';
 import pickBy from 'lodash-es/pickBy.js';
 import uniqBy from 'lodash-es/uniqBy.js';
@@ -82,8 +83,6 @@ const agentModeModule = feature('COORDINATOR_MODE') ? require('./agent-mode/agen
 const assistantModule = feature('KAIROS') ? require('./assistant/index.js') as typeof import('./assistant/index.js') : null;
 const kairosGate = feature('KAIROS') ? require('./assistant/gate.js') as typeof import('./assistant/gate.js') : null;
 import { join, relative, resolve } from 'path';
-import { spawn, type ChildProcess } from 'child_process';
-import { tmpdir } from 'os';
 import { isAnalyticsDisabled } from 'src/services/analytics/config.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
@@ -115,7 +114,6 @@ import { refreshExampleCommands } from './utils/exampleCommands.js';
 import type { FpsMetrics } from './utils/fpsTracker.js';
 import { getWorktreePaths } from './utils/getWorktreePaths.js';
 import { findGitRoot, getBranch, getIsGit, getWorktreeCount } from './utils/git.js';
-import { openBrowser } from './utils/browser.js';
 import { getGhAuthStatus } from './utils/github/ghAuthStatus.js';
 import { safeParseJSON } from './utils/json.js';
 import { logError } from './utils/log.js';
@@ -197,6 +195,7 @@ import { createRemoteSessionConfig } from './remote/RemoteSessionManager.js';
 import { createDirectConnectSession, DirectConnectError } from './server/createDirectConnectSession.js';
 import { initializeLspServerManager } from './services/lsp/manager.js';
 import { shouldEnablePromptSuggestion } from './services/PromptSuggestion/promptSuggestion.js';
+import { createQueryEngineAppSessionConfigFromSetup } from './app-runtime/createQueryEngineAppSessionConfigFromSetup.js';
 import { type AppState, getDefaultAppState, IDLE_SPECULATION_STATE } from './state/AppStateStore.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { createStore } from './state/store.js';
@@ -210,9 +209,11 @@ import { migrateChangelogFromConfig } from './utils/releaseNotes.js';
 import { SandboxManager } from './utils/sandbox/sandbox-adapter.js';
 import { fetchSession, prepareApiRequest } from './utils/teleport/api.js';
 import { checkOutTeleportedSessionBranch, processMessagesForTeleportResume, teleportToRemoteWithErrorHandling, validateGitState, validateSessionRepository } from './utils/teleport.js';
+import { createFileStateCacheWithSizeLimit, READ_FILE_STATE_CACHE_SIZE } from './utils/fileStateCache.js';
 import { shouldEnableThinkingByDefault, type ThinkingConfig } from './utils/thinking.js';
 import { initUser, resetUserCache } from './utils/user.js';
 import { getTmuxInstallInstructions, isTmuxAvailable, parsePRReference } from './utils/worktree.js';
+import { startRuntimeBackedWebMode } from './web/startRuntimeBackedWebMode.js';
 
 // eslint-disable-next-line custom-rules/no-top-level-side-effects
 profileCheckpoint('main_tsx_imports_loaded');
@@ -1218,93 +1219,6 @@ async function run(): Promise<CommanderCommand> {
     }
 
     const webModeEnabled = (options as { web?: boolean }).web === true;
-
-    // Start web UI server if --web flag is set
-    if (webModeEnabled) {
-      const { startWebUIServer } = await import('./web/WebSocketServer.js');
-      const { port } = startWebUIServer();
-      // biome-ignore lint/suspicious/noConsole:: intentional console output
-      console.log(chalk.magenta(`Web UI server listening on ws://localhost:${port}/ws`));
-
-      const webDir = resolve(process.cwd(), 'web');
-      const webDevLogPath = join(tmpdir(), 'cat-code-web-dev.log');
-      let webDevServer: ChildProcess | null = null;
-      let browserOpened = false;
-      let stdoutBuffer = '';
-      let stderrBuffer = '';
-      const webDevLog = createWriteStream(webDevLogPath, { flags: 'a' });
-
-      const maybeOpenWebUI = (text: string) => {
-        const match = text.match(/Local:\s+(http:\/\/localhost:(\d+)\/)/);
-        const url = match?.[1];
-        if (!url || browserOpened) return;
-        browserOpened = true;
-        void openBrowser(url);
-      };
-
-      // biome-ignore lint/suspicious/noConsole:: intentional console output
-      console.log(chalk.magenta(`Web dev server logs: ${webDevLogPath}`));
-
-      try {
-        webDevServer = spawn('bun', ['run', 'dev'], {
-          cwd: webDir,
-          env: process.env,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        webDevServer.stdout?.on('data', (chunk: Buffer | string) => {
-          const text = String(chunk);
-          stdoutBuffer += text;
-          webDevLog.write(text);
-          maybeOpenWebUI(stdoutBuffer);
-        });
-
-        webDevServer.stderr?.on('data', (chunk: Buffer | string) => {
-          const text = String(chunk);
-          stderrBuffer += text;
-          webDevLog.write(text);
-          maybeOpenWebUI(stderrBuffer);
-        });
-
-        webDevServer.on('error', (error) => {
-          webDevLog.write(`Failed to start web dev server: ${error instanceof Error ? error.message : String(error)}\n`);
-          process.stderr.write(chalk.red(`Failed to start web dev server. See ${webDevLogPath}\n`));
-        });
-
-        webDevServer.on('exit', (code, signal) => {
-          if (code === 0 || signal === 'SIGTERM') {
-            webDevLog.end();
-            return;
-          }
-          webDevLog.write(`Web dev server exited unexpectedly (${signal ?? code ?? 'unknown'})\n`);
-          webDevLog.end();
-          process.stderr.write(chalk.red(`Web dev server exited unexpectedly. See ${webDevLogPath}\n`));
-        });
-
-        const shutdownWebDevServer = () => {
-          if (!webDevServer || webDevServer.killed) {
-            webDevLog.end();
-            return;
-          }
-          webDevServer.kill('SIGTERM');
-        };
-
-        process.once('exit', shutdownWebDevServer);
-        process.once('SIGTERM', shutdownWebDevServer);
-      } catch (error) {
-        webDevLog.write(`Failed to launch web dev server: ${error instanceof Error ? error.message : String(error)}\n`);
-        webDevLog.end();
-        process.stderr.write(chalk.red(`Failed to launch web dev server. See ${webDevLogPath}\n`));
-      }
-
-      // biome-ignore lint/suspicious/noConsole:: intentional console output
-      console.log(chalk.magenta('Web mode is browser-first: skipping the Ink REPL.'));
-      // biome-ignore lint/suspicious/noConsole:: intentional console output
-      console.log(chalk.yellow('Browser input is intentionally disabled until the web backend no longer depends on REPL wiring.'));
-
-      await new Promise<void>(() => {});
-      return;
-    }
 
     // Extract teammate options (for tmux-spawned agents)
     // Declared outside the if block so it's accessible later for system prompt addendum
@@ -2539,16 +2453,19 @@ async function run(): Promise<CommanderCommand> {
     const localMcpPromise = isNonInteractiveSession ? Promise.resolve({
       clients: [],
       tools: [],
-      commands: []
+      commands: [],
+      resources: {}
     }) : prefetchAllMcpResources(regularMcpConfigs);
     const claudeaiMcpPromise = isNonInteractiveSession ? Promise.resolve({
       clients: [],
       tools: [],
-      commands: []
+      commands: [],
+      resources: {}
     }) : claudeaiConfigPromise.then(configs => Object.keys(configs).length > 0 ? prefetchAllMcpResources(configs) : {
       clients: [],
       tools: [],
-      commands: []
+      commands: [],
+      resources: {}
     });
     // Merge with dedup by name: each prefetchAllMcpResources call independently
     // adds helper tools (ListMcpResourcesTool, ReadMcpResourceTool) via
@@ -2557,7 +2474,11 @@ async function run(): Promise<CommanderCommand> {
     const mcpPromise = Promise.all([localMcpPromise, claudeaiMcpPromise]).then(([local, claudeai]) => ({
       clients: [...local.clients, ...claudeai.clients],
       tools: uniqBy([...local.tools, ...claudeai.tools], 'name'),
-      commands: uniqBy([...local.commands, ...claudeai.commands], 'name')
+      commands: uniqBy([...local.commands, ...claudeai.commands], 'name'),
+      resources: {
+        ...local.resources,
+        ...claudeai.resources
+      }
     }));
 
     // Start hooks early so they run in parallel with MCP connections.
@@ -3235,6 +3156,57 @@ async function run(): Promise<CommanderCommand> {
       cliAgents,
       initialState
     };
+    if (webModeEnabled) {
+      const appStateStore = createStore(initialState, onChangeAppState);
+      const readFileCache = createFileStateCacheWithSizeLimit(READ_FILE_STATE_CACHE_SIZE);
+      const mcpStartupState = await mcpPromise;
+      appStateStore.setState(prev => ({
+        ...prev,
+        mcp: {
+          ...prev.mcp,
+          clients: mcpStartupState.clients,
+          tools: mcpStartupState.tools,
+          commands: mcpStartupState.commands,
+          resources: mcpStartupState.resources
+        }
+      }));
+      const queryEngineAppSessionConfig = createQueryEngineAppSessionConfigFromSetup({
+        cwd: currentCwd,
+        tools,
+        commands,
+        mcpTools: mcpStartupState.tools,
+        mcpCommands: mcpStartupState.commands,
+        mcpClients: mcpStartupState.clients,
+        mcpResources: mcpStartupState.resources,
+        agents: agentDefinitions.activeAgents,
+        getAppState: appStateStore.getState,
+        setAppState: appStateStore.setState,
+        readFileCache,
+        customSystemPrompt: systemPrompt,
+        appendSystemPrompt,
+        userSpecifiedModel: effectiveModel,
+        fallbackModel: userSpecifiedFallbackModel,
+        thinkingConfig,
+        maxTurns: options.maxTurns,
+        maxBudgetUsd: options.maxBudgetUsd,
+        taskBudget: options.taskBudget ? {
+          total: options.taskBudget
+        } : undefined,
+        jsonSchema,
+        verbose,
+        replayUserMessages: effectiveReplayUserMessages
+      });
+      const webDir = resolve(currentCwd, 'web');
+      await startRuntimeBackedWebMode({
+        queryEngineConfig: queryEngineAppSessionConfig,
+        webDir,
+        token: randomUUID(),
+        wsPort: 3456,
+        webPort: 5173,
+        allowedOrigins: ['http://127.0.0.1:5173']
+      });
+      return;
+    }
     if (options.continue) {
       // Continue the most recent conversation directly
       let resumeSucceeded = false;

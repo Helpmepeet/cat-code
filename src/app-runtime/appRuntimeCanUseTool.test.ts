@@ -71,4 +71,72 @@ describe('createAppRuntimeCanUseTool', () => {
       ),
     ).resolves.toBe(askDecision)
   })
+
+  test('preserves permission update suggestions and maps cancel to deny with interrupt', async () => {
+    const baseCanUseTool: CanUseToolFn = async () =>
+      ({
+        behavior: 'ask',
+        message: 'Need sandboxed network approval',
+        updatedInput: { command: 'curl https://example.com' },
+        suggestions: [
+          {
+            type: 'addRules',
+            rules: [
+              { toolName: 'Bash', ruleContent: 'curl https://example.com' },
+            ],
+            behavior: 'allow',
+            destination: 'projectSettings',
+          },
+        ],
+      }) as never
+    const requests: unknown[] = []
+    const canUseTool = createAppRuntimeCanUseTool({
+      baseCanUseTool,
+      createRequestId: () => 'request-1',
+      getPermissionRequestHandler: () => async request => {
+        requests.push(request)
+        return {
+          behavior: 'deny',
+          message: 'cancelled in browser',
+          interrupt: true,
+        }
+      },
+    })
+
+    const decision = await canUseTool(
+      { name: 'Bash' } as Tool,
+      { command: 'curl http://example.com' },
+      {
+        agentId: 'worker-7',
+        abortController: { abort: () => {} },
+      } as ToolUseContext,
+      {} as AssistantMessage,
+      'toolu_7',
+    )
+
+    expect(requests).toEqual([
+      {
+        requestId: 'request-1',
+        request: expect.objectContaining({
+          tool_name: 'Bash',
+          input: { command: 'curl https://example.com' },
+          agent_id: 'worker-7',
+          permission_suggestions: [
+            expect.objectContaining({
+              type: 'addRules',
+              rules: [
+                { toolName: 'Bash', ruleContent: 'curl https://example.com' },
+              ],
+              behavior: 'allow',
+              destination: 'projectSettings',
+            }),
+          ],
+        }),
+      },
+    ])
+    expect(decision).toMatchObject({
+      behavior: 'deny',
+      interrupt: true,
+    })
+  })
 })

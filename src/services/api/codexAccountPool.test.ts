@@ -5,8 +5,11 @@ import { tmpdir } from 'os'
 
 import {
   appendAccount,
+  getCodexAccountAvailability,
+  getCodexPlanMetadataFromIdToken,
   getPoolStatus,
-  getVaultPlanHealthFromIdToken,
+  isCodexAccountLeaseSelectable,
+  isCodexAccountSwitchable,
   loadVaultAccountsForTest,
   markAccountDead,
   mergePoolAccountsForTest,
@@ -39,7 +42,13 @@ function buildPoolAccount(
     usagePrimary: overrides.usagePrimary,
     usageWeekly: overrides.usageWeekly,
     usageFetchedAt: overrides.usageFetchedAt,
+    usageAllowed: overrides.usageAllowed,
+    usageLimitReached: overrides.usageLimitReached,
+    usageResetAt: overrides.usageResetAt,
     lastErrorAt: overrides.lastErrorAt,
+    statusReason: overrides.statusReason,
+    planType: overrides.planType,
+    planExpiresAt: overrides.planExpiresAt,
     lastRefreshIso: overrides.lastRefreshIso,
     vaultFilePath: overrides.vaultFilePath,
   }
@@ -54,6 +63,104 @@ function createIdToken(auth: Record<string, unknown>): string {
   ).toString('base64url')
   return `${header}.${payload}.signature`
 }
+
+describe('codexAccountPool availability', () => {
+  const NOW = Date.parse('2026-04-21T00:00:00+00:00')
+
+  test('expired plan metadata is a warning, not a blocker', () => {
+    const account = buildPoolAccount({
+      accountId: 'plan-account',
+      planType: 'plus',
+      planExpiresAt: '2026-04-12T03:30:01+00:00',
+    })
+
+    expect(getCodexAccountAvailability(account, NOW)).toEqual({
+      kind: 'warned',
+      warnings: [
+        {
+          code: 'plan_metadata_expired',
+          message: 'saved plan metadata says expired (2026-04-12T03:30:01+00:00); live usage decides availability',
+        },
+      ],
+    })
+    expect(isCodexAccountSwitchable(account, NOW)).toBe(true)
+    expect(isCodexAccountLeaseSelectable(account, NOW)).toBe(true)
+  })
+
+  test('free plan metadata is a warning, not a blocker', () => {
+    const account = buildPoolAccount({ accountId: 'free-account', planType: 'free' })
+
+    expect(getCodexAccountAvailability(account, NOW)).toEqual({
+      kind: 'warned',
+      warnings: [
+        {
+          code: 'plan_metadata_ineligible',
+          message: 'saved plan metadata says plan type free is not eligible for Codex; live usage decides availability',
+        },
+      ],
+    })
+  })
+
+  test('future plan expiry is available with no warnings', () => {
+    const account = buildPoolAccount({
+      accountId: 'ok-account',
+      planType: 'plus',
+      planExpiresAt: '2999-01-01T00:00:00.000Z',
+    })
+
+    expect(getCodexAccountAvailability(account, NOW)).toEqual({ kind: 'available' })
+  })
+
+  test('runtime caps are blocked regardless of plan metadata', () => {
+    const account = buildPoolAccount({
+      accountId: 'capped-account',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'Usage cap hit (429)',
+    })
+
+    expect(getCodexAccountAvailability(account, NOW)).toEqual({
+      kind: 'blocked',
+      reason: 'Usage cap hit (429)',
+    })
+    expect(isCodexAccountSwitchable(account, NOW)).toBe(false)
+  })
+
+  test('dead auth is blocked', () => {
+    const account = buildPoolAccount({
+      accountId: 'dead-account',
+      status: 'dead',
+      statusReason: 'auth_dead',
+      lastError: 'Token expired (>7 days since last refresh)',
+    })
+
+    expect(getCodexAccountAvailability(account, NOW)).toEqual({
+      kind: 'blocked',
+      reason: 'Token expired (>7 days since last refresh)',
+    })
+  })
+
+  test('fresh blocked usage hints block a healthy account; stale hints do not', () => {
+    const freshBlocked = buildPoolAccount({
+      accountId: 'fresh-blocked',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: NOW - 1_000,
+    })
+    expect(getCodexAccountAvailability(freshBlocked, NOW)).toEqual({
+      kind: 'blocked',
+      reason: 'fresh usage data reports this account is capped',
+    })
+
+    const staleBlocked = buildPoolAccount({
+      accountId: 'stale-blocked',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: NOW - 10 * 60 * 1000,
+    })
+    expect(getCodexAccountAvailability(staleBlocked, NOW)).toEqual({ kind: 'available' })
+  })
+})
 
 describe('codexAccountPool appendAccount', () => {
   beforeEach(() => {
@@ -90,6 +197,32 @@ describe('codexAccountPool appendAccount', () => {
     expect(updated?.lastError).toBe('Usage snapshot reported account exhaustion')
     expect(updated?.accessToken).toBe('new-access')
     expect(updated?.refreshToken).toBe('new-refresh')
+  })
+
+  test('appendAccount updates plan metadata facts from a provided id_token', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-1', planType: 'plus', planExpiresAt: '2020-01-01T00:00:00.000Z' }),
+      ],
+    })
+
+    appendAccount(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'acct-1',
+        idToken: createIdToken({
+          chatgpt_plan_type: 'plus',
+          chatgpt_subscription_active_until: '2999-01-01T00:00:00.000Z',
+        }),
+      },
+      { preserveCapped: true, writer: 'test' },
+    )
+
+    const account = getPoolStatus().accounts[0]!
+    expect(account.planType).toBe('plus')
+    expect(account.planExpiresAt).toBe('2999-01-01T00:00:00.000Z')
   })
 
   test('markPoolAccountCapped emits a usage-cap diagnostic', () => {
@@ -298,33 +431,18 @@ describe('codexAccountPool appendAccount', () => {
     })
   })
 
-  test('marks expired plus subscriptions capped from id_token claims', () => {
-    const health = getVaultPlanHealthFromIdToken(
-      createIdToken({
-        chatgpt_plan_type: 'plus',
-        chatgpt_subscription_active_until: '2026-04-12T03:30:01+00:00',
-      }),
-      Date.parse('2026-04-21T00:00:00+00:00'),
-    )
+  test('extracts plan metadata facts from id_token claims', () => {
+    expect(
+      getCodexPlanMetadataFromIdToken(
+        createIdToken({
+          chatgpt_plan_type: 'Plus',
+          chatgpt_subscription_active_until: '2026-04-12T03:30:01+00:00',
+        }),
+      ),
+    ).toEqual({ planType: 'plus', planExpiresAt: '2026-04-12T03:30:01+00:00' })
 
-    expect(health).toEqual({
-      status: 'capped',
-      lastError: 'Plan expired (2026-04-12T03:30:01+00:00)',
-    })
-  })
-
-  test('marks free plans capped from id_token claims', () => {
-    const health = getVaultPlanHealthFromIdToken(
-      createIdToken({
-        chatgpt_plan_type: 'free',
-      }),
-      Date.parse('2026-04-21T00:00:00+00:00'),
-    )
-
-    expect(health).toEqual({
-      status: 'capped',
-      lastError: 'Plan type free is not eligible for Codex usage',
-    })
+    expect(getCodexPlanMetadataFromIdToken(undefined)).toEqual({})
+    expect(getCodexPlanMetadataFromIdToken('not-a-jwt')).toEqual({})
   })
 
   test('saveCodexTokenToVault preserves metadata for same account', () => {
@@ -634,6 +752,28 @@ describe('resolveCodexAccountByPrefix', () => {
       expect(filtered.account.accountId).toBe('acct-backupA')
     }
   })
+
+  test('onlySwitchable:true filters out accounts with fresh live usage caps', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-backupA',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-backupA', alias: 'backupA' }),
+        buildPoolAccount({
+          accountId: 'acct-backupB',
+          alias: 'backupB',
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: Date.now(),
+        }),
+      ],
+    })
+
+    const filtered = resolveCodexAccountByPrefix('backup', { onlySwitchable: true })
+    expect(filtered.kind).toBe('unique')
+    if (filtered.kind === 'unique') {
+      expect(filtered.account.accountId).toBe('acct-backupA')
+    }
+  })
 })
 
 describe('switchToAccount', () => {
@@ -668,6 +808,25 @@ describe('switchToAccount', () => {
     const result = switchToAccount('backup1')
     expect(result?.accountId).toBe('acct-backup1')
     expect(getPoolStatus().accounts[getPoolStatus().activeIndex]?.accountId).toBe('acct-backup1')
+  })
+
+  test('does not switch to an account with a fresh live usage cap', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-main',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-main', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'acct-backup1',
+          alias: 'backup1',
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: Date.now(),
+        }),
+      ],
+    })
+
+    expect(switchToAccount('backup1')).toBeNull()
+    expect(getPoolStatus().accounts[getPoolStatus().activeIndex]?.accountId).toBe('acct-main')
   })
 })
 

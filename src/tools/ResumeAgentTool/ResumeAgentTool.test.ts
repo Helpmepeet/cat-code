@@ -216,7 +216,7 @@ describe('ResumeAgentTool', () => {
     expect(result).toEqual({
       data: {
         success: true,
-        message: 'Resumed "Stopped worker" in the background.',
+        message: 'Resumed "@worker-one" in the background.',
       },
     })
   })
@@ -649,7 +649,7 @@ describe('ResumeAgentTool', () => {
 
     expect(result.data).toEqual({
       success: true,
-      message: 'Resumed "Pending worker" in the background.',
+      message: 'Resumed "@worker-one" in the background.',
     })
     expect(getState().tasks[agentId].pendingMessages).toEqual([
       'queued-1',
@@ -689,7 +689,7 @@ describe('ResumeAgentTool', () => {
 
     expect(result.data).toEqual({
       success: true,
-      message: 'Resumed "Lifecycle worker" in the background.',
+      message: 'Resumed "@worker-one" in the background.',
     })
   })
 })

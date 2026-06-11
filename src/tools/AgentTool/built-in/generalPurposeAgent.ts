@@ -53,7 +53,7 @@ ${SHARED_GUIDELINES}`
 export const GENERAL_PURPOSE_AGENT: BuiltInAgentDefinition = {
   agentType: 'general-purpose',
   whenToUse:
-    'General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.',
+    'General-purpose agent for researching complex questions and executing multi-step tasks. Use it when the work mixes searching with taking actions (editing files, running commands). For read-only codebase searches or questions, prefer the Explore agent when it is listed; use this agent for search only when Explore is unavailable.',
   tools: ['*'],
   source: 'built-in',
   baseDir: 'built-in',

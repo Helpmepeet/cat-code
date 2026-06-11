@@ -1,7 +1,9 @@
 import { clearAuthRelatedCaches } from '../logout/logout.js'
 import {
   applyPostCodexAccountSwitchRefresh,
+  getCodexAccountAvailability,
   getPoolStatus,
+  isCodexAccountSwitchable,
   resolveCodexAccountByPrefix,
   switchToAccount,
 } from '../../services/api/codexAccountPool.js'
@@ -155,7 +157,12 @@ async function performCodexSwitch(
 
   if (idPrefix) {
     const label = result.alias ?? result.accountId.slice(0, 12)
-    return { type: 'text', value: `Switched to ${label}` }
+    const availability = getCodexAccountAvailability(result)
+    const warningLines =
+      availability.kind === 'warned'
+        ? availability.warnings.map((warning) => `Warning: ${warning.message}`)
+        : []
+    return { type: 'text', value: [`Switched to ${label}`, ...warningLines].join('\n') }
   }
 
   const fromLabel = current?.alias ?? current?.accountId.slice(0, 12) ?? '?'
@@ -167,7 +174,7 @@ export const call: LocalCommandCall = async (args, context) => {
   const codexPool = getPoolStatus()
   const claudePool = getClaudePoolStatus()
 
-  const codexHealthy = codexPool.initialized ? codexPool.accounts.filter((a) => a.status === 'healthy').length : 0
+  const codexHealthy = codexPool.initialized ? codexPool.accounts.filter((a) => isCodexAccountSwitchable(a)).length : 0
   const claudeHealthy = claudePool.initialized ? claudePool.accounts.filter((a) => a.status === 'healthy').length : 0
 
   const prefix = args.trim().toLowerCase()
@@ -182,7 +189,7 @@ export const call: LocalCommandCall = async (args, context) => {
       ? resolveClaudeAccountByPrefix(prefix, { onlyHealthy: true })
       : { kind: 'none' as const }
     const codexResolution = codexHealthy > 0
-      ? resolveCodexAccountByPrefix(prefix, { onlyHealthy: true })
+      ? resolveCodexAccountByPrefix(prefix, { onlySwitchable: true })
       : { kind: 'none' as const }
 
     const claudeExact =
@@ -255,6 +262,25 @@ export const call: LocalCommandCall = async (args, context) => {
       const result = await performCodexSwitch(prefix, context)
       if (result) return result
     }
+    const codexAnyResolution = resolveCodexAccountByPrefix(prefix)
+    if (codexAnyResolution.kind === 'unique' && !isCodexAccountSwitchable(codexAnyResolution.account)) {
+      const label = codexAnyResolution.account.alias ?? codexAnyResolution.account.accountId.slice(0, 12)
+      emitManualSwitchFailure('matching Codex account is not switchable')
+      return {
+        type: 'text',
+        value: `Found Codex account "${label}", but it is not switchable.\nReason: ${formatCodexAccountBlockReason(codexAnyResolution.account)}`,
+      }
+    }
+    if (codexAnyResolution.kind === 'ambiguous') {
+      const list = codexAnyResolution.matches
+        .map((a) => `  ${a.alias ?? a.accountId.slice(0, 12)}`)
+        .join('\n')
+      emitManualSwitchFailure('ambiguous Codex account prefix')
+      return {
+        type: 'text',
+        value: `Multiple Codex accounts match "${prefix}":\n${list}\n\nBe more specific.`,
+      }
+    }
     emitManualSwitchFailure('no matching healthy account')
     return {
       type: 'text',
@@ -292,4 +318,14 @@ export const call: LocalCommandCall = async (args, context) => {
   }
   emitManualSwitchFailure('only one Codex account')
   return { type: 'text', value: 'Only one Codex account. Use /switch-account <alias> to switch to a Claude account.' }
+}
+
+function formatCodexAccountBlockReason(
+  account: ReturnType<typeof getPoolStatus>['accounts'][number],
+): string {
+  const availability = getCodexAccountAvailability(account)
+  if (availability.kind === 'blocked') {
+    return availability.reason
+  }
+  return 'account is unavailable for switching'
 }

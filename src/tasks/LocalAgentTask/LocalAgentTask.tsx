@@ -273,7 +273,9 @@ export function enqueueAgentNotification({
   // If the task was already marked as notified (e.g., by TaskStopTool), skip
   // enqueueing to avoid sending redundant messages to the model.
   let shouldEnqueue = false;
+  let agentName: string | undefined;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    agentName = task.agentName;
     if (task.notified) {
       return task;
     }
@@ -291,7 +293,8 @@ export function enqueueAgentNotification({
   // results may reference stale task output. The prompt suggestion text is
   // preserved; only the pre-computed response is discarded.
   abortSpeculation(setAppState);
-  const summary = status === 'completed' ? `Agent "${description}" completed` : status === 'failed' ? `Agent "${description}" failed: ${error || 'Unknown error'}` : `Agent "${description}" was stopped`;
+  const agentLabel = agentName ? `@${agentName}` : `"${description}"`;
+  const summary = status === 'completed' ? `Agent ${agentLabel} completed` : status === 'failed' ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}` : `Agent ${agentLabel} was stopped`;
   const outputPath = getTaskOutputPath(taskId);
   const details = {
     taskId,

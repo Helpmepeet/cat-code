@@ -164,8 +164,8 @@ Usage:
 Older restored transcripts may still contain legacy \`<task-notification>...</task-notification>\` XML. Treat it as a compatibility-only equivalent of the structured banner.
 
 - \`Result:\` and \`Usage:\` sections are optional
-- The summary describes the outcome: "completed", "failed: {error}", or "was stopped"
-- The task ID identifies the worker — use ${RESUME_AGENT_TOOL_NAME} with that ID as agentId to continue that worker (a completed worker is a stopped worker)
+- The summary describes the outcome: "completed", "failed: {error}", or "was stopped"; named local workers appear as @name
+- The task ID identifies the worker — use ${RESUME_AGENT_TOOL_NAME} with that ID or @name as agentId to continue that worker (a completed worker is a stopped worker)
 
 ### Example
 
@@ -183,7 +183,7 @@ User:
   Task notification
   Task ID: agent-a1b
   Status: completed
-  Summary: Agent "Investigate auth bug" completed
+  Summary: Agent @Ada completed
   Result:
   Found null pointer in src/auth/validate.ts:42...
 
@@ -354,7 +354,7 @@ User:
   Task notification
   Task ID: agent-a1b
   Status: completed
-  Summary: Agent "Investigate auth bug" completed
+  Summary: Agent @Ada completed
   Result:
   Found null pointer in src/auth/validate.ts:42. The user field on Session is undefined when the session expires but ...
 

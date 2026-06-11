@@ -5,9 +5,14 @@ import { mkdtempSync } from 'fs'
 import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { PassThrough } from 'stream'
+import stripAnsi from 'strip-ansi'
+import * as React from 'react'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
 import { readSessionState } from '../../agent-mode/sessionState.js'
 import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js'
+import { render, ThemeProvider } from '../../ink.js'
+import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
 import { getBuiltInAgents } from './builtInAgents.js'
 import {
   AgentTool,
@@ -16,6 +21,52 @@ import {
   finalizeFailedAgentLaunch,
   resolveSystemSubagentName,
 } from './AgentTool.js'
+import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
+
+async function renderToPlainText(node: React.ReactNode): Promise<string> {
+  const stdout = new PassThrough() as unknown as NodeJS.WriteStream & {
+    columns: number
+  }
+  stdout.columns = 120
+  let output = ''
+  ;(stdout as unknown as PassThrough).on('data', chunk => {
+    output += chunk.toString()
+  })
+  const stdin = new PassThrough() as unknown as NodeJS.ReadStream & {
+    isTTY: boolean
+    setRawMode: (enabled: boolean) => void
+    ref: () => void
+    unref: () => void
+  }
+  stdin.isTTY = true
+  stdin.setRawMode = () => undefined
+  stdin.ref = () => undefined
+  stdin.unref = () => undefined
+  const stderr = new PassThrough() as unknown as NodeJS.WriteStream
+
+  const instance = await render(
+    React.createElement(
+      ThemeProvider,
+      null,
+      React.createElement(
+        AppStateProvider,
+        { initialState: getDefaultAppState() },
+        node,
+      ),
+    ),
+    {
+      stdout,
+      stdin,
+      stderr,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+
+  await new Promise(resolve => setTimeout(resolve, 30))
+  instance.unmount()
+  return stripAnsi(output)
+}
 
 const originalRandom = Math.random
 const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
@@ -44,6 +95,112 @@ afterEach(() => {
       originalSdkDisableBuiltins
   }
   resetStateForTests()
+})
+
+describe('AgentTool UI', () => {
+  test('single async launch result introduces the resolved friendly agent name', async () => {
+    const node = renderToolResultMessage(
+      {
+        status: 'async_launched',
+        agentId: 'agent-a',
+        agentName: 'Ada',
+        agentType: 'general-purpose',
+        description: 'review backend integration',
+        prompt: 'review backend integration',
+        outputFile: '/tmp/agent-a',
+        canCheckProgress: true,
+      },
+      [],
+      {
+        tools: [],
+        verbose: false,
+        theme: 'dark' as never,
+      },
+    )
+
+    expect(await renderToPlainText(node)).toContain('Backgrounded agent @Ada')
+  })
+
+  test('grouped async launch rows introduce resolved friendly agent names', async () => {
+    const node = renderGroupedAgentToolUse(
+      [
+        {
+          param: {
+            type: 'tool_use',
+            id: 'tool-a',
+            name: 'Agent',
+            input: {
+              description: 'review backend integration',
+              prompt: 'review backend integration',
+              subagent_type: 'general-purpose',
+              run_in_background: true,
+            },
+          },
+          isResolved: true,
+          isError: false,
+          isInProgress: false,
+          progressMessages: [],
+          result: {
+            param: {
+              type: 'tool_result',
+              tool_use_id: 'tool-a',
+              content: [{ type: 'text', text: '' }],
+            },
+            output: {
+              status: 'async_launched',
+              agentId: 'agent-a',
+              agentName: 'Ada',
+              agentType: 'general-purpose',
+              description: 'review backend integration',
+              prompt: 'review backend integration',
+              outputFile: '/tmp/agent-a',
+              canCheckProgress: true,
+            },
+          },
+        },
+        {
+          param: {
+            type: 'tool_use',
+            id: 'tool-b',
+            name: 'Agent',
+            input: {
+              description: 'review UI integration',
+              prompt: 'review UI integration',
+              subagent_type: 'general-purpose',
+              run_in_background: true,
+            },
+          },
+          isResolved: true,
+          isError: false,
+          isInProgress: false,
+          progressMessages: [],
+          result: {
+            param: {
+              type: 'tool_result',
+              tool_use_id: 'tool-b',
+              content: [{ type: 'text', text: '' }],
+            },
+            output: {
+              status: 'async_launched',
+              agentId: 'agent-b',
+              agentName: 'Katherine',
+              agentType: 'general-purpose',
+              description: 'review UI integration',
+              prompt: 'review UI integration',
+              outputFile: '/tmp/agent-b',
+              canCheckProgress: true,
+            },
+          },
+        },
+      ],
+      { shouldAnimate: false, tools: [] },
+    )
+
+    const text = await renderToPlainText(node)
+    expect(text).toContain('2 background agents launched')
+    expect(text).toContain('@Ada: review backend integration')
+    expect(text).toContain('@Katherine: review UI integration')
+  })
 })
 
 describe('getBuiltInAgents in normal mode', () => {

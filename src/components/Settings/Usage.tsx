@@ -386,7 +386,7 @@ function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactN
   useEffect(() => {
     void (async () => {
       try {
-        const data = await fetchPoolUsage();
+        const data = await fetchPoolUsage({ updateRoutingHints: true });
         setSnapshot(data);
       } catch {
         // best-effort; silently skip on failure

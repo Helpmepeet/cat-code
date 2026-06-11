@@ -313,7 +313,7 @@ function AccountsPanelContent({
   useEffect(() => {
     if (!hasCodexAccounts) return
     let cancelled = false
-    fetchPoolUsage()
+    fetchPoolUsage({ updateRoutingHints: true })
       .then((snapshot) => { if (!cancelled) setCodexUsageSnapshot(snapshot) })
       .catch(() => { if (!cancelled) setCodexUsageSnapshot(null) })
     return () => { cancelled = true }

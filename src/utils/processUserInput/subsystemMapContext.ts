@@ -47,6 +47,19 @@ export const KEYWORD_MAP: ReadonlyArray<{ map: string; keywords: string[] }> = [
     ],
   },
   {
+    map: 'web-app-runtime.md',
+    keywords: [
+      'web app',
+      'browser chat',
+      'websocket',
+      'app session',
+      'appsessioncontroller',
+      'app runtime',
+      'web mode',
+      'vite',
+    ],
+  },
+  {
     map: 'tools-permissions.md',
     keywords: [
       'permission',

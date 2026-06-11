@@ -73,13 +73,14 @@ export function AgentProgressLine(t0) {
   let t6;
   // Both branches MUST render `name` (when set) so a named subagent is
   // identifiable in the transcript line. hideType (all siblings same type)
-  // leads with the name; the else branch (mixed types) prefixes "@name · "
+  // leads with "@name"; the else branch (mixed types) prefixes "@name · "
   // before the type to match the background-task footer's "@name · type"
   // convention (src/components/tasks/BackgroundTask.tsx). Dropping the @name
   // prefix here regresses to showing only "type (description)" — the bug where
   // a named verifier rendered as "verification (verify codex failover)".
   if ($[7] !== agentType || $[8] !== color || $[9] !== description || $[10] !== descriptionColor || $[11] !== hideType || $[12] !== name) {
-    t6 = hideType ? <><Text bold={true}>{name ?? description ?? agentType}</Text>{name && description && <Text dimColor={true}>: {description}</Text>}</> : <>{name && <><Text bold={true}>@{name}</Text><Text dimColor={true}> · </Text></>}<Text bold={true} backgroundColor={color} color={color ? "inverseText" : undefined}>{agentType}</Text>{description && <>{" ("}<Text backgroundColor={descriptionColor} color={descriptionColor ? "inverseText" : undefined}>{description}</Text>{")"}</>}</>;
+    const displayName = name ? `@${name}` : undefined;
+    t6 = hideType ? <><Text bold={true}>{displayName ?? description ?? agentType}</Text>{name && description && <Text dimColor={true}>: {description}</Text>}</> : <>{name && <><Text bold={true}>@{name}</Text><Text dimColor={true}> · </Text></>}<Text bold={true} backgroundColor={color} color={color ? "inverseText" : undefined}>{agentType}</Text>{description && <>{" ("}<Text backgroundColor={descriptionColor} color={descriptionColor ? "inverseText" : undefined}>{description}</Text>{")"}</>}</>;
     $[7] = agentType;
     $[8] = color;
     $[9] = description;

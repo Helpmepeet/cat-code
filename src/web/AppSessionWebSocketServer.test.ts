@@ -501,4 +501,165 @@ describe('AppSessionWebSocketServer', () => {
     releaseTurn?.()
     await closeWebSocket(ws)
   })
+
+  test('replays pending permissions and rejects stale permission ids', async () => {
+    let permissionResponse: unknown
+    let releaseTurn: (() => void) | undefined
+    const turnReleased = new Promise<void>(resolve => {
+      releaseTurn = resolve
+    })
+
+    const controller = new AppSessionController({
+      async *runTurn({ onPermissionRequest }) {
+        permissionResponse = await onPermissionRequest({
+          requestId: 'perm-replay',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'Bash',
+            display_name: 'Run shell command',
+            input: { command: 'pwd' },
+            tool_use_id: 'toolu_replay',
+            agent_id: 'worker-1',
+            blocked_path: '/repo',
+            decision_reason: 'Need shell approval',
+            permission_suggestions: [
+              {
+                type: 'addRules',
+                rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+                behavior: 'allow',
+                destination: 'projectSettings',
+              },
+            ],
+          } as never,
+        })
+        await turnReleased
+      },
+    })
+
+    const server = await startAppSessionWebSocketServer({
+      port: 0,
+      token: 'secret',
+      allowedOrigins: ['http://localhost:5173'],
+      controller,
+    })
+    servers.push(server)
+
+    const firstClient = await connect(
+      `ws://127.0.0.1:${server.port}/ws`,
+      'secret',
+    )
+    await nextJson(firstClient)
+    firstClient.send(
+      JSON.stringify({ type: 'app.submit', requestId: 'submit-1', prompt: 'hi' }),
+    )
+    expect(await nextJson(firstClient)).toEqual({
+      type: 'app.ack',
+      requestId: 'submit-1',
+    })
+    expect(await nextJson(firstClient)).toEqual({
+      type: 'app.event',
+      event: { type: 'status.update', activeTurn: true, inputEnabled: false },
+    })
+    expect(await nextJson(firstClient)).toMatchObject({
+      type: 'app.event',
+      event: {
+        type: 'permission.requested',
+        request: {
+          requestId: 'perm-replay',
+          request: {
+            display_name: 'Run shell command',
+            tool_name: 'Bash',
+            agent_id: 'worker-1',
+            blocked_path: '/repo',
+            decision_reason: 'Need shell approval',
+            input: { command: 'pwd' },
+            permission_suggestions: [
+              expect.objectContaining({
+                type: 'addRules',
+                rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+                behavior: 'allow',
+                destination: 'projectSettings',
+              }),
+            ],
+          },
+        },
+      },
+    })
+
+    const reconnectClient = await connect(
+      `ws://127.0.0.1:${server.port}/ws`,
+      'secret',
+    )
+    expect(await nextJson(reconnectClient)).toMatchObject({
+      type: 'app.ready',
+      pendingPermissionRequests: [
+        expect.objectContaining({
+          requestId: 'perm-replay',
+          request: expect.objectContaining({ agent_id: 'worker-1' }),
+        }),
+      ],
+    })
+
+    reconnectClient.send(
+      JSON.stringify({
+        type: 'permission.response',
+        requestId: 'perm-replay',
+        response: {
+          behavior: 'allow',
+          updatedInput: { command: 'pwd' },
+          updatedPermissions: [
+            {
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+              behavior: 'allow',
+              destination: 'projectSettings',
+            },
+          ],
+        },
+      }),
+    )
+    expect(await nextJson(reconnectClient)).toEqual({
+      type: 'app.ack',
+      requestId: 'perm-replay',
+    })
+    expect(await nextJson(reconnectClient)).toMatchObject({
+      type: 'app.event',
+      event: {
+        type: 'permission.resolved',
+        requestId: 'perm-replay',
+      },
+    })
+    expect(permissionResponse).toMatchObject({
+      behavior: 'allow',
+      updatedInput: { command: 'pwd' },
+      updatedPermissions: [
+        expect.objectContaining({
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'pwd' }],
+          behavior: 'allow',
+          destination: 'projectSettings',
+        }),
+      ],
+    })
+
+    reconnectClient.send(
+      JSON.stringify({
+        type: 'permission.response',
+        requestId: 'stale-perm',
+        response: { behavior: 'deny', message: 'stale' },
+      }),
+    )
+    expect(await nextJson(reconnectClient)).toMatchObject({
+      type: 'app.error',
+      requestId: 'stale-perm',
+      code: 'permission_not_found',
+      retryable: false,
+    })
+
+    releaseTurn?.()
+    await Promise.all([
+      closeWebSocket(firstClient),
+      closeWebSocket(reconnectClient),
+    ])
+  })
 })

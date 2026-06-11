@@ -346,12 +346,13 @@ export function renderToolResultMessage(data: Output, progressMessagesForMessage
   }
   if (data.status === 'async_launched') {
     const {
+      agentName,
       prompt
     } = data;
     return <Box flexDirection="column">
         <MessageResponse height={1}>
           <Text>
-            Backgrounded agent
+            Backgrounded agent{agentName ? ` @${agentName}` : ''}
             {!isTranscriptMode && <Text dimColor>
                 {' ('}
                 <Byline>
@@ -766,6 +767,11 @@ export function renderGroupedAgentToolUse(toolUses: Array<{
     const stats = calculateAgentStats(progressMessages);
     const lastToolInfo = extractLastToolInfo(progressMessages, tools);
     const parsedInput = inputSchema().safeParse(param.input);
+    const resultAgentName = result?.output && typeof result.output === 'object' && 'agentName' in result.output && typeof (result.output as {
+      agentName?: unknown;
+    }).agentName === 'string' ? (result.output as {
+      agentName: string;
+    }).agentName : undefined;
 
     // teammate_spawned is not part of the exported Output type (cast through unknown
     // for dead code elimination), so check via string comparison on the raw value
@@ -802,7 +808,7 @@ export function renderGroupedAgentToolUse(toolUses: Array<{
     // non-teammate branch above. AgentProgressLine renders it as a "@name · "
     // prefix; don't drop it here assuming it's unused — see the contract note
     // in src/components/AgentProgressLine.tsx.
-    const name = parsedInput.success ? parsedInput.data.name : undefined;
+    const name = resultAgentName ?? (parsedInput.success ? parsedInput.data.name : undefined);
     return {
       id: param.id,
       agentType,

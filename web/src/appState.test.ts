@@ -216,6 +216,61 @@ describe("web app state reducer", () => {
     expect(state.pendingPermissions).toEqual([]);
   });
 
+  test("preserves pending permission display fields for the browser panel", () => {
+    let state = createInitialAppState();
+    state = reduceAppServerMessage(state, {
+      type: "app.event",
+      event: {
+        type: "permission.requested",
+        request: {
+          requestId: "perm-1",
+          request: {
+            subtype: "can_use_tool",
+            tool_name: "Bash",
+            display_name: "Run shell command",
+            input: { command: "pwd" },
+            permission_suggestions: [
+              {
+                type: "addRules",
+                rules: [{ toolName: "Bash", ruleContent: "pwd" }],
+                behavior: "allow",
+                destination: "projectSettings",
+              },
+            ],
+            blocked_path: "/repo",
+            decision_reason: "Need shell approval",
+            tool_use_id: "toolu_1",
+            agent_id: "worker-1",
+          },
+        },
+      },
+    });
+
+    expect(state.pendingPermissions).toEqual([
+      {
+        requestId: "perm-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Bash",
+          display_name: "Run shell command",
+          input: { command: "pwd" },
+          permission_suggestions: [
+            expect.objectContaining({
+              type: "addRules",
+              rules: [{ toolName: "Bash", ruleContent: "pwd" }],
+              behavior: "allow",
+              destination: "projectSettings",
+            }),
+          ],
+          blocked_path: "/repo",
+          decision_reason: "Need shell approval",
+          tool_use_id: "toolu_1",
+          agent_id: "worker-1",
+        },
+      },
+    ]);
+  });
+
   test("records errors as system messages", () => {
     const state = reduceAppServerMessage(createInitialAppState(), {
       type: "app.error",

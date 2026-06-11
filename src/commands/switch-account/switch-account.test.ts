@@ -10,7 +10,12 @@ import {
 } from '../../services/api/accountDiagnostics.js'
 import { call } from './switch-account.js'
 
-function createCodexAccount(accountId: string, alias: string, lastUsedAt = 0) {
+function createCodexAccount(
+  accountId: string,
+  alias: string,
+  lastUsedAt = 0,
+  overrides: Partial<codexPoolModule.PoolAccount> = {},
+) {
   return {
     accountId,
     accessToken: `${accountId}-access`,
@@ -20,6 +25,7 @@ function createCodexAccount(accountId: string, alias: string, lastUsedAt = 0) {
     status: 'healthy' as const,
     lastUsedAt,
     alias,
+    ...overrides,
   }
 }
 
@@ -153,6 +159,34 @@ describe('/switch-account', () => {
       reason: 'manual switch succeeded',
     })
     expect((emittedMessages[1] as { account_ref?: string }).account_ref).toBeDefined()
+  })
+
+  test('explicit Codex switch to an account with stale plan metadata succeeds with a warning', async () => {
+    setSessionProvider('openai')
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        createCodexAccount('codex-current', 'current'),
+        createCodexAccount('codex-plan', 'plan', 0, {
+          planType: 'plus',
+          planExpiresAt: '2026-04-12T03:30:01+00:00',
+        }),
+      ],
+      activeAccountId: 'codex-current',
+    })
+
+    const result = await call(
+      'plan',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result?.value).toContain('Switched to plan')
+    expect(result?.value).toContain(
+      'Warning: saved plan metadata says expired (2026-04-12T03:30:01+00:00); live usage decides availability',
+    )
   })
 
   test('emits account.manual_switch for actual Claude switches', async () => {
@@ -416,6 +450,32 @@ describe('/switch-account', () => {
       'manual switch started',
       'manual switch failed: no matching healthy account',
     ])
+  })
+
+  test('explicit Codex switch reports existing account that is not switchable', async () => {
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        createCodexAccount('codex-current', 'current'),
+        createCodexAccount('codex-blocked', 'blocked', 0, {
+          status: 'capped',
+          statusReason: 'usage_cap',
+          lastError: 'Usage cap hit (429)',
+        }),
+      ],
+      activeAccountId: 'codex-current',
+    })
+
+    const result = await call(
+      'blocked',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result?.value).toContain('Found Codex account "blocked", but it is not switchable.')
+    expect(result?.value).toContain('Reason: Usage cap hit (429)')
   })
 
   test('returns Multiple Claude accounts match for ambiguous Claude alias prefix and does not switch', async () => {

@@ -2,6 +2,7 @@ import { clearAuthRelatedCaches } from '../logout/logout.js'
 import {
   applyPostCodexAccountSwitchRefresh,
   getPoolStatus,
+  isCodexAccountSwitchable,
   removeCodexAccount,
   resolveCodexAccountByPrefix,
 } from '../../services/api/codexAccountPool.js'
@@ -113,7 +114,7 @@ export const call: LocalCommandCall = async (args, context) => {
 
     if (!confirmed) {
       const remaining = codexAccounts.filter((a) => a.accountId !== codexAcct.accountId)
-      const nextActive = remaining.find((a) => a.status === 'healthy')
+      const nextActive = remaining.find((a) => isCodexAccountSwitchable(a))
       let impact: string
       if (wasActive && nextActive) {
         impact = `After deletion, active Codex account will become "${nextActive.alias ?? nextActive.accountId.slice(0, 12)}".`

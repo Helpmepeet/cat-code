@@ -2413,6 +2413,7 @@ export function prefetchAllMcpResources(
   clients: MCPServerConnection[]
   tools: Tool[]
   commands: Command[]
+  resources: Record<string, ServerResource[]>
 }> {
   return new Promise(resolve => {
     let pendingCount = 0
@@ -2425,6 +2426,7 @@ export function prefetchAllMcpResources(
         clients: [],
         tools: [],
         commands: [],
+        resources: {},
       })
       return
     }
@@ -2432,11 +2434,15 @@ export function prefetchAllMcpResources(
     const clients: MCPServerConnection[] = []
     const tools: Tool[] = []
     const commands: Command[] = []
+    const resources: Record<string, ServerResource[]> = {}
 
     getMcpToolsCommandsAndResources(result => {
       clients.push(result.client)
       tools.push(...result.tools)
       commands.push(...result.commands)
+      if (result.resources && result.resources.length > 0) {
+        resources[result.client.name] = result.resources
+      }
 
       completedCount++
       if (completedCount >= pendingCount) {
@@ -2457,6 +2463,7 @@ export function prefetchAllMcpResources(
           clients,
           tools,
           commands,
+          resources,
         })
       }
     }, mcpConfigs).catch(error => {
@@ -2469,6 +2476,7 @@ export function prefetchAllMcpResources(
         clients: [],
         tools: [],
         commands: [],
+        resources: {},
       })
     })
   })

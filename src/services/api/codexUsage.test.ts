@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
   getPoolStatus,
+  isCodexAccountSwitchable,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
   type PoolAccount,
@@ -33,10 +34,16 @@ function buildPoolAccount(
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
     alias: overrides.alias,
+    planType: overrides.planType,
+    planExpiresAt: overrides.planExpiresAt,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
     usageWeekly: overrides.usageWeekly,
     usageFetchedAt: overrides.usageFetchedAt,
+    usageAllowed: overrides.usageAllowed,
+    usageLimitReached: overrides.usageLimitReached,
+    usageResetAt: overrides.usageResetAt,
+    statusReason: overrides.statusReason,
   }
 }
 
@@ -124,6 +131,7 @@ describe('codexUsage display helpers', () => {
         alias: 'backup1',
         isActive: false,
         status: 'healthy',
+        availabilityWarnings: [],
         usage: null,
         error: 'HTTP 401',
       },
@@ -132,6 +140,7 @@ describe('codexUsage display helpers', () => {
         alias: 'backup2',
         isActive: false,
         status: 'capped',
+        availabilityWarnings: [],
         usage: buildUsage('capped-account', 100, 0, {
           allowed: false,
           limitReached: true,
@@ -143,6 +152,7 @@ describe('codexUsage display helpers', () => {
         alias: 'main',
         isActive: true,
         status: 'healthy',
+        availabilityWarnings: [],
         usage: buildUsage('main-account', 10, 40),
         error: null,
       },
@@ -155,7 +165,7 @@ describe('codexUsage display helpers', () => {
     ])
   })
 
-  test('fetchPoolUsage does not mutate account status (observational only)', async () => {
+  test('fetchPoolUsage records usage caps without mutating account status', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -192,16 +202,18 @@ describe('codexUsage display helpers', () => {
 
     invalidateUsageCache()
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
     }
 
     const status = getPoolStatus()
-    expect(status.accounts.find((a) => a.accountId === 'main-account')?.status).toBe(
-      'healthy',
-    )
+    const account = status.accounts.find((a) => a.accountId === 'main-account')
+    expect(account?.status).toBe('healthy')
+    expect(account?.usageAllowed).toBe(false)
+    expect(account?.usageLimitReached).toBe(true)
+    expect(account ? isCodexAccountSwitchable(account) : false).toBe(false)
   })
 
   test('fetchPoolUsage does not move pool.activeIndex', async () => {
@@ -250,6 +262,136 @@ describe('codexUsage display helpers', () => {
     }
 
     expect(getPoolStatus().activeIndex).toBe(beforeIndex)
+  })
+
+  test('cached fetchPoolUsage records availability when updateRoutingHints is requested later', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response(
+        JSON.stringify({
+          user_id: 'u',
+          email: 'x@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: false,
+            limit_reached: true,
+            primary_window: {
+              used_percent: 100,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 0,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage(true)
+      await fetchPoolUsage({ updateRoutingHints: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const account = getPoolStatus().accounts.find((a) => a.accountId === 'main-account')
+    expect(fetchCount).toBe(1)
+    expect(account?.usageAllowed).toBe(false)
+    expect(account?.usageLimitReached).toBe(true)
+  })
+
+  test('fetchPoolUsage clears only usage-derived capped status when live usage is allowed', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          lastError: 'Usage cap hit (429)',
+        }),
+        buildPoolAccount({
+          accountId: 'plan-account',
+          alias: 'plan',
+          status: 'capped',
+          statusReason: 'runtime_cap',
+          lastError: 'Runtime turn failure (429)',
+        }),
+        buildPoolAccount({
+          accountId: 'dead-account',
+          alias: 'dead',
+          status: 'dead',
+          statusReason: 'auth_dead',
+          lastError: 'Token refresh failed',
+        }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const authHeader = new Headers(init?.headers).get('Authorization')
+      const accountId = authHeader?.replace('Bearer access-', '') ?? 'main-account'
+      return new Response(
+        JSON.stringify({
+          user_id: `u-${accountId}`,
+          email: `${accountId}@example.com`,
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 10,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 20,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const accounts = getPoolStatus().accounts
+    const main = accounts.find((a) => a.accountId === 'main-account')
+    const plan = accounts.find((a) => a.accountId === 'plan-account')
+    const dead = accounts.find((a) => a.accountId === 'dead-account')
+    expect(main?.status).toBe('healthy')
+    expect(main?.statusReason).toBeUndefined()
+    expect(main?.lastError).toBeUndefined()
+    expect(plan?.status).toBe('capped')
+    expect(plan?.statusReason).toBe('runtime_cap')
+    expect(dead?.status).toBe('dead')
+    expect(dead?.statusReason).toBe('auth_dead')
   })
 
   test('fetchPoolUsage treats HTTP 401 as observational and does not refresh tokens', async () => {
@@ -563,5 +705,59 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain('  backup1  [usage unavailable]')
     expect(output).toContain('usage      unavailable (HTTP 401)')
     expect(output).toContain('3 accounts, 1 available, 1 capped, 1 unavailable')
+  })
+
+  test('formatPoolUsage shows internal capped status even when live usage is available', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'blocked-account',
+          alias: 'blocked',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          lastError: 'Usage cap hit (429)',
+        }),
+      ],
+    })
+
+    const output = formatPoolUsage({
+      accounts: [
+        buildUsage('main-account', 10, 40),
+        buildUsage('blocked-account', 1, 72, { allowed: true, limitReached: false }),
+      ],
+      fetchedAt: Date.now(),
+      errors: [],
+    })
+
+    expect(output).toContain('blocked  [not switchable: capped] [usage available]')
+    expect(output).toContain('reason: Usage cap hit (429)')
+  })
+
+  test('formatPoolUsage shows stale plan metadata as a warning on a switchable account', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          alias: 'main',
+          planType: 'plus',
+          planExpiresAt: '2026-04-12T03:30:01+00:00',
+        }),
+      ],
+    })
+
+    const output = formatPoolUsage({
+      accounts: [buildUsage('main-account', 1, 72, { allowed: true, limitReached: false })],
+      fetchedAt: Date.now(),
+      errors: [],
+    })
+
+    expect(output).toContain('● main')
+    expect(output).not.toContain('[not switchable')
+    expect(output).toContain(
+      'warning: saved plan metadata says expired (2026-04-12T03:30:01+00:00); live usage decides availability',
+    )
   })
 })

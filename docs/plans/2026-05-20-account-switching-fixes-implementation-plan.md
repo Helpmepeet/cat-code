@@ -32,7 +32,7 @@ These are product decisions. Do not implement gated behavior until the owner cho
 Applied implementation decisions:
 
 - DP1: manual Codex switches reassign the main lease and active follow-main subagent leases; spread leases keep their existing account.
-- DP2/DP4: usage display and `/accounts` are observational by default; only explicit background refresh paths update routing hints.
+- DP2/DP4: usage display and `/accounts` may record live usage availability for later routing, but they must not directly reroll the active account as a read-side effect.
 - DP3: turn-based account rotation was deleted rather than wired.
 
 Resolved §16.3 items that still affect sequencing:

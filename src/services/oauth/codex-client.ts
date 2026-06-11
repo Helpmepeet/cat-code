@@ -38,6 +38,8 @@ export type CodexTokens = {
   expiresAt: number
   /** ChatGPT account ID extracted from the JWT */
   accountId: string
+  /** OIDC id_token with plan and account metadata when OpenAI provides it */
+  idToken?: string
   /** Email from the OIDC id_token or access token when OpenAI provides it */
   accountEmail?: string
 }
@@ -224,6 +226,7 @@ export async function exchangeCodexCode(
     refreshToken: result.refresh,
     expiresAt: result.expires,
     accountId,
+    ...(result.idToken ? { idToken: result.idToken } : {}),
     ...(accountEmail ? { accountEmail } : {}),
   }
 }
@@ -252,6 +255,7 @@ export async function refreshCodexToken(refreshToken: string): Promise<CodexToke
     refreshToken: result.refresh,
     expiresAt: result.expires,
     accountId,
+    ...(result.idToken ? { idToken: result.idToken } : {}),
     ...(accountEmail ? { accountEmail } : {}),
   }
 }

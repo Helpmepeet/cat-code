@@ -3,10 +3,12 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { logForDebugging } from '../../utils/debug.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import {
+  getCodexAccountAvailability,
   getPoolAccountUsageScore,
   getPoolAccountsForLeaseSelection,
   getPoolStatus,
   hasFreshPoolAccountUsageHint,
+  isCodexAccountLeaseSelectable,
   markPoolAccountCapped,
   markPoolAccountLastError,
   touchPoolAccountUsage,
@@ -401,14 +403,24 @@ function synthesizeMainLease(
 
 function selectMainAccountForLease(): { account: PoolAccount; reason: string } {
   const pool = getPoolStatus()
-  if (!pool.initialized || pool.activeIndex < 0) {
+  if (!pool.initialized || pool.accounts.length === 0) {
     throw new Error(NO_HEALTHY_ACCOUNTS_ERROR)
   }
-  const account = pool.accounts[pool.activeIndex]
-  if (!account) {
+
+  const active = pool.activeIndex >= 0 ? pool.accounts[pool.activeIndex] : undefined
+  if (active && isCodexAccountLeaseSelectable(active)) {
+    // The user chose this account; a plan-metadata warning does not override that.
+    return { account: active, reason: 'main lease pinned to pool activeIndex' }
+  }
+
+  const selectable = pool.accounts.filter((account) => isCodexAccountLeaseSelectable(account))
+  const replacement =
+    selectable.find((account) => getCodexAccountAvailability(account).kind === 'available') ??
+    selectable[0]
+  if (!replacement) {
     throw new Error(NO_HEALTHY_ACCOUNTS_ERROR)
   }
-  return { account, reason: 'main lease pinned to pool activeIndex' }
+  return { account: replacement, reason: 'main lease repaired from non-selectable active account' }
 }
 
 function selectAccountForLease(
@@ -418,7 +430,7 @@ function selectAccountForLease(
   const poolAccounts = getPoolAccountsForLeaseSelection()
   const healthyCandidates = poolAccounts.filter(
     (account) =>
-      account.status === 'healthy' && account.accountId !== excludedAccountId,
+      isCodexAccountLeaseSelectable(account) && account.accountId !== excludedAccountId,
   )
 
   if (healthyCandidates.length === 0) {
@@ -438,14 +450,19 @@ function selectAccountForLease(
     }
   }
 
+  const cleanCandidates = healthyCandidates.filter(
+    (account) => getCodexAccountAvailability(account).kind === 'available',
+  )
+  const rankableCandidates = cleanCandidates.length > 0 ? cleanCandidates : healthyCandidates
+
   const liveLeaseCounts = getLiveLeaseCountsByAccountId()
   const now = Date.now()
   const errorCooldownMs =
     Number(process.env['CODEX_POOL_ERROR_COOLDOWN_MS'] ?? 60_000) || 60_000
-  const hasFreshUsage = healthyCandidates.some((account) =>
+  const hasFreshUsage = rankableCandidates.some((account) =>
     hasFreshPoolAccountUsageHint(account, now),
   )
-  const rankedCandidates = [...healthyCandidates].sort((left, right) => {
+  const rankedCandidates = [...rankableCandidates].sort((left, right) => {
     const liveLeaseDelta =
       (liveLeaseCounts.get(left.accountId) ?? 0) -
       (liveLeaseCounts.get(right.accountId) ?? 0)

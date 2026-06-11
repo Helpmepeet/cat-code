@@ -349,7 +349,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['sonnet', 'opus', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it (don't match yourself to a specific id like gpt-5.4)."),
+  model: z.enum(['sonnet', 'opus', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it (don't match yourself to a specific id like gpt-5.4). Same-family downgrades below the parent model are ignored."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));
 

@@ -350,6 +350,9 @@ export function getGPTAgentModeSessionGuidanceSection(
     hasSkills
       ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
       : null,
+    hasSkills
+      ? `HANDOFF PROMPTS: When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
+      : null,
     discoverSkillsRule,
   ].filter(item => item !== null)
 
@@ -411,7 +414,7 @@ export function getGPTSessionGuidanceSection(
     hasAgentTool &&
     feature('VERIFICATION_AGENT') &&
     getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)
-      ? `VERIFICATION CONTRACT: After any non-trivial implementation (3+ file edits, backend/API changes, or infrastructure changes), you MUST spawn ${AGENT_TOOL_NAME} with subagent_type="${VERIFICATION_AGENT_TYPE}" before reporting completion to the user. You own the verification gate regardless of who did the implementing (you, a fork, or a subagent). Your own checks do NOT substitute — only the verifier assigns a verdict. Pass: original user request, all changed files, approach, plan file path if applicable. On FAIL: fix and re-run the verifier until PASS. On PASS: spot-check — re-run 2-3 commands from its report and confirm output matches. On PARTIAL: report what passed and what could not be verified.`
+      ? `VERIFICATION CONTRACT: After any non-trivial implementation (3+ file edits, backend/API changes, or infrastructure changes), you MUST spawn ${AGENT_TOOL_NAME} with subagent_type="${VERIFICATION_AGENT_TYPE}" before reporting completion to the user. You own the verification gate regardless of who did the implementing (you, a fork, or a subagent). Your own checks do NOT substitute — only the verifier assigns a verdict. Pass: original user request, all changed files, approach, plan file path if applicable. Flag concerns if you have them, but do NOT share your own test results or claim things work — the verifier must reach its verdict independently. On FAIL: fix and re-run the verifier until PASS. On PASS: spot-check — re-run 2-3 commands from its report and confirm output matches. On PARTIAL: report what passed and what could not be verified.`
       : null
 
   const items = [
@@ -429,11 +432,17 @@ export function getGPTSessionGuidanceSection(
     !isForkSubagentEnabled()
       ? [
           `SEARCH RULE: For simple, directed codebase searches (a specific file/class/function) use ${searchTools} directly.`,
-          `EXPLORE RULE: For broader codebase exploration or deep research, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType}. This is slower than direct search — use only when a direct search is insufficient or when your task clearly requires more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
+          `EXPLORE RULE: For broader codebase exploration or deep research, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType}. It fans out many searches and returns only conclusions, keeping your context small. Run 1-2 targeted lookups directly; delegate to ${EXPLORE_AGENT.agentType} when the task clearly requires more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
         ]
       : []),
+    hasAgentTool
+      ? `AGENT TYPES: When the ${AGENT_TOOL_NAME} tool's available-agent list includes implementor or verification, use those subagent types for bounded implementation slices or independent checks where delegation helps; keep the scope tight and report results yourself.`
+      : null,
     hasSkills
       ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
+      : null,
+    hasSkills
+      ? `HANDOFF PROMPTS: When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
       : null,
     discoverSkillsRule,
     verificationRule,

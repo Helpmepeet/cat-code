@@ -216,6 +216,7 @@ async function refreshAccountTokensImpl(
       {
         accessToken: newAccessToken,
         refreshToken: newRefreshToken,
+        idToken: newIdToken,
         expiresAt,
         accountId: refreshedAccountId,
       },
@@ -273,6 +274,7 @@ async function refreshAccountTokensImpl(
   appendAccount({
     accessToken: newAccessToken,
     refreshToken: newRefreshToken,
+    idToken: newIdToken,
     expiresAt,
     accountId: refreshedAccountId,
   }, {

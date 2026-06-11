@@ -73,7 +73,7 @@ Codex client.
 | Codex single-account fallback | `src/utils/auth.ts:getCodexOAuthTokens()` | Global config `codexOAuth` | Backward-compatible path when Codex pool is not active. |
 | Codex account pool | `src/services/api/codexAccountPool.ts` | `~/codex-vault/accounts/<accountId>.json`, optional `.codex-nootp/config.toml` vault path, plus config fallback | Pool owns health, aliases, active account, usage hints, plan eligibility, and config active-account pointer. |
 | Codex token refresh | `src/services/api/codexTokenRefresh.ts` | Codex vault JSON | `touchAll()` refreshes unlocked vault accounts. Identity mismatch saves a new profile and marks the old account dead. |
-| Codex usage hints | `src/services/api/codexUsage.ts` | In-memory cache and pool account fields | Wham usage is best-effort. Hard truth remains 429/cap handling in request retry. |
+| Codex usage hints | `src/services/api/codexUsage.ts` | In-memory cache and pool account fields | Wham usage is best-effort. Fresh usage caps can block routing; usage can clear only usage-derived caps. |
 
 ## Command Routing
 

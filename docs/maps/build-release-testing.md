@@ -1,8 +1,8 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-06-06 against `CLAUDE.md`,
+Last refreshed: 2026-06-08 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
-`scripts/test-codex-*.ts`, `src/migrations/`,
+`scripts/test-codex-*.ts`, `web/package.json`, `src/migrations/`,
 update/release/upgrade command surfaces, and colocated tests.
 
 Use this as the daily-refreshable routing layer for build, development,
@@ -37,6 +37,7 @@ files, then verify current source before changing code.
 | Development build | `scripts/build.ts` | `package.json` | `bun run build:dev` emits `./cli-dev`, sets development macros, experimental-build env, dev semver suffix, and git-log changelog macro. |
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
+| Web frontend dev/build | `web/package.json` | `src/main.tsx`, `src/web/startRuntimeBackedWebMode.ts`, `src/web/launchWebAppDevServer.ts`, `web/src/App.tsx` | `cd web && bun run dev` starts Vite, `cd web && bun run build` produces the browser bundle, and `main.tsx --web` now routes through the runtime-backed web-mode launcher plus the app-session WebSocket server. |
 | Shell update command | `src/main.tsx` | `src/entrypoints/cli.tsx`, `src/cli/update.ts` | `program.command('update').alias('upgrade')` delegates to `src/cli/update.ts`. Early CLI rewrites `--update` and `--upgrade` to the `update` subcommand. |
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
@@ -138,6 +139,8 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Full repo build gate requested by root docs | `bun run build:dev:full` | `CLAUDE.md`, `package.json`, `scripts/build.ts` |
 | Docs-only whitespace/path sanity | `git diff --check` | Git diff |
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
+| Web frontend tests | `bun run --cwd web test` | `web/package.json` |
+| Web frontend type/build verification | `cd web && bun run typecheck && bun run build` | `web/package.json`, Vite |
 | Codex standalone smoke | `bun run scripts/test-codex-core.ts --account <alias> --model <model> --prompt "hello"` | `scripts/test-codex-core.ts` |
 | Codex two-turn smoke | `bun run scripts/test-codex-core-conversation.ts --account <alias> --model <model>` | `scripts/test-codex-core-conversation.ts` |
 | Codex effort mapping | `bun run scripts/test-codex-effort.ts` | `scripts/test-codex-effort.ts` |
@@ -161,6 +164,7 @@ paths.
 | Tasks and workers | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
 | Compact/context behavior | `bun test src/services/compact/*.test.ts` |
 | App runtime | `bun test src/app-runtime/*.test.ts` |
+| Browser app/runtime | `bun test src/web/*.test.ts src/app-runtime/*.test.ts` plus `bun run --cwd web test` |
 | Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts src/commands/agent/agent.test.ts`. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |
 
@@ -173,7 +177,8 @@ workarounds.
 
 `bun run lint` runs ESLint only on changed TypeScript files from
 `git diff --name-only main...HEAD`, excluding `web/`, and only if those paths
-still exist. It uses `eslint-suppressions.json` plus suppressions for:
+still exist. Browser-frontend changes therefore need their own `web/` checks.
+The root lint uses `eslint-suppressions.json` plus suppressions for:
 
 - `react-hooks/rules-of-hooks`
 - `react-hooks/exhaustive-deps`
@@ -215,6 +220,8 @@ actual command expansion before trusting a clean lint result.
   changelog file.
 - `bun run lint` can miss unchanged files affected by API changes. Run focused
   tests and, for shared type changes, broaden lint/test selection manually.
+- `bun run lint` does not cover `web/`. A clean root lint says nothing about
+  the Vite React app unless you also run the `web/package.json` checks.
 - Some checked-in TSX files include React compiler artifacts or source maps.
   Avoid formatting or rewriting unrelated generated-looking regions while doing
   scoped fixes.

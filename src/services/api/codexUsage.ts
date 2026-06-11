@@ -7,6 +7,7 @@
 
 import { logForDebugging } from '../../utils/debug.js'
 import {
+  getCodexAccountAvailability,
   getPoolStatus,
   updateAccountUsageHints,
   type PoolAccount,
@@ -53,6 +54,11 @@ export interface PoolUsageDisplayAccount {
   alias?: string
   isActive: boolean
   status: PoolAccount['status']
+  statusReason?: PoolAccount['statusReason']
+  lastError?: string
+  switchable?: boolean
+  availabilityReason?: string
+  availabilityWarnings: string[]
   usage: AccountUsage | null
   error: string | null
 }
@@ -152,6 +158,9 @@ export async function fetchPoolUsage(
       : forceRefreshOrOptions
   const forceRefresh = options.forceRefresh === true
   if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
+    if (options.updateRoutingHints === true) {
+      updateRoutingHintsFromUsage(cachedSnapshot.accounts)
+    }
     emitCachedUsageWarningsForActiveSink()
     return cachedSnapshot
   }
@@ -180,16 +189,10 @@ export async function fetchPoolUsage(
 
   emitUsageWarnings(results)
 
-  // Display calls are observational by default (DP2/DP4). Only explicit
-  // background prefetch paths may update soft routing hints for scoring.
+  // Display calls stay non-rerolling, but callers may record live availability
+  // so later routing can avoid accounts that usage has already shown as capped.
   if (options.updateRoutingHints === true && results.length > 0) {
-    updateAccountUsageHints(
-      results.map((r) => ({
-        accountId: r.accountId,
-        primaryPercent: r.primaryWindow.usedPercent,
-        weeklyPercent: r.secondaryWindow.usedPercent,
-      })),
-    )
+    updateRoutingHintsFromUsage(results)
   }
 
   const snapshot: PoolUsageSnapshot = {
@@ -208,6 +211,22 @@ export function emitCachedUsageWarningsForActiveSink(): void {
   emitUsageWarnings(cachedSnapshot.accounts)
 }
 
+function updateRoutingHintsFromUsage(usages: readonly AccountUsage[]): void {
+  if (usages.length === 0) {
+    return
+  }
+  updateAccountUsageHints(
+    usages.map((r) => ({
+      accountId: r.accountId,
+      primaryPercent: r.primaryWindow.usedPercent,
+      weeklyPercent: r.secondaryWindow.usedPercent,
+      allowed: r.allowed,
+      limitReached: r.limitReached,
+      resetAt: Math.max(r.primaryWindow.resetAt, r.secondaryWindow.resetAt),
+    })),
+  )
+}
+
 /**
  * Score an account for pool selection — lower score = better candidate.
  * Weights the 5h window heavily (it's the one that causes 429s).
@@ -219,7 +238,7 @@ export function scoreAccountUsage(usage: AccountUsage): number {
 }
 
 export function buildPoolUsageDisplayAccounts(
-  poolAccounts: readonly Pick<PoolAccount, 'accountId' | 'alias' | 'status'>[],
+  poolAccounts: readonly PoolAccount[],
   snapshot: PoolUsageSnapshot | null,
   activeIndex = -1,
 ): PoolUsageDisplayAccount[] {
@@ -230,14 +249,25 @@ export function buildPoolUsageDisplayAccounts(
     (snapshot?.errors ?? []).map((entry) => [entry.accountId, entry.error] as const),
   )
 
-  return poolAccounts.map((account, index) => ({
-    accountId: account.accountId,
-    alias: account.alias,
-    isActive: index === activeIndex,
-    status: account.status,
-    usage: usageById.get(account.accountId) ?? null,
-    error: errorById.get(account.accountId) ?? null,
-  }))
+  return poolAccounts.map((account, index) => {
+    const availability = getCodexAccountAvailability(account)
+    return {
+      accountId: account.accountId,
+      alias: account.alias,
+      isActive: index === activeIndex,
+      status: account.status,
+      statusReason: account.statusReason,
+      lastError: account.lastError,
+      switchable: availability.kind !== 'blocked',
+      availabilityReason: availability.kind === 'blocked' ? availability.reason : undefined,
+      availabilityWarnings:
+        availability.kind === 'warned'
+          ? availability.warnings.map((warning) => warning.message)
+          : [],
+      usage: usageById.get(account.accountId) ?? null,
+      error: errorById.get(account.accountId) ?? null,
+    }
+  })
 }
 
 export function sortPoolUsageDisplayAccounts(
@@ -291,17 +321,15 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   for (const account of displayAccounts) {
     const label = account.alias ?? account.accountId.slice(0, 12)
     const activeDot = account.isActive ? '● ' : '  '
-    const statusTag = account.usage
-      ? account.usage.allowed && !account.usage.limitReached
-        ? ''
-        : '  [capped]'
-      : account.status === 'dead'
-        ? '  [dead]'
-        : account.error
-          ? '  [usage unavailable]'
-          : ''
+    const statusTag = formatDisplayStatusTag(account)
 
     lines.push(`${activeDot}${label}${statusTag}`)
+    if (account.availabilityReason) {
+      lines.push(`  reason: ${account.availabilityReason}`)
+    }
+    for (const warning of account.availabilityWarnings) {
+      lines.push(`  warning: ${warning}`)
+    }
     if (account.usage) {
       lines.push(usageRow('5h', account.usage.primaryWindow))
       lines.push(usageRow('7d', account.usage.secondaryWindow))
@@ -326,6 +354,31 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   lines.push(summary)
 
   return lines.join('\n')
+}
+
+function formatDisplayStatusTag(account: PoolUsageDisplayAccount): string {
+  if (
+    account.switchable === false &&
+    account.usage &&
+    account.usage.allowed &&
+    !account.usage.limitReached
+  ) {
+    return `  [not switchable: ${account.status}] [usage available]`
+  }
+
+  if (account.usage) {
+    return account.usage.allowed && !account.usage.limitReached ? '' : '  [capped]'
+  }
+
+  if (account.status === 'dead') {
+    return '  [dead]'
+  }
+
+  if (account.error) {
+    return '  [usage unavailable]'
+  }
+
+  return ''
 }
 
 function usageRow(label: string, window: UsageWindow): string {

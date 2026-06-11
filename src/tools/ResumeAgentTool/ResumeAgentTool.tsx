@@ -140,7 +140,7 @@ export const ResumeAgentTool = buildTool({
     }
 
     try {
-      const result = await resumeAgentBackground({
+      await resumeAgentBackground({
         agentId: resolved.agentId,
         prompt: input.prompt,
         sourceSessionId: resolved.sourceSessionId,
@@ -151,7 +151,7 @@ export const ResumeAgentTool = buildTool({
       return {
         data: {
           success: true,
-          message: `Resumed "${result.description}" in the background.${formatContextSizeHint(resolved.contextTokens)}`,
+          message: `Resumed "${resolved.displayName}" in the background.${formatContextSizeHint(resolved.contextTokens)}`,
         },
       }
     } catch (e) {
