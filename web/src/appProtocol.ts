@@ -67,6 +67,7 @@ export type AppServerMessage =
       type: "app.ready";
       protocolVersion: 1;
       inputEnabled: boolean;
+      activeTurn: boolean;
       abort: AppAbortState;
       goalSnapshot: unknown;
       pendingPermissionRequests: AppPermissionRequest[];

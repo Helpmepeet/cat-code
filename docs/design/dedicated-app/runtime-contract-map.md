@@ -12,14 +12,15 @@ behavior where a real terminal or runtime semantic already exists.
 
 | Concern | Current owner | Current status |
 |---|---|---|
-| CLI `--web` startup | `src/main.tsx` | Starts `src/web/WebSocketServer.ts`, spawns Vite from `web/`, opens a browser, skips Ink REPL, and waits. |
+| CLI `--web` startup | `src/main.tsx` and `src/web/startRuntimeBackedWebMode.ts` | Runs normal setup, builds a `QueryEngineAppSessionConfig`, starts the runtime-backed app-session WebSocket server, launches Vite from `web/`, opens a browser, skips Ink REPL only after web startup succeeds, and waits. |
 | App session turn lifecycle | `src/app-runtime/AppSessionController.ts` | Runtime boundary exists and has focused tests. |
 | App session event types | `src/app-runtime/sessionEvents.ts` | Events exist for message, goal, permissions, and abort. |
-| QueryEngine-backed app session | `src/app-runtime/createQueryEngineAppSession.ts` and `src/app-runtime/createQueryEngineSessionController.ts` | Runtime adapter exists. QueryEngine assembly remains non-trivial. |
-| Current browser relay | `src/web/WebSocketServer.ts` and `src/web/WebUIBus.ts` | Separate relay exists, but it does not expose the full app-runtime contract to `web/`. |
-| Current browser UI | `web/src/App.tsx` | Minimal chat shell. Sending is intentionally disabled by current server status. |
-| Current browser socket hook | `web/src/hooks/useWebSocket.ts` | Connects to `/ws`, receives `message`, `delta`, and `status`, and can send `user_input`. |
-| Terminal session loop | `src/screens/REPL.tsx` | Terminal remains the primary production surface. Existing web proof-of-life wiring lives here, but `--web` does not reach REPL. |
+| QueryEngine-backed app session | `src/app-runtime/createQueryEngineAppSession.ts`, `src/app-runtime/createQueryEngineSessionController.ts`, and `src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts` | Runtime adapter exists and normal startup config is extracted for browser sessions. |
+| Runtime-backed browser transport | `src/web/AppSessionWebSocketServer.ts`, `src/web/appSessionProtocol.ts`, and `src/web/appSessionEventMapper.ts` | Localhost WebSocket server exposes the app-runtime contract to `web/`, including submit, abort, permissions, goal snapshots, and ready-state replay. |
+| Legacy browser relay | `src/web/WebSocketServer.ts` and `src/web/WebUIBus.ts` | Legacy REPL relay remains for compatibility and sends a notice that it does not accept browser submissions. |
+| Current browser UI | `web/src/App.tsx` | Single-session chat shell that submits prompts, renders runtime messages, shows connection/goal/abort status, and handles permission requests. |
+| Current browser socket hook | `web/src/hooks/useWebSocket.ts` | Connects to `/ws` with the runtime token subprotocol, receives app-session envelopes, and sends app-session client messages. |
+| Terminal session loop | `src/screens/REPL.tsx` | Terminal remains the primary production surface for non-web sessions. Runtime-backed `--web` skips the Ink REPL. |
 
 ## App Runtime Events
 
@@ -35,34 +36,33 @@ behavior where a real terminal or runtime semantic already exists.
 These are the first events the dedicated app should consume directly or through
 a thin web transport adapter.
 
-## Current Web Events
+## Web Events
 
-`src/web/WebUIBus.ts` currently exposes a smaller browser relay contract:
+`src/web/appSessionProtocol.ts` is the browser app contract. The server sends:
 
-- `message`
-- `delta`
-- `stream_mode`
-- `tool_use`
-- `status`
+- `app.ready`
+- `app.event`
+- `app.ack`
+- `app.error`
+- `app.pong`
 
-`src/web/WebSocketServer.ts` currently sends an initial status with
-`inputEnabled: false` and a notice that browser input is disabled until the
-backend path no longer depends on REPL wiring.
+`app.event` wraps the app-facing browser events for message append/replace/delta,
+status updates, goal snapshots, permission request/resolution, and abort status.
 
-`web/src/hooks/useWebSocket.ts` currently types only `message`, `delta`, and
-`status`, so `stream_mode` and `tool_use` are backend-emittable but not yet
-frontend-handled in the browser app.
+`src/web/WebUIBus.ts` still exposes the older `message`, `delta`,
+`stream_mode`, `tool_use`, and `status` relay events for legacy REPL-web
+integration. Do not use it for new runtime-backed browser work.
 
 ## Prototype Surface To Runtime Mapping
 
 | Prototype surface | Current source evidence | Runtime contract | First-slice decision |
 |---|---|---|---|
-| Message list | `cat-app/Messages.jsx`, `cat-app/Chat.jsx` | `AppSessionEvent.type === "message"` | Implement in Phase 1. |
-| Composer | `cat-app/Chat.jsx` | Needs submit path into `AppSessionController.submit()` | Implement basic single-session submit in Phase 1 only after transport design is explicit. |
-| Goal chip and drawer | `cat-app/Surfaces.jsx`, `cat-app/AppV2.jsx` | `goal.snapshot` and `ThreadGoal` | Display in Phase 1; mutate actions later unless runtime API is present. |
-| Permission queue/dialog | `cat-app/Surfaces.jsx`, `cat-app/AppV2.jsx` | `permission.requested` and `permission.resolved` | Implement in Phase 1 because safety blocks app viability. |
-| Abort/stop state | `cat-app/Chat.jsx`, `cat-app/Surfaces.jsx` | `abort.status` plus controller `abort()` | Display in Phase 1; stop action can call controller only after transport is defined. |
-| Connection chip | `cat-app/Surfaces.jsx` | Current web `status`, future app transport status | Display with current transport state in Phase 1. |
+| Message list | `cat-app/Messages.jsx`, `cat-app/Chat.jsx` | `AppSessionEvent.type === "message"` mapped through `appSessionEventMapper.ts` | Implemented for basic user/assistant/system text messages. |
+| Composer | `cat-app/Chat.jsx` | `app.submit` into `AppSessionController.submit()` | Implemented for one runtime-backed session. |
+| Goal chip and drawer | `cat-app/Surfaces.jsx`, `cat-app/AppV2.jsx` | `goal.snapshot` and `ThreadGoal` | Goal status/objective display implemented; mutation actions remain later. |
+| Permission queue/dialog | `cat-app/Surfaces.jsx`, `cat-app/AppV2.jsx` | `permission.requested` and `permission.resolved` | Implemented in the single-session browser panel. |
+| Abort/stop state | `cat-app/Chat.jsx`, `cat-app/Surfaces.jsx` | `abort.status` plus controller `abort()` | Stop action and abort status display implemented. |
+| Connection chip | `cat-app/Surfaces.jsx` | Runtime-backed app-session ready/status events | Displayed with current transport state in Phase 1. |
 | Account chip | `cat-app/Surfaces.jsx`, `cat-app/Pages.jsx` | Account pool and auth modules, not app-runtime events yet | Defer until account contract is defined. |
 | Model/effort controls | `cat-app/Surfaces.jsx`, `cat-app/menu-variants.jsx` | Settings/model runtime surfaces | Defer mutation controls. Read-only display may be allowed if already in status. |
 | Session sidebar | `cat-app/Sidebar.jsx`, `cat-app/Pages.jsx` | `src/utils/sessionStorage.ts`, optimized list sessions path | Phase 3. |
@@ -84,39 +84,18 @@ frontend-handled in the browser app.
 
 ## Known Readiness Findings
 
-- `bun test src/app-runtime/*.test.ts` passed during planning.
-- Current web type checking failed before migration work:
-  - `web/src/App.tsx`: `data.message` possibly undefined.
-  - `web/src/components/MessageContent.tsx`: `inline` prop typing mismatch.
-- `AppSessionController` is not currently used by `src/web` or `src/main.tsx`.
-- Browser permission response, abort, and app-runtime event handling are not
-  currently implemented.
-- `--web` starts the socket/Vite path before the normal `setup(...)`, commands,
-  agents, MCP, permission mode, and state wiring are assembled for the REPL.
-- `createQueryEngineAppSession.ts` should be audited before Phase 1 because its
-  abort-controller lifecycle may affect later turns after an interrupt.
-- `src/web/WebSocketServer.ts` currently uses a fixed port and has minimal
-  browser-origin/auth hardening. Treat that as a Phase 1 risk.
+- Runtime-backed browser tests cover protocol validation, event mapping,
+  WebSocket origin/token handling, permission replay, abort, and startup
+  orchestration.
+- `web` typecheck and build are part of the Phase 1 verification surface.
+- `createQueryEngineAppSession.ts` has focused runtime tests, but richer tool
+  rendering and session navigation remain future phases.
+- `src/web/WebSocketServer.ts` is legacy; runtime-backed work should use
+  `src/web/AppSessionWebSocketServer.ts`.
 
 ## First Runtime Gap To Resolve After This Plan
 
-The next implementation plan must decide whether Phase 1 connects `web/`
-directly to `AppSessionController` through a new web transport adapter or
-adapts `src/web/WebSocketServer.ts` to forward app-runtime events.
-
-That Phase 1 plan must also define:
-
-- The SDK-message mapper from raw app-runtime stream-json messages to browser UI
-  state, including partial streaming behavior.
-- The QueryEngine assembly strategy for app sessions outside the Ink REPL path.
-- The permission request and response WebSocket protocol.
-- The abort lifecycle for interrupted and later app turns.
-- The transport security model for browser-originated prompts and permission
-  decisions.
-- Whether existing `stream_mode` and `tool_use` relay events are reused,
-  replaced, or intentionally ignored.
-- Whether preexisting web TypeScript failures are fixed inside Phase 1 or as a
-  prep patch.
-
-Those decisions belong in the Phase 1 runtime-backed single chat plan, not in
-this docs-only normalization plan.
+Phase 1 resolved the transport direction by adding a runtime-backed app-session
+server rather than extending the legacy REPL relay. The next gaps are richer
+message/tool rendering, same-project session navigation, and broader dedicated
+app surfaces from later phases.

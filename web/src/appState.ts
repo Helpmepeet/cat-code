@@ -49,6 +49,7 @@ export function reduceAppServerMessage(
         connected: true,
         reconnecting: false,
         inputEnabled: message.inputEnabled,
+        activeTurn: message.activeTurn,
       },
       abort: message.abort,
       goalSnapshot: message.goalSnapshot,

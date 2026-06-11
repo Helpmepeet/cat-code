@@ -11,6 +11,7 @@ import {
   isCodexAccountLeaseSelectable,
   markPoolAccountCapped,
   markPoolAccountLastError,
+  setActiveAccountPersisted,
   touchPoolAccountUsage,
   type PoolAccount,
 } from './codexAccountPool.js'
@@ -197,6 +198,44 @@ export function getCodexLeaseForOwner(ownerId: string): CodexLease | undefined {
 export function getCurrentCodexLease(): CodexLease | undefined {
   const ownerId = codexLeaseOwnerContext.getStore()
   return ownerId ? codexLeasesByOwnerId.get(ownerId) : undefined
+}
+
+export function repairCodexLeaseIfNonSelectable(
+  ownerId: string,
+): CodexLease | undefined {
+  const existingLease = codexLeasesByOwnerId.get(ownerId)
+  if (!existingLease) return undefined
+
+  const pool = getPoolStatus()
+  const account = pool.accounts.find(
+    candidate => candidate.accountId === existingLease.accountId,
+  )
+  if (
+    existingLease.state === 'active' &&
+    account &&
+    isCodexAccountLeaseSelectable(account)
+  ) {
+    return existingLease
+  }
+
+  const selection =
+    existingLease.ownerType === 'main'
+      ? selectMainAccountForLease()
+      : selectAccountForLease(existingLease.strategy, existingLease.accountId)
+  const repairedLease: CodexLease = {
+    ...existingLease,
+    accountId: selection.account.accountId,
+    state: 'active',
+    selectionReason: `repaired from non-selectable account ${existingLease.accountId}: ${selection.reason}`,
+    updatedAt: Date.now(),
+  }
+
+  codexLeasesByOwnerId.set(ownerId, repairedLease)
+  touchPoolAccountUsage(selection.account.accountId)
+  if (repairedLease.ownerType === 'main') {
+    setActiveAccountPersisted(repairedLease.accountId)
+  }
+  return repairedLease
 }
 
 export function runWithCodexLeaseOwner<T>(

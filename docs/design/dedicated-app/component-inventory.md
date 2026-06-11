@@ -124,4 +124,3 @@ chat loop:
 
 Do not introduce split panels, accounts charts, task pages, or settings pages
 in the first component slice.
-

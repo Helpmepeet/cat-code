@@ -80,6 +80,7 @@ export async function startAppSessionWebSocketServer({
       type: 'app.ready',
       protocolVersion: 1,
       inputEnabled: !activeTurn,
+      activeTurn,
       abort: controller.getAbortState(),
       goalSnapshot: controller.getGoalSnapshot(),
       pendingPermissionRequests: controller.getPendingPermissionRequests(),

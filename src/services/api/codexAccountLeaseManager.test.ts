@@ -287,6 +287,9 @@ describe('codexAccountLeaseManager', () => {
     })
 
     expect(tokens?.accountId).toBe('backup-clean')
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe(
+      'backup-clean',
+    )
   })
 
   test('spread lease prefers a clean account over a warned one', () => {

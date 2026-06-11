@@ -8,6 +8,7 @@ describe("web app state reducer", () => {
       type: "app.ready",
       protocolVersion: 1,
       inputEnabled: true,
+      activeTurn: false,
       abort: { status: "idle" },
       goalSnapshot: null,
       pendingPermissionRequests: [],
@@ -16,7 +17,32 @@ describe("web app state reducer", () => {
     expect(state.status.connected).toBe(true);
     expect(state.status.reconnecting).toBe(false);
     expect(state.status.inputEnabled).toBe(true);
+    expect(state.status.activeTurn).toBe(false);
     expect(state.abort).toEqual({ status: "idle" });
+  });
+
+  test("ready snapshots reset stale active turn state", () => {
+    const busyState = reduceAppServerMessage(createInitialAppState(), {
+      type: "app.event",
+      event: {
+        type: "status.update",
+        inputEnabled: false,
+        activeTurn: true,
+      },
+    });
+
+    const state = reduceAppServerMessage(busyState, {
+      type: "app.ready",
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: "idle" },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    });
+
+    expect(state.status.inputEnabled).toBe(true);
+    expect(state.status.activeTurn).toBe(false);
   });
 
   test("appends messages and accumulates deltas", () => {

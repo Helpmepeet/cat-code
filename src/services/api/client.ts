@@ -14,7 +14,11 @@ import {
   getClaudePoolStatus,
   isClaudePoolActive,
 } from './claudeAccountPool.js'
-import { getCurrentCodexLease, getCodexLeaseForOwner } from './codexAccountLeaseManager.js'
+import {
+  getCurrentCodexLease,
+  getCodexLeaseForOwner,
+  repairCodexLeaseIfNonSelectable,
+} from './codexAccountLeaseManager.js'
 import {
   computeCch,
   hasCchPlaceholder,
@@ -236,21 +240,33 @@ export function resolveCodexOAuthTokensForLeaseOwner({
     poolStatus.accounts.map(account => [account.accountId, account] as const),
   )
 
-  const leasedAccountId =
+  const leaseOwnerId =
     codexLeaseOwnerType === 'subagent' && codexLeaseOwnerId
-      ? getCodexLeaseForOwner(codexLeaseOwnerId)?.accountId
+      ? codexLeaseOwnerId
       : codexLeaseOwnerType === 'main'
-        ? getCodexLeaseForOwner('main-thread')?.accountId ??
-          (poolStatus.activeIndex >= 0
-            ? poolStatus.accounts[poolStatus.activeIndex]?.accountId
-            : undefined)
+        ? 'main-thread'
         : undefined
+  const lease = leaseOwnerId ? getCodexLeaseForOwner(leaseOwnerId) : undefined
+  const leasedAccountId =
+    lease?.accountId ??
+    (codexLeaseOwnerType === 'main' && poolStatus.activeIndex >= 0
+      ? poolStatus.accounts[poolStatus.activeIndex]?.accountId
+      : undefined)
 
   const leasedAccount = leasedAccountId
     ? poolAccountById.get(leasedAccountId)
     : null
+  const repairedLease =
+    leaseOwnerId && leasedAccount && !isCodexAccountLeaseSelectable(leasedAccount)
+      ? repairCodexLeaseIfNonSelectable(leaseOwnerId)
+      : undefined
+  const repairedAccount = repairedLease
+    ? poolAccountById.get(repairedLease.accountId)
+    : null
   const poolAccount =
-    leasedAccount && isCodexAccountLeaseSelectable(leasedAccount)
+    repairedAccount && isCodexAccountLeaseSelectable(repairedAccount)
+      ? repairedAccount
+      : leasedAccount && isCodexAccountLeaseSelectable(leasedAccount)
       ? leasedAccount
       : getActiveAccount()
 

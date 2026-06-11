@@ -2621,13 +2621,13 @@ Run:
 
 ```bash
 git diff --check
-rg -n "FORBIDDEN_PLAN_PLACEHOLDER_PATTERN" docs/superpowers/plans/2026-06-07-dedicated-app-phase1b-startup-extraction.md
+rg -n "T[B]D|T[O]DO|implement [l]ater|fill in [d]etails|appropriate error [h]andling|add [v]alidation|handle [e]dge cases|Write tests for the [a]bove|Similar to Task [0-9]" docs/superpowers/plans/2026-06-07-dedicated-app-phase1b-startup-extraction.md
 ```
 
 Expected:
 
 - `git diff --check` exits 0.
-- Replace `FORBIDDEN_PLAN_PLACEHOLDER_PATTERN` with the forbidden placeholder terms from `superpowers:writing-plans`; the scan exits 1 with no matches.
+- The placeholder scan exits 1 with no matches.
 
 - [ ] **Step 6: Commit the Phase 1B plan**
 
@@ -2654,13 +2654,13 @@ Run docs/code hygiene checks:
 
 ```bash
 git diff --check
-rg -n "FORBIDDEN_PLAN_PLACEHOLDER_PATTERN" docs/design/dedicated-app docs/superpowers/plans/2026-06-06-dedicated-app-phase1-runtime-backed-single-chat.md
+rg -n "T[B]D|T[O]DO|implement [l]ater|fill in [d]etails|appropriate error [h]andling|add [v]alidation|handle [e]dge cases|Write tests for the [a]bove|Similar to Task [0-9]" docs/design/dedicated-app docs/superpowers/plans/2026-06-06-dedicated-app-phase1-runtime-backed-single-chat.md
 ```
 
 Expected:
 
 - `git diff --check` exits 0.
-- Replace `FORBIDDEN_PLAN_PLACEHOLDER_PATTERN` with the forbidden placeholder terms from `superpowers:writing-plans`; the scan exits 1 with no matches.
+- The placeholder scan exits 1 with no matches.
 
 ## Execution Notes
 

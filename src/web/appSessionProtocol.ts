@@ -114,6 +114,7 @@ export const appServerMessageSchema = z.union([
     type: z.literal('app.ready'),
     protocolVersion: z.literal(1),
     inputEnabled: z.boolean(),
+    activeTurn: z.boolean(),
     abort: abortStateSchema,
     goalSnapshot: presentUnknownSchema,
     pendingPermissionRequests: z.array(permissionRequestSchema),
@@ -156,6 +157,7 @@ export type AppBrowserEvent = z.infer<typeof appBrowserEventSchema>
 export type AppReadyPayload = {
   protocolVersion: 1
   inputEnabled: boolean
+  activeTurn: boolean
   abort: AppSessionAbortState
   goalSnapshot: AppGoalSnapshot
   pendingPermissionRequests: AppPermissionRequest[]

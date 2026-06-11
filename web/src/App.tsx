@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageContent } from "./components/MessageContent";
 import type {
+  AppAbortState,
   AppServerMessage,
   BrowserMessage,
   PermissionUpdate,
@@ -12,10 +13,6 @@ import {
 import { useWebSocket } from "./hooks/useWebSocket";
 
 const DRAFT_STORAGE_KEY = "cat-code:web:draft";
-
-function messageId(prefix: string) {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
 
 function JumpToLatestButton({
   visible,
@@ -118,6 +115,31 @@ function formatTokenCount(value?: number) {
     .replace(".0", "");
 }
 
+function formatGoalSnapshot(goalSnapshot: unknown) {
+  if (!goalSnapshot || typeof goalSnapshot !== "object") return undefined;
+  const goal = goalSnapshot as {
+    objective?: unknown;
+    status?: unknown;
+    tokensUsed?: unknown;
+    tokenBudget?: unknown;
+  };
+  if (typeof goal.objective !== "string" || goal.objective.trim() === "") {
+    return undefined;
+  }
+
+  const status = typeof goal.status === "string" ? goal.status : "active";
+  const budget =
+    typeof goal.tokensUsed === "number" && typeof goal.tokenBudget === "number"
+      ? ` · ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)} tokens`
+      : "";
+  return `${status}: ${goal.objective}${budget}`;
+}
+
+function formatAbortState(abort: AppAbortState) {
+  if (abort.status === "idle") return undefined;
+  return abort.reason ? `${abort.status}: ${abort.reason}` : abort.status;
+}
+
 export function App() {
   const [appState, setAppState] = useState(createInitialAppState);
   const messages = appState.messages;
@@ -214,13 +236,6 @@ export function App() {
     const text = input.trim();
     if (!text || !connected || !status.inputEnabled) return;
 
-    setAppState(prev => ({
-      ...prev,
-      messages: [
-        ...prev.messages,
-        { id: messageId("user"), role: "user", content: text },
-      ],
-    }));
     send({
       type: "app.submit",
       requestId: crypto.randomUUID(),
@@ -250,6 +265,14 @@ export function App() {
     if (status.reconnecting) return "Reconnecting";
     return "Disconnected";
   }, [status.connected, status.reconnecting]);
+  const goalLabel = useMemo(
+    () => formatGoalSnapshot(appState.goalSnapshot),
+    [appState.goalSnapshot],
+  );
+  const abortLabel = useMemo(
+    () => formatAbortState(appState.abort),
+    [appState.abort],
+  );
   const pendingPermission = appState.pendingPermissions[0];
   const permissionSuggestions =
     pendingPermission?.request.permission_suggestions ?? [];
@@ -333,6 +356,8 @@ export function App() {
                 value={status.contextTokens !== undefined ? `${formatTokenCount(status.contextTokens)} tokens` : undefined}
               />
               <FooterChip label="State" value={connectionLabel} />
+              <FooterChip label="Goal" value={goalLabel} />
+              <FooterChip label="Abort" value={abortLabel} />
             </div>
 
             {pendingPermission ? (

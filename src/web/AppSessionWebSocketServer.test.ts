@@ -336,6 +336,7 @@ describe('AppSessionWebSocketServer', () => {
     expect(await nextJson(midTurnClient)).toMatchObject({
       type: 'app.ready',
       inputEnabled: false,
+      activeTurn: true,
     })
 
     releaseTurn?.()
@@ -371,6 +372,7 @@ describe('AppSessionWebSocketServer', () => {
       type: 'app.ready',
       protocolVersion: 1,
       inputEnabled: true,
+      activeTurn: false,
     })
 
     ws.send(
