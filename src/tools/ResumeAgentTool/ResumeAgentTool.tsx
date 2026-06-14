@@ -9,7 +9,7 @@ import { errorMessage } from '../../utils/errors.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
 import {
-  formatContextSizeHint,
+  formatResumedContextNotice,
   resolveAgentTarget,
 } from '../AgentTool/resolveAgentTarget.js'
 import {
@@ -151,7 +151,7 @@ export const ResumeAgentTool = buildTool({
       return {
         data: {
           success: true,
-          message: `Resumed "${resolved.displayName}" in the background.${formatContextSizeHint(resolved.contextTokens)}`,
+          message: `Resumed "${resolved.displayName}" in the background.${formatResumedContextNotice(resolved.contextTokens, resolved.contextWindowTokens)}`,
         },
       }
     } catch (e) {

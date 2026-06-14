@@ -55,6 +55,65 @@ function writeCurrentAgentTranscript(agentId: string): void {
   createdFiles.push(path)
 }
 
+function writeCurrentAgentTranscriptWithUsage({
+  agentId,
+  model,
+  inputTokens,
+  outputTokens,
+}: {
+  agentId: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+}): void {
+  const path = getAgentTranscriptPath(asAgentId(agentId))
+  mkdirSync(dirname(path), { recursive: true })
+  const userUuid = randomUUID()
+  const assistantUuid = randomUUID()
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({
+        type: 'user',
+        uuid: userUuid,
+        parentUuid: null,
+        isSidechain: true,
+        sessionId: getSessionId(),
+        agentId,
+        timestamp: '2026-05-01T00:00:00.000Z',
+        message: { role: 'user', content: 'continue' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: assistantUuid,
+        parentUuid: userUuid,
+        isSidechain: true,
+        sessionId: getSessionId(),
+        agentId,
+        timestamp: '2026-05-01T00:00:01.000Z',
+        message: {
+          id: `msg-${assistantUuid}`,
+          type: 'message',
+          role: 'assistant',
+          model,
+          content: [{ type: 'text', text: 'prior result' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      }),
+      '',
+    ].join('\n'),
+    'utf-8',
+  )
+  createdFiles.push(path)
+}
+
 function writePriorAgentTranscript(
   projectDir: string,
   sessionId: string,
@@ -201,6 +260,36 @@ describe('resolveAgentTarget', () => {
     })
   })
 
+  test('fills context window from transcript when an in-memory stopped task has progress but no model', async () => {
+    const agentId = 'agent-registered'
+    writeCurrentAgentTranscriptWithUsage({
+      agentId,
+      model: 'claude-3-haiku',
+      inputTokens: 52_000,
+      outputTokens: 1_000,
+    })
+    const state = appState({
+      registry: new Map([['worker-one', agentId]]),
+      tasks: {
+        [agentId]: {
+          id: agentId,
+          type: 'local_agent',
+          status: 'completed',
+          agentId,
+          progress: { contextTokenCount: 53_000 },
+        },
+      },
+    })
+
+    await expect(
+      resolveAgentTarget({ input: '@worker-one', appState: state, sessionId }),
+    ).resolves.toMatchObject({
+      agentId,
+      contextTokens: 53_000,
+      contextWindowTokens: 200_000,
+    })
+  })
+
   test('resolves current-session durable worker handles', async () => {
     writeSessionState(sessionId, {
       sessionId,
@@ -305,6 +394,7 @@ describe('resolveAgentTarget', () => {
       sourceSessionId: priorSessionId,
       displayName: 'Prior metadata worker',
       contextTokens: expect.any(Number),
+      contextWindowTokens: expect.any(Number),
     })
   })
 
@@ -517,9 +607,16 @@ describe('formatContextSizeHint', () => {
     expect(formatContextSizeHint(148_000)).toContain('~148k tokens')
   })
 
+  test('renders max context and percentage when context window is known', () => {
+    expect(formatContextSizeHint(53_000, 200_000)).toContain(
+      '~53k / 200k tokens (27%)',
+    )
+  })
+
   test('the hint is a leading-space trailing clause callers can append unconditionally', () => {
     const hint = formatContextSizeHint(150_000)
     expect(hint.startsWith(' ')).toBe(true)
     expect(hint).toContain('a fresh agent may be cheaper than resuming')
+    expect(hint).not.toContain('last checkpoint')
   })
 })

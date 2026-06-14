@@ -4,45 +4,14 @@ import {
   allocateWorkerName,
   releaseWorkerName,
   reserveWorkerName,
+  resetWorkerNamesForTests,
 } from './workerNames.js'
 
 const originalRandom = Math.random
-const ALL_TEST_NAMES = [
-  'Turing',
-  'Turing-2',
-  'Hopper',
-  'Curie',
-  'Galileo',
-  'Kepler',
-  'Lovelace',
-  'Ramanujan',
-  'Darwin',
-  'Faraday',
-  'Pasteur',
-  'Tesla',
-  'Euclid',
-  'Archimedes',
-  'Euler',
-  'Gauss',
-  'Feynman',
-  'Bohr',
-  'Sagan',
-  'Franklin',
-  'Bell',
-  'Noether',
-  'Ada',
-  'Katherine',
-  'Johnson',
-  'Hamilton',
-  'Ritchie',
-  'Kay',
-]
 
 afterEach(() => {
   Math.random = originalRandom
-  for (const name of ALL_TEST_NAMES) {
-    releaseWorkerName(name)
-  }
+  resetWorkerNamesForTests()
 })
 
 describe('workerNames', () => {
@@ -67,6 +36,15 @@ describe('workerNames', () => {
   test('skips names already reserved by restored workers', () => {
     Math.random = () => 0
     reserveWorkerName('Turing')
+
+    expect(allocateWorkerName('agent-mode-coding-worker')).toBe('Hopper')
+  })
+
+  test('does not immediately reuse a released worker handle', () => {
+    Math.random = () => 0
+
+    const firstName = allocateWorkerName('agent-mode-coding-worker')
+    if (firstName) releaseWorkerName(firstName)
 
     expect(allocateWorkerName('agent-mode-coding-worker')).toBe('Hopper')
   })

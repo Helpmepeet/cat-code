@@ -1,10 +1,12 @@
 import { stat } from 'fs/promises'
-import { getSessionId } from '../../bootstrap/state.js'
+import { getSdkBetas, getSessionId } from '../../bootstrap/state.js'
 import { resolveWorkerAgentTarget } from '../../agent-mode/sessionState.js'
 import type { AppState } from '../../state/AppStateStore.js'
 import { isLocalAgentTask } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
+import type { Message } from '../../types/message.js'
 import { asAgentId, toAgentId } from '../../types/ids.js'
+import { getContextWindowForModel } from '../../utils/context.js'
 import {
   getAgentTranscript,
   getAgentTranscriptForSession,
@@ -13,7 +15,7 @@ import {
   readAgentMetadata,
   readAgentMetadataForSession,
 } from '../../utils/sessionStorage.js'
-import { tokenCountFromLastAPIResponse } from '../../utils/tokens.js'
+import { getTokenCountFromUsage, getTokenUsage } from '../../utils/tokens.js'
 
 export type ResolvedAgentTarget = {
   agentId: string
@@ -22,9 +24,11 @@ export type ResolvedAgentTarget = {
   // Best-effort current context size of the target, in tokens. Read from live
   // task progress when the agent is still in memory, else recomputed from the
   // last API response in its on-disk transcript. undefined when neither is
-  // available. Lets the caller weigh resume (replays this context) vs. spawning
-  // a fresh agent.
+  // available.
   contextTokens?: number
+  // Best-effort max context window for the model that produced contextTokens.
+  // Lets callers render context size as a comparable fraction when available.
+  contextWindowTokens?: number
 }
 
 type DisplayNameOptions = {
@@ -37,23 +41,58 @@ function shortAgentId(agentId: string): string {
   return agentId.length <= 12 ? agentId : `${agentId.slice(0, 12)}...`
 }
 
+const HINT_FLOOR_TOKENS = 1000
+
+function shouldRenderContextSize(contextTokens: number | undefined): boolean {
+  if (typeof contextTokens !== 'number' || contextTokens < HINT_FLOOR_TOKENS) {
+    return false
+  }
+  return true
+}
+
+function formatKTokens(tokens: number, approximate: boolean): string {
+  return `${approximate ? '~' : ''}${Math.round(tokens / 1000)}k`
+}
+
+function formatContextSize(
+  contextTokens: number,
+  contextWindowTokens: number | undefined,
+): string {
+  const used = formatKTokens(contextTokens, true)
+  if (typeof contextWindowTokens === 'number' && contextWindowTokens > 0) {
+    const max = formatKTokens(contextWindowTokens, false)
+    const percent = Math.round((contextTokens / contextWindowTokens) * 100)
+    return `${used} / ${max} tokens (${percent}%)`
+  }
+  return `${used} tokens`
+}
+
 /**
- * Render a resolved target's context size as a short trailing clause for
- * model-facing messages, e.g. " Its context was ~148k tokens at last checkpoint."
+ * Render a resolved target's context size as a short pre-action decision hint.
  * Empty string when the size is unknown OR small enough not to matter, so the
  * hint only fires when context size is actually decision-relevant and callers
  * can append it unconditionally.
  */
 export function formatContextSizeHint(
   contextTokens: number | undefined,
+  contextWindowTokens?: number,
 ): string {
   // Below this, replaying the transcript is cheap and the size shouldn't sway
   // resume-vs-spawn — surfacing "~2 tokens" would be noise, not signal.
-  const HINT_FLOOR_TOKENS = 1000
-  if (typeof contextTokens !== 'number' || contextTokens < HINT_FLOOR_TOKENS) {
-    return ''
-  }
-  return ` Its context was ~${Math.round(contextTokens / 1000)}k tokens at last checkpoint; if that's already large, a fresh agent may be cheaper than resuming.`
+  if (!shouldRenderContextSize(contextTokens)) return ''
+  return ` Its context was ${formatContextSize(contextTokens, contextWindowTokens)}; if that's already large, a fresh agent may be cheaper than resuming.`
+}
+
+/**
+ * Render a neutral post-action context note after ResumeAgent has already
+ * scheduled the background run.
+ */
+export function formatResumedContextNotice(
+  contextTokens: number | undefined,
+  contextWindowTokens?: number,
+): string {
+  if (!shouldRenderContextSize(contextTokens)) return ''
+  return ` Previous context: ${formatContextSize(contextTokens, contextWindowTokens)}.`
 }
 
 function normalizeAgentTarget(input: string): string {
@@ -86,39 +125,84 @@ export async function displayNameForAgent({
   return shortAgentId(agentId)
 }
 
+type ContextStats = {
+  contextTokens?: number
+  contextWindowTokens?: number
+}
+
+function contextWindowTokensForModel(model: string | undefined): number | undefined {
+  if (!model || model === 'inherit') return undefined
+  const contextWindow = getContextWindowForModel(model, getSdkBetas())
+  return contextWindow > 0 ? contextWindow : undefined
+}
+
+function contextStatsFromMessages(messages: Message[]): ContextStats {
+  let i = messages.length - 1
+  while (i >= 0) {
+    const message = messages[i]
+    const usage = message ? getTokenUsage(message) : undefined
+    if (usage) {
+      return {
+        contextTokens: getTokenCountFromUsage(usage),
+        contextWindowTokens:
+          message?.type === 'assistant'
+            ? contextWindowTokensForModel(message.message.model)
+            : undefined,
+      }
+    }
+    i--
+  }
+  return {}
+}
+
 /**
  * Best-effort current context size of an agent, in tokens. Prefers the live
  * task's progress counter (already in memory, no I/O); falls back to the last
  * API response in the on-disk transcript for evicted/terminated agents. Never
- * throws — returns undefined when the size can't be determined.
+ * throws — returns empty stats when the size can't be determined.
  */
-async function contextTokensForAgent({
+async function contextStatsForAgent({
   agentId,
   appState,
   sourceSessionId,
-}: DisplayNameOptions): Promise<number | undefined> {
+}: DisplayNameOptions): Promise<ContextStats> {
   const task = appState.tasks[agentId]
+  const transcriptStats = async (): Promise<ContextStats> => {
+    try {
+      const currentSessionId = getSessionId()
+      const transcript =
+        sourceSessionId && sourceSessionId !== currentSessionId
+          ? await getAgentTranscriptForSession(sourceSessionId, asAgentId(agentId))
+          : await getAgentTranscript(asAgentId(agentId))
+      return transcript ? contextStatsFromMessages(transcript.messages) : {}
+    } catch {
+      return {}
+    }
+  }
+
   if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
     // Full context size (input + cache + output of the last response) — the
     // amount that would be replayed on resume. NOT progress.tokenCount, which
     // is a display-oriented counter (drops cache reads, sums all output) and
     // can diverge ~2x from real context size.
     const tokens = task.progress?.contextTokenCount
-    if (typeof tokens === 'number' && tokens > 0) return tokens
+    if (typeof tokens === 'number' && tokens > 0) {
+      const contextWindowTokens = contextWindowTokensForModel(task.model)
+      if (contextWindowTokens) {
+        return {
+          contextTokens: tokens,
+          contextWindowTokens,
+        }
+      }
+      const fallback = await transcriptStats()
+      return {
+        contextTokens: tokens,
+        contextWindowTokens: fallback.contextWindowTokens,
+      }
+    }
   }
 
-  try {
-    const currentSessionId = getSessionId()
-    const transcript =
-      sourceSessionId && sourceSessionId !== currentSessionId
-        ? await getAgentTranscriptForSession(sourceSessionId, asAgentId(agentId))
-        : await getAgentTranscript(asAgentId(agentId))
-    if (!transcript) return undefined
-    const tokens = tokenCountFromLastAPIResponse(transcript.messages)
-    return tokens > 0 ? tokens : undefined
-  } catch {
-    return undefined
-  }
+  return await transcriptStats()
 }
 
 async function transcriptExistsForCurrentSession(agentId: string): Promise<boolean> {
@@ -145,11 +229,16 @@ export async function resolveAgentTarget({
   const registered = appState.agentNameRegistry.get(target)
   if (registered) {
     const opts = { agentId: registered, appState, sourceSessionId: sessionId }
-    const [displayName, contextTokens] = await Promise.all([
+    const [displayName, contextStats] = await Promise.all([
       displayNameForAgent(opts),
-      contextTokensForAgent(opts),
+      contextStatsForAgent(opts),
     ])
-    return { agentId: registered, sourceSessionId: sessionId, displayName, contextTokens }
+    return {
+      agentId: registered,
+      sourceSessionId: sessionId,
+      displayName,
+      ...contextStats,
+    }
   }
 
   const durableTarget = await resolveWorkerAgentTarget(sessionId, target)
@@ -159,15 +248,15 @@ export async function resolveAgentTarget({
       appState,
       sourceSessionId: durableTarget.originSessionId,
     }
-    const [displayName, contextTokens] = await Promise.all([
+    const [displayName, contextStats] = await Promise.all([
       displayNameForAgent(opts),
-      contextTokensForAgent(opts),
+      contextStatsForAgent(opts),
     ])
     return {
       agentId: durableTarget.agentId,
       sourceSessionId: durableTarget.originSessionId,
       displayName,
-      contextTokens,
+      ...contextStats,
     }
   }
 
@@ -182,15 +271,15 @@ export async function resolveAgentTarget({
       appState,
       sourceSessionId: sessionId,
     }
-    const [displayName, contextTokens] = await Promise.all([
+    const [displayName, contextStats] = await Promise.all([
       displayNameForAgent(opts),
-      contextTokensForAgent(opts),
+      contextStatsForAgent(opts),
     ])
     return {
       agentId: metadataTarget.agentId,
       sourceSessionId: sessionId,
       displayName,
-      contextTokens,
+      ...contextStats,
     }
   }
 
@@ -210,9 +299,14 @@ export async function resolveAgentTarget({
   }
 
   const opts = { agentId: rawAgentId, appState, sourceSessionId: sessionId }
-  const [displayName, contextTokens] = await Promise.all([
+  const [displayName, contextStats] = await Promise.all([
     displayNameForAgent(opts),
-    contextTokensForAgent(opts),
+    contextStatsForAgent(opts),
   ])
-  return { agentId: rawAgentId, sourceSessionId: sessionId, displayName, contextTokens }
+  return {
+    agentId: rawAgentId,
+    sourceSessionId: sessionId,
+    displayName,
+    ...contextStats,
+  }
 }

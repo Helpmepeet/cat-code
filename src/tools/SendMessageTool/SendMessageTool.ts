@@ -883,7 +883,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           return {
             data: {
               success: false,
-              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.${formatContextSizeHint(resolved.contextTokens)}`,
+              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.${formatContextSizeHint(resolved.contextTokens, resolved.contextWindowTokens)}`,
             },
           }
         }

@@ -91,6 +91,65 @@ function writeAgentTranscript(
   createdFiles.push(path)
 }
 
+function writeAgentTranscriptWithUsage({
+  agentId,
+  model,
+  inputTokens,
+  outputTokens,
+}: {
+  agentId: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+}): void {
+  const path = getAgentTranscriptPath(asAgentId(agentId))
+  mkdirSync(dirname(path), { recursive: true })
+  const userUuid = randomUUID()
+  const assistantUuid = randomUUID()
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({
+        type: 'user',
+        uuid: userUuid,
+        parentUuid: null,
+        isSidechain: true,
+        sessionId: getSessionId(),
+        agentId,
+        timestamp: '2026-05-01T00:00:00.000Z',
+        message: { role: 'user', content: 'continue' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: assistantUuid,
+        parentUuid: userUuid,
+        isSidechain: true,
+        sessionId: getSessionId(),
+        agentId,
+        timestamp: '2026-05-01T00:00:01.000Z',
+        message: {
+          id: `msg-${assistantUuid}`,
+          type: 'message',
+          role: 'assistant',
+          model,
+          content: [{ type: 'text', text: 'prior result' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      }),
+      '',
+    ].join('\n'),
+    'utf-8',
+  )
+  createdFiles.push(path)
+}
+
 function writePriorAgentMetadata(
   projectDir: string,
   sessionId: string,
@@ -568,11 +627,15 @@ describe('ResumeAgentTool', () => {
       ),
     ])
 
-    expect(results.map(result => result.data.success)).toEqual([true, false])
-    expect(results[1].data.message).toContain('already running')
+    const successfulPrompt = results[0].data.success ? 'first' : 'second'
+    expect(results.filter(result => result.data.success)).toHaveLength(1)
+    expect(results.filter(result => !result.data.success)).toHaveLength(1)
+    expect(results.find(result => !result.data.success)?.data.message).toContain(
+      'already running',
+    )
     expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
     expect(getState().tasks[agentId].status).toBe('running')
-    expect(getState().tasks[agentId].prompt).toBe('first')
+    expect(getState().tasks[agentId].prompt).toBe(successfulPrompt)
   })
 
   test('resumes an evicted task from an on-disk transcript', async () => {
@@ -605,6 +668,41 @@ describe('ResumeAgentTool', () => {
     expect(readFileSync(getTranscriptPathForSession(sessionId), 'utf-8')).toContain(
       '"type":"subagent-spawned"',
     )
+  })
+
+  test('reports resumed context against the model window without post-action advice', async () => {
+    const runAsyncAgentLifecycle = spyOn(
+      agentToolUtils,
+      'runAsyncAgentLifecycle',
+    ).mockImplementation(mock(async () => {}) as never)
+    const agentId = createAgentId()
+    writeAgentTranscriptWithUsage({
+      agentId,
+      model: 'claude-3-haiku',
+      inputTokens: 52_000,
+      outputTokens: 1_000,
+    })
+    await writeAgentMetadata(asAgentId(agentId), {
+      agentType: 'general-purpose',
+      description: 'Context worker',
+    })
+    const { context } = createToolUseContext()
+
+    const result = await ResumeAgentTool.call(
+      { agentId, prompt: 'resume with context' },
+      context,
+      undefined as never,
+      { requestId: 'req-context' } as never,
+    )
+
+    expect(result.data).toEqual({
+      success: true,
+      message:
+        'Resumed "Context worker" in the background. Previous context: ~53k / 200k tokens (27%).',
+    })
+    expect(result.data.message).not.toContain('fresh agent may be cheaper')
+    expect(result.data.message).not.toContain('last checkpoint')
+    expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
   })
 
   test('preserves pending messages when replacing an in-state task', async () => {

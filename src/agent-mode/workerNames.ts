@@ -22,6 +22,7 @@ const NAME_POOLS: Record<string, string[]> = {
 }
 
 const activeNames = new Set<string>()
+const poolCursors = new Map<string[], number>()
 
 function getReservedNames(
   reservedNames: Iterable<string> = [],
@@ -33,11 +34,33 @@ function getReservedNames(
   return reserved
 }
 
-function pickRandom(pool: string[], reservedNames: Iterable<string>): string {
+function getPoolCursor(pool: string[]): number {
+  const existing = poolCursors.get(pool)
+  if (existing !== undefined) return existing
+  const initial = Math.floor(Math.random() * pool.length)
+  poolCursors.set(pool, initial)
+  return initial
+}
+
+function advancePoolCursor(pool: string[], index: number): void {
+  poolCursors.set(pool, (index + 1) % pool.length)
+}
+
+function pickNext(pool: string[], reservedNames: Iterable<string>): string {
   const reserved = getReservedNames(reservedNames)
-  const available = pool.filter(n => !reserved.has(n))
-  if (available.length === 0) {
-    const baseName = pool[Math.floor(Math.random() * pool.length)]!
+  const startIndex = getPoolCursor(pool)
+  for (let offset = 0; offset < pool.length; offset += 1) {
+    const index = (startIndex + offset) % pool.length
+    const candidate = pool[index]!
+    if (!reserved.has(candidate)) {
+      advancePoolCursor(pool, index)
+      return candidate
+    }
+  }
+
+  for (let offset = 0; offset < pool.length; offset += 1) {
+    const index = (startIndex + offset) % pool.length
+    const baseName = pool[index]!
     let suffix = 2
     let candidate = `${baseName}-${suffix}`
 
@@ -46,9 +69,11 @@ function pickRandom(pool: string[], reservedNames: Iterable<string>): string {
       candidate = `${baseName}-${suffix}`
     }
 
+    advancePoolCursor(pool, index)
     return candidate
   }
-  return available[Math.floor(Math.random() * available.length)]!
+
+  throw new Error('Worker name pool must not be empty')
 }
 
 export function allocateWorkerName(
@@ -60,7 +85,7 @@ export function allocateWorkerName(
     options.allowGeneric ? GENERIC_WORKER_NAMES : null
   )
   if (!pool) return null
-  const name = pickRandom(pool, reservedNames)
+  const name = pickNext(pool, reservedNames)
   activeNames.add(name)
   return name
 }
@@ -71,4 +96,9 @@ export function reserveWorkerName(name: string): void {
 
 export function releaseWorkerName(name: string): void {
   activeNames.delete(name)
+}
+
+export function resetWorkerNamesForTests(): void {
+  activeNames.clear()
+  poolCursors.clear()
 }
