@@ -7,9 +7,14 @@ import {
   getSessionProjectDir,
   switchSession,
 } from '../../bootstrap/state.js'
+import { getDefaultAppState } from '../../state/AppStateStore.js'
+import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
-import { createUserMessage } from '../../utils/messages.js'
+import {
+  createUserMessage,
+  normalizeAttachmentForAPI,
+} from '../../utils/messages.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 
 function createAssistantMessage(text: string): AssistantMessage {
@@ -32,6 +37,37 @@ function createAssistantMessage(text: string): AssistantMessage {
       stop_sequence: null,
     },
   } as AssistantMessage
+}
+
+function makeCompletedLocalAgentTask(): LocalAgentTaskState {
+  return {
+    id: 'agent-clean-compact',
+    type: 'local_agent',
+    status: 'completed',
+    description: 'completed agent with clean result',
+    startTime: 1,
+    outputFile: '',
+    outputOffset: 0,
+    notified: false,
+    agentId: 'agent-clean-compact',
+    prompt: 'test',
+    agentType: 'Explore',
+    retrieved: false,
+    lastReportedToolCount: 0,
+    lastReportedTokenCount: 0,
+    isBackgrounded: true,
+    pendingMessages: [],
+    retain: false,
+    diskLoaded: false,
+    result: {
+      agentId: 'agent-clean-compact',
+      agentType: 'Explore',
+      content: [{ type: 'text', text: 'CLEAN STRUCTURED FINAL ANSWER' }],
+      totalToolUseCount: 0,
+      totalDurationMs: 1,
+      totalTokens: 1,
+    },
+  }
 }
 
 function createToolUseContext(messages: Message[]): ToolUseContext {
@@ -151,5 +187,38 @@ describe('compactConversation', () => {
     expect(postCompactMessages[0]?.type).toBe('system')
     expect(summaryMessage).toContain('Keep the compacted conversation moving.')
     expect(summaryMessage).not.toContain('Agent Mode Run State')
+  })
+
+  test('post-compact completed local-agent attachment points to TaskOutput instead of raw output file reads', async () => {
+    const { createAsyncAgentAttachmentsIfNeeded } = await import('./compact.js')
+    const appState = {
+      ...getDefaultAppState(),
+      tasks: {
+        'agent-clean-compact': makeCompletedLocalAgentTask(),
+      },
+    }
+    const context = {
+      ...createToolUseContext([]),
+      getAppState: () => appState,
+      setAppState: updater => {
+        Object.assign(appState, updater(appState))
+      },
+    } as ToolUseContext
+
+    const attachments = await createAsyncAgentAttachmentsIfNeeded(context)
+    const outputFilePath = attachments[0]?.attachment.outputFilePath
+    const normalized = normalizeAttachmentForAPI(attachments[0]!.attachment)
+    const normalizedText = normalized
+      .map(message =>
+        typeof message.message.content === 'string'
+          ? message.message.content
+          : JSON.stringify(message.message.content),
+      )
+      .join('\n')
+
+    expect(outputFilePath).toBeTruthy()
+    expect(normalizedText).toContain('TaskOutput')
+    expect(normalizedText).not.toContain('Read the output file')
+    expect(normalizedText).not.toContain(outputFilePath!)
   })
 })

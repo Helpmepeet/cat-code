@@ -10,7 +10,10 @@ import stripAnsi from 'strip-ansi'
 import * as React from 'react'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
 import { readSessionState } from '../../agent-mode/sessionState.js'
-import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js'
+import {
+  allocateWorkerName,
+  resetWorkerNamesForTests,
+} from '../../agent-mode/workerNames.js'
 import { render, ThemeProvider } from '../../ink.js'
 import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
 import { getBuiltInAgents } from './builtInAgents.js'
@@ -76,8 +79,7 @@ const originalSdkDisableBuiltins =
 
 afterEach(() => {
   Math.random = originalRandom
-  releaseWorkerName('Ada')
-  releaseWorkerName('Katherine')
+  resetWorkerNamesForTests()
   if (originalAgentMode === undefined) {
     delete process.env.CLAUDE_CODE_AGENT_MODE
   } else {
@@ -119,6 +121,37 @@ describe('AgentTool UI', () => {
     )
 
     expect(await renderToPlainText(node)).toContain('Backgrounded agent @Ada')
+  })
+
+  test('async launch result points models to TaskOutput instead of raw transcript reads', () => {
+    const block = AgentTool.mapToolResultToToolResultBlockParam(
+      {
+        status: 'async_launched',
+        agentId: 'agent-a',
+        agentName: 'Ada',
+        agentType: 'Explore',
+        description: 'inspect sessions page',
+        prompt: 'inspect sessions page',
+        outputFile: '/tmp/agent-a.output',
+        canCheckProgress: true,
+      },
+      'tool-a',
+    )
+
+    const text = Array.isArray(block.content)
+      ? block.content
+          .map(part => (part.type === 'text' ? part.text : ''))
+          .join('\n')
+      : block.content
+
+    expect(text).toContain('TaskOutput')
+    expect(text).toContain('task_id: "agent-a"')
+    expect(text).toContain('block: true')
+    expect(text).toContain('output_file: /tmp/agent-a.output')
+    expect(text).toContain('debug transcript path only')
+    expect(text).toContain('do not read it for progress or results')
+    expect(text).not.toContain('Read on the output file')
+    expect(text).not.toContain('raw stdout')
   })
 
   test('grouped async launch rows introduce resolved friendly agent names', async () => {
@@ -648,7 +681,7 @@ describe('finalizeFailedAgentLaunch', () => {
     expect(terminalCalls).toHaveLength(1)
   })
 
-  test('persists generic handles for tracked Agent Mode launch failures without leaking reservations', async () => {
+  test('persists generic handles for tracked Agent Mode launch failures and advances allocation', async () => {
     const tempProjectDir = mkdtempSync(join(tmpdir(), 'agent-tool-failed-launch-'))
     const sessionId = 'session-123'
     Math.random = () => 0
@@ -679,7 +712,7 @@ describe('finalizeFailedAgentLaunch', () => {
       expect(failedWorker?.handle).toBe('Ada')
       expect(failedWorker?.handle).not.toBe('agent-123')
       expect(allocateWorkerName('Explore', [], { allowGeneric: true })).toBe(
-        'Ada',
+        'Katherine',
       )
     } finally {
       await rm(tempProjectDir, { recursive: true, force: true })

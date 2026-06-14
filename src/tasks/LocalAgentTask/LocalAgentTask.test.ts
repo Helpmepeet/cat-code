@@ -25,7 +25,11 @@ import {
   getTaskStatusIcon,
   shouldHideTasksFooter,
 } from '../../components/tasks/taskStatusUtils.js'
-import { dequeue, resetCommandQueue } from '../../utils/messageQueueManager.js'
+import {
+  dequeue,
+  getCommandsByMaxPriority,
+  resetCommandQueue,
+} from '../../utils/messageQueueManager.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -379,5 +383,71 @@ describe('LocalAgentTask foreground cleanup', () => {
       kind: 'task-notification',
       summary: 'Agent @Ada completed',
     })
+  })
+
+  test('local agent completion notifications keep default later priority', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-12',
+      description: 'Inspect sessions page',
+      prompt: 'test prompt',
+      selectedAgent: {
+        name: 'Explore',
+        agentType: 'Explore',
+        prompt: 'test prompt',
+      },
+      agentName: 'Ada',
+      setAppState,
+    })
+
+    enqueueAgentNotification({
+      taskId: 'sync-agent-12',
+      description: 'Inspect sessions page',
+      status: 'completed',
+      setAppState,
+    })
+
+    const nextCommands = getCommandsByMaxPriority('next')
+    const laterCommands = getCommandsByMaxPriority('later')
+
+    expect(nextCommands).toHaveLength(0)
+    expect(laterCommands).toHaveLength(1)
+    expect(laterCommands[0]?.mode).toBe('task-notification')
+    expect(laterCommands[0]?.priority).toBe('later')
+    expect(laterCommands[0]?.value).toContain('Agent @Ada completed')
+  })
+
+  test('failed and killed local agent notifications keep default priority', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-13',
+      description: 'Inspect failed path',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'Explore', prompt: 'test prompt' },
+      agentName: 'Ada',
+      setAppState,
+    })
+    registerAgentForeground({
+      agentId: 'sync-agent-14',
+      description: 'Inspect killed path',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'Explore', prompt: 'test prompt' },
+      agentName: 'Ada',
+      setAppState,
+    })
+
+    enqueueAgentNotification({
+      taskId: 'sync-agent-13',
+      description: 'Inspect failed path',
+      status: 'failed',
+      error: 'Test failure',
+      setAppState,
+    })
+    enqueueAgentNotification({
+      taskId: 'sync-agent-14',
+      description: 'Inspect killed path',
+      status: 'killed',
+      setAppState,
+    })
+
+    expect(getCommandsByMaxPriority('next')).toHaveLength(0)
   })
 })

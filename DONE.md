@@ -8,6 +8,14 @@
 
 ## Phase 0
 
+### 14 Jun 2026
+
+86. Fixed background subagent result handoff affordances for GPT/Codex — async agent launch and fork guidance now treat `output_file` as a debug transcript path only, dependency waits are explicitly routed through `TaskOutput(block=true)`, `canCheckProgress` requires `TaskOutput` instead of raw `Read`, and running local-agent `TaskOutput(block=false)` returns bounded status instead of transcript content. Local-agent completion notifications stay on the default `later` queue path. Focused AgentTool/TaskOutput/LocalAgentTask/prompt/compact tests, touched-file ESLint, diff check, and dev-full compile pass; canonical `build:dev:full` remains blocked by the existing `.worktrees` lint-wrapper scan.
+
+### 13 Jun 2026
+
+85. Improved stopped-subagent resume context messaging — `ResumeAgent` success now reports neutral post-action context as `Previous context: ~53k / 200k tokens (27%)`, removes "last checkpoint" and fresh-agent advice after the resume has already been scheduled, while stopped-agent `SendMessage` guidance keeps that advice in the pre-action path and also includes the model-window denominator when available. Context-window resolution now falls back from live task progress to the transcript model so retained stopped agents with progress but no live model still show the denominator. Focused ResumeAgent/SendMessage/target-resolution tests pass; the canonical `build:dev:full` gate remains blocked by the existing `.worktrees` lint scan.
+
 ### 10 Jun 2026
 
 84. Cut idle/background energy usage — teammate mailbox polling (the 1s inbox poller and the 500ms in-process teammate wait loop) now stats the inbox file for an mtime+size signature and skips reading/parsing unchanged mailboxes, with the in-process idle loop backing off 500ms→2s when empty; web mode no longer leaks the vite dev server on exit (the global SIGINT handler's `process.exit(0)` skipped the async cleanup, orphaning vite+esbuild — one orphan had run for 2¼ days — fixed with a `process.on('exit')` hook that SIGTERMs the child); and the browser web app's WebSocket reconnect backs off exponentially 1.5s→30s instead of hammering a dead backend every 1.5s forever. Verified live: an idle interactive session now measures ~0.3% CPU, ~0.3 wakeups/s, macOS power score 0.0. A long active session's ~1GB RSS was diagnosed as JS-heap retention plus allocator slack (not a leak, not battery-relevant).

@@ -4091,7 +4091,11 @@ You have exited auto mode. The user may now want to interact more directly. You 
         if (attachment.deltaSummary) {
           parts.push(`Progress: ${attachment.deltaSummary}`)
         }
-        if (attachment.outputFilePath) {
+        if (attachment.taskType === 'local_agent') {
+          parts.push(
+            `Do NOT spawn a duplicate. You will be notified when it completes. You can check its progress with the ${TASK_OUTPUT_TOOL_NAME} tool or send it a message with ${SEND_MESSAGE_TOOL_NAME}.`,
+          )
+        } else if (attachment.outputFilePath) {
           parts.push(
             `Do NOT spawn a duplicate. You will be notified when it completes. You can read partial output at ${attachment.outputFilePath} or send it a message with ${SEND_MESSAGE_TOOL_NAME}.`,
           )
@@ -4120,7 +4124,11 @@ You have exited auto mode. The user may now want to interact more directly. You 
         messageParts.push(`Delta: ${attachment.deltaSummary}`)
       }
 
-      if (attachment.outputFilePath) {
+      if (attachment.taskType === 'local_agent') {
+        messageParts.push(
+          `You can check its output using the ${TASK_OUTPUT_TOOL_NAME} tool.`,
+        )
+      } else if (attachment.outputFilePath) {
         messageParts.push(
           `Read the output file to retrieve the result: ${attachment.outputFilePath}`,
         )

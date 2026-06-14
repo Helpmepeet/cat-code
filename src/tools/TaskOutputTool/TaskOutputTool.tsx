@@ -53,11 +53,39 @@ type TaskOutputToolOutput = {
   task: TaskOutput | null;
 };
 
+const LOCAL_AGENT_PENDING_OUTPUT =
+  'Final answer is not available yet. Use block=true to wait for completion.';
+
 // Re-export Progress from centralized types to break import cycles
 export type { TaskOutputProgress as Progress } from '../../types/tools.js';
 
 // Get output for any task type
 async function getTaskOutputData(task: TaskState): Promise<TaskOutput> {
+  if (task.type === 'local_agent') {
+    const agentTask = task as LocalAgentTaskState;
+    // Prefer the clean final answer from the in-memory result over the raw
+    // JSONL transcript on disk. The disk output is a symlink to the full
+    // session transcript (every message, tool use, etc.), not just the
+    // subagent's answer. The in-memory result contains only the final
+    // assistant text content blocks.
+    const cleanResult = agentTask.result ? extractTextContent(agentTask.result.content, '\n') : undefined;
+    const output =
+      cleanResult ??
+      (task.status === 'running' || task.status === 'pending'
+        ? LOCAL_AGENT_PENDING_OUTPUT
+        : await getTaskOutput(task.id));
+    return {
+      task_id: task.id,
+      task_type: task.type,
+      status: task.status,
+      description: task.description,
+      output,
+      prompt: agentTask.prompt,
+      ...(cleanResult ? { result: cleanResult } : {}),
+      error: agentTask.error
+    };
+  }
+
   let output: string;
   if (task.type === 'local_bash') {
     const bashTask = task as LocalShellTaskState;
@@ -86,22 +114,6 @@ async function getTaskOutputData(task: TaskState): Promise<TaskOutput> {
     return {
       ...baseOutput,
       exitCode: bashTask.result?.code ?? null
-    };
-  }
-  if (task.type === 'local_agent') {
-    const agentTask = task as LocalAgentTaskState;
-    // Prefer the clean final answer from the in-memory result over the raw
-    // JSONL transcript on disk. The disk output is a symlink to the full
-    // session transcript (every message, tool use, etc.), not just the
-    // subagent's answer. The in-memory result contains only the final
-    // assistant text content blocks.
-    const cleanResult = agentTask.result ? extractTextContent(agentTask.result.content, '\n') : undefined;
-    return {
-      ...baseOutput,
-      prompt: agentTask.prompt,
-      result: cleanResult || output,
-      output: cleanResult || output,
-      error: agentTask.error
     };
   }
   if (task.type === 'remote_agent') {
@@ -155,7 +167,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     return inputSchema();
   },
   async description() {
-    return '[Deprecated] — prefer Read on the task output file path';
+    return 'Read structured output from a background task';
   },
   isConcurrencySafe(_input) {
     return this.isReadOnly?.(_input) ?? false;
@@ -170,15 +182,16 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     return input.task_id;
   },
   async prompt() {
-    return `DEPRECATED: Prefer using the Read tool on the task's output file path instead. Background tasks return their output file path in the tool result, and you receive a task notification with the same path when the task completes — Read that file directly.
+    return `Use this tool to retrieve structured output from a running or completed background task.
 
-- Retrieves output from a running or completed task (background shell, agent, or remote session)
-- Takes a task_id parameter identifying the task
-- Returns the task output along with status information
-- Use block=true (default) to wait for task completion
-- Use block=false for non-blocking check of current status
-- Task IDs can be found using the /tasks command
-- Works with all task types: background shells, async agents, and remote sessions`;
+- Prefer this tool over reading task output files directly.
+- For local agents, the output file can be a full JSONL transcript; this tool returns the clean final answer when available.
+- Takes a task_id parameter identifying the task.
+- Returns task status, output, and type-specific fields.
+- Use block=true (default) to wait for task completion when your next step depends on the result.
+- Use block=false for a non-blocking status check; running local agents do not return transcript content.
+- Task IDs are shown in background task launch results and task notifications.
+- Works with background shell tasks, local agents, and remote agent sessions.`;
   },
   async validateInput({
     task_id

@@ -9,6 +9,7 @@ import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
+import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js'
 import { AGENT_TOOL_NAME } from './constants.js'
 import { isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -96,7 +97,7 @@ Fork yourself (omit \`subagent_type\`) when the intermediate tool output isn't w
 
 Forks are cheap because they share your prompt cache. Don't set \`model\` on a fork — a different model can't reuse the parent's cache. Pass a short \`name\` (one or two words, lowercase) so the user can see the fork in the teams panel and steer it mid-run.
 
-**Don't peek.** The tool result includes an \`output_file\` path — do not Read or tail it unless the user explicitly asks for a progress check. You get a completion notification; trust it. Reading the transcript mid-flight pulls the fork's tool noise into your context, which defeats the point of forking.
+**Don't peek.** The tool result includes an \`output_file\` path, but it is a debug transcript path — do not use it for progress or results. If your next step depends on the fork's result before the completion notification arrives, use ${TASK_OUTPUT_TOOL_NAME} with \`block=true\`. Inspect the transcript only when the user explicitly asks for raw transcript forensics. Pulling transcript content mid-flight brings the fork's tool noise into your context, which defeats the point of forking.
 
 **Don't race.** After launching, you know nothing about what the fork found. Never fabricate or predict fork results in any format — not as prose, summary, or structured output. The notification arrives as a user-role message in a later turn; it is never something you write yourself. If the user asks a follow-up before the notification lands, tell them the fork is still running — give status, not a guess.
 
