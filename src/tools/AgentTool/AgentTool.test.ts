@@ -123,7 +123,7 @@ describe('AgentTool UI', () => {
     expect(await renderToPlainText(node)).toContain('Backgrounded agent @Ada')
   })
 
-  test('async launch result points models to TaskOutput instead of raw transcript reads', () => {
+  test('async launch result frames TaskOutput as optional manual retrieval', () => {
     const block = AgentTool.mapToolResultToToolResultBlockParam(
       {
         status: 'async_launched',
@@ -144,12 +144,19 @@ describe('AgentTool UI', () => {
           .join('\n')
       : block.content
 
-    expect(text).toContain('TaskOutput')
-    expect(text).toContain('task_id: "agent-a"')
-    expect(text).toContain('block: true')
+    expect(text).toContain(
+      'TaskOutput is available for explicit status checks, manual retrieval, or intentional waits',
+    )
+    expect(text).toContain('not the default background-agent result handoff')
+    expect(text).not.toContain('block: true')
+    expect(text).not.toContain('call TaskOutput')
+    expect(text).toContain('automatic completion notification')
+    expect(text).toContain('end your response')
+    expect(text).toContain('yield the turn')
     expect(text).toContain('output_file: /tmp/agent-a.output')
     expect(text).toContain('debug transcript path only')
     expect(text).toContain('do not read it for progress or results')
+    expect(text).toContain('raw transcript forensics')
     expect(text).not.toContain('Read on the output file')
     expect(text).not.toContain('raw stdout')
   })

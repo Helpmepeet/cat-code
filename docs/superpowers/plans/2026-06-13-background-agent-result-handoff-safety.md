@@ -4,7 +4,7 @@
 
 **Goal:** Prevent parent agents from reading raw local-agent transcript output when a clean structured background-agent result path exists.
 
-**Architecture:** Keep the fix narrow: make `TaskOutput(block=true)` the explicit dependency-wait path, remove the launch-result instruction that permits raw output-file reads, keep task notifications at their existing `later` priority, and make running local-agent non-blocking output avoid transcript content. Do not change transcript storage or the Read tool in this pass; raw transcript guarding can be a separate hardening task after this safer path is restored.
+**Architecture:** Keep the fix narrow: make automatic completion notifications the normal background-agent result handoff, keep `TaskOutput` as the safe structured manual retrieval/status path, reserve `block=true` for intentional waits, remove launch-result instructions that permit raw output-file reads, keep local-agent notifications at their existing `later` priority, and make running local-agent non-blocking output avoid transcript content. Do not change transcript storage or the Read tool in this pass; raw transcript guarding can be a separate hardening task after this safer path is restored.
 
 **Tech Stack:** TypeScript, React/Ink tool rendering, Bun tests, Cat Code task queue and AgentTool runtime.
 
@@ -24,7 +24,7 @@
 
 - `src/tasks/LocalAgentTask/LocalAgentTask.tsx`
   - Responsibility: register local agent tasks and enqueue background-agent completion notifications.
-  - Change: keep local-agent completion notifications on the default `later` path; `TaskOutput(block=true)` is the active dependency-wait mechanism.
+  - Change: keep local-agent completion notifications on the default `later` path; automatic completion notification is the normal background handoff, and `TaskOutput` is only the manual retrieval/status path or an intentional wait.
 
 - `src/tools/AgentTool/AgentTool.test.ts`
   - Responsibility: AgentTool behavior and result-message tests.
@@ -52,7 +52,7 @@
 
 ---
 
-### Task 1: Restore TaskOutput as the preferred structured retrieval path
+### Task 1: Restore TaskOutput as the safe structured manual retrieval path
 
 **Files:**
 
@@ -207,7 +207,7 @@ and:
 - For local agents, the output file can be a full JSONL transcript; this tool returns the clean final answer when available.
 - Takes a task_id parameter identifying the task.
 - Returns task status, output, and type-specific fields.
-- Use block=true (default) to wait for task completion.
+- Use block=true only when you intentionally want to wait for task completion.
 - Use block=false for a non-blocking status/output check.
 - Task IDs are shown in background task launch results and task notifications.
 - Works with background shell tasks, local agents, and remote agent sessions.`;
@@ -260,7 +260,7 @@ Do not commit unless the user explicitly asks for commits.
 In `src/tools/AgentTool/AgentTool.test.ts`, add this test inside `describe('AgentTool UI', () => { ... })` after the existing `single async launch result introduces the resolved friendly agent name` test:
 
 ```ts
-  test('async launch result points models to TaskOutput instead of raw transcript reads', () => {
+  test('async launch result frames TaskOutput as optional manual retrieval', () => {
     const block = AgentTool.mapToolResultToToolResultBlockParam(
       {
         status: 'async_launched',
@@ -281,10 +281,19 @@ In `src/tools/AgentTool/AgentTool.test.ts`, add this test inside `describe('Agen
           .join('\n')
       : block.content
 
-    expect(text).toContain('TaskOutput')
+    expect(text).toContain(
+      'TaskOutput is available for explicit status checks, manual retrieval, or intentional waits',
+    )
+    expect(text).toContain('not the default background-agent result handoff')
+    expect(text).not.toContain('block: true')
+    expect(text).not.toContain('call TaskOutput')
+    expect(text).toContain('automatic completion notification')
+    expect(text).toContain('end your response')
+    expect(text).toContain('yield the turn')
     expect(text).toContain('output_file: /tmp/agent-a.output')
-    expect(text).toContain('debug transcript path')
-    expect(text).toContain('do not read it directly')
+    expect(text).toContain('debug transcript path only')
+    expect(text).toContain('do not read it for progress or results')
+    expect(text).toContain('raw transcript forensics')
     expect(text).not.toContain('Read on the output file')
     expect(text).not.toContain('raw stdout')
   })
@@ -295,7 +304,7 @@ In `src/tools/AgentTool/AgentTool.test.ts`, add this test inside `describe('Agen
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun test src/tools/AgentTool/AgentTool.test.ts --test-name-pattern "async launch result points models to TaskOutput"
+cd /Users/pt/cat-code && bun test src/tools/AgentTool/AgentTool.test.ts --test-name-pattern "async launch result frames TaskOutput as optional manual retrieval"
 ```
 
 Expected result before implementation:
@@ -307,7 +316,7 @@ FAIL src/tools/AgentTool/AgentTool.test.ts
 Expected failing assertion:
 
 ```text
-expected text not to contain "Read on the output file"
+expected text not to contain "block: true"
 ```
 
 - [ ] **Step 3: Update async launch guidance in AgentTool**
@@ -316,20 +325,21 @@ In `src/tools/AgentTool/AgentTool.tsx`, replace the `instructions` assignment in
 
 ```ts
       const instructions = data.canCheckProgress
-        ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.
-If you need progress or the final result before the completion notification arrives, use ${TASK_OUTPUT_TOOL_NAME}; it returns structured task output and the clean final answer for local agents.
-output_file: ${data.outputFile} (debug transcript path; do not read it directly unless the user explicitly asks for raw transcript forensics).`
+        ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks.
+For background launches, normally briefly tell the user what you launched, end your response, and yield the turn; the result will arrive via automatic completion notification. Do not predict or fabricate results.
+${TASK_OUTPUT_TOOL_NAME} is available for explicit status checks, manual retrieval, or intentional waits when the user or task requires it; it is not the default background-agent result handoff.
+output_file: ${data.outputFile} (debug transcript path only; do not read it for progress or results. Use it only when the user explicitly asks for raw transcript forensics).`
         : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.`;
 ```
 
-Keep `output_file` visible for forensic/debug use, but make the model-facing default path `TaskOutput` only.
+Keep `output_file` visible for forensic/debug use, keep `TaskOutput` available for manual structured retrieval/status, and make automatic completion notification the model-facing default path.
 
 - [ ] **Step 4: Run the AgentTool test and verify it passes**
 
 Run:
 
 ```bash
-cd /Users/pt/cat-code && bun test src/tools/AgentTool/AgentTool.test.ts --test-name-pattern "async launch result points models to TaskOutput"
+cd /Users/pt/cat-code && bun test src/tools/AgentTool/AgentTool.test.ts --test-name-pattern "async launch result frames TaskOutput as optional manual retrieval"
 ```
 
 Expected result:
@@ -602,7 +612,7 @@ Do not commit unless the user explicitly asks for commits.
 - Unsafe raw `output_file` guidance is addressed by Task 2.
 - Contradictory `TaskOutputTool` deprecation guidance is addressed by Task 1.
 - Existing clean local-agent result path is preserved and tested by Task 1.
-- Delayed local-agent final-result delivery is addressed through explicit `TaskOutput(block=true)` dependency waits while completion notifications keep their default `later` priority.
+- Normal delayed local-agent final-result delivery is addressed by automatic completion notifications while local-agent completion notifications keep their default `later` priority; `TaskOutput` remains the safe structured manual retrieval/status path, with `block=true` reserved for intentional waits.
 - The raw transcript symlink storage model is intentionally not changed; the plan prevents routine parent reads of that transcript by changing instructions and structured retrieval behavior.
 - Full notification trimming and Read-tool transcript guards are not included because they are broader behavior changes. They should be separate follow-up work if this minimal fix does not prevent recurrence.
 

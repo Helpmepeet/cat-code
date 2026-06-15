@@ -10,6 +10,8 @@
 
 ### 15 Jun 2026
 
+88. Restored async background subagent handoff contract — background Agent launch guidance now tells parent agents to yield for automatic completion notifications by default while keeping `TaskOutput` for explicit status checks, manual retrieval, or intentional waits; `output_file` remains debug transcript only. Updated regression coverage and the handoff plan; focused AgentTool/TaskOutput/LocalAgentTask tests plus touched-file diff/lint checks pass, while canonical `build:dev:full` remains blocked by the existing `.worktrees` lint-wrapper scan.
+
 87. Removed the old Claude Code feedback survey surfaces from Cat Code — the post-command Bad/Fine/Good session prompt, memory/post-compact/frustration survey hooks, transcript-sharing survey upload path, and feedback-triggered `/issue` auto-run wiring are gone. Skill-improvement prompts now own their tiny response type/validation directly instead of depending on the deleted survey module. Stale survey docs/comments were cleaned; targeted ESLint, stale-reference search, diff check, dev-full build, and `cli-dev --version` pass.
 
 ### 14 Jun 2026

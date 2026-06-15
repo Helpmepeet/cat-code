@@ -1951,8 +1951,9 @@ The agent is now running and will receive instructions via mailbox.`
         : `internal ID - do not mention to user. While it is running, use SendMessage with to: '${target}' to queue follow-ups. After it completes or is stopped, use ResumeAgent({ agentId: '${target}', prompt }) to continue it.`
       const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const instructions = data.canCheckProgress
-        ? `Do not duplicate this agent's work — avoid reading, grepping, editing, or investigating the same files or topics while it is running. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.
-If your next step depends on this agent's result before the completion notification arrives, call ${TASK_OUTPUT_TOOL_NAME} with task_id: "${data.agentId}" and block: true. It waits for completion and returns structured task output and the clean final answer for local agents.
+        ? `Do not duplicate this agent's work — avoid reading, grepping, editing, or investigating the same files or topics while it is running. Work on non-overlapping tasks.
+For background launches, normally briefly tell the user what you launched, end your response, and yield the turn; the result will arrive via automatic completion notification. Do not predict or fabricate results.
+${TASK_OUTPUT_TOOL_NAME} is available for explicit status checks, manual retrieval, or intentional waits when the user or task requires it; it is not the default background-agent result handoff.
 output_file: ${data.outputFile} (debug transcript path only; do not read it for progress or results. Use it only when the user explicitly asks for raw transcript forensics).`
         : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.`;
       const text = `${prefix}\n${instructions}`;
