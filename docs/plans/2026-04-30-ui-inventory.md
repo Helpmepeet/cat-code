@@ -389,7 +389,6 @@ The app has three overlay mechanisms:
 | `DevChannelsDialog` | Dev channel switch | Switch between release channels |
 | `ExitFlow` | On exit | Confirm exit / show exit options |
 | `ExportDialog` | `/export` | Export full conversation |
-| `FeedbackSurvey` | Bug report | Feedback/bug submission form |
 | `GlobalSearchDialog` | `/global-search` | Semantic search across all sessions |
 | `HelpV2` | `/help` | Full help screen with keybindings |
 | `HistorySearchDialog` | `/history` | Full-text search in current session |

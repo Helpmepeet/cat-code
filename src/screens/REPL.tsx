@@ -105,13 +105,6 @@ const useVoiceIntegration: typeof import('../hooks/useVoiceIntegration.js').useV
   resetAnchor: () => {}
 });
 const VoiceKeybindingHandler: typeof import('../hooks/useVoiceIntegration.js').VoiceKeybindingHandler = feature('VOICE_MODE') ? require('../hooks/useVoiceIntegration.js').VoiceKeybindingHandler : () => null;
-// Frustration detection is ant-only (dogfooding). Conditional require so external
-// builds eliminate the module entirely (including its two O(n) useMemos that run
-// on every messages change, plus the GrowthBook fetch).
-const useFrustrationDetection: typeof import('../components/FeedbackSurvey/useFrustrationDetection.js').useFrustrationDetection = "external" === 'ant' ? require('../components/FeedbackSurvey/useFrustrationDetection.js').useFrustrationDetection : () => ({
-  state: 'closed',
-  handleTranscriptSelect: () => {}
-});
 // Ant-only org warning. Conditional require so the org UUID list is
 // eliminated from external builds (one UUID is on excluded-strings).
 const useAntOrgWarningNotification: typeof import('../hooks/notifs/useAntOrgWarningNotification.js').useAntOrgWarningNotification = "external" === 'ant' ? require('../hooks/notifs/useAntOrgWarningNotification.js').useAntOrgWarningNotification : () => {};
@@ -250,10 +243,6 @@ const UndercoverAutoCallout = "external" === 'ant' ? require('../components/Unde
 import { activityManager } from '../utils/activityManager.js';
 import { createAbortController } from '../utils/abortController.js';
 import { MCPConnectionManager } from 'src/services/mcp/MCPConnectionManager.js';
-import { useFeedbackSurvey } from 'src/components/FeedbackSurvey/useFeedbackSurvey.js';
-import { useMemorySurvey } from 'src/components/FeedbackSurvey/useMemorySurvey.js';
-import { usePostCompactSurvey } from 'src/components/FeedbackSurvey/usePostCompactSurvey.js';
-import { FeedbackSurvey } from 'src/components/FeedbackSurvey/FeedbackSurvey.js';
 import { useInstallMessages } from 'src/hooks/notifs/useInstallMessages.js';
 import { useAwaySummary } from 'src/hooks/useAwaySummary.js';
 import { useChromeExtensionNotification } from 'src/hooks/useChromeExtensionNotification.js';
@@ -295,7 +284,6 @@ import { useModelMigrationNotifications } from 'src/hooks/notifs/useModelMigrati
 import { useCanSwitchToExistingSubscription } from 'src/hooks/notifs/useCanSwitchToExistingSubscription.js';
 import { useTeammateLifecycleNotification } from 'src/hooks/notifs/useTeammateShutdownNotification.js';
 import { useFastModeNotification } from 'src/hooks/notifs/useFastModeNotification.js';
-import { AutoRunIssueNotification, shouldAutoRunIssue, getAutoRunIssueReasonText, getAutoRunCommand, type AutoRunIssueReason } from '../utils/autoRunIssue.js';
 import type { HookProgress } from '../types/hooks.js';
 import { TungstenLiveMonitor } from '../tools/TungstenTool/TungstenLiveMonitor.js';
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -1921,41 +1909,8 @@ export function REPL({
   // but keep it when isBriefOnly suppresses the streaming text display
   !visibleStreamingText || isBriefOnly);
 
-  // Check if any permission or ask question prompt is currently visible
-  // This is used to prevent the survey from opening while prompts are active
-  const hasActivePrompt = toolUseConfirmQueue.length > 0 || promptQueue.length > 0 || sandboxPermissionRequestQueue.length > 0 || elicitation.queue.length > 0 || workerSandboxPermissions.queue.length > 0;
-  const feedbackSurveyOriginal = useFeedbackSurvey(messages, isLoading, submitCount, 'session', hasActivePrompt);
   const skillImprovementSurvey = useSkillImprovementSurvey(setMessages);
   const showIssueFlagBanner = useIssueFlagBanner(messages, submitCount);
-
-  // Wrap feedback survey handler to trigger auto-run /issue
-  const feedbackSurvey = useMemo(() => ({
-    ...feedbackSurveyOriginal,
-    handleSelect: (selected: 'dismissed' | 'bad' | 'fine' | 'good') => {
-      // Reset the ref when a new survey response comes in
-      didAutoRunIssueRef.current = false;
-      const showedTranscriptPrompt = feedbackSurveyOriginal.handleSelect(selected);
-      // Auto-run /issue for "bad" if transcript prompt wasn't shown
-      if (selected === 'bad' && !showedTranscriptPrompt && shouldAutoRunIssue('feedback_survey_bad')) {
-        setAutoRunIssueReason('feedback_survey_bad');
-        didAutoRunIssueRef.current = true;
-      }
-    }
-  }), [feedbackSurveyOriginal]);
-
-  // Post-compact survey: shown after compaction if feature gate is enabled
-  const postCompactSurvey = usePostCompactSurvey(messages, isLoading, hasActivePrompt, {
-    enabled: !isRemoteSession
-  });
-
-  // Memory survey: shown when the assistant mentions memory and a memory file
-  // was read this conversation
-  const memorySurvey = useMemorySurvey(messages, isLoading, hasActivePrompt, {
-    enabled: !isRemoteSession
-  });
-
-  // Frustration detection: show transcript sharing prompt after detecting frustrated messages
-  const frustrationDetection = useFrustrationDetection(messages, isLoading, hasActivePrompt, feedbackSurvey.state !== 'closed' || postCompactSurvey.state !== 'closed' || memorySurvey.state !== 'closed');
 
   // Initialize IDE integration
   useIDEIntegration({
@@ -2233,13 +2188,6 @@ export function REPL({
     status: apiKeyStatus,
     reverify
   } = useApiKeyVerification();
-
-  // Auto-run /issue state
-  const [autoRunIssueReason, setAutoRunIssueReason] = useState<AutoRunIssueReason | null>(null);
-  // Ref to track if autoRunIssue was triggered this survey cycle,
-  // so we can suppress the [1] follow-up prompt even after
-  // autoRunIssueReason is cleared.
-  const didAutoRunIssueRef = useRef(false);
 
   // State for exit feedback flow
   const [exitFlow, setExitFlow] = useState<React.ReactNode>(null);
@@ -3964,7 +3912,7 @@ export function REPL({
   // keep onSubmit stable across message updates (see L2384/L2400/L2662).
   // Without this, each setMessages call (~30× per turn) recreates
   // onSubmit, pinning the REPL render scope (1776B) + that render's
-  // messages array in downstream closures (PromptInput, handleAutoRunIssue).
+  // messages array in downstream closures (PromptInput).
   // Heap analysis showed ~9 REPL scopes and ~15 messages array versions
   // accumulating after #20174/#20175, all traced to this dep.
   mainLoopModel, pastedContents, ideSelection, setUserInputOnProcessing, setAbortController, addNotification, onQuery, stashedPrompt, setStashedPrompt, setAppState, onBeforeQuery, canUseTool, remoteSession, setMessages, awaitPendingHooks, repinScroll]);
@@ -4007,34 +3955,6 @@ export function REPL({
     helpers.setCursorOffset(0);
     helpers.clearBuffer();
   }, [store, setAppState, setInputValue, getToolUseContext, canUseTool, mainLoopModel, addNotification]);
-
-  // Handlers for auto-run /issue or /good-claude (defined after onSubmit)
-  const handleAutoRunIssue = useCallback(() => {
-    const command = autoRunIssueReason ? getAutoRunCommand(autoRunIssueReason) : '/issue';
-    setAutoRunIssueReason(null); // Clear the state
-    onSubmit(command, {
-      setCursorOffset: () => {},
-      clearBuffer: () => {},
-      resetHistory: () => {}
-    }).catch(err => {
-      logForDebugging(`Auto-run ${command} failed: ${errorMessage(err)}`);
-    });
-  }, [onSubmit, autoRunIssueReason]);
-  const handleCancelAutoRunIssue = useCallback(() => {
-    setAutoRunIssueReason(null);
-  }, []);
-
-  // Handler for when user presses 1 on survey thanks screen to share details
-  const handleSurveyRequestFeedback = useCallback(() => {
-    const command = "external" === 'ant' ? '/issue' : '/feedback';
-    onSubmit(command, {
-      setCursorOffset: () => {},
-      clearBuffer: () => {},
-      resetHistory: () => {}
-    }).catch(err => {
-      logForDebugging(`Survey feedback request failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }, [onSubmit]);
 
   // onSubmit is unstable (deps include `messages` which changes every turn).
   // `handleOpenRateLimitOptions` is prop-drilled to every MessageRow, and each
@@ -5494,10 +5414,6 @@ export function REPL({
                 {mrRender()}
 
                 {!toolJSX?.shouldHidePromptInput && !focusedInputDialog && !isExiting && !disabled && !cursor && <>
-                      {autoRunIssueReason && <AutoRunIssueNotification onRun={handleAutoRunIssue} onCancel={handleCancelAutoRunIssue} reason={getAutoRunIssueReasonText(autoRunIssueReason)} />}
-                      {postCompactSurvey.state !== 'closed' ? <FeedbackSurvey state={postCompactSurvey.state} lastResponse={postCompactSurvey.lastResponse} handleSelect={postCompactSurvey.handleSelect} inputValue={inputValue} setInputValue={setInputValue} onRequestFeedback={handleSurveyRequestFeedback} /> : memorySurvey.state !== 'closed' ? <FeedbackSurvey state={memorySurvey.state} lastResponse={memorySurvey.lastResponse} handleSelect={memorySurvey.handleSelect} handleTranscriptSelect={memorySurvey.handleTranscriptSelect} inputValue={inputValue} setInputValue={setInputValue} onRequestFeedback={handleSurveyRequestFeedback} message="How well did Claude use its memory? (optional)" /> : <FeedbackSurvey state={feedbackSurvey.state} lastResponse={feedbackSurvey.lastResponse} handleSelect={feedbackSurvey.handleSelect} handleTranscriptSelect={feedbackSurvey.handleTranscriptSelect} inputValue={inputValue} setInputValue={setInputValue} onRequestFeedback={didAutoRunIssueRef.current ? undefined : handleSurveyRequestFeedback} />}
-                      {/* Frustration-triggered transcript sharing prompt */}
-                      {frustrationDetection.state !== 'closed' && <FeedbackSurvey state={frustrationDetection.state} lastResponse={null} handleSelect={() => {}} handleTranscriptSelect={frustrationDetection.handleTranscriptSelect} inputValue={inputValue} setInputValue={setInputValue} />}
                       {/* Skill improvement survey - appears when improvements detected (ant-only) */}
                       {"external" === 'ant' && skillImprovementSurvey.suggestion && <SkillImprovementSurvey isOpen={skillImprovementSurvey.isOpen} skillName={skillImprovementSurvey.suggestion.skillName} updates={skillImprovementSurvey.suggestion.updates} handleSelect={skillImprovementSurvey.handleSelect} inputValue={inputValue} setInputValue={setInputValue} />}
                       {showIssueFlagBanner && <IssueFlagBanner />}

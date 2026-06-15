@@ -333,7 +333,7 @@ export function getLastAssistantMessage(
   messages: Message[],
 ): AssistantMessage | undefined {
   // findLast exits early from the end — much faster than filter + last for
-  // large message arrays (called on every REPL render via useFeedbackSurvey).
+  // large message arrays.
   return messages.findLast(
     (msg): msg is AssistantMessage => msg.type === 'assistant',
   )

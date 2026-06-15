@@ -4,16 +4,16 @@ import { BLACK_CIRCLE, BULLET_OPERATOR } from '../constants/figures.js';
 import { Box, Text } from '../ink.js';
 import type { SkillUpdate } from '../utils/hooks/skillImprovement.js';
 import { normalizeFullWidthDigits } from '../utils/stringUtils.js';
-import { isValidResponseInput } from './FeedbackSurvey/FeedbackSurveyView.js';
-import type { FeedbackSurveyResponse } from './FeedbackSurvey/utils.js';
+type SkillImprovementResponse = 'dismissed' | 'good';
 type Props = {
   isOpen: boolean;
   skillName: string;
   updates: SkillUpdate[];
-  handleSelect: (selected: FeedbackSurveyResponse) => void;
+  handleSelect: (selected: SkillImprovementResponse) => void;
   inputValue: string;
   setInputValue: (value: string) => void;
 };
+const isValidResponseInput = (input: string): input is '0' | '1' => input === '0' || input === '1';
 export function SkillImprovementSurvey(t0) {
   const $ = _c(6);
   const {
@@ -47,7 +47,7 @@ export function SkillImprovementSurvey(t0) {
 type ViewProps = {
   skillName: string;
   updates: SkillUpdate[];
-  onSelect: (option: FeedbackSurveyResponse) => void;
+  onSelect: (option: SkillImprovementResponse) => void;
   inputValue: string;
   setInputValue: (value: string) => void;
 };

@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 15 Jun 2026
+
+87. Removed the old Claude Code feedback survey surfaces from Cat Code — the post-command Bad/Fine/Good session prompt, memory/post-compact/frustration survey hooks, transcript-sharing survey upload path, and feedback-triggered `/issue` auto-run wiring are gone. Skill-improvement prompts now own their tiny response type/validation directly instead of depending on the deleted survey module. Stale survey docs/comments were cleaned; targeted ESLint, stale-reference search, diff check, dev-full build, and `cli-dev --version` pass.
+
 ### 14 Jun 2026
 
 86. Fixed background subagent result handoff affordances for GPT/Codex — async agent launch and fork guidance now treat `output_file` as a debug transcript path only, dependency waits are explicitly routed through `TaskOutput(block=true)`, `canCheckProgress` requires `TaskOutput` instead of raw `Read`, and running local-agent `TaskOutput(block=false)` returns bounded status instead of transcript content. Local-agent completion notifications stay on the default `later` queue path. Focused AgentTool/TaskOutput/LocalAgentTask/prompt/compact tests, touched-file ESLint, diff check, and dev-full compile pass; canonical `build:dev:full` remains blocked by the existing `.worktrees` lint-wrapper scan.
