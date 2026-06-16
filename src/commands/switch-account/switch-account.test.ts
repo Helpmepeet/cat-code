@@ -3,6 +3,7 @@ import * as claudePoolModule from '../../services/api/claudeAccountPool.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
 import * as leaseManagerModule from '../../services/api/codexAccountLeaseManager.js'
 import * as codexFetchAdapterModule from '../../services/api/codex-fetch-adapter.js'
+import * as codexUsageModule from '../../services/api/codexUsage.js'
 import { setSessionProvider } from '../../bootstrap/state.js'
 import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
@@ -161,7 +162,7 @@ describe('/switch-account', () => {
     expect((emittedMessages[1] as { account_ref?: string }).account_ref).toBeDefined()
   })
 
-  test('explicit Codex switch to an account with stale plan metadata succeeds with a warning', async () => {
+  test('explicit Codex switch to an account with stale plan metadata succeeds with a warning when live usage is unreachable', async () => {
     setSessionProvider('openai')
     codexPoolModule.seedCodexAccountPoolForTest({
       accounts: [
@@ -173,6 +174,9 @@ describe('/switch-account', () => {
       ],
       activeAccountId: 'codex-current',
     })
+
+    // Live usage unreachable (network failure) must never block a switch.
+    spyOn(codexUsageModule, 'fetchAccountUsage').mockResolvedValue(null)
 
     const result = await call(
       'plan',
@@ -187,6 +191,102 @@ describe('/switch-account', () => {
     expect(result?.value).toContain(
       'Warning: saved plan metadata says expired (2026-04-12T03:30:01+00:00); live usage decides availability',
     )
+  })
+
+  test('explicit Codex switch refuses a warned account when live usage reports it capped', async () => {
+    setSessionProvider('openai')
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        createCodexAccount('codex-current', 'main2'),
+        createCodexAccount('codex-free', 'hiby', 0, {
+          planType: 'free',
+          planExpiresAt: '2026-06-01T05:46:53+00:00',
+        }),
+      ],
+      activeAccountId: 'codex-current',
+    })
+
+    const reassignSpy = spyOn(
+      leaseManagerModule,
+      'reassignCodexLeasesToActiveAccount',
+    ).mockImplementation(() => {})
+    spyOn(codexUsageModule, 'fetchAccountUsage').mockResolvedValue({
+      accountId: 'codex-free',
+      userId: 'u',
+      email: 'hiby@example.com',
+      planType: 'free',
+      allowed: false,
+      limitReached: true,
+      primaryWindow: {
+        usedPercent: 100,
+        limitWindowSeconds: 2592000,
+        resetAfterSeconds: 2427459,
+        resetAt: 0,
+      },
+      secondaryWindow: {
+        usedPercent: 0,
+        limitWindowSeconds: 0,
+        resetAfterSeconds: 0,
+        resetAt: 0,
+      },
+      credits: { hasCredits: false, unlimited: false, balance: '0' },
+      fetchedAt: Date.now(),
+    })
+
+    const result = await call(
+      'hiby',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result?.value).toContain('Cannot switch to hiby')
+    expect(result?.value).toContain('free plan')
+    expect(result?.value).toContain('Staying on main2')
+    // The switch must not have been committed.
+    expect(reassignSpy).not.toHaveBeenCalled()
+    expect(codexPoolModule.getPoolStatus().accounts[
+      codexPoolModule.getPoolStatus().activeIndex
+    ]?.accountId).toBe('codex-current')
+  })
+
+  test('explicit Codex switch refuses with the unified message when a fresh capped hint already blocks the target', async () => {
+    setSessionProvider('openai')
+    // Simulates the second attempt within 5 minutes: the target already carries
+    // a fresh capped usage hint, so call()'s generic gate refuses before the
+    // live-usage re-check. It must use the same friendly wording.
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        createCodexAccount('codex-current', 'main2'),
+        createCodexAccount('codex-free', 'hiby', 0, {
+          planType: 'free',
+          usageAllowed: false,
+          usageLimitReached: true,
+          usagePrimary: 100,
+          usageFetchedAt: Date.now(),
+        }),
+      ],
+      activeAccountId: 'codex-current',
+    })
+
+    const fetchUsageSpy = spyOn(codexUsageModule, 'fetchAccountUsage')
+
+    const result = await call(
+      'hiby',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result?.value).toContain('Cannot switch to hiby')
+    expect(result?.value).toContain('free plan')
+    expect(result?.value).toContain('Staying on main2')
+    // Already blocked, so no live fetch is needed.
+    expect(fetchUsageSpy).not.toHaveBeenCalled()
   })
 
   test('emits account.manual_switch for actual Claude switches', async () => {
@@ -474,8 +574,9 @@ describe('/switch-account', () => {
       } as Parameters<typeof call>[1],
     )
 
-    expect(result?.value).toContain('Found Codex account "blocked", but it is not switchable.')
-    expect(result?.value).toContain('Reason: Usage cap hit (429)')
+    expect(result?.value).toContain('Cannot switch to blocked')
+    expect(result?.value).toContain('Usage cap hit (429)')
+    expect(result?.value).toContain('Staying on current')
   })
 
   test('explicit Codex switch does not expose raw refresh state reason', async () => {
@@ -500,9 +601,9 @@ describe('/switch-account', () => {
       } as Parameters<typeof call>[1],
     )
 
-    expect(result?.value).toContain('Found Codex account "authdead", but it is not switchable.')
-    expect(result?.value).toContain('Reason: Token refresh failed: HTTP 401')
-    expect(result?.value).not.toContain('Reason: http_401')
+    expect(result?.value).toContain('Cannot switch to authdead')
+    expect(result?.value).toContain('Token refresh failed: HTTP 401')
+    expect(result?.value).not.toContain('http_401')
   })
 
   test('returns Multiple Claude accounts match for ambiguous Claude alias prefix and does not switch', async () => {

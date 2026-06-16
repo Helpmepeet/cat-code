@@ -8,6 +8,7 @@ import { useAppState } from '../../state/AppState.js'
 import {
   buildPoolUsageDisplayAccounts,
   fetchPoolUsage,
+  isFreePlan,
   type PoolUsageSnapshot,
 } from '../../services/api/codexUsage.js'
 import { getPoolStatus } from '../../services/api/codexAccountPool.js'
@@ -243,6 +244,10 @@ function CodexSection({ usageSnapshot, accentColor, textColor }: CodexSectionPro
             <Box paddingLeft={2} flexDirection="column">
               {acct.usage == null ? (
                 <Text color={textColor} dimColor>{unavailableLabel}</Text>
+              ) : isFreePlan(acct.usage.planType) ? (
+                // Free plans have no Codex quota; the backend returns a synthetic
+                // "100% used, resets in ~28d" window. Don't render usage bars.
+                <Text color={textColor} dimColor>free — no Codex access (upgrade required)</Text>
               ) : (
                 <>
                   {acct.switchable === false && acct.usage.allowed && !acct.usage.limitReached ? (
@@ -254,12 +259,14 @@ function CodexSection({ usageSnapshot, accentColor, textColor }: CodexSectionPro
                     resetStr={formatReset(acct.usage.primaryWindow.resetAfterSeconds)}
                     textColor={textColor}
                   />
-                  <UsageRow
-                    label="7d"
-                    usedPct={acct.usage.secondaryWindow.usedPercent}
-                    resetStr={formatReset(acct.usage.secondaryWindow.resetAfterSeconds)}
-                    textColor={textColor}
-                  />
+                  {acct.usage.hasSecondaryWindow !== false ? (
+                    <UsageRow
+                      label="7d"
+                      usedPct={acct.usage.secondaryWindow.usedPercent}
+                      resetStr={formatReset(acct.usage.secondaryWindow.resetAfterSeconds)}
+                      textColor={textColor}
+                    />
+                  ) : null}
                 </>
               )}
             </Box>

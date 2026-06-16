@@ -6,7 +6,9 @@ import {
   isCodexAccountSwitchable,
   resolveCodexAccountByPrefix,
   switchToAccount,
+  updateAccountUsageHints,
 } from '../../services/api/codexAccountPool.js'
+import { fetchAccountUsage } from '../../services/api/codexUsage.js'
 import { reassignCodexLeasesToActiveAccount } from '../../services/api/codexAccountLeaseManager.js'
 import {
   getClaudePoolStatus,
@@ -114,24 +116,51 @@ async function performCodexSwitch(
   const { accounts, activeIndex } = getPoolStatus()
   const current = accounts[activeIndex]
 
+  // Resolve the candidate WITHOUT mutating pool.activeIndex yet, so a live-usage
+  // check can refuse a capped target before we commit the switch (no revert).
+  const candidate =
+    idPrefix !== null
+      ? (() => {
+          const resolution = resolveCodexAccountByPrefix(idPrefix, { onlySwitchable: true })
+          return resolution.kind === 'unique' ? resolution.account : null
+        })()
+      : null
+
+  if (idPrefix !== null) {
+    if (!candidate) return null
+
+    if (current?.accountId === candidate.accountId && getAPIProvider() === 'openai') {
+      const label = candidate.alias ?? candidate.accountId.slice(0, 12)
+      emitManualSwitchDiagnostic({
+        provider: 'openai',
+        pool: 'codex',
+        accountRef: candidate.accountId,
+        counts: countStatuses(getPoolStatus().accounts),
+        reason: 'manual switch no-op',
+      })
+      return { type: 'text', value: `Already on ${label}` }
+    }
+
+    // The named target only carries soft plan-metadata warnings (e.g. plan
+    // expired / free). The warning text promises "live usage decides
+    // availability" — so consult it now. A fresh capped hint flips
+    // getCodexAccountAvailability to 'blocked' and we refuse the switch instead
+    // of reporting a false success that silently fails over on the next request.
+    const preCheck = getCodexAccountAvailability(candidate)
+    if (preCheck.kind === 'warned') {
+      const blocked = await liveUsageIsBlocked(candidate)
+      if (blocked) {
+        emitManualSwitchFailure('target capped per live usage')
+        return {
+          type: 'text',
+          value: formatCodexSwitchRefusal(candidate, current),
+        }
+      }
+    }
+  }
+
   const result = switchToAccount(idPrefix)
   if (!result) return null
-
-  if (
-    idPrefix &&
-    current?.accountId === result.accountId &&
-    getAPIProvider() === 'openai'
-  ) {
-    const label = result.alias ?? result.accountId.slice(0, 12)
-    emitManualSwitchDiagnostic({
-      provider: 'openai',
-      pool: 'codex',
-      accountRef: result.accountId,
-      counts: countStatuses(getPoolStatus().accounts),
-      reason: 'manual switch no-op',
-    })
-    return { type: 'text', value: `Already on ${label}` }
-  }
 
   // The main thread holds a persistent codex lease (see query.ts) that pins an
   // accountId at creation time. switchToAccount only updates pool.activeIndex,
@@ -264,11 +293,13 @@ export const call: LocalCommandCall = async (args, context) => {
     }
     const codexAnyResolution = resolveCodexAccountByPrefix(prefix)
     if (codexAnyResolution.kind === 'unique' && !isCodexAccountSwitchable(codexAnyResolution.account)) {
-      const label = codexAnyResolution.account.alias ?? codexAnyResolution.account.accountId.slice(0, 12)
       emitManualSwitchFailure('matching Codex account is not switchable')
       return {
         type: 'text',
-        value: `Found Codex account "${label}", but it is not switchable.\nReason: ${formatCodexAccountBlockReason(codexAnyResolution.account)}`,
+        value: formatCodexSwitchRefusal(
+          codexAnyResolution.account,
+          codexPool.accounts[codexPool.activeIndex],
+        ),
       }
     }
     if (codexAnyResolution.kind === 'ambiguous') {
@@ -320,12 +351,68 @@ export const call: LocalCommandCall = async (args, context) => {
   return { type: 'text', value: 'Only one Codex account. Use /switch-account <alias> to switch to a Claude account.' }
 }
 
-function formatCodexAccountBlockReason(
-  account: ReturnType<typeof getPoolStatus>['accounts'][number],
-): string {
+type CodexPoolAccount = ReturnType<typeof getPoolStatus>['accounts'][number]
+
+/**
+ * Build a human-readable reason an account can't be switched to. Prefers a
+ * plan/usage-specific explanation (free plan, expired subscription, usage cap)
+ * over the internal availability string, falling back to that string otherwise.
+ */
+function humanizeCodexBlockReason(account: CodexPoolAccount): string {
   const availability = getCodexAccountAvailability(account)
-  if (availability.kind === 'blocked') {
-    return availability.reason
+  const fallback =
+    availability.kind === 'blocked'
+      ? availability.reason
+      : 'account is unavailable for switching'
+
+  if (account.planType === 'free') {
+    return 'on the ChatGPT free plan (Codex requires a paid plan)'
   }
-  return 'account is unavailable for switching'
+
+  const expiresAtMs = account.planExpiresAt ? Date.parse(account.planExpiresAt) : Number.NaN
+  if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
+    const date = account.planExpiresAt!.slice(0, 10)
+    return `subscription expired ${date}`
+  }
+
+  if (account.usageLimitReached === true || (account.usagePrimary ?? 0) >= 100) {
+    return 'usage limit reached (live usage 100% used)'
+  }
+
+  return fallback
+}
+
+/** Unified refusal message shared by every "can't switch to this Codex account" path. */
+function formatCodexSwitchRefusal(
+  target: CodexPoolAccount,
+  current: CodexPoolAccount | undefined,
+): string {
+  const targetLabel = target.alias ?? target.accountId.slice(0, 12)
+  const stayLabel = current?.alias ?? current?.accountId.slice(0, 12) ?? 'current account'
+  return `Cannot switch to ${targetLabel} — ${humanizeCodexBlockReason(target)}. Staying on ${stayLabel}.`
+}
+
+/**
+ * Fetch live usage for a warned account and fold it into the pool's usage
+ * hints, then re-check availability. Returns true when the fresh hint flips the
+ * account to 'blocked' (e.g. a free/expired account the backend would reject),
+ * false when usage is fine or unreachable (an unreachable usage endpoint must
+ * never block a switch).
+ */
+async function liveUsageIsBlocked(account: CodexPoolAccount): Promise<boolean> {
+  const usage = await fetchAccountUsage(account)
+  if (!usage) return false
+
+  updateAccountUsageHints([
+    {
+      accountId: usage.accountId,
+      primaryPercent: usage.primaryWindow.usedPercent,
+      weeklyPercent: usage.secondaryWindow.usedPercent,
+      allowed: usage.allowed,
+      limitReached: usage.limitReached,
+      resetAt: Math.max(usage.primaryWindow.resetAt, usage.secondaryWindow.resetAt),
+    },
+  ])
+
+  return getCodexAccountAvailability(account).kind === 'blocked'
 }

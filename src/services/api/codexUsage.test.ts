@@ -266,6 +266,94 @@ describe('codexUsage display helpers', () => {
     expect(account ? isCodexAccountSwitchable(account) : false).toBe(true)
   })
 
+  test('fetchPoolUsage parses a free/capped account with a null secondary window', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'free-account', alias: 'hiby', planType: 'free' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u1',
+          email: 'hiby@example.com',
+          plan_type: 'free',
+          rate_limit: {
+            allowed: false,
+            limit_reached: true,
+            primary_window: {
+              used_percent: 100,
+              limit_window_seconds: 2592000,
+              reset_after_seconds: 2427459,
+              reset_at: 0,
+            },
+            // Free plans return a null secondary window; the capped signal must
+            // still survive instead of collapsing the whole response to null.
+            secondary_window: null,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    let snapshot: PoolUsageSnapshot
+    try {
+      snapshot = await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    expect(snapshot.errors).toEqual([])
+    expect(snapshot.accounts).toHaveLength(1)
+    const usage = snapshot.accounts[0]!
+    expect(usage.allowed).toBe(false)
+    expect(usage.limitReached).toBe(true)
+    expect(usage.primaryWindow.usedPercent).toBe(100)
+    expect(usage.secondaryWindow.usedPercent).toBe(0)
+
+    const account = getPoolStatus().accounts.find((a) => a.accountId === 'free-account')
+    expect(account ? isCodexAccountSwitchable(account) : true).toBe(false)
+  })
+
+  test('fetchPoolUsage treats a response without rate_limit as an error', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'eligibility-only', alias: 'creds' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u1',
+          email: 'creds@example.com',
+          plan_type: 'free',
+          credits: { has_credits: false, unlimited: false, balance: null },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    let snapshot: PoolUsageSnapshot
+    try {
+      snapshot = await fetchPoolUsage({ forceRefresh: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    expect(snapshot.accounts).toHaveLength(0)
+    expect(snapshot.errors).toEqual([
+      { accountId: 'eligibility-only', error: 'Unexpected usage response' },
+    ])
+  })
+
   test('fetchPoolUsage sends the ChatGPT account selector', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -808,6 +896,71 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain('  backup1  [usage unavailable]')
     expect(output).toContain('usage      unavailable (HTTP 401)')
     expect(output).toContain('3 accounts, 2 routable, 2 with usage data, 1 capped, 1 usage unavailable')
+  })
+
+  test('formatPoolUsage omits the weekly row when the secondary window is absent', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'free-account',
+      accounts: [buildPoolAccount({ accountId: 'free-account', alias: 'hiby' })],
+    })
+
+    const output = formatPoolUsage({
+      accounts: [
+        buildUsage('free-account', 100, 0, {
+          allowed: false,
+          limitReached: true,
+          hasSecondaryWindow: false,
+        }),
+      ],
+      fetchedAt: Date.now(),
+      errors: [],
+    })
+
+    expect(output).toContain('5h')
+    expect(output).not.toContain('7d')
+  })
+
+  test('formatPoolUsage shows no Codex access for a free plan instead of usage bars', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'free-account',
+      accounts: [buildPoolAccount({ accountId: 'free-account', alias: 'hiby', planType: 'free' })],
+    })
+
+    const output = formatPoolUsage({
+      accounts: [
+        buildUsage('free-account', 100, 0, {
+          planType: 'free',
+          allowed: false,
+          limitReached: true,
+          hasSecondaryWindow: false,
+        }),
+      ],
+      fetchedAt: Date.now(),
+      errors: [],
+    })
+
+    expect(output).toContain('[free — no Codex access]')
+    expect(output).toContain('upgrade to a paid plan to use Codex')
+    // No usage bars or reset timers for a plan that has no quota.
+    expect(output).not.toContain('5h')
+    expect(output).not.toContain('7d')
+    expect(output).not.toContain('[capped]')
+  })
+
+  test('formatPoolUsage keeps the weekly row when the secondary window is present', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'paid-account',
+      accounts: [buildPoolAccount({ accountId: 'paid-account', alias: 'main' })],
+    })
+
+    const output = formatPoolUsage({
+      accounts: [buildUsage('paid-account', 10, 40)],
+      fetchedAt: Date.now(),
+      errors: [],
+    })
+
+    expect(output).toContain('5h')
+    expect(output).toContain('7d')
   })
 
   test('formatPoolUsage shows internal capped status even when live usage is available', () => {

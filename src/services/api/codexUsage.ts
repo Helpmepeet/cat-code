@@ -35,6 +35,7 @@ export interface AccountUsage {
   limitReached: boolean
   primaryWindow: UsageWindow    // 5-hour window
   secondaryWindow: UsageWindow  // weekly window
+  hasSecondaryWindow?: boolean  // false when the upstream omitted it (e.g. free plan); undefined treated as present
   credits: {
     hasCredits: boolean
     unlimited: boolean
@@ -337,9 +338,20 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
     for (const warning of account.availabilityWarnings) {
       lines.push(`  warning: ${warning}`)
     }
-    if (account.usage) {
+    if (account.usage && isFreePlan(account.usage.planType)) {
+      // Free plans have no Codex quota at all; the backend returns a synthetic
+      // "100% used, resets in ~28d" primary window. Rendering usage bars implies
+      // a quota that is merely exhausted and will reset — both untrue. The
+      // [free — no Codex access] tag already states the situation, so add only
+      // the action.
+      lines.push('  upgrade to a paid plan to use Codex')
+    } else if (account.usage) {
       lines.push(usageRow('5h', account.usage.primaryWindow))
-      lines.push(usageRow('7d', account.usage.secondaryWindow))
+      // Free/odd-shaped plans omit the weekly window; don't render a fake
+      // "7d 0% resets now" placeholder for it.
+      if (account.usage.hasSecondaryWindow !== false) {
+        lines.push(usageRow('7d', account.usage.secondaryWindow))
+      }
     } else {
       lines.push(usageUnavailableRow(account.error))
     }
@@ -364,6 +376,12 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
 }
 
 function formatDisplayStatusTag(account: PoolUsageDisplayAccount): string {
+  if (account.usage && isFreePlan(account.usage.planType)) {
+    // A free plan can't run Codex at all — "capped" would imply an exhausted
+    // quota that resets, which is wrong.
+    return '  [free — no Codex access]'
+  }
+
   if (
     account.switchable === false &&
     account.usage &&
@@ -386,6 +404,10 @@ function formatDisplayStatusTag(account: PoolUsageDisplayAccount): string {
   }
 
   return ''
+}
+
+export function isFreePlan(planType: string): boolean {
+  return planType.toLowerCase() === 'free'
 }
 
 function usageRow(label: string, window: UsageWindow): string {
@@ -486,8 +508,11 @@ function parseUsageResponse(
   if (!rateLimit) return null
 
   const primary = rateLimit.primary_window as Record<string, unknown> | undefined
+  // Free/capped plans return a populated primary window but a null secondary
+  // window. Require only the primary window so the allowed/limit_reached
+  // signals on those accounts survive instead of collapsing to null.
+  if (!primary) return null
   const secondary = rateLimit.secondary_window as Record<string, unknown> | undefined
-  if (!primary || !secondary) return null
 
   const credits = data.credits as Record<string, unknown> | undefined
 
@@ -505,11 +530,12 @@ function parseUsageResponse(
       resetAt: Number(primary.reset_at ?? 0),
     },
     secondaryWindow: {
-      usedPercent: Number(secondary.used_percent ?? 0),
-      limitWindowSeconds: Number(secondary.limit_window_seconds ?? 0),
-      resetAfterSeconds: Number(secondary.reset_after_seconds ?? 0),
-      resetAt: Number(secondary.reset_at ?? 0),
+      usedPercent: Number(secondary?.used_percent ?? 0),
+      limitWindowSeconds: Number(secondary?.limit_window_seconds ?? 0),
+      resetAfterSeconds: Number(secondary?.reset_after_seconds ?? 0),
+      resetAt: Number(secondary?.reset_at ?? 0),
     },
+    hasSecondaryWindow: Boolean(secondary),
     credits: {
       hasCredits: Boolean(credits?.has_credits),
       unlimited: Boolean(credits?.unlimited),
