@@ -30,7 +30,7 @@ export interface PoolAccount {
   refreshToken: string
   expiresAt: number
   source: 'vault' | 'config'
-  status: 'healthy' | 'dead' | 'capped'
+  status: 'healthy' | 'dead' | 'capped' | 'quarantined'
   statusReason?: PoolAccountStatusReason
   lastUsedAt: number
   lastError?: string
@@ -66,6 +66,7 @@ export type PoolAccountStatusReason =
   | 'usage_cap'
   | 'auth_dead'
   | 'runtime_cap'
+  | 'probe_pending_transport'
   | 'unknown'
 
 export type MarkPoolAccountStatusOptions = {
@@ -188,8 +189,9 @@ export async function initAccountPool(): Promise<void> {
     // access_token on tab startup. Vault locks in touchAll() serialize
     // concurrent refreshes across tabs.
     if (pool.accounts.some((a) => a.source === 'vault')) {
-      const { startPeriodicRefresh, touchAll } = await import('./codexTokenRefresh.js')
+      const { startPeriodicRefresh, startQuarantineProbe, touchAll } = await import('./codexTokenRefresh.js')
       startPeriodicRefresh()
+      startQuarantineProbe()
       void touchAll().catch(() => {})
     }
 
@@ -630,6 +632,47 @@ export function markAccountDead(
   )
 }
 
+export function markPoolAccountQuarantined(
+  accountId: string,
+  reason: string,
+  options: MarkPoolAccountStatusOptions = {},
+): void {
+  const acct = pool.accounts.find((a) => a.accountId === accountId)
+  if (!acct) return
+  acct.status = 'quarantined'
+  acct.lastError = reason
+  acct.statusReason = 'probe_pending_transport'
+
+  if (
+    options.rerollActive !== false &&
+    pool.accounts[pool.activeIndex]?.accountId === accountId
+  ) {
+    const next = findLRUHealthy(-1)
+    pool.activeIndex = next
+    persistActiveCodexAccountId(pool.accounts[next]?.accountId)
+    emitActiveRerollDiagnostic(
+      accountId,
+      pool.accounts[next]?.accountId,
+      `markPoolAccountQuarantined: ${reason}`,
+    )
+  }
+
+  emitAccountDiagnostic({
+    code: 'account.transient_failure',
+    severity: 'warning',
+    provider: 'openai',
+    recoverable: true,
+    pool: 'codex',
+    account_ref: accountId,
+    counts: countPoolStatuses(),
+    reason,
+  })
+  logForDebugging(
+    `[codex-pool] Account ${truncId(accountId)} quarantined: ${reason}`,
+    { level: 'warn' },
+  )
+}
+
 // ── Vault reader ───────────────────────────────────────────────────────────
 
 /** Returns the resolved vault path, or null if vault directory doesn't exist. */
@@ -928,7 +971,10 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
           ? expiresAtRaw
           : 0
-      const status = checkAccountHealth(lastRefresh)
+      const health = checkAccountHealth(lastRefresh)
+      const refresh = data.refresh as Record<string, unknown> | undefined
+      const refreshStatus = getVaultRefreshPoolStatus(refresh, health)
+      const status = refreshStatus.status
       const planMetadata = getCodexPlanMetadataFromIdToken(
         typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
       )
@@ -946,9 +992,8 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         alias: typeof data.alias === 'string' && data.alias ? data.alias : undefined,
         planType: planMetadata.planType,
         planExpiresAt: planMetadata.planExpiresAt,
-        ...(status === 'dead'
-          ? { lastError: 'Token expired (>7 days since last refresh)', statusReason: 'auth_dead' as const }
-          : {}),
+        ...(refreshStatus.lastError ? { lastError: refreshStatus.lastError } : {}),
+        ...(refreshStatus.statusReason ? { statusReason: refreshStatus.statusReason } : {}),
       })
       logForDebugging(
         `[codex-profile] profile-load source=vault account=${accountId} alias=${typeof data.alias === 'string' && data.alias ? data.alias : 'none'} file=${file} status=${status} last_refresh=${lastRefresh ?? 'none'}`,
@@ -1050,6 +1095,58 @@ function checkAccountHealth(lastRefresh: string | undefined): 'healthy' | 'dead'
   const daysSinceRefresh = (Date.now() - refreshMs) / (1000 * 60 * 60 * 24)
   // Match codex-nootp's CRITICAL threshold of 7 days
   return daysSinceRefresh > 7 ? 'dead' : 'healthy'
+}
+
+function isStaleInFlightRefresh(refresh: Record<string, unknown> | undefined): boolean {
+  if (!refresh) return false
+  if (refresh.state === 'stale_in_flight') return true
+  if (refresh.state !== 'in_flight') return false
+  const startedAt = typeof refresh.started_at === 'string' ? Date.parse(refresh.started_at) : Number.NaN
+  return Number.isFinite(startedAt) && Date.now() - startedAt > 60_000
+}
+
+function isHistoricalTransportReauth(reason: string | undefined): boolean {
+  return reason === 'network_or_timeout' || reason === 'stale_in_flight'
+}
+
+function getVaultRefreshPoolStatus(
+  refresh: Record<string, unknown> | undefined,
+  health: 'healthy' | 'dead',
+): {
+  status: PoolAccount['status']
+  statusReason?: PoolAccountStatusReason
+  lastError?: string
+} {
+  if (health === 'dead') {
+    return {
+      status: 'dead',
+      statusReason: 'auth_dead',
+      lastError: 'Token expired (>7 days since last refresh)',
+    }
+  }
+
+  const reason = typeof refresh?.reason === 'string' ? refresh.reason : undefined
+  if (
+    refresh?.state === 'unknown' ||
+    isStaleInFlightRefresh(refresh) ||
+    (refresh?.state === 'reauth_required' && isHistoricalTransportReauth(reason))
+  ) {
+    return {
+      status: 'quarantined',
+      statusReason: 'probe_pending_transport',
+      lastError: normalizeCodexAccountBlockReason(reason) ?? reason ?? 'connection problem; retrying',
+    }
+  }
+
+  if (refresh?.state === 'reauth_required') {
+    return {
+      status: 'dead',
+      statusReason: 'auth_dead',
+      lastError: normalizeCodexAccountBlockReason(reason) ?? reason ?? 'Reauthentication required',
+    }
+  }
+
+  return { status: 'healthy' }
 }
 
 export function getCodexPlanMetadataFromIdToken(
@@ -1193,10 +1290,13 @@ export function getCodexAccountAvailability(
   now = Date.now(),
 ): CodexAccountAvailability {
   if (account.status === 'dead') {
-    return { kind: 'blocked', reason: account.lastError ?? 'account auth is unavailable' }
+    return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'account auth is unavailable' }
   }
   if (account.status === 'capped') {
-    return { kind: 'blocked', reason: account.lastError ?? 'account is capped' }
+    return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'account is capped' }
+  }
+  if (account.status === 'quarantined') {
+    return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'connection problem; retrying' }
   }
   if (
     hasFreshPoolAccountUsageHint(account, now) &&
@@ -1207,6 +1307,15 @@ export function getCodexAccountAvailability(
 
   const warnings = getPlanMetadataWarnings(account, now)
   return warnings.length > 0 ? { kind: 'warned', warnings } : { kind: 'available' }
+}
+
+export function normalizeCodexAccountBlockReason(reason: string | undefined): string | undefined {
+  if (!reason) return undefined
+  const httpMatch = /^http_(\d{3})$/i.exec(reason)
+  if (httpMatch) {
+    return `Token refresh failed: HTTP ${httpMatch[1]}`
+  }
+  return reason
 }
 
 export function isCodexAccountSwitchable(

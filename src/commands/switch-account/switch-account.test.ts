@@ -478,6 +478,33 @@ describe('/switch-account', () => {
     expect(result?.value).toContain('Reason: Usage cap hit (429)')
   })
 
+  test('explicit Codex switch does not expose raw refresh state reason', async () => {
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        createCodexAccount('codex-current', 'current'),
+        createCodexAccount('codex-auth-dead', 'authdead', 0, {
+          status: 'dead',
+          statusReason: 'auth_dead',
+          lastError: 'http_401',
+        }),
+      ],
+      activeAccountId: 'codex-current',
+    })
+
+    const result = await call(
+      'authdead',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result?.value).toContain('Found Codex account "authdead", but it is not switchable.')
+    expect(result?.value).toContain('Reason: Token refresh failed: HTTP 401')
+    expect(result?.value).not.toContain('Reason: http_401')
+  })
+
   test('returns Multiple Claude accounts match for ambiguous Claude alias prefix and does not switch', async () => {
     const claudeAcct1 = {
       accountUuid: 'claude-uuid-1',

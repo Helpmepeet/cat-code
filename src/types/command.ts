@@ -167,12 +167,15 @@ type LocalJSXCommand = {
  * Example: `availability: ['claude-ai', 'console']` shows the command to
  * claude.ai subscribers and direct Console API key users (api.anthropic.com),
  * but hides it from Bedrock/Vertex/Foundry users and custom base URL users.
+ * Add `openai` for commands that also work in Codex/OpenAI sessions.
  */
 export type CommandAvailability =
   // claude.ai OAuth subscriber (Pro/Max/Team/Enterprise via claude.ai)
   | 'claude-ai'
   // Console API key user (direct api.anthropic.com, not via claude.ai OAuth)
   | 'console'
+  // OpenAI/Codex session provider
+  | 'openai'
 
 export type CommandBase = {
   availability?: CommandAvailability[]

@@ -23,6 +23,7 @@ import {
   getPoolStatus,
   isPoolActive,
   markPoolAccountCapped,
+  markPoolAccountQuarantined,
   markPoolAccountLastError,
   markPoolAccountStatus,
   setActiveAccountPersisted,
@@ -75,7 +76,7 @@ import {
 import { REPEATED_529_ERROR_MESSAGE } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
-import { refreshAccountTokens } from './codexTokenRefresh.js'
+import { ReauthenticationRequiredError, refreshAccountTokens } from './codexTokenRefresh.js'
 import {
   failoverClaudeAccount,
   getActiveClaudeAccount,
@@ -163,7 +164,8 @@ function getCodexExhaustionDiagnosticCode(): 'auth.missing' | 'account.pool.unav
   if (!counts) {
     return 'auth.missing'
   }
-  if (counts.capped === counts.total) {
+  const capped = counts.capped ?? 0
+  if (capped === counts.total) {
     return 'quota.exhausted'
   }
   return 'account.pool.unavailable'
@@ -587,6 +589,7 @@ export async function* withRetry<T>(
         )
 
         let refreshRecovered = false
+        let refreshFailure: unknown
         if (currentAccount?.refreshToken && currentAccount.vaultFilePath) {
           try {
             const refreshed = await refreshAccountTokens(
@@ -597,7 +600,8 @@ export async function* withRetry<T>(
             if (refreshed.status === 'refreshed') {
               refreshRecovered = true
             }
-          } catch {
+          } catch (err) {
+            refreshFailure = err
             // refreshAccountTokens already records the underlying failure state
           }
         }
@@ -607,12 +611,20 @@ export async function* withRetry<T>(
           continue
         }
 
-        markPoolAccountStatus(
-          accountId,
-          'dead',
-          'Codex account authentication failed',
-          { rerollActive: false },
-        )
+        if (refreshFailure && !(refreshFailure instanceof ReauthenticationRequiredError)) {
+          markPoolAccountQuarantined(
+            accountId,
+            'connection problem during token refresh; retrying',
+            { rerollActive: false },
+          )
+        } else {
+          markPoolAccountStatus(
+            accountId,
+            'dead',
+            'Codex account authentication failed',
+            { rerollActive: false },
+          )
+        }
         emitCodexDiagnostic({
           code: 'account.token_refresh.failed',
           severity: 'warning',

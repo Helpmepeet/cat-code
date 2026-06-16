@@ -15,7 +15,7 @@
     "build": "bun run ./scripts/build.ts",
     "build:dev": "bun run ./scripts/build.ts --dev",
     "build:dev:full": "bun run lint && bun run ./scripts/build.ts --dev --feature-set=dev-full && ./cli-dev --version",
-    "lint": "eslint --suppressions-location eslint-suppressions.json --suppress-rule react-hooks/rules-of-hooks --suppress-rule react-hooks/exhaustive-deps --suppress-rule custom-rules/prefer-use-terminal-size $(git diff --name-only main...HEAD | grep -E '\\.(ts|tsx)$' | grep -v '^web/' | while IFS= read -r f; do [ -f \"$f\" ] && printf '%s ' \"$f\"; done)",
+    "lint": "files=$(git diff --name-only --diff-filter=d main...HEAD -- '*.ts' '*.tsx' ':(exclude)web/**'); [ -z \"$files\" ] || eslint --suppressions-location eslint-suppressions.json --suppress-rule react-hooks/rules-of-hooks --suppress-rule react-hooks/exhaustive-deps --suppress-rule custom-rules/prefer-use-terminal-size $files",
     "compile": "bun run ./scripts/build.ts --compile",
     "dev": "bun run ./src/entrypoints/cli.tsx"
   },

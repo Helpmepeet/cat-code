@@ -116,6 +116,9 @@ async function fetchAccountUsageOnce(
       method: 'GET',
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+        'chatgpt-account-id': accountId,
+        originator: 'codex_cli_rs',
       },
       signal: controller.signal,
     })
@@ -340,17 +343,17 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   }
 
   // Pool summary
-  const totalAllowed = displayAccounts.filter(
-    (account) => account.usage?.allowed && !account.usage.limitReached,
-  ).length
+  const totalRoutable = displayAccounts.filter((account) => account.switchable !== false).length
+  const totalWithUsageData = displayAccounts.filter((account) => !!account.usage).length
   const totalCapped = displayAccounts.filter(
     (account) => account.usage && (!account.usage.allowed || account.usage.limitReached),
   ).length
   const totalUnavailable = displayAccounts.filter((account) => !account.usage).length
   const noun = displayAccounts.length === 1 ? 'account' : 'accounts'
-  let summary = `${displayAccounts.length} ${noun}, ${totalAllowed} available`
+  let summary = `${displayAccounts.length} ${noun}, ${totalRoutable} routable`
+  if (totalWithUsageData > 0) summary += `, ${totalWithUsageData} with usage data`
   if (totalCapped > 0) summary += `, ${totalCapped} capped`
-  if (totalUnavailable > 0) summary += `, ${totalUnavailable} unavailable`
+  if (totalUnavailable > 0) summary += `, ${totalUnavailable} usage unavailable`
   lines.push(summary)
 
   return lines.join('\n')
@@ -363,7 +366,7 @@ function formatDisplayStatusTag(account: PoolUsageDisplayAccount): string {
     account.usage.allowed &&
     !account.usage.limitReached
   ) {
-    return `  [not switchable: ${account.status}] [usage available]`
+    return `  [not switchable: ${account.status}] [quota info only]`
   }
 
   if (account.usage) {
@@ -410,6 +413,7 @@ function countPoolStatuses(
     total: accounts.length,
     healthy: 0,
     capped: 0,
+    quarantined: 0,
     dead: 0,
     locked: 0,
   }

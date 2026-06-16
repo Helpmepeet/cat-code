@@ -140,6 +140,20 @@ describe('codexAccountPool availability', () => {
     })
   })
 
+  test('quarantined transport failures are blocked with retry copy', () => {
+    const account = buildPoolAccount({
+      accountId: 'quarantined-account',
+      status: 'quarantined',
+      statusReason: 'probe_pending_transport',
+    })
+
+    expect(getCodexAccountAvailability(account, NOW)).toEqual({
+      kind: 'blocked',
+      reason: 'connection problem; retrying',
+    })
+    expect(isCodexAccountSwitchable(account, NOW)).toBe(false)
+  })
+
   test('fresh blocked usage hints block a healthy account; stale hints do not', () => {
     const freshBlocked = buildPoolAccount({
       accountId: 'fresh-blocked',
@@ -197,6 +211,34 @@ describe('codexAccountPool appendAccount', () => {
     expect(updated?.lastError).toBe('Usage snapshot reported account exhaustion')
     expect(updated?.accessToken).toBe('new-access')
     expect(updated?.refreshToken).toBe('new-refresh')
+  })
+
+  test('token refresh updates clear quarantine even when preserving caps', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'main-account',
+          status: 'quarantined',
+          statusReason: 'probe_pending_transport',
+          lastError: 'connection problem; retrying',
+        }),
+      ],
+    })
+
+    appendAccount({
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      expiresAt: Date.now() + 120_000,
+      accountId: 'main-account',
+    }, {
+      preserveCapped: true,
+    })
+
+    const updated = getPoolStatus().accounts.find((account) => account.accountId === 'main-account')
+    expect(updated?.status).toBe('healthy')
+    expect(updated?.statusReason).toBeUndefined()
+    expect(updated?.lastError).toBeUndefined()
   })
 
   test('appendAccount updates plan metadata facts from a provided id_token', () => {
@@ -618,6 +660,61 @@ describe('codexAccountPool appendAccount', () => {
     const accounts = loadVaultAccountsForTest(dir)
     expect(accounts).toHaveLength(1)
     expect(accounts[0]?.expiresAt).toBe(0)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('loadVaultAccounts quarantines unknown and historical transport refresh states', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-vault-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const unknownAccountId = 'unknown-refresh-account'
+    const historicalAccountId = 'historical-transport-account'
+
+    writeFileSync(
+      join(accountsDir, `${unknownAccountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          account_id: unknownAccountId,
+        },
+        last_refresh: new Date().toISOString(),
+        refresh: {
+          state: 'unknown',
+          attempt_id: 'attempt-1',
+          refresh_token_hash: 'hash',
+          failed_at: new Date().toISOString(),
+          reason: 'socket timeout',
+        },
+      }),
+      'utf-8',
+    )
+    writeFileSync(
+      join(accountsDir, `${historicalAccountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          account_id: historicalAccountId,
+        },
+        last_refresh: new Date().toISOString(),
+        refresh: {
+          state: 'reauth_required',
+          refresh_token_hash: 'hash',
+          marked_at: new Date().toISOString(),
+          reason: 'network_or_timeout',
+        },
+      }),
+      'utf-8',
+    )
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts).toHaveLength(2)
+    expect(accounts.map(account => account.status)).toEqual([
+      'quarantined',
+      'quarantined',
+    ])
+    expect(accounts.every(account => account.statusReason === 'probe_pending_transport')).toBe(true)
     rmSync(dir, { recursive: true, force: true })
   })
 

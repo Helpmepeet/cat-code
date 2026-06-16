@@ -177,7 +177,7 @@ import {
 } from './utils/plugins/loadPluginCommands.js'
 import memoize from 'lodash-es/memoize.js'
 import { isUsing3PServices, isClaudeAISubscriber } from './utils/auth.js'
-import { isFirstPartyAnthropicBaseUrl } from './utils/model/providers.js'
+import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './utils/model/providers.js'
 import env from './commands/env/index.js'
 import exit from './commands/exit/index.js'
 import exportCommand from './commands/export/index.js'
@@ -436,9 +436,11 @@ const getWorkflowCommands = feature('WORKFLOW_SCRIPTS')
  */
 export function meetsAvailabilityRequirement(cmd: Command): boolean {
   if (!cmd.availability) return true
+  const provider = getAPIProvider()
   for (const a of cmd.availability) {
     switch (a) {
       case 'claude-ai':
+        if (provider === 'openai') break
         if (isClaudeAISubscriber()) return true
         break
       case 'console':
@@ -451,6 +453,9 @@ export function meetsAvailabilityRequirement(cmd: Command): boolean {
           isFirstPartyAnthropicBaseUrl()
         )
           return true
+        break
+      case 'openai':
+        if (provider === 'openai') return true
         break
       default: {
         const _exhaustive: never = a

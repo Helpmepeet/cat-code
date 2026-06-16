@@ -72,6 +72,36 @@ function buildPoolAccount(
   }
 }
 
+function codexCompletedStreamResponse(): Response {
+  return new Response(
+    [
+      'event: response.output_text.delta',
+      `data: ${JSON.stringify({
+        type: 'response.output_text.delta',
+        delta: 'ok',
+      })}`,
+      '',
+      'event: response.completed',
+      `data: ${JSON.stringify({
+        type: 'response.completed',
+        response: {
+          id: 'resp_test',
+          usage: {
+            input_tokens: 1,
+            output_tokens: 1,
+            input_tokens_details: { cached_tokens: 0 },
+          },
+        },
+      })}`,
+      '',
+    ].join('\n'),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    },
+  )
+}
+
 describe('codexAccountLeaseManager', () => {
   let moduleUnderTest: typeof import('./codexAccountLeaseManager.js')
 
@@ -778,147 +808,6 @@ describe('codexAccountLeaseManager', () => {
     ).toBe('rate_limit')
   })
 
-  test('createCodexFetch routes the first pooled request through the current lease account', async () => {
-    setSessionProvider('openai')
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'main-account',
-      accounts: [
-        buildPoolAccount({
-          accountId: 'main-account',
-          alias: 'main',
-        }),
-        buildPoolAccount({
-          accountId: 'worker-a',
-          lastUsedAt: 100,
-        }),
-      ],
-    })
-
-    moduleUnderTest.seedCodexLeaseForTest({
-      ownerId: 'subagent-first-request',
-      ownerType: 'subagent',
-      ownerLabel: 'Subagent First Request',
-      accountId: 'worker-a',
-    })
-
-    const originalFetch = globalThis.fetch
-    let authorizationHeader: string | null = null
-    let accountHeader: string | null = null
-
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers)
-      authorizationHeader = headers.get('Authorization')
-      accountHeader = headers.get('chatgpt-account-id')
-      return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      })
-    }) as typeof globalThis.fetch
-
-    try {
-      await moduleUnderTest.runWithCodexLeaseOwner('subagent-first-request', async () => {
-        const codexFetch = createCodexFetch('fallback-access-token')
-        await codexFetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
-        })
-      })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
-
-    expect(authorizationHeader).toBe(`Bearer ${buildCodexToken('worker-a')}`)
-    expect(accountHeader).toBe('worker-a')
-  })
-
-  test('createCodexFetch keeps conversation ids isolated across interleaved lease owners', async () => {
-    setSessionProvider('openai')
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'main-account',
-      accounts: [
-        buildPoolAccount({
-          accountId: 'main-account',
-          alias: 'main',
-        }),
-        buildPoolAccount({
-          accountId: 'worker-a',
-          lastUsedAt: 100,
-        }),
-        buildPoolAccount({
-          accountId: 'worker-b',
-          lastUsedAt: 200,
-        }),
-      ],
-    })
-
-    moduleUnderTest.seedCodexLeaseForTest({
-      ownerId: 'lease-a',
-      ownerType: 'subagent',
-      ownerLabel: 'Lease A',
-      accountId: 'worker-a',
-    })
-    moduleUnderTest.seedCodexLeaseForTest({
-      ownerId: 'lease-b',
-      ownerType: 'subagent',
-      ownerLabel: 'Lease B',
-      accountId: 'worker-b',
-    })
-
-    const originalFetch = globalThis.fetch
-    const seenConversationIds = new Map<string, string[]>()
-
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers)
-      const accountId = headers.get('chatgpt-account-id') ?? 'unknown'
-      const conversationId = headers.get('conversation-id') ?? 'missing'
-      const existing = seenConversationIds.get(accountId) ?? []
-      existing.push(conversationId)
-      seenConversationIds.set(accountId, existing)
-      return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      })
-    }) as typeof globalThis.fetch
-
-    try {
-      const codexFetch = createCodexFetch(buildCodexToken('main-account'))
-
-      await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
-        await codexFetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
-        })
-      })
-      await moduleUnderTest.runWithCodexLeaseOwner('lease-b', async () => {
-        await codexFetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
-        })
-      })
-      await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
-        await codexFetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
-        })
-      })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
-
-    expect(seenConversationIds.get('worker-a')).toHaveLength(2)
-    expect(seenConversationIds.get('worker-b')).toHaveLength(1)
-    expect(seenConversationIds.get('worker-a')?.[0]).toBe(
-      seenConversationIds.get('worker-a')?.[1],
-    )
-    expect(seenConversationIds.get('worker-a')?.[0]).not.toBe(
-      seenConversationIds.get('worker-b')?.[0],
-    )
-  })
-
   test('failover keeps the failed lease inspectable when no healthy replacement exists', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'worker-a',
@@ -1191,10 +1080,7 @@ describe('codexAccountLeaseManager', () => {
       const headers = new Headers(init?.headers)
       authorizationHeader = headers.get('Authorization')
       accountHeader = headers.get('chatgpt-account-id')
-      return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      })
+      return codexCompletedStreamResponse()
     }) as typeof globalThis.fetch
 
     try {
@@ -1203,7 +1089,7 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1257,10 +1143,7 @@ describe('codexAccountLeaseManager', () => {
       const existing = seenConversationIds.get(accountId) ?? []
       existing.push(conversationId)
       seenConversationIds.set(accountId, existing)
-      return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      })
+      return codexCompletedStreamResponse()
     }) as typeof globalThis.fetch
 
     try {
@@ -1270,21 +1153,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-b', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1332,10 +1215,7 @@ describe('codexAccountLeaseManager', () => {
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers)
       seenConversationIds.push(headers.get('conversation-id') ?? 'missing')
-      return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      })
+      return codexCompletedStreamResponse()
     }) as typeof globalThis.fetch
 
     try {
@@ -1345,14 +1225,14 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('subagent-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
 
@@ -1388,10 +1268,7 @@ describe('codexAccountLeaseManager', () => {
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers)
       seenConversationIds.push(headers.get('conversation-id') ?? 'missing')
-      return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      })
+      return codexCompletedStreamResponse()
     }) as typeof globalThis.fetch
 
     try {
@@ -1401,21 +1278,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.4', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.4', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stream: true, model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
 

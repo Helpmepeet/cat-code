@@ -1426,6 +1426,28 @@ async function* queryModel(
         ...messagesForAPI,
       ]
     }
+  } else if (!useToolSearch) {
+    // Standard mode (tool search off): normally-deferred tools are emitted
+    // inline with full schemas, indistinguishable from Read/Bash. Without
+    // ToolSearchTool's prompt or the <available-deferred-tools> block, the
+    // model gets no signal that the deferral concept is inactive this session.
+    // An agent that expects a tool (e.g. TaskCreate) to be deferred can read
+    // the missing scaffolding as "the tool is gone" and skip it. Emit a single
+    // meta cue so the absence of deferral machinery is unambiguous.
+    const inlinedDeferredTools = filteredTools
+      .filter(t => isDeferredTool(t))
+      .map(formatDeferredToolLine)
+      .sort()
+      .join('\n')
+    if (inlinedDeferredTools) {
+      messagesForAPI = [
+        createUserMessage({
+          content: `<tools-inlined>\nTool search is off this session. All tools are listed at the top of the prompt with full schemas and are directly callable — including ones that are normally deferred behind tool search:\n${inlinedDeferredTools}\nDo not treat any of these as unavailable or in need of loading; call them directly.\n</tools-inlined>`,
+          isMeta: true,
+        }),
+        ...messagesForAPI,
+      ]
+    }
   }
 
   // Chrome tool-search instructions: when the delta attachment is enabled,

@@ -1,6 +1,6 @@
 # Terminal UI And State Routing Map
 
-Last refreshed: 2026-06-06
+Last refreshed: 2026-06-16
 
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
@@ -26,7 +26,7 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | Auto subsystem-map context | `src/utils/processUserInput/processUserInput.ts` | `src/utils/processUserInput/subsystemMapContext.ts` | After the UserPromptSubmit hook loop, interactive (`repl_main_thread*`) prompts get an `auto_map_context` attachment pointing at the matching `docs/maps/*.md`; inert outside repos with a `docs/maps/` dir. |
 | Prompt input shell | `src/components/PromptInput/PromptInput.tsx` | `src/components/PromptInput/PromptInputFooter.tsx`, `src/components/PromptInput/`, `src/hooks/useCommandQueue.ts`, `src/state/selectors.ts` | Owns prompt composition, footer pills, stash/queued-command UX, history-search entry, and submit routing to leader or viewed agent. |
 | Footer notifications and transient task notices | `src/components/PromptInput/Notifications.tsx` | `src/components/tasks/taskStatusUtils.tsx`, `src/tasks/LocalAgentTask/LocalAgentTask.tsx`, `src/state/AppStateStore.ts` | Notifications now surface terminal local-agent outcomes when you are not viewing that agent, including blocked handoffs and verification verdicts. |
-| Status line, model picker, and footer status | `src/components/StatusLine.tsx` | `src/components/ModelPicker.tsx`, `src/state/AppStateStore.ts`, `src/tools/AgentTool/built-in/statuslineSetup.ts`, `src/services/tools/ptcloveToolStatus.ts` | Status line composes per-turn state, connection/runtime status, and current-model/tool affordances. Agent Tool can install per-worker statusline behavior; ptclove tool tracking updates `ptcloveCurrentTool` for UI/bridge. |
+| Status line, model picker, and footer status | `src/components/StatusLine.tsx` | `src/components/ModelPicker.tsx`, `src/state/AppStateStore.ts`, `src/tools/AgentTool/built-in/statuslineSetup.ts`, `src/services/tools/ptcloveToolStatus.ts` | Status line composes per-turn state, connection/runtime status, current-model/tool affordances, and fast-mode state. Agent Tool can install per-worker statusline behavior; ptclove tool tracking updates `ptcloveCurrentTool` for UI/bridge. |
 | Plain text editing | `src/hooks/useTextInput.ts` | `src/components/TextInput.tsx`, `src/components/PromptInput/inputModes.ts` | Readline-like editing lives here: cursor movement, multiline submit behavior, kill/yank, double-Esc clear, Ctrl+C/D exit handling. |
 | Vim editing | `src/hooks/useVimInput.ts` | `src/vim/transitions.ts`, `src/vim/operators.ts`, `src/vim/motions.ts`, `src/vim/textObjects.ts` | `useVimInput.ts` wraps base text editing and owns INSERT/NORMAL transitions and replay; `src/vim/` owns the command engine. |
 | Message rendering | `src/components/Messages.tsx` | `src/components/MessageRow.tsx`, `src/components/Message.tsx`, `src/components/messages/` | `Messages.tsx` owns normalization, grouping, virtualization, brief-mode filtering, streaming adornments, and transcript search plumbing. |
@@ -45,6 +45,10 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
   state shape. Check `src/state/AppStateStore.ts` first for shared fields.
 - `src/state/AppState.tsx` expects stable selector slices. Do not return new
   objects from `useAppState(...)` selectors.
+- `src/components/StatusLine.tsx` and
+  `src/tools/AgentTool/built-in/statuslineSetup.ts` share a contract. If you
+  change status-line JSON fields such as `fast_mode_state`, update both the UI
+  producer and the statusline command instructions together.
 - `messagesRef` in `REPL.tsx` is the synchronous source of truth during
   streaming and queue processing; React state alone is not the whole story.
 - Prompt editing behavior is split on purpose:

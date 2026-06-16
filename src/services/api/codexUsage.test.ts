@@ -216,6 +216,58 @@ describe('codexUsage display helpers', () => {
     expect(account ? isCodexAccountSwitchable(account) : false).toBe(false)
   })
 
+  test('fetchPoolUsage sends the ChatGPT account selector', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const headers = new Headers(init?.headers)
+      expect(headers.get('Authorization')).toBe('Bearer access-main-account')
+      expect(headers.get('chatgpt-account-id')).toBe('main-account')
+      expect(headers.get('originator')).toBe('codex_cli_rs')
+      expect(headers.get('Accept')).toBe('application/json')
+      return new Response(
+        JSON.stringify({
+          user_id: 'u',
+          email: 'main@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 10,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 20,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    try {
+      const snapshot = await fetchPoolUsage(true)
+      expect(snapshot.errors).toEqual([])
+      expect(snapshot.accounts).toHaveLength(1)
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+  })
+
   test('fetchPoolUsage does not move pool.activeIndex', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -494,6 +546,7 @@ describe('codexUsage display helpers', () => {
           total: 1,
           healthy: 1,
           capped: 0,
+          quarantined: 0,
           dead: 0,
           locked: 0,
         },
@@ -704,7 +757,7 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain('  backup2  [capped]')
     expect(output).toContain('  backup1  [usage unavailable]')
     expect(output).toContain('usage      unavailable (HTTP 401)')
-    expect(output).toContain('3 accounts, 1 available, 1 capped, 1 unavailable')
+    expect(output).toContain('3 accounts, 2 routable, 2 with usage data, 1 capped, 1 usage unavailable')
   })
 
   test('formatPoolUsage shows internal capped status even when live usage is available', () => {
@@ -731,8 +784,41 @@ describe('codexUsage display helpers', () => {
       errors: [],
     })
 
-    expect(output).toContain('blocked  [not switchable: capped] [usage available]')
+    expect(output).toContain('blocked  [not switchable: capped] [quota info only]')
     expect(output).toContain('reason: Usage cap hit (429)')
+  })
+
+  test('formatPoolUsage separates routability from quota data in the summary', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'dead-account',
+          alias: 'dead',
+          status: 'dead',
+          statusReason: 'auth_dead',
+          lastError: 'http_401',
+        }),
+        buildPoolAccount({ accountId: 'unknown-account', alias: 'unknown' }),
+      ],
+    })
+
+    const output = formatPoolUsage({
+      accounts: [
+        buildUsage('main-account', 10, 40),
+        buildUsage('dead-account', 1, 20, { allowed: true, limitReached: false }),
+      ],
+      fetchedAt: Date.now(),
+      errors: [
+        { accountId: 'unknown-account', error: 'Unexpected usage response' },
+      ],
+    })
+
+    expect(output).toContain('dead  [not switchable: dead] [quota info only]')
+    expect(output).toContain('reason: Token refresh failed: HTTP 401')
+    expect(output).toContain('3 accounts, 2 routable, 2 with usage data, 1 usage unavailable')
+    expect(output).not.toContain('2 available')
   })
 
   test('formatPoolUsage shows stale plan metadata as a warning on a switchable account', () => {

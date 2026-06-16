@@ -109,8 +109,9 @@ export function getFastModeUnavailableReason(): string | null {
     }
   }
 
-  // Only available for 1P (not Bedrock/Vertex/Foundry)
-  if (getAPIProvider() !== 'firstParty') {
+  // Only available for 1P Anthropic and Codex/OpenAI (not Bedrock/Vertex/Foundry)
+  const provider = getAPIProvider()
+  if (provider !== 'firstParty' && provider !== 'openai') {
     const reason = 'Fast mode is not available on Bedrock, Vertex, or Foundry'
     if (!hasLoggedProviderUnavailable) {
       hasLoggedProviderUnavailable = true
@@ -119,7 +120,7 @@ export function getFastModeUnavailableReason(): string | null {
     return reason
   }
 
-  if (orgStatus.status === 'disabled') {
+  if (provider === 'firstParty' && orgStatus.status === 'disabled') {
     if (
       orgStatus.reason === 'network_error' ||
       orgStatus.reason === 'unknown'
@@ -145,7 +146,17 @@ export function getFastModeUnavailableReason(): string | null {
 // @[MODEL LAUNCH]: Update supported Fast Mode models.
 export const FAST_MODE_MODEL_DISPLAY = 'Opus 4.6'
 
+export function getFastModeModelDisplay(): string {
+  if (getAPIProvider() === 'openai') {
+    return 'GPT-5.5'
+  }
+  return FAST_MODE_MODEL_DISPLAY
+}
+
 export function getFastModeModel(): string {
+  if (getAPIProvider() === 'openai') {
+    return 'gpt-5.5'
+  }
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
 }
 
@@ -175,7 +186,12 @@ export function isFastModeSupportedByModel(
   }
   const model = modelSetting ?? getDefaultMainLoopModelSetting()
   const parsedModel = parseUserSpecifiedModel(model)
-  return parsedModel.toLowerCase().includes('opus-4-6')
+  const normalizedModel = parsedModel.toLowerCase()
+  return (
+    normalizedModel.includes('opus-4-6') ||
+    normalizedModel === 'gpt-5.5' ||
+    normalizedModel === 'gpt-5.4'
+  )
 }
 
 // --- Fast mode runtime state ---
@@ -415,6 +431,10 @@ export async function prefetchFastModeStatus(): Promise<void> {
   }
 
   if (!isFastModeEnabled()) {
+    return
+  }
+
+  if (getAPIProvider() === 'openai') {
     return
   }
 

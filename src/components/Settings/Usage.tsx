@@ -446,6 +446,9 @@ function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactN
           <Box key={acct.accountId} flexDirection="column">
             <Text bold={true} color={isCapped ? 'red' : undefined}>{label}{statusTag}</Text>
             {acct.usage ? <>
+              {acct.switchable === false && acct.usage.allowed && !acct.usage.limitReached
+                ? <Text dimColor>Quota info only; account is not routable.</Text>
+                : null}
               <LimitBar
                 title="5h"
                 limit={{ utilization: acct.usage.primaryWindow.usedPercent, resets_at: primaryResetAt }}

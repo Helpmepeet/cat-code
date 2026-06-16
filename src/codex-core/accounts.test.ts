@@ -219,4 +219,36 @@ describe('codex-core/accounts identity mismatch reconciliation', () => {
     expect(emitted.map(message => message.code)).not.toContain('account.active.reroll')
     expect(saveCalls).toHaveLength(1)
   })
+
+  test('dead account resolution does not expose raw refresh state reason', async () => {
+    await mock.module('../services/api/codexAccountPool.js', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      return {
+        ...(require('../services/api/codexAccountPool.js') as Record<string, unknown>),
+        initAccountPool: async () => {},
+      }
+    })
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: OLD_ACCOUNT_ID,
+      accounts: [
+        {
+          ...buildPoolAccount({
+            accountId: OLD_ACCOUNT_ID,
+            alias: 'raw401',
+            status: 'dead',
+          }),
+          statusReason: 'auth_dead',
+          lastError: 'http_401',
+        },
+      ],
+    })
+
+    const { resolveCodexCoreAccount } = await import('./accounts.js')
+
+    await expect(resolveCodexCoreAccount('raw401')).rejects.toThrow(
+      'Codex account "raw401" cannot be used: Token refresh failed: HTTP 401',
+    )
+    await expect(resolveCodexCoreAccount('raw401')).rejects.not.toThrow('http_401')
+  })
 })

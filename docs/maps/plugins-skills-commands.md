@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-06-06
+Last refreshed: 2026-06-16
 
 ## Purpose
 
@@ -40,6 +40,10 @@ memoized and several surfaces load lazily or only under feature flags.
 `getCommands(cwd)` then applies availability and `isEnabled` filters. Dynamic
 skills discovered later in the session are deduped and inserted before built-in
 commands, so they behave like late-arriving non-built-in prompt commands.
+
+`CommandAvailability` now includes `openai` for Codex/OpenAI sessions.
+`meetsAvailabilityRequirement()` is the durable owner for provider-specific
+command visibility, including shared commands such as `/fast`.
 
 `/init` and `/init-verifiers` now steer users toward `.cat-code/skills`,
 `.cat-code/rules`, `.cat-code/settings*.json`, and `~/.cat-code/...`

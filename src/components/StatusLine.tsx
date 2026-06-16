@@ -24,6 +24,7 @@ import { getCwd } from '../utils/cwd.js';
 import { logForDebugging } from '../utils/debug.js';
 import { getDisplayedEffortLevel, type EffortValue } from '../utils/effort.js';
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js';
+import { getFastModeState } from '../utils/fastMode.js';
 import { createBaseHookInput, executeStatusLineCommand } from '../utils/hooks.js';
 import { getLastAssistantMessage } from '../utils/messages.js';
 import { getRuntimeMainLoopModel, type ModelName, renderModelName } from '../utils/model/model.js';
@@ -37,7 +38,7 @@ export function statusLineShouldDisplay(settings: ReadonlySettings): boolean {
   if (feature('KAIROS') && getKairosActive()) return false;
   return settings?.statusLine !== undefined;
 }
-function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200kTokens: boolean, settings: ReadonlySettings, messages: Message[], addedDirs: string[], mainLoopModel: ModelName, vimMode?: VimMode, effortValue?: EffortValue): StatusLineCommandInput {
+function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200kTokens: boolean, settings: ReadonlySettings, messages: Message[], addedDirs: string[], mainLoopModel: ModelName, fastModeUserEnabled: boolean | undefined, vimMode?: VimMode, effortValue?: EffortValue): StatusLineCommandInput {
   const agentType = getMainThreadAgentType();
   const worktreeSession = getCurrentWorktreeSession();
   const runtimeModel = getRuntimeMainLoopModel({
@@ -75,6 +76,7 @@ function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200k
       id: runtimeModel,
       display_name: renderModelName(runtimeModel)
     },
+    fast_mode_state: getFastModeState(mainLoopModel, fastModeUserEnabled),
     effortLevel: getDisplayedEffortLevel(runtimeModel, effortValue),
     workspace: {
       current_dir: getCwd(),
@@ -184,6 +186,7 @@ function StatusLineInner({
   const statusLineText = useAppState(s => s.statusLineText);
   const statusLineRefreshKey = useAppState(s => s.statusLineRefreshKey);
   const effortValue = useAppState(s => s.effortValue);
+  const fastMode = useAppState(s => s.fastMode);
   const setAppState = useSetAppState();
   const settings = useSettings();
   const {
@@ -207,6 +210,8 @@ function StatusLineInner({
   mainLoopModelRef.current = mainLoopModel;
   const effortValueRef = useRef(effortValue);
   effortValueRef.current = effortValue;
+  const fastModeRef = useRef(fastMode);
+  fastModeRef.current = fastMode;
 
   // Track previous state to detect changes and cache expensive calculations
   const previousStateRef = useRef<{
@@ -217,6 +222,7 @@ function StatusLineInner({
     vimMode: VimMode | undefined;
     mainLoopModel: ModelName;
     effortValue: EffortValue | undefined;
+    fastMode: boolean | undefined;
   }>({
     messageId: null,
     latestUsageSignature: null,
@@ -224,7 +230,8 @@ function StatusLineInner({
     permissionMode,
     vimMode,
     mainLoopModel,
-    effortValue
+    effortValue,
+    fastMode
   });
 
   // Debounce timer ref
@@ -252,7 +259,7 @@ function StatusLineInner({
         previousStateRef.current.messageId = currentMessageId;
         previousStateRef.current.exceeds200kTokens = exceeds200kTokens;
       }
-      const statusInput = buildStatusLineCommandInput(permissionModeRef.current, exceeds200kTokens, settingsRef.current, msgs, Array.from(addedDirsRef.current.keys()), mainLoopModelRef.current, vimModeRef.current, effortValueRef.current);
+      const statusInput = buildStatusLineCommandInput(permissionModeRef.current, exceeds200kTokens, settingsRef.current, msgs, Array.from(addedDirsRef.current.keys()), mainLoopModelRef.current, fastModeRef.current, vimModeRef.current, effortValueRef.current);
       const text = await executeStatusLineCommand(statusInput, controller.signal, undefined, logResult);
       if (!controller.signal.aborted) {
         setAppState(prev => {
@@ -282,7 +289,7 @@ function StatusLineInner({
   // Trigger update when assistant identity changes, usage changes within the
   // same assistant response, or other status-line-relevant state changes.
   useEffect(() => {
-    if (lastAssistantMessageId !== previousStateRef.current.messageId || latestUsageSignature !== previousStateRef.current.latestUsageSignature || permissionMode !== previousStateRef.current.permissionMode || vimMode !== previousStateRef.current.vimMode || mainLoopModel !== previousStateRef.current.mainLoopModel || effortValue !== previousStateRef.current.effortValue) {
+    if (lastAssistantMessageId !== previousStateRef.current.messageId || latestUsageSignature !== previousStateRef.current.latestUsageSignature || permissionMode !== previousStateRef.current.permissionMode || vimMode !== previousStateRef.current.vimMode || mainLoopModel !== previousStateRef.current.mainLoopModel || effortValue !== previousStateRef.current.effortValue || fastMode !== previousStateRef.current.fastMode) {
       // Don't update messageId here — let doUpdate handle it so
       // exceeds200kTokens is recalculated with the latest messages
       previousStateRef.current.latestUsageSignature = latestUsageSignature;
@@ -290,9 +297,10 @@ function StatusLineInner({
       previousStateRef.current.vimMode = vimMode;
       previousStateRef.current.mainLoopModel = mainLoopModel;
       previousStateRef.current.effortValue = effortValue;
+      previousStateRef.current.fastMode = fastMode;
       scheduleUpdate();
     }
-  }, [lastAssistantMessageId, latestUsageSignature, permissionMode, vimMode, mainLoopModel, effortValue, scheduleUpdate]);
+  }, [lastAssistantMessageId, latestUsageSignature, permissionMode, vimMode, mainLoopModel, effortValue, fastMode, scheduleUpdate]);
 
   // Trigger update when external code bumps statusLineRefreshKey (e.g. /switch-account)
   useEffect(() => {

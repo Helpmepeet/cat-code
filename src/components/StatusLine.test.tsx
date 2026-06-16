@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { PassThrough } from 'stream'
 import * as React from 'react'
 
@@ -8,7 +8,6 @@ import {
   getDefaultAppState,
   useSetAppState,
 } from '../state/AppState.js'
-import * as providersModule from '../utils/model/providers.js'
 
 describe('StatusLine', () => {
   afterEach(() => {
@@ -16,12 +15,15 @@ describe('StatusLine', () => {
     delete (globalThis as typeof globalThis & { MACRO?: { VERSION: string } }).MACRO
   })
 
-  test('passes session effort level to the status line command and refreshes when it changes', async () => {
+  test('passes session effort and fast mode state to the status line command and refreshes when they change', async () => {
     ;(globalThis as typeof globalThis & { MACRO?: { VERSION: string } }).MACRO = {
       VERSION: 'test-version',
     }
 
-    const statusInputs: Array<{ effortLevel?: string }> = []
+    const statusInputs: Array<{
+      effortLevel?: string
+      fast_mode_state?: string
+    }> = []
     await mock.module('../utils/hooks.js', () => ({
       createBaseHookInput: () => ({
         session_id: 'test-session',
@@ -29,14 +31,21 @@ describe('StatusLine', () => {
         cwd: '/repo',
       }),
       executeStatusLineCommand: mock(async input => {
-        statusInputs.push(input as { effortLevel?: string })
+        statusInputs.push(
+          input as { effortLevel?: string; fast_mode_state?: string },
+        )
         return `effort:${(input as { effortLevel?: string }).effortLevel ?? ''}`
       }),
     }))
     await mock.module('../utils/config.js', () => ({
       checkHasTrustDialogAccepted: () => true,
     }))
-    spyOn(providersModule, 'getAPIProvider').mockReturnValue('firstParty')
+    await mock.module('../utils/fastMode.js', () => ({
+      getFastModeState: mock(
+        (_model: unknown, fastModeUserEnabled: boolean | undefined) =>
+          fastModeUserEnabled ? 'on' : 'off',
+      ),
+    }))
 
     const { StatusLine } = await import('./StatusLine.js')
 
@@ -48,6 +57,7 @@ describe('StatusLine', () => {
           setAppState(prev => ({
             ...prev,
             effortValue: 'max',
+            fastMode: true,
           }))
         }, 20)
 
@@ -85,6 +95,7 @@ describe('StatusLine', () => {
             },
             mainLoopModelForSession: 'gpt-5.5',
             effortValue: 'high',
+            fastMode: false,
           }}
         >
           <Harness />
@@ -103,6 +114,8 @@ describe('StatusLine', () => {
     instance.unmount()
 
     expect(statusInputs.map(input => input.effortLevel)).toContain('high')
+    expect(statusInputs.map(input => input.fast_mode_state)).toContain('off')
     expect(statusInputs.at(-1)?.effortLevel).toBe('max')
+    expect(statusInputs.at(-1)?.fast_mode_state).toBe('on')
   })
 })

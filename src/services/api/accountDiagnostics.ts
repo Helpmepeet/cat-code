@@ -45,6 +45,7 @@ const ACCOUNT_DIAGNOSTIC_COUNT_KEYS = new Set([
   'total',
   'healthy',
   'capped',
+  'quarantined',
   'dead',
   'locked',
 ])

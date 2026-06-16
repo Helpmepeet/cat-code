@@ -4,7 +4,10 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { getGlobalConfig } from '../../utils/config.js'
-import { refreshAccountTokens } from './codexTokenRefresh.js'
+import {
+  refreshAccountTokens,
+  runQuarantineProbeOnce,
+} from './codexTokenRefresh.js'
 import {
   getCodexAccountAvailability,
   getPoolStatus,
@@ -69,6 +72,36 @@ function createIdToken(auth: Record<string, unknown>): string {
     }),
   ).toString('base64url')
   return `${header}.${payload}.signature`
+}
+
+async function withVaultAccount<T>(
+  accountId: string,
+  vault: Record<string, unknown>,
+  run: (filePath: string) => Promise<T>,
+  poolOverrides: Partial<PoolAccount> = {},
+): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+  const accountsDir = join(dir, 'accounts')
+  mkdirSync(accountsDir, { recursive: true })
+  const filePath = join(accountsDir, `${accountId}.json`)
+  writeFileSync(filePath, JSON.stringify(vault), 'utf-8')
+  seedCodexAccountPoolForTest({
+    activeAccountId: accountId,
+    accounts: [
+      buildPoolAccount({
+        accountId,
+        refreshToken: 'old-refresh',
+        vaultFilePath: filePath,
+        ...poolOverrides,
+      }),
+    ],
+  })
+
+  try {
+    return await run(filePath)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 describe('codexTokenRefresh identity handling', () => {
@@ -663,6 +696,583 @@ describe('codexTokenRefresh identity handling', () => {
       const mainLease = getCodexLeaseForOwner('main-thread')
       expect(mainLease?.accountId).toBe(activeAccountId)
     } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('codexTokenRefresh state machine and concurrency', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    resetCodexLeaseManagerForTest()
+  })
+
+  test('fetch transport failure quarantines token with unknown refresh outcome', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'timeout-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    writeFileSync(filePath, JSON.stringify({
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId }
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [buildPoolAccount({ accountId, refreshToken: 'old-refresh', vaultFilePath: filePath })]
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () => {
+      throw new TypeError('fetch failed')
+    }
+
+    try {
+      await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('Token refresh transport error')
+
+      const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+      expect(vault.refresh.state).toBe('unknown')
+      expect(vault.refresh.reason).toBe('fetch failed')
+
+      let fetchCalled = false
+      globalThis.fetch = async () => { fetchCalled = true; return new Response(JSON.stringify({
+        access_token: createAccessToken(accountId),
+        refresh_token: 'new-refresh',
+      })) }
+      await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).resolves.toMatchObject({
+        status: 'refreshed',
+      })
+      expect(fetchCalled).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('stale in_flight becomes unknown quarantine', async () => {
+    const accountId = 'stale-test'
+    const crypto = require('crypto')
+    const hash = crypto.createHash('sha256').update('old-refresh').digest('hex')
+
+    await withVaultAccount(accountId, {
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+      refresh: {
+        state: 'in_flight',
+        attempt_id: 'old-attempt',
+        refresh_token_hash: hash,
+        started_at: new Date(Date.now() - 120_000).toISOString(),
+        pid: 12345
+      }
+    }, async (filePath) => {
+      const originalFetch = globalThis.fetch
+      let fetchCalled = false
+      globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+
+      try {
+        await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('Previous token refresh stalled')
+        expect(fetchCalled).toBe(false)
+        const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+        expect(vault.refresh.state).toBe('unknown')
+        expect(vault.refresh.reason).toBe('stale_in_flight')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  test('fresh in_flight blocks without changing state', async () => {
+    const accountId = 'fresh-test'
+    const crypto = require('crypto')
+    const hash = crypto.createHash('sha256').update('old-refresh').digest('hex')
+
+    await withVaultAccount(accountId, {
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+      refresh: {
+        state: 'in_flight',
+        attempt_id: 'fresh-attempt',
+        refresh_token_hash: hash,
+        started_at: new Date().toISOString(),
+        pid: 12345
+      }
+    }, async (filePath) => {
+      const originalFetch = globalThis.fetch
+      let fetchCalled = false
+      globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+
+      try {
+        await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('Token refresh is already in progress.')
+        expect(fetchCalled).toBe(false)
+        const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+        expect(vault.refresh.state).toBe('in_flight')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  test('newer token already saved returns new token', async () => {
+    const accountId = 'newer-test'
+    await withVaultAccount(accountId, {
+      tokens: { access_token: 'newer-access', refresh_token: 'newer-refresh', account_id: accountId }
+    }, async (filePath) => {
+      const originalFetch = globalThis.fetch
+      let fetchCalled = false
+      globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+
+      try {
+        const res = await refreshAccountTokens(accountId, 'old-refresh', filePath)
+        expect(res.status).toBe('refreshed')
+        expect(res.accessToken).toBe('newer-access')
+        expect(res.refreshToken).toBe('newer-refresh')
+        expect(fetchCalled).toBe(false)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  test('HTTP invalid_grant does not retry', async () => {
+    const accountId = 'invalid-grant-test'
+    await withVaultAccount(accountId, {
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId }
+    }, async (filePath) => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 })
+
+      try {
+        await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('invalid_grant')
+
+        const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+        expect(vault.refresh.state).toBe('reauth_required')
+        expect(vault.refresh.reason).toBe('invalid_grant')
+
+        let fetchCalled = false
+        globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+        await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('Reauthentication required')
+        expect(fetchCalled).toBe(false)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  test('stored HTTP refresh failure is replayed as user-facing dead reason', async () => {
+    const accountId = 'stored-http-failure-test'
+    const crypto = require('crypto')
+    const hash = crypto.createHash('sha256').update('old-refresh').digest('hex')
+
+    await withVaultAccount(accountId, {
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+      refresh: {
+        state: 'reauth_required',
+        refresh_token_hash: hash,
+        marked_at: new Date().toISOString(),
+        reason: 'http_401',
+      },
+    }, async (filePath) => {
+      const originalFetch = globalThis.fetch
+      let fetchCalled = false
+      globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+
+      try {
+        await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('Reauthentication required')
+        expect(fetchCalled).toBe(false)
+        const account = getPoolStatus().accounts.find((a) => a.accountId === accountId)
+        expect(account?.status).toBe('dead')
+        expect(account?.lastError).toBe('Token refresh failed: HTTP 401')
+        expect(getCodexAccountAvailability(account!).reason).toBe('Token refresh failed: HTTP 401')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  test('success commit requires ownership', async () => {
+    const accountId = 'ownership-test'
+    await withVaultAccount(accountId, {
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId }
+    }, async (filePath) => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async () => {
+        const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+        vault.refresh = { ...vault.refresh, attempt_id: 'stolen-attempt' }
+        writeFileSync(filePath, JSON.stringify(vault), 'utf-8')
+
+        return new Response(
+          JSON.stringify({
+            access_token: createAccessToken(accountId),
+            refresh_token: 'new-refresh',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      try {
+        await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toThrow('Lost refresh attempt ownership')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+})
+
+// ── Security fix tests ─────────────────────────────────────────────────────
+
+describe('codexTokenRefresh security fixes (confirmed bugs)', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    resetCodexLeaseManagerForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  // Fix 2: Concurrent-success recovery syncs appendAccount
+  test('concurrent-success recovery calls appendAccount with vault tokens', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'concurrent-recovery-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    const newAccessToken = createAccessToken(accountId)
+    const newRefreshToken = 'newer-refresh-token'
+
+    // Vault already has a rotated token (simulates another process having refreshed)
+    writeFileSync(filePath, JSON.stringify({
+      tokens: {
+        access_token: newAccessToken,
+        refresh_token: newRefreshToken,
+        account_id: accountId,
+        expires_at: Date.now() + 3_600_000,
+      },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [buildPoolAccount({ accountId, refreshToken: 'old-refresh', vaultFilePath: filePath })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCalled = false
+    globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+
+    try {
+      const res = await refreshAccountTokens(accountId, 'old-refresh', filePath)
+      expect(res.status).toBe('refreshed')
+      expect(res.accessToken).toBe(newAccessToken)
+      expect(res.refreshToken).toBe(newRefreshToken)
+      expect(fetchCalled).toBe(false)
+
+      // The in-memory pool must have been synced with the vault tokens.
+      const pool = getPoolStatus().accounts.find((a) => a.accountId === accountId)
+      expect(pool?.accessToken).toBe(newAccessToken)
+      expect(pool?.refreshToken).toBe(newRefreshToken)
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Fix 3: in_flight with a different token hash is blocked
+  test('in_flight with a different refresh_token_hash throws RefreshAlreadyInFlightError', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'diff-hash-inflight-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    // Hash of a *different* refresh token than what we will pass.
+    const { createHash } = await import('crypto')
+    const differentHash = createHash('sha256').update('some-other-refresh-token').digest('hex')
+
+    writeFileSync(filePath, JSON.stringify({
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+      refresh: {
+        state: 'in_flight',
+        attempt_id: 'other-attempt',
+        refresh_token_hash: differentHash,
+        started_at: new Date().toISOString(),
+        pid: 99999,
+      },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [buildPoolAccount({ accountId, refreshToken: 'old-refresh', vaultFilePath: filePath })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCalled = false
+    globalThis.fetch = async () => { fetchCalled = true; return new Response() }
+
+    try {
+      await expect(
+        refreshAccountTokens(accountId, 'old-refresh', filePath)
+      ).rejects.toThrow('Token refresh for a different token is in progress.')
+      expect(fetchCalled).toBe(false)
+
+      // The existing in_flight state must NOT have been overwritten.
+      const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+      expect(vault.refresh.state).toBe('in_flight')
+      expect(vault.refresh.attempt_id).toBe('other-attempt')
+      expect(vault.refresh.refresh_token_hash).toBe(differentHash)
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Fix 4a: DNS / definitely-not-sent errors reset vault to idle, no markAccountDead
+  test('DNS/offline error resets vault to idle and does not mark account dead', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'dns-error-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    writeFileSync(filePath, JSON.stringify({
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [buildPoolAccount({ accountId, refreshToken: 'old-refresh', vaultFilePath: filePath })],
+    })
+
+    const originalFetch = globalThis.fetch
+    const dnsError = Object.assign(new Error('getaddrinfo ENOTFOUND auth.openai.com'), { code: 'ENOTFOUND' })
+    globalThis.fetch = async () => { throw dnsError }
+
+    try {
+      await expect(refreshAccountTokens(accountId, 'old-refresh', filePath)).rejects.toMatchObject({
+        transportClass: 'offline',
+      })
+
+      const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+      expect(vault.refresh.state).toBe('idle')
+
+      // Account must NOT be marked dead — it was offline, not a bad credential.
+      const poolAccount = getPoolStatus().accounts.find((a) => a.accountId === accountId)
+      expect(poolAccount?.status).not.toBe('dead')
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Fix 4b: Ambiguous timeout error sets vault to unknown, no markAccountDead
+  test('ambiguous timeout error sets vault state to unknown and does not mark account dead', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'timeout-ambiguous-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    writeFileSync(filePath, JSON.stringify({
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [buildPoolAccount({ accountId, refreshToken: 'old-refresh', vaultFilePath: filePath })],
+    })
+
+    const originalFetch = globalThis.fetch
+    const timeoutError = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError', code: 'ETIMEDOUT' })
+    globalThis.fetch = async () => { throw timeoutError }
+
+    try {
+      await expect(
+        refreshAccountTokens(accountId, 'old-refresh', filePath)
+      ).rejects.toThrow('Token refresh transport error (outcome unknown)')
+
+      const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+      expect(vault.refresh.state).toBe('unknown')
+      expect(vault.refresh.reason).toContain('timeout')
+
+      // Account must NOT be immediately marked dead for ambiguous errors.
+      const poolAccount = getPoolStatus().accounts.find((a) => a.accountId === accountId)
+      expect(poolAccount?.status).not.toBe('dead')
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Fix 6: Lost ownership with valid newer vault tokens returns success and syncs pool
+  test('lost ownership with valid newer vault tokens returns success and syncs pool', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'lost-ownership-recovery-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    const newerAccessToken = createAccessToken(accountId)
+    const newerRefreshToken = 'newer-refresh-written-by-other-process'
+
+    writeFileSync(filePath, JSON.stringify({
+      tokens: { access_token: 'old', refresh_token: 'old-refresh', account_id: accountId },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [buildPoolAccount({ accountId, refreshToken: 'old-refresh', vaultFilePath: filePath })],
+    })
+
+    const originalFetch = globalThis.fetch
+    // During fetch, another process "wins" and writes newer tokens, stealing the attempt_id.
+    globalThis.fetch = async () => {
+      const vault = JSON.parse(readFileSync(filePath, 'utf-8'))
+      vault.refresh = { state: 'idle' }
+      vault.tokens = {
+        access_token: newerAccessToken,
+        refresh_token: newerRefreshToken,
+        account_id: accountId,
+        expires_at: Date.now() + 3_600_000,
+      }
+      writeFileSync(filePath, JSON.stringify(vault), 'utf-8')
+
+      return new Response(
+        JSON.stringify({
+          access_token: createAccessToken(accountId),
+          refresh_token: 'our-refresh-token',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+
+    try {
+      // Should succeed by falling back to the vault tokens, not throw.
+      const res = await refreshAccountTokens(accountId, 'old-refresh', filePath)
+      expect(res.status).toBe('refreshed')
+      expect(res.accessToken).toBe(newerAccessToken)
+      expect(res.refreshToken).toBe(newerRefreshToken)
+
+      // Pool must be synced.
+      const poolAccount = getPoolStatus().accounts.find((a) => a.accountId === accountId)
+      expect(poolAccount?.accessToken).toBe(newerAccessToken)
+      expect(poolAccount?.refreshToken).toBe(newerRefreshToken)
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Fix 7: Identity mismatch marks old vault reauth_required, not idle
+  test('identity mismatch marks old vault reauth_required rather than idle', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const oldAccountId = 'old-identity-fix7'
+    const newAccountId = 'new-identity-fix7'
+    const oldPath = join(accountsDir, `${oldAccountId}.json`)
+
+    writeFileSync(oldPath, JSON.stringify({
+      tokens: { access_token: 'old-access', refresh_token: 'old-refresh', account_id: oldAccountId },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: oldAccountId,
+      accounts: [buildPoolAccount({ accountId: oldAccountId, refreshToken: 'old-refresh', source: 'vault', vaultFilePath: oldPath })],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          access_token: createAccessToken(newAccountId),
+          refresh_token: 'new-refresh-fix7',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+
+    try {
+      const result = await refreshAccountTokens(oldAccountId, 'old-refresh', oldPath)
+      expect(result.status).toBe('identity_mismatch')
+
+      const written = JSON.parse(readFileSync(oldPath, 'utf-8'))
+      // Must be reauth_required, NOT idle.
+      expect(written.refresh.state).toBe('reauth_required')
+      expect(written.refresh.reason).toBe('identity_mismatch')
+      expect(typeof written.refresh.marked_at).toBe('string')
+      // Old tokens must be untouched.
+      expect(written.tokens.access_token).toBe('old-access')
+      expect(written.tokens.refresh_token).toBe('old-refresh')
+    } finally {
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('quarantine probe persists next_probe_at before the network request', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountId = 'probe-reservation-test'
+    const filePath = join(accountsDir, `${accountId}.json`)
+
+    writeFileSync(filePath, JSON.stringify({
+      tokens: {
+        access_token: 'old-access',
+        refresh_token: 'old-refresh',
+        account_id: accountId,
+      },
+      refresh: {
+        state: 'unknown',
+        attempt_id: 'previous-attempt',
+        refresh_token_hash: 'previous-hash',
+        failed_at: new Date(Date.now() - 60_000).toISOString(),
+        reason: 'previous transport failure',
+      },
+    }), 'utf-8')
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [
+        buildPoolAccount({
+          accountId,
+          accessToken: 'old-access',
+          refreshToken: 'old-refresh',
+          status: 'quarantined',
+          statusReason: 'probe_pending_transport',
+          lastError: 'connection problem; retrying',
+          vaultFilePath: filePath,
+        }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    let releaseFetch!: () => void
+    let fetchStarted!: () => void
+    const fetchStartedPromise = new Promise<void>(resolve => { fetchStarted = resolve })
+    const releaseFetchPromise = new Promise<void>(resolve => { releaseFetch = resolve })
+    globalThis.fetch = async () => {
+      fetchStarted()
+      await releaseFetchPromise
+      throw Object.assign(new Error('simulated socket drop'), { code: 'ECONNRESET' })
+    }
+
+    try {
+      const probe = runQuarantineProbeOnce()
+      await fetchStartedPromise
+
+      const during = JSON.parse(readFileSync(filePath, 'utf-8'))
+      expect(during.refresh.state).toBe('in_flight')
+      expect(typeof during.refresh.next_probe_at).toBe('string')
+      expect(during.refresh.consecutive_failures).toBe(1)
+
+      releaseFetch()
+      await probe
+
+      const after = JSON.parse(readFileSync(filePath, 'utf-8'))
+      expect(after.refresh.state).toBe('unknown')
+      expect(after.refresh.next_probe_at).toBe(during.refresh.next_probe_at)
+      expect(after.refresh.consecutive_failures).toBe(1)
+    } finally {
+      releaseFetch?.()
       globalThis.fetch = originalFetch
       rmSync(dir, { recursive: true, force: true })
     }

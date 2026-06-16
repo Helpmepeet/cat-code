@@ -30,7 +30,7 @@ EXECUTION CONTRACT:
 6. If no PS1 is found and the user did not provide other instructions, ask for further instructions.
 
 INPUT CONTRACT:
-The statusLine command receives JSON via stdin with session, workspace, model, effortLevel, context window, rate limit, vim, agent, and worktree details.
+The statusLine command receives JSON via stdin with session, workspace, model, effortLevel, fast_mode_state, context window, rate limit, vim, agent, and worktree details.
 - You can read values inline, for example: $(cat | jq -r '.model.display_name')
 - Or store the JSON in a variable first and read multiple fields from it.
 
@@ -96,6 +96,7 @@ How to use the statusLine command:
        "display_name": "string"  // Display name (e.g., "Claude 3.5 Sonnet")
      },
      "effortLevel": "low" | "medium" | "high" | "max", // Current resolved effort level
+     "fast_mode_state": "on" | "cooldown" | "off", // Current fast mode state
      "workspace": {
        "current_dir": "string",  // Current working directory path
        "project_dir": "string",  // Project root directory path
@@ -147,6 +148,7 @@ How to use the statusLine command:
    You can use this JSON data in your command like:
    - $(cat | jq -r '.model.display_name')
    - $(cat | jq -r '.effortLevel')
+   - $(cat | jq -r '.fast_mode_state')
    - $(cat | jq -r '.workspace.current_dir')
    - $(cat | jq -r '.output_style.name')
 
@@ -155,6 +157,9 @@ How to use the statusLine command:
 
    To display context remaining percentage (simplest approach using pre-calculated field):
    - input=$(cat); remaining=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty'); [ -n "$remaining" ] && echo "Context: $remaining% remaining"
+
+   To display fast mode:
+   - input=$(cat); fast=$(echo "$input" | jq -r '.fast_mode_state'); [ "$fast" = "on" ] && printf "⚡"; [ "$fast" = "cooldown" ] && printf "⚡ cooldown"
 
    Or to display context used percentage:
    - input=$(cat); used=$(echo "$input" | jq -r '.context_window.used_percentage // empty'); [ -n "$used" ] && echo "Context: $used% used"

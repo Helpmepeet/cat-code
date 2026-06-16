@@ -200,9 +200,10 @@ function emitRouteSelectedDiagnostic(options: {
 function emitCodexUnavailableDiagnostic(model: string | undefined): void {
   const poolStatus = getPoolStatus()
   const counts = countStatuses(poolStatus.accounts)
+  const capped = counts?.capped ?? 0
   const code = !counts
     ? 'auth.missing'
-    : counts.capped === counts.total
+    : capped === counts.total
       ? 'quota.exhausted'
       : 'account.pool.unavailable'
 
@@ -232,6 +233,13 @@ export function resolveCodexOAuthTokensForLeaseOwner({
   codexLeaseOwnerType,
 }: CodexLeaseOwnerOptions): ResolvedCodexOAuthTokens | null {
   if (!isPoolActive()) {
+    const poolStatus = getPoolStatus()
+    const solePoolAccount = poolStatus.initialized && poolStatus.accounts.length === 1
+      ? poolStatus.accounts[0]
+      : undefined
+    if (solePoolAccount && !isCodexAccountLeaseSelectable(solePoolAccount)) {
+      return null
+    }
     return getCodexOAuthTokens()
   }
 

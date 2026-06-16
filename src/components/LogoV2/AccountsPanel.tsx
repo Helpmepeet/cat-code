@@ -245,6 +245,9 @@ function CodexSection({ usageSnapshot, accentColor, textColor }: CodexSectionPro
                 <Text color={textColor} dimColor>{unavailableLabel}</Text>
               ) : (
                 <>
+                  {acct.switchable === false && acct.usage.allowed && !acct.usage.limitReached ? (
+                    <Text color={textColor} dimColor>quota info only</Text>
+                  ) : null}
                   <UsageRow
                     label="5h"
                     usedPct={acct.usage.primaryWindow.usedPercent}

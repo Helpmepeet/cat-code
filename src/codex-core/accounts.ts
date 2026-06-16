@@ -2,13 +2,19 @@ import {
   appendAccount,
   initAccountPool,
   getPoolStatus,
+  getCodexAccountAvailability,
   markAccountDead,
   saveCodexTokenToVault,
   setActiveAccountPersisted,
   type PoolAccount,
 } from '../services/api/codexAccountPool.js'
+import { existsSync } from 'fs'
 import { getCodexLeaseForOwner, reassignCodexLeaseToActiveAccount } from '../services/api/codexAccountLeaseManager.js'
 import { refreshCodexToken } from '../services/oauth/codex-client.js'
+import {
+  ReauthenticationRequiredError,
+  refreshAccountTokens,
+} from '../services/api/codexTokenRefresh.js'
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../utils/auth.js'
 import { logForDebugging } from '../utils/debug.js'
 import { emitAccountDiagnostic } from '../services/api/accountDiagnostics.js'
@@ -40,17 +46,26 @@ export async function resolveCodexCoreAccount(
   const poolStatus = getPoolStatus()
   const match = findAccount(poolStatus.accounts, profile)
   if (match) {
+    const availability = getCodexAccountAvailability(match)
+    const reason = availability.kind === 'blocked' ? availability.reason : undefined
+    if (match.status === 'quarantined') {
+      throw new CodexCoreError(
+        'backend',
+        `Codex account "${profile}" is temporarily unavailable: ${reason ?? 'connection problem; retrying'}`,
+        { status: 503 },
+      )
+    }
     if (match.status === 'capped') {
       throw new CodexCoreError(
         'quota',
-        `Codex account "${profile}" is capped or not eligible: ${match.lastError ?? match.accountId}`,
+        `Codex account "${profile}" is capped or not eligible: ${reason ?? match.accountId}`,
         { status: 429 },
       )
     }
     if (match.status === 'dead') {
       throw new CodexCoreError(
         'auth',
-        `Codex account "${profile}" cannot be used: ${match.lastError ?? 'token is expired'}`,
+        `Codex account "${profile}" cannot be used: ${reason ?? 'token is expired'}`,
         { status: 401 },
       )
     }
@@ -131,7 +146,16 @@ async function maybeRefreshAccount(
     logForDebugging(
       `[codex-profile] core-refresh-start writer=codex-core.maybeRefreshAccount profile=${account.profile} account=${account.accountId} source=${account.source} expires_at=${String(account.expiresAt)}`,
     )
-    const refreshed = await refreshCodexToken(account.refreshToken)
+    const usedStatefulRefresh = Boolean(
+      account.vaultFilePath && existsSync(account.vaultFilePath),
+    )
+    const refreshed = usedStatefulRefresh
+      ? await refreshAccountTokens(
+        account.accountId,
+        account.refreshToken,
+        account.vaultFilePath,
+      )
+      : await refreshCodexToken(account.refreshToken)
     const sameAccount = refreshed.accountId === account.accountId
     let savedVaultPath = account.vaultFilePath
     const next = {
@@ -146,7 +170,7 @@ async function maybeRefreshAccount(
     }
     if (account.source === 'config') {
       saveCodexOAuthTokens(refreshed)
-    } else {
+    } else if (!usedStatefulRefresh) {
       const saved = saveCodexTokenToVault({
         accessToken: refreshed.accessToken,
         refreshToken: refreshed.refreshToken,
@@ -160,7 +184,7 @@ async function maybeRefreshAccount(
       savedVaultPath = saved?.filePath
       next.vaultFilePath = sameAccount ? savedVaultPath : undefined
     }
-    if (!sameAccount) {
+    if (!sameAccount && !usedStatefulRefresh) {
       logForDebugging(
         `[codex-profile] identity-mismatch writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} action=do-not-transfer-alias`,
         { level: 'warn' },
@@ -218,10 +242,17 @@ async function maybeRefreshAccount(
     )
     return next
   } catch (error) {
+    if (error instanceof ReauthenticationRequiredError) {
+      throw new CodexCoreError(
+        'auth',
+        `Failed to refresh Codex account "${account.profile}". Please re-login.`,
+        { status: 401, cause: error },
+      )
+    }
     throw new CodexCoreError(
-      'auth',
-      `Failed to refresh Codex account "${account.profile}". Please re-login.`,
-      { status: 401, cause: error },
+      'backend',
+      `Failed to refresh Codex account "${account.profile}" because the server could not be reached. Retrying may recover automatically.`,
+      { status: 503, cause: error },
     )
   }
 }

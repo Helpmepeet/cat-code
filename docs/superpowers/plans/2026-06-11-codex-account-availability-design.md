@@ -930,7 +930,7 @@ test('formatPoolUsage shows stale plan metadata as a warning on a switchable acc
           lastError: 'Usage cap hit (429)',
 ```
 
-Keep the `[not switchable: capped] [usage available]` assertion and change the reason assertion to:
+Keep the `[not switchable: capped] [quota info only]` assertion and change the reason assertion to:
 
 ```ts
     expect(output).toContain('reason: Usage cap hit (429)')

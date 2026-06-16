@@ -4,6 +4,7 @@ import {
   APIError,
 } from '@anthropic-ai/sdk'
 import { getCodexLeaseExhaustedMessage } from './codexAccountLeaseManager.js'
+import { getCodexAccountAvailability, getPoolStatus } from './codexAccountPool.js'
 import type {
   BetaMessage,
   BetaStopReason,
@@ -168,6 +169,47 @@ export const REPEATED_529_ERROR_MESSAGE = 'Repeated 529 Overloaded errors'
 export const CUSTOM_OFF_SWITCH_MESSAGE =
   'Opus is experiencing high load, please use /model to switch to Sonnet'
 export const API_TIMEOUT_ERROR_MESSAGE = 'Request timed out'
+const CODEX_CONNECTIVITY_EXHAUSTED_MESSAGE =
+  "Can't reach the server right now — retrying automatically. Your account is fine; this is a connection problem."
+
+function getCodexLeaseExhaustedAssistantError(): {
+  content: string
+  error: SDKAssistantMessageError
+} {
+  const accounts = getPoolStatus().accounts
+  if (accounts.length > 0) {
+    const anyUsable = accounts.some(
+      account => getCodexAccountAvailability(account).kind !== 'blocked',
+    )
+    const anyQuarantined = accounts.some(account => account.status === 'quarantined')
+    if (anyQuarantined && !anyUsable) {
+      return {
+        content: CODEX_CONNECTIVITY_EXHAUSTED_MESSAGE,
+        error: 'unknown',
+      }
+    }
+    if (accounts.every(account => account.status === 'capped')) {
+      return {
+        content:
+          'Codex account usage limit reached and no healthy replacement profile is available. Switch accounts or wait for usage to reset.',
+        error: 'rate_limit',
+      }
+    }
+    if (accounts.some(account => account.status === 'dead')) {
+      return {
+        content:
+          'Codex account authentication failed and no healthy replacement profile is available. Run /login or switch accounts.',
+        error: 'authentication_failed',
+      }
+    }
+  }
+
+  return {
+    content:
+      'Codex account usage limit reached and no healthy replacement profile is available. Switch accounts or wait for usage to reset.',
+    error: 'rate_limit',
+  }
+}
 export function getPdfTooLargeErrorMessage(): string {
   const limits = `max ${API_PDF_MAX_PAGES} pages, ${formatFileSize(PDF_TARGET_RAW_SIZE)}`
   return getIsNonInteractiveSession()
@@ -928,10 +970,10 @@ export function getAssistantMessageFromError(
     error instanceof Error &&
     error.message.includes(getCodexLeaseExhaustedMessage())
   ) {
+    const codexError = getCodexLeaseExhaustedAssistantError()
     return createAssistantAPIErrorMessage({
-      content:
-        'Codex account usage limit reached and no healthy replacement profile is available. Switch accounts or wait for usage to reset.',
-      error: 'rate_limit',
+      content: codexError.content,
+      error: codexError.error,
     })
   }
 
@@ -1019,6 +1061,9 @@ export function classifyAPIError(error: unknown): string {
     error instanceof Error &&
     error.message.includes(getCodexLeaseExhaustedMessage())
   ) {
+    const codexError = getCodexLeaseExhaustedAssistantError()
+    if (codexError.error === 'unknown') return 'connection_error'
+    if (codexError.error === 'authentication_failed') return 'auth_error'
     return 'rate_limit'
   }
 

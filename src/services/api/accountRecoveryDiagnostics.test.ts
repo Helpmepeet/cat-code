@@ -252,7 +252,6 @@ describe('account recovery diagnostics', () => {
         {
           method: 'POST',
           body: JSON.stringify({
-            stream: true,
             model: 'gpt-5.4',
             _openaiInstructionAssembly: {
               instructions: 'Be precise.',
@@ -308,7 +307,7 @@ describe('account recovery diagnostics', () => {
 
     globalThis.fetch = (async () => {
       return new Response(
-        JSON.stringify({ error: 'refresh_token_invalidated' }),
+        JSON.stringify({ error: 'invalid_grant' }),
         {
           status: 400,
           headers: { 'Content-Type': 'application/json' },

@@ -1,6 +1,6 @@
 # Codex Core Map
 
-Last refreshed: 2026-05-21
+Last refreshed: 2026-06-16
 
 ## Purpose
 
@@ -41,12 +41,12 @@ Read in this order for most Codex/OpenAI work:
 | Change app-level Codex request assembly | `src/services/api/claude.ts` | `src/services/api/instructionAssembly.ts`, `src/utils/messages.ts`, `src/query.ts`, `src/QueryEngine.ts` | The main app path normalizes transcript messages first, then hands Anthropic-shaped params to the Codex adapter. |
 | Change Anthropic-to-Codex body translation | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts`, `src/services/api/codex-continuation-e2e.test.ts` | `translateToCodexBody()` owns model mapping, tool translation, developer-context placement, reasoning, JSON output, and cache-related request fields. |
 | Change Codex account resolution for explicit profile use | `src/codex-core/accounts.ts` | `src/services/api/codexAccountPool.ts`, `src/utils/auth.ts`, `src/services/oauth/codex-client.ts` | Core account selection is explicit-only: alias or account ID prefix, no silent rotation. |
-| Change pooled account selection for app traffic | `src/services/api/codexAccountPool.ts` | `src/services/api/codexUsage.ts`, `src/services/api/codexTokenRefresh.ts`, `src/query.ts` | Pool state owns health, derived switchability, active account, LRU/usage-aware selection, and persistent active-account choice. |
+| Change pooled account selection for app traffic | `src/services/api/codexAccountPool.ts` | `src/services/api/codexUsage.ts`, `src/services/api/codexTokenRefresh.ts`, `src/query.ts` | Pool state owns health, derived switchability, active account, normalized block reasons, LRU/usage-aware selection, and persistent active-account choice. |
 | Change subagent/main-thread account pinning | `src/services/api/codexAccountLeaseManager.ts` | `src/services/api/client.ts`, `src/services/api/withRetry.ts`, `src/tasks/LocalAgentTask/`, `src/tools/AgentTool/` | Lease manager pins owners to accounts and isolates failover by owner instead of mutating one shared route. |
 | Change retry or failover policy | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts`, `src/services/api/codex-fetch-adapter.ts` | Cap errors and repeated connection errors are handled here, not in the core request builder. |
 | Change Codex transport continuation | `src/services/api/codex-websocket-transport.ts` | `src/services/api/codex-continuation-e2e.test.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/messages.ts` | This owns `previous_response_id`, canonical delta checks, prewarm, and stale response-id fallback. |
 | Change final text/usage parsing for standalone core | `src/codex-core/response.ts` | `src/services/api/codex-fetch-adapter.ts`, `src/codex-core/errors.ts` | Core parses Anthropic-style SSE events returned by the adapter and extracts text, stop reason, usage, and cache metadata. |
-| Change token refresh and vault persistence | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts`, `src/utils/auth.ts` | Refresh can preserve capped state, mark dead accounts, or save a new profile on identity mismatch. |
+| Change token refresh and vault persistence | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts`, `src/utils/auth.ts` | Refresh is a vault-state machine with file locking and ownership checks. It can reset safe offline failures to idle, mark ambiguous or fatal outcomes for reauth, preserve capped state, or save a new profile on identity mismatch. |
 
 ## Runtime Flow
 
@@ -75,14 +75,14 @@ src/codex-core/client.ts:runCodexLLM()
 | Model mapping and provider-native request body | `src/services/api/codex-fetch-adapter.ts` | `src/utils/model/providers.ts`, `src/utils/model/model.ts`, `src/utils/effort.ts` | `mapClaudeModelToCodex()` and `mapEffortToCodex()` are the durable owner functions. |
 | Codex core message validation | `src/codex-core/request.ts` | `src/codex-core/request.test.ts` | Rejects empty content, mixed `input`+`messages`, and conversation history that does not start with a user message. |
 | Developer vs instruction prefix placement | `src/codex-core/request.ts` | `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts` | Core and app paths both separate stable instructions from conversation messages before translation. |
-| Pool activation and active-account fallback | `src/services/api/codexAccountPool.ts` | `src/services/api/client.ts` | `getActiveAccount()` can repair an invalid active account by finding another healthy one. |
+| Pool activation and active-account fallback | `src/services/api/codexAccountPool.ts` | `src/services/api/client.ts` | `getActiveAccount()` can repair an invalid active account by finding another healthy one. `getCodexAccountAvailability()` is the owner for normalized user-facing dead/capped reasons and routability warnings. |
 | Lease-aware token selection | `src/services/api/client.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts` | `resolveCodexOAuthTokensForLeaseOwner()` is the bridge between pool/lease state and API client creation. |
 | Per-owner failover | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts` | Leased owners fail over locally; unleased main-thread requests fall back to pool switching. |
 | Structured account diagnostics | `src/services/api/accountDiagnostics.ts` | `src/entrypoints/sdk/coreSchemas.ts`, `src/services/api/client.ts`, `src/services/api/withRetry.ts` | Downstream remediation only requires `version`, `code`, `severity`, `provider`, and `recoverable`; optional fields are sanitized hints. |
 | WebSocket incremental continuation | `src/services/api/codex-websocket-transport.ts` | `src/services/api/codex-continuation-e2e.test.ts`, `src/utils/messages.ts` | `responseItemsEqual()` and `getIncrementalInputDelta()` are the strict continuation gates. |
 | HTTP fallback / stream normalization | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts` | Adapter owns stream translation for both HTTP SSE and websocket-backed event flows. |
 | Standalone response parsing | `src/codex-core/response.ts` | `src/codex-core/errors.ts` | Core classifies 401/403 as auth, 429 as quota or rate-limit, 400/model text as model, else backend. |
-| Long-running token freshness | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts` | Refresh-on-timer and refresh-on-use are separate paths; check both before changing account health rules. |
+| Long-running token freshness | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts` | Refresh-on-timer and refresh-on-use are separate paths. Check the persisted vault `refresh` state, transport classifier, and ownership guards before changing account health rules. |
 
 
 ## Failure Paths And Diagnostic Codes
@@ -90,7 +90,7 @@ src/codex-core/client.ts:runCodexLLM()
 | Path | Inspect first | Then inspect | Result |
 |---|---|---|---|
 | Usage cap / hard 429 | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts`, `src/services/api/codex-fetch-adapter.ts` | `CodexAccountCapError` is the only path that marks the failed account capped. Successful rotation emits `account.failover.succeeded`; terminal exhaustion becomes `quota.exhausted` only when every remaining account is capped. |
-| Refresh/auth failure / 401 | `src/services/api/withRetry.ts` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountPool.ts`, `src/services/api/client.ts` | `CodexAccountAuthError` tries vault refresh first, then marks the account dead, emits `account.token_refresh.failed`, and ends as `account.pool.unavailable` or `auth.missing` only if no healthy replacement remains. |
+| Refresh/auth failure / 401 | `src/services/api/withRetry.ts` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountPool.ts`, `src/services/api/client.ts` | `CodexAccountAuthError` tries vault refresh first, then marks the account dead, emits `account.token_refresh.failed`, and ends as `account.pool.unavailable` or `auth.missing` only if no healthy replacement remains. Stored raw refresh-state codes such as `http_401` should be normalized before they reach users. |
 | Transient transport / websocket rejection | `src/services/api/withRetry.ts` | `src/services/api/codex-websocket-transport.ts`, `src/services/api/codexAccountLeaseManager.ts` | Repeated `APIConnectionError` emits `account.transient_failure`, does not mark the failed account capped, and can still emit `account.failover.succeeded` when another healthy account exists. |
 | Pool unavailable before send | `src/services/api/client.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/accountDiagnostics.ts` | `resolveCodexOAuthTokensForLeaseOwner()` refuses raw config fallback when the pool is active. `getAnthropicClient()` emits `auth.missing` when no Codex account exists, `account.pool.unavailable` when accounts exist but none are healthy, and `quota.exhausted` only when all known accounts are capped. |
 
