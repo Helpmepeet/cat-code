@@ -10,6 +10,8 @@
 
 ### 17 Jun 2026
 
+90. Installed a local `cat-code-gpt-prompting` skill for Cat Code prompt authors — it turns the GPT-vs-Claude behavioral research into direct guidance for writing and reviewing Cat Code system prompts, harness prompts, agent instructions, and tool descriptions on the GPT backend, with explicit trigger/negative-scope metadata, prompt-writing rules, Claude-era porting inversions, a checklist, and validation scenarios.
+
 89. Audited auto-mode classifier fidelity vs. real Claude Code. Confirmed auto mode is an upstream port whose decision-boundary prompts were authored locally, and that the classifier runs on the GPT main-loop model (`gpt-5.5`), not an Anthropic endpoint. Axis-1 (do the GPT classifier's allow/block verdicts match the authored policy?) is blocked on a Codex usage cap — all live probes fail closed — pending reset. Axis-2 (does the agent respond correctly when a tool call is denied?) was audited statically and externally reviewed: the denial message is a verbatim upstream port that correctly forbids laundering and tells the agent to escalate when a capability is essential, but offloads "intent behind this denial" inference onto the model with no decision procedure — headline risk is wrong-intent routing (picking a "natural alternative" that defeats the block while believing it complies). Writeup: `docs/research/2026-06-17-auto-mode-agent-response-audit.md`.
 
 ### 15 Jun 2026
