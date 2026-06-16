@@ -602,7 +602,7 @@ describe('/switch-account', () => {
     )
 
     expect(result?.value).toContain('Cannot switch to authdead')
-    expect(result?.value).toContain('Token refresh failed: HTTP 401')
+    expect(result?.value).toContain('login expired — run /login (OpenAI) to re-authenticate this account')
     expect(result?.value).not.toContain('http_401')
   })
 

@@ -50,18 +50,24 @@ export const call: LocalCommandCall = async () => {
         const isActive = i === activeIndex
         const dot = isActive ? '● ' : '  '
         const label = acct.alias ?? acct.accountId.slice(0, 12)
+        const needsReauth = acct.status === 'dead' && acct.statusReason === 'auth_dead'
         const statusTag =
           acct.status === 'healthy'
             ? ''
             : acct.status === 'capped'
               ? '  [capped]'
-              : '  [dead]'
+              : needsReauth
+                ? '  [needs re-login]'
+                : '  [dead]'
         const sourceTag = acct.source === 'vault' ? '  vault' : '  config'
         if (acct.source !== 'vault') hasConfigOnly = true
 
         let line = `${dot}${label}${statusTag}${sourceTag}`
         if (acct.lastError) {
           line += `\n    warning: ${acct.lastError}`
+        }
+        if (needsReauth) {
+          line += `\n    fix: run /login (OpenAI) to re-authenticate this account`
         }
         lines.push(line)
       }

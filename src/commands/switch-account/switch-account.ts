@@ -375,6 +375,10 @@ function humanizeCodexBlockReason(account: CodexPoolAccount): string {
     return `subscription expired ${date}`
   }
 
+  if (account.statusReason === 'auth_dead') {
+    return 'login expired — run /login (OpenAI) to re-authenticate this account'
+  }
+
   if (account.usageLimitReached === true || (account.usagePrimary ?? 0) >= 100) {
     return 'usage limit reached (live usage 100% used)'
   }
