@@ -235,4 +235,93 @@ describe('reasoning-aware token accounting', () => {
       ]),
     ).toBe(130)
   })
+
+  // Regression: Codex agents emit {input_tokens:0, output_tokens:0} seed usage
+  // on tool-use sub-records. tokenCountWithEstimation must skip them and anchor
+  // on the last record with real usage, not read the context as ~0 (which made
+  // autocompact never fire until the API 413'd at >100% of the window).
+  test('skips zero-context Codex seed usage and anchors on real usage', () => {
+    const zeroSeed: Message = {
+      type: 'assistant',
+      uuid: 'assistant-zero-seed',
+      message: {
+        id: 'msg-codex-toolcall',
+        model: 'gpt-5.4',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'tool call split' }],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    } as Message
+    // Anchors on the real usage (130) and rough-estimates the trailing
+    // zero-seed record's content, rather than collapsing the base to ~0.
+    const count = tokenCountWithEstimation([
+      createAssistantUsageMessage(),
+      zeroSeed,
+    ])
+    expect(count).toBeGreaterThanOrEqual(130)
+    expect(count).toBeLessThan(200)
+  })
+})
+
+describe('post-compaction preserved-segment skip', () => {
+  // A kept-tail assistant carries its PRE-compaction usage (huge input_tokens).
+  // The boundary records the kept range as head/tail UUIDs. Usage walks must
+  // skip it so the context reads small again, not stale-full.
+  function staleAssistant(uuid: string): Message {
+    return {
+      type: 'assistant',
+      uuid,
+      message: {
+        id: `msg-${uuid}`,
+        model: 'gpt-5.4',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'pre-compact reply' }],
+        usage: {
+          input_tokens: 180_000, // ~full window before compaction
+          output_tokens: 500,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    } as Message
+  }
+
+  function boundary(headUuid: string, tailUuid: string): Message {
+    return {
+      type: 'system',
+      subtype: 'compact_boundary',
+      uuid: 'compact-boundary',
+      timestamp: '2026-04-21T00:00:00.000Z',
+      compactMetadata: {
+        preservedSegment: { headUuid, anchorUuid: headUuid, tailUuid },
+      },
+    } as Message
+  }
+
+  // [boundary, summary(user), ...kept(stale assistant), attachment(user)]
+  function postCompactMessages(): Message[] {
+    const kept = staleAssistant('kept-asst')
+    return [
+      boundary(kept.uuid as string, kept.uuid as string),
+      createUserMessage('compact summary'),
+      kept,
+      createUserMessage('post-compact attachment'),
+    ]
+  }
+
+  test('getCurrentUsage ignores stale kept-tail usage', () => {
+    expect(getCurrentUsage(postCompactMessages())).toBeNull()
+  })
+
+  test('tokenCountWithEstimation does not anchor on stale 180k usage', () => {
+    // Falls through to rough estimation of the small post-compact array.
+    expect(tokenCountWithEstimation(postCompactMessages())).toBeLessThan(10_000)
+  })
+
+  test('a fresh post-compact response after the kept tail still counts', () => {
+    // Once the next API response lands (after tailUuid), its usage is real.
+    const msgs = [...postCompactMessages(), createAssistantUsageMessage()]
+    const usage = getCurrentUsage(msgs)
+    expect(usage?.input_tokens).toBe(100)
+  })
 })

@@ -1,7 +1,7 @@
 import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { roughTokenCountEstimationForMessages } from '../services/tokenEstimation.js'
 import type { AssistantMessage, Message } from '../types/message.js'
-import { SYNTHETIC_MESSAGES, SYNTHETIC_MODEL } from './messages.js'
+import { findLastCompactBoundaryIndex, isCompactBoundaryMessage, SYNTHETIC_MESSAGES, SYNTHETIC_MODEL } from './messages.js'
 import { jsonStringify } from './slowOperations.js'
 
 type ContextUsage = Pick<
@@ -55,6 +55,45 @@ export function getTokenCountFromUsage(usage: Usage): number {
     (usage.cache_read_input_tokens ?? 0) +
     usage.output_tokens
   )
+}
+
+/**
+ * After a partial/session-memory compaction the kept tail (messagesToKeep) is
+ * spliced in AFTER the compact boundary, but those assistant messages keep
+ * their ORIGINAL usage — whose input_tokens describes the pre-compaction
+ * window. A backward usage walk would anchor on that stale number and report
+ * the context as still-full until the next API response writes fresh usage
+ * (statusline/footer freezing at the pre-compact % after /compact).
+ *
+ * The boundary records the preserved range as head/tail UUIDs
+ * (compact.ts annotateBoundaryWithPreservedSegment). Resolve that to an index
+ * range [headIdx, tailIdx] so usage walks can skip it. Returns null when there
+ * is no boundary or no preserved segment (nothing to skip).
+ */
+function getPreservedSegmentRange(
+  messages: readonly Message[],
+): { start: number; end: number } | null {
+  const boundaryIdx = findLastCompactBoundaryIndex(messages as Message[])
+  if (boundaryIdx === -1) return null
+  const boundary = messages[boundaryIdx]
+  const seg =
+    boundary && isCompactBoundaryMessage(boundary)
+      ? boundary.compactMetadata?.preservedSegment
+      : undefined
+  if (!seg) return null
+  // head/tail sit after the boundary; scan forward from it to resolve indices.
+  let start = -1
+  let end = -1
+  for (let i = boundaryIdx + 1; i < messages.length; i++) {
+    const uuid = messages[i]?.uuid
+    if (uuid === seg.headUuid) start = i
+    if (uuid === seg.tailUuid) {
+      end = i
+      break
+    }
+  }
+  if (start === -1 || end === -1) return null
+  return { start, end }
 }
 
 /**
@@ -190,7 +229,13 @@ export function messageTokenCountFromLastAPIResponse(
 }
 
 export function getCurrentUsage(messages: Message[]): ContextUsage | null {
+  const preserved = getPreservedSegmentRange(messages)
   for (let i = messages.length - 1; i >= 0; i--) {
+    // Skip kept-tail messages whose usage describes the pre-compaction window.
+    if (preserved && i >= preserved.start && i <= preserved.end) {
+      i = preserved.start
+      continue
+    }
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
     if (usage) {
@@ -273,11 +318,25 @@ export function getAssistantMessageContentLength(
  * so every interleaved tool_result is included in the rough estimate.
  */
 export function tokenCountWithEstimation(messages: readonly Message[]): number {
+  const preserved = getPreservedSegmentRange(messages)
   let i = messages.length - 1
   while (i >= 0) {
+    // Don't anchor on kept-tail usage (pre-compaction window). Skipping it lets
+    // the walk fall through to the whole-array rough estimate, which still
+    // counts the kept tail as context — just not via its stale usage number.
+    if (preserved && i >= preserved.start && i <= preserved.end) {
+      i = preserved.start - 1
+      continue
+    }
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
-    if (message && usage) {
+    // The Codex adapter seeds usage at {0,0,0,0} on message_start and only
+    // fills real numbers on the final message_delta/stop. Tool-use sub-records
+    // split from one API response keep the zero seed. Treat a zero-context
+    // usage as "no usage yet" and keep walking, so the base anchors on the
+    // last record with real numbers instead of reading the context as ~0 and
+    // silently skipping autocompact until the API 413s. (GPT/Codex agents.)
+    if (message && usage && getTokenCountFromUsage(usage) > 0) {
       // Walk back past any earlier sibling records split from the same API
       // response (same message.id) so interleaved tool_results between them
       // are included in the estimation slice.
