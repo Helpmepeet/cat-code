@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-06-06
+Last refreshed: 2026-06-18
 
 ## Purpose
 
@@ -35,7 +35,7 @@ for the config and persistence slice.
 | `--setting-sources` behavior | `src/utils/settings/constants.ts` | `src/bootstrap/state.ts`, `src/main.tsx` | The flag can narrow user/project/local loading. It does not exclude `flagSettings` or `policySettings`. |
 | Inline or file-backed flag settings | `src/utils/settings/settings.ts` | `src/bootstrap/state.ts` | `flagSettings` can come from a `--settings` path and inline SDK settings. Inline settings merge on top of the flag file. |
 | Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. Arrays replace during source writes but concat/dedupe during normal merged reads. |
-| Hot reload of settings | `src/utils/settings/changeDetector.ts` | `src/utils/settings/applySettingsChange.ts`, `src/utils/hooks.ts` | File watcher changes run `ConfigChange` hooks first. `fanOut()` owns cache reset before subscribers read fresh settings. MDM/plist/registry changes are polled. |
+| Hot reload of settings | `src/utils/settings/changeDetector.ts` | `src/utils/settings/applySettingsChange.ts`, `src/utils/hooks.ts` | File watcher changes run `ConfigChange` hooks first. `fanOut()` owns cache reset before subscribers read fresh settings, and `applySettingsChange()` is shared by both interactive AppState updates and the headless/SDK subscribe path. MDM/plist/registry changes are polled. |
 | Initial merged settings snapshot | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts` | `getInitialSettings()`/`getSettings_DEPRECATED()` use a session cache. Reset that cache through the established change paths, not per listener. |
 | Global config file location | `src/utils/env.ts` | `src/utils/envUtils.ts`, `src/constants/oauth.ts` | `getGlobalClaudeFile()` uses legacy `~/.cat-code/.config.json` if present, otherwise `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`. The suffix can vary for OAuth config. |
 | Global config reads and writes | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/lockfile.ts` | `enableConfigs()` gates reads. `saveGlobalConfig()` uses a lock, backups, cache write-through, and an auth-loss guard. |
@@ -141,6 +141,13 @@ Do not treat `src/history.ts` or prompt input history as transcript truth.
 - `flagSettings` and `policySettings` are always loaded even when
   `--setting-sources` narrows user/project/local settings.
 - Settings file hot reload can be blocked by `ConfigChange` hooks.
+- `changeDetector.fanOut()` is the cache-reset owner before settings subscribers
+  run. Do not reintroduce per-listener `getInitialSettings()` cache resets in
+  `applySettingsChange()` or adjacent subscribers.
+- `applySettingsChange()` reloads `settings` plus permission context only. Do
+  not treat disk-backed `settings.effortLevel` as the owner of
+  `AppState.effortValue`; session-scoped `/effort` state is updated by the
+  command/UI path instead.
 - Internal settings writes are suppressed from watcher notifications for a short
   window; do not expect every write to produce UI reload churn.
 - Project config keys are keyed by canonical git root when possible, so
