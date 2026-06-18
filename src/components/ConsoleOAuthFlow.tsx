@@ -65,6 +65,17 @@ export function isLoginDialogCancelActive(
     (oauthStatus.state === 'waiting_for_login' && showPastePrompt)
   );
 }
+export function getCodexAliasPrompt(
+  accounts: readonly { accountId: string; alias?: string }[],
+  accountId: string,
+): string {
+  const existing = accounts.find(account => account.accountId === accountId);
+  if (!existing) {
+    return 'Name this account (e.g. work, backup — Enter to skip)';
+  }
+  const label = existing.alias ?? existing.accountId.slice(0, 8);
+  return `Already saved as ${label}. Press Enter to keep this name, or type a new name.`;
+}
 const PASTE_HERE_MSG = 'Paste code here if prompted > ';
 export function ConsoleOAuthFlow({
   onDone,
@@ -434,13 +445,12 @@ export function ConsoleOAuthFlow({
           {(() => {
             const { getPoolStatus } = require('../services/api/codexAccountPool.js') as typeof import('../services/api/codexAccountPool.js');
             const { accounts } = getPoolStatus();
-            if (accounts.length > 0) {
-              const labels = accounts.map(a => a.alias ?? a.accountId.slice(0, 8)).join(', ');
-              return <Text dimColor>Existing Codex accounts: {labels}</Text>;
-            }
-            return null;
+            const labels = accounts.map(a => a.alias ?? a.accountId.slice(0, 8)).join(', ');
+            return <>
+              {accounts.length > 0 && <Text dimColor>Existing Codex accounts: {labels}</Text>}
+              <Text>{getCodexAliasPrompt(accounts, oauthStatus.codexTokens.accountId)}</Text>
+            </>;
           })()}
-          <Text>Name this account <Text dimColor>(e.g. work, backup — Enter to skip)</Text></Text>
           <Box>
             <Text>{'> '}</Text>
             <TextInput

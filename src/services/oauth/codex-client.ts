@@ -488,32 +488,6 @@ export async function startCodexCallbackServer(expectedState: string): Promise<L
       font-weight: 650;
     }
 
-    .close-help[hidden] {
-      display: none;
-    }
-
-    .actions {
-      margin-top: 28px;
-      display: flex;
-      justify-content: center;
-    }
-
-    button {
-      appearance: none;
-      border: 0;
-      border-radius: 999px;
-      padding: 12px 18px;
-      font-size: 14px;
-      font-weight: 600;
-      color: white;
-      background: linear-gradient(180deg, var(--pink-soft), var(--pink));
-      box-shadow: 0 10px 26px rgba(255, 79, 163, 0.28);
-      cursor: pointer;
-    }
-
-    button:hover {
-      transform: translateY(-1px);
-    }
   </style>
 </head>
 <body>
@@ -538,11 +512,6 @@ export async function startCodexCallbackServer(expectedState: string): Promise<L
       <h1>Authentication <span>complete</span>.</h1>
       <p>Signed in as <strong>${accountLabel}</strong>.</p>
       <p>Return to terminal.</p>
-
-      <div class="actions">
-        <button onclick="window.close(); document.getElementById('close-help').hidden = false; this.textContent = 'Close this tab'">Close</button>
-      </div>
-      <p id="close-help" class="close-help" hidden>You can close this tab now.</p>
     </div>
   </main>
 </body>

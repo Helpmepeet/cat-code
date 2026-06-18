@@ -34,7 +34,7 @@ describe('Codex OAuth callback page', () => {
     }
   })
 
-  test('shows the authenticated account and close fallback after token exchange', async () => {
+  test('shows the authenticated account without an unusable close button', async () => {
     const server = await startCodexCallbackServer('expected-state')
 
     try {
@@ -52,7 +52,9 @@ describe('Codex OAuth callback page', () => {
 
       const page = await pagePromise
       expect(page).toContain('person@example.com')
-      expect(page).toContain('You can close this tab now.')
+      expect(page).toContain('Return to terminal.')
+      expect(page).not.toContain('<button')
+      expect(page).not.toContain('window.close')
     } finally {
       server.close()
     }
