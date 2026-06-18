@@ -4206,6 +4206,7 @@ async function loadSessionFile(sessionId: UUID): Promise<{
   agentSettings: Map<UUID, string>
   threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
+  modes: Map<UUID, string>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
   contentReplacements: Map<UUID, ContentReplacementRecord[]>
@@ -4250,6 +4251,7 @@ export async function getLastSessionLog(
     agentSettings,
     threadGoals,
     worktreeStates,
+    modes,
     fileHistorySnapshots,
     attributionSnapshots,
     contentReplacements,
