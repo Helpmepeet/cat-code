@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-06-06 against the current source tree.
+Last refreshed: 2026-06-17 against the current source tree.
 
 ## Purpose
 
@@ -187,6 +187,9 @@ Important current behavior:
 - Some built-in tools also defer through `shouldDefer: true`.
 - `ToolSearchTool` itself must remain available or tool search collapses back
   to standard inline exposure.
+- Deferred-tool names are announced either in `<system-reminder>` attachments
+  or the older `<available-deferred-tools>` block, depending on the delta gate
+  in `src/tools/ToolSearchTool/prompt.ts`.
 
 ## MCP Exposure And Validation Notes
 
