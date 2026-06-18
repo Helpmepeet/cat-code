@@ -1,6 +1,6 @@
 # Web App Runtime Routing Map
 
-Last refreshed: 2026-06-08 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-06-18 against `src/main.tsx`, `src/app-runtime/`,
 `src/web/`, `src/services/mcp/client.ts`, `web/src/`, `web/package.json`, and
 related tests.
 
@@ -37,7 +37,6 @@ legacy REPL relay server.
 | Change area | Command |
 |---|---|
 | Docs-only map sanity | `git diff --check -- docs/maps/web-app-runtime.md docs/maps/WORKSPACE_MAP.md docs/maps/build-release-testing.md` |
-| Auto-map keyword routing | `bun test src/utils/processUserInput/subsystemMapContext.test.ts` |
 | App-runtime session seam | `bun test src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/app-runtime/createQueryEngineAppSession.test.ts src/app-runtime/createQueryEngineSessionController.test.ts src/app-runtime/AppSessionController.test.ts` |
 | Web-mode startup and transport | `bun test src/web/startRuntimeBackedWebMode.test.ts src/web/launchWebAppDevServer.test.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.test.ts src/web/appSessionEventMapper.test.ts` |
 | Browser frontend | `bun run --cwd web test && bun run --cwd web build` |

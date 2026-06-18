@@ -4249,17 +4249,6 @@ You have exited auto mode. The user may now want to interact more directly. You 
         }),
       ]
     }
-    case 'auto_map_context': {
-      if (attachment.content === '') {
-        return []
-      }
-      return [
-        createUserMessage({
-          content: wrapInSystemReminder(attachment.content),
-          isMeta: true,
-        }),
-      ]
-    }
     case 'hook_stopped_continuation':
       return [
         createUserMessage({
