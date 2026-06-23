@@ -117,3 +117,14 @@ describe('Normal mode static delegation guidance', () => {
     )
   })
 })
+
+describe('GPT read discipline guidance', () => {
+  test('GPT style tells the model to locate then read narrowly and avoid head_limit:0', () => {
+    expect(gptPromptSource).toContain('READ DISCIPLINE:')
+    expect(gptPromptSource).toContain('never pass head_limit:0')
+  })
+
+  test('Claude style does not carry the GPT read discipline rule', () => {
+    expect(promptsSource).not.toContain('READ DISCIPLINE:')
+  })
+})
