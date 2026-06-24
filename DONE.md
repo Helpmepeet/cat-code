@@ -10,6 +10,8 @@
 
 ### 23 Jun 2026
 
+93. Fixed GPT MCP background-job result retrieval — default tool discovery now exposes the read-only `get_gpt_agent_job_status`, `get_gpt_agent_job_result`, and `wait_for_gpt_agent_job` tools so completed background GPT outputs can be fetched by `job_id` without re-running via `send_gpt_agent_message`. Mutating/log job tools stay debug-gated, default guidance no longer advertises hidden tools, stale docs were updated, focused MCP tests and dev-full build pass.
+
 92. Implemented named GPTs for the GPT MCP server — the normal tool surface is now `spawn_gpt_agent`, `send_gpt_agent_message`, and `list_gpt_agents`, with job-control tools hidden and blocked unless `GPT_AGENT_DEBUG_TOOLS=1`. Named GPT continuation is registry-backed instead of `conversations.json`-backed, generated names are stable (`GPT 1`, `GPT 2`, ...), duplicate/replace/busy flows are explicit, prompt-cache freshness gates guard stale resumes, and background reconciliation/cleanup no longer strand GPTs busy. Focused MCP tests and the dev-full build pass.
 
 ### 17 Jun 2026

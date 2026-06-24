@@ -279,7 +279,7 @@ printf '%s\n' '{"result":"done","session_id":"session-addressable","is_error":fa
   }
 })
 
-test('default background spawn response does not advertise hidden debug tools', async () => {
+test('default background spawn response does not advertise mutating debug tools', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-bg-default-response-'))
   const fakeCli = join(dir, 'cat-code')
   const jobs = join(dir, 'jobs')
@@ -311,9 +311,6 @@ printf '%s\n' '{"result":"done","session_id":"session-bg-default","is_error":fal
     expect(text).toContain('Started GPT "Default Background" in the background.')
     expect(text).toContain('send_gpt_agent_message')
     expect(text).toContain('Debug job_id:')
-    expect(text).not.toContain('get_gpt_agent_job_status')
-    expect(text).not.toContain('get_gpt_agent_job_result')
-    expect(text).not.toContain('wait_for_gpt_agent_job')
     expect(text).not.toContain('tail_gpt_agent_job_log')
     expect(text).not.toContain('cancel_gpt_agent_job')
     expect(text).not.toContain('status_tool:')
@@ -945,7 +942,7 @@ printf '%s\n' '{"result":"done","session_id":"session-tilde","is_error":false}'
   }
 })
 
-test('tools/list exposes only named GPT tools by default', async () => {
+test('tools/list exposes named GPT and result retrieval tools by default', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-tools-default-'))
   const child = spawn('bun', [SERVER], {
     cwd: dir,
@@ -960,7 +957,14 @@ test('tools/list exposes only named GPT tools by default', async () => {
 	    const spawnTool = response.result.tools.find((tool: { name: string }) => tool.name === 'spawn_gpt_agent')
 	    const spawnProps = spawnTool.inputSchema.properties
 
-    expect(names).toEqual(['spawn_gpt_agent', 'send_gpt_agent_message', 'list_gpt_agents'])
+    expect(names).toEqual([
+      'spawn_gpt_agent',
+      'send_gpt_agent_message',
+      'list_gpt_agents',
+      'get_gpt_agent_job_status',
+      'get_gpt_agent_job_result',
+      'wait_for_gpt_agent_job',
+    ])
 	    expect(spawnProps.conversation).toBeUndefined()
 	    expect(spawnProps.reset_conversation).toBeUndefined()
 	    expect(spawnProps.resume_session).toBeUndefined()
@@ -970,7 +974,83 @@ test('tools/list exposes only named GPT tools by default', async () => {
   }
 })
 
-test('debug-only job tools cannot be called in default mode', async () => {
+test('completed job result can be fetched in default mode', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-result-default-'))
+  const jobs = join(dir, 'jobs')
+  const jobId = 'job_77777777-7777-4777-8777-777777777777'
+  const jobDir = join(jobs, jobId)
+  mkdirSync(jobDir, { recursive: true })
+  const paths = {
+    request: join(jobDir, 'request.json'),
+    status: join(jobDir, 'status.json'),
+    result: join(jobDir, 'result.json'),
+    stdout: join(jobDir, 'stdout.log'),
+    stderr: join(jobDir, 'stderr.log'),
+  }
+  writeJson(paths.status, { jobId, status: 'completed', conversation: 'Default result GPT', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), cwd: dir, paths })
+  writeJson(paths.result, { text: 'saved output', sessionId: 'session-default-result', isError: false, status: 'completed' })
+
+  const child = spawn('bun', [SERVER], {
+    cwd: dir,
+    env: { ...process.env, GPT_AGENT_BACKGROUND_DIR: jobs },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  try {
+    const response = await callTool(child, 1, 'get_gpt_agent_job_result', { job_id: jobId })
+    expect(response.result.isError).toBe(false)
+    const result = JSON.parse(response.result.content[0].text)
+
+    expect(result).toMatchObject({
+      job_id: jobId,
+      status: 'completed',
+      ready: true,
+      name: 'Default result GPT',
+      text: 'saved output',
+    })
+  } finally {
+    child.kill('SIGTERM')
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('default not-ready result guidance only mentions exposed retrieval tools', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-not-ready-default-'))
+  const jobs = join(dir, 'jobs')
+  const jobId = 'job_88888888-8888-4888-8888-888888888888'
+  const jobDir = join(jobs, jobId)
+  mkdirSync(jobDir, { recursive: true })
+  const paths = {
+    request: join(jobDir, 'request.json'),
+    status: join(jobDir, 'status.json'),
+    result: join(jobDir, 'result.json'),
+    stdout: join(jobDir, 'stdout.log'),
+    stderr: join(jobDir, 'stderr.log'),
+  }
+  writeJson(paths.status, { jobId, status: 'queued', conversation: 'Not Ready GPT', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), cwd: dir, paths })
+
+  const child = spawn('bun', [SERVER], {
+    cwd: dir,
+    env: { ...process.env, GPT_AGENT_BACKGROUND_DIR: jobs },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  try {
+    const response = await callTool(child, 1, 'get_gpt_agent_job_result', { job_id: jobId })
+    expect(response.result.isError).toBe(false)
+    const result = JSON.parse(response.result.content[0].text)
+
+    expect(result.ready).toBe(false)
+    expect(result.message).toContain('wait_for_gpt_agent_job')
+    expect(result.message).toContain('get_gpt_agent_job_status')
+    expect(result.message).not.toContain('tail_gpt_agent_job_log')
+  } finally {
+    child.kill('SIGTERM')
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('debug-only job mutation tools cannot be called in default mode', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-debug-call-default-'))
   const child = spawn('bun', [SERVER], {
     cwd: dir,
@@ -979,7 +1059,7 @@ test('debug-only job tools cannot be called in default mode', async () => {
   })
 
   try {
-    const response = await callTool(child, 1, 'get_gpt_agent_job_status', { job_id: 'job_11111111-1111-4111-8111-111111111111' })
+    const response = await callTool(child, 1, 'cancel_gpt_agent_job', { job_id: 'job_11111111-1111-4111-8111-111111111111' })
 
     expect(response.result.isError).toBe(true)
     expect(response.result.content[0].text).toContain('GPT_AGENT_DEBUG_TOOLS=1')

@@ -53,7 +53,7 @@ It already has an in-memory `gptRegistry`, named create/send/list code paths, an
 
 Known current drift to fix:
 
-- Normal `tools/list` still exposes job debug tools by default.
+- Normal `tools/list` should expose read-only result retrieval but hide mutating/log job debug tools by default.
 - Named GPT runs still write `name -> sessionId` into the global conversation store.
 - `send_gpt_agent_message` still resumes through the global conversation store instead of the `GptRecord.sessionId`.
 - Prompt-cache freshness gating is not implemented.
@@ -74,12 +74,15 @@ The script currently stores conversation mappings and background jobs globally b
 
 ## Proposed tool surface
 
-Expose only the named-GPT tools needed for the normal flow:
+Expose the named-GPT tools and read-only background result retrieval needed for the normal flow:
 
 ```text
 spawn_gpt_agent
 send_gpt_agent_message
 list_gpt_agents
+get_gpt_agent_job_status
+get_gpt_agent_job_result
+wait_for_gpt_agent_job
 ```
 
 Minimum viable change:
@@ -88,21 +91,18 @@ Minimum viable change:
 - Add `list_gpt_agents`.
 - Update `spawn_gpt_agent` wording and behavior so it creates named GPTs, not just jobs.
 - Make `spawn_gpt_agent` create-only for visible names. Continuing a named GPT belongs only in `send_gpt_agent_message`.
-- Keep old job tools as lower-level debug tools, but do not expose them in the default normal-flow `tools/list`.
+- Keep mutating/log job tools as lower-level debug tools, but expose read-only result retrieval in the default normal-flow `tools/list`.
 
-Debug tools may remain available behind an explicit debug flag such as `GPT_AGENT_DEBUG_TOOLS=1`:
+Mutating/log debug tools may remain available behind an explicit debug flag such as `GPT_AGENT_DEBUG_TOOLS=1`:
 
 ```text
-get_gpt_agent_job_status
-get_gpt_agent_job_result
-wait_for_gpt_agent_job
 tail_gpt_agent_job_log
 cancel_gpt_agent_job
 list_gpt_agent_jobs
 cleanup_gpt_agent_job
 ```
 
-Do not add named mirrors for every job tool yet. Use `list_gpt_agents` for normal status polling. Add named wait/tail/cancel tools only if Claude repeatedly needs them in normal flow after job tools are hidden by default.
+Do not add named mirrors for every job tool yet. Use `list_gpt_agents` for normal status polling and the result retrieval tools when Claude needs the saved background output by `job_id`. Add named wait/tail/cancel tools only if Claude repeatedly needs them in normal flow after mutating/log job tools are hidden by default.
 
 ## State model
 
@@ -277,7 +277,7 @@ No raw prompts, raw `session_id`, or full filesystem paths in default list outpu
 
 ## Compatibility
 
-Do not delete existing job-tool implementation in the first change. Existing tests and manual debugging may rely on it. But default MCP exposure should be named-GPT-first: job tools are debug surfaces, not normal product tools.
+Do not delete existing job-tool implementation in the first change. Existing tests and manual debugging may rely on it. But default MCP exposure should be named-GPT-first: mutating/log job tools are debug surfaces, while read-only result retrieval is a normal product tool.
 
 Existing resume mechanics can be reused internally, but the MCP-facing contract must change:
 
@@ -290,8 +290,8 @@ Existing resume mechanics can be reused internally, but the MCP-facing contract 
 
 Add focused tests in `scripts/mcp/gpt-agent.test.ts`:
 
-1. `tools/list` exposes `spawn_gpt_agent`, `send_gpt_agent_message`, and `list_gpt_agents` in normal mode, without job debug tools.
-2. `tools/list` exposes job debug tools only when debug mode is explicitly enabled.
+1. `tools/list` exposes `spawn_gpt_agent`, `send_gpt_agent_message`, `list_gpt_agents`, and read-only result retrieval tools in normal mode, without mutating/log job debug tools.
+2. `tools/list` exposes mutating/log job debug tools only when debug mode is explicitly enabled.
 3. `spawn_gpt_agent` without a name creates a unique visible fallback name and does not use `description` as the name.
 4. Duplicate `spawn_gpt_agent` name returns `isError: true`, does not resume, and does not create a second GPT, including concurrent foreground spawns.
 5. `replace_existing: true` can explicitly rebind a bricked or unwanted name without making duplicate reuse implicit.
@@ -303,7 +303,7 @@ Add focused tests in `scripts/mcp/gpt-agent.test.ts`:
 11. `list_gpt_agents` returns names/status without raw prompt text, raw `session_id`, or full paths.
 12. Auto-generated names are unique within the current MCP process.
 13. Existing global conversation mappings do not appear as named GPTs in a fresh MCP process and are not used for named-GPT continuation.
-14. Existing job-control implementation tests still pass when debug mode is enabled.
+14. Existing mutating/log job-control implementation tests still pass when debug mode is enabled.
 
 ## Implementation traps
 
@@ -312,7 +312,7 @@ Add focused tests in `scripts/mcp/gpt-agent.test.ts`:
 - Do not treat every reconciliation error as terminal. Missing job artifacts are different from partial JSON writes or transient read failures.
 - A failed GPT with a `sessionId` is recoverable; a failed GPT without a `sessionId` is not continuable unless it is explicitly replaced.
 - Background workers cannot mutate the parent in-memory registry. `list_gpt_agents` and `send_gpt_agent_message` are the reconciliation points.
-- Hiding job debug tools by default means normal busy/status wording must point to `list_gpt_agents`, not job tools.
+- Hiding mutating/log job debug tools by default means normal busy/status wording must point to `list_gpt_agents`, not job mutation tools.
 
 ## Verification
 
@@ -351,7 +351,7 @@ Only change references that describe this MCP product surface. Do not rewrite un
 - Default `send_gpt_agent_message` to foreground.
 - Make duplicate visible names hard errors.
 - Auto-generate simple unique names such as `GPT 1`. Keep `description` separate from generated names.
-- Ship only `spawn_gpt_agent`, `send_gpt_agent_message`, and `list_gpt_agents` as normal-flow tools. Keep job tools implemented but hidden behind debug mode.
+- Ship `spawn_gpt_agent`, `send_gpt_agent_message`, `list_gpt_agents`, and read-only result retrieval as normal-flow tools. Keep mutating/log job tools implemented but hidden behind debug mode.
 - Make `list_gpt_agents` the normal polling/status surface.
 - Make the in-memory GPT registry the source of truth for named GPTs; do not use `conversations.json` for named-GPT continuation.
 - Prompt-cache freshness gating is in scope.

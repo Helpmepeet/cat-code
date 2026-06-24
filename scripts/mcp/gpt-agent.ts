@@ -609,10 +609,12 @@ const NORMAL_TOOLS = [
   SEND_GPT_MESSAGE_TOOL,
   LIST_GPT_AGENTS_TOOL,
 ]
-const DEBUG_TOOLS = [
+const RESULT_TOOLS = [
   { name: 'get_gpt_agent_job_status', description: 'Return status and artifact paths for a detached GPT job.', inputSchema: JOB_ID_SCHEMA },
   { name: 'get_gpt_agent_job_result', description: 'Return status, ready, is_error, has_result, and text for a detached GPT job.', inputSchema: JOB_ID_SCHEMA },
   { name: 'wait_for_gpt_agent_job', description: 'Wait briefly for a detached GPT job, then return the same fields as get_gpt_agent_job_result.', inputSchema: WAIT_JOB_SCHEMA },
+]
+const DEBUG_TOOLS = [
   {
     name: 'tail_gpt_agent_job_log',
     description: 'Return the tail of a detached GPT job stdout or stderr log.',
@@ -628,7 +630,7 @@ const DEBUG_TOOLS = [
 ]
 const DEBUG_TOOLS_ENABLED = process.env.GPT_AGENT_DEBUG_TOOLS === '1'
 const DEBUG_TOOL_NAMES = new Set(DEBUG_TOOLS.map(tool => tool.name))
-const TOOLS = DEBUG_TOOLS_ENABLED ? [...NORMAL_TOOLS, ...DEBUG_TOOLS] : NORMAL_TOOLS
+const TOOLS = DEBUG_TOOLS_ENABLED ? [...NORMAL_TOOLS, ...RESULT_TOOLS, ...DEBUG_TOOLS] : [...NORMAL_TOOLS, ...RESULT_TOOLS]
 
 function runCatCode(args: { prompt: string; model: Model; addDirs: string[]; resume?: string; signal: AbortSignal; logs?: { stdout: string; stderr: string } }): Promise<ChildOutcome> {
   const argv = ['--model', args.model, '-p', args.prompt, '--output-format', 'json', '--permission-mode', 'auto', '--debug-to-stderr']
@@ -1199,7 +1201,8 @@ function formatJobResult(record: JobRecord): AgentResult {
       const text = record.error ?? (stderr || stdout || `job ${jobId} ended with status ${record.status} but no result artifact was written`)
       return { text: JSON.stringify({ job_id: jobId, status: record.status, ready: true, has_result: false, name: record.conversation, description: record.description, is_error: record.status === 'failed', text }, null, 2), sessionId: record.sessionId ?? '', isError: record.status === 'failed', name: record.conversation }
     }
-    return { text: JSON.stringify({ job_id: jobId, status: record.status, ready: false, has_result: false, name: record.conversation, description: record.description, message: 'Job result is not ready yet. Call wait_for_gpt_agent_job, get_gpt_agent_job_status, or tail_gpt_agent_job_log.' }, null, 2), sessionId: '', isError: false, name: record.conversation }
+    const message = `Job result is not ready yet. Call wait_for_gpt_agent_job or get_gpt_agent_job_status${DEBUG_TOOLS_ENABLED ? ', or tail_gpt_agent_job_log' : ''}.`
+    return { text: JSON.stringify({ job_id: jobId, status: record.status, ready: false, has_result: false, name: record.conversation, description: record.description, message }, null, 2), sessionId: '', isError: false, name: record.conversation }
   }
   const result = readJson(record.paths.result) as AgentResult & { completedAt?: string; status?: JobStatus }
   const body = result.text.length > MAX_RESULT_CHARS ? `${result.text.slice(0, MAX_RESULT_CHARS)}\n\n[truncated; full result at ${record.paths.result}]` : result.text
