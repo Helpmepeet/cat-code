@@ -225,7 +225,11 @@ function updateRoutingHintsFromUsage(usages: readonly AccountUsage[]): void {
       weeklyPercent: r.secondaryWindow.usedPercent,
       allowed: r.allowed,
       limitReached: r.limitReached,
-      resetAt: Math.max(r.primaryWindow.resetAt, r.secondaryWindow.resetAt),
+      // The 5h (primary) window is what trips the block, so gate the
+      // already-reset escape on its reset, not max() across windows (the weekly
+      // reset is days out and would keep a reset 5h account blocked).
+      resetAt: r.primaryWindow.resetAt,
+      fetchedAt: r.fetchedAt,
     })),
   )
 }

@@ -19,6 +19,7 @@ import {
   saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
   switchToAccount,
+  updateAccountUsageHints,
   type PoolAccount,
 } from './codexAccountPool.js'
 import {
@@ -45,6 +46,7 @@ function buildPoolAccount(
     usageAllowed: overrides.usageAllowed,
     usageLimitReached: overrides.usageLimitReached,
     usageResetAt: overrides.usageResetAt,
+    cappedAt: overrides.cappedAt,
     lastErrorAt: overrides.lastErrorAt,
     statusReason: overrides.statusReason,
     planType: overrides.planType,
@@ -173,6 +175,30 @@ describe('codexAccountPool availability', () => {
       usageFetchedAt: NOW - 10 * 60 * 1000,
     })
     expect(getCodexAccountAvailability(staleBlocked, NOW)).toEqual({ kind: 'available' })
+
+    // A fresh blocked hint whose reset window (seconds) has already elapsed must
+    // not keep blocking — the window reset since the poll.
+    const freshButReset = buildPoolAccount({
+      accountId: 'fresh-but-reset',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: NOW - 1_000,
+      usageResetAt: Math.floor(NOW / 1000) - 60, // reset 60s ago, in Unix seconds
+    })
+    expect(getCodexAccountAvailability(freshButReset, NOW)).toEqual({ kind: 'available' })
+
+    // reset_at = 0 is the API's "unknown" sentinel; it must not unblock.
+    const freshUnknownReset = buildPoolAccount({
+      accountId: 'fresh-unknown-reset',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: NOW - 1_000,
+      usageResetAt: 0,
+    })
+    expect(getCodexAccountAvailability(freshUnknownReset, NOW)).toEqual({
+      kind: 'blocked',
+      reason: 'fresh usage data reports this account is capped',
+    })
   })
 })
 
@@ -327,6 +353,112 @@ describe('codexAccountPool appendAccount', () => {
       (message as { code?: string }).code === 'account.usage.uncap' &&
       (message as { account_ref?: string }).account_ref !== undefined,
     )).toBe(true)
+  })
+
+  test('updateAccountUsageHints does not uncap a hard-429 account from stale or in-grace usage data', () => {
+    const now = Date.now()
+    const cappedAt = now - 30_000 // capped 30s ago (inside the 2m grace)
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'capped-account',
+          alias: 'backup',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt,
+        }),
+      ],
+    })
+
+    // A poll that resolved AFTER the cap but reports allowed:true. Its data is
+    // pre-cap-lagging, so it must not resurrect the account while the cap is fresh.
+    updateAccountUsageHints([
+      {
+        accountId: 'capped-account',
+        primaryPercent: 10,
+        weeklyPercent: 5,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: now,
+      },
+    ])
+    const stillCapped = getPoolStatus().accounts.find(a => a.accountId === 'capped-account')
+    expect(stillCapped?.status).toBe('capped')
+
+    // A poll fetched BEFORE the cap must never uncap, regardless of grace.
+    updateAccountUsageHints([
+      {
+        accountId: 'capped-account',
+        primaryPercent: 10,
+        weeklyPercent: 5,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: cappedAt - 10_000,
+      },
+    ])
+    expect(getPoolStatus().accounts.find(a => a.accountId === 'capped-account')?.status).toBe('capped')
+
+    // Isolate the timestamp-ordering guard: cap is PAST the grace window (so the
+    // grace clause would permit uncap), but the poll was fetched BEFORE the cap.
+    // Only the fetchedAt > cappedAt guard keeps this capped.
+    const pastGraceCappedAt = now - 3 * 60 * 1000
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'capped-account',
+          alias: 'backup',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: pastGraceCappedAt,
+        }),
+      ],
+    })
+    updateAccountUsageHints([
+      {
+        accountId: 'capped-account',
+        primaryPercent: 10,
+        weeklyPercent: 5,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: pastGraceCappedAt - 10_000, // fetched before the cap
+      },
+    ])
+    expect(getPoolStatus().accounts.find(a => a.accountId === 'capped-account')?.status).toBe('capped')
+
+    // A genuinely newer poll, once the cap is older than the grace window,
+    // clears the cap and cappedAt. Re-seed with a cap that is old in wall-clock
+    // time (the grace clause compares Date.now() to cappedAt, not fetchedAt).
+    const oldCappedAt = now - 3 * 60 * 1000 // capped 3m ago (past the 2m grace)
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'capped-account',
+          alias: 'backup',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: oldCappedAt,
+        }),
+      ],
+    })
+    updateAccountUsageHints([
+      {
+        accountId: 'capped-account',
+        primaryPercent: 10,
+        weeklyPercent: 5,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: oldCappedAt + 60_000, // fetched after the cap
+      },
+    ])
+    const uncapped = getPoolStatus().accounts.find(a => a.accountId === 'capped-account')
+    expect(uncapped?.status).toBe('healthy')
+    expect(uncapped?.cappedAt).toBeUndefined()
   })
 
   test('successful refresh can revive dead accounts', () => {

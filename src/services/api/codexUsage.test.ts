@@ -216,6 +216,56 @@ describe('codexUsage display helpers', () => {
     expect(account ? isCodexAccountSwitchable(account) : false).toBe(false)
   })
 
+  test('routing-hint path unblocks when the 5h window has reset even if the weekly window has not', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+      ],
+    })
+
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u1',
+          email: 'main@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: false,
+            limit_reached: true,
+            primary_window: {
+              used_percent: 100,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 0,
+              reset_at: nowSeconds - 60, // 5h window reset a minute ago
+            },
+            secondary_window: {
+              used_percent: 40,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 300000,
+              reset_at: nowSeconds + 300_000, // weekly window resets days out
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    try {
+      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const account = getPoolStatus().accounts.find((a) => a.accountId === 'main-account')
+    // Gating on the primary reset (not max across windows) lets the account
+    // route again now that the 5h window has reset.
+    expect(account ? isCodexAccountSwitchable(account) : false).toBe(true)
+  })
+
   test('fetchPoolUsage sends the ChatGPT account selector', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
