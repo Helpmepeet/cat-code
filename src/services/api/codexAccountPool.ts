@@ -44,6 +44,7 @@ export interface PoolAccount {
   usageLimitReached?: boolean
   usageFetchedAt?: number       // when usage was last fetched
   usageResetAt?: number
+  cappedAt?: number             // when a hard 429 capped this account; uncap only from usage data fetched after this
   // Saved id_token plan metadata. May be stale — warning only, never a blocker.
   planType?: string
   planExpiresAt?: string        // raw ISO string from chatgpt_subscription_active_until
@@ -291,6 +292,7 @@ export function rotateOnFailure(): PoolAccount | null {
     current.usagePrimary = 100 // Mark as fully used
     current.usageAllowed = false
     current.usageLimitReached = true
+    current.cappedAt = Date.now()
     current.lastError = 'Usage cap hit (429)'
     logForDebugging(
       `[codex-pool] Account ${truncId(current.accountId)} capped`,
@@ -355,6 +357,7 @@ export function appendAccount(tokens: {
     acct.status = preserveCapped ? 'capped' : 'healthy'
     acct.lastError = preserveCapped ? acct.lastError : undefined
     acct.statusReason = preserveCapped ? acct.statusReason : undefined
+    acct.cappedAt = preserveCapped ? acct.cappedAt : undefined
     if (previousStatus === 'capped' && acct.status === 'healthy') {
       emitUsageStatusDiagnostic(
         'account.usage.uncap',
@@ -445,6 +448,7 @@ export function markPoolAccountStatus(
     status === 'healthy'
       ? undefined
       : options.statusReason ?? (status === 'dead' ? 'auth_dead' : acct.statusReason)
+  if (status === 'healthy') acct.cappedAt = undefined
 
   if (previousStatus !== 'capped' && status === 'capped') {
     emitUsageStatusDiagnostic('account.usage.cap', accountId, reason)
@@ -483,6 +487,7 @@ export function markPoolAccountCapped(
   acct.usagePrimary = 100
   acct.usageAllowed = false
   acct.usageLimitReached = true
+  acct.cappedAt = Date.now()
 }
 
 export function markPoolAccountLastError(accountId: string): void {
@@ -1185,6 +1190,7 @@ export function updateAccountUsageHints(
     allowed?: boolean
     limitReached?: boolean
     resetAt?: number
+    fetchedAt?: number
   }>,
 ): void {
   const now = Date.now()
@@ -1197,16 +1203,29 @@ export function updateAccountUsageHints(
       acct.usageAllowed = hint.allowed
       acct.usageLimitReached = hint.limitReached
       acct.usageResetAt = hint.resetAt
+      // A hard 429 (markPoolAccountCapped/rotateOnFailure) is authoritative.
+      // wham/usage lags by minutes, so a poll can carry a stale allowed:true
+      // snapshot even when it *resolves* after the cap (e.g. the forceRefresh
+      // fetch rotateOnFailure fires right after capping). Only let usage data
+      // uncap when it was fetched after the cap AND the cap is older than the
+      // endpoint's lag grace; otherwise leave it capped for the next request.
+      const usageNewerThanCap =
+        acct.cappedAt === undefined ||
+        (hint.fetchedAt !== undefined &&
+          hint.fetchedAt > acct.cappedAt &&
+          now - acct.cappedAt > USAGE_UNCAP_GRACE_MS)
       if (
         hint.allowed === true &&
         hint.limitReached === false &&
         acct.status === 'capped' &&
-        acct.statusReason === 'usage_cap'
+        acct.statusReason === 'usage_cap' &&
+        usageNewerThanCap
       ) {
         const previousLastError = acct.lastError
         acct.status = 'healthy'
         acct.statusReason = undefined
         acct.lastError = undefined
+        acct.cappedAt = undefined
         emitUsageStatusDiagnostic(
           'account.usage.uncap',
           acct.accountId,
@@ -1222,6 +1241,10 @@ export function updateAccountUsageHints(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const USAGE_HINT_STALE_MS = 5 * 60 * 1000 // 5 minutes
+// wham/usage lags reality by minutes; don't let a poll uncap an account whose
+// hard 429 is more recent than this, even if the poll resolved after the cap.
+// ponytail: fixed grace; only the self-inflicted post-failover refresh races this tight.
+const USAGE_UNCAP_GRACE_MS = 2 * 60 * 1000 // 2 minutes
 const DEFAULT_USAGE_PRIMARY = 50
 const DEFAULT_USAGE_WEEKLY = 50
 const PRIMARY_USAGE_WEIGHT = 3
@@ -1300,7 +1323,15 @@ export function getCodexAccountAvailability(
   }
   if (
     hasFreshPoolAccountUsageHint(account, now) &&
-    (account.usageAllowed === false || account.usageLimitReached === true)
+    (account.usageAllowed === false || account.usageLimitReached === true) &&
+    // ...unless the window the hint reported has already reset. usageResetAt is
+    // wham/usage reset_at in Unix *seconds* (hence *1000); 0 is its "unknown"
+    // sentinel, so only trust a positive, already-elapsed value.
+    !(
+      typeof account.usageResetAt === 'number' &&
+      account.usageResetAt > 0 &&
+      now >= account.usageResetAt * 1000
+    )
   ) {
     return { kind: 'blocked', reason: 'fresh usage data reports this account is capped' }
   }
