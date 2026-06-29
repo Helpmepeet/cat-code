@@ -886,10 +886,12 @@ describe('codex-fetch-adapter', () => {
 
     try {
       _markStickyHttpFallbackForTest('conv_http_direct', 'test')
+      const abortController = new AbortController()
       const response = await createCodexFetch(accessToken, 'conv_http_direct')(
         'https://api.anthropic.com/v1/messages',
         {
           method: 'POST',
+          signal: abortController.signal,
           body: JSON.stringify({
             stream: true,
             model: 'claude-sonnet-4-6',
@@ -908,6 +910,7 @@ describe('codex-fetch-adapter', () => {
         Authorization: `Bearer ${accessToken}`,
         'chatgpt-account-id': 'acct_test_streaming',
       })
+      expect(fetchCalls[0]?.init?.signal).toBe(abortController.signal)
       expect(body).toContain('event: message_stop')
       expect(body).toContain('"input_tokens":7')
       expect(body).toContain('"cache_read_input_tokens":3')
@@ -916,6 +919,73 @@ describe('codex-fetch-adapter', () => {
       expect(body).toContain('"cache_creation_input_tokens":0')
       expect(body).not.toContain('currentAccountId is not defined')
     } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch times out HTTP streams before initial visible output', async () => {
+    const accessToken = createAccessToken('acct_test_initial_timeout')
+    const originalFetch = globalThis.fetch
+    const originalTimeout = process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+    const encoder = new TextEncoder()
+    let interval: ReturnType<typeof setInterval> | undefined
+    let cancelCount = 0
+
+    process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = '20'
+    globalThis.fetch = (async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const sendHeartbeat = () => {
+              controller.enqueue(
+                encoder.encode(
+                  [
+                    'event: response.created',
+                    `data: ${JSON.stringify({ type: 'response.created' })}`,
+                    '',
+                  ].join('\n'),
+                ),
+              )
+            }
+            sendHeartbeat()
+            interval = setInterval(sendHeartbeat, 5)
+          },
+          cancel() {
+            cancelCount++
+            if (interval) clearInterval(interval)
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest('conv_initial_timeout', 'test')
+      await expect(
+        createCodexFetch(accessToken, 'conv_initial_timeout')(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              stream: true,
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          },
+        ),
+      ).rejects.toThrow('no visible output')
+      expect(cancelCount).toBe(1)
+    } finally {
+      if (interval) clearInterval(interval)
+      if (originalTimeout === undefined) {
+        delete process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+      } else {
+        process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = originalTimeout
+      }
       globalThis.fetch = originalFetch
       resetCodexCacheContext()
     }

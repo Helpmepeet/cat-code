@@ -65,6 +65,10 @@ const stickyHttpFallback = new Map<string, StickyFallbackEntry>()
 let nowForTest: (() => number) | null = null
 const conversationIdsByCacheKey = new Map<string, string>()
 
+function getCodexInitialOutputTimeoutMs(): number {
+  return parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || '', 10) || 90_000
+}
+
 export function _setStickyFallbackNowForTest(fn: (() => number) | null): void {
   nowForTest = fn
 }
@@ -1110,6 +1114,7 @@ function formatSSE(event: string, data: string): string {
  */
 async function* httpSseToEvents(
   codexResponse: Response,
+  signal?: AbortSignal,
 ): AsyncGenerator<Record<string, unknown>> {
   const IDLE_TIMEOUT_MS =
     parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || '', 10) || 90_000
@@ -1118,17 +1123,27 @@ async function* httpSseToEvents(
   if (!reader) return
 
   let idleTimer: ReturnType<typeof setTimeout> | null = null
-  let idleTimeoutError: Error | null = null
+  let streamError: Error | null = null
+
+  const cancelReader = (error: Error) => {
+    streamError = error
+    reader.cancel(error).catch(() => {})
+  }
+
+  const abortReader = () => {
+    const reason = signal?.reason
+    cancelReader(reason instanceof Error ? reason : new Error('Codex stream aborted'))
+  }
 
   const resetIdleTimer = () => {
     if (idleTimer !== null) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
-      idleTimeoutError = new Error(`Codex stream idle timeout after ${IDLE_TIMEOUT_MS}ms`)
+      const idleTimeoutError = new Error(`Codex stream idle timeout after ${IDLE_TIMEOUT_MS}ms`)
       logForDebugging(
         `[codex-fetch] Streaming idle timeout: no chunks received for ${IDLE_TIMEOUT_MS / 1000}s, aborting`,
         { level: 'error' },
       )
-      reader.cancel(idleTimeoutError).catch(() => {})
+      cancelReader(idleTimeoutError)
       codexResponse.body?.cancel(idleTimeoutError).catch(() => {})
     }, IDLE_TIMEOUT_MS)
   }
@@ -1140,11 +1155,13 @@ async function* httpSseToEvents(
   let buffer = ''
 
   try {
+    if (signal?.aborted) abortReader()
+    signal?.addEventListener('abort', abortReader, { once: true })
     resetIdleTimer()
     while (true) {
       const { done, value } = await reader.read()
+      if (streamError) throw streamError
       if (done) break
-      if (idleTimeoutError) throw idleTimeoutError
       resetIdleTimer()
 
       buffer += decoder.decode(value, { stream: true })
@@ -1165,6 +1182,7 @@ async function* httpSseToEvents(
     }
   } finally {
     clearIdleTimer()
+    signal?.removeEventListener('abort', abortReader)
   }
 }
 
@@ -2594,34 +2612,79 @@ function createPartialStreamReplaySkippedError(
 async function primeCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
   requestCacheMetadata?: CodexRequestCacheMetadata,
+  transport: CodexStreamTransport = 'http',
+  cancelOnTimeout?: (error: Error) => void,
 ): Promise<AsyncIterable<Record<string, unknown>>> {
   const iterator = events[Symbol.asyncIterator]()
   const bufferedEvents: Array<Record<string, unknown>> = []
+  const startedAtMs = Date.now()
+  const timeoutMs = getCodexInitialOutputTimeoutMs()
+  let lastEventType: string | null = null
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  let timeoutError: APIConnectionError | null = null
+  const conversationId = requestCacheMetadata?.conversationId.slice(0, 8) ?? 'unknown'
+  const accountId = requestCacheMetadata?.accountId.slice(0, 8) ?? 'unknown'
+  const initialOutputTimeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const elapsedMs = Date.now() - startedAtMs
+      const message =
+        `Codex ${transport} stream produced no visible output before initial timeout ` +
+        `(${elapsedMs}ms >= ${timeoutMs}ms, events=${bufferedEvents.length}, ` +
+        `last_event=${lastEventType ?? 'none'}, conv=${conversationId}, account=${accountId})`
+      timeoutError = new APIConnectionError({ message })
+      logForDebugging(`[codex-fetch] initial_output_timeout ${message}`, {
+        level: 'error',
+      })
+      cancelOnTimeout?.(timeoutError)
+      reject(timeoutError)
+    }, timeoutMs)
+  })
 
-  while (true) {
-    const next = await iterator.next()
-    if (next.done) {
-      if (bufferedEvents.length === 0) {
-        throw new Error('Codex stream ended before first event')
+  logForDebugging(
+    `[codex-fetch] awaiting_initial_output transport=${transport} ` +
+    `conv=${conversationId} account=${accountId} timeout_ms=${timeoutMs}`,
+  )
+
+  try {
+    while (true) {
+      const next = await Promise.race([iterator.next(), initialOutputTimeout])
+      if (next.done) {
+        if (bufferedEvents.length === 0) {
+          throw new Error('Codex stream ended before first event')
+        }
+        break
       }
-      break
-    }
 
-    const responseFailedError = responseFailedErrorForInitialEvent(
-      next.value,
-      requestCacheMetadata,
-    )
-    if (responseFailedError) {
-      throw responseFailedError
-    }
+      lastEventType = typeof next.value.type === 'string' ? next.value.type : null
 
-    bufferedEvents.push(next.value)
-    if (
-      codexEventBeginsVisibleOutput(next.value) ||
-      next.value.type === 'response.completed'
-    ) {
-      break
+      const responseFailedError = responseFailedErrorForInitialEvent(
+        next.value,
+        requestCacheMetadata,
+      )
+      if (responseFailedError) {
+        throw responseFailedError
+      }
+
+      bufferedEvents.push(next.value)
+      if (
+        codexEventBeginsVisibleOutput(next.value) ||
+        next.value.type === 'response.completed'
+      ) {
+        logForDebugging(
+          `[codex-fetch] initial_output_ready transport=${transport} ` +
+          `conv=${conversationId} account=${accountId} elapsed_ms=${Date.now() - startedAtMs} ` +
+          `events=${bufferedEvents.length} trigger=${lastEventType ?? 'unknown'}`,
+        )
+        break
+      }
     }
+  } catch (error) {
+    if (error === timeoutError) {
+      void iterator.return?.().catch(() => undefined)
+    }
+    throw error
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId)
   }
 
   return {
@@ -2805,6 +2868,7 @@ export function createCodexFetch(
       try {
         codexResponse = await globalThis.fetch(CODEX_BASE_URL, {
           method: 'POST',
+          signal: init?.signal,
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
@@ -2894,10 +2958,13 @@ export function createCodexFetch(
         }
         throw createRetryableCodexHttpError(codexResponse.status, errorText)
       }
+      const initialOutputAbortController = new AbortController()
       return {
         events: await primeCodexEvents(
-          httpSseToEvents(codexResponse),
+          httpSseToEvents(codexResponse, initialOutputAbortController.signal),
           requestCacheMetadata,
+          'http',
+          error => initialOutputAbortController.abort(error),
         ),
         transportContext,
       }
@@ -2924,6 +2991,7 @@ export function createCodexFetch(
               fullInput.length,
             ),
             requestCacheMetadata,
+            'websocket',
           )
           logForDebugging(
             `[codex-cache] transport=websocket conv=${conversationId.slice(0, 8)} ` +
@@ -2998,9 +3066,12 @@ export function createCodexFetch(
     }
 
     if (isStreamingAnthropicRequest) {
+      const initialOutputAbortController = new AbortController()
       const events = await primeCodexEvents(
-        httpSseToEvents(codexResponse),
+        httpSseToEvents(codexResponse, initialOutputAbortController.signal),
         requestCacheMetadata,
+        'http',
+        error => initialOutputAbortController.abort(error),
       )
       return buildAnthropicStreamResponse(
         events,

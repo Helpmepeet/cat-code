@@ -1,6 +1,6 @@
 # Codex Core Map
 
-Last refreshed: 2026-06-16
+Last refreshed: 2026-06-27
 
 ## Purpose
 
@@ -81,6 +81,7 @@ src/codex-core/client.ts:runCodexLLM()
 | Structured account diagnostics | `src/services/api/accountDiagnostics.ts` | `src/entrypoints/sdk/coreSchemas.ts`, `src/services/api/client.ts`, `src/services/api/withRetry.ts` | Downstream remediation only requires `version`, `code`, `severity`, `provider`, and `recoverable`; optional fields are sanitized hints. |
 | WebSocket incremental continuation | `src/services/api/codex-websocket-transport.ts` | `src/services/api/codex-continuation-e2e.test.ts`, `src/utils/messages.ts` | `responseItemsEqual()` and `getIncrementalInputDelta()` are the strict continuation gates. |
 | HTTP fallback / stream normalization | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts` | Adapter owns stream translation for both HTTP SSE and websocket-backed event flows. |
+| Initial stream liveness and aborts | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts`, `src/services/api/codex-websocket-transport.ts` | `primeCodexEvents()` waits for visible output or completion before releasing the stream, uses `CLAUDE_STREAM_IDLE_TIMEOUT_MS` for initial-output and idle timeouts, and cancels HTTP readers on abort. HTTP requests forward the caller `RequestInit.signal`. |
 | Standalone response parsing | `src/codex-core/response.ts` | `src/codex-core/errors.ts` | Core classifies 401/403 as auth, 429 as quota or rate-limit, 400/model text as model, else backend. |
 | Long-running token freshness | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts` | Refresh-on-timer and refresh-on-use are separate paths. Check the persisted vault `refresh` state, transport classifier, and ownership guards before changing account health rules. |
 
