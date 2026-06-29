@@ -101,7 +101,7 @@ Git Safety Protocol:
 2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:
   - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to an existing feature, "fix" means a bug fix, etc.).
   - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files
-  - Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the "what"
+  - Draft a commit message focused on the "why" rather than the "what", sized to the change: for a single-purpose change, a concise 1-2 sentence summary; for a commit spanning multiple distinct changes, follow the summary line with a short bulleted body, one line per change. Do not pad a simple change with a body it does not need.
   - Write the message as if the user wrote it — imperative mood, no "Claude did X" or "AI-assisted" framing
   - Ensure it accurately reflects the changes and their purpose
 3. Run the following commands in parallel:
