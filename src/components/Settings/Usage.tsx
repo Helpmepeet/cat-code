@@ -16,7 +16,7 @@ import { Byline } from '../design-system/Byline.js';
 import { ProgressBar } from '../design-system/ProgressBar.js';
 import { isEligibleForOverageCreditGrant, OverageCreditUpsell } from '../LogoV2/OverageCreditUpsell.js';
 import { isPoolActive, getPoolStatus } from '../../services/api/codexAccountPool.js';
-import { buildPoolUsageDisplayAccounts, fetchPoolUsage, sortPoolUsageDisplayAccounts, type PoolUsageSnapshot } from '../../services/api/codexUsage.js';
+import { buildPoolUsageDisplayAccounts, fetchPoolUsage, isFreePlan, sortPoolUsageDisplayAccounts, type PoolUsageSnapshot } from '../../services/api/codexUsage.js';
 type LimitBarProps = {
   title: string;
   limit: RateLimit;
@@ -417,16 +417,19 @@ function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactN
       <Text bold>Codex accounts</Text>
       {displayAccounts.map((acct) => {
         const label = acct.alias ?? acct.accountId.slice(0, 12);
-        const isCapped = acct.usage
+        const isFree = !!acct.usage && isFreePlan(acct.usage.planType);
+        const isCapped = !isFree && (acct.usage
           ? acct.usage.limitReached || !acct.usage.allowed
-          : acct.status === 'capped';
-        const statusTag = isCapped
-          ? ' · capped'
-          : acct.status === 'dead'
-            ? ' · unavailable'
-            : acct.error
-              ? ' · usage unavailable'
-              : '';
+          : acct.status === 'capped');
+        const statusTag = isFree
+          ? ' · free — no Codex access'
+          : isCapped
+            ? ' · capped'
+            : acct.status === 'dead'
+              ? ' · unavailable'
+              : acct.error
+                ? ' · usage unavailable'
+                : '';
 
         const primaryResetAt = acct.usage && acct.usage.primaryWindow.resetAt > 0
           ? new Date(acct.usage.primaryWindow.resetAt * 1000).toISOString()
@@ -445,22 +448,31 @@ function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactN
         return (
           <Box key={acct.accountId} flexDirection="column">
             <Text bold={true} color={isCapped ? 'red' : undefined}>{label}{statusTag}</Text>
-            {acct.usage ? <>
-              {acct.switchable === false && acct.usage.allowed && !acct.usage.limitReached
-                ? <Text dimColor>Quota info only; account is not routable.</Text>
-                : null}
-              <LimitBar
-                title="5h"
-                limit={{ utilization: acct.usage.primaryWindow.usedPercent, resets_at: primaryResetAt }}
-                maxWidth={maxWidth}
-              />
-              <LimitBar
-                title="7d"
-                limit={{ utilization: acct.usage.secondaryWindow.usedPercent, resets_at: weeklyResetAt }}
-                maxWidth={maxWidth}
-                showTimeInReset={false}
-              />
-            </> : <Text dimColor={true}>{unavailableText}</Text>}
+            {acct.usage ? (
+              isFree ? (
+                // Free plans have no Codex quota; the backend returns a synthetic
+                // "100% used, resets in ~28d" window. Don't render usage bars that
+                // imply an exhausted-but-resettable quota.
+                <Text dimColor={true}>Upgrade to a paid plan to use Codex.</Text>
+              ) : <>
+                {acct.switchable === false && acct.usage.allowed && !acct.usage.limitReached
+                  ? <Text dimColor>Quota info only; account is not routable.</Text>
+                  : null}
+                <LimitBar
+                  title="5h"
+                  limit={{ utilization: acct.usage.primaryWindow.usedPercent, resets_at: primaryResetAt }}
+                  maxWidth={maxWidth}
+                />
+                {acct.usage.hasSecondaryWindow !== false ? (
+                  <LimitBar
+                    title="7d"
+                    limit={{ utilization: acct.usage.secondaryWindow.usedPercent, resets_at: weeklyResetAt }}
+                    maxWidth={maxWidth}
+                    showTimeInReset={false}
+                  />
+                ) : null}
+              </>
+            ) : <Text dimColor={true}>{unavailableText}</Text>}
           </Box>
         );
       })}
