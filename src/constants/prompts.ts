@@ -592,7 +592,7 @@ Common queries on a transcript:
     Grep '"type":"tool_use"'      # list tool calls
     Grep '"stop_reason"'          # find last API response boundary
     Grep '"type":"subagent-'      # enumerate spawn/terminal entries
-    Grep '"tool_use_id":"toolu_'  # link a tool_result back to its tool_use
+    Grep '"tool_use_id":"call_'   # link a tool_result back to its tool_use
 
 The subagent sidecar .meta.json contains:
 
@@ -806,7 +806,7 @@ Common queries on a transcript:
     Grep '"type":"tool_use"'      # list tool calls
     Grep '"stop_reason"'          # find last API response boundary
     Grep '"type":"subagent-'      # enumerate spawn/terminal entries
-    Grep '"tool_use_id":"toolu_'  # link a tool_result back to its tool_use
+    Grep '"tool_use_id":"call_'   # link a tool_result back to its tool_use
 
 The subagent sidecar .meta.json contains:
 

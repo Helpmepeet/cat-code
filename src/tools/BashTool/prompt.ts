@@ -244,9 +244,8 @@ function getSimpleSandboxSection(): string {
           ],
           'When you see evidence of sandbox-caused failure:',
           [
-            "Immediately retry with `dangerouslyDisableSandbox: true` (don't ask, just do it)",
+            'Retry with `dangerouslyDisableSandbox: true` — the harness will prompt the user to approve that specific command, so you do not need to ask separately first.',
             'Briefly explain what sandbox restriction likely caused the failure. Be sure to mention that the user can use the `/sandbox` command to manage restrictions.',
-            'This will prompt the user for permission',
           ],
           'Treat each command you execute with `dangerouslyDisableSandbox: true` individually. Even if you have recently run a command with this setting, you should default to running future commands within the sandbox.',
           'Do not suggest adding sensitive paths like ~/.bashrc, ~/.zshrc, ~/.ssh/*, or credential files to the sandbox allowlist.',
@@ -334,6 +333,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
     'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.',
     'Always quote file paths that contain spaces with double quotes in your command (e.g., cd "path with spaces/file.txt")',
     'Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.',
+    'If a command fails or returns no output, do not assume success: check the exit status and stderr, then retry with a corrected command or report the failure with its output. Empty output is a result to interpret, not a completion signal.',
     `You may specify an optional timeout in milliseconds (up to ${getMaxTimeoutMs()}ms / ${getMaxTimeoutMs() / 60000} minutes). By default, your command will timeout after ${getDefaultTimeoutMs()}ms (${getDefaultTimeoutMs() / 60000} minutes).`,
     ...(backgroundNote !== null ? [backgroundNote] : []),
     'When issuing multiple commands:',
