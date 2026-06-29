@@ -12,6 +12,13 @@ bun run build:dev:full
 
 Do not use `bun run build` or `./cli` unless explicitly asked.
 
+## Git workflow
+
+- This is a solo repo. Commit directly to `main`. Do **not** create branches, worktrees, or PRs unless the user explicitly asks.
+- If the user does ask for a branch/PR, delete it once it is merged — don't leave it lingering.
+- Don't use `git stash` as a long-term checkpoint; if work matters, commit it.
+- Commit/push only when the user asks. Never use `--no-verify`.
+
 ## Navigation
 
 - Use `docs/maps/WORKSPACE_MAP.md` before broad source search for non-trivial questions, bugs, or features.
