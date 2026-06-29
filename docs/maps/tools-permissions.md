@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-06-17 against the current source tree.
+Last refreshed: 2026-06-27 against the current source tree.
 
 ## Purpose
 
@@ -74,6 +74,7 @@ The live tool system is assembled in layers:
 | MCP config layering | `src/services/mcp/config.ts` | `src/utils/config.ts`, `src/utils/plugins/mcpPluginIntegration.ts`, `src/utils/settings/types.ts` | Config layering spans global, project, managed, plugin, and connector sources. Deduplication is content-based, not just by server name. |
 | MCP tool exposure | `src/services/mcp/client.ts` | `src/tools/MCPTool/MCPTool.ts`, `src/services/mcp/mcpStringUtils.ts`, `src/services/mcp/utils.ts` | Connected MCP tools are wrapped into normal `Tool` objects. `mcpInfo` preserves original server/tool identity even when display names are unprefixed. |
 | MCP resources and auth tools | `src/services/mcp/client.ts` | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/`, `src/tools/McpAuthTool/` | Resource listing and auth surfaces are first-class tools, separate from normal MCP server tools. |
+| Standalone MCP helper servers | `scripts/mcp/` | Helper-specific tests and any CLI/transcript files the helper spawns or reads | Scripts such as `scripts/mcp/gpt-agent.ts` are external stdio MCP servers, not part of the in-process MCP client. Route their protocol, job persistence, and result shaping through the script first. |
 | Tool search and deferred loading | `src/utils/toolSearch.ts` | `src/tools/ToolSearchTool/ToolSearchTool.ts`, `src/tools/ToolSearchTool/prompt.ts`, `src/services/api/claude.ts` | Tool search decides whether deferred tools are omitted from the inline tool list and discovered later through tool references. |
 | Tool input validation | `src/services/tools/toolExecution.ts` | `src/Tool.ts`, specific tool `inputSchema`, tool `validateInput()` implementation | The execution layer owns schema parsing and calls `validateInput()` before permission checks. Tool implementations own domain-specific validation details. |
 | Shell-specific validation | `src/tools/BashTool/bashPermissions.ts` | `src/tools/BashTool/pathValidation.ts`, `src/tools/BashTool/readOnlyValidation.ts`, `src/tools/BashTool/shouldUseSandbox.ts` | Bash has deeper subcommand classification, redirection checks, path validation, sandbox routing, and classifier integration than most tools. |
@@ -228,6 +229,7 @@ Use focused checks first, then the documented build:
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
 | Tool search behavior | `bun test` for `src/tools/ToolSearchTool/` and `src/utils/toolSearch.ts` if present in current snapshot |
 | MCP configuration and client behavior | MCP-related tests under `src/services/mcp/` and integration checks through connected server flows |
+| Standalone MCP helper scripts | `bun test scripts/mcp/gpt-agent.test.ts` for `scripts/mcp/gpt-agent.ts`; this script spawns the Cat Code CLI, stores named GPT/background-job state under `.cat-code/mcp`, and summarizes background usage by scanning session transcript `codex_send_path`, `codex_stream_surface`, and `prompt_cache_break` system entries. |
 | Build-level validation | `bun run build:dev:full` |
 
 ## Traps And Stale Assumptions

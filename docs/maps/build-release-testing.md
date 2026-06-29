@@ -1,9 +1,10 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-06-08 against `CLAUDE.md`,
+Last refreshed: 2026-06-27 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
-`scripts/test-codex-*.ts`, `web/package.json`, `src/migrations/`,
-update/release/upgrade command surfaces, and colocated tests.
+`scripts/mcp/gpt-agent.ts`, `scripts/test-codex-*.ts`, `web/package.json`,
+`src/migrations/`, update/release/upgrade command surfaces, and colocated
+tests.
 
 Use this as the daily-refreshable routing layer for build, development,
 compile, release-note, updater, migration, validation, lint, and test-routing
@@ -145,6 +146,7 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Codex two-turn smoke | `bun run scripts/test-codex-core-conversation.ts --account <alias> --model <model>` | `scripts/test-codex-core-conversation.ts` |
 | Codex effort mapping | `bun run scripts/test-codex-effort.ts` | `scripts/test-codex-effort.ts` |
 | Codex tool-call continuity | `bun run scripts/test-codex-stream-tool-call-ids.ts` | `scripts/test-codex-stream-tool-call-ids.ts` |
+| GPT agent MCP helper | `bun test scripts/mcp/gpt-agent.test.ts` | `scripts/mcp/gpt-agent.ts` |
 
 `scripts/test-codex-core-conversation.ts` has a usage string mentioning
 `pnpm tsx`, but the file is runnable through the repo's Bun workflow when Bun
@@ -166,6 +168,7 @@ paths.
 | App runtime | `bun test src/app-runtime/*.test.ts` |
 | Browser app/runtime | `bun test src/web/*.test.ts src/app-runtime/*.test.ts` plus `bun run --cwd web test` |
 | Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts src/commands/agent/agent.test.ts`. |
+| Standalone MCP helper scripts | Run the matching script test, for example `bun test scripts/mcp/gpt-agent.test.ts` when changing `scripts/mcp/gpt-agent.ts` job state, stdio protocol, CLI spawning, or transcript-derived usage summaries. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |
 
 Colocated tests use `bun:test` imports (`describe`, `test`, `expect`,

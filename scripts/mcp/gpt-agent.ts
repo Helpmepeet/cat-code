@@ -61,7 +61,17 @@ type StoreEntry = { sessionId: string; model?: Model }
 type ConversationStore = Record<string, StoreEntry>
 type LockRecord = { pid: number; token: string; createdAt: number }
 type PendingCommit = { conversation: string; entry: { sessionId: string; model: Model }; createdAt: number }
-type AgentResult = { text: string; sessionId: string; isError: boolean; name?: string }
+type UsageSummary = {
+  calls: number
+  input_tokens: number
+  cached_input_tokens: number
+  uncached_input_tokens: number
+  output_tokens: number
+  full_sends: number
+  incremental_sends: number
+  prompt_cache_breaks: number
+}
+type AgentResult = { text: string; sessionId: string; isError: boolean; name?: string; usage?: UsageSummary }
 type AgentRunResult = AgentResult & { model: Model; process?: ChildProcessSummary }
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelling' | 'cancelled'
 type JobRequest = { args: ValidatedArguments; cwd: string; createdAt: string; audit?: AuditContext }
@@ -286,6 +296,45 @@ function readSessionAuditSummary(sessionId: string, cwd: string): JsonObject {
   if (effort) summary.effort = effort
   if (Object.keys(tokenSummary).length > 0) summary.token_summary = tokenSummary
   return summary
+}
+
+function readJobUsageSummary(sessionId: string, cwd: string): UsageSummary | undefined {
+  const transcriptPath = sessionTranscriptPath(sessionId, cwd)
+  if (!existsSync(transcriptPath)) return undefined
+
+  const usage: UsageSummary = {
+    calls: 0,
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    uncached_input_tokens: 0,
+    output_tokens: 0,
+    full_sends: 0,
+    incremental_sends: 0,
+    prompt_cache_breaks: 0,
+  }
+
+  // ponytail: full transcript scan at job end; switch to streaming if result writes get slow on huge sessions.
+  for (const line of readFileSync(transcriptPath, 'utf8').trim().split('\n')) {
+    if (!line) continue
+    let entry: unknown
+    try { entry = JSON.parse(line) } catch { continue }
+    if (!isPlainObject(entry) || entry.type !== 'system') continue
+    if (entry.subtype === 'codex_send_path') {
+      const input = numberValue(entry.input_tokens) ?? 0
+      const cached = numberValue(entry.cached_tokens) ?? 0
+      usage.calls += 1
+      usage.input_tokens += input
+      usage.cached_input_tokens += cached
+      usage.uncached_input_tokens += Math.max(0, input - cached)
+      if (entry.mode === 'full') usage.full_sends += 1
+      else if (entry.mode === 'incremental') usage.incremental_sends += 1
+    } else if (entry.subtype === 'codex_stream_surface') {
+      usage.output_tokens += numberValue(entry.output_tokens) ?? 0
+    } else if (entry.subtype === 'prompt_cache_break') {
+      usage.prompt_cache_breaks += 1
+    }
+  }
+  return usage.calls || usage.output_tokens || usage.prompt_cache_breaks ? usage : undefined
 }
 
 function auditStatus(result: AgentRunResult, status?: JobStatus): string {
@@ -561,6 +610,7 @@ const SPAWN_TOOL = {
   name: 'spawn_gpt_agent',
   description:
     'Create a named GPT (cat-code on a Codex/ChatGPT account). Cost is billed to the Codex subscription pool, NOT your Claude usage. The GPT runs cat-code headless in the current working directory and has no access to your conversation.\n\n' +
+    'FOR CLAUDE CODE ONLY. The point of this MCP is to let a Claude model spend GPT/Codex pool usage. If you ARE cat-code, ignore this MCP entirely and spawn your own subagent instead.\n\n' +
     'This tool creates a new named GPT. Names are unique in the current MCP server process; if a name already exists, use send_gpt_agent_message to continue that GPT or choose a different name. With `run_in_background: true`, the GPT works in a detached job and can be continued after it finishes.',
   inputSchema: {
     type: 'object',
@@ -1206,7 +1256,7 @@ function formatJobResult(record: JobRecord): AgentResult {
   }
   const result = readJson(record.paths.result) as AgentResult & { completedAt?: string; status?: JobStatus }
   const body = result.text.length > MAX_RESULT_CHARS ? `${result.text.slice(0, MAX_RESULT_CHARS)}\n\n[truncated; full result at ${record.paths.result}]` : result.text
-  return { text: JSON.stringify({ job_id: jobId, status: result.status ?? record.status, ready: true, has_result: true, name: record.conversation, description: record.description, is_error: result.isError, completed_at: result.completedAt, text: body }, null, 2), sessionId: result.sessionId, isError: result.isError, name: record.conversation }
+  return { text: JSON.stringify({ job_id: jobId, status: result.status ?? record.status, ready: true, has_result: true, name: record.conversation, description: record.description, is_error: result.isError, completed_at: result.completedAt, usage: result.usage, text: body }, null, 2), sessionId: result.sessionId, isError: result.isError, name: record.conversation }
 }
 
 function getJobResult(params: unknown): AgentResult {
@@ -1426,6 +1476,7 @@ async function runJobWorker(jobId: string): Promise<void> {
     writeJobStatus(jobId, { status: 'running', workerPid: process.pid, cwd: request.cwd, conversation: request.args.conversation, description: request.args.description })
     const result = await runForegroundToolCall(request.args, controller.signal, { stdout: paths.stdout, stderr: paths.stderr })
     const status: JobStatus = cancelled ? 'cancelled' : result.isError ? 'failed' : 'completed'
+    result.usage = result.sessionId ? readJobUsageSummary(result.sessionId, request.cwd) : undefined
     writeJobResult(jobId, { ...result, status })
     writeJobStatus(jobId, { status, sessionId: result.sessionId, isError: result.isError, error: result.isError ? result.text.slice(0, 4000) : undefined })
     appendTerminalAudit(request.args, audit, 'background', startedAtMs, result, jobId, status)

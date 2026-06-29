@@ -219,6 +219,67 @@ printf '%s\n' '{"result":"done","session_id":"session-bg-audit","is_error":false
   }
 })
 
+test('background result includes aggregated usage summary', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-bg-usage-'))
+  const fakeCli = join(dir, 'cat-code')
+  const jobs = join(dir, 'jobs')
+  const configDir = join(dir, 'config')
+  const transcript = join(configDir, 'projects', sanitizePath(realpathSync(dir)), 'session-bg-usage.jsonl')
+  writeFileSync(fakeCli, `#!/usr/bin/env bash
+mkdir -p "$(dirname "$FAKE_TRANSCRIPT")"
+cat > "$FAKE_TRANSCRIPT" <<'JSONL'
+{"type":"system","subtype":"codex_send_path","mode":"incremental","cached_tokens":4,"input_tokens":12}
+{"type":"system","subtype":"codex_stream_surface","input_tokens":12,"output_tokens":3,"completed":true}
+{"type":"system","subtype":"codex_send_path","mode":"full","cached_tokens":8,"input_tokens":20}
+{"type":"system","subtype":"codex_stream_surface","input_tokens":20,"output_tokens":5,"completed":true}
+{"type":"system","subtype":"prompt_cache_break"}
+JSONL
+printf '%s\n' '{"result":"done","session_id":"session-bg-usage","is_error":false}'
+`)
+  chmodSync(fakeCli, 0o700)
+
+  const child = spawn('bun', [SERVER], {
+    cwd: dir,
+    env: {
+      ...process.env,
+      CAT_CODE_CLI: fakeCli,
+      CLAUDE_CONFIG_DIR: configDir,
+      GPT_AGENT_BACKGROUND_DIR: jobs,
+      GPT_AGENT_TIMEOUT_MS: '5000',
+      FAKE_TRANSCRIPT: transcript,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  try {
+    const startResponse = await callTool(child, 1, 'spawn_gpt_agent', {
+      prompt: 'usage task',
+      model: 'gpt-5.4-mini',
+      run_in_background: true,
+    })
+    const jobId = startResponse.result.content[0].text.match(/job_id: (job_[a-zA-Z0-9-]+)/)?.[1]
+    expect(jobId).toBeString()
+
+    const resultPath = join(jobs, jobId!, 'result.json')
+    await waitForFile(resultPath, 4000)
+    const result = JSON.parse(readFileSync(resultPath, 'utf8'))
+
+    expect(result.usage).toEqual({
+      calls: 2,
+      input_tokens: 32,
+      cached_input_tokens: 12,
+      uncached_input_tokens: 20,
+      output_tokens: 8,
+      full_sends: 1,
+      incremental_sends: 1,
+      prompt_cache_breaks: 1,
+    })
+  } finally {
+    child.kill('SIGTERM')
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('background spawn creates a named GPT even without an explicit name', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gpt-agent-bg-addressable-'))
   const fakeCli = join(dir, 'cat-code')
