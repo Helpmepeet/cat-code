@@ -6,6 +6,7 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_PII_TAGGED,
   logEvent,
 } from '../../services/analytics/index.js'
+import { buildProviderInstructionAssembly } from '../../services/api/instructionAssembly.js'
 import { queryModelWithoutStreaming } from '../../services/api/claude.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
@@ -18,8 +19,10 @@ import {
   createUserMessage,
   extractTag,
   extractTextContent,
+  normalizeMessagesForAPI,
 } from '../messages.js'
 import { getSmallFastModel } from '../model/model.js'
+import { resolveRequestProvider } from '../model/providers.js'
 import { jsonParse } from '../slowOperations.js'
 import { asSystemPrompt } from '../systemPromptType.js'
 import {
@@ -210,8 +213,11 @@ export async function applySkillImprovement(
   const updateList = updates.map(u => `- ${u.section}: ${u.change}`).join('\n')
   const model = getSmallFastModel()
   const provider = resolveRequestProvider(model)
-
-  const response = await queryModelWithoutStreaming({
+  // Build a provider-native instruction assembly so the OpenAI/Codex path (the
+  // default on the Codex fork) gets the payload translateToCodexBody requires;
+  // without it the request throws before being sent. No-op for Anthropic.
+  const assembly = buildProviderInstructionAssembly({
+    provider,
     messages: [
       createUserMessage({
         content: `You are editing a skill definition file. Apply the following improvements to the skill.
@@ -235,6 +241,14 @@ Rules:
     systemPrompt: asSystemPrompt([
       'You edit skill definition files to incorporate user preferences. Output only the updated file content.',
     ]),
+    userContext: {},
+    systemContext: {},
+  })
+
+  const response = await queryModelWithoutStreaming({
+    messages: normalizeMessagesForAPI(assembly.messages),
+    systemPrompt: assembly.systemPrompt,
+    openAIInstructionAssembly: assembly.openAIInstructionAssembly,
     thinkingConfig: { type: 'disabled' as const },
     tools: [],
     signal: createAbortController().signal,

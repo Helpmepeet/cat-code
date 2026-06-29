@@ -5,10 +5,12 @@ import { logForDebugging } from '../utils/debug.js'
 import {
   createUserMessage,
   getAssistantMessageText,
+  normalizeMessagesForAPI,
 } from '../utils/messages.js'
 import { getSmallFastModel } from '../utils/model/model.js'
 import { resolveRequestProvider } from '../utils/model/providers.js'
 import { asSystemPrompt } from '../utils/systemPromptType.js'
+import { buildProviderInstructionAssembly } from './api/instructionAssembly.js'
 import { queryModelWithoutStreaming } from './api/claude.js'
 import { getSessionMemoryContent } from './SessionMemory/sessionMemoryUtils.js'
 
@@ -41,9 +43,21 @@ export async function generateAwaySummary(
     recent.push(createUserMessage({ content: buildAwaySummaryPrompt(memory) }))
     const model = getSmallFastModel()
     const provider = resolveRequestProvider(model)
-    const response = await queryModelWithoutStreaming({
+    // Build a provider-native instruction assembly so the OpenAI/Codex path
+    // (the default on the Codex fork) receives the payload translateToCodexBody
+    // requires — without it the request throws before being sent. No-op shape
+    // for genuine Anthropic providers.
+    const assembly = buildProviderInstructionAssembly({
+      provider,
       messages: recent,
       systemPrompt: asSystemPrompt([]),
+      userContext: {},
+      systemContext: {},
+    })
+    const response = await queryModelWithoutStreaming({
+      messages: normalizeMessagesForAPI(assembly.messages),
+      systemPrompt: assembly.systemPrompt,
+      openAIInstructionAssembly: assembly.openAIInstructionAssembly,
       thinkingConfig: { type: 'disabled' },
       tools: [],
       signal,

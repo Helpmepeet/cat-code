@@ -1,11 +1,12 @@
 import { randomUUID } from 'crypto'
 import type { QuerySource } from '../../constants/querySource.js'
+import { buildProviderInstructionAssembly } from '../../services/api/instructionAssembly.js'
 import { queryModelWithoutStreaming } from '../../services/api/claude.js'
 import type { Message } from '../../types/message.js'
 import { createAbortController } from '../../utils/abortController.js'
 import { logError } from '../../utils/log.js'
 import { toError } from '../errors.js'
-import { extractTextContent } from '../messages.js'
+import { extractTextContent, normalizeMessagesForAPI } from '../messages.js'
 import { asSystemPrompt } from '../systemPromptType.js'
 import { resolveRequestProvider } from '../model/providers.js'
 import type { REPLHookContext } from './postSamplingHooks.js'
@@ -86,10 +87,23 @@ export function createApiQueryHook<TResult>(
         context.toolUseContext.options.mainLoopProvider,
       )
 
-      // Make API call
-      const response = await queryModelWithoutStreaming({
+      // Build a provider-native instruction assembly so the OpenAI/Codex path
+      // (the default on the Codex fork) receives the payload
+      // translateToCodexBody requires; without it the request throws before
+      // being sent. Returns the plain Anthropic shape for other providers.
+      const assembly = buildProviderInstructionAssembly({
+        provider,
         messages,
         systemPrompt,
+        userContext: {},
+        systemContext: {},
+      })
+
+      // Make API call
+      const response = await queryModelWithoutStreaming({
+        messages: normalizeMessagesForAPI(assembly.messages),
+        systemPrompt: assembly.systemPrompt,
+        openAIInstructionAssembly: assembly.openAIInstructionAssembly,
         thinkingConfig: { type: 'disabled' as const },
         tools,
         signal: createAbortController().signal,

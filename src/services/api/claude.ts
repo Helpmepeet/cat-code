@@ -89,6 +89,7 @@ import {
   getDefaultOpusModel,
   getDefaultSonnetModel,
   getSmallFastModel,
+  getSmallFastModelForProvider,
   isNonCustomOpusModel,
 } from '../../utils/model/model.js'
 import {
@@ -103,7 +104,10 @@ import {
   extractQuotaStatusFromHeaders,
 } from '../claudeAiLimits.js'
 import { getAPIContextManagement } from '../compact/apiMicrocompact.js'
-import type { OpenAIInstructionAssembly } from './instructionAssembly.js'
+import {
+  buildProviderInstructionAssembly,
+  type OpenAIInstructionAssembly,
+} from './instructionAssembly.js'
 
 // Non-streaming requests have a 10min max per the docs:
 // https://platform.claude.com/docs/en/api/errors#long-requests
@@ -3491,15 +3495,40 @@ export async function queryHaiku({
         }),
       ]
 
-      const result = await queryModelWithoutStreaming({
+      // On the Codex/OpenAI fork getSmallFastModelForProvider() returns a gpt-*
+      // model, which resolveRequestProvider() routes to OpenAI. That path
+      // requires a provider-native instruction assembly (translateToCodexBody
+      // throws without it), so build one here rather than letting the OpenAI
+      // request go out empty. buildProviderInstructionAssembly returns the
+      // plain Anthropic shape for non-OpenAI providers, so this is a no-op for
+      // genuine Anthropic/Bedrock/Vertex/Foundry callers.
+      const model = getSmallFastModelForProvider()
+      const provider = resolveRequestProvider(model)
+      const assembly = buildProviderInstructionAssembly({
+        provider,
         messages,
         systemPrompt,
+        userContext: {},
+        systemContext: {},
+      })
+
+      const result = await queryModelWithoutStreaming({
+        messages: assembly.messages,
+        systemPrompt: assembly.systemPrompt,
+        openAIInstructionAssembly: assembly.openAIInstructionAssembly,
+        // thinkingConfig: 'disabled' lands as undefined on the request body
+        // before it reaches the Codex adapter, so the Codex server would
+        // default to high reasoning effort for these cheap calls. Pass an
+        // explicit low effort so the adapter sends reasoning.effort=low on the
+        // OpenAI path. Harmless on Anthropic (Haiku ignores effort).
         thinkingConfig: { type: 'disabled' },
         tools: [],
         signal,
         options: {
           ...options,
-          model: getSmallFastModel(),
+          model,
+          provider,
+          effortValue: options.effortValue ?? 'low',
           enablePromptCaching: options.enablePromptCaching ?? false,
           outputFormat,
           async getToolPermissionContext() {

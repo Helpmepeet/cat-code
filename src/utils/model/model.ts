@@ -40,6 +40,26 @@ export function getSmallFastModel(): ModelName {
   return process.env.ANTHROPIC_SMALL_FAST_MODEL || getDefaultHaikuModel()
 }
 
+/**
+ * Provider-aware small/fast model for cheap secondary calls (WebFetch
+ * post-processing, session titles, away summaries, etc).
+ *
+ * On the Codex/OpenAI fork the Anthropic account pool is retired, so the
+ * default Haiku model from getSmallFastModel() has no working credentials and
+ * every call fails with a connection error. Route those secondary calls to the
+ * GPT mini instead, mirroring getDefaultMainLoopModelSetting()'s Codex branch.
+ *
+ * Anthropic-billing consumers (token estimation, claudeAiLimits) keep calling
+ * getSmallFastModel() directly so the ANTHROPIC_SMALL_FAST_MODEL env var and
+ * Bedrock inference-profile resolution still apply for them.
+ */
+export function getSmallFastModelForProvider(): ModelName {
+  if (isCodexSubscriber()) {
+    return getModelStrings().gpt54mini
+  }
+  return getSmallFastModel()
+}
+
 export function isNonCustomOpusModel(model: ModelName): boolean {
   return (
     model === getModelStrings().opus40 ||
