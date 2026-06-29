@@ -20,6 +20,9 @@ const GHA_SUBPROCESS_SCRUB = [
   'ANTHROPIC_FOUNDRY_API_KEY',
   'ANTHROPIC_CUSTOM_HEADERS',
 
+  // Third-party research provider auth — Cat Code reads it in-process only
+  'EXA_API_KEY',
+
   // OTLP exporter headers — documented to carry Authorization=Bearer tokens
   // for monitoring backends; read in-process by OTEL SDK, subprocesses never need them
   'OTEL_EXPORTER_OTLP_HEADERS',
