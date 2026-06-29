@@ -349,9 +349,6 @@ export function Config({
     type: 'boolean' as const,
     onChange(enabled_0: boolean) {
       clearFastModeCooldown();
-      updateSettingsForSource('userSettings', {
-        fastMode: enabled_0 ? true : undefined
-      });
       if (enabled_0) {
         setAppState(prev_7 => ({
           ...prev_7,

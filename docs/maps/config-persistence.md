@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-06-18
+Last refreshed: 2026-06-27
 
 ## Purpose
 
@@ -37,6 +37,7 @@ for the config and persistence slice.
 | Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. Arrays replace during source writes but concat/dedupe during normal merged reads. |
 | Hot reload of settings | `src/utils/settings/changeDetector.ts` | `src/utils/settings/applySettingsChange.ts`, `src/utils/hooks.ts` | File watcher changes run `ConfigChange` hooks first. `fanOut()` owns cache reset before subscribers read fresh settings, and `applySettingsChange()` is shared by both interactive AppState updates and the headless/SDK subscribe path. MDM/plist/registry changes are polled. |
 | Initial merged settings snapshot | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts` | `getInitialSettings()`/`getSettings_DEPRECATED()` use a session cache. Reset that cache through the established change paths, not per listener. |
+| Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.js` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
 | Global config file location | `src/utils/env.ts` | `src/utils/envUtils.ts`, `src/constants/oauth.ts` | `getGlobalClaudeFile()` uses legacy `~/.cat-code/.config.json` if present, otherwise `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`. The suffix can vary for OAuth config. |
 | Global config reads and writes | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/lockfile.ts` | `enableConfigs()` gates reads. `saveGlobalConfig()` uses a lock, backups, cache write-through, and an auth-loss guard. |
 | Project instruction files and rule globs | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/markdownConfigLoader.ts` | Project instruction discovery now checks `CLAUDE.md`, `.cat-code/CLAUDE.md`, and `.cat-code/rules/*.md` before legacy `.claude` fallbacks, across cwd ancestors and additional dirs. |
@@ -148,6 +149,9 @@ Do not treat `src/history.ts` or prompt input history as transcript truth.
   not treat disk-backed `settings.effortLevel` as the owner of
   `AppState.effortValue`; session-scoped `/effort` state is updated by the
   command/UI path instead.
+- Do not treat `settings.fastMode` as the current-session fast-mode toggle.
+  `getInitialFastModeSetting()` starts sessions off, and `/fast` plus Settings
+  Config mutate `AppState.fastMode` directly.
 - Internal settings writes are suppressed from watcher notifications for a short
   window; do not expect every write to produce UI reload churn.
 - Project config keys are keyed by canonical git root when possible, so

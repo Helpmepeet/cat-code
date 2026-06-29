@@ -12,12 +12,8 @@ import type { LocalJSXCommandOnDone } from '../../types/command.js';
 import { clearFastModeCooldown, getFastModeModelDisplay, getFastModeModel, getFastModeRuntimeState, getFastModeUnavailableReason, isFastModeEnabled, isFastModeSupportedByModel, prefetchFastModeStatus } from '../../utils/fastMode.js';
 import { formatDuration } from '../../utils/format.js';
 import { formatModelPricing, getOpus46CostTier } from '../../utils/modelCost.js';
-import { updateSettingsForSource } from '../../utils/settings/settings.js';
 function applyFastMode(enable: boolean, setAppState: (f: (prev: AppState) => AppState) => void): void {
   clearFastModeCooldown();
-  updateSettingsForSource('userSettings', {
-    fastMode: enable ? true : undefined
-  });
   if (enable) {
     setAppState(prev => {
       // Only switch model if current model doesn't support fast mode

@@ -29,7 +29,6 @@ import {
 import { getAPIProvider } from './model/providers.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import {
-  getInitialSettings,
   getSettingsForSource,
   updateSettingsForSource,
 } from './settings/settings.js'
@@ -170,12 +169,7 @@ export function getInitialFastModeSetting(model: ModelSetting): boolean {
   if (!isFastModeSupportedByModel(model)) {
     return false
   }
-  const settings = getInitialSettings()
-  // If per-session opt-in is required, fast mode starts off each session
-  if (settings.fastModePerSessionOptIn) {
-    return false
-  }
-  return settings.fastMode === true
+  return false
 }
 
 export function isFastModeSupportedByModel(
@@ -195,9 +189,7 @@ export function isFastModeSupportedByModel(
 }
 
 // --- Fast mode runtime state ---
-// Separate from user preference (settings.fastMode). This tracks the actual
-// operational state: whether we're actively sending fast speed or in cooldown
-// after a rate limit.
+// Tracks whether we're actively sending fast speed or in cooldown after a rate limit.
 
 export type FastModeRuntimeState =
   | { status: 'active' }
