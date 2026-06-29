@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, utimesSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'
-import { clearSessionMessagesCache, getLastSessionLog, getTranscriptPathForSession } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -58,5 +58,58 @@ describe('session storage', () => {
       mode: 'agent',
       firstPrompt: 'resume me',
     })
+  })
+
+  test('enriched modified tracks last in-file timestamp, not drifted mtime', async () => {
+    const lastMessageTs = '2026-06-20T11:53:25.000Z'
+    // file-history-snapshot is written during the turn and carries a nested
+    // timestamp (FileHistorySnapshot.timestamp). It is the last *timestamped*
+    // entry here, so enrichment adopts it — minutes from the message, unlike
+    // mtime which the bug let drift by days. This mirrors real JSONL: the
+    // extractor is a flat scan, so the nested timestamp is what it finds.
+    const snapshotTs = '2026-06-20T11:55:00.000Z'
+    const transcript = [
+      {
+        type: 'user',
+        uuid: randomUUID(),
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: lastMessageTs,
+        message: { role: 'user', content: 'do the thing' },
+      },
+      // last-prompt carries no timestamp — must not be the source.
+      { type: 'last-prompt', lastPrompt: 'do the thing' },
+      {
+        type: 'file-history-snapshot',
+        messageId: randomUUID(),
+        snapshot: { trackedFileBackups: {}, timestamp: snapshotTs },
+        isSnapshotUpdate: false,
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${transcript}\n`)
+    // Simulate mtime drift: a metadata rewrite bumps mtime days past the last
+    // activity (the bug this guards against would surface this as the time).
+    const driftedMtime = new Date('2026-06-23T05:53:00.000Z')
+    utimesSync(path, driftedMtime, driftedMtime)
+
+    const lite = await getSessionFilesLite(tempDir)
+    expect(lite).toHaveLength(1)
+    // Lite (stat-only) still reflects mtime until enriched.
+    expect(lite[0]!.modified.toISOString()).toBe(driftedMtime.toISOString())
+
+    const { logs } = await enrichLogs(lite, 0, 1)
+    expect(logs).toHaveLength(1)
+    // After enrichment, modified is the last in-file timestamp (snapshotTs here),
+    // never the drifted mtime — the days-off value can no longer leak through.
+    expect(logs[0]!.modified.toISOString()).toBe(snapshotTs)
+    expect(logs[0]!.modified.getTime()).toBeLessThan(driftedMtime.getTime())
   })
 })

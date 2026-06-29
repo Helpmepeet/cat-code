@@ -4420,11 +4420,15 @@ export async function loadAllProjectsMessageLogsProgressive(
 
   const { logs, nextIndex } = await enrichLogs(sorted, 0, initialEnrichCount)
 
-  // enrichLogs returns fresh unshared objects — safe to mutate in place
-  logs.forEach((log, i) => {
+  // Re-sort the enriched batch by corrected `modified` (enrichLogs replaces the
+  // mtime-based value with the real last-activity timestamp). `allStatLogs`
+  // stays in mtime order — nextIndex indexes into it for progressive loading.
+  // enrichLogs returns fresh unshared objects — safe to mutate in place.
+  const enrichedSorted = sortLogs(logs)
+  enrichedSorted.forEach((log, i) => {
     log.value = i
   })
-  return { logs, allStatLogs: sorted, nextIndex }
+  return { logs: enrichedSorted, allStatLogs: sorted, nextIndex }
 }
 
 /**
@@ -4479,11 +4483,15 @@ export async function loadSameRepoMessageLogsProgressive(
     initialEnrichCount,
   )
 
-  // enrichLogs returns fresh unshared objects — safe to mutate in place
-  logs.forEach((log, i) => {
+  // Re-sort by corrected `modified`: allStatLogs is ordered by file mtime, but
+  // enrichLogs replaces mtime with the real last-activity timestamp, so the
+  // enriched batch needs re-sorting. enrichLogs returns fresh unshared objects
+  // — safe to mutate in place.
+  const sorted = sortLogs(logs)
+  sorted.forEach((log, i) => {
     log.value = i
   })
-  return { logs, allStatLogs, nextIndex }
+  return { logs: sorted, allStatLogs, nextIndex }
 }
 
 /**
@@ -4981,6 +4989,7 @@ type LiteMetadata = {
   prNumber?: number
   prUrl?: string
   prRepository?: string
+  lastTimestamp?: string
 }
 
 /**
@@ -5188,6 +5197,16 @@ async function readLiteMetadata(
     }
   }
 
+  // Last in-file timestamp ≈ real last-activity time. Used to correct
+  // `modified`, which the lite path otherwise sets from file mtime — and mtime
+  // drifts (by days) when bookkeeping rewrites the file long after the final
+  // message. This is a flat scan of the tail, so the match may be a timestamped
+  // bookkeeping write (e.g. a file-history-snapshot's nested timestamp) rather
+  // than the last message itself — acceptable: those land within the session,
+  // always far closer to truth than a drifted mtime. Undefined if the tail has
+  // no timestamp at all (then enrichLog keeps the mtime fallback).
+  const lastTimestamp = extractLastJsonStringField(tail, 'timestamp')
+
   return {
     firstPrompt,
     gitBranch,
@@ -5201,6 +5220,7 @@ async function readLiteMetadata(
     prNumber,
     prUrl,
     prRepository,
+    lastTimestamp,
   }
 }
 
@@ -5420,9 +5440,19 @@ async function enrichLog(
 
   const meta = await readLiteMetadata(log.fullPath, log.fileSize ?? 0, readBuf)
 
+  // Prefer the last in-file timestamp over the lite path's mtime fallback
+  // (`log.modified`), which drifts when the file is rewritten after the final
+  // message. Keep mtime if the timestamp is missing or unparseable.
+  let modified = log.modified
+  if (meta.lastTimestamp) {
+    const parsed = new Date(meta.lastTimestamp)
+    if (!Number.isNaN(parsed.getTime())) modified = parsed
+  }
+
   const enriched: LogOption = {
     ...log,
     isLite: false,
+    modified,
     firstPrompt: meta.firstPrompt,
     gitBranch: meta.gitBranch,
     isSidechain: meta.isSidechain,
