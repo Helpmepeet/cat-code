@@ -114,6 +114,11 @@ export function createApiQueryHook<TResult>(
           },
           model,
           provider,
+          // disabled thinking lands as undefined on the body and never reaches
+          // the Codex adapter, which would then default to high reasoning
+          // effort. Pin low effort for these cheap hook evaluations. No-op on
+          // Anthropic (Haiku ignores effort).
+          effortValue: 'low',
           toolChoice: undefined,
           isNonInteractiveSession:
             context.toolUseContext.options.isNonInteractiveSession,

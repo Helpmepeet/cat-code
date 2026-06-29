@@ -256,6 +256,11 @@ Rules:
       getToolPermissionContext: async () => getEmptyToolPermissionContext(),
       model,
       provider,
+      // disabled thinking lands as undefined on the body and never reaches the
+      // Codex adapter, which would then default to high reasoning effort. Pin
+      // low effort for this cheap file-rewrite. No-op on Anthropic (Haiku
+      // ignores effort).
+      effortValue: 'low',
       toolChoice: undefined,
       isNonInteractiveSession: false,
       hasAppendSystemPrompt: false,
