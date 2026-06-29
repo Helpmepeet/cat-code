@@ -197,6 +197,21 @@ selection variables above. Login is not just a token write: the post-login path
 refreshes account state, remote managed settings, policy limits, feature gates,
 trusted-device state, and session/cost state.
 
+### Web Search
+
+`WebSearch` uses the Exa Search API for provider-neutral web research. Set
+`EXA_API_KEY` in the shell environment before starting Cat Code:
+
+```bash
+export EXA_API_KEY="..."
+cat-code
+```
+
+Web search is disabled when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.
+In GitHub Actions subprocess-scrub mode, Cat Code keeps `EXA_API_KEY` available
+to the main process but removes it from Bash, hooks, MCP stdio servers, LSP
+servers, and other child processes.
+
 ## Builds
 
 The main build commands are documented in `CLAUDE.md`. In normal private

@@ -5,30 +5,21 @@ export const WEB_SEARCH_TOOL_NAME = 'WebSearch'
 export function getWebSearchPrompt(): string {
   const currentMonthYear = getLocalMonthYear()
   return `
-- Search the web and use the results to inform responses
-- Provides up-to-date information for current events and recent data
-- Returns search result information formatted as search result blocks, including links as markdown hyperlinks
-- Use this tool for accessing information beyond your knowledge cutoff
-- Searches are performed automatically within a single API call
+- Search the web and use compact results to inform responses.
+- Use this for current documentation, package/API references, GitHub or repository docs, changelogs, issue/error lookup, and general web research.
+- Results include titles, URLs, dates when available, authors when available, and bounded highlights. Full page text and summaries are not returned in v1.
+- Use targeted queries. For recent docs or current events, include the current year when it helps.
+- Use include_domains when the relevant site is known, such as official docs or GitHub repository documentation.
+- Use freshness when recency matters.
 
 CRITICAL REQUIREMENT - You MUST follow this:
-  - After answering the user's question, you MUST include a "Sources:" section at the end of your response
-  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
-  - This is MANDATORY - never skip including sources in your response
-  - Example format:
-
-    [Your answer here]
-
-    Sources:
-    - [Source Title 1](https://example.com/1)
-    - [Source Title 2](https://example.com/2)
+  - After answering the user's question, include a "Sources:" section at the end of your response when WebSearch results informed the answer.
+  - In the Sources section, list relevant URLs from the search results as markdown hyperlinks: [Title](URL).
+  - Do not cite sources that were not returned by WebSearch or otherwise read with a tool.
 
 Usage notes:
-  - Domain filtering is supported to include or block specific websites
-  - Web search is only available in the US
-
-IMPORTANT - Use the correct year in search queries:
-  - The current month is ${currentMonthYear}. You MUST use this year when searching for recent information, documentation, or current events.
-  - Example: If the user asks for "latest React docs", search for "React documentation" with the current year, NOT last year
+  - Domain filtering supports include_domains and exclude_domains.
+  - Freshness supports day, week, month, year, or any.
+  - The current month is ${currentMonthYear}. Use the current year when searching for recent information, documentation, changelogs, or current events.
 `
 }
