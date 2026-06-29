@@ -18,6 +18,7 @@ import type { Tool } from '../Tool.js';
 import type { AgentColorName } from '../tools/AgentTool/agentColorManager.js';
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js';
 import { asSessionId } from '../types/ids.js';
+import { sortLogs } from '../types/logs.js';
 import type { LogOption } from '../types/logs.js';
 import type { Message } from '../types/message.js';
 import { agenticSessionSearch } from '../utils/agenticSessionSearch.js';
@@ -140,13 +141,19 @@ export function ResumeConversation({
     void enrichLogs(ref.allStatLogs, ref.nextIndex, count).then(result_1 => {
       ref.nextIndex = result_1.nextIndex;
       if (result_1.logs.length > 0) {
-        // enrichLogs returns fresh unshared objects — safe to mutate in place.
-        // Offset comes from logCountRef so the setLogs updater stays pure.
-        const offset = logCountRef.current;
-        result_1.logs.forEach((log, i) => {
-          log.value = offset + i;
+        // enrichLogs corrects `modified` to the real last-activity timestamp,
+        // so a newly-loaded session may sort earlier than already-shown rows.
+        // Merge into a fresh array (concat copies; prev is never mutated) and
+        // re-sort by `modified`. Re-stamp `value` to keep it the array index
+        // like every other load path — it's write-only (the selector keys off
+        // session id and the option's own index), so this can't disturb focus.
+        setLogs(prev => {
+          const merged = sortLogs(prev.concat(result_1.logs));
+          merged.forEach((log, i) => {
+            log.value = i;
+          });
+          return merged;
         });
-        setLogs(prev => prev.concat(result_1.logs));
         logCountRef.current += result_1.logs.length;
       } else if (ref.nextIndex < ref.allStatLogs.length) {
         loadMoreLogs(count);

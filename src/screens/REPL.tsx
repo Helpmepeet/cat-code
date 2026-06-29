@@ -189,7 +189,7 @@ import type { ContentBlockParam, ImageBlockParam } from '@anthropic-ai/sdk/resou
 import type { ProcessUserInputContext } from '../utils/processUserInput/processUserInput.js';
 import type { PastedContent } from '../utils/config.js';
 import { copyPlanForFork, copyPlanForResume, getPlanSlug, setPlanSlug } from '../utils/plans.js';
-import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript } from '../utils/sessionStorage.js';
+import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript, saveAiGeneratedTitle } from '../utils/sessionStorage.js';
 import { deserializeMessages } from '../utils/conversationRecovery.js';
 import { extractReadFilesFromMessages, extractBashToolsFromMessages } from '../utils/queryHelpers.js';
 import { resetMicrocompactState } from '../services/compact/microCompact.js';
@@ -3015,7 +3015,15 @@ export function REPL({
       haikuTitleAttemptedRef.current = true;
       setTimeout(() => {
         void generateSessionTitle(deferredSessionTitleText, new AbortController().signal).then(title => {
-          if (title) setHaikuTitle(title);else haikuTitleAttemptedRef.current = false;
+          if (title) {
+            setHaikuTitle(title);
+            // Persist as an AI title so /resume can show it later. Skip if the
+            // user has since set a title — readers prefer customTitle over
+            // aiTitle, and skipping avoids a stale write racing a /rename.
+            if (!getCurrentSessionTitle(getSessionId())) {
+              saveAiGeneratedTitle(getSessionId() as UUID, title);
+            }
+          } else haikuTitleAttemptedRef.current = false;
         }, () => {
           haikuTitleAttemptedRef.current = false;
         });
