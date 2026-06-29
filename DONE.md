@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 29 Jun 2026
+
+94. Shipped three independent Codex/runtime features to `main`. (a) Codex HTTP streams now race the first visible-output event against an initial-output timeout (`CLAUDE_STREAM_IDLE_TIMEOUT_MS`, default 90s) so a stream that opens but never emits fails fast with a diagnostic error instead of hanging, and the caller's abort signal is forwarded into SSE reads so readers cancel on abort as well as idle. (b) GPT-agent background job results now include a usage summary derived by scanning the session transcript at job end — call count, input/cached/uncached and output tokens, full vs incremental sends, and prompt-cache breaks. (c) Fast mode is now session-only: `/fast` and the Settings toggle mutate session AppState/model instead of persisting `userSettings.fastMode`, and sessions always start with fast mode off. Focused tests (78 pass) and lint clean.
+
 ### 23 Jun 2026
 
 93. Fixed GPT MCP background-job result retrieval — default tool discovery now exposes the read-only `get_gpt_agent_job_status`, `get_gpt_agent_job_result`, and `wait_for_gpt_agent_job` tools so completed background GPT outputs can be fetched by `job_id` without re-running via `send_gpt_agent_message`. Mutating/log job tools stay debug-gated, default guidance no longer advertises hidden tools, stale docs were updated, focused MCP tests and dev-full build pass.
