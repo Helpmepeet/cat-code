@@ -894,6 +894,11 @@ async function summarizeTranscriptChunk(chunk: string): Promise<string> {
       signal: new AbortController().signal,
       options: {
         model: getAnalysisModel(),
+        // /insights is Anthropic-Opus-only for quality. Pin the provider so the
+        // call doesn't resolve to Codex on this fork (where queryWithModel
+        // builds no instruction assembly and translateToCodexBody would throw).
+        // Matches the sibling sideQuery calls below.
+        provider: 'firstParty',
         querySource: 'insights',
         agents: [],
         isNonInteractiveSession: true,
