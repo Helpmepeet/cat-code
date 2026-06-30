@@ -130,6 +130,31 @@ describe('codex-fetch-adapter', () => {
     resetCodexAccountPoolForTest()
   })
 
+  // Guards the invariant the WebFetch + side-call fixes depend on: any request
+  // that reaches the OpenAI path without a provider-native instruction assembly
+  // throws here (rather than silently sending an empty request). Call-sites that
+  // route Haiku/cheap calls to Codex must build buildProviderInstructionAssembly.
+  test('translateToCodexBody throws without an instruction assembly', () => {
+    expect(() =>
+      translateToCodexBody({ model: 'gpt-5.4-mini', tools: [] }),
+    ).toThrow('OpenAI request missing provider-native instruction assembly payload')
+  })
+
+  // A Claude small-fast model on the OpenAI path is remapped to the GPT mini.
+  // This is the route the away-summary / hook / skill-improvement side-calls
+  // take (they pass claude-haiku-* and rely on the adapter's remap).
+  test('translateToCodexBody remaps claude-haiku to gpt-5.4-mini', () => {
+    const { codexModel } = translateToCodexBody({
+      model: 'claude-haiku-4-5-20251001',
+      tools: [],
+      _openaiInstructionAssembly: {
+        instructions: 'sys',
+        inputMessages: [],
+      },
+    })
+    expect(codexModel).toBe('gpt-5.4-mini')
+  })
+
   test('translateToCodexBody sets service_tier="priority" when speed=fast', () => {
     const { codexBody } = translateToCodexBody({
       model: 'claude-sonnet-4-6',

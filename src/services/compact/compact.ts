@@ -101,6 +101,7 @@ import {
   getMaxOutputTokensForModel,
   queryModelWithStreaming,
 } from '../api/claude.js'
+import { buildProviderInstructionAssembly } from '../api/instructionAssembly.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import {
   getPromptTooLongTokenGap,
@@ -1349,19 +1350,34 @@ async function streamCompactSummary({
         model,
         context.options.mainLoopProvider,
       )
-      const streamingGen = queryModelWithStreaming({
-        messages: normalizeMessagesForAPI(
-          stripImagesFromMessages(
-            stripReinjectedAttachments([
-              ...getMessagesAfterCompactBoundary(messages),
-              summaryRequest,
-            ]),
-          ),
-          context.options.tools,
+      const compactMessages = normalizeMessagesForAPI(
+        stripImagesFromMessages(
+          stripReinjectedAttachments([
+            ...getMessagesAfterCompactBoundary(messages),
+            summaryRequest,
+          ]),
         ),
+        context.options.tools,
+      )
+      // Build a provider-native instruction assembly so the OpenAI/Codex path
+      // (the default on the Codex fork, where mainLoopModel is a gpt-* model)
+      // receives the payload translateToCodexBody requires; without it the
+      // streaming fallback throws before sending. The forked-agent path above
+      // builds its own assembly via the full pipeline; this covers the
+      // fallback. No-op shape for Anthropic providers.
+      const assembly = buildProviderInstructionAssembly({
+        provider,
+        messages: compactMessages,
         systemPrompt: asSystemPrompt([
           'You are a helpful AI assistant tasked with summarizing conversations.',
         ]),
+        userContext: {},
+        systemContext: {},
+      })
+      const streamingGen = queryModelWithStreaming({
+        messages: assembly.messages,
+        systemPrompt: assembly.systemPrompt,
+        openAIInstructionAssembly: assembly.openAIInstructionAssembly,
         thinkingConfig: { type: 'disabled' as const },
         tools,
         signal: context.abortController.signal,
