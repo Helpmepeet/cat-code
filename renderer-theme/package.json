@@ -1,0 +1,14 @@
+{
+  "name": "@cat-code/renderer-theme-portable",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.2.2",
+    "tailwindcss": "4.2.2",
+    "vite": "7.3.2"
+  }
+}
