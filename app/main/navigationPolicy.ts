@@ -19,8 +19,9 @@ export type NavigationConfig =
 
 /**
  * Whether a navigation/redirect target is the app itself. Everything else is
- * blocked (T3): in dev only the Vite dev origin; in production ONLY the exact
- * packaged renderer entry file (F8 — not every `file:` URL, or an
+ * blocked (T3): in dev only the configured Vite renderer entry document; in
+ * production ONLY the exact packaged renderer entry file (F8 — not every
+ * `file:` URL, or an
  * attacker-planted local HTML file would load with the preload bridge attached).
  */
 export function isAppOrigin(url: string, config: NavigationConfig): boolean {
@@ -42,11 +43,17 @@ export function isAppOrigin(url: string, config: NavigationConfig): boolean {
     // the literal string "null", and a misconfigured non-http `devOrigin` is
     // ALSO "null" — so a bare `target.origin === dev.origin` would let a
     // `file:///etc/passwd` navigation match a `file:` devOrigin. Pin the dev
-    // origin to http/https and compare protocol + origin so no opaque target can
-    // slip through (F16).
+    // origin to http/https, then require the configured renderer document path
+    // and query as well as its origin so another Vite-served route cannot load
+    // with the preload attached (P1-F3).
     if (dev.protocol !== 'http:' && dev.protocol !== 'https:') return false
     if (target.protocol !== dev.protocol) return false
-    return target.origin === dev.origin && target.origin !== 'null'
+    return (
+      target.origin === dev.origin &&
+      target.origin !== 'null' &&
+      target.pathname === dev.pathname &&
+      target.search === dev.search
+    )
   }
   if (target.protocol !== 'file:') return false
   try {

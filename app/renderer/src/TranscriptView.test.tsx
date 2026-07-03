@@ -7,6 +7,12 @@ test('renders an assistant text row as markdown, not raw source', () => {
     <TranscriptView
       rows={[
         {
+          id: 's:m:0:f',
+          sessionId: 's',
+          messageId: 'm',
+          frameId: 'f',
+          blockIndex: 0,
+          parentToolUseId: null,
           kind: 'assistant-text',
           role: 'assistant',
           content: 'Reading **package.json** now.',
@@ -24,6 +30,12 @@ test('renders a tool_use row as a card with tool name and structured input', () 
     <TranscriptView
       rows={[
         {
+          id: 's:m:1:toolu_p13_1',
+          sessionId: 's',
+          messageId: 'm',
+          frameId: 'f',
+          blockIndex: 1,
+          parentToolUseId: null,
           kind: 'tool-use',
           toolUseId: 'toolu_p13_1',
           toolName: 'Read',

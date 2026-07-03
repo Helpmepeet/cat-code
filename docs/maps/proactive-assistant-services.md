@@ -1,6 +1,6 @@
 # Proactive And Assistant Services Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-07-01
 
 ## Purpose
 
@@ -20,6 +20,7 @@ or stubbed; treat those as validation targets, not confirmed runtime behavior.
 | Command list | `src/commands.ts` | `src/commands/brief.ts`, `src/commands/assistant/` | `/proactive`, `/brief`, and `/assistant` are conditionally required. `/brief` exists; `/assistant` is a placeholder wizard; `src/commands/proactive.*` is not present in this checkout. |
 | Tool list | `src/tools.ts` | `src/tools/SleepTool/`, `src/tools/ScheduleCronTool/`, `src/tools/RemoteTriggerTool/`, `src/tools/BriefTool/` | Sleep is behind `PROACTIVE || KAIROS`; cron is behind `AGENT_TRIGGERS`; remote triggers are behind `AGENT_TRIGGERS_REMOTE`; Brief is always imported but runtime-gated. `PushNotificationTool` and `SendUserFileTool` are referenced but not present here. |
 | REPL wiring | `src/screens/REPL.tsx` | `src/query/stopHooks.ts`, `src/hooks/useScheduledTasks.ts` | REPL mounts scheduled tasks, prompt suggestions, tips, speculation accept, and proactive hooks. Proactive imports resolve to no-op stubs in this checkout. |
+| Away-summary generation | `src/services/awaySummary.ts` | `src/services/SessionMemory/sessionMemoryUtils.ts`, `src/services/api/instructionAssembly.ts`, `src/services/api/claude.ts` | Uses recent turn history plus session memory. Its provider-aware small-model request builds native instruction assembly and requests low reasoning effort on Codex/OpenAI. |
 | Startup services | `src/utils/backgroundHousekeeping.ts` | service files below | Initializes Magic Docs, auto dream, skill improvement, extract memories, and plugin updates. |
 | Task registry | `src/tasks.ts` | `src/tasks/DreamTask/DreamTask.ts`, `src/tasks/LocalAgentTask/` | `DreamTask` is registered with other task types and surfaces auto-dream as UI-visible background work. |
 

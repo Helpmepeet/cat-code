@@ -1,6 +1,6 @@
 # Terminal UI And State Routing Map
 
-Last refreshed: 2026-06-18
+Last refreshed: 2026-07-01
 
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
@@ -35,6 +35,7 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | User keybinding validation | `src/keybindings/validate.ts` | `src/keybindings/loadUserBindings.ts`, `src/keybindings/reservedShortcuts.ts` | Validation owns parse errors, reserved shortcuts, context checks, and command-binding restrictions. |
 | REPL/global shortcut behavior | `src/hooks/useGlobalKeybindings.tsx` | `src/hooks/useCommandKeybindings.tsx`, `src/hooks/useCancelRequest.ts`, `src/hooks/useBackgroundTaskNavigation.ts` | Hooks map resolved actions into REPL behavior: transcript toggles, slash-command launch, cancel/interrupt, and teammate/task navigation. |
 | Dialog and overlay focus | `src/screens/REPL.tsx` | `src/components/design-system/Dialog.tsx`, `src/context/overlayContext.tsx`, `src/context/promptOverlayContext.tsx` | `getFocusedInputDialog()` in `REPL.tsx` is the priority owner for blocking UI such as message selector, permissions, prompts, cost/idle dialogs, onboarding, and callouts. |
+| Resume picker presentation | `src/screens/ResumeConversation.tsx` | `src/utils/sessionStorage.ts`, `src/components/LogSelector.tsx`, `src/types/logs.ts`, `src/screens/REPL.tsx` | The picker sorts enriched logs and displays session title/prompt/time. Session storage owns progressive enrichment and timestamp/name fallback data; REPL re-appends current metadata before opening the picker. |
 | Prompt/message/task local JSX | `src/screens/REPL.tsx` | `src/components/PromptInput/PromptInputQueuedCommands.tsx`, `src/components/TaskListV2.tsx`, slash-command implementations | REPL controls whether local JSX renders inline, in the fullscreen modal slot, or while hiding prompt input. |
 | Theme and design system | `src/utils/theme.ts` | `src/components/design-system/ThemeProvider.tsx`, `src/components/design-system/`, `src/components/ThemePicker.tsx` | Concrete palette tokens live in `theme.ts`; themed primitives and dialogs live under `design-system/`. |
 

@@ -10,5 +10,5 @@
       "@cat-code/engine/session-events": ["app/shared/engine-types.snapshot.d.ts"]
     }
   },
-  "include": ["./**/*.ts", "../shared/**/*.ts"]
+  "include": ["./**/*.ts", "../shared/**/*.ts", "../../env.d.ts"]
 }

@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-07-01
 
 ## Purpose
 
@@ -33,7 +33,7 @@ Read in this order for most prompt or instruction work:
 
 | Goal | Owner | Fallback order | Notes |
 |---|---|---|---|
-| Change normal default assistant behavior | `src/constants/prompts.ts` | `src/constants/promptStyles/gpt.ts`, `src/constants/systemPromptSections.ts`, `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | `getSystemPrompt()` builds the default prompt array. GPT-style sections can live in provider-specific prompt-style files. |
+| Change normal default assistant behavior | `src/constants/prompts.ts` | `src/constants/promptStyles/gpt.ts`, `src/constants/systemPromptSections.ts`, `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | `getSystemPrompt()` builds the default prompt array. GPT-specific safety rules and session guidance live in `promptStyles/gpt.ts`; shared transcript guidance remains in `prompts.ts`. |
 | Change Agent Mode system prompt behavior | `src/constants/prompts.ts` | `src/agent-mode/agentMode.ts`, `src/agent-mode/orchestratorPrompt.ts`, `src/agent-mode/rolePrompts.ts`, `src/utils/systemPrompt.ts` | Agent Mode is active via `CLAUDE_CODE_AGENT_MODE`. It uses dedicated sections from `getAgentModeSystemPromptSections()` when available. |
 | Change runtime prompt precedence | `src/utils/systemPrompt.ts` | `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/query.ts` | Effective branch order is override, Agent Mode, coordinator, main-thread agent, custom, default. `appendSystemPrompt` appends unless override replaces everything. |
 | Change repo/user instruction loading | `src/utils/claudemd.ts` | `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts`, `src/bootstrap/state.ts` | This path controls managed, user, project, local, auto-memory, and team-memory instruction inputs. |
@@ -42,7 +42,7 @@ Read in this order for most prompt or instruction work:
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
 | Change subagent prompt behavior | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/loadAgentsDir.ts`, `src/agent-mode/rolePrompts.ts` | `runAgent.ts` builds the agent prompt, injects Agent Mode addenda, adds env details, and may trim inherited context. |
 | Change output styles | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts`, `src/utils/plugins/loadPluginOutputStyles.ts`, `.claude/output-styles/*.md`, `~/.cat-code/output-styles/*.md` | Output style text is injected by `src/constants/prompts.ts`. |
-| Change tool descriptions | `src/tools/*/prompt.ts` | `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. |
+| Change tool descriptions | `src/tools/*/prompt.ts` | `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. `src/tools/BashTool/prompt.ts` also owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
 | Inspect emitted prompts | `src/services/api/dumpPrompts.ts` | `src/query.ts`, `src/services/api/claude.ts`, `/context` command paths | Ant-user dumps write under `~/.cat-code/dump-prompts/<session-or-agent-id>.jsonl` as init, system_update, message, and response entries. |
 
 ## Runtime Flow
@@ -161,3 +161,4 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not trust older docs that mention a missing `src/agent/prompt.ts` split. Verify current prompt entrypoints in this map.
 - Do not debug MCP prompt churn only in `prompts.ts`; MCP instruction delta behavior can move instructions out of the normal prompt section.
 - Do not forget API-time additions in `src/services/api/claude.ts`, such as CLI prompt prefixes and tool-search related instructions.
+- Do not assume safety or orchestration guidance is shared across providers. GPT-specific tool-output handling, risky-action policy, verification bounds, and Explore delegation rules are assembled in `src/constants/promptStyles/gpt.ts`.

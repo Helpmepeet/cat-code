@@ -121,17 +121,42 @@ export type ErrorFrame = {
   retryable: boolean
 }
 
-export type ServerFrame = ReadyFrame | EventFrame | PongFrame | ErrorFrame
+/**
+ * Supervisor-owned process/transport state. Unlike controller events, this
+ * remains observable even when the sidecar has died or its socket is unusable.
+ */
+export type LifecycleFrame = {
+  kind: 'lifecycle'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  status: 'disconnected' | 'failed' | 'exited'
+  exit?: {
+    code: number | null
+    signal: string | null
+  }
+}
+
+export type ServerFrame =
+  | ReadyFrame
+  | EventFrame
+  | PongFrame
+  | ErrorFrame
+  | LifecycleFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
  * ------------------------------------------------------------------------- */
 
 /**
- * The ONLY API the preload exposes to the renderer. Four structured senders +
+ * The ONLY API the preload exposes to the renderer. Fixed structured senders +
  * one subscribe. No generic `send(channel, payload)`, no `invoke`, no
  * renderer-controlled channel name. The renderer supplies payloads; the preload
  * owns the fixed internal channel names.
+ *
+ * This surface comprises:
+ *  1. Direct Engine Commands (submit, abort, respondPermission, ping) - routed to the sidecar.
+ *  2. Host-Level Operations (restart) - triggers sidecar process control in Electron main.
+ *  3. Attachment Operations (rendererReady, subscribe) - initializes preload-to-renderer bridging.
  */
 export type CatCodeBridge = {
   /** Send one prompt to the addressed session. */
@@ -146,6 +171,8 @@ export type CatCodeBridge = {
   ): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
+  /** Restart the addressed sidecar process while retaining renderer attachment. */
+  restart(sessionId: SessionId): void
   /** Subscribe to all server frames. Returns an unsubscribe function. */
   subscribe(listener: (frame: ServerFrame) => void): () => void
   /**

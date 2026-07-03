@@ -15,8 +15,12 @@
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
-import { SidecarSupervisor } from '../supervisor/supervisor.js'
+import {
+  SidecarSupervisor,
+  type SupervisorEvent,
+} from '../supervisor/supervisor.js'
 import { AttachmentGate } from './attachmentGate.js'
 import {
   decideWindowOpen,
@@ -25,7 +29,12 @@ import {
 } from './navigationPolicy.js'
 import type { AppClientMessage } from '@cat-code/engine/session-events'
 import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
-import type { ServerFrame, SessionId } from '../shared/protocol.js'
+import {
+  PROTOCOL_VERSION,
+  type ServerFrame,
+  type SessionId,
+} from '../shared/protocol.js'
+import { P1_1_CWD } from '../shared/sessionConfig.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -34,6 +43,7 @@ const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_PING = 'catcode:ping'
+const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
 
@@ -43,7 +53,6 @@ const VITE_REACT_PREAMBLE_CSP_HASH =
   "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
 
 // The single Phase-1 session id. The supervisor is N-ready (a map).
-let primarySessionId: SessionId | null = null
 let supervisor: SidecarSupervisor | null = null
 let mainWindow: BrowserWindow | null = null
 
@@ -76,6 +85,7 @@ function createSupervisor(): SidecarSupervisor {
   return new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
     sidecarArgs: ['run', sidecarEntry],
+    sidecarCwd: P1_1_CWD,
   })
 }
 
@@ -192,9 +202,36 @@ function navigationConfig(): NavigationConfig {
  */
 function wireRendererBridge(sup: SidecarSupervisor): void {
   sup.subscribe(event => {
-    if (event.type !== 'frame') return
-    deliver(attachmentGate.onFrame(event.sessionId, event.frame))
+    const frame = supervisorEventToServerFrame(event)
+    if (!frame) return
+    deliver(attachmentGate.onFrame(event.sessionId, frame))
   })
+}
+
+function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | null {
+  if (event.type === 'frame') return event.frame
+  if (event.type === 'exit') {
+    return {
+      kind: 'lifecycle',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: event.sessionId,
+      status: 'exited',
+      exit: { code: event.code, signal: event.signal },
+    }
+  }
+  if (
+    event.status === 'disconnected' ||
+    event.status === 'failed' ||
+    event.status === 'exited'
+  ) {
+    return {
+      kind: 'lifecycle',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: event.sessionId,
+      status: event.status,
+    }
+  }
+  return null
 }
 
 /**
@@ -210,7 +247,7 @@ function registerIpcHandlers(): void {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.prompt !== 'string') return
     forward(arg.sessionId, {
       type: 'app.submit',
-      requestId: cryptoRandomId(),
+      requestId: generateRequestId(),
       prompt: arg.prompt,
       options: sanitizeSubmitOptions(arg.options),
     })
@@ -247,6 +284,15 @@ function registerIpcHandlers(): void {
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
   })
 
+  ipcMain.on(CH_RESTART, (_e, arg: { sessionId: SessionId }) => {
+    if (typeof arg?.sessionId !== 'string' || !supervisor) return
+    if (!supervisor.listSessions().some(session => session.sessionId === arg.sessionId)) {
+      return
+    }
+    attachmentGate.clearSession(arg.sessionId)
+    supervisor.restartSession(arg.sessionId)
+  })
+
   // F2 — the renderer signals it has mounted and subscribed. The gate replays the
   // buffered frames (including the one-shot `ready` handshake) once per document
   // load and returns nothing on a repeat signal (StrictMode double-invoke).
@@ -263,12 +309,21 @@ function forward(sessionId: SessionId, message: AppClientMessage): void {
   try {
     supervisor.send(sessionId, message)
   } catch (error) {
-    // Session not ready yet; the sidecar's app.ready gates the renderer's first
-    // send in practice. Log rather than crash main.
+    const messageText = error instanceof Error ? error.message : String(error)
+    const frame: ServerFrame = {
+      kind: 'error',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId,
+      ...('requestId' in message && typeof message.requestId === 'string'
+        ? { requestId: message.requestId }
+        : {}),
+      code: 'bad_request',
+      message: messageText,
+      retryable: false,
+    }
+    deliver(attachmentGate.onFrame(sessionId, frame))
     process.stderr.write(
-      `[main] forward to ${sessionId} failed: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
+      `[main] forward to ${sessionId} failed: ${messageText}\n`,
     )
   }
 }
@@ -336,8 +391,8 @@ function coercePermissionResponse(response: unknown): CoercedPermissionResponse 
   return null
 }
 
-function cryptoRandomId(): string {
-  return `req_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`
+function generateRequestId(): string {
+  return randomUUID()
 }
 
 /**
@@ -350,7 +405,7 @@ function ensureHost(): SidecarSupervisor {
   if (supervisor) return supervisor
   supervisor = createSupervisor()
   wireRendererBridge(supervisor)
-  primarySessionId = supervisor.spawnSession()
+  supervisor.spawnSession()
 
   // Smoke-run hook (verification only): if CATCODE_SMOKE_EXIT_MS is set, log the
   // frames the supervisor receives and exit after the timeout. Lets a headless
@@ -399,7 +454,6 @@ app.on('window-all-closed', () => {
   // rebuilds a fresh host on reopen (F5).
   supervisor?.shutdown()
   supervisor = null
-  primarySessionId = null
   // F2 — drop the old session's buffered frames so a macOS reopen (which spawns a
   // NEW session id via `ensureHost`) never replays dead-session frames into the
   // fresh window.

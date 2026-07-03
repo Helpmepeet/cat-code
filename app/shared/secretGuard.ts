@@ -2,12 +2,13 @@
  * Outbound secret-key guard (SECURITY-MINIMUM §4 — "No token field crosses IPC",
  * review finding F6).
  *
- * The engine (sidecar) is the sole secret owner; the renderer must never receive
- * a token in any form. This is a defense-in-depth serializer-level assertion:
- * before ANY frame leaves the sidecar, we walk it and reject one that carries a
- * known-secret key. It is distinct from the JSON-safe check (which only proves
- * losslessness) — a `{accessToken:"..."}` object is structurally valid JSON, so
- * `checkJsonSafe` passes it; this guard is what stops it.
+ * The engine (sidecar) is the sole secret owner; known credential-bearing keys
+ * are blocked at the serializer boundary to prevent key leak. This is a
+ * defense-in-depth serializer-level assertion: before ANY frame leaves the
+ * sidecar, we walk it and reject one that carries a known-secret key. It is
+ * distinct from the JSON-safe check (which only proves losslessness) — a
+ * `{accessToken:"..."}` object is structurally valid JSON, so `checkJsonSafe`
+ * passes it; this guard is what stops it.
  *
  * Applied to EVERY outbound frame (events AND the `ready` handshake), because the
  * ready payload embeds session state that is a plausible accidental leak site.

@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-07-01
 
 ## Purpose
 
@@ -78,9 +78,10 @@ src/services/api/client.ts
 | Change provider selection | `src/utils/model/providers.ts` | `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/client.ts` | `getAPIProvider()` reads session provider, env, and startup preference. `resolveRequestProvider()` lets model names override the base provider for GPT-family models. |
 | Change runtime model adjustment | `src/utils/model/model.ts` | `src/query.ts`, `src/utils/context.ts` | `getRuntimeMainLoopModel()` can adjust plan-mode behavior before each API iteration. The request provider is resolved again after this runtime model is chosen. |
 | Change API request shaping | `src/services/api/claude.ts` | `src/utils/api.ts`, `src/utils/messages.ts`, `src/services/api/instructionAssembly.ts` | Despite the filename, this is the shared Anthropic-SDK-shaped request path for all providers, including providers reached through adapters. |
+| Change cheap secondary model calls | `src/utils/model/model.ts:getSmallFastModelForProvider()` | `src/services/api/claude.ts:queryHaiku()`, `src/services/compact/compact.ts`, `src/services/awaySummary.ts`, `src/utils/hooks/apiQueryHookHelper.ts`, `src/utils/hooks/skillImprovement.ts` | Codex subscribers route provider-aware side-calls to GPT mini. OpenAI-bound callers must build provider instruction assembly; cheap calls explicitly request low reasoning effort. Anthropic-only callers such as `/insights` pin `provider: 'firstParty'`. |
 | Change client/auth routing | `src/services/api/client.ts` | `src/utils/auth.ts`, `src/utils/model/providers.ts`, [`codex-core.md`](codex-core.md) | Provider-specific clients are selected here. OpenAI/Codex fetch-adapter and account lease details are intentionally routed to `codex-core.md`. |
 | Change retry/fallback behavior | `src/services/api/withRetry.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`codex-core.md`](codex-core.md) | `claude.ts` wraps requests with `withRetry()`. `query.ts` handles model fallback by switching model/provider and replaying the whole attempt. |
-| Change compaction/collapse hooks | `src/query.ts` | `src/services/compact/autoCompact.ts`, `src/services/compact/compact.ts`, `src/services/compact/microCompact.ts`, `src/services/contextCollapse/index.ts` | Query loop order matters: tool-result budget, snip, microcompact, context collapse, autocompact, blocking-limit check, API call, reactive recovery. |
+| Change compaction/collapse hooks | `src/query.ts` | `src/services/compact/autoCompact.ts`, `src/services/compact/compact.ts`, `src/services/compact/microCompact.ts`, `src/services/contextCollapse/index.ts` | Query loop order matters: tool-result budget, snip, microcompact, context collapse, autocompact, blocking-limit check, API call, reactive recovery. `compact.ts` also owns the provider-aware streaming fallback request and its instruction assembly. |
 | Change model validation | `src/utils/model/validateModel.ts` | `src/utils/model/modelAllowlist.ts`, `src/utils/model/modelCapabilities.ts`, `src/utils/sideQuery.ts` | Validation checks allowlist and aliases before probing the API via `sideQuery()`. Codex subscriber model handling short-circuits known Codex/OpenAI models. |
 
 ## Turn Execution Owners

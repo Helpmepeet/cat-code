@@ -675,6 +675,24 @@ test('F10 — an unexpected key inside app.submit.options is rejected', () => {
   expect(err).toBeDefined()
 })
 
+test('F10 — an unexpected key toolUseID inside permission.response.response is rejected', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'x',
+      response: { behavior: 'allow', toolUseID: 'some-id' },
+    } as never),
+  )
+  const err = received.find(
+    f => f.kind === 'error' && f.message.includes('toolUseID'),
+  )
+  expect(err).toBeDefined()
+})
+
 test('F6 — an outbound event carrying a secret key is blocked, not shipped', async () => {
   // An engine event that accidentally embeds a token must never reach the client.
   const controller = new AppSessionController({
@@ -806,6 +824,66 @@ test('F10 — a legit deny still passes strict checks (reaches permission_not_fo
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'permission_not_found')).toBe(true)
   expect(received.some(f => f.kind === 'error' && f.message.includes('unexpected key'))).toBe(false)
+})
+
+test('F5 — ready frame does not alias the controller\'s live objects (mutation isolation)', () => {
+  const controller = new AppSessionController(probeAdapter())
+  const mutableSnapshot = { threadId: 'thread-123', name: 'Original Name' } as any
+  controller.getGoalSnapshot = () => mutableSnapshot
+
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const ready = received.find(f => f.kind === 'ready')
+  expect(ready).toBeDefined()
+  expect(ready?.kind).toBe('ready')
+
+  // Mutate original object
+  mutableSnapshot.name = 'Mutated Name'
+
+  // Received frame should have original name
+  expect((ready as any).payload.goalSnapshot.name).toBe('Original Name')
+})
+
+test('F5 — ready frame canonicalizes undefined-valued fields', () => {
+  const controller = new AppSessionController(probeAdapter())
+  controller.getGoalSnapshot = () => ({
+    threadId: 'thread-123',
+    description: undefined,
+  } as any)
+
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const ready = received.find(f => f.kind === 'ready')
+  expect(ready).toBeDefined()
+  const snapshotKeys = Object.keys((ready as any).payload.goalSnapshot)
+  expect(snapshotKeys).not.toContain('description')
+})
+
+test('F5 — ready frame with non-JSON-safe payload is rejected', () => {
+  const controller = new AppSessionController(probeAdapter())
+  controller.getGoalSnapshot = () => ({
+    threadId: 'thread-123',
+    invalidField: new Date(),
+  } as any)
+
+  let loggedMessage = ''
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    controller,
+    log: (msg) => { loggedMessage = msg }
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  // Ready frame should be blocked
+  expect(received.some(f => f.kind === 'ready')).toBe(false)
+  // An error should be logged
+  expect(loggedMessage).toContain('non-plain object')
 })
 
 /** Read `updatedInput` off a possibly-null allow response without union quirks. */

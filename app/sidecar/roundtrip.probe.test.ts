@@ -123,7 +123,7 @@ test('hand-injected tool_use SDKMessage round-trips sidecar→supervisor INTACT'
   expect(textBlock).toBeDefined()
 })
 
-test('a forged sessionId frame is rejected at the sidecar boundary', async () => {
+test('a connected session responds to a valid ping (happy-path liveness)', async () => {
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
@@ -131,11 +131,11 @@ test('a forged sessionId frame is rejected at the sidecar boundary', async () =>
   })
   const sessionId = supervisor.spawnSession('p1-0-test-forge')
 
-  // Wait until ready, then send a well-formed ping addressed to a DIFFERENT
-  // session id by reaching past the supervisor's routing (simulating a forged
-  // frame). We do this by sending a valid message and asserting the pong comes
-  // back for the correct session — the sidecar's envelope check is unit-tested
-  // separately; here we assert the happy path pong to confirm liveness.
+  // Wait until ready, then send a well-formed ping and assert the pong comes
+  // back for the correct session to confirm liveness.
+  // Note: The actual forged/mismatched envelope sessionId rejection is
+  // unit-tested separately in sidecarServer.test.ts ("rejects a frame addressed
+  // to a different sessionId").
   await waitForFrame(supervisor, frame => frame.kind === 'ready')
   supervisor.send(sessionId, { type: 'app.ping', nonce: 'live-1' })
 

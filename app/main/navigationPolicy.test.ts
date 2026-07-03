@@ -24,9 +24,15 @@ const DEV: NavigationConfig = { isDev: true, devOrigin: 'http://localhost:5173' 
 const PACKAGED_INDEX = '/Applications/CatCode.app/Contents/Resources/renderer/dist/index.html'
 const PROD: NavigationConfig = { isDev: false, packagedIndexPath: PACKAGED_INDEX }
 
-test('dev — the Vite dev origin is the app origin', () => {
+test('dev — only the configured Vite renderer entry document is the app origin', () => {
   expect(isAppOrigin('http://localhost:5173/', DEV)).toBe(true)
-  expect(isAppOrigin('http://localhost:5173/index.html', DEV)).toBe(true)
+  expect(isAppOrigin('http://localhost:5173/#transcript', DEV)).toBe(true)
+})
+
+test('dev — another path on the Vite origin is blocked', () => {
+  expect(isAppOrigin('http://localhost:5173/index.html', DEV)).toBe(false)
+  expect(isAppOrigin('http://localhost:5173/attack.html', DEV)).toBe(false)
+  expect(isAppOrigin('http://localhost:5173/@vite/client', DEV)).toBe(false)
 })
 
 test('dev — a different origin is blocked', () => {

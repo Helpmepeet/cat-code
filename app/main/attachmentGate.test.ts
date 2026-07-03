@@ -9,7 +9,10 @@
 import { expect, test } from 'bun:test'
 
 import { AttachmentGate } from './attachmentGate.js'
-import { FrameReplayBuffer } from './replayBuffer.js'
+import {
+  FrameReplayBuffer,
+  isReplayTruncationFrame,
+} from './replayBuffer.js'
 import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/protocol.js'
 
 const SID: SessionId = 'sess-1'
@@ -131,12 +134,29 @@ test('reset() (macOS window-all-closed) drops the buffer and detaches', () => {
   expect(gate.onRendererReady()).toEqual([])
 })
 
+test('clearSession() drops stale replay while preserving the attached renderer', () => {
+  const gate = new AttachmentGate()
+  gate.onFrame(SID, readyFrame())
+  gate.onFrame(SID, pong('old'))
+  gate.onRendererReady()
+
+  gate.clearSession(SID)
+
+  expect(gate.isAttached).toBe(true)
+  expect(gate.onFrame(SID, pong('replacement-live'))).toEqual([
+    pong('replacement-live'),
+  ])
+  gate.onNavigationStart()
+  expect(gate.onRendererReady()).toEqual([pong('replacement-live')])
+})
+
 test('an injected buffer is used (cap/retention delegated to FrameReplayBuffer)', () => {
   const gate = new AttachmentGate(new FrameReplayBuffer(1))
   gate.onFrame(SID, readyFrame())
   gate.onFrame(SID, pong('a'))
   gate.onFrame(SID, pong('b')) // evicts 'a' at cap 1
   const out = gate.onRendererReady()
-  expect(out.map(f => f.kind)).toEqual(['ready', 'pong'])
-  expect(out[1]).toMatchObject({ nonce: 'b' })
+  expect(out.map(f => f.kind)).toEqual(['ready', 'error', 'pong'])
+  expect(isReplayTruncationFrame(out[1])).toBe(true)
+  expect(out[2]).toMatchObject({ nonce: 'b' })
 })

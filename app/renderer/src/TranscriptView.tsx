@@ -16,17 +16,17 @@ export function TranscriptView({ rows }: { rows: TranscriptRow[] }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {rows.map((row, index) =>
+      {rows.map(row =>
         row.kind === 'assistant-text' ? (
           <div
-            key={index}
+            key={row.id}
             className="font-sans text-sm leading-relaxed [&>*+*]:mt-2 [&_code]:font-mono [&_a]:text-accent [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
           >
             <Markdown>{row.content}</Markdown>
           </div>
         ) : (
           <div
-            key={index}
+            key={row.id}
             className="rounded border border-accent/40 bg-app-bg p-3"
           >
             <div className="font-mono text-xs text-accent">{row.toolName}</div>

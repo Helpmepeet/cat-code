@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-06-27 against the current source tree.
+Last refreshed: 2026-07-01 against the current source tree.
 
 ## Purpose
 
@@ -79,6 +79,7 @@ The live tool system is assembled in layers:
 | Tool input validation | `src/services/tools/toolExecution.ts` | `src/Tool.ts`, specific tool `inputSchema`, tool `validateInput()` implementation | The execution layer owns schema parsing and calls `validateInput()` before permission checks. Tool implementations own domain-specific validation details. |
 | Shell-specific validation | `src/tools/BashTool/bashPermissions.ts` | `src/tools/BashTool/pathValidation.ts`, `src/tools/BashTool/readOnlyValidation.ts`, `src/tools/BashTool/shouldUseSandbox.ts` | Bash has deeper subcommand classification, redirection checks, path validation, sandbox routing, and classifier integration than most tools. |
 | Tool examples and prompt-visible guidance | tool `prompt.ts` or tool implementation | `src/tools/ToolSearchTool/prompt.ts`, `src/utils/api.ts` | Tool descriptions and prompts are model-visible policy surfaces. For many tools they matter as much as code-level permission hooks. |
+| Web search behavior and Exa transport | `src/tools/WebSearchTool/WebSearchTool.ts` | `src/tools/WebSearchTool/exa.ts`, `src/tools/WebSearchTool/prompt.ts`, `src/tools/WebSearchTool/UI.tsx`, `src/utils/subprocessEnv.ts` | `WebSearchTool.ts` owns schema, permission, progress, and result rendering handoff. `exa.ts` owns the direct Exa request, freshness/domain filters, response validation, timeout/abort behavior, and `EXA_API_KEY`; subprocess env forwarding keeps the key available to child runtimes. |
 
 ## Tool Exposure Flow
 

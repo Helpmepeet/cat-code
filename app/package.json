@@ -11,7 +11,8 @@
     "renderer:dev": "vite --config renderer/vite.config.ts",
     "renderer:build": "vite build --config renderer/vite.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test app/",
+    "test": "cd .. && bun test app/",
+    "typecheck:sidecar": "bun run scripts/sidecar-typecheck.ts",
     "test:hardening": "bun run scripts/run-hardening-smoke.ts"
   },
   "devDependencies": {

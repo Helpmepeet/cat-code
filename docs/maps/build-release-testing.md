@@ -1,10 +1,11 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-06-27 against `CLAUDE.md`,
+Last refreshed: 2026-07-03 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
-`scripts/mcp/gpt-agent.ts`, `scripts/test-codex-*.ts`, `web/package.json`,
-`src/migrations/`, update/release/upgrade command surfaces, and colocated
-tests.
+`scripts/mcp/gpt-agent.ts`, `scripts/test-codex-*.ts`,
+`scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
+`web/package.json`, `app/package.json`, `app/scripts/`, `src/migrations/`,
+update/release/upgrade command surfaces, and colocated tests.
 
 Use this as the daily-refreshable routing layer for build, development,
 compile, release-note, updater, migration, validation, lint, and test-routing
@@ -39,6 +40,10 @@ files, then verify current source before changing code.
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
 | Web frontend dev/build | `web/package.json` | `src/main.tsx`, `src/web/startRuntimeBackedWebMode.ts`, `src/web/launchWebAppDevServer.ts`, `web/src/App.tsx` | `cd web && bun run dev` starts Vite, `cd web && bun run build` produces the browser bundle, and `main.tsx --web` now routes through the runtime-backed web-mode launcher plus the app-session WebSocket server. |
+| Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | This is a temporary Tailwind v4 build harness for design-token handoff, not the final renderer scaffold. Run `bun run build` from `renderer-theme/`. |
+| Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | This portable type-only fixture currently uses cited snapshots because direct aliases pull in the engine runtime graph. Re-sync snapshots from their canonical source types before renderer adoption, then run the documented isolated `tsc` command. |
+| Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process. |
+| Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/sidecar/tsconfig.json`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the root lint configuration does not yet cover `app/**`. |
 | Shell update command | `src/main.tsx` | `src/entrypoints/cli.tsx`, `src/cli/update.ts` | `program.command('update').alias('upgrade')` delegates to `src/cli/update.ts`. Early CLI rewrites `--update` and `--upgrade` to the `update` subcommand. |
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
@@ -142,6 +147,12 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
 | Web frontend tests | `bun run --cwd web test` | `web/package.json` |
 | Web frontend type/build verification | `cd web && bun run typecheck && bun run build` | `web/package.json`, Vite |
+| Portable renderer theme | `cd renderer-theme && bun run build` | `renderer-theme/package.json`, Vite |
+| Renderer engine-type fixture | `bunx tsc --project scripts/typecheck/renderer-engine-types/tsconfig.json --noEmit` | Isolated renderer type-adoption config |
+| Electron desktop tests | `bun test app/` | Desktop unit, boundary, and round-trip tests |
+| Electron desktop typechecks | `bunx tsc --noEmit -p app/tsconfig.json && bunx tsc --noEmit -p app/sidecar/tsconfig.json` | Snapshot-isolated shell graph plus real engine-sidecar graph |
+| Electron desktop renderer | `bun run --cwd app renderer:build` | Vite renderer bundle |
+| Electron hardening smoke | `bun run --cwd app test:hardening` | Packaged Electron security-baseline checks |
 | Codex standalone smoke | `bun run scripts/test-codex-core.ts --account <alias> --model <model> --prompt "hello"` | `scripts/test-codex-core.ts` |
 | Codex two-turn smoke | `bun run scripts/test-codex-core-conversation.ts --account <alias> --model <model>` | `scripts/test-codex-core-conversation.ts` |
 | Codex effort mapping | `bun run scripts/test-codex-effort.ts` | `scripts/test-codex-effort.ts` |

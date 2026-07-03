@@ -111,7 +111,9 @@ field, or shape not on this list is rejected at the engine boundary, logged, and
 `read-file`, `exec`, or any raw capability channel — those live behind the engine's tool +
 permission machinery and are unreachable from the renderer.
 
-Renderer → engine, the complete allowed set (four types, nothing else):
+The renderer bridge surface exposes direct engine-bound commands (which route all the way to the sidecar process) as well as host-level control and attachment/recovery operations (which execute inside Electron main).
+
+### Engine Commands (Four types, routed to sidecar):
 
 | # | Type | Payload (from `appSessionProtocol.ts`) | Validation rule (engine-side, before any effect) |
 |---|---|---|---|
@@ -119,6 +121,12 @@ Renderer → engine, the complete allowed set (four types, nothing else):
 | A2 | `app.abort` | `{requestId, reason?}` | `requestId` non-empty; `reason?` string, capped length. No engine state beyond aborting the named turn. |
 | A3 | `permission.response` | `{requestId, response}` | `requestId` MUST match a **currently-pending** engine request (`AppSessionController.ts:91`); unknown id → no-op + `app.error{code:"permission_not_found"}`. `response` MUST satisfy `PermissionPromptToolResultSchema` (allow requires `{behavior:"allow", updatedInput}`; deny requires `{behavior:"deny", message}` — a bare allow is already rejected). **`updatedInput` constraint (T6):** the engine MUST treat renderer-supplied `updatedInput` as *echo-only* — if it differs from the originally-gated tool input, reject with `bad_request` rather than executing the rewrite. The renderer may confirm or deny a prompt; it may not author a *different* command inside an allow. |
 | A4 | `app.ping` | `{nonce}` | `nonce` non-empty string, capped length. Liveness only; answered with `app.pong{nonce}`. No side effects. |
+
+### Host-Level / Attachment Operations (Handled by Electron Main):
+
+- **A5 (restart):** `{sessionId}` — Triggers sidecar process restart/recovery. Main clears stale replay buffers and requests the supervisor to restart the session's sidecar process.
+- **Renderer attachment (rendererReady):** Signals that the renderer is mounted and has registered its subscription, prompting main to replay buffered frames to catch up (F2).
+- **Outbound subscription (subscribe):** Wires a listener callback in the renderer to receive the outbound stream of server event frames bridged from main.
 
 Cross-cutting rules that apply to the channel itself:
 
@@ -196,8 +204,7 @@ Each item is a checkable gate. P1-0 is not done until every one passes.
 
 ## 4. SECRET-HANDLING OWNER
 
-**Owner: the Bun engine sidecar — and only the engine — holds raw credentials. The renderer
-never receives a token, in any form, on any channel.**
+**Owner: the Bun engine sidecar — and only the engine — holds raw credentials. Known credential-bearing keys are blocked by the outbound secret-key guard; value-level content scanning is not implemented.**
 
 Where the secrets actually live (verified):
 
@@ -217,7 +224,7 @@ Rules:
 - [ ] **No token field crosses IPC.** The §2 engine→renderer event stream (raw `SDKMessage` +
       status) MUST NOT include `accessToken`, `refreshToken`, `apiKey`, `vaultFilePath`, or any
       derivative. A serializer-level assertion should reject any outbound frame carrying a
-      known-secret key (defense-in-depth against an accidental leak; ties to §2 R5).
+      known-secret key name (defense-in-depth against an accidental leak; ties to §2 R5). Note that value-level content scanning is not performed.
 - [ ] **The renderer is allowed to see status only, never material:** a redacted account label /
       alias (`CodexCoreAccount.alias`, accounts.ts:30 — a human name, not a token), the active
       provider/model string, and account availability state (`available` / `blocked` / reason

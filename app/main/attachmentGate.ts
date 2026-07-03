@@ -56,6 +56,11 @@ export class AttachmentGate {
     this.attached = false
   }
 
+  /** Drop stale replay for one restarting session without detaching the renderer. */
+  clearSession(sessionId: SessionId): void {
+    this.buffer.clearSession(sessionId)
+  }
+
   /** The session was torn down (macOS window-all-closed): drop everything. */
   reset(): void {
     this.attached = false

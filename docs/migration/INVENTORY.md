@@ -57,7 +57,7 @@
 | `DiffView`, `MultiDiffCard` | `Messages.jsx` | 2 | — | adapt |
 | Boundary rows: `CompactBoundaryRow`, `MicrocompactBoundaryRow`, `SnipBoundaryRow`, `SessionInitRow`, `ResultRow`, `TombstoneRow` | `Messages.jsx` | 6 | — | adapt; `MicrocompactBoundaryRow` is stale/cut unless a real visible mapping is found |
 | Error/state rows: `ApiErrorRow`, `RateLimitRow`, `InterruptedRow`, `HookProgressRow`, `TaskAssignRow` | `Messages.jsx` | 4 | partial (**S1/S5**) | adapt; separate `RateLimitRow` is stale because source folds it into API error/retry handling |
-| Prototype-only display types: `GroupedToolGroup`, `AgentEventRow`, `AgentMsgCard`, `AttachmentCard` | `Messages.jsx` | 3 | partial (**S5**) | adapt/recon; keep source-backed grouped tools/attachments, cut or redesign unverifiable agent chrome — **❓ D2 agent-chrome** |
+| Prototype-only display types: `GroupedToolGroup`, `AgentEventRow`, `AgentMsgCard`, `AttachmentCard` | `Messages.jsx` | 3 | partial (**S5**) | **✅ D2 DECIDED 2026-07-04** (`decisions/AGENT-CHROME.md`): `AgentMsgCard` adapt (Agent member of the P2-2 tool-card family); `AgentEventRow` CUT (no `agent-event` seam frame); `AttachmentCard` CUT (engine-internal, never reaches seam — extend-engine flag); `GroupedToolGroup` message type CUT, grouping kept as projector derivation |
 | Markdown/code: `Prose`, `ProseCode`, Prism themes | `Messages.jsx` | 1 | — | port/adapt (target has `react-markdown` + `shiki`; source renderer differs) |
 | Streaming/activity engine | `Chat.jsx` | 6 | yes (**S1/S2**) | build-new + spec; prototype `runPlaygroundTurn`/timers are demo-only |
 
@@ -75,7 +75,7 @@
 | `SessionActionsMenu` + `BranchDialog`/`ExportDialog`/`RewindDialog` | `SessionActions.jsx` | 6 | partial (**S4**) | adapt (real branch/export/rewind commands exist separately; menu/dialog shell is GUI-owned) |
 | `MetadataInspector` | `MetadataInspector.jsx` | 1 | yes (**S4**) | adapt (read-only metadata inspector over real log/message fields; no per-message account field) |
 | **Agents config** `AgentsPage` | `AgentsPage.jsx` | 3 | yes (**S5**) | adapt (real agent/runtime model is broader than the prototype editor) |
-| **Orchestrator** roster/detail/focus: `OrchestratorModeWorkerRoster`, `WorkerDetail`, `WorkerFocusView`, `AgentToolCard`, `DelegateGroup`, `BackgroundTaskStatus`, `deriveWorker`, `summarizeWorkers` | `OrchestratorMode.jsx` | 8 | yes (**S5**) | adapt; real Agent Mode roster/detail/focus/status exist, but inline `AgentToolCard`/`DelegateGroup` should be cut or replaced with task dialog/list plumbing — **❓ D2 agent-chrome** |
+| **Orchestrator** roster/detail/focus: `OrchestratorModeWorkerRoster`, `WorkerDetail`, `WorkerFocusView`, `AgentToolCard`, `DelegateGroup`, `BackgroundTaskStatus`, `deriveWorker`, `summarizeWorkers` | `OrchestratorMode.jsx` | 8 | yes (**S5**) | **✅ D2 DECIDED 2026-07-04** (`decisions/AGENT-CHROME.md`): ALL eight adapt over real shapes (roster `AgentModeWorkerRoster.tsx:30`, panel `BackgroundTasksDialog.tsx:131`, focus = teammate view, pill `BackgroundTaskStatus.tsx:25`, derivations `workerUxSummary.ts:72-112`); inline `AgentToolCard`/`DelegateGroup` KEPT (inline agent cards are the real idiom — `AgentTool/UI.tsx:458,740`), their fixture data feeds CUT; subagent frames NEST under the owning card (never interleave) |
 | **Tasks** `BgTasksDialog` / `TasksPanel` | `TasksPage.jsx` / `OrchestratorMode.jsx` | 4 / 0 | yes (**S5**) | adapt; `BgTasksDialog` is grounded, `TasksPanel` is unanchored GUI |
 | `GoalsPage` + `GoalDetail` + create/replace dialogs | `GoalsPage.jsx` / `Surfaces.jsx` | 1 / 0 | yes (**S8**) | adapt (real thread goal is per-thread persisted state; roster/dialogs are GUI wrappers) |
 | `MemoryPanel` (`/memory`) | `MemoryPage.jsx` | 1 | yes (**S8**) | adapt; anchor line range was stale, real memory types are `src/memdir/memoryTypes.ts:14-21` |
@@ -86,7 +86,7 @@
 |---|---|---:|---|---|
 | Settings shell + `Field`/`SourceBadge`/`ManagedBadge` primitives | `Settings.jsx` | 1 | partial (**S7**) | adapt (real settings source/editable/managed model is broader) |
 | `MCPPanel`, `PluginsPanel`, `SkillsPanel`, `HooksPanel`, `ElicitationDialog` | `SettingsExtensions.jsx` | 5 | yes (**S7**) | adapt (real domains exist; prototype flattens scoped state and hook outcomes) |
-| `RemoteSettingsPanel`, `RemoteRolePill` | `RemoteSettings.jsx` | 9 | yes (**S7**) | adapt; bridge/remote/direct-connect are real, paired-device roster is invented — **❓ D3 paired-devices** |
+| `RemoteSettingsPanel`, `RemoteRolePill` | `RemoteSettings.jsx` | 9 | yes (**S7**) | **🟠 D3 ARCH-RULED 2026-07-04, product call PENDING OPERATOR** (`decisions/PAIRED-DEVICES.md`): paired-device roster/wizard confirmed invention (no device model in src; only Chrome-ext pairing `config.ts:530-533`, unrelated); real = bridge + filter + direct-connect. Recommended CUT to real surface; operator must rule build-device-model vs cut before this row builds |
 | `DiagnosticsSection`, `WorkspaceTrustSection` | `Pages.jsx` | 0 | partial (**S6/S7**) | adapt/recon; no surface-local anchors, but real status/trust helpers exist |
 
 ## W5 — Foundations, shared primitives & release
@@ -96,9 +96,9 @@
 | Shared primitives: `Chip`, `ChipStrip`, `BannerStack`, `ToastHost`, `MentionPicker`, `ToolInspector` | `Surfaces.jsx` | 5 | partial (**S7**) | adapt (source analogs are split TUI primitives; product primitive layer is target-owned) |
 | Connection UI: `ConnectionChip`, `ConnectionDemoBar`, `CONN_STATES` | `Surfaces.jsx` | 2 | yes (**S7**) | adapt; **cut `ConnectionDemoBar` simulator** |
 | `AgentIdentity` (shared agent vocabulary) | `AgentIdentity.jsx` | 4 | partial (**S5**) | adapt (useful vocabulary, but compresses real worker/task/agent state) |
-| **Startup/trust** `StartupFlow`, `ReauthGate`, `WorkspaceSwitchPrompt` | `Startup.jsx` | 11 | partial (**S6**) | adapt; trust/OAuth are real, read-only/workspace-switch/forced-reauth gates are GUI inventions — **❓ D4 startup-gates** |
+| **Startup/trust** `StartupFlow`, `ReauthGate`, `WorkspaceSwitchPrompt` | `Startup.jsx` | 11 | partial (**S6**) | **🟠 D4 ARCH-RULED 2026-07-04, product call PENDING OPERATOR** (`decisions/STARTUP-GATES.md`): trust gate + first-run OAuth = real, adapt (per-session-create; `config.ts:111,735-788`, `ConsoleOAuthFlow.tsx:35-55`); `WorkspaceSwitchPrompt` CUT (ruled — one-cwd-per-session dissolves it); read-only mode (Q1) + blocking-vs-banner reauth (Q2) await operator |
 | Resume: `CrossProjectResumeDialog`, `HydrationOverlay` | `ResumeStates.jsx` | 2 | yes (**S6**) | adapt; real resume is synchronous restore/recovery, overlay/diff list is visualization |
-| `WelcomeScreen` | `Welcome.jsx` | 1 | partial (**S6/S8**) | adapt (trust/account/orchestrator pieces are real; project recents/branch picker launcher is GUI-owned) — **❓ D5 welcome-launcher** |
+| `WelcomeScreen` | `Welcome.jsx` | 1 | partial (**S6/S8**) | **🟠 D5 ARCH-RULED 2026-07-04, product call PENDING OPERATOR** (`decisions/WELCOME-LAUNCHER.md`): no recents store in src (confirmed); recents DERIVABLE from D1 registry rows ∪ `config.projects` ∪ transcript dirs — recommended derive-don't-persist; worktree launch real (`worktree.ts:703`) but defer-recommended; branch chooser cut to worktree input; curated-recents (Q1) + worktree-in-v1 (Q2) await operator |
 | Design tokens / theme → Tailwind | `CatCode Web App.html` `<style>` + inline | 0 | — | build-new (W5 Phase 0) |
 
 ## CUT — demo-only / excluded (do not migrate)
@@ -139,15 +139,34 @@ until the owner rules. (Stamped onto rows as `❓ D1`…`❓ D5`.)
    single-writer + lockfile + atomic writes; §6.1 typed control-plane contract (DR-4) with
    trust zone in `SECURITY-MINIMUM.md` T8/HC1–HC4. `concurrentSessions.ts` confirmed
    liveness-idiom only. *Rows: N-process, TabBar.*
-2. **D2 — Which Agent-Mode chrome survives.** Cut or redesign prototype `AgentEventRow`/
-   `AgentMsgCard`/inline `AgentToolCard`/`DelegateGroup` over the real task dialogs/lists?
-   *Rows: W3 prototype-only display types, Orchestrator.*
-3. **D3 — Paired devices: back it or cut it.** The paired-device roster/wizard is a
-   prototype invention; add a real backing model or cut. *Row: RemoteSettings.*
-4. **D4 — Are startup GUI gates real requirements?** Read-only startup, workspace-switch
-   prompt, forced reauth — product requirement or prototype storytelling? *Row: Startup/trust.*
-5. **D5 — Does welcome launcher state persist?** Do project recents, branch chooser, and
-   "start in" become desktop-owned persistence? *Row: WelcomeScreen.*
+2. **D2 — Which Agent-Mode chrome survives. → ✅ DECIDED 2026-07-04:
+   `decisions/AGENT-CHROME.md`.** The Agent-Mode substrate is real and richer than assumed
+   (worker sessions + handoff/blocked model + roster/panel/pill/teammate-view all source-anchored);
+   all eight Orchestrator surfaces **adapt** — including inline `AgentToolCard`/`DelegateGroup`,
+   which the row had proposed cutting but which match the real inline idiom
+   (`AgentTool/UI.tsx:458,740`); what's cut is their fixture data feeds. `AgentEventRow` and
+   `AttachmentCard` CUT (no seam frame); `GroupedToolGroup` survives only as a projector
+   derivation. Binding on P2-2: subagent frames (non-null `parentToolUseId`) NEST under the
+   owning agent card, never interleave. *Rows: W3 prototype-only display types, Orchestrator.*
+3. **D3 — Paired devices: back it or cut it. → ✅ DECIDED 2026-07-04 (operator ruling):
+   `decisions/PAIRED-DEVICES.md`.** Confirmed: no device/identity/revocation model exists in
+   src (the roster is invention; the only "paired device" is the unrelated Chrome-extension
+   pairing, `config.ts:530-533`); bridge/filter/direct-connect are real. **RULING: cut to the
+   real surface for v1** (bridge toggle/status + read-only command-filter truth + direct-connect
+   form); device identity/authz deferred to the v2 multi-client milestone. *Row: RemoteSettings.*
+4. **D4 — Are startup GUI gates real requirements? → 🟠 ARCHITECTURE RULED 2026-07-04, product
+   call PENDING OPERATOR: `decisions/STARTUP-GATES.md`.** Trust gate + first-run OAuth are real
+   requirements (adapt, per-session-create). `WorkspaceSwitchPrompt` is CUT by ruling
+   (one-cwd-per-session dissolves it). OPEN product questions: **Q1** untrusted folder — TUI
+   parity (trust or don't open; source's decline = exit, `TrustDialog.tsx:231-240`) vs build a
+   read-only mode (new security feature); **Q2** account death — non-blocking banner + re-auth
+   action (recommended) vs the prototype's blocking modal. *Row: Startup/trust.*
+5. **D5 — Does welcome launcher state persist? → ✅ DECIDED 2026-07-04 (operator ruling):
+   `decisions/WELCOME-LAUNCHER.md`.** No recents store exists in src (confirmed); recency is
+   fully derivable from D1 registry rows (`cwd`+`lastAttachedAt`) ∪ `config.projects` ∪
+   transcript dirs. **RULING: derive, don't persist** (no new store; ordering/cap is a selector
+   concern) and **defer worktree-at-launch** past v1 (real `worktree.ts:703` but new scope).
+   *Row: WelcomeScreen.*
 6. **D6 — When the window closes, does the agent stop? → ✅ DECIDED 2026-07-02: DIE-WITH-WINDOW
    for v1.** *(added 2026-07-02 from `reviews/2026-07-02-direction-review.md` DR-1; ruled by owner same
    day.)* The locked topology makes Electron main the **parent** of the N engine sidecars, so by

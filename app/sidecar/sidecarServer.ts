@@ -115,20 +115,24 @@ export class SidecarServer {
     this.connections.add(connection)
     // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
     // :79-87 equivalent).
-    this.send(connection, {
-      kind: 'ready',
+    const readyPayload = {
+      type: 'app.ready' as const,
       protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      payload: {
-        type: 'app.ready',
+      inputEnabled: !this.activeTurn,
+      activeTurn: this.activeTurn,
+      abort: this.controller.getAbortState(),
+      goalSnapshot: this.controller.getGoalSnapshot(),
+      pendingPermissionRequests: this.controller.getPendingPermissionRequests(),
+    }
+    const preparedPayload = this.prepareOutboundPayload(readyPayload, 'ready payload')
+    if (preparedPayload) {
+      this.send(connection, {
+        kind: 'ready',
         protocolVersion: PROTOCOL_VERSION,
-        inputEnabled: !this.activeTurn,
-        activeTurn: this.activeTurn,
-        abort: this.controller.getAbortState(),
-        goalSnapshot: this.controller.getGoalSnapshot(),
-        pendingPermissionRequests: this.controller.getPendingPermissionRequests(),
-      },
-    })
+        sessionId: this.sessionId,
+        payload: preparedPayload,
+      })
+    }
     return connection
   }
 
@@ -501,7 +505,7 @@ export class SidecarServer {
       // itself gated, since no renderer rewrite reached it.
       updatedInput: gatedInput ?? {},
       // updatedPermissions intentionally dropped (T6b).
-      ...(response.toolUseID !== undefined ? { toolUseID: response.toolUseID } : {}),
+      // Note: toolUseID is rejected upstream by checkStrictKeys and thus not passed here.
     }
   }
 
@@ -509,42 +513,43 @@ export class SidecarServer {
    * Outbound (engine → client): raw-forward, JSON-safe, clone-on-serialize.
    * --------------------------------------------------------------------- */
 
+  private prepareOutboundPayload<T>(payload: T, contextName: string): T | null {
+    // Landmine 2 (immutability): structuredClone
+    let cloned: T
+    try {
+      cloned = structuredClone(payload)
+    } catch (error) {
+      this.log(
+        `[sidecar] dropped un-cloneable payload for ${contextName}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return null
+    }
+
+    // Real SDK messages materialize optional fields as `key: undefined`.
+    // Canonical JSON represents those as absent properties.
+    omitUndefinedObjectProperties(cloned)
+
+    // Landmine 1 (JSON-safe): assert the payload round-trips through JSON losslessly
+    const safety = checkJsonSafe(cloned)
+    if (!safety.ok) {
+      this.log(
+        `[sidecar] dropped non-JSON-safe payload for ${contextName} at ${safety.path}: ${safety.reason}`,
+      )
+      return null
+    }
+
+    return cloned
+  }
+
   private broadcastEvent(event: AppSessionEvent): void {
     if (this.connections.size === 0) {
       return
     }
 
-    // Landmine 2 (immutability): `AppSessionController.emit()` hands the SAME
-    // mutable event reference to every listener. We must never mutate it and
-    // must serialize from a clone so a future second subscriber can't observe a
-    // half-mutated object. `structuredClone` also surfaces a non-cloneable value
-    // early (belt to the JSON-safe braces below).
-    let cloned: AppSessionEvent
-    try {
-      cloned = structuredClone(event)
-    } catch (error) {
-      this.log(
-        `[sidecar] dropped un-cloneable event type=${event.type}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      )
-      return
-    }
-
-    // Real SDK messages materialize optional fields as `key: undefined`.
-    // Canonical JSON represents those as absent properties. Normalize only the
-    // private clone; array entries and every exotic value remain fail-closed.
-    omitUndefinedObjectProperties(cloned)
-
-    // Landmine 1 (JSON-safe): assert the payload round-trips through JSON
-    // losslessly BEFORE it hits the wire. A Buffer/Date/Map/bigint/cyclic value
-    // is rejected+logged, never silently corrupted. No current producer emits
-    // one; this is the boundary contract, not dead weight.
-    const safety = checkJsonSafe(cloned)
-    if (!safety.ok) {
-      this.log(
-        `[sidecar] dropped non-JSON-safe event type=${event.type} at ${safety.path}: ${safety.reason}`,
-      )
+    const prepared = this.prepareOutboundPayload(event, `event type=${event.type}`)
+    if (!prepared) {
       return
     }
 
@@ -552,7 +557,7 @@ export class SidecarServer {
       kind: 'event',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      event: cloned,
+      event: prepared,
     }
     for (const connection of this.connections) {
       this.send(connection, frame)

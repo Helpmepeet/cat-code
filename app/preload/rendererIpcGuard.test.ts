@@ -1,0 +1,41 @@
+import { expect, test } from 'bun:test'
+
+import {
+  MAX_FRAME_BYTES,
+  MAX_FRAMES_PER_WINDOW,
+  RATE_WINDOW_MS,
+} from '../shared/limits.js'
+import { createRendererIpcGuard } from './rendererIpcGuard.js'
+
+test('rejects renderer IPC payloads over the shared frame byte limit', () => {
+  const guard = createRendererIpcGuard()
+
+  expect(() => guard.assertAllowed('x'.repeat(MAX_FRAME_BYTES + 1))).toThrow(
+    `renderer IPC payload exceeds ${MAX_FRAME_BYTES} bytes`,
+  )
+})
+
+test('counts all fixed-channel sends in one shared rate window', () => {
+  let now = 1_000
+  const guard = createRendererIpcGuard({ now: () => now })
+
+  for (let index = 0; index < MAX_FRAMES_PER_WINDOW; index++) {
+    guard.assertAllowed({ index })
+  }
+  expect(() => guard.assertAllowed({ overflow: true })).toThrow(
+    `renderer IPC rate exceeds ${MAX_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+  )
+
+  now += RATE_WINDOW_MS
+  expect(() => guard.assertAllowed({ nextWindow: true })).not.toThrow()
+})
+
+test('rejects values that cannot be serialized without reaching Electron IPC', () => {
+  const guard = createRendererIpcGuard()
+  const cyclic: { self?: unknown } = {}
+  cyclic.self = cyclic
+
+  expect(() => guard.assertAllowed(cyclic)).toThrow(
+    'renderer IPC payload is not serializable',
+  )
+})

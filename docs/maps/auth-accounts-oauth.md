@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-06-16
+Last refreshed: 2026-07-01
 
 ## Purpose
 
@@ -75,7 +75,7 @@ Codex client.
 | Codex single-account fallback | `src/utils/auth.ts:getCodexOAuthTokens()` | Global config `codexOAuth` | Backward-compatible path when Codex pool is not active. |
 | Codex account pool | `src/services/api/codexAccountPool.ts` | `~/codex-vault/accounts/<accountId>.json`, optional `.codex-nootp/config.toml` vault path, plus config fallback | Pool owns health, aliases, active account, usage hints, plan eligibility, and config active-account pointer. |
 | Codex token refresh | `src/services/api/codexTokenRefresh.ts` | Codex vault JSON plus persisted `refresh` state | Refresh now writes `idle` / `in_flight` / `unknown` / `reauth_required` state into the vault, uses file locking to serialize writers, distinguishes definitely-not-sent transport errors from ambiguous outcomes, and leaves identity-mismatch refreshes marked for reauth on the old vault file. |
-| Codex usage hints | `src/services/api/codexUsage.ts` | In-memory cache and pool account fields | Usage fetches are best-effort and now send provider account-selection headers. Treat live quota data and routability separately: a non-switchable account can still have quota info for display. |
+| Codex usage hints | `src/services/api/codexUsage.ts` | `src/components/Settings/Usage.tsx`, `src/components/LogoV2/AccountsPanel.tsx`, pool account fields | Usage fetches are best-effort and send provider account-selection headers. Treat plan type, quota data, and switchability separately: free accounts can be healthy and displayable even when their quota shape differs from paid accounts. |
 
 ## Command Routing
 
@@ -84,7 +84,7 @@ Codex client.
 | `/login` | `src/commands/login/` | Shows `ConsoleOAuthFlow`; post-login refresh clears signature blocks, regenerates session/cost state, refreshes policy/remote settings/GrowthBook, increments `authVersion`. |
 | `/logout` | `src/commands/logout/logout.tsx` | With multiple Claude accounts, removes only active Claude account and switches. Otherwise deletes secure storage, clears Codex config token, clears `oauthAccount`, and leaves Codex vault profiles on disk. |
 | `/accounts` | `src/commands/accounts/accounts.ts` | Displays Claude pool, Codex pool, live usage when available, main lease, subagent strategy, and lease holders. |
-| `/switch-account` | `src/commands/switch-account/switch-account.ts` | Matches Claude aliases/email/UUID and Codex aliases/account IDs. No arg rotates within current provider. Codex switch reassigns main lease and resets Codex cache context. User-facing dead/capped reasons should come from normalized pool availability text, not raw stored refresh-state codes such as `http_401`. |
+| `/switch-account` | `src/commands/switch-account/switch-account.ts` | Matches Claude aliases/email/UUID and Codex aliases/account IDs. No arg rotates within current provider. Codex switch reassigns main lease and resets Codex cache context. Free accounts remain selectable when healthy; revoked refresh tokens render as “needs re-login.” User-facing dead/capped reasons should come from normalized pool availability text, not raw stored refresh-state codes such as `http_401`. |
 | `/delete-account` | `src/commands/delete-account/delete-account.ts` | Deletes vault-backed Claude or Codex accounts only. Codex delete repairs or releases main lease; config-only Codex accounts are not deletable here. |
 | `/rename-account` | `src/commands/rename-account/rename-account.ts` | Renames vault-backed Claude or Codex accounts. Codex aliases are validated by `validateCodexAccountAlias()`. |
 

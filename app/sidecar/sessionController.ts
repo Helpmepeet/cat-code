@@ -10,8 +10,30 @@ import {
   READ_FILE_STATE_CACHE_SIZE,
 } from '../../src/utils/fileStateCache.js'
 import { createProbeAdapter } from './probeAdapter.js'
+import { P1_1_CWD } from '../shared/sessionConfig.js'
 
-export const P1_1_CWD = '/Users/pt/cat-code'
+export { P1_1_CWD } from '../shared/sessionConfig.js'
+
+export function createNormalSidecarQueryEngineConfig() {
+  const appStateStore = createStore(getDefaultAppState())
+  const tools = getTools(appStateStore.getState().toolPermissionContext)
+
+  return createQueryEngineAppSessionConfigFromSetup({
+    cwd: P1_1_CWD,
+    tools,
+    commands: [],
+    mcpTools: [],
+    mcpCommands: [],
+    mcpClients: [],
+    mcpResources: {},
+    agents: [],
+    getAppState: appStateStore.getState,
+    setAppState: appStateStore.setState,
+    readFileCache: createFileStateCacheWithSizeLimit(
+      READ_FILE_STATE_CACHE_SIZE,
+    ),
+  })
+}
 
 export function createSidecarSessionController({
   probe,
@@ -34,28 +56,12 @@ export function createSidecarSessionController({
     })
   }
 
-  const appStateStore = createStore(getDefaultAppState())
   // Derive the model-visible tool list from the SAME permission context the
   // runtime enforces (QueryEngine reads getAppState().toolPermissionContext),
   // so what the model sees and what canUseTool allows never diverge. P1-2
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
-  const tools = getTools(appStateStore.getState().toolPermissionContext)
-  const queryEngineConfig = createQueryEngineAppSessionConfigFromSetup({
-    cwd: P1_1_CWD,
-    tools,
-    commands: [],
-    mcpTools: [],
-    mcpCommands: [],
-    mcpClients: [],
-    mcpResources: {},
-    agents: [],
-    getAppState: appStateStore.getState,
-    setAppState: appStateStore.setState,
-    readFileCache: createFileStateCacheWithSizeLimit(
-      READ_FILE_STATE_CACHE_SIZE,
-    ),
-  })
+  const queryEngineConfig = createNormalSidecarQueryEngineConfig()
 
   return createRuntimeBackedWebAppSession({ queryEngineConfig })
 }

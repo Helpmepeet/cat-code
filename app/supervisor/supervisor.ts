@@ -27,7 +27,11 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
-import { MAX_OUTBOUND_FRAME_BYTES } from '../shared/limits.js'
+import {
+  MAX_FRAME_BYTES,
+  MAX_OUTBOUND_FRAME_BYTES,
+  MAX_PROMPT_BYTES,
+} from '../shared/limits.js'
 import {
   PROTOCOL_VERSION,
   type ClientFrame,
@@ -46,6 +50,11 @@ export type SupervisorOptions = {
   sidecarArgs?: string[]
   /** Extra env for the sidecar (e.g. the P1-0 probe flag). */
   sidecarEnv?: Record<string, string>
+  /**
+   * Boot cwd for the sidecar. This must match the session-config cwd because
+   * engine project identity is initialized from process.cwd().
+   */
+  sidecarCwd?: string
   /** Directory for the per-session socket files. Defaults to an OS temp dir. */
   socketDir?: string
   /** Structured logger. */
@@ -147,6 +156,7 @@ export class SidecarSupervisor {
 
     const child = spawn(this.options.sidecarCommand, this.options.sidecarArgs ?? [], {
       stdio: ['ignore', 'inherit', 'inherit'],
+      cwd: this.options.sidecarCwd,
       env: {
         ...process.env,
         ...this.options.sidecarEnv,
@@ -214,7 +224,18 @@ export class SidecarSupervisor {
       sessionId,
       message,
     }
-    record.socket.write(encodeFrame(frame))
+    if (
+      message.type === 'app.submit' &&
+      Buffer.byteLength(message.prompt, 'utf8') > MAX_PROMPT_BYTES
+    ) {
+      throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
+    }
+    const encoded = encodeFrame(frame)
+    const payloadBytes = encoded.byteLength - 4
+    if (payloadBytes > MAX_FRAME_BYTES) {
+      throw new Error(`frame exceeds ${MAX_FRAME_BYTES} bytes`)
+    }
+    record.socket.write(encoded)
   }
 
   /** Kill and deregister one session's sidecar. */
@@ -290,7 +311,9 @@ export class SidecarSupervisor {
 
     this.setStatus(record, 'connecting')
 
-    const socket = connect(record.socketPath)
+    // Keep the local writable half open until the explicit `end` handler runs.
+    // This makes remote FIN observable rather than relying on an implicit close.
+    const socket = connect({ path: record.socketPath, allowHalfOpen: true })
     record.socket = socket
 
     socket.on('connect', () => {
@@ -315,6 +338,17 @@ export class SidecarSupervisor {
 
     socket.on('error', error => {
       this.log(`[supervisor] socket error for ${record.sessionId}: ${error.message}`)
+    })
+
+    socket.on('end', () => {
+      if (record.socket !== socket) {
+        return
+      }
+      record.socket = null
+      if (record.status === 'ready' || record.status === 'connecting') {
+        this.setStatus(record, 'disconnected')
+      }
+      socket.destroy()
     })
 
     socket.on('close', () => {
