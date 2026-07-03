@@ -126,11 +126,38 @@ export function App() {
     message => message.type === 'stream_event',
   ).length
 
+  function copyForLlm(): void {
+    const text = `# CatCode debug export
+
+## Transcript (projected)
+
+\`\`\`json
+${JSON.stringify(transcript.rows, null, 2)}
+\`\`\`
+
+## Raw SDKMessage events
+
+\`\`\`json
+${JSON.stringify(state.messages, null, 2)}
+\`\`\`
+`
+    void navigator.clipboard.writeText(text)
+  }
+
   return (
     <main className="h-screen bg-app-bg text-text-primary font-sans p-8 flex flex-col gap-4">
-      <div className="text-sm text-text-muted">
-        {connectionState} · {state.messages.length} messages · {partialCount}{' '}
-        partial frames
+      <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
+        <span>
+          {connectionState} · {state.messages.length} messages · {partialCount}{' '}
+          partial frames
+        </span>
+        <button
+          className="rounded border border-text-subtle px-3 py-1 text-xs text-text-primary"
+          onClick={copyForLlm}
+          type="button"
+        >
+          Copy for LLM
+        </button>
       </div>
 
       <form className="flex gap-3" onSubmit={submit}>

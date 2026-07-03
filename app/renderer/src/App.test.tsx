@@ -6,6 +6,7 @@ test('renders the live prompt input, permission surface, projected transcript, a
   const html = renderToStaticMarkup(<App />)
 
   expect(html).toContain('aria-label="Prompt"')
+  expect(html).toContain('Copy for LLM')
   expect(html).toContain('aria-label="Permission requests"')
   expect(html).toContain('Transcript (projected)')
   expect(html).toContain('<pre')
