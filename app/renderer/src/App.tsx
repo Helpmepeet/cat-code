@@ -1,5 +1,22 @@
-import { useEffect, useReducer, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useState,
+  type FormEvent,
+} from 'react'
 import { getBridge } from './bridge.js'
+import {
+  PermissionPrompt,
+  permissionActionForKey,
+} from './PermissionPrompt.js'
+import {
+  buildAllowResponse,
+  buildDenyResponse,
+  createPermissionState,
+  reducePermissionState,
+  selectVisiblePermission,
+} from './permissionState.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -21,12 +38,18 @@ export function App() {
     undefined,
     createTranscriptState,
   )
+  const [permissions, dispatchPermission] = useReducer(
+    reducePermissionState,
+    undefined,
+    createPermissionState,
+  )
   const [prompt, setPrompt] = useState('')
 
   useEffect(() => {
     const bridge = getBridge()
     const unsubscribe = bridge.subscribe(frame => {
       dispatch(frame)
+      dispatchPermission({ type: 'frame', frame })
       // The projector (§5 layer 2) consumes the raw AppSessionEvent stream.
       if (frame.kind === 'event') dispatchSessionEvent(frame.event)
     })
@@ -45,6 +68,58 @@ export function App() {
     getBridge().submit(state.sessionId, text)
     setPrompt('')
   }
+
+  const pendingPermission = selectVisiblePermission(permissions)
+
+  const allowPermission = useCallback(() => {
+    if (!pendingPermission || !state.sessionId) return
+    dispatchPermission({
+      type: 'decided',
+      requestId: pendingPermission.requestId,
+    })
+    getBridge().respondPermission(
+      state.sessionId,
+      pendingPermission.requestId,
+      buildAllowResponse(pendingPermission),
+    )
+  }, [pendingPermission, state.sessionId])
+
+  const denyPermission = useCallback(() => {
+    if (!pendingPermission || !state.sessionId) return
+    dispatchPermission({
+      type: 'decided',
+      requestId: pendingPermission.requestId,
+    })
+    getBridge().respondPermission(
+      state.sessionId,
+      pendingPermission.requestId,
+      buildDenyResponse(),
+    )
+  }, [pendingPermission, state.sessionId])
+
+  useEffect(() => {
+    if (!pendingPermission) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const action = permissionActionForKey(event)
+      if (!action) return
+
+      event.preventDefault()
+      if (action === 'allow') {
+        allowPermission()
+      } else if (action === 'deny') {
+        denyPermission()
+      } else {
+        dispatchPermission({
+          type: 'dismissed',
+          requestId: pendingPermission.requestId,
+        })
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [allowPermission, denyPermission, pendingPermission])
 
   const connectionState = state.sessionId ? 'ready' : 'connecting'
   const partialCount = state.messages.filter(
@@ -77,6 +152,16 @@ export function App() {
           Send
         </button>
       </form>
+
+      <div aria-label="Permission requests">
+        {pendingPermission ? (
+          <PermissionPrompt
+            onAllow={allowPermission}
+            onDeny={denyPermission}
+            request={pendingPermission}
+          />
+        ) : null}
+      </div>
 
       {state.error ? (
         <div className="text-sm text-tone-danger">{state.error}</div>
