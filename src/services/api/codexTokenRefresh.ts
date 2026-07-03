@@ -187,7 +187,7 @@ function readVault(vaultFilePath: string): Record<string, any> {
  * - `ambiguous`: timeout/socket; we cannot know if the server processed it.
  * - `fatal`: any other error (programming fault, auth error, etc.).
  */
-function classifyRefreshTransportError(err: any): 'definitely_not_sent' | 'ambiguous' | 'fatal' {
+export function classifyRefreshTransportError(err: any): 'definitely_not_sent' | 'ambiguous' | 'fatal' {
   const code: string = err?.code ?? ''
   const name: string = err?.name ?? ''
   const message: string = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()

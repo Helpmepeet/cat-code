@@ -243,3 +243,47 @@ Rules:
   `src/tools/ClaudeCliTool/`, `src/tools/FileWriteTool/`, `src/tools/FileEditTool/`,
   `src/tools/FilePatchTool/`.
 - Raw secrets: `src/utils/auth.ts` (:220, :1346, :1362), `src/codex-core/accounts.ts` (:25-31, :155-175).
+
+---
+
+## Addendum 2026-07-04 — trust zone: the host control plane (Phase-3, DR-4)
+
+*Added by the Phase-3 pre-work track after the 2026-07-03 pressure-test review found DR-4
+("the control plane sits in no trust zone") still unexecuted. The contract itself lives in
+`decisions/REGISTRY.md` §6.1; this addendum owns the security rules.*
+
+Phase 3 introduces a fifth zone between the renderer and the supervisor: the **host control
+plane** — Electron main + the Electron-free host module executing
+`createSession / restoreSession / closeSession / listSessions`. Unlike the four engine
+commands (§2), these operations **originate in main**, never cross into a sidecar as frames,
+and mint new engine processes — which makes their inputs (above all a working directory)
+security-relevant in a way no session frame is.
+
+**T8 — renderer-authored cwd (session-scope injection).** A compromised renderer that can name
+an arbitrary `cwd` for a new session scopes every tool of that session to an attacker-chosen
+directory (and can use restore/create to probe the filesystem via error differences). The cwd
+decides what `Bash`/file tools reach *before* any permission prompt exists.
+
+Rules (extend §2's R-rules; all enforced in main/host, never in the preload):
+
+- **HC1 — the renderer never authors a filesystem path.** A session's `cwd` originates only
+  from (a) Electron main's **native directory picker** (`dialog.showOpenDialog` — a trusted
+  surface the renderer can request but not answer) or (b) an existing registry row (restore).
+  The host API re-validates regardless of origin: `realpath`, exists, `isDirectory` — reject
+  with typed `invalid_cwd` otherwise. Defense in depth: even if a raw string ever reaches the
+  API, it is canonicalized and existence-checked, never trusted.
+- **HC2 — session addressing is validated, not trusted.** Control-plane calls take an
+  `appSessionId`; the host checks UUID shape + registry/live membership and answers unknown ids
+  with typed `session_not_found` (mirrors `decisions/PROTOCOL-ENVELOPE.md` §3) — no silent
+  drops, no throw-through into main.
+- **HC3 — preload surface stays default-deny.** Control-plane methods are added to the preload
+  as **fixed, per-method structured senders** exactly like the four session channels (extends
+  R1). No generic `invoke`, no renderer-controlled channel names, no method that returns
+  filesystem contents.
+- **HC4 — spawning is bounded.** `MAX_REGISTRY_SESSIONS` (registry bound) plus a spawn rate cap
+  extend T7's flood posture to process creation: a compromised renderer must not be able to
+  fork-bomb the machine through `createSession`.
+
+The sidecar trust boundary (§2) is unchanged: the control plane never adds an inbound frame
+type to the socket protocol; its only contact with a sidecar is the spawn environment
+(`CATCODE_SIDECAR_SESSION_ID`, cwd, resume id), which is main-owned input, not renderer input.

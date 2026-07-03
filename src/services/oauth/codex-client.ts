@@ -54,6 +54,12 @@ type TokenSuccessResult = {
 
 type TokenFailedResult = {
   type: 'failed'
+  /** HTTP status when the endpoint responded non-OK. */
+  status?: number
+  /** Response body text for the non-OK case (for grant-failure classification). */
+  bodyText?: string
+  /** The thrown error when the request itself failed (network/timeout). */
+  networkError?: unknown
 }
 
 type TokenResult = TokenSuccessResult | TokenFailedResult
@@ -158,12 +164,16 @@ export function buildCodexAuthUrl(): {
 
 // ── Token Exchange & Refresh ──────────────────────────────────────────────────
 
-async function postToTokenUrl(body: URLSearchParams): Promise<TokenResult> {
+async function postToTokenUrl(
+  body: URLSearchParams,
+  options: { timeoutMs?: number } = {},
+): Promise<TokenResult> {
   try {
     const response = await fetch(CODEX_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
     })
     if (!response.ok) {
       const text = await response.text().catch(() => '')
@@ -172,7 +182,7 @@ async function postToTokenUrl(body: URLSearchParams): Promise<TokenResult> {
           `[codex-oauth] token endpoint responded ${response.status}: ${text}`,
         ),
       )
-      return { type: 'failed' }
+      return { type: 'failed', status: response.status, bodyText: text }
     }
     const json = (await response.json()) as {
       access_token?: string
@@ -193,8 +203,39 @@ async function postToTokenUrl(body: URLSearchParams): Promise<TokenResult> {
     }
   } catch (err) {
     logError(err as Error)
-    return { type: 'failed' }
+    return { type: 'failed', networkError: err }
   }
+}
+
+/**
+ * Typed refresh failure so callers can distinguish a definitive credential
+ * verdict (token burned/revoked — re-login) from a transport failure whose
+ * outcome may be unknown (rotation may or may not have happened server-side).
+ * Refresh tokens rotate on use, so this distinction is load-bearing for any
+ * caller that persists tokens (see codex-core/accounts.ts raw-refresh ledger).
+ */
+export class CodexTokenRefreshError extends Error {
+  readonly status?: number
+  /** 401/403 or invalid_grant/invalid_token/expired_token — re-login required. */
+  readonly credentialFailure: boolean
+  /** Set when the HTTP request itself failed (offline/timeout); outcome unknown. */
+  readonly networkError?: unknown
+
+  constructor(
+    message: string,
+    details: { status?: number; credentialFailure: boolean; networkError?: unknown },
+  ) {
+    super(message)
+    this.name = 'CodexTokenRefreshError'
+    this.status = details.status
+    this.credentialFailure = details.credentialFailure
+    this.networkError = details.networkError
+  }
+}
+
+function isCredentialGrantFailure(status?: number, bodyText?: string): boolean {
+  if (status === 401 || status === 403) return true
+  return /\b(?:invalid_grant|invalid_token|expired_token)\b/i.test(bodyText ?? '')
 }
 
 /**
@@ -241,9 +282,16 @@ export async function refreshCodexToken(refreshToken: string): Promise<CodexToke
       refresh_token: refreshToken,
       client_id: CODEX_CLIENT_ID,
     }),
+    // Bounded so a hung endpoint cannot hold a caller's cross-process refresh
+    // lock indefinitely (mirrors codexTokenRefresh.ts's 15s stateful timeout).
+    { timeoutMs: 15_000 },
   )
   if (result.type !== 'success') {
-    throw new Error('Codex token refresh failed. Please re-login.')
+    throw new CodexTokenRefreshError('Codex token refresh failed. Please re-login.', {
+      status: result.status,
+      credentialFailure: isCredentialGrantFailure(result.status, result.bodyText),
+      networkError: result.networkError,
+    })
   }
   const accountId = extractCodexAccountId(result.access)
   if (!accountId) {

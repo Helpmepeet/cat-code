@@ -131,9 +131,14 @@ These are **product/architecture calls a subagent cannot make.** The disposition
 tagged rows reflect a *recommendation*, not a settled decision — do not build them as final
 until the owner rules. (Stamped onto rows as `❓ D1`…`❓ D5`.)
 
-1. **D1 — Desktop session registry.** Define the app-owned durable registry + attach/
-   multiplex/restore contract. `concurrentSessions.ts` cannot fill it. *Rows: N-process,
-   TabBar.* — this is also the plan's P0-2 existential risk (PROGRAM-PLAN §4/§7).
+1. **D1 — Desktop session registry. → ✅ DECIDED 2026-07-03 (pressure-tested + review findings
+   applied 2026-07-04): `decisions/REGISTRY.md`.** App-owned durable *index* over engine-owned
+   transcripts, living in the Electron-free host plane; two-id model (appSessionId address ↔
+   engineSessionId transcript key); v1 restore = re-spawn + resume via the engine's real resume
+   machinery (`conversationRecovery.ts` / `sessionRestore.ts`); PID-liveness sweep;
+   single-writer + lockfile + atomic writes; §6.1 typed control-plane contract (DR-4) with
+   trust zone in `SECURITY-MINIMUM.md` T8/HC1–HC4. `concurrentSessions.ts` confirmed
+   liveness-idiom only. *Rows: N-process, TabBar.*
 2. **D2 — Which Agent-Mode chrome survives.** Cut or redesign prototype `AgentEventRow`/
    `AgentMsgCard`/inline `AgentToolCard`/`DelegateGroup` over the real task dialogs/lists?
    *Rows: W3 prototype-only display types, Orchestrator.*

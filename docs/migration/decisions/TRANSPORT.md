@@ -216,7 +216,8 @@ is introduced *only* by the WS server's subscriber (`AppSessionWebSocketServer.t
      owner. This is what turns `GOAL_PLAN.md:75`'s durable-background-service milestone into an
      *attach* (point a daemon, or a phone, at the same host module) instead of a rewrite of the
      Phase-3 supervisor.
-   - ✅ **D6 DECIDED (owner ruling 2026-07-02): sessions die with the window for v1** (parity with
+   - ✅ **D6 DECIDED (owner ruling 2026-07-02): sessions die with the window for v1** — semantics,
+     gate line, and adversarial review formalized in `decisions/SESSION-LIFETIME.md` (2026-07-03) — (parity with
      today's TUI). v1 does not build reattach/detached-daemon behavior. The socket +
      Electron-free-supervisor structure above is **still mandatory** — the ruling accepted
      die-with-window *behavior*, not welding the sidecars to the window — so the eventual always-on

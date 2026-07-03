@@ -71,9 +71,63 @@ Gate: real multi-tool transcript renders; a real permission approved/denied thro
 ## PHASE 3 — shell + multi-session build-out
 Gate: two real sessions in one window, each its own engine process, switchable, app-owned registry. **Sessions not generated yet.**
 
+> ✅ **Phase-3 pre-work DONE — drafted 2026-07-03, independently pressure-tested (subagent
+> review, verdicts RED/RED/YELLOW/YELLOW), all Critical/High/Medium findings fixed 2026-07-04.**
+> (Parallel track alongside Phase 2 + the P1 review; per
+> `reviews/2026-07-02-direction-review.md` these four gate Phase-3 backlog generation, which can
+> now consume them.)
+> **D1 registry → `decisions/REGISTRY.md`** — host-plane durable *index* over engine-owned
+> transcripts (registry loss ≠ data loss); two-id model (`appSessionId` address ↔
+> `engineSessionId` transcript key, bridged once per attach); v1 restore = re-spawn + resume
+> through the engine's REAL resume machinery (`conversationRecovery.ts:465` /
+> `sessionRestore.ts:493` — `switchSession` alone only adopts the id); launch liveness-sweep
+> kills orphaned sidecars (v1) and offers restore; single-writer + advisory lockfile + atomic
+> writes. **§6.1 executes DR-4**: typed control-plane contract (`CreateSessionRequest` /
+> `SessionDescriptor` / `HostErrorCode` / `HostEvent`, five methods) with its trust zone landed
+> in `SECURITY-MINIMUM.md` (Addendum 2026-07-04: threat T8 renderer-authored cwd, rules
+> HC1–HC4). `concurrentSessions.ts` re-verified ephemeral per-PID (`:64,:77` writes,
+> `:186-201` sweep) — liveness idiom only.
+> **D6 lifetime → `decisions/SESSION-LIFETIME.md`** — formalizes the 2026-07-02 owner ruling
+> (die-with-window v1; behavior, NOT welding — socket + Electron-free supervisor stay
+> mandatory). DR-1's "quit+relaunch with turn in flight → re-attach" gate line is **explicitly
+> waived for v1**; substitute Phase-3 gate line (§4): quit/relaunch restores both sessions from
+> the registry with transcript history (+ crash-sim: orphans reaped, restore still offered),
+> with an **anti-Potemkin clause** — restore is proven by a post-restore prompt depending on a
+> pre-quit fact + the same `engineSessionId` transcript appended by a new engine PID, not by
+> re-rendered JSONL.
+> **F3 envelope → `decisions/PROTOCOL-ENVELOPE.md`** — AUDIT (rescoped: envelope already shipped
+> P1-0): v1 envelope **SUFFICIENT** for Phase-3 multiplexing; inbound sessionId routing is live
+> code (supervisor map + sidecar self-check), NOT a dead slot; unknown-session sends currently
+> vanish silently at main (one undifferentiated throw, `supervisor.ts:217-221`); no version
+> negotiation (sidecar fails closed per frame). Additive gaps for Phase 3 (no version bump, §6):
+> `ReadyFrame.engineSessionId` (do first — unblocks registry), typed forward-failure outcomes
+> (`session_not_found` / `session_not_ready` / `session_disconnected`), outbound sessionId
+> tripwire, ready-frame **schema** check at attach (version number alone misses additive-field
+> skew), per-session replay eviction. P2-4's decided C2/C3 frames acknowledged in E-7.
+> **DR-2 shared-state fix → LANDED IN ENGINE, review-hardened** — `src/codex-core/accounts.ts`
+> raw refresh branch (config-source / vault-less accounts; NB: `initAccountPool` imports the
+> config login as exactly this kind) now has in-process single-flight + cross-process advisory
+> lockfile (compromise-guarded, retry budget > worst-case holder) + adopt-under-lock recovery +
+> a **durable attempt ledger** (`codex-raw-refresh.state.json`: `in_flight` written BEFORE the
+> network spend; crash-after-rotation → probe-once then terminal `reauth_required`; persist
+> failure → `unknown`, never silent success; identity-rotation tombstone with
+> `rotatedToAccountId`) + typed credential-vs-transport errors in `codex-client.ts` (15s
+> timeout; `invalid_grant` no longer reported as "server could not be reached"). Two-REAL-process
+> probe `src/codex-core/accountRefreshContention.probe.test.ts` (+ `.probe.child.ts`,
+> strict-rotation mock OAuth, fail-closed network): **pre-fix reproduced the clobber**, post-fix
+> **4 scenarios green ×3 runs** — config contention (one rotation, both converge), vault branch
+> with two real processes, crash-after-rotation (survivor probes once, third process fails fast
+> off the tombstone), identity-switch contention (winner adopts new account id, loser gets a
+> truthful error, config holds the new identity). The vault path (`refreshAccountTokens`) was
+> found ALREADY protected (proper-lockfile + recovery, landed 5a7b744 2026-06-16 — narrows
+> DR-2's stated blast radius) and is now **proven with two real processes** (retires P0-4's
+> "sufficiency assumed, not proven" caveat for this file). Brokered-vault-access redesign **not
+> needed** — zero Phase-1 protocol impact. Same-class NOT solved (flagged only):
+> `persistPermissionUpdates` settings writes, `GenerateImageTool.ts:496` raw refresh.
+
 | Session | Model | Diff | Status | Note |
 |---|---|---:|---|---|
-| _(to be generated when Phase 3 opens)_ | — | — | ⬜ | INVENTORY W2 rows; D1 registry decision required first. |
+| _(to be generated when Phase 3 opens)_ | — | — | ⬜ | INVENTORY W2 rows; D1/D6/F3 decided + DR-2 fixed, all four pressure-tested + review findings applied (pre-work note above) — backlog generation unblocked. |
 
 ## PHASE 4 — remaining domains (fanned out)
 Gate: prototype feature parity (~80% wireable), each surface real. **Sessions not generated yet.**
