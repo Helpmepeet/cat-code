@@ -1,0 +1,382 @@
+/**
+ * Electron main process — the supervisor's client #1 (D6 pin 2).
+ *
+ * Electron main is NOT the engine host and NOT the supervisor: it CALLS the
+ * Electron-free `SidecarSupervisor`. Its jobs:
+ *   1. instantiate the supervisor and spawn the desktop sidecar;
+ *   2. enforce the Electron security baseline (SECURITY-MINIMUM §3);
+ *   3. bridge renderer IPC ↔ supervisor (the four allowlisted channels);
+ *   4. clean up sidecars on quit (D6: die-with-window for v1 — but via the
+ *      supervisor's kill API, not by welding the sidecar to the window).
+ *
+ * This is the ONLY module in `app/` that imports `electron`.
+ */
+
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+import { SidecarSupervisor } from '../supervisor/supervisor.js'
+import { AttachmentGate } from './attachmentGate.js'
+import {
+  decideWindowOpen,
+  isAppOrigin,
+  type NavigationConfig,
+} from './navigationPolicy.js'
+import type { AppClientMessage } from '@cat-code/engine/session-events'
+import type { ServerFrame, SessionId } from '../shared/protocol.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// Fixed internal channel names — must match preload.ts.
+const CH_SUBMIT = 'catcode:submit'
+const CH_ABORT = 'catcode:abort'
+const CH_PERMISSION = 'catcode:permission'
+const CH_PING = 'catcode:ping'
+const CH_SERVER_FRAME = 'catcode:server-frame'
+const CH_RENDERER_READY = 'catcode:renderer-ready'
+
+const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
+const IS_DEV = !app.isPackaged
+const VITE_REACT_PREAMBLE_CSP_HASH =
+  "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
+
+// The single Phase-1 session id. The supervisor is N-ready (a map).
+let primarySessionId: SessionId | null = null
+let supervisor: SidecarSupervisor | null = null
+let mainWindow: BrowserWindow | null = null
+
+/**
+ * F2 — renderer attachment. Server frames arrive from the supervisor the moment
+ * the sidecar attaches (including the one-shot `ready` handshake), which
+ * is BEFORE the renderer has mounted and registered its `subscribe`, and again
+ * there is nothing to receive them after a reload. The `AttachmentGate` buffers
+ * them and decides what to deliver on each event so a fire-and-forget
+ * `webContents.send` cannot lose them and a repeat readiness signal (React
+ * StrictMode double-invokes the mount effect) cannot duplicate them. The gate is
+ * Electron-free and unit-tested; main just `send`s whatever it returns.
+ */
+const attachmentGate = new AttachmentGate()
+
+function deliver(frames: ServerFrame[]): void {
+  const contents = mainWindow?.webContents
+  if (!contents) return
+  for (const frame of frames) {
+    contents.send(CH_SERVER_FRAME, frame satisfies ServerFrame)
+  }
+}
+
+function createSupervisor(): SidecarSupervisor {
+  // Dev: `bun run <repo>/app/sidecar/index.ts`. Packaged: the --compile'd Bun
+  // binary path (W5). Injected so the supervisor stays runtime-agnostic.
+  const repoRoot = join(__dirname, '..', '..')
+  const sidecarEntry = join(repoRoot, 'app', 'sidecar', 'index.ts')
+
+  return new SidecarSupervisor({
+    sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
+    sidecarArgs: ['run', sidecarEntry],
+  })
+}
+
+function applySecurityBaseline(): void {
+  // CSP for any rendered content (SECURITY-MINIMUM §3 CSP). Delivered as a
+  // response header on the app load so it also covers the dev server.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          [
+            "default-src 'none'",
+            // F9 — no 'unsafe-inline'/'unsafe-eval' for scripts, in dev or prod
+            // (SECURITY-MINIMUM §3). Vite dev serves its client + the React
+            // preamble as an inline module. Allow only that exact script via
+            // its SHA-256; never weaken script-src with unsafe-inline.
+            IS_DEV
+              ? `script-src 'self' http://localhost:5173 ${VITE_REACT_PREAMBLE_CSP_HASH}`
+              : "script-src 'self'",
+            // Styles still allow inline: Tailwind v4 dev + injected style tags.
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data:",
+            IS_DEV
+              ? "connect-src 'self' http://localhost:5173 ws://localhost:5173"
+              : "connect-src 'self'",
+            "font-src 'self' data:",
+            "frame-src 'none'",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "form-action 'none'",
+          ].join('; '),
+        ],
+      },
+    })
+  })
+}
+
+function createWindow(): void {
+  const window = new BrowserWindow({
+    width: 1100,
+    height: 720,
+    backgroundColor: '#09090b',
+    show: false,
+    webPreferences: {
+      // SECURITY-MINIMUM §3 BrowserWindow/webPreferences — every box checked.
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      webviewTag: false,
+      webSecurity: true,
+      preload: join(__dirname, '..', 'preload', 'preload.cjs'),
+    },
+  })
+  mainWindow = window
+
+  // F2 — a fresh document (first load OR a reload of this window) has not yet
+  // re-registered `subscribe`, so live frames must not be sent to it until it
+  // re-announces readiness. Reset the attach flag on every navigation start; the
+  // renderer's `rendererReady` call after mount flips it back and triggers the
+  // replay. `did-start-navigation` fires on the initial load and on reloads.
+  window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) {
+      attachmentGate.onNavigationStart()
+    }
+  })
+
+  // Navigation lockdown (SECURITY-MINIMUM §3 Navigation / window.open — T3). The
+  // DECISIONS live in the pure, unit-tested `navigationPolicy`; here we only wire
+  // them to the real Electron events and apply the effect.
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isAppOrigin(url, navigationConfig())) {
+      event.preventDefault()
+    }
+  })
+  window.webContents.on('will-redirect', (event, url) => {
+    if (!isAppOrigin(url, navigationConfig())) {
+      event.preventDefault()
+    }
+  })
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const decision = decideWindowOpen(url)
+    if ('openExternal' in decision) {
+      void shell.openExternal(decision.openExternal)
+    }
+    return { action: 'deny' }
+  })
+
+  window.once('ready-to-show', () => window.show())
+
+  if (IS_DEV) {
+    void window.loadURL(APP_ORIGIN_DEV)
+  } else {
+    void window.loadFile(PACKAGED_INDEX_PATH)
+  }
+}
+
+/** The exact packaged renderer entry file (production nav target). */
+const PACKAGED_INDEX_PATH = join(__dirname, '..', 'renderer', 'dist', 'index.html')
+
+/** The current process's navigation policy config (dev origin vs packaged file). */
+function navigationConfig(): NavigationConfig {
+  return IS_DEV
+    ? { isDev: true, devOrigin: APP_ORIGIN_DEV }
+    : { isDev: false, packagedIndexPath: PACKAGED_INDEX_PATH }
+}
+
+/**
+ * Per-supervisor: hand every server frame to the attachment gate and deliver
+ * whatever it returns (F2) — live if a renderer is attached, otherwise buffered
+ * for the next replay so nothing is lost to a fire-and-forget send.
+ */
+function wireRendererBridge(sup: SidecarSupervisor): void {
+  sup.subscribe(event => {
+    if (event.type !== 'frame') return
+    deliver(attachmentGate.onFrame(event.sessionId, event.frame))
+  })
+}
+
+/**
+ * Register the renderer→supervisor IPC handlers ONCE. They read the module-level
+ * `supervisor`, so they keep working across a host rebuild (F5) without
+ * double-registering listeners on `ipcMain`.
+ */
+function registerIpcHandlers(): void {
+  // Renderer → supervisor: the four allowlisted channels. Main does light shape
+  // coercion for UX, but the SIDECAR is the trust boundary (R2) — it re-validates
+  // everything with the allowlist schema and applies T4/T6/T6b.
+  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: string; options?: unknown }) => {
+    if (typeof arg?.sessionId !== 'string' || typeof arg?.prompt !== 'string') return
+    forward(arg.sessionId, {
+      type: 'app.submit',
+      requestId: cryptoRandomId(),
+      prompt: arg.prompt,
+      options: sanitizeSubmitOptions(arg.options),
+    })
+  })
+
+  ipcMain.on(
+    CH_ABORT,
+    (_e, arg: { sessionId: SessionId; requestId: string; reason?: string }) => {
+      if (typeof arg?.sessionId !== 'string' || typeof arg?.requestId !== 'string') return
+      forward(arg.sessionId, {
+        type: 'app.abort',
+        requestId: arg.requestId,
+        ...(typeof arg.reason === 'string' ? { reason: arg.reason } : {}),
+      })
+    },
+  )
+
+  ipcMain.on(
+    CH_PERMISSION,
+    (_e, arg: { sessionId: SessionId; requestId: string; response: unknown }) => {
+      if (typeof arg?.sessionId !== 'string' || typeof arg?.requestId !== 'string') return
+      const response = coercePermissionResponse(arg.response)
+      if (!response) return
+      forward(arg.sessionId, {
+        type: 'permission.response',
+        requestId: arg.requestId,
+        response,
+      })
+    },
+  )
+
+  ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
+    if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return
+    forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
+  })
+
+  // F2 — the renderer signals it has mounted and subscribed. The gate replays the
+  // buffered frames (including the one-shot `ready` handshake) once per document
+  // load and returns nothing on a repeat signal (StrictMode double-invoke).
+  ipcMain.on(CH_RENDERER_READY, () => {
+    deliver(attachmentGate.onRendererReady())
+  })
+}
+
+function forward(sessionId: SessionId, message: AppClientMessage): void {
+  if (!supervisor) {
+    process.stderr.write(`[main] forward to ${sessionId} dropped: no live host\n`)
+    return
+  }
+  try {
+    supervisor.send(sessionId, message)
+  } catch (error) {
+    // Session not ready yet; the sidecar's app.ready gates the renderer's first
+    // send in practice. Log rather than crash main.
+    process.stderr.write(
+      `[main] forward to ${sessionId} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
+}
+
+function sanitizeSubmitOptions(options: unknown): { isMeta?: boolean; goalSnapshot?: unknown } | undefined {
+  if (typeof options !== 'object' || options === null) return undefined
+  const o = options as { isMeta?: unknown; goalSnapshot?: unknown }
+  const result: { isMeta?: boolean; goalSnapshot?: unknown } = {}
+  if (typeof o.isMeta === 'boolean') result.isMeta = o.isMeta
+  // goalSnapshot passed through as-is; the SIDECAR validates it (T4).
+  if ('goalSnapshot' in o) result.goalSnapshot = o.goalSnapshot
+  return result
+}
+
+type CoercedPermissionResponse =
+  | { behavior: 'allow'; updatedInput: Record<string, unknown> }
+  | { behavior: 'deny'; message: string }
+
+function coercePermissionResponse(response: unknown): CoercedPermissionResponse | null {
+  if (typeof response !== 'object' || response === null) return null
+  const r = response as { behavior?: unknown; updatedInput?: unknown; message?: unknown }
+  if (r.behavior === 'deny' && typeof r.message === 'string') {
+    return { behavior: 'deny', message: r.message }
+  }
+  if (r.behavior === 'allow') {
+    // updatedInput is echo-only downstream (T6, enforced at the sidecar). Pass an
+    // object or default to empty ("use original").
+    const updatedInput =
+      typeof r.updatedInput === 'object' && r.updatedInput !== null && !Array.isArray(r.updatedInput)
+        ? (r.updatedInput as Record<string, unknown>)
+        : {}
+    return { behavior: 'allow', updatedInput }
+  }
+  return null
+}
+
+function cryptoRandomId(): string {
+  return `req_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`
+}
+
+/**
+ * (Re)create the host: supervisor + bridge wiring + the primary session. Called
+ * on startup AND on macOS `activate` (F5) so reopening the window after
+ * `window-all-closed` produces a NEW functioning session rather than a shell
+ * wired to a shut-down supervisor.
+ */
+function ensureHost(): SidecarSupervisor {
+  if (supervisor) return supervisor
+  supervisor = createSupervisor()
+  wireRendererBridge(supervisor)
+  primarySessionId = supervisor.spawnSession()
+
+  // Smoke-run hook (verification only): if CATCODE_SMOKE_EXIT_MS is set, log the
+  // frames the supervisor receives and exit after the timeout. Lets a headless
+  // CI/verify run prove the sidecar spawns and the tool_use frame round-trips
+  // through main without needing a visible window.
+  const smokeMs = Number(process.env.CATCODE_SMOKE_EXIT_MS ?? '0')
+  if (smokeMs > 0) {
+    supervisor.subscribe(event => {
+      if (event.type === 'frame') {
+        if (event.frame.kind === 'ready') {
+          process.stdout.write(
+            `[main-smoke] ready ${JSON.stringify(event.frame.payload)}\n`,
+          )
+        } else {
+          process.stdout.write(`[main-smoke] frame ${event.frame.kind}\n`)
+        }
+      }
+    })
+    setTimeout(() => {
+      supervisor?.shutdown()
+      app.exit(0)
+    }, smokeMs)
+  }
+
+  return supervisor
+}
+
+app.whenReady().then(() => {
+  applySecurityBaseline()
+  registerIpcHandlers() // once — handlers read the module-level supervisor
+  ensureHost()
+  // Hand the renderer its session id once it loads (via the ready frame's
+  // sessionId; renderer reads it off the first frame it receives).
+  createWindow()
+
+  app.on('activate', () => {
+    // F5 — reopening on macOS must rebuild a live host if it was torn down.
+    ensureHost()
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
+  // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
+  // rebuilds a fresh host on reopen (F5).
+  supervisor?.shutdown()
+  supervisor = null
+  primarySessionId = null
+  // F2 — drop the old session's buffered frames so a macOS reopen (which spawns a
+  // NEW session id via `ensureHost`) never replays dead-session frames into the
+  // fresh window.
+  attachmentGate.reset()
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+app.on('before-quit', () => {
+  supervisor?.shutdown()
+})

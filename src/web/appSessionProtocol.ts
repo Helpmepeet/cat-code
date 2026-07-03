@@ -155,6 +155,7 @@ export type AppServerMessage = z.infer<typeof appServerMessageSchema>
 export type AppBrowserEvent = z.infer<typeof appBrowserEventSchema>
 
 export type AppReadyPayload = {
+  type: 'app.ready'
   protocolVersion: 1
   inputEnabled: boolean
   activeTurn: boolean

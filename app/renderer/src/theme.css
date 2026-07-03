@@ -1,0 +1,65 @@
+/* Without this import the Vite Tailwind plugin emits theme.css verbatim:
+ * `@theme` stays as-is (browsers ignore it) and NO utility classes are
+ * generated — every className in the renderer silently no-ops (found in
+ * P1-3; P1-0/P1-2 shipped without it). */
+@import 'tailwindcss';
+
+:root {
+  --accent: #f472b6;
+  --tone-default: #f4f4f5;
+  --tone-accent: var(--accent);
+
+  /*
+   * TODO(P1-0): The prototype design-system sources name these tones but do
+   * not assign them hex values. Define them only after the palette is
+   * source-approved; leaving them unset prevents accidental invented colors.
+   *
+   * --tone-warn: <source-approved color>;
+   * --tone-danger: <source-approved color>;
+   * --tone-good: <source-approved color>;
+   * --tone-info: <source-approved color>;
+   */
+}
+
+@theme inline {
+  --color-app-bg: #09090b;
+  --color-text-primary: #f4f4f5;
+  --color-text-muted: #a1a1aa;
+  --color-text-subtle: #71717a;
+  --color-accent: var(--accent);
+
+  --color-tone-default: var(--tone-default);
+  --color-tone-accent: var(--tone-accent);
+  --color-tone-warn: var(--tone-warn);
+  --color-tone-danger: var(--tone-danger);
+  --color-tone-good: var(--tone-good);
+  --color-tone-success: var(--tone-good);
+  --color-tone-info: var(--tone-info);
+
+  --font-sans:
+    "DM Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-mono:
+    "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  --font-display: "Press Start 2P", fantasy;
+}
+
+@layer base {
+  html {
+    background: var(--color-app-bg);
+  }
+
+  body {
+    background: var(--color-app-bg);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}

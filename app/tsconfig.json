@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "jsx": "react-jsx",
+    "types": ["node", "bun"],
+    "allowImportingTsExtensions": false,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@cat-code/engine/sdk": ["./shared/engine-types.snapshot.d.ts"],
+      "@cat-code/engine/session-events": ["./shared/engine-types.snapshot.d.ts"]
+    }
+  },
+  "include": [
+    "main/**/*.ts",
+    "preload/**/*.ts",
+    "supervisor/**/*.ts",
+    "shared/**/*.ts",
+    "renderer/src/**/*.ts",
+    "renderer/src/**/*.tsx",
+    "scripts/**/*.ts"
+  ],
+  "//": "sidecar/** is checked by sidecar/tsconfig.json — it imports engine RUNTIME directly and must resolve the real Bun engine graph, which this isolated (snapshot-alias, DOM-lib) config deliberately cannot."
+}

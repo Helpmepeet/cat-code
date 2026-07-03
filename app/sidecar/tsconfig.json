@@ -1,0 +1,14 @@
+{
+  "//": "The sidecar is Bun engine-adjacent code: it imports the real engine RUNTIME (AppSessionController, appClientMessageSchema, parseThreadGoal) and must resolve the actual Bun engine graph. It therefore extends the engine root tsconfig rather than the isolated app config. The @cat-code/engine/* alias is still defined so shared/protocol.ts (used by both worlds) resolves its type-only snapshot import here too.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "baseUrl": "../..",
+    "paths": {
+      "src/*": ["src/*"],
+      "@cat-code/engine/sdk": ["app/shared/engine-types.snapshot.d.ts"],
+      "@cat-code/engine/session-events": ["app/shared/engine-types.snapshot.d.ts"]
+    }
+  },
+  "include": ["./**/*.ts", "../shared/**/*.ts"]
+}

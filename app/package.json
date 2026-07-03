@@ -1,0 +1,29 @@
+{
+  "name": "@cat-code/desktop",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "CatCode desktop app — Electron shell + Bun engine sidecar (P1-0 walking-skeleton scaffold).",
+  "main": "main/main.js",
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "sidecar:dev": "bun run sidecar/index.ts",
+    "renderer:dev": "vite --config renderer/vite.config.ts",
+    "renderer:build": "vite build --config renderer/vite.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test app/",
+    "test:hardening": "bun run scripts/run-hardening-smoke.ts"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.2.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-markdown": "^10.1.0",
+    "tailwindcss": "4.2.2",
+    "vite": "7.3.2"
+  }
+}
