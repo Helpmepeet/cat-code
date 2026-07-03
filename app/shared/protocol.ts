@@ -173,9 +173,23 @@ export type SubmitOptions = {
 /**
  * Renderer-supplied permission response. The renderer may confirm or deny a
  * prompt the engine raised; it may NOT author a different command inside an
- * allow (SECURITY-MINIMUM T6) nor install durable permission rules
- * (SECURITY-MINIMUM T6b). Those constraints are enforced at the sidecar.
+ * allow (SECURITY-MINIMUM T6) nor author permission rules (SECURITY-MINIMUM
+ * T6b). "Always allow" is expressed as a SELECTION among the engine-minted
+ * `permission_suggestions` on the pending request (`applySuggestions`), never
+ * as renderer-authored update objects. All constraints are enforced at the
+ * sidecar (decisions/PERMISSION-BOUNDARY.md C1).
  */
 export type PermissionResponseInput =
-  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
+  | {
+      behavior: 'allow'
+      updatedInput?: Record<string, unknown>
+      /**
+       * "Always allow": indices into THIS request's engine-minted
+       * `permission_suggestions`. The sidecar validates every index against
+       * the pending request and re-attaches the engine's own update objects
+       * as `updatedPermissions`; the renderer cannot author rule content.
+       * Absent or empty = allow once.
+       */
+      applySuggestions?: number[]
+    }
   | { behavior: 'deny'; message: string }

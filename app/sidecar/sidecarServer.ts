@@ -22,9 +22,11 @@
 
 import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import type {
+  AppPermissionRequest,
   AppPermissionResponse,
   AppSessionEvent,
 } from '../../src/app-runtime/sessionEvents.js'
+import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
 import type {
   AppClientMessage,
@@ -43,6 +45,7 @@ import {
   MAX_FRAMES_PER_WINDOW,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  MAX_SUGGESTION_SELECTIONS,
   MAX_TEXT_FIELD_CHARS,
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
@@ -232,10 +235,14 @@ export class SidecarServer {
       return
     }
 
-    this.dispatch(connection, parsed.data)
+    this.dispatch(connection, parsed.data, frame.message)
   }
 
-  private dispatch(connection: Connection, message: AppClientMessage): void {
+  private dispatch(
+    connection: Connection,
+    message: AppClientMessage,
+    rawMessage: unknown,
+  ): void {
     switch (message.type) {
       case 'app.ping':
         if (message.nonce.length > MAX_TEXT_FIELD_CHARS) {
@@ -265,7 +272,7 @@ export class SidecarServer {
         return
 
       case 'permission.response':
-        this.handlePermissionResponse(connection, message)
+        this.handlePermissionResponse(connection, message, rawMessage)
         return
 
       case 'app.submit':
@@ -356,6 +363,7 @@ export class SidecarServer {
   private handlePermissionResponse(
     connection: Connection,
     message: PermissionResponseMessage,
+    rawMessage: unknown,
   ): void {
     // T5a (structural) — the requestId MUST match a currently-pending
     // engine-minted request. `respondToPermissionRequest` no-ops on a miss
@@ -376,6 +384,22 @@ export class SidecarServer {
       return
     }
 
+    // C1 — "always allow" as suggestion SELECTION (PERMISSION-BOUNDARY.md). The
+    // renderer may request durable permission updates only by INDEXING into the
+    // `permission_suggestions` the ENGINE minted on this exact pending request;
+    // it can never author update objects (T6b intent). The shared Zod schema
+    // strips unknown response keys, so the selection is read from the raw frame
+    // and validated here, fail-closed.
+    const selection = validateSuggestionSelection(
+      rawMessage,
+      message.response.behavior,
+      pending.request,
+    )
+    if (!selection.ok) {
+      this.sendError(connection, message.requestId, 'bad_request', selection.reason, false)
+      return
+    }
+
     const response = this.sanitizePermissionResponse(
       connection,
       message.requestId,
@@ -386,7 +410,18 @@ export class SidecarServer {
       return // an error was already sent
     }
 
-    this.controller.respondToPermissionRequest(message.requestId, response)
+    // Re-attach the ENGINE-authored update objects for a validated selection
+    // (cloned so the response never aliases the pending request). This is the
+    // ONLY path that puts `updatedPermissions` on a boundary response — the
+    // objects are byte-for-byte the engine's own suggestions for this requestId,
+    // which the engine then applies + persists via its normal decision path
+    // (permissionPromptToolResultToPermissionDecision).
+    const finalResponse: AppPermissionResponse =
+      response.behavior === 'allow' && selection.updates.length > 0
+        ? { ...response, updatedPermissions: structuredClone(selection.updates) }
+        : response
+
+    this.controller.respondToPermissionRequest(message.requestId, finalResponse)
   }
 
   /**
@@ -411,8 +446,11 @@ export class SidecarServer {
    *   T6b — `updatedPermissions`: on an allow these are persisted via
    *         `persistPermissionUpdates` (PermissionPromptToolResultSchema.ts:96
    *         -105), installing durable always-allow rules. A forged allow must
-   *         not be able to write policy. Strip the field before it reaches the
-   *         engine.
+   *         not be able to write policy. Strip renderer-SUPPLIED objects before
+   *         they reach the engine (backstop; F10 rejects the key upstream). The
+   *         legitimate "always allow" path is C1: handlePermissionResponse
+   *         re-attaches ENGINE-minted suggestions after
+   *         validateSuggestionSelection — the renderer selects, never authors.
    *
    * Returns the sanitized response, or null if it was rejected (error sent).
    */
@@ -635,7 +673,14 @@ function checkStrictKeys(message: unknown): string | null {
   // escalations (allow.updatedPermissions, deny.interrupt) that the renderer must
   // not be able to set; reject any key outside this allowlist rather than let the
   // Zod parse silently strip it or forward `interrupt` to the engine.
-  const allowedResponseKeys = new Set(['behavior', 'updatedInput', 'message'])
+  // `applySuggestions` (C1) is a renderer-facing key: an index selection among
+  // the engine-minted suggestions, validated in validateSuggestionSelection.
+  const allowedResponseKeys = new Set([
+    'behavior',
+    'updatedInput',
+    'message',
+    'applySuggestions',
+  ])
 
   // `Map.get`, not `key in obj` — an inherited key like "constructor" or
   // "toString" must NOT be treated as a known message type (it would also crash
@@ -680,6 +725,80 @@ function checkStrictKeys(message: unknown): string | null {
   }
 
   return null
+}
+
+type SuggestionSelectionResult =
+  | { ok: true; updates: PermissionUpdate[] }
+  | { ok: false; reason: string }
+
+/**
+ * C1 — validate a renderer "always allow" selection (PERMISSION-BOUNDARY.md).
+ * The renderer may request durable permission updates ONLY by selecting, by
+ * index, among the `permission_suggestions` the ENGINE minted on this exact
+ * pending request. Anything else — a selection on a deny, a non-array, a
+ * non-integer / negative / out-of-range index, a duplicate, an oversize list,
+ * or a request that minted no suggestions — is rejected fail-closed (error
+ * frame, request stays pending). The returned updates are the engine's own
+ * objects (the caller clones before use); the renderer never authors rule
+ * content, so T6b's guarantee is preserved.
+ */
+function validateSuggestionSelection(
+  rawMessage: unknown,
+  behavior: AppPermissionResponse['behavior'],
+  request: AppPermissionRequest['request'],
+): SuggestionSelectionResult {
+  const raw = (
+    rawMessage as { response?: { applySuggestions?: unknown } } | null
+  )?.response?.applySuggestions
+  if (raw === undefined) {
+    return { ok: true, updates: [] }
+  }
+  if (behavior !== 'allow') {
+    return { ok: false, reason: 'applySuggestions is only valid on an allow' }
+  }
+  if (!Array.isArray(raw)) {
+    return { ok: false, reason: 'applySuggestions must be an array of indices' }
+  }
+  if (raw.length === 0) {
+    return { ok: true, updates: [] }
+  }
+  if (raw.length > MAX_SUGGESTION_SELECTIONS) {
+    return {
+      ok: false,
+      reason: `applySuggestions exceeds ${MAX_SUGGESTION_SELECTIONS} entries`,
+    }
+  }
+  // Runtime-narrow the engine-typed field: the request came from the engine,
+  // but the boundary stays defensive about shape (same posture as
+  // extractGatedToolInput).
+  const suggestions = request.permission_suggestions
+  if (!Array.isArray(suggestions) || suggestions.length === 0) {
+    return {
+      ok: false,
+      reason: 'request has no permission_suggestions to select from',
+    }
+  }
+  const seen = new Set<number>()
+  const updates: PermissionUpdate[] = []
+  for (const value of raw) {
+    if (
+      typeof value !== 'number' ||
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value >= suggestions.length
+    ) {
+      return {
+        ok: false,
+        reason: 'applySuggestions contains an invalid or out-of-range index',
+      }
+    }
+    if (seen.has(value)) {
+      return { ok: false, reason: 'applySuggestions contains a duplicate index' }
+    }
+    seen.add(value)
+    updates.push(suggestions[value] as PermissionUpdate)
+  }
+  return { ok: true, updates }
 }
 
 /**

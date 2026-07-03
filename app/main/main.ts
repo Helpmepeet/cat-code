@@ -24,6 +24,7 @@ import {
   type NavigationConfig,
 } from './navigationPolicy.js'
 import type { AppClientMessage } from '@cat-code/engine/session-events'
+import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
 import type { ServerFrame, SessionId } from '../shared/protocol.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -283,12 +284,21 @@ function sanitizeSubmitOptions(options: unknown): { isMeta?: boolean; goalSnapsh
 }
 
 type CoercedPermissionResponse =
-  | { behavior: 'allow'; updatedInput: Record<string, unknown> }
+  | {
+      behavior: 'allow'
+      updatedInput: Record<string, unknown>
+      applySuggestions?: number[]
+    }
   | { behavior: 'deny'; message: string }
 
 function coercePermissionResponse(response: unknown): CoercedPermissionResponse | null {
   if (typeof response !== 'object' || response === null) return null
-  const r = response as { behavior?: unknown; updatedInput?: unknown; message?: unknown }
+  const r = response as {
+    behavior?: unknown
+    updatedInput?: unknown
+    message?: unknown
+    applySuggestions?: unknown
+  }
   if (r.behavior === 'deny' && typeof r.message === 'string') {
     return { behavior: 'deny', message: r.message }
   }
@@ -299,6 +309,28 @@ function coercePermissionResponse(response: unknown): CoercedPermissionResponse 
       typeof r.updatedInput === 'object' && r.updatedInput !== null && !Array.isArray(r.updatedInput)
         ? (r.updatedInput as Record<string, unknown>)
         : {}
+    // C1 — "always allow" suggestion selection (decisions/PERMISSION-BOUNDARY.md).
+    // Indices only; the sidecar re-validates against the pending request's
+    // engine-minted suggestions. A malformed selection drops the whole response
+    // (fail-closed) rather than silently downgrading "always" to allow-once.
+    if (r.applySuggestions !== undefined) {
+      if (
+        !Array.isArray(r.applySuggestions) ||
+        r.applySuggestions.length > MAX_SUGGESTION_SELECTIONS ||
+        !r.applySuggestions.every(
+          value => typeof value === 'number' && Number.isInteger(value) && value >= 0,
+        )
+      ) {
+        return null
+      }
+      if (r.applySuggestions.length > 0) {
+        return {
+          behavior: 'allow',
+          updatedInput,
+          applySuggestions: r.applySuggestions as number[],
+        }
+      }
+    }
     return { behavior: 'allow', updatedInput }
   }
   return null

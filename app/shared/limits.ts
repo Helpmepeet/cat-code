@@ -40,3 +40,11 @@ export const MAX_PROMPT_BYTES = 96 * 1024
 
 /** Max length for free-text fields (abort reason, ping nonce), in chars. */
 export const MAX_TEXT_FIELD_CHARS = 4_096
+
+/**
+ * Max entries in a permission-response `applySuggestions` selection (C1,
+ * decisions/PERMISSION-BOUNDARY.md). Engine suggestion lists are tiny (1–3
+ * entries in practice); this is a structural bound on hostile input, not a
+ * policy gate.
+ */
+export const MAX_SUGGESTION_SELECTIONS = 16

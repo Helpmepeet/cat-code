@@ -13,6 +13,7 @@ import type {
   AppPermissionRequest,
   AppPermissionResponse,
 } from '../../src/app-runtime/sessionEvents.js'
+import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import { MAX_FRAME_BYTES, MAX_PROMPT_BYTES } from '../shared/limits.js'
 import { PROTOCOL_VERSION, type ClientFrame, type ServerFrame } from '../shared/protocol.js'
@@ -57,6 +58,7 @@ function probeAdapter(): AppSessionControllerAdapter {
 function permissionAdapter(
   toolInput: Record<string, unknown>,
   onResolved: (r: AppPermissionResponse) => void,
+  suggestions?: PermissionUpdate[],
 ): AppSessionControllerAdapter {
   return {
     async *runTurn({ onPermissionRequest }) {
@@ -67,11 +69,22 @@ function permissionAdapter(
           tool_name: 'Bash',
           input: toolInput,
           tool_use_id: 'toolu_1',
+          ...(suggestions ? { permission_suggestions: suggestions } : {}),
         },
       }
       const response = await onPermissionRequest(request)
       onResolved(response)
     },
+  }
+}
+
+/** An engine-minted "always allow" suggestion, as the gate would produce it. */
+function bashSuggestion(ruleContent: string): PermissionUpdate {
+  return {
+    type: 'addRules',
+    rules: [{ toolName: 'Bash', ruleContent }],
+    behavior: 'allow',
+    destination: 'localSettings',
   }
 }
 
@@ -363,6 +376,271 @@ test('T6b — sanitizePermissionResponse still strips updatedPermissions (defens
   expect(sanitized).not.toBeNull()
   expect((sanitized as unknown as Record<string, unknown>).updatedPermissions).toBeUndefined()
   void resolved // unused; sanitizer path does not resolve the turn
+})
+
+test('C1 — allow + applySuggestions attaches the ENGINE-minted suggestion as updatedPermissions', async () => {
+  // "Always allow": the renderer SELECTS (by index) among the suggestions the
+  // engine minted on this request; the sidecar re-attaches the engine's own
+  // update objects. The renderer never authors rule content (T6b intent).
+  let resolved: AppPermissionResponse | null = null
+  const suggestion = bashSuggestion('npm test:*')
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'npm test' }, r => {
+      resolved = r
+    }, [suggestion]),
+  )
+  const server = makeServer(controller)
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  const engineSuggestions =
+    controller.getPendingPermissionRequests()[0]!.request.permission_suggestions
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-1',
+      response: { behavior: 'allow', updatedInput: {}, applySuggestions: [0] },
+    } as never),
+  )
+
+  await waitFor(() => resolved !== null)
+  expect(resolved!.behavior).toBe('allow')
+  const attached = (resolved as unknown as { updatedPermissions?: PermissionUpdate[] })
+    .updatedPermissions
+  // Deep-equal to the engine's own suggestion object…
+  expect(attached).toEqual([suggestion])
+  // …but CLONED, never aliasing the pending request's objects.
+  expect(attached![0]).not.toBe(engineSuggestions![0])
+  // The gated input is still what reaches the engine (T6 unchanged).
+  expect(allowInput(resolved)).toEqual({ command: 'npm test' })
+})
+
+test('C1 — an empty applySuggestions is a plain allow-once (nothing attached)', async () => {
+  // TUI parity: allow-once sends [] (BashPermissionRequest.tsx:346).
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, r => {
+      resolved = r
+    }, [bashSuggestion('ls:*')]),
+  )
+  const server = makeServer(controller)
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-1',
+      response: { behavior: 'allow', updatedInput: {}, applySuggestions: [] },
+    } as never),
+  )
+
+  await waitFor(() => resolved !== null)
+  expect(resolved!.behavior).toBe('allow')
+  expect(
+    (resolved as unknown as { updatedPermissions?: unknown }).updatedPermissions,
+  ).toBeUndefined()
+})
+
+test('C1 — an out-of-range index is rejected fail-closed (request stays pending)', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, r => {
+      resolved = r
+    }, [bashSuggestion('ls:*')]),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-1',
+      response: { behavior: 'allow', updatedInput: {}, applySuggestions: [1] },
+    } as never),
+  )
+
+  const err = received.find(
+    f => f.kind === 'error' && f.code === 'bad_request' && f.message.includes('applySuggestions'),
+  )
+  expect(err).toBeDefined()
+  expect(resolved).toBeNull()
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C1 — a selection against a request that minted NO suggestions is rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-1',
+      response: { behavior: 'allow', updatedInput: {}, applySuggestions: [0] },
+    } as never),
+  )
+
+  const err = received.find(
+    f => f.kind === 'error' && f.message.includes('no permission_suggestions'),
+  )
+  expect(err).toBeDefined()
+  expect(resolved).toBeNull()
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C1 — non-integer, duplicate, and oversize selections are rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, r => {
+      resolved = r
+    }, [bashSuggestion('ls:*'), bashSuggestion('pwd')]),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  const sendSelection = (applySuggestions: unknown) => {
+    server.handleData(
+      conn,
+      clientFrame({
+        type: 'permission.response',
+        requestId: 'perm-1',
+        response: { behavior: 'allow', updatedInput: {}, applySuggestions },
+      } as never),
+    )
+  }
+
+  sendSelection([0.5]) // non-integer
+  sendSelection(['0']) // non-number
+  sendSelection([-1]) // negative
+  sendSelection([0, 0]) // duplicate
+  sendSelection(Array.from({ length: 17 }, () => 0)) // over MAX_SUGGESTION_SELECTIONS
+  sendSelection({ 0: 0 }) // non-array
+
+  const errors = received.filter(
+    f => f.kind === 'error' && f.code === 'bad_request' && f.message.includes('applySuggestions'),
+  )
+  expect(errors.length).toBe(6)
+  expect(resolved).toBeNull()
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C1 — applySuggestions on a deny is rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, r => {
+      resolved = r
+    }, [bashSuggestion('ls:*')]),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-1',
+      response: { behavior: 'deny', message: 'no', applySuggestions: [0] },
+    } as never),
+  )
+
+  const err = received.find(
+    f => f.kind === 'error' && f.message.includes('only valid on an allow'),
+  )
+  expect(err).toBeDefined()
+  expect(resolved).toBeNull()
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C1 — a selection resolves against ITS OWN request, not another pending one', async () => {
+  // Two concurrent pendings with different engine suggestions: answering B with
+  // index 0 must attach B's suggestion and leave A untouched (T5a discipline
+  // extended to the selection).
+  const resolvedById = new Map<string, AppPermissionResponse>()
+  const suggestionA = bashSuggestion('aaa:*')
+  const suggestionB = bashSuggestion('bbb:*')
+  const controller = new AppSessionController({
+    async *runTurn({ onPermissionRequest }) {
+      await Promise.all([
+        onPermissionRequest({
+          requestId: 'perm-A',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'Bash',
+            input: { command: 'aaa' },
+            tool_use_id: 'toolu_A',
+            permission_suggestions: [suggestionA],
+          },
+        }).then(r => resolvedById.set('perm-A', r)),
+        onPermissionRequest({
+          requestId: 'perm-B',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'Bash',
+            input: { command: 'bbb' },
+            tool_use_id: 'toolu_B',
+            permission_suggestions: [suggestionB],
+          },
+        }).then(r => resolvedById.set('perm-B', r)),
+      ])
+    },
+  })
+  const server = makeServer(controller)
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 2)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-B',
+      response: { behavior: 'allow', updatedInput: {}, applySuggestions: [0] },
+    } as never),
+  )
+
+  await waitFor(() => resolvedById.has('perm-B'))
+  const attached = (
+    resolvedById.get('perm-B') as unknown as { updatedPermissions?: PermissionUpdate[] }
+  ).updatedPermissions
+  expect(attached).toEqual([suggestionB])
+  // A is untouched and still pending.
+  expect(resolvedById.has('perm-A')).toBe(false)
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+  expect(controller.getPendingPermissionRequests()[0]!.requestId).toBe('perm-A')
 })
 
 test('F10 — a frame with an extra key on an allowlisted type is rejected (not stripped)', () => {
