@@ -20,6 +20,7 @@ import { statSync } from 'node:fs'
 import { FrameDecoder } from '../shared/framing.js'
 import { MAX_FRAME_BYTES } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
+import type { Message } from '../../src/types/message.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
@@ -96,8 +97,16 @@ async function main(): Promise<void> {
   // and the ready frame's engineSessionId echoes the requested resume id. A bad
   // id throws here → the fatal handler below exits non-zero + loudly (never a
   // silent fresh session). Probe mode has no engine and cannot resume.
+  // The loaded Message[] are the restored turn context (F1, host-plane review
+  // 2026-07-05): they MUST reach the session controller below — id adoption
+  // alone restores the transcript key, not the conversation.
+  let resumedMessages: Message[] | undefined
   if (!args.probeOnAttach && args.resumeEngineSessionId) {
-    await resumeEngineSession(args.resumeEngineSessionId, args.cwd)
+    const resumed = await resumeEngineSession(args.resumeEngineSessionId, args.cwd)
+    resumedMessages = resumed.messages
+    process.stderr.write(
+      `[sidecar] resume-seeded messages=${resumed.messages.length} engineSessionId=${resumed.engineSessionId}\n`,
+    )
   }
 
   const engineSessionId = args.probeOnAttach
@@ -107,6 +116,7 @@ async function main(): Promise<void> {
   const { controller, permissions } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: args.cwd,
+    ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
   })
 
   const server = new SidecarServer({

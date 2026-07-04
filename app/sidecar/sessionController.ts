@@ -16,6 +16,7 @@ import {
   createFileStateCacheWithSizeLimit,
   READ_FILE_STATE_CACHE_SIZE,
 } from '../../src/utils/fileStateCache.js'
+import type { Message } from '../../src/types/message.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -74,7 +75,10 @@ export async function loadSidecarToolPermissionContext(): Promise<ToolPermission
   }
 }
 
-export async function createNormalSidecarQueryEngineConfig(cwd: string) {
+export async function createNormalSidecarQueryEngineConfig(
+  cwd: string,
+  initialMessages?: readonly Message[],
+) {
   const toolPermissionContext = await loadSidecarToolPermissionContext()
   const appStateStore = createStore({
     ...getDefaultAppState(),
@@ -84,21 +88,33 @@ export async function createNormalSidecarQueryEngineConfig(cwd: string) {
 
   return {
     appStateStore,
-    queryEngineConfig: createQueryEngineAppSessionConfigFromSetup({
-      cwd,
-      tools,
-      commands: [],
-      mcpTools: [],
-      mcpCommands: [],
-      mcpClients: [],
-      mcpResources: {},
-      agents: [],
-      getAppState: appStateStore.getState,
-      setAppState: appStateStore.setState,
-      readFileCache: createFileStateCacheWithSizeLimit(
-        READ_FILE_STATE_CACHE_SIZE,
-      ),
-    }),
+    queryEngineConfig: {
+      ...createQueryEngineAppSessionConfigFromSetup({
+        cwd,
+        tools,
+        commands: [],
+        mcpTools: [],
+        mcpCommands: [],
+        mcpClients: [],
+        mcpResources: {},
+        agents: [],
+        getAppState: appStateStore.getState,
+        setAppState: appStateStore.setState,
+        readFileCache: createFileStateCacheWithSizeLimit(
+          READ_FILE_STATE_CACHE_SIZE,
+        ),
+      }),
+      // F1 (host-plane review 2026-07-05): seed the resumed transcript into the
+      // QueryEngine's live turn context (`initialMessages` → `mutableMessages`,
+      // QueryEngine.ts:208) — the same hand-off the TUI's --resume makes via the
+      // REPL's initialMessages (main.tsx:3784-3797). Without this, a restored
+      // session adopts the id and appends to the right transcript but answers
+      // with no pre-quit context (the D6 anti-Potemkin failure). Copied so the
+      // engine's in-place mutation never aliases the caller's resumed array.
+      ...(initialMessages !== undefined
+        ? { initialMessages: [...initialMessages] }
+        : {}),
+    },
   }
 }
 
@@ -115,10 +131,17 @@ export type SidecarSession = {
 export async function createSidecarSessionController({
   probe,
   cwd,
+  initialMessages,
 }: {
   probe: boolean
   /** Session root; the engine's QueryEngine is configured here. Ignored in probe mode. */
   cwd: string
+  /**
+   * The resumed transcript from `resumeEngineSession` (F1): seeds the
+   * QueryEngine's turn context so a restored session actually operates on its
+   * pre-quit history. Absent for a fresh session; ignored in probe mode.
+   */
+  initialMessages?: readonly Message[]
 }): Promise<SidecarSession> {
   if (probe) {
     return {
@@ -145,7 +168,7 @@ export async function createSidecarSessionController({
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
   const { appStateStore, queryEngineConfig } =
-    await createNormalSidecarQueryEngineConfig(cwd)
+    await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
