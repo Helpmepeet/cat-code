@@ -128,6 +128,7 @@ async function runProductionHardeningSmoke(
     })()`)
 
     const expectedBridgeKeys = [
+      // Frame plane (engine commands + attachment).
       'abort',
       'ping',
       'rendererReady',
@@ -136,7 +137,14 @@ async function runProductionHardeningSmoke(
       'setPermissionMode',
       'submit',
       'subscribe',
-    ]
+      // Control plane (P3-3 — HC3 fixed per-method senders).
+      'closeSession',
+      'createSession',
+      'listSessions',
+      'pickDirectory',
+      'restoreSession',
+      'subscribeHost',
+    ].sort()
     const links = probe.links as Array<{
       text: string | null
       href: string | null

@@ -297,6 +297,14 @@ export class SessionRegistry {
   /** In-memory mirror of the on-disk document; the write points mutate it. */
   private doc: RegistryDocument
 
+  /**
+   * Whether the LAST `persist()` failed to write (held lock or IO error). The
+   * write is swallowed (never throws — §5, a session must outlive a persistence
+   * failure), but the host layer reads this to surface `registry_unavailable`
+   * (HostErrorCode) as a NON-fatal degraded-persistence signal.
+   */
+  private writeFailed = false
+
   constructor(options: RegistryOptions = {}) {
     this.dir = options.storageDir ?? defaultRegistryDir()
     this.path = join(this.dir, 'registry.json')
@@ -318,6 +326,21 @@ export class SessionRegistry {
   /** A defensive copy of the current in-memory rows. */
   get sessions(): RegistrySession[] {
     return this.doc.sessions.map(row => ({ ...row }))
+  }
+
+  /**
+   * True when the most recent write could not be persisted (§5). The in-memory
+   * doc is still authoritative for this run; the host surfaces this as a
+   * non-fatal `registry_unavailable` and keeps the session alive.
+   */
+  get lastWriteFailed(): boolean {
+    return this.writeFailed
+  }
+
+  /** Look up one row by appSessionId (defensive copy), or undefined. */
+  findSession(appSessionId: string): RegistrySession | undefined {
+    const row = this.find(appSessionId)
+    return row ? { ...row } : undefined
   }
 
   /* --------------------------------------------------------------------- *
@@ -628,12 +651,22 @@ export class SessionRegistry {
     this.doc.hostPid = process.pid
     this.doc.updatedAt = Date.now()
 
-    ensureDir(this.dir)
+    try {
+      ensureDir(this.dir)
+    } catch (error) {
+      this.writeFailed = true
+      this.log(
+        `[registry] could not ensure ${this.dir} (${errText(error)}); ` +
+          'skipping this write — session unaffected',
+      )
+      return
+    }
 
     let release: (() => Promise<void>) | undefined
     try {
       release = await this.acquireLock(this.path)
     } catch (error) {
+      this.writeFailed = true
       this.log(
         `[registry] could not acquire lock for ${this.path} (${errText(error)}); ` +
           'skipping this write — session unaffected',
@@ -643,7 +676,9 @@ export class SessionRegistry {
 
     try {
       atomicWriteJson(this.path, this.doc)
+      this.writeFailed = false
     } catch (error) {
+      this.writeFailed = true
       this.log(`[registry] atomic write failed (${errText(error)}); session unaffected`)
     } finally {
       try {

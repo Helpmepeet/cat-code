@@ -39,6 +39,16 @@ import type {
   AppClientMessage,
   AppReadyPayload,
 } from '@cat-code/engine/session-events'
+// The host control-plane contract (P3-3). Kept in its own module (`hostApi.ts`)
+// because it is a SEPARATE plane from the wire frames — its `HostErrorCode` union
+// must never merge with `ErrorFrame['code']` (F3 §3). Re-surfaced on the bridge
+// here because the renderer reaches both planes through the one preload.
+import type {
+  CreateSessionRequest,
+  HostEvent,
+  HostResult,
+  SessionDescriptor,
+} from './hostApi.js'
 
 /** Protocol wire version. Bump only on a breaking frame-shape change. */
 export const PROTOCOL_VERSION = 1 as const
@@ -268,6 +278,34 @@ export type CatCodeBridge = {
    * send.
    */
   rendererReady(): void
+
+  /* ----------------------------------------------------------------------- *
+   * Control plane (P3-3 — REGISTRY §6.1 / SECURITY-MINIMUM Addendum HC1–HC4).
+   * Fixed per-method senders; the renderer never authors a cwd (it requests the
+   * native picker, HC1) and never controls a channel name (HC3). Each returns a
+   * typed `HostResult` — a failure crosses as data, never a thrown internal
+   * error (HC2).
+   * ----------------------------------------------------------------------- */
+
+  /**
+   * HC1 — request main's NATIVE directory picker. The renderer may request it,
+   * never answer it: main returns a single realpath the user chose, or null
+   * (cancelled). Not a listing, not file contents.
+   */
+  pickDirectory(): Promise<string | null>
+  /** Create a fresh (or, with `resumeEngineSessionId`, restored) session. */
+  createSession(req: CreateSessionRequest): Promise<HostResult<SessionDescriptor>>
+  /** Restore a registry row's session by id (sugar over create). */
+  restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
+  /** Graceful close; the row is kept restorable. */
+  closeSession(appSessionId: SessionId): Promise<HostResult<void>>
+  /** Snapshot of live ∪ restorable sessions. */
+  listSessions(): Promise<SessionDescriptor[]>
+  /**
+   * Subscribe to the host's row-change stream (the session list is a projection
+   * of this, never a poll loop). Returns an unsubscribe function.
+   */
+  subscribeHost(listener: (event: HostEvent) => void): () => void
 }
 
 /**

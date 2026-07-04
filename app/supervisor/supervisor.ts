@@ -367,6 +367,16 @@ export class SidecarSupervisor {
     return this.registry.get(sessionId)?.child.pid
   }
 
+  /**
+   * Advisory socket path for a live session — the registry persists it as the
+   * §9-A3 orphan-identity signal and the v2 re-attach seed (REGISTRY.md R2). A
+   * cleanup/identity hint only, never a routing identity (routing is the
+   * in-memory map). Undefined once the session is killed/deregistered.
+   */
+  getSessionSocketPath(sessionId: SessionId): string | undefined {
+    return this.registry.get(sessionId)?.socketPath
+  }
+
   /* --------------------------------------------------------------------- */
 
   private connectWhenReady(record: SidecarRecord, attempt = 0): void {

@@ -1,0 +1,515 @@
+/**
+ * The host composition layer (D1 — `decisions/REGISTRY.md` §6/§6.1; trust zone —
+ * `decisions/SECURITY-MINIMUM.md` Addendum, T8 / HC1–HC4).
+ *
+ * This is the "design the control plane once" deliverable executed as code. It
+ * wires three Electron-FREE modules into the typed host API (`HostApi`):
+ *   - the supervisor (`app/supervisor/supervisor.ts`) — the in-memory process
+ *     manager (spawn/kill/restart/listSessions/events);
+ *   - the registry (`app/host/registry.ts`, P3-2) — the durable app-owned index;
+ *   - per-session spawn config (P3-1) — cwd + resumeEngineSessionId to the sidecar.
+ *
+ * It owns NO `electron` import: Electron main is a CALLER (single-instance lock,
+ * native dir picker, replay eviction all live in main); a v2 daemon would call
+ * this same interface. The control plane never adds a socket frame type — its
+ * only contact with a sidecar is the spawn environment (main-owned input, HC1),
+ * exactly as the addendum requires.
+ *
+ * Failure model (REGISTRY.md §6.1): every method returns a typed `HostResult`;
+ * a failure is a `HostError` value the caller pattern-matches, NEVER a bare
+ * thrown string that leaks internal state across the boundary (HC2). A registry
+ * write failure DEGRADES persistence (`registry_unavailable`) but never kills a
+ * live session.
+ */
+
+import { randomUUID } from 'node:crypto'
+
+import type { SessionRegistry, RegistrySession } from './registry.js'
+import { MAX_REGISTRY_SESSIONS } from './registry.js'
+import type {
+  SidecarStatus,
+  SidecarSupervisor,
+  SupervisorEvent,
+} from '../supervisor/supervisor.js'
+import type { SessionId } from '../shared/protocol.js'
+import {
+  MAX_SESSION_TITLE_CHARS,
+  MAX_SPAWNS_PER_WINDOW,
+  SPAWN_RATE_WINDOW_MS,
+  type CreateSessionRequest,
+  type HostApi,
+  type HostError,
+  type HostErrorCode,
+  type HostEvent,
+  type HostResult,
+  type SessionDescriptor,
+} from '../shared/hostApi.js'
+
+/* ------------------------------------------------------------------------- *
+ * Injected dependencies (main provides the electron-bound / real-fs ones; tests
+ * pass hermetic fakes so this module runs without electron and without a real
+ * process tree).
+ * ------------------------------------------------------------------------- */
+
+export type CwdValidation = { ok: true; realpath: string } | { ok: false }
+
+export type HostOptions = {
+  supervisor: SidecarSupervisor
+  registry: SessionRegistry
+  /**
+   * HC1 — canonicalize + existence/isDirectory check a cwd, regardless of
+   * origin. Main injects the real `realpathSync` + `statSync().isDirectory()`;
+   * tests inject a controllable check. Returns the canonical path on success so
+   * the row and the spawn both use the SAME resolved path (no symlink skew).
+   */
+  validateCwd: (cwd: string) => CwdValidation
+  /**
+   * Called when a session is closed/restarted so main can evict its replay
+   * buffer (the P3-0 carry — `AttachmentGate.clearSession`). Kept as an injected
+   * callback so this module stays Electron-free (the gate lives in main).
+   */
+  evictReplay?: (appSessionId: SessionId) => void
+  /** Structured logger. Defaults to stderr. */
+  log?: (line: string) => void
+  /** Clock (spawn rate window). Injected for deterministic HC4 tests. */
+  now?: () => number
+}
+
+/* UUID v1–v5 shape — the HC2 membership pre-check (cheap reject of garbage ids
+ * before any map/registry lookup). */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value)
+}
+
+function hostError(code: HostErrorCode, message: string): { ok: false; error: HostError } {
+  return { ok: false, error: { code, message } }
+}
+
+export class Host implements HostApi {
+  private readonly supervisor: SidecarSupervisor
+  private readonly registry: SessionRegistry
+  private readonly validateCwd: (cwd: string) => CwdValidation
+  private readonly evictReplay: (appSessionId: SessionId) => void
+  private readonly log: (line: string) => void
+  private readonly now: () => number
+
+  private readonly listeners = new Set<(event: HostEvent) => void>()
+
+  /** Spawn-rate ring (HC4): timestamps of recent createSession spawns. */
+  private spawnTimes: number[] = []
+
+  /**
+   * appSessionIds currently gracefully closing. `killSession` fires an async
+   * `exit` event; without this we would emit `session-status(exited)` for a row
+   * we already reported as `session-removed`/clean.
+   */
+  private readonly closing = new Set<SessionId>()
+
+  constructor(options: HostOptions) {
+    this.supervisor = options.supervisor
+    this.registry = options.registry
+    this.validateCwd = options.validateCwd
+    this.evictReplay = options.evictReplay ?? (() => {})
+    this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
+    this.now = options.now ?? Date.now
+    this.wireSupervisor()
+  }
+
+  /* --------------------------------------------------------------------- *
+   * Supervisor event → registry row updates + HostEvent stream
+   * --------------------------------------------------------------------- */
+
+  private wireSupervisor(): void {
+    this.supervisor.subscribe(event => {
+      void this.onSupervisorEvent(event)
+    })
+  }
+
+  private async onSupervisorEvent(event: SupervisorEvent): Promise<void> {
+    const appSessionId = event.sessionId
+
+    if (event.type === 'frame') {
+      // Relay the ready frame's engineSessionId into the registry row (the
+      // two-id bridge, REGISTRY.md §2). Only the ready frame carries it.
+      if (event.frame.kind === 'ready') {
+        await this.registry.fillEngineSessionId(
+          appSessionId,
+          event.frame.engineSessionId,
+        )
+        this.emitStatus(appSessionId)
+      }
+      return
+    }
+
+    if (event.type === 'exit') {
+      // A graceful close already marked the row clean + emitted removed; don't
+      // re-report the async exit that killSession triggers.
+      if (!this.closing.has(appSessionId)) {
+        this.emitStatus(appSessionId)
+      }
+      return
+    }
+
+    // status change
+    this.emitStatus(appSessionId)
+  }
+
+  /* --------------------------------------------------------------------- *
+   * createSession (HC1 cwd revalidate · HC4 caps · spawn_failed)
+   * --------------------------------------------------------------------- */
+
+  async createSession(
+    req: CreateSessionRequest,
+  ): Promise<HostResult<SessionDescriptor>> {
+    // HC1 — the host re-validates the cwd regardless of origin. A renderer never
+    // authors a path (main's native picker or a registry row is the only source),
+    // but defense in depth canonicalizes + existence-checks here too.
+    if (typeof req?.cwd !== 'string' || req.cwd.length === 0) {
+      return hostError('invalid_cwd', 'cwd must be a non-empty string')
+    }
+    const validated = this.validateCwd(req.cwd)
+    if (!validated.ok) {
+      return hostError(
+        'invalid_cwd',
+        `cwd is not an existing directory: ${req.cwd}`,
+      )
+    }
+    const cwd = validated.realpath
+
+    // HC4 — bound row count AND spawn rate; either breach → session_limit.
+    const limit = this.checkSpawnLimits()
+    if (limit) return limit
+
+    return this.spawn({
+      appSessionId: randomUUID(),
+      cwd,
+      title: capTitle(req.title),
+      resumeEngineSessionId: req.resumeEngineSessionId,
+    })
+  }
+
+  /* --------------------------------------------------------------------- *
+   * restoreSession — sugar over create with the row's cwd + engineSessionId
+   * --------------------------------------------------------------------- */
+
+  async restoreSession(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>> {
+    // HC2 — validate id shape before any lookup; unknown → session_not_found.
+    if (!isUuid(appSessionId)) {
+      return hostError('session_not_found', 'malformed session id')
+    }
+    const row = this.registry.findSession(appSessionId)
+    // §9-A4: fails session_not_found if the row OR its transcript is gone. The
+    // registry only offers restorable rows whose transcript exists (launch reap),
+    // and a null engineSessionId row is not resumable.
+    if (!row || row.engineSessionId === null) {
+      return hostError(
+        'session_not_found',
+        `no restorable session ${appSessionId}`,
+      )
+    }
+    if (this.isLive(appSessionId)) {
+      return hostError(
+        'session_not_found',
+        `session ${appSessionId} is already live`,
+      )
+    }
+
+    // Re-validate the row's cwd too (HC1 defense in depth: a row can go stale if
+    // its directory was moved/deleted between launches).
+    const validated = this.validateCwd(row.cwd)
+    if (!validated.ok) {
+      return hostError('invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
+    }
+
+    const limit = this.checkSpawnLimits()
+    if (limit) return limit
+
+    return this.spawn({
+      appSessionId,
+      cwd: validated.realpath,
+      title: row.title,
+      resumeEngineSessionId: row.engineSessionId,
+    })
+  }
+
+  /* --------------------------------------------------------------------- *
+   * Shared spawn path (create + restore) — upsert row, spawn sidecar, record
+   * advisory fields, emit session-added.
+   * --------------------------------------------------------------------- */
+
+  private async spawn(input: {
+    appSessionId: SessionId
+    cwd: string
+    title: string | null | undefined
+    resumeEngineSessionId: string | undefined
+  }): Promise<HostResult<SessionDescriptor>> {
+    const { appSessionId, cwd, resumeEngineSessionId } = input
+    const title = input.title ?? undefined
+    this.recordSpawnTime()
+
+    // Persist the live row BEFORE spawning so a crash between spawn and the next
+    // launch still finds a row to sweep (REGISTRY.md §4.5 write points).
+    await this.registry.upsertOnSpawn({ appSessionId, cwd, title })
+
+    try {
+      this.supervisor.spawnSession(appSessionId, {
+        cwd,
+        ...(resumeEngineSessionId !== undefined ? { resumeEngineSessionId } : {}),
+      })
+    } catch (error) {
+      // Spawn threw synchronously (e.g. socket-path overflow, duplicate id). The
+      // row we just wrote is now dead — mark it clean so it does not masquerade
+      // as a live crash on the next sweep, and report spawn_failed.
+      await this.registry.markClean(appSessionId)
+      this.emitRemoved(appSessionId)
+      return hostError(
+        'spawn_failed',
+        `could not spawn session: ${errText(error)}`,
+      )
+    }
+
+    // Record the advisory runtime fields now that the child exists (§9-A3 orphan
+    // identity + crash sweep). Persistence failure here degrades but never fails.
+    await this.registry.upsertOnSpawn({
+      appSessionId,
+      cwd,
+      title,
+      enginePid: this.supervisor.getSessionProcessId(appSessionId),
+      socketPath: this.supervisor.getSessionSocketPath(appSessionId),
+    })
+    this.surfaceRegistryHealth(appSessionId)
+
+    const descriptor = this.descriptorFor(appSessionId)
+    if (!descriptor) {
+      // Unreachable in practice (we just upserted the row) — typed, not thrown.
+      return hostError('spawn_failed', 'session vanished immediately after spawn')
+    }
+    this.emit({ type: 'session-added', session: descriptor })
+    return { ok: true, value: descriptor }
+  }
+
+  /* --------------------------------------------------------------------- *
+   * closeSession — graceful shutdown; row kept restorable + marked clean; MUST
+   * evict replay state (the P3-0 carry).
+   * --------------------------------------------------------------------- */
+
+  async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
+    if (!isUuid(appSessionId)) {
+      return hostError('session_not_found', 'malformed session id')
+    }
+    if (!this.isLive(appSessionId) && !this.registry.findSession(appSessionId)) {
+      return hostError('session_not_found', `unknown session ${appSessionId}`)
+    }
+
+    this.closing.add(appSessionId)
+    // Graceful sidecar shutdown (SIGTERM via the supervisor's kill API — the
+    // die-with-window mechanism, not process welding).
+    this.supervisor.killSession(appSessionId)
+    // Evict replay so a reload never replays a dead session's frames (P3-0 carry
+    // — the named eviction requirement; AttachmentGate.clearSession in main).
+    this.evictReplay(appSessionId)
+    // Row is KEPT (restorable): mark clean, clear advisory runtime fields.
+    await this.registry.markClean(appSessionId)
+    this.surfaceRegistryHealth(appSessionId)
+    this.closing.delete(appSessionId)
+
+    // The row still exists (restorable) but is no longer live — the session left
+    // the "live" half of the union, so the list projection must drop the live
+    // entry and pick up the restorable one. A single session-status carries the
+    // new (exited, restorable) descriptor.
+    this.emitStatus(appSessionId)
+    return { ok: true, value: undefined }
+  }
+
+  /* --------------------------------------------------------------------- *
+   * listSessions — live ∪ restorable (§6)
+   * --------------------------------------------------------------------- */
+
+  listSessions(): SessionDescriptor[] {
+    const byId = new Map<SessionId, SessionDescriptor>()
+    // Restorable rows first…
+    for (const row of this.registry.restorable()) {
+      byId.set(row.appSessionId, this.descriptorFromRow(row, null))
+    }
+    // …then live sessions overwrite (a live session's status wins over its row).
+    for (const live of this.supervisor.listSessions()) {
+      const descriptor = this.descriptorFor(live.sessionId)
+      if (descriptor) byId.set(live.sessionId, descriptor)
+    }
+    return [...byId.values()]
+  }
+
+  /* --------------------------------------------------------------------- *
+   * subscribe — HostEvent stream (the renderer's list is a projection, never a
+   * poll loop)
+   * --------------------------------------------------------------------- */
+
+  subscribe(cb: (event: HostEvent) => void): () => void {
+    this.listeners.add(cb)
+    return () => {
+      this.listeners.delete(cb)
+    }
+  }
+
+  /* --------------------------------------------------------------------- *
+   * HC4 — spawn limits
+   * --------------------------------------------------------------------- */
+
+  private checkSpawnLimits(): { ok: false; error: HostError } | null {
+    // Row bound: live sessions + restorable rows. A create that would exceed the
+    // registry bound is refused (the reap only trims TERMINAL rows; live ones
+    // must not be evicted to make room).
+    if (this.liveCount() >= MAX_REGISTRY_SESSIONS) {
+      return hostError(
+        'session_limit',
+        `at most ${MAX_REGISTRY_SESSIONS} live sessions`,
+      )
+    }
+    // Rate cap: fork-bomb defense (extends T7 to process creation).
+    const cutoff = this.now() - SPAWN_RATE_WINDOW_MS
+    const recent = this.spawnTimes.filter(t => t > cutoff)
+    if (recent.length >= MAX_SPAWNS_PER_WINDOW) {
+      this.spawnTimes = recent
+      return hostError(
+        'session_limit',
+        `spawn rate cap: ${MAX_SPAWNS_PER_WINDOW} per ${SPAWN_RATE_WINDOW_MS}ms`,
+      )
+    }
+    return null
+  }
+
+  private recordSpawnTime(): void {
+    const cutoff = this.now() - SPAWN_RATE_WINDOW_MS
+    this.spawnTimes = this.spawnTimes.filter(t => t > cutoff)
+    this.spawnTimes.push(this.now())
+  }
+
+  private liveCount(): number {
+    return this.supervisor.listSessions().length
+  }
+
+  /* --------------------------------------------------------------------- *
+   * Descriptor derivation
+   * --------------------------------------------------------------------- */
+
+  private isLive(appSessionId: SessionId): boolean {
+    return this.supervisor.listSessions().some(s => s.sessionId === appSessionId)
+  }
+
+  /** Descriptor for a currently-live session (status from the supervisor). */
+  private descriptorFor(appSessionId: SessionId): SessionDescriptor | undefined {
+    const live = this.supervisor
+      .listSessions()
+      .find(s => s.sessionId === appSessionId)
+    const row = this.registry.findSession(appSessionId)
+    if (!live && !row) return undefined
+    if (!live) {
+      // Not live but has a row → a restorable / exited row.
+      return row ? this.descriptorFromRow(row, null) : undefined
+    }
+    return this.descriptorFromRow(row, live.status)
+  }
+
+  /**
+   * Merge a registry row (durable identity) with a live supervisor status. When
+   * `liveStatus` is null the session is not currently live (restorable/exited).
+   */
+  private descriptorFromRow(
+    row: RegistrySession | undefined,
+    liveStatus: SidecarStatus | null,
+  ): SessionDescriptor {
+    const status = liveStatus ? mapStatus(liveStatus) : 'exited'
+    return {
+      appSessionId: row?.appSessionId ?? '',
+      engineSessionId: row?.engineSessionId ?? null,
+      cwd: row?.cwd ?? '',
+      title: row?.title ?? null,
+      status,
+      restorable: this.isRestorable(row, liveStatus),
+      createdAt: row?.createdAt ?? 0,
+      lastAttachedAt: row?.lastAttachedAt ?? 0,
+    }
+  }
+
+  /**
+   * A session is restorable when a registry row exists with a known
+   * engineSessionId (transcript key). The launch reap already dropped rows whose
+   * transcript is gone, so a row that survived launch WITH an engineSessionId is
+   * re-spawnable. A live-but-not-yet-ready session (no engineSessionId yet) is
+   * not restorable until its ready frame lands.
+   */
+  private isRestorable(
+    row: RegistrySession | undefined,
+    _liveStatus: SidecarStatus | null,
+  ): boolean {
+    return !!row && row.engineSessionId !== null
+  }
+
+  /* --------------------------------------------------------------------- *
+   * HostEvent emit helpers
+   * --------------------------------------------------------------------- */
+
+  private emit(event: HostEvent): void {
+    for (const listener of this.listeners) {
+      listener(event)
+    }
+  }
+
+  private emitStatus(appSessionId: SessionId): void {
+    const descriptor = this.descriptorFor(appSessionId)
+    if (descriptor) {
+      this.emit({ type: 'session-status', session: descriptor })
+    }
+  }
+
+  private emitRemoved(appSessionId: SessionId): void {
+    this.emit({ type: 'session-removed', appSessionId })
+  }
+
+  /**
+   * Surface a degraded registry write as a non-fatal `registry_unavailable`
+   * (HC/§6.1). The session is unaffected; only persistence degraded.
+   */
+  private surfaceRegistryHealth(appSessionId: SessionId): void {
+    if (this.registry.lastWriteFailed) {
+      this.log(
+        `[host] registry_unavailable: persistence degraded for ${appSessionId}; ` +
+          'session is live and unaffected',
+      )
+    }
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Module-private helpers
+ * ------------------------------------------------------------------------- */
+
+/** Supervisor status → the coarser descriptor status the renderer consumes. */
+function mapStatus(status: SidecarStatus): SessionDescriptor['status'] {
+  switch (status) {
+    case 'spawning':
+    case 'connecting':
+      return 'spawning'
+    case 'ready':
+      return 'ready'
+    case 'disconnected':
+    case 'failed':
+      return 'disconnected'
+    case 'exited':
+      return 'exited'
+  }
+}
+
+function capTitle(title: string | undefined): string | undefined {
+  if (typeof title !== 'string') return undefined
+  return title.slice(0, MAX_SESSION_TITLE_CHARS)
+}
+
+function errText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}

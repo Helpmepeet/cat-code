@@ -12,16 +12,25 @@
  * This is the ONLY module in `app/` that imports `electron`.
  */
 
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { realpathSync, statSync } from 'node:fs'
 
 import {
   isSidecarSendError,
   SidecarSupervisor,
   type SupervisorEvent,
 } from '../supervisor/supervisor.js'
+import { SessionRegistry } from '../host/registry.js'
+import { Host, type CwdValidation } from '../host/host.js'
+import type {
+  CreateSessionRequest,
+  HostEvent,
+  HostResult,
+  SessionDescriptor,
+} from '../shared/hostApi.js'
 import { AttachmentGate } from './attachmentGate.js'
 import {
   decideWindowOpen,
@@ -49,13 +58,25 @@ const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
 
+// Control-plane channels (HC3 — fixed, per-method structured senders). `invoke`
+// channels return a typed HostResult; `pick-directory` returns a realpath or
+// null (the native picker, HC1); the host-event channel is a one-way stream.
+const CH_HOST_CREATE = 'catcode:host:create'
+const CH_HOST_RESTORE = 'catcode:host:restore'
+const CH_HOST_CLOSE = 'catcode:host:close'
+const CH_HOST_LIST = 'catcode:host:list'
+const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
+const CH_HOST_EVENT = 'catcode:host:event'
+
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
 const IS_DEV = !app.isPackaged
 const VITE_REACT_PREAMBLE_CSP_HASH =
   "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
 
-// The single Phase-1 session id. The supervisor is N-ready (a map).
+// The supervisor is N-ready (a map). The host composes it with the durable
+// registry into the typed control plane (P3-3); main is a CALLER of that host.
 let supervisor: SidecarSupervisor | null = null
+let host: Host | null = null
 let mainWindow: BrowserWindow | null = null
 
 /**
@@ -78,20 +99,36 @@ function deliver(frames: ServerFrame[]): void {
   }
 }
 
+/** The sidecar entry path — also the registry's orphan-identity marker (§9-A3). */
+const SIDECAR_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'index.ts')
+
 function createSupervisor(): SidecarSupervisor {
   // Dev: `bun run <repo>/app/sidecar/index.ts`. Packaged: the --compile'd Bun
   // binary path (W5). Injected so the supervisor stays runtime-agnostic.
-  const repoRoot = join(__dirname, '..', '..')
-  const sidecarEntry = join(repoRoot, 'app', 'sidecar', 'index.ts')
-
   return new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
-    sidecarArgs: ['run', sidecarEntry],
-    // Default boot cwd for the single startup session until the host API adds
-    // per-session cwd via the native picker (P3-3, HC1). The P1-1 pinned-literal
-    // hardcode is retired: main owns this default; it is not a fixed path.
+    sidecarArgs: ['run', SIDECAR_ENTRY],
+    // Default boot cwd for the single startup session. Per-session cwd now flows
+    // through the host API (createSession → native picker, HC1); this stays only
+    // as the supervisor-wide default for probe/legacy callers.
     sidecarCwd: process.cwd(),
   })
+}
+
+/**
+ * HC1 — canonicalize + existence/isDirectory-check a cwd, regardless of origin.
+ * The host calls this before every spawn; a renderer never authors a path (the
+ * native picker or a registry row is the only source), but this is the
+ * defense-in-depth revalidation the addendum mandates.
+ */
+function validateCwd(cwd: string): CwdValidation {
+  try {
+    const real = realpathSync(cwd)
+    if (statSync(real).isDirectory()) return { ok: true, realpath: real }
+    return { ok: false }
+  } catch {
+    return { ok: false }
+  }
 }
 
 function applySecurityBaseline(): void {
@@ -216,6 +253,20 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
   })
 }
 
+/**
+ * Bridge the host's `HostEvent` row-change stream to the renderer over the fixed
+ * one-way channel. The renderer's session list is a PROJECTION of this stream
+ * (REGISTRY §6.1), never a poll loop. HostEvents are host-authored typed data
+ * (no filesystem contents, HC3) — the same trust posture as server frames.
+ */
+function wireHostEvents(h: Host): void {
+  h.subscribe(event => {
+    const contents = mainWindow?.webContents
+    if (!contents) return
+    contents.send(CH_HOST_EVENT, event satisfies HostEvent)
+  })
+}
+
 function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | null {
   if (event.type === 'frame') return event.frame
   if (event.type === 'exit') {
@@ -337,6 +388,94 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_RENDERER_READY, () => {
     deliver(attachmentGate.onRendererReady())
   })
+
+  registerHostControlPlane()
+}
+
+/**
+ * Control-plane IPC (HC3 — fixed, per-method structured senders; no generic
+ * invoke, no renderer-controlled channel names, no method returning filesystem
+ * contents). Each returns a typed `HostResult` (or the picker's single realpath)
+ * so a failure crosses the boundary as data, never a thrown internal error (HC2).
+ * Handlers read the module-level `host`, so they survive a host rebuild (F5)
+ * without re-registering listeners.
+ */
+function registerHostControlPlane(): void {
+  const noHost = <T>(): HostResult<T> => ({
+    ok: false,
+    error: { code: 'spawn_failed', message: 'host is not running' },
+  })
+
+  // HC1 — the ONLY way a renderer obtains a cwd. Native picker in main; the
+  // renderer may REQUEST it, never answer it. Returns a single realpath the user
+  // explicitly chose, or null (cancelled) — not a listing, not file contents.
+  ipcMain.handle(CH_HOST_PICK_DIR, async (): Promise<string | null> => {
+    const parent = mainWindow ?? undefined
+    const result = parent
+      ? await dialog.showOpenDialog(parent, {
+          properties: ['openDirectory', 'createDirectory'],
+        })
+      : await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory'],
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const chosen = validateCwd(result.filePaths[0])
+    return chosen.ok ? chosen.realpath : null
+  })
+
+  ipcMain.handle(
+    CH_HOST_CREATE,
+    (_e, req: unknown): Promise<HostResult<SessionDescriptor>> => {
+      if (!host) return Promise.resolve(noHost<SessionDescriptor>())
+      // Coerce to the request shape; the host re-validates cwd (HC1) and id-shape
+      // (HC2), so a malformed field becomes a typed error, never a throw.
+      return host.createSession(coerceCreateRequest(req))
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_RESTORE,
+    (_e, appSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
+      if (!host) return Promise.resolve(noHost<SessionDescriptor>())
+      // HC2 — the host validates id shape + membership; pass through as unknown.
+      return host.restoreSession(String(appSessionId))
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_CLOSE,
+    (_e, appSessionId: unknown): Promise<HostResult<void>> => {
+      if (!host) return Promise.resolve(noHost<void>())
+      return host.closeSession(String(appSessionId))
+    },
+  )
+
+  ipcMain.handle(CH_HOST_LIST, (): SessionDescriptor[] => {
+    return host ? host.listSessions() : []
+  })
+}
+
+/**
+ * Shape-coerce a renderer-supplied create request. Only the three contract
+ * fields survive; anything else is dropped. The host still re-validates cwd and
+ * caps the title — this is UX coercion, not the trust boundary (HC1 is the host).
+ */
+function coerceCreateRequest(req: unknown): CreateSessionRequest {
+  const r =
+    typeof req === 'object' && req !== null
+      ? (req as {
+          cwd?: unknown
+          resumeEngineSessionId?: unknown
+          title?: unknown
+        })
+      : {}
+  return {
+    cwd: typeof r.cwd === 'string' ? r.cwd : '',
+    ...(typeof r.resumeEngineSessionId === 'string'
+      ? { resumeEngineSessionId: r.resumeEngineSessionId }
+      : {}),
+    ...(typeof r.title === 'string' ? { title: r.title } : {}),
+  }
 }
 
 function forward(sessionId: SessionId, message: SidecarClientMessage): void {
@@ -447,16 +586,59 @@ function generateRequestId(): string {
 }
 
 /**
- * (Re)create the host: supervisor + bridge wiring + the primary session. Called
- * on startup AND on macOS `activate` (F5) so reopening the window after
- * `window-all-closed` produces a NEW functioning session rather than a shell
- * wired to a shut-down supervisor.
+ * (Re)create the host: supervisor + durable registry + the typed control-plane
+ * composition, then the primary session. Called on startup AND on macOS
+ * `activate` (F5) so reopening the window after `window-all-closed` produces a
+ * NEW functioning session rather than a shell wired to a shut-down supervisor.
+ *
+ * The fresh-session-per-activate now flows through `host.createSession` so
+ * registry hygiene (the launch sweep, row bound, clean/crashed marking) applies
+ * to dock-reopen sessions (D1 §9-A5). The single-instance lock (taken in
+ * `whenReady`, REGISTRY §5) guarantees this is the ONLY writer of the registry
+ * file, so its launch sweep runs unraced.
  */
-function ensureHost(): SidecarSupervisor {
-  if (supervisor) return supervisor
+function ensureHost(): Host {
+  if (host) return host
   supervisor = createSupervisor()
   wireRendererBridge(supervisor)
-  supervisor.spawnSession()
+
+  // The registry lives beside the supervisor in the host plane. Default storage
+  // dir (<config-home>/desktop) unless overridden for tests. The sidecar entry
+  // path is the §9-A3 orphan-identity marker so the launch sweep never SIGTERMs
+  // an innocent same-pid process.
+  const registry = new SessionRegistry({
+    sidecarCommandMarker: SIDECAR_ENTRY,
+  })
+
+  host = new Host({
+    supervisor,
+    registry,
+    validateCwd,
+    // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
+    // so a reload never replays a dead session's frames.
+    evictReplay: appSessionId => attachmentGate.clearSession(appSessionId),
+  })
+  wireHostEvents(host)
+
+  // Run the launch sequence (read+validate → sweep orphans → reap), THEN spawn
+  // the primary session through the host so registry hygiene applies. Both are
+  // async; a launch/spawn failure logs but never crashes main.
+  void registry
+    .launch()
+    .catch(error => {
+      process.stderr.write(`[main] registry launch failed: ${errText(error)}\n`)
+    })
+    .then(() => host?.createSession({ cwd: process.cwd() }))
+    .then(result => {
+      if (result && !result.ok) {
+        process.stderr.write(
+          `[main] primary session create failed: ${result.error.code} ${result.error.message}\n`,
+        )
+      }
+    })
+    .catch(error => {
+      process.stderr.write(`[main] primary session create threw: ${errText(error)}\n`)
+    })
 
   // Smoke-run hook (verification only): if CATCODE_SMOKE_EXIT_MS is set, log the
   // frames the supervisor receives and exit after the timeout. Lets a headless
@@ -481,23 +663,47 @@ function ensureHost(): SidecarSupervisor {
     }, smokeMs)
   }
 
-  return supervisor
+  return host
 }
 
-app.whenReady().then(() => {
-  applySecurityBaseline()
-  registerIpcHandlers() // once — handlers read the module-level supervisor
-  ensureHost()
-  // Hand the renderer its session id once it loads (via the ready frame's
-  // sessionId; renderer reads it off the first frame it receives).
-  createWindow()
+function errText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
-  app.on('activate', () => {
-    // F5 — reopening on macOS must rebuild a live host if it was torn down.
-    ensureHost()
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+// Single-instance lock (REGISTRY §5 / R5): the registry is a shared mutable file
+// and the host is its SINGLE writer by construction. Take the OS lock BEFORE any
+// host is constructed; a second app instance never builds a host — it focuses the
+// existing window and quits. This is the client-layer half of the write
+// discipline (the module-layer advisory lockfile is the belt to this braces).
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // A second launch defers to us: surface our window instead.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
   })
-})
+
+  app.whenReady().then(() => {
+    applySecurityBaseline()
+    registerIpcHandlers() // once — handlers read the module-level host/supervisor
+    // Host construction (and thus the registry's launch sweep) runs only after we
+    // hold the single-instance lock, so the sweep is never raced by a sibling.
+    ensureHost()
+    // Hand the renderer its session id once it loads (via the ready frame's
+    // sessionId; renderer reads it off the first frame it receives).
+    createWindow()
+
+    app.on('activate', () => {
+      // F5 — reopening on macOS must rebuild a live host if it was torn down.
+      ensureHost()
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
@@ -505,6 +711,10 @@ app.on('window-all-closed', () => {
   // rebuilds a fresh host on reopen (F5).
   supervisor?.shutdown()
   supervisor = null
+  // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
+  // unit on the next `activate` (a fresh registry re-reads the file and re-runs
+  // its launch sweep — the dock-reopen session goes through createSession again).
+  host = null
   // F2 — drop the old session's buffered frames so a macOS reopen (which spawns a
   // NEW session id via `ensureHost`) never replays dead-session frames into the
   // fresh window.

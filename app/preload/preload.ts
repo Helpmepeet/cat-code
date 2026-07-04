@@ -23,6 +23,12 @@ import type {
   SessionId,
   SubmitOptions,
 } from '../shared/protocol.js'
+import type {
+  CreateSessionRequest,
+  HostEvent,
+  HostResult,
+  SessionDescriptor,
+} from '../shared/hostApi.js'
 import { createRendererIpcGuard } from './rendererIpcGuard.js'
 
 // Fixed internal channel names. The renderer never sees or supplies these.
@@ -34,6 +40,14 @@ const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
+
+// Control-plane channels (HC3 — fixed, per-method; must match main.ts).
+const CH_HOST_CREATE = 'catcode:host:create'
+const CH_HOST_RESTORE = 'catcode:host:restore'
+const CH_HOST_CLOSE = 'catcode:host:close'
+const CH_HOST_LIST = 'catcode:host:list'
+const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
+const CH_HOST_EVENT = 'catcode:host:event'
 
 const sendGuard = createRendererIpcGuard()
 
@@ -82,6 +96,47 @@ const bridge: CatCodeBridge = {
   rendererReady(): void {
     sendGuard.assertAllowed({ rendererReady: true })
     ipcRenderer.send(CH_RENDERER_READY)
+  },
+
+  // --- Control plane (HC3 — fixed per-method senders; no generic invoke, no
+  // renderer-controlled channel names; each returns typed data, never file
+  // contents). Rate/size-guarded like the frame senders. ---
+  pickDirectory(): Promise<string | null> {
+    sendGuard.assertAllowed({ pickDirectory: true })
+    return ipcRenderer.invoke(CH_HOST_PICK_DIR) as Promise<string | null>
+  },
+  createSession(
+    req: CreateSessionRequest,
+  ): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed(req)
+    return ipcRenderer.invoke(CH_HOST_CREATE, req) as Promise<
+      HostResult<SessionDescriptor>
+    >
+  },
+  restoreSession(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_RESTORE, appSessionId) as Promise<
+      HostResult<SessionDescriptor>
+    >
+  },
+  closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_CLOSE, appSessionId) as Promise<
+      HostResult<void>
+    >
+  },
+  listSessions(): Promise<SessionDescriptor[]> {
+    sendGuard.assertAllowed({ listSessions: true })
+    return ipcRenderer.invoke(CH_HOST_LIST) as Promise<SessionDescriptor[]>
+  },
+  subscribeHost(listener: (event: HostEvent) => void): () => void {
+    const handler = (_event: unknown, event: HostEvent) => listener(event)
+    ipcRenderer.on(CH_HOST_EVENT, handler)
+    return () => {
+      ipcRenderer.removeListener(CH_HOST_EVENT, handler)
+    }
   },
 }
 

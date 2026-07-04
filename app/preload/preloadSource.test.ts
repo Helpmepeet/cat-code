@@ -10,5 +10,52 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
   )
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(7)
+  // 7 frame-plane senders + 5 payload-bearing control-plane senders
+  // (pickDirectory/createSession/restoreSession/closeSession/listSessions).
+  // subscribe / subscribeHost register a listener and send no payload, so they
+  // do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(12)
+})
+
+test('control-plane senders are fixed per-method channels (HC3), no generic invoke', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+
+  // The five host methods each ride a FIXED channel constant.
+  expect(source).toContain("const CH_HOST_CREATE = 'catcode:host:create'")
+  expect(source).toContain("const CH_HOST_RESTORE = 'catcode:host:restore'")
+  expect(source).toContain("const CH_HOST_CLOSE = 'catcode:host:close'")
+  expect(source).toContain("const CH_HOST_LIST = 'catcode:host:list'")
+  expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
+  expect(source).toContain("const CH_HOST_EVENT = 'catcode:host:event'")
+
+  // Every invoke targets one of those FIXED constants — never a renderer-supplied
+  // channel name. Extract the first argument of each ipcRenderer.invoke(...) and
+  // assert it is a known CH_HOST_* constant (HC3: no renderer-controlled channel).
+  const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
+    m => m[1],
+  )
+  expect(invokeChannels.length).toBe(5)
+  const allowed = new Set([
+    'CH_HOST_CREATE',
+    'CH_HOST_RESTORE',
+    'CH_HOST_CLOSE',
+    'CH_HOST_LIST',
+    'CH_HOST_PICK_DIR',
+  ])
+  for (const channel of invokeChannels) {
+    expect(allowed.has(channel)).toBe(true)
+  }
+
+  // Default-deny stays intact: no generic escape hatches. Strip comments first
+  // so the prose that DESCRIBES the forbidden pattern ("no generic send(channel,
+  // payload)") does not trip the check — only real code counts.
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+  expect(code).not.toContain('send(channel')
+  expect(code).not.toContain('invoke(channel')
+  // No control-plane method returns filesystem contents — the picker returns a
+  // single realpath string, never a directory listing or file bytes.
+  expect(code).not.toContain('readdir')
+  expect(code).not.toContain('readFile')
 })
