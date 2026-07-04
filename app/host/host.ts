@@ -73,6 +73,14 @@ export type HostOptions = {
   log?: (line: string) => void
   /** Clock (spawn rate window). Injected for deterministic HC4 tests. */
   now?: () => number
+  /**
+   * The registry launch sequence (read → sweep orphans → reap). Every mutating
+   * host op AWAITS this before touching the registry, so the launch's own
+   * read-modify-write is never interleaved with a concurrent spawn's write
+   * (REGISTRY.md §4: "before any spawn"). When omitted (tests that don't exercise
+   * launch ordering), the gate is already-resolved.
+   */
+  launched?: Promise<unknown>
 }
 
 /* UUID v1–v5 shape — the HC2 membership pre-check (cheap reject of garbage ids
@@ -108,6 +116,9 @@ export class Host implements HostApi {
    */
   private readonly closing = new Set<SessionId>()
 
+  /** Resolves once the registry launch sweep has completed (B4 / REGISTRY §4). */
+  private readonly launched: Promise<unknown>
+
   constructor(options: HostOptions) {
     this.supervisor = options.supervisor
     this.registry = options.registry
@@ -115,6 +126,10 @@ export class Host implements HostApi {
     this.evictReplay = options.evictReplay ?? (() => {})
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
     this.now = options.now ?? Date.now
+    // Never reject the gate — a failed launch already logged and started empty;
+    // ops proceed against the in-memory doc (the registry is an index, not a
+    // backup). We only need the sweep's read-modify-write to have SETTLED first.
+    this.launched = (options.launched ?? Promise.resolve()).catch(() => undefined)
     this.wireSupervisor()
   }
 
@@ -164,9 +179,14 @@ export class Host implements HostApi {
   async createSession(
     req: CreateSessionRequest,
   ): Promise<HostResult<SessionDescriptor>> {
-    // HC1 — the host re-validates the cwd regardless of origin. A renderer never
-    // authors a path (main's native picker or a registry row is the only source),
-    // but defense in depth canonicalizes + existence-checks here too.
+    // B4 — the registry launch sweep must complete before any spawn writes a row.
+    await this.launched
+    // HC1 — the host re-validates the cwd regardless of origin. The renderer
+    // CANNOT author a path: main resolves a native-picker TOKEN to the realpath
+    // before this is called (`req.cwd` is main-supplied, never a renderer string),
+    // and `req.resumeEngineSessionId` is only ever set by `restoreSession` from a
+    // registry row — the renderer create surface carries neither. This
+    // canonicalize + existence check is the defense-in-depth backstop.
     if (typeof req?.cwd !== 'string' || req.cwd.length === 0) {
       return hostError('invalid_cwd', 'cwd must be a non-empty string')
     }
@@ -198,6 +218,7 @@ export class Host implements HostApi {
   async restoreSession(
     appSessionId: SessionId,
   ): Promise<HostResult<SessionDescriptor>> {
+    await this.launched
     // HC2 — validate id shape before any lookup; unknown → session_not_found.
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
@@ -210,6 +231,15 @@ export class Host implements HostApi {
       return hostError(
         'session_not_found',
         `no restorable session ${appSessionId}`,
+      )
+    }
+    // §9-A4 (SF6) — re-check transcript existence NOW, not just at launch: it may
+    // have been pruned between launch and this restore. Never offer a restore we
+    // cannot perform (which would exit `resume-failed` downstream).
+    if (!this.registry.hasTranscript(appSessionId)) {
+      return hostError(
+        'session_not_found',
+        `transcript for ${appSessionId} is gone`,
       )
     }
     if (this.isLive(appSessionId)) {
@@ -299,6 +329,7 @@ export class Host implements HostApi {
    * --------------------------------------------------------------------- */
 
   async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
+    await this.launched
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
     }
@@ -332,8 +363,14 @@ export class Host implements HostApi {
 
   listSessions(): SessionDescriptor[] {
     const byId = new Map<SessionId, SessionDescriptor>()
-    // Restorable rows first…
+    // Restorable rows first — but ONLY genuinely restorable ones (SF7). The
+    // registry's `restorable()` is the launch restore-ORDERING (all rows sorted);
+    // the live∪restorable UNION excludes rows that are neither live nor
+    // restorable — e.g. a clean row that never acquired an engineSessionId, or a
+    // spawn_failed row marked clean before any ready frame. Those are not a tab
+    // and not a restore.
     for (const row of this.registry.restorable()) {
+      if (row.engineSessionId === null) continue
       byId.set(row.appSessionId, this.descriptorFromRow(row, null))
     }
     // …then live sessions overwrite (a live session's status wins over its row).
@@ -342,6 +379,57 @@ export class Host implements HostApi {
       if (descriptor) byId.set(live.sessionId, descriptor)
     }
     return [...byId.values()]
+  }
+
+  /* --------------------------------------------------------------------- *
+   * restartSession — restart in place, refreshing the registry advisory fields
+   * (SF5). Routed through the host so a restarted sidecar's new pid/socketPath
+   * land in the row; a bare `supervisor.restartSession` would leave stale
+   * advisory fields that weaken the D6 crash-reap (§9-A3 identity match).
+   * --------------------------------------------------------------------- */
+
+  async restartSession(appSessionId: SessionId): Promise<HostResult<void>> {
+    await this.launched
+    if (!isUuid(appSessionId)) {
+      return hostError('session_not_found', 'malformed session id')
+    }
+    if (!this.isLive(appSessionId)) {
+      return hostError('session_not_found', `session ${appSessionId} is not live`)
+    }
+    // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
+    this.evictReplay(appSessionId)
+    this.supervisor.restartSession(appSessionId)
+    // Refresh advisory fields from the fresh child (new pid + socketPath). The
+    // row stays live; upsertOnSpawn bumps restartCount and rewrites the hints.
+    const row = this.registry.findSession(appSessionId)
+    await this.registry.upsertOnSpawn({
+      appSessionId,
+      cwd: row?.cwd ?? '',
+      ...(row?.title !== undefined ? { title: row.title } : {}),
+      enginePid: this.supervisor.getSessionProcessId(appSessionId),
+      socketPath: this.supervisor.getSessionSocketPath(appSessionId),
+    })
+    this.surfaceRegistryHealth(appSessionId)
+    this.emitStatus(appSessionId)
+    return { ok: true, value: undefined }
+  }
+
+  /* --------------------------------------------------------------------- *
+   * shutdownAll — die-with-window (B3). SYNCHRONOUS: mark every LIVE row clean
+   * (one atomic write) + evict its replay, THEN kill the sidecars. A clean quit
+   * must not masquerade as crash recovery on the next launch (which the orphan
+   * sweep would report if rows stayed `shutdown:null`). Rows are KEPT
+   * (restorable), same as closeSession. Sync because it runs on
+   * `window-all-closed`/`before-quit`, where the process may exit before an async
+   * persist could settle.
+   * --------------------------------------------------------------------- */
+
+  shutdownAll(): void {
+    const marked = this.registry.markLiveCleanSync()
+    for (const appSessionId of marked) {
+      this.evictReplay(appSessionId)
+    }
+    this.supervisor.shutdown()
   }
 
   /* --------------------------------------------------------------------- *

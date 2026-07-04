@@ -44,7 +44,7 @@ import type {
 // must never merge with `ErrorFrame['code']` (F3 §3). Re-surfaced on the bridge
 // here because the renderer reaches both planes through the one preload.
 import type {
-  CreateSessionRequest,
+  CreateSessionInput,
   HostEvent,
   HostResult,
   SessionDescriptor,
@@ -289,13 +289,20 @@ export type CatCodeBridge = {
 
   /**
    * HC1 — request main's NATIVE directory picker. The renderer may request it,
-   * never answer it: main returns a single realpath the user chose, or null
-   * (cancelled). Not a listing, not file contents.
+   * never answer it: main returns a one-time `cwdToken` bound to the realpath the
+   * user chose (feed it to `createSession`), or null (cancelled). The renderer
+   * never sees the path itself — not a listing, not file contents, not even the
+   * chosen string.
    */
   pickDirectory(): Promise<string | null>
-  /** Create a fresh (or, with `resumeEngineSessionId`, restored) session. */
-  createSession(req: CreateSessionRequest): Promise<HostResult<SessionDescriptor>>
-  /** Restore a registry row's session by id (sugar over create). */
+  /**
+   * Create a fresh session rooted at the directory a prior `pickDirectory()`
+   * token names. The renderer supplies a token + optional title — it CANNOT
+   * author a cwd or a resume id (HC1/T8). To reopen a past session use
+   * `restoreSession`, not this.
+   */
+  createSession(input: CreateSessionInput): Promise<HostResult<SessionDescriptor>>
+  /** Restore a registry row's session by id (registry-mediated; HC2). */
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   /** Graceful close; the row is kept restorable. */
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>

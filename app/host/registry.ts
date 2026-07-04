@@ -343,6 +343,19 @@ export class SessionRegistry {
     return row ? { ...row } : undefined
   }
 
+  /**
+   * Whether the row's engine transcript still exists on disk RIGHT NOW. The
+   * launch reap (§4.3) drops rows whose transcript is gone, but a transcript can
+   * be pruned between launch and a restore click — so restore must re-check
+   * (§9-A4: never offer a restore it cannot perform). False when the row is
+   * unknown or has no `engineSessionId` yet (nothing to resume).
+   */
+  hasTranscript(appSessionId: string): boolean {
+    const row = this.find(appSessionId)
+    if (!row || row.engineSessionId === null) return false
+    return existsSync(this.transcriptPathFor(row.cwd, row.engineSessionId))
+  }
+
   /* --------------------------------------------------------------------- *
    * §4 — launch sequence (read+validate → sweep → reap → restore data)
    * --------------------------------------------------------------------- */
@@ -633,6 +646,39 @@ export class SessionRegistry {
 
   private find(appSessionId: string): RegistrySession | undefined {
     return this.doc.sessions.find(r => r.appSessionId === appSessionId)
+  }
+
+  /**
+   * SYNCHRONOUS clean-marking for the exit path (B3 / die-with-window). Marks
+   * every currently-live row (`shutdown == null`) clean, clears advisory fields,
+   * and writes ONCE atomically — bypassing the async advisory lock because this
+   * runs on `window-all-closed`/`before-quit`, where (a) we hold the OS
+   * single-instance lock so we are the only writer, and (b) the process may exit
+   * before an async persist could settle. A write failure is swallowed (the row
+   * state is re-derivable; a launch sweep would just mark them crashed instead).
+   * Returns the ids it marked.
+   */
+  markLiveCleanSync(): string[] {
+    const marked: string[] = []
+    for (const row of this.doc.sessions) {
+      if (row.shutdown !== null) continue
+      row.shutdown = 'clean'
+      row.enginePid = undefined
+      row.socketPath = undefined
+      marked.push(row.appSessionId)
+    }
+    if (marked.length === 0) return marked
+    this.doc.hostPid = process.pid
+    this.doc.updatedAt = Date.now()
+    try {
+      ensureDir(this.dir)
+      atomicWriteJson(this.path, this.doc)
+      this.writeFailed = false
+    } catch (error) {
+      this.writeFailed = true
+      this.log(`[registry] markLiveCleanSync write failed (${errText(error)})`)
+    }
+    return marked
   }
 
   /* --------------------------------------------------------------------- *

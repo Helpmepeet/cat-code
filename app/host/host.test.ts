@@ -86,6 +86,23 @@ class FakeSupervisor {
     this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
   }
 
+  restartSession(sessionId: SessionId): void {
+    const record = this.records.get(sessionId)
+    if (!record) throw new Error('no such session')
+    // Fresh child = new pid + socketPath (what SF5 must re-record).
+    record.pid = ++this.pidSeq
+    record.socketPath = `/tmp/fake/s${this.sockSeq++}.sock`
+    record.status = 'spawning'
+  }
+
+  shutdown(): void {
+    const ids = [...this.records.keys()]
+    this.records.clear()
+    for (const sessionId of ids) {
+      this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
+    }
+  }
+
   listSessions(): Array<{ sessionId: SessionId; status: SidecarStatus }> {
     return [...this.records.values()].map(r => ({
       sessionId: r.sessionId,
@@ -443,6 +460,7 @@ test('restoreSession re-spawns a clean row with its cwd + engineSessionId (resum
 
 test('restoreSession refuses an already-live session', async () => {
   const h = makeHost()
+  writeTranscript(h.storageDir, 'engine-live')
   const created = await h.host.createSession({ cwd: h.cwd })
   expect(created.ok).toBe(true)
   if (!created.ok) return
@@ -451,6 +469,8 @@ test('restoreSession refuses an already-live session', async () => {
     () => h.registry.findSession(created.value.appSessionId)?.engineSessionId === 'engine-live',
   )
 
+  // Transcript exists (so it's not the SF6 recheck failing) — the live check is
+  // what refuses this.
   const result = await h.host.restoreSession(created.value.appSessionId)
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe('session_not_found')
@@ -602,4 +622,150 @@ test('closeSession on a known restorable-only row succeeds without a live proces
   const result = await h.host.closeSession(appSessionId)
   expect(result.ok).toBe(true)
   expect(h.registry.findSession(appSessionId)?.shutdown).toBe('clean')
+})
+
+/* ------------------------------------------------------------------------- *
+ * SF6 — restoreSession re-checks transcript existence AT restore time
+ * ------------------------------------------------------------------------- */
+
+test('restoreSession fails session_not_found when the transcript vanished after launch', async () => {
+  const h = makeHost()
+  const appSessionId = randomUUID()
+  // A clean, restorable row — but NO transcript on disk (pruned since launch).
+  await h.registry.upsertOnSpawn({ appSessionId, cwd: h.cwd })
+  await h.registry.fillEngineSessionId(appSessionId, 'engine-pruned')
+  await h.registry.markClean(appSessionId)
+  // Deliberately do NOT writeTranscript('engine-pruned').
+
+  const result = await h.host.restoreSession(appSessionId)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('session_not_found')
+  // Nothing spawned — we never offer a restore we cannot perform.
+  expect(h.supervisor.records.has(appSessionId)).toBe(false)
+})
+
+/* ------------------------------------------------------------------------- *
+ * SF7 — listSessions excludes rows that are neither live nor restorable
+ * ------------------------------------------------------------------------- */
+
+test('listSessions omits a clean row that never acquired an engineSessionId', async () => {
+  const h = makeHost()
+  // A spawn that failed before any ready frame: the pre-written row is marked
+  // clean with engineSessionId still null.
+  h.supervisor.throwOnNextSpawn = new Error('boom')
+  const failed = await h.host.createSession({ cwd: h.cwd })
+  expect(failed.ok).toBe(false)
+
+  // The failed row is clean + null-engineSessionId → NOT a tab, NOT restorable.
+  const list = h.host.listSessions()
+  expect(list.length).toBe(0)
+})
+
+/* ------------------------------------------------------------------------- *
+ * SF5 — restartSession refreshes the registry advisory fields (pid/socketPath)
+ * ------------------------------------------------------------------------- */
+
+test('restartSession refreshes the row pid + socketPath from the fresh child', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  const oldPid = h.registry.findSession(appSessionId)?.enginePid
+  const oldSock = h.registry.findSession(appSessionId)?.socketPath
+  h.evicted.length = 0
+
+  const result = await h.host.restartSession(appSessionId)
+  expect(result.ok).toBe(true)
+
+  const row = h.registry.findSession(appSessionId)
+  // Advisory fields now match the FRESH child, not the dead one.
+  expect(row?.enginePid).toBe(h.supervisor.getSessionProcessId(appSessionId))
+  expect(row?.socketPath).toBe(h.supervisor.getSessionSocketPath(appSessionId))
+  expect(row?.enginePid).not.toBe(oldPid)
+  expect(row?.socketPath).not.toBe(oldSock)
+  // Replay evicted around the restart (P3-0 carry preserved).
+  expect(h.evicted).toContain(appSessionId)
+})
+
+test('restartSession rejects an unknown/non-live id (session_not_found)', async () => {
+  const h = makeHost()
+  const result = await h.host.restartSession(randomUUID())
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('session_not_found')
+})
+
+/* ------------------------------------------------------------------------- *
+ * B3 — shutdownAll marks every live row CLEAN (die-with-window ≠ crash)
+ * ------------------------------------------------------------------------- */
+
+test('shutdownAll marks live rows clean and kills the sidecars', async () => {
+  const h = makeHost()
+  const a = await h.host.createSession({ cwd: h.cwd })
+  const b = await h.host.createSession({ cwd: h.cwd })
+  expect(a.ok && b.ok).toBe(true)
+  if (!a.ok || !b.ok) return
+
+  // Both rows are live (shutdown: null) before the quit.
+  expect(h.registry.findSession(a.value.appSessionId)?.shutdown).toBeNull()
+  expect(h.registry.findSession(b.value.appSessionId)?.shutdown).toBeNull()
+
+  h.host.shutdownAll()
+
+  // A clean quit leaves BOTH rows marked clean — not left null (which the next
+  // launch's orphan sweep would report as crashed).
+  expect(h.registry.findSession(a.value.appSessionId)?.shutdown).toBe('clean')
+  expect(h.registry.findSession(b.value.appSessionId)?.shutdown).toBe('clean')
+  // Sidecars gone; replay evicted.
+  expect(h.supervisor.records.size).toBe(0)
+  expect(h.evicted).toContain(a.value.appSessionId)
+  expect(h.evicted).toContain(b.value.appSessionId)
+})
+
+/* ------------------------------------------------------------------------- *
+ * B4 — host ops await the registry launch sweep before touching the registry
+ * ------------------------------------------------------------------------- */
+
+test('createSession awaits the launch gate before spawning (no interleave)', async () => {
+  const storageDir = tempDir()
+  const cwd = join(storageDir, 'proj')
+  mkdirSync(cwd, { recursive: true })
+  const registry = new SessionRegistry({
+    storageDir,
+    transcriptPathFor: (_c, e) => join(storageDir, 'transcripts', `${e}.jsonl`),
+  })
+  const supervisor = new FakeSupervisor()
+
+  // A launch gate that resolves only when we release it.
+  let releaseLaunch = () => {}
+  const launched = new Promise<void>(resolve => {
+    releaseLaunch = resolve
+  })
+  let launchDone = false
+  const gated = launched.then(() => {
+    launchDone = true
+  })
+
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (c: string) => (c === cwd ? { ok: true, realpath: c } : { ok: false }),
+    launched: gated,
+  })
+
+  // Fire a create BEFORE the gate resolves.
+  const pending = host.createSession({ cwd })
+  // Give the microtask queue a few turns — the spawn must NOT have happened yet.
+  await new Promise(r => setTimeout(r, 10))
+  expect(launchDone).toBe(false)
+  expect(supervisor.records.size).toBe(0)
+
+  // Release the gate; now the create proceeds.
+  releaseLaunch()
+  const result = await pending
+  expect(launchDone).toBe(true)
+  expect(result.ok).toBe(true)
+  expect(supervisor.records.size).toBe(1)
+
+  rmSync(storageDir, { recursive: true, force: true })
 })

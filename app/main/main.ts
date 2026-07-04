@@ -26,7 +26,6 @@ import {
 import { SessionRegistry } from '../host/registry.js'
 import { Host, type CwdValidation } from '../host/host.js'
 import type {
-  CreateSessionRequest,
   HostEvent,
   HostResult,
   SessionDescriptor,
@@ -374,12 +373,12 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.on(CH_RESTART, (_e, arg: { sessionId: SessionId }) => {
-    if (typeof arg?.sessionId !== 'string' || !supervisor) return
-    if (!supervisor.listSessions().some(session => session.sessionId === arg.sessionId)) {
-      return
-    }
-    attachmentGate.clearSession(arg.sessionId)
-    supervisor.restartSession(arg.sessionId)
+    if (typeof arg?.sessionId !== 'string' || !host) return
+    // SF5 — route through the host so the registry's advisory fields (pid /
+    // socketPath) are refreshed from the fresh child; the host also evicts replay.
+    // A typed error is swallowed here (fire-and-forget IPC); the renderer already
+    // learns liveness from status events.
+    void host.restartSession(arg.sessionId)
   })
 
   // F2 — the renderer signals it has mounted and subscribed. The gate replays the
@@ -407,8 +406,9 @@ function registerHostControlPlane(): void {
   })
 
   // HC1 — the ONLY way a renderer obtains a cwd. Native picker in main; the
-  // renderer may REQUEST it, never answer it. Returns a single realpath the user
-  // explicitly chose, or null (cancelled) — not a listing, not file contents.
+  // renderer may REQUEST it, never answer it. Returns a one-time TOKEN bound to
+  // the realpath the user chose (never the path itself), or null (cancelled). The
+  // renderer feeds the token to createSession; it can never author a path.
   ipcMain.handle(CH_HOST_PICK_DIR, async (): Promise<string | null> => {
     const parent = mainWindow ?? undefined
     const result = parent
@@ -420,16 +420,31 @@ function registerHostControlPlane(): void {
         })
     if (result.canceled || result.filePaths.length === 0) return null
     const chosen = validateCwd(result.filePaths[0])
-    return chosen.ok ? chosen.realpath : null
+    if (!chosen.ok) return null
+    return mintCwdToken(chosen.realpath)
   })
 
   ipcMain.handle(
     CH_HOST_CREATE,
-    (_e, req: unknown): Promise<HostResult<SessionDescriptor>> => {
+    (_e, input: unknown): Promise<HostResult<SessionDescriptor>> => {
       if (!host) return Promise.resolve(noHost<SessionDescriptor>())
-      // Coerce to the request shape; the host re-validates cwd (HC1) and id-shape
-      // (HC2), so a malformed field becomes a typed error, never a throw.
-      return host.createSession(coerceCreateRequest(req))
+      // HC1/T8 — the renderer supplies only a picker TOKEN + a title. Resolve the
+      // token to the realpath MAIN minted; an unknown/expired/reused token is an
+      // invalid cwd. The renderer can neither author a path nor forge a resume id
+      // (resume is only reachable via restoreSession → a registry row).
+      const token = readString(input, 'cwdToken')
+      const cwd = token ? consumeCwdToken(token) : undefined
+      if (!cwd) {
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'invalid_cwd',
+            message: 'a valid directory token from pickDirectory() is required',
+          },
+        })
+      }
+      const title = readString(input, 'title')
+      return host.createSession({ cwd, ...(title !== undefined ? { title } : {}) })
     },
   )
 
@@ -455,27 +470,37 @@ function registerHostControlPlane(): void {
   })
 }
 
-/**
- * Shape-coerce a renderer-supplied create request. Only the three contract
- * fields survive; anything else is dropped. The host still re-validates cwd and
- * caps the title — this is UX coercion, not the trust boundary (HC1 is the host).
- */
-function coerceCreateRequest(req: unknown): CreateSessionRequest {
-  const r =
-    typeof req === 'object' && req !== null
-      ? (req as {
-          cwd?: unknown
-          resumeEngineSessionId?: unknown
-          title?: unknown
-        })
-      : {}
-  return {
-    cwd: typeof r.cwd === 'string' ? r.cwd : '',
-    ...(typeof r.resumeEngineSessionId === 'string'
-      ? { resumeEngineSessionId: r.resumeEngineSessionId }
-      : {}),
-    ...(typeof r.title === 'string' ? { title: r.title } : {}),
-  }
+/* ------------------------------------------------------------------------- *
+ * HC1 directory-token store. A `pickDirectory()` result is a one-time token
+ * bound to a realpath MAIN validated; `createSession` consumes it. This makes
+ * the renderer structurally incapable of authoring a cwd string — it only ever
+ * holds an opaque token that main issued for a path the USER chose in the native
+ * dialog. Tokens are single-use and short-lived.
+ * ------------------------------------------------------------------------- */
+
+const CWD_TOKEN_TTL_MS = 5 * 60 * 1000
+const cwdTokens = new Map<string, { realpath: string; expiresAt: number }>()
+
+function mintCwdToken(realpath: string): string {
+  const token = randomUUID()
+  cwdTokens.set(token, { realpath, expiresAt: Date.now() + CWD_TOKEN_TTL_MS })
+  return token
+}
+
+/** Resolve + INVALIDATE a token (single use). Undefined if unknown/expired. */
+function consumeCwdToken(token: string): string | undefined {
+  const entry = cwdTokens.get(token)
+  if (!entry) return undefined
+  cwdTokens.delete(token)
+  if (entry.expiresAt < Date.now()) return undefined
+  return entry.realpath
+}
+
+/** Read a string field off an unknown IPC payload, or undefined. */
+function readString(payload: unknown, key: string): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const value = (payload as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : undefined
 }
 
 function forward(sessionId: SessionId, message: SidecarClientMessage): void {
@@ -610,27 +635,32 @@ function ensureHost(): Host {
     sidecarCommandMarker: SIDECAR_ENTRY,
   })
 
+  // B4 — kick off the launch sequence (read → sweep orphans → reap) and hand the
+  // promise to the host as its readiness GATE. Every host op awaits this before
+  // touching the registry, so a renderer create that races startup can never
+  // interleave its write with the launch's read-modify-write (REGISTRY §4).
+  const launched = registry.launch().catch(error => {
+    process.stderr.write(`[main] registry launch failed: ${errText(error)}\n`)
+  })
+
   host = new Host({
     supervisor,
     registry,
     validateCwd,
+    launched,
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
     // so a reload never replays a dead session's frames.
     evictReplay: appSessionId => attachmentGate.clearSession(appSessionId),
   })
   wireHostEvents(host)
 
-  // Run the launch sequence (read+validate → sweep orphans → reap), THEN spawn
-  // the primary session through the host so registry hygiene applies. Both are
-  // async; a launch/spawn failure logs but never crashes main.
-  void registry
-    .launch()
-    .catch(error => {
-      process.stderr.write(`[main] registry launch failed: ${errText(error)}\n`)
-    })
-    .then(() => host?.createSession({ cwd: process.cwd() }))
+  // The primary startup session: main's OWN process.cwd() (trusted main input,
+  // not a renderer string). host.createSession awaits `launched` internally, so
+  // this runs strictly after the sweep.
+  void host
+    .createSession({ cwd: process.cwd() })
     .then(result => {
-      if (result && !result.ok) {
+      if (!result.ok) {
         process.stderr.write(
           `[main] primary session create failed: ${result.error.code} ${result.error.message}\n`,
         )
@@ -708,8 +738,15 @@ if (!gotSingleInstanceLock) {
 app.on('window-all-closed', () => {
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
   // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
-  // rebuilds a fresh host on reopen (F5).
-  supervisor?.shutdown()
+  // rebuilds a fresh host on reopen (F5). B3 — go through host.shutdownAll so
+  // live rows are marked CLEAN before the kill; a clean quit must not resurface
+  // as crash recovery on the next launch. Fall back to a bare supervisor
+  // shutdown if the host never came up.
+  if (host) {
+    host.shutdownAll()
+  } else {
+    supervisor?.shutdown()
+  }
   supervisor = null
   // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
@@ -725,5 +762,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  supervisor?.shutdown()
+  // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
+  // (no live rows left to mark).
+  if (host) {
+    host.shutdownAll()
+  } else {
+    supervisor?.shutdown()
+  }
 })

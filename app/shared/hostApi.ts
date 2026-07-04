@@ -31,18 +31,36 @@ import type { SessionId } from './protocol.js'
  * ------------------------------------------------------------------------- */
 
 /**
- * Create (or restore) a session. `cwd` is re-validated by the host regardless of
- * origin (HC1); it never authors a path renderer-side. When
- * `resumeEngineSessionId` is present this is a RESTORE — the sidecar resumes that
- * engine session through the engine's real resume machinery (REGISTRY.md R3),
- * rather than minting a fresh one.
+ * Create (or restore) a session — the INTERNAL (main→host) request. `cwd` and
+ * `resumeEngineSessionId` are MAIN-supplied, never renderer-authored (HC1/T8):
+ * `cwd` is either main's own `process.cwd()` (the startup session) or a realpath
+ * main resolved from a native-picker token; `resumeEngineSessionId` is only ever
+ * set by `restoreSession` from a registry row. The host re-validates `cwd`
+ * regardless of origin (defense in depth). The renderer's create surface is the
+ * separate `CreateSessionInput` (a picker token + a title), which cannot express
+ * either field — see `CatCodeBridge.createSession`.
  */
 export type CreateSessionRequest = {
   /** Session root. Host re-validates (realpath / exists / isDirectory) — HC1. */
   cwd: string
-  /** Present ⇒ restore, not a fresh spawn (REGISTRY.md R3). */
+  /** Present ⇒ restore, not a fresh spawn (REGISTRY.md R3). Main-set only. */
   resumeEngineSessionId?: string
   /** Display only; length-capped by the host (`MAX_SESSION_TITLE_CHARS`). */
+  title?: string
+}
+
+/**
+ * The RENDERER-facing create input (HC1). The renderer never names a path: it
+ * obtains a one-time `cwdToken` from `pickDirectory()` (main's native dialog) and
+ * hands it back here. Main resolves the token to a realpath it minted; an unknown
+ * or already-consumed token is rejected. There is deliberately NO `cwd` and NO
+ * `resumeEngineSessionId` — a compromised renderer can neither author a
+ * filesystem path nor forge a resume (restore is only `restoreSession(id)`).
+ */
+export type CreateSessionInput = {
+  /** A one-time directory token from `pickDirectory()`. */
+  cwdToken: string
+  /** Display only; length-capped by the host. */
   title?: string
 }
 

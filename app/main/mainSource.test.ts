@@ -60,7 +60,7 @@ test('configures a main-owned default sidecar boot cwd (P1_1_CWD hardcode retire
   expect(source).not.toContain('P1_1_CWD')
 })
 
-test('restart IPC clears stale replay before restarting the addressed session', () => {
+test('restart IPC routes through the host (SF5), which evicts replay + refreshes the row', () => {
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   const handlerStart = source.indexOf('ipcMain.on(CH_RESTART')
   const handlerEnd = source.indexOf('\n  })', handlerStart)
@@ -70,10 +70,11 @@ test('restart IPC clears stale replay before restarting the addressed session', 
 
   const handlerSource = source.slice(handlerStart, handlerEnd)
 
-  expect(handlerSource.indexOf('attachmentGate.clearSession(arg.sessionId)')).toBeGreaterThan(-1)
-  expect(handlerSource.indexOf('supervisor.restartSession(arg.sessionId)')).toBeGreaterThan(
-    handlerSource.indexOf('attachmentGate.clearSession(arg.sessionId)'),
-  )
+  // The restart no longer pokes the supervisor directly — the host owns it now,
+  // so the registry advisory fields (pid/socketPath) refresh and replay is
+  // evicted inside host.restartSession (proven in host.test.ts).
+  expect(handlerSource).toContain('host.restartSession(arg.sessionId)')
+  expect(handlerSource).not.toContain('supervisor.restartSession')
 })
 
 test('uses crypto randomUUID instead of Math.random for request IDs in main.ts', () => {
@@ -116,10 +117,11 @@ test('main is a host-API caller: ensureHost composes supervisor + registry + hos
   expect(body).toContain('new Host(')
   // Registry launch sweep runs, THEN the primary session goes through the host
   // API (not a bare supervisor.spawnSession) so registry hygiene applies.
-  expect(body).toContain('registry')
-  expect(body).toContain('.launch()')
-  expect(body).toContain('host?.createSession(')
-  // The P3-0 carry: closeSession/restart replay eviction wired via the gate.
+  expect(body).toContain('registry.launch()')
+  // The primary session goes through the host API (call may wrap across lines).
+  expect(/host\s*\.?\s*\n?\s*\.createSession\(/.test(body) || body.includes('host.createSession(')).toBe(true)
+  expect(body).toContain('createSession({ cwd: process.cwd() })')
+  // The P3-0 carry: replay eviction is wired via the injected gate callback.
   expect(body).toContain('attachmentGate.clearSession(appSessionId)')
 })
 
@@ -146,6 +148,61 @@ test('control-plane cwd never trusts the renderer: HC1 native picker + host reva
   ]) {
     expect(new RegExp(`ipcMain\\.handle\\(\\s*${channel}\\b`).test(source)).toBe(true)
   }
+})
+
+test('HC1 ORIGIN rule: the renderer create handler resolves a token, never a renderer cwd', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+
+  // The picker returns a one-time TOKEN, not the chosen path.
+  expect(source).toContain('function mintCwdToken(')
+  expect(source).toContain('function consumeCwdToken(')
+  // pickDirectory mints a token from the validated realpath — it must NOT return
+  // the realpath to the renderer.
+  const pickStart = source.indexOf('ipcMain.handle(CH_HOST_PICK_DIR')
+  const pickEnd = source.indexOf('ipcMain.handle(\n    CH_HOST_CREATE', pickStart)
+  const pickBody = source.slice(pickStart, pickEnd)
+  expect(pickBody).toContain('return mintCwdToken(chosen.realpath)')
+  expect(pickBody).not.toContain('return chosen.realpath')
+
+  // The CREATE handler resolves the token to a cwd — it must NOT read a cwd off
+  // the renderer payload, and must NOT forward a renderer resumeEngineSessionId.
+  const createStart = source.indexOf('ipcMain.handle(\n    CH_HOST_CREATE')
+  const createEnd = source.indexOf('ipcMain.handle(\n    CH_HOST_RESTORE', createStart)
+  const createBody = source.slice(createStart, createEnd)
+  expect(createBody).toContain("consumeCwdToken(token)")
+  // No renderer-authored cwd or resume id reaches host.createSession.
+  expect(createBody).not.toMatch(/readString\([^)]*['"]cwd['"]\)/)
+  expect(createBody).not.toContain('resumeEngineSessionId')
+})
+
+test('restart routes through the host (SF5) and lifecycle uses host.shutdownAll (B3)', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+
+  // Restart no longer pokes the supervisor directly — it goes through the host so
+  // the registry advisory fields refresh.
+  const restartStart = source.indexOf('ipcMain.on(CH_RESTART')
+  const restartEnd = source.indexOf('\n  })', restartStart)
+  const restartBody = source.slice(restartStart, restartEnd)
+  expect(restartBody).toContain('host.restartSession(arg.sessionId)')
+  expect(restartBody).not.toContain('supervisor.restartSession')
+
+  // Die-with-window marks rows clean via host.shutdownAll before the kill.
+  expect(source).toContain('host.shutdownAll()')
+  const wac = source.slice(
+    source.indexOf("app.on('window-all-closed'"),
+    source.indexOf("app.on('before-quit'"),
+  )
+  expect(wac).toContain('host.shutdownAll()')
+})
+
+test('B4: the launch promise is handed to the host as its readiness gate', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('function ensureHost(): Host')
+  const end = source.indexOf('\nfunction errText', start)
+  const body = source.slice(start, end)
+  // launch() is captured and passed to the host as `launched`, not just chained.
+  expect(body).toContain('const launched = registry.launch()')
+  expect(body).toContain('launched,')
 })
 
 test('control plane adds ZERO new socket frame types (stays off the wire in v1)', () => {

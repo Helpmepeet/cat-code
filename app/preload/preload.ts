@@ -24,7 +24,7 @@ import type {
   SubmitOptions,
 } from '../shared/protocol.js'
 import type {
-  CreateSessionRequest,
+  CreateSessionInput,
   HostEvent,
   HostResult,
   SessionDescriptor,
@@ -103,13 +103,15 @@ const bridge: CatCodeBridge = {
   // contents). Rate/size-guarded like the frame senders. ---
   pickDirectory(): Promise<string | null> {
     sendGuard.assertAllowed({ pickDirectory: true })
+    // Returns a one-time cwdToken (or null), NOT the chosen path.
     return ipcRenderer.invoke(CH_HOST_PICK_DIR) as Promise<string | null>
   },
   createSession(
-    req: CreateSessionRequest,
+    input: CreateSessionInput,
   ): Promise<HostResult<SessionDescriptor>> {
-    sendGuard.assertAllowed(req)
-    return ipcRenderer.invoke(CH_HOST_CREATE, req) as Promise<
+    // The renderer can only carry a picker token + a title — no cwd, no resume id.
+    sendGuard.assertAllowed(input)
+    return ipcRenderer.invoke(CH_HOST_CREATE, input) as Promise<
       HostResult<SessionDescriptor>
     >
   },
