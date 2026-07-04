@@ -218,11 +218,11 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'assistant: server_tool_use block (P2-2 tool-card scope — no row yet)',
+      name: 'assistant: server_tool_use block (P2-2 tool-card, pending — no matching result block yet)',
       anchor:
         'src/utils/messages.ts:3136 block-start family; src/utils/messages.ts:2766 normalize',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'assistant',
         message: {
@@ -244,6 +244,69 @@ export const SDK_MESSAGE_FIXTURE: {
         parent_tool_use_id: null,
         session_id: SESSION,
         uuid: '00000000-0000-4000-8000-00000000a005',
+      },
+    },
+    {
+      name: 'assistant: web_search_tool_result block (P2-2 server-tool result — resolves srvtoolu_01Fix001 inline, no user reply)',
+      anchor:
+        'src/utils/messages.ts:3137 block-start family; src/utils/messages.ts:1306-1328 (orphan-if-unresolved proves results ride inline)',
+      reach: 'app-seam',
+      expectRows: 0,
+      message: {
+        type: 'assistant',
+        message: {
+          id: 'msg_01Fix004',
+          model: 'claude-sonnet-5',
+          role: 'assistant',
+          content: [
+            {
+              type: 'web_search_tool_result',
+              tool_use_id: 'srvtoolu_01Fix001',
+              content: [
+                { type: 'text', text: 'bun sun_path limit is 104 bytes on macOS' },
+              ],
+            },
+          ],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1300, output_tokens: 40, service_tier: null },
+        },
+        parent_tool_use_id: null,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000a00c',
+      },
+    },
+    {
+      name: 'assistant: FileEditTool diff result riding a user reply (P2-2 DiffView/MultiDiffCard scope)',
+      anchor:
+        'src/tools/FileEditTool/types.ts:63-80 (structuredPatch: StructuredPatchHunk[])',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'assistant',
+        message: {
+          id: 'msg_01Fix00d',
+          model: 'claude-sonnet-5',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_01FixEdit1',
+              name: 'Edit',
+              input: {
+                file_path: '/repo/src/config.ts',
+                old_string: "port: 3000",
+                new_string: "port: 4000",
+              },
+            },
+          ],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 900, output_tokens: 30, service_tier: null },
+        },
+        parent_tool_use_id: null,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000a00e',
       },
     },
     {
@@ -644,6 +707,107 @@ export const SDK_MESSAGE_FIXTURE: {
         session_id: SESSION,
         uuid: '00000000-0000-4000-8000-00000000u002',
         timestamp: '2026-07-04T09:00:04.000Z',
+      },
+    },
+    {
+      name: 'user: FileEditTool tool_result carrying structuredPatch (P2-2 DiffView/MultiDiffCard source data)',
+      anchor:
+        'src/tools/FileEditTool/types.ts:63-80 output schema; src/tools/FileEditTool/utils.ts (diff npm structuredPatch shape)',
+      reach: 'app-seam',
+      expectRows: 0,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_01FixEdit1',
+              content: [
+                { type: 'text', text: 'The file /repo/src/config.ts has been updated.' },
+              ],
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        isSynthetic: true,
+        tool_use_result: {
+          filePath: '/repo/src/config.ts',
+          oldString: 'port: 3000',
+          newString: 'port: 4000',
+          originalFile: 'export const config = {\n  port: 3000,\n}\n',
+          structuredPatch: [
+            {
+              oldStart: 1,
+              oldLines: 3,
+              newStart: 1,
+              newLines: 3,
+              lines: [
+                ' export const config = {',
+                '-  port: 3000,',
+                '+  port: 4000,',
+                ' }',
+              ],
+            },
+          ],
+          userModified: false,
+          replaceAll: false,
+        },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u006',
+        timestamp: '2026-07-04T09:00:05.000Z',
+      },
+    },
+    {
+      name: 'user: tool_result error (P2-2 correlation — is_error true)',
+      anchor: 'src/utils/queryHelpers.ts:478 (`content.is_error !== true` read pattern)',
+      reach: 'app-seam',
+      expectRows: 0,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_01FixErr1',
+              content: [{ type: 'text', text: 'ENOENT: /repo/missing.json not found' }],
+              is_error: true,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        isSynthetic: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u007',
+        timestamp: '2026-07-04T09:00:06.000Z',
+      },
+    },
+    {
+      name: 'user: tool_result for a subagent-scoped tool_use (D2 nesting — parent_tool_use_id non-null)',
+      anchor:
+        'src/utils/queryHelpers.ts:141-153 (agent/skill progress re-emit — same subagent path P2-0 found for assistant frames, `parent_tool_use_id: message.parentToolUseID`); D2 decisions/AGENT-CHROME.md C4 nests, never interleaves',
+      reach: 'app-seam',
+      expectRows: 0,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_01FixSubGrep1',
+              content: [{ type: 'text', text: '3 matches in src/tools/' }],
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: 'toolu_01FixTask1',
+        isSynthetic: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u008',
+        timestamp: '2026-07-04T09:00:07.000Z',
       },
     },
     {
