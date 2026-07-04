@@ -45,7 +45,6 @@ type SessionPermissionState = {
 }
 
 export type PermissionState = {
-  activeSessionId: SessionId | null
   sessions: Record<SessionId, SessionPermissionState>
 }
 
@@ -57,10 +56,7 @@ export type PermissionAction =
   | { type: 'restored'; sessionId: SessionId; requestId: string }
 
 export function createPermissionState(): PermissionState {
-  return {
-    activeSessionId: null,
-    sessions: {},
-  }
+  return { sessions: {} }
 }
 
 function createSessionPermissionState(): SessionPermissionState {
@@ -122,7 +118,7 @@ export function reducePermissionState(
       frame.payload.pendingPermissionRequests.map(request => request.requestId),
     )
     return {
-      activeSessionId: frame.sessionId,
+      ...state,
       sessions: {
         ...state.sessions,
         [frame.sessionId]: {
@@ -217,7 +213,7 @@ export type PermissionQueueItem = {
 /** The full pending queue in arrival order (every card, including snoozed). */
 export function selectPermissionQueue(
   state: PermissionState,
-  sessionId: SessionId | null = state.activeSessionId,
+  sessionId: SessionId | null,
 ): PermissionQueueItem[] {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return []
@@ -231,7 +227,7 @@ export function selectPermissionQueue(
 /** The card keyboard shortcuts act on: first un-answered, un-snoozed pending. */
 export function selectVisiblePermission(
   state: PermissionState,
-  sessionId: SessionId | null = state.activeSessionId,
+  sessionId: SessionId | null,
 ): PermissionRequest | null {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return null
@@ -247,7 +243,7 @@ export function selectVisiblePermission(
 /** C3 — the latest engine context snapshot (null before the first frame). */
 export function selectPermissionContext(
   state: PermissionState,
-  sessionId: SessionId | null = state.activeSessionId,
+  sessionId: SessionId | null,
 ): PermissionContextSnapshot | null {
   const session = sessionId ? state.sessions[sessionId] : undefined
   return session?.context ?? null

@@ -154,7 +154,7 @@ test('uses deterministic per-frame fallback identity without stream events', () 
     }),
   )
 
-  expect(selectTranscriptRows(state)[0]).toMatchObject({
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
     messageId: '00000000-0000-4000-8000-000000000010',
     frameId: '00000000-0000-4000-8000-000000000010',
     blockIndex: 0,
@@ -385,7 +385,7 @@ test('skips malformed blocks without dropping valid siblings', () => {
     }),
   )
 
-  expect(selectTranscriptRows(state)).toEqual([
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
     {
       id: 'session-1:msg-malformed:4:toolu_ok',
       sessionId: 'session-1',
@@ -643,7 +643,7 @@ test('projects assistant thinking blocks and preserves Codex reasoning metadata'
     }),
   )
 
-  expect(selectTranscriptRows(state)).toMatchObject([
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
     {
       kind: 'thinking',
       content: 'First inspect the boundary.',
@@ -690,7 +690,7 @@ test('projects plain user text, real command metadata, and image blocks', () => 
     }),
   )
 
-  expect(selectTranscriptRows(state)).toMatchObject([
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
     { kind: 'user-text', role: 'user', content: 'inspect this image' },
     {
       kind: 'command-echo',
@@ -736,7 +736,7 @@ test('rejects malformed P2-1 content blocks without partial rows', () => {
     messageFrame('session-1', malformedUser),
   )
 
-  expect(selectTranscriptRows(state)).toEqual([])
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
 })
 
 test('projects user-visible system notices and emits boundary rows once', () => {
@@ -783,13 +783,13 @@ test('projects user-visible system notices and emits boundary rows once', () => 
     state = projectServerFrame(state, messageFrame('session-1', message))
   }
 
-  expect(selectTranscriptRows(state).map(row => row.kind)).toEqual([
+  expect(selectTranscriptRows(state, 'session-1').map(row => row.kind)).toEqual([
     'session-init',
     'compact-boundary',
     'system-notice',
     'result',
   ])
-  expect(selectTranscriptRows(state)).toMatchObject([
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
     { cwd: '/Users/pt/cat-code', model: 'claude-sonnet-5' },
     { trigger: 'auto', preTokens: 1234 },
     { noticeType: 'api_retry', content: 'Overloaded' },

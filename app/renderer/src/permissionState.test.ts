@@ -49,7 +49,7 @@ test('hydrates pending permission requests from the ready frame', () => {
   })
 
   expect(state.sessions['session-1']?.pending).toEqual([REQUEST])
-  expect(selectVisiblePermission(state)).toEqual(REQUEST)
+  expect(selectVisiblePermission(state, 'session-1')).toEqual(REQUEST)
 })
 
 test('upserts requested permissions and removes them when resolved', () => {
@@ -98,7 +98,7 @@ test('a submitted decision hides the prompt but retains it until resolved', () =
   })
 
   expect(state.sessions['session-1']?.pending).toEqual([REQUEST])
-  expect(selectVisiblePermission(state)).toBeNull()
+  expect(selectVisiblePermission(state, 'session-1')).toBeNull()
 })
 
 test('an addressed transport error restores a submitted permission for retry', () => {
@@ -162,7 +162,7 @@ test('terminal lifecycle clears permissions owned by the dead sidecar', () => {
   })
 
   expect(state.sessions['session-1']?.pending).toEqual([])
-  expect(selectVisiblePermission(state)).toBeNull()
+  expect(selectVisiblePermission(state, 'session-1')).toBeNull()
 })
 
 test('dismiss hides a request without resolving it', () => {
@@ -177,7 +177,7 @@ test('dismiss hides a request without resolving it', () => {
   })
 
   expect(state.sessions['session-1']?.pending).toEqual([REQUEST])
-  expect(selectVisiblePermission(state)).toBeNull()
+  expect(selectVisiblePermission(state, 'session-1')).toBeNull()
 })
 
 test('allow sends an empty confirmation and cannot echo oversized gated input', () => {
@@ -223,7 +223,6 @@ test('permission and lifecycle frames cannot clear another session queue', () =>
     },
   })
 
-  expect(state.activeSessionId).toBe('session-2')
   expect(selectVisiblePermission(state, 'session-2')).toEqual(request2)
   expect(state.sessions['session-1']?.pending).toEqual([])
 })

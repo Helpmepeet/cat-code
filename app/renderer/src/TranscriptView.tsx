@@ -9,13 +9,30 @@
  */
 
 import Markdown from 'react-markdown'
-import type {
-  NestedTranscriptRow,
-  ToolCardStatus,
-  ToolDiffProjection,
+import type { SessionId } from '../../shared/protocol.js'
+import {
+  selectNestedTranscriptRows,
+  type NestedTranscriptRow,
+  type TranscriptState,
+  type ToolCardStatus,
+  type ToolDiffProjection,
 } from './transcriptProjector.js'
 
-export function TranscriptView({ rows }: { rows: NestedTranscriptRow[] }) {
+export function TranscriptView({
+  state,
+  activeSessionId,
+}: {
+  state: TranscriptState
+  activeSessionId: SessionId | null
+}) {
+  return (
+    <TranscriptRowsView
+      rows={selectNestedTranscriptRows(state, activeSessionId)}
+    />
+  )
+}
+
+export function TranscriptRowsView({ rows }: { rows: NestedTranscriptRow[] }) {
   if (rows.length === 0) {
     return (
       <div className="text-sm text-text-subtle">No transcript rows yet.</div>

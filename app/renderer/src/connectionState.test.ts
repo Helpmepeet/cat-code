@@ -82,10 +82,57 @@ test('a lifecycle frame only disables its addressed session', () => {
     status: 'disconnected',
   })
 
-  expect(state.activeSessionId).toBe('session-2')
   expect(selectConnection(state, 'session-2')).toEqual({
     status: 'ready',
     inputEnabled: true,
   })
   expect(selectConnection(state, 'session-1').status).toBe('disconnected')
+})
+
+test('typed forward failures update only the addressed session state', () => {
+  let state = createConnectionState()
+  state = reduceConnectionState(state, validReady as ServerFrame)
+  state = reduceConnectionState(state, {
+    ...validReady,
+    sessionId: 'session-2',
+    engineSessionId: 'engine-session-2',
+  } as ServerFrame)
+
+  state = reduceConnectionState(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-2',
+    code: 'session_not_ready',
+    message: 'session is still spawning',
+    retryable: true,
+  })
+  expect(selectConnection(state, 'session-2')).toEqual({
+    status: 'starting',
+    inputEnabled: false,
+  })
+  expect(selectConnection(state, 'session-1')).toEqual({
+    status: 'ready',
+    inputEnabled: true,
+  })
+
+  state = reduceConnectionState(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-3',
+    code: 'session_not_found',
+    message: 'session is gone',
+    retryable: false,
+  })
+  expect(selectConnection(state, 'session-3').status).toBe('dead')
+
+  state = reduceConnectionState(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-2',
+    code: 'session_disconnected',
+    message: 'sidecar exited',
+    retryable: false,
+  })
+  expect(selectConnection(state, 'session-2').status).toBe('disconnected')
+  expect(selectConnection(state, 'session-1').status).toBe('ready')
 })

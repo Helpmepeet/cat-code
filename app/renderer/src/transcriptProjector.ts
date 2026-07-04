@@ -259,7 +259,6 @@ type TranscriptSessionState = {
 }
 
 export type TranscriptState = {
-  activeSessionId: SessionId | null
   sessions: Record<SessionId, TranscriptSessionState>
 }
 
@@ -276,7 +275,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
 }
 
 export function createTranscriptState(): TranscriptState {
-  return { activeSessionId: null, sessions: {} }
+  return { sessions: {} }
 }
 
 /**
@@ -286,7 +285,7 @@ export function createTranscriptState(): TranscriptState {
  */
 export function selectTranscriptRows(
   state: TranscriptState,
-  sessionId: SessionId | null = state.activeSessionId,
+  sessionId: SessionId | null,
 ): TranscriptRow[] {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return []
@@ -318,7 +317,7 @@ export type NestedTranscriptRow = TranscriptRow & {
 
 export function selectNestedTranscriptRows(
   state: TranscriptState,
-  sessionId: SessionId | null = state.activeSessionId,
+  sessionId: SessionId | null,
 ): NestedTranscriptRow[] {
   const rows = selectTranscriptRows(state, sessionId)
   const byToolUseId = new Map<string, TranscriptRow>()
@@ -356,7 +355,7 @@ export function projectServerFrame(
 ): TranscriptState {
   if (isAppReadyFrame(frame)) {
     return {
-      activeSessionId: frame.sessionId,
+      ...state,
       sessions: {
         ...state.sessions,
         [frame.sessionId]:

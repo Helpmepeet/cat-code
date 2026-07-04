@@ -6,12 +6,16 @@ import type {
 } from '../../shared/protocol.js'
 
 export type ConnectionSnapshot = {
-  status: 'connecting' | 'ready' | LifecycleFrame['status']
+  status:
+    | 'connecting'
+    | 'starting'
+    | 'ready'
+    | 'dead'
+    | LifecycleFrame['status']
   inputEnabled: boolean
 }
 
 export type ConnectionState = {
-  activeSessionId: SessionId | null
   sessions: Record<SessionId, ConnectionSnapshot>
 }
 
@@ -21,12 +25,12 @@ const CONNECTING: ConnectionSnapshot = {
 }
 
 export function createConnectionState(): ConnectionState {
-  return { activeSessionId: null, sessions: {} }
+  return { sessions: {} }
 }
 
 export function selectConnection(
   state: ConnectionState,
-  sessionId: SessionId | null = state.activeSessionId,
+  sessionId: SessionId | null,
 ): ConnectionSnapshot {
   return sessionId ? (state.sessions[sessionId] ?? CONNECTING) : CONNECTING
 }
@@ -37,7 +41,7 @@ export function reduceConnectionState(
 ): ConnectionState {
   if (isAppReadyFrame(frame)) {
     return {
-      activeSessionId: frame.sessionId,
+      ...state,
       sessions: {
         ...state.sessions,
         [frame.sessionId]: {
@@ -54,6 +58,27 @@ export function reduceConnectionState(
         ...state.sessions,
         [frame.sessionId]: {
           status: frame.status,
+          inputEnabled: false,
+        },
+      },
+    }
+  }
+  if (frame.kind === 'error') {
+    const status =
+      frame.code === 'session_not_found'
+        ? 'dead'
+        : frame.code === 'session_not_ready'
+          ? 'starting'
+          : frame.code === 'session_disconnected'
+            ? 'disconnected'
+            : null
+    if (!status) return state
+    return {
+      ...state,
+      sessions: {
+        ...state.sessions,
+        [frame.sessionId]: {
+          status,
           inputEnabled: false,
         },
       },

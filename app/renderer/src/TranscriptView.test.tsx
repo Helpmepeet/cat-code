@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { TranscriptView } from './TranscriptView.js'
+import { TranscriptRowsView } from './TranscriptView.js'
 
 test('renders an assistant text row as markdown, not raw source', () => {
   const html = renderToStaticMarkup(
-    <TranscriptView
+    <TranscriptRowsView
       rows={[
         {
           id: 's:m:0:f',
@@ -28,7 +28,7 @@ test('renders an assistant text row as markdown, not raw source', () => {
 
 test('renders a tool_use row as a card with tool name and structured input', () => {
   const html = renderToStaticMarkup(
-    <TranscriptView
+    <TranscriptRowsView
       rows={[
         {
           id: 's:m:1:toolu_p13_1',
@@ -56,14 +56,14 @@ test('renders a tool_use row as a card with tool name and structured input', () 
 })
 
 test('renders an empty-state hint when no rows are projected yet', () => {
-  const html = renderToStaticMarkup(<TranscriptView rows={[]} />)
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
 
   expect(html).toContain('No transcript rows yet.')
 })
 
 test('renders a resolved tool card with success status and result content', () => {
   const html = renderToStaticMarkup(
-    <TranscriptView
+    <TranscriptRowsView
       rows={[
         {
           id: 's:m:1:toolu_res_1',
@@ -91,7 +91,7 @@ test('renders a resolved tool card with success status and result content', () =
 
 test('D2/C4: renders a subagent tool card NESTED inside its owning agent card, not as a sibling', () => {
   const html = renderToStaticMarkup(
-    <TranscriptView
+    <TranscriptRowsView
       rows={[
         {
           id: 's:m:0:toolu_agent_1',

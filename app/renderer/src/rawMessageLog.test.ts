@@ -3,7 +3,7 @@ import {
   createRawMessageLogState,
   reduceServerFrame,
   reduceServerFrameWithLimits,
-  selectActiveRawMessageLog,
+  selectRawMessageLog,
 } from './rawMessageLog.js'
 
 test('captures the ready session and appends every raw SDKMessage in arrival order', () => {
@@ -63,8 +63,7 @@ test('captures the ready session and appends every raw SDKMessage in arrival ord
     },
   })
 
-  const active = selectActiveRawMessageLog(state)
-  expect(state.activeSessionId).toBe('session-1')
+  const active = selectRawMessageLog(state, 'session-1')
   expect(active.inputEnabled).toBe(true)
   expect(active.messages).toHaveLength(2)
   expect(active.messages.map(message => message.type)).toEqual([
@@ -106,7 +105,7 @@ test('records transport errors without adding non-message events to the raw log'
     retryable: false,
   })
 
-  const active = selectActiveRawMessageLog(state)
+  const active = selectRawMessageLog(state, 'session-1')
   expect(active.messages).toEqual([])
   expect(active.error).toBe('turn failed')
 })
@@ -139,7 +138,7 @@ test('keys logs by ready session and rejects frames for an unattached session', 
   })
 
   expect(Object.keys(state.sessions)).toEqual(['session-1'])
-  expect(selectActiveRawMessageLog(state).messages).toEqual([])
+  expect(selectRawMessageLog(state, 'session-1').messages).toEqual([])
 })
 
 test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', () => {
@@ -192,7 +191,7 @@ test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', ()
     { maxMessages: 10, maxBytes: secondBytes },
   )
 
-  const active = selectActiveRawMessageLog(state)
+  const active = selectRawMessageLog(state, 'session-1')
   expect(active.messages).toEqual([second])
   expect(active.retainedBytes).toBe(secondBytes)
   expect(active.truncated).toBe(true)

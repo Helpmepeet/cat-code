@@ -21,13 +21,12 @@ import {
 import {
   createRawMessageLogState,
   reduceServerFrame,
-  selectActiveRawMessageLog,
+  selectRawMessageLog,
   type RawMessageSessionLog,
 } from './rawMessageLog.js'
 import {
   createTranscriptState,
   projectServerFrame,
-  selectNestedTranscriptRows,
   selectTranscriptRows,
   type TranscriptRow,
 } from './transcriptProjector.js'
@@ -63,6 +62,7 @@ export function App() {
   )
   const [prompt, setPrompt] = useState('')
   const [transportError, setTransportError] = useState<string | null>(null)
+  const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
   const [connection, dispatchConnection] = useReducer(
     reduceConnectionState,
     undefined,
@@ -72,6 +72,9 @@ export function App() {
   useEffect(() => {
     const bridge = getBridge()
     const unsubscribe = bridge.subscribe(frame => {
+      // Active selection is renderer-owned UI state. A background frame can
+      // create/update its addressed slice, but never steals focus.
+      setActiveSessionId(current => current ?? frame.sessionId)
       dispatch(frame)
       dispatchPermission({ type: 'frame', frame })
       dispatchConnection(frame)
@@ -81,24 +84,15 @@ export function App() {
     return unsubscribe
   }, [])
 
-  const activeLog = selectActiveRawMessageLog(state)
-  const transcriptRows = selectTranscriptRows(transcript, state.activeSessionId)
-  // Nested for display only (D2/C4 subagent nesting) — the debug export and
-  // any other flat consumer keep reading `transcriptRows` untransformed.
-  const nestedTranscriptRows = selectNestedTranscriptRows(
-    transcript,
-    state.activeSessionId,
-  )
-  const activeConnection = selectConnection(
-    connection,
-    state.activeSessionId,
-  )
+  const activeLog = selectRawMessageLog(state, activeSessionId)
+  const transcriptRows = selectTranscriptRows(transcript, activeSessionId)
+  const activeConnection = selectConnection(connection, activeSessionId)
 
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault()
     const text = prompt.trim()
     if (
-      !state.activeSessionId ||
+      !activeSessionId ||
       !activeLog.inputEnabled ||
       !activeConnection.inputEnabled ||
       text.length === 0
@@ -108,7 +102,7 @@ export function App() {
     // goalSnapshot unless the renderer actually owns one; if added later, the
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
-      getBridge().submit(state.activeSessionId, text)
+      getBridge().submit(activeSessionId, text)
       setPrompt('')
       setTransportError(null)
     } catch (error) {
@@ -118,21 +112,21 @@ export function App() {
 
   const permissionQueue =
     activeConnection.status === 'ready'
-      ? selectPermissionQueue(permissions, state.activeSessionId)
+      ? selectPermissionQueue(permissions, activeSessionId)
       : []
   const permissionContext = selectPermissionContext(
     permissions,
-    state.activeSessionId,
+    activeSessionId,
   )
   // The card the keyboard shortcuts act on: first un-answered, un-snoozed.
   const pendingPermission =
     activeConnection.status === 'ready'
-      ? selectVisiblePermission(permissions, state.activeSessionId)
+      ? selectVisiblePermission(permissions, activeSessionId)
       : null
 
   const respondToPermission = useCallback(
     (requestId: string, response: PermissionResponseInput) => {
-      const sessionId = state.activeSessionId
+      const sessionId = activeSessionId
       if (!sessionId) return
       dispatchPermission({ type: 'submitted', sessionId, requestId })
       const error = sendPermissionResponse(
@@ -148,7 +142,7 @@ export function App() {
         setTransportError(null)
       }
     },
-    [state.activeSessionId],
+    [activeSessionId],
   )
 
   const allowPermission = useCallback(
@@ -174,33 +168,32 @@ export function App() {
 
   const restorePermission = useCallback(
     (requestId: string) => {
-      if (!state.activeSessionId) return
+      if (!activeSessionId) return
       dispatchPermission({
         type: 'restored',
-        sessionId: state.activeSessionId,
+        sessionId: activeSessionId,
         requestId,
       })
     },
-    [state.activeSessionId],
+    [activeSessionId],
   )
 
   const setPermissionMode = useCallback(
     (mode: PermissionSetModeMode) => {
-      if (!state.activeSessionId) return
+      if (!activeSessionId) return
       // C2 — session-scoped mode switch; the sidecar validates the mode and
       // answers with a fresh permission.context snapshot (the ack).
       try {
-        getBridge().setPermissionMode(state.activeSessionId, mode)
+        getBridge().setPermissionMode(activeSessionId, mode)
         setTransportError(null)
       } catch (error) {
         setTransportError(errorMessage(error))
       }
     },
-    [state.activeSessionId],
+    [activeSessionId],
   )
 
   useEffect(() => {
-    const activeSessionId = state.activeSessionId
     if (!pendingPermission || !activeSessionId) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -235,7 +228,7 @@ export function App() {
     allowPermission,
     denyPermission,
     pendingPermission,
-    state.activeSessionId,
+    activeSessionId,
   ])
 
   const partialCount = activeLog.messages.filter(
@@ -265,7 +258,7 @@ export function App() {
 
       <ConnectionRecovery
         connection={activeConnection}
-        sessionId={state.activeSessionId}
+        sessionId={activeSessionId}
       />
 
       <form className="flex gap-3" onSubmit={submit}>
@@ -273,7 +266,7 @@ export function App() {
           aria-label="Prompt"
           className="min-w-0 flex-1 rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
           disabled={
-            !state.activeSessionId ||
+            !activeSessionId ||
             !activeLog.inputEnabled ||
             !activeConnection.inputEnabled
           }
@@ -284,7 +277,7 @@ export function App() {
         <button
           className="rounded bg-accent px-4 py-2 text-app-bg disabled:opacity-50"
           disabled={
-            !state.activeSessionId ||
+            !activeSessionId ||
             !activeLog.inputEnabled ||
             !activeConnection.inputEnabled ||
             prompt.trim().length === 0
@@ -336,7 +329,10 @@ export function App() {
       <section className="flex min-h-0 flex-1 flex-col">
         <h1 className="mb-2 text-sm text-text-muted">Transcript (projected)</h1>
         <div className="min-h-0 flex-1 overflow-auto rounded border border-text-subtle p-4">
-          <TranscriptView rows={nestedTranscriptRows} />
+          <TranscriptView
+            activeSessionId={activeSessionId}
+            state={transcript}
+          />
         </div>
       </section>
 

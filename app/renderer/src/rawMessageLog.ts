@@ -21,7 +21,6 @@ export type RawMessageSessionLog = {
 }
 
 export type RawMessageLogState = {
-  activeSessionId: SessionId | null
   sessions: Record<SessionId, RawMessageSessionLog>
 }
 
@@ -40,17 +39,15 @@ const EMPTY_SESSION_LOG: RawMessageSessionLog = {
 }
 
 export function createRawMessageLogState(): RawMessageLogState {
-  return {
-    activeSessionId: null,
-    sessions: {},
-  }
+  return { sessions: {} }
 }
 
-export function selectActiveRawMessageLog(
+export function selectRawMessageLog(
   state: RawMessageLogState,
+  sessionId: SessionId | null,
 ): RawMessageSessionLog {
-  return state.activeSessionId
-    ? (state.sessions[state.activeSessionId] ?? EMPTY_SESSION_LOG)
+  return sessionId
+    ? (state.sessions[sessionId] ?? EMPTY_SESSION_LOG)
     : EMPTY_SESSION_LOG
 }
 
@@ -72,7 +69,7 @@ export function reduceServerFrameWithLimits(
   if (isAppReadyFrame(frame)) {
     const previous = state.sessions[frame.sessionId] ?? EMPTY_SESSION_LOG
     return {
-      activeSessionId: frame.sessionId,
+      ...state,
       sessions: {
         ...state.sessions,
         [frame.sessionId]: {
@@ -84,15 +81,16 @@ export function reduceServerFrameWithLimits(
     }
   }
 
-  const session = state.sessions[frame.sessionId]
-  if (!session) return state
-
   if (frame.kind === 'error') {
+    const session = state.sessions[frame.sessionId] ?? EMPTY_SESSION_LOG
     return updateSession(state, frame.sessionId, {
       ...session,
       error: frame.message,
     })
   }
+
+  const session = state.sessions[frame.sessionId]
+  if (!session) return state
 
   if (frame.kind !== 'event' || frame.event.type !== 'message') return state
 
