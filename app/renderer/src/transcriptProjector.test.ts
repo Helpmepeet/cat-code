@@ -3,6 +3,7 @@ import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
   createTranscriptState,
   projectServerFrame,
+  selectNestedTranscriptRows,
   selectTranscriptRows,
 } from './transcriptProjector.js'
 import {
@@ -190,7 +191,10 @@ test('skips malformed blocks without dropping valid siblings', () => {
       kind: 'tool-use',
       toolUseId: 'toolu_ok',
       toolName: 'Bash',
+      toolFamily: 'bash',
       input: {},
+      status: 'pending',
+      result: null,
     },
   ])
 })
@@ -317,8 +321,20 @@ test('every fixture sample projects without crashing and adds exactly its docume
 
 test('documented no-op variants leave state reference-equal (no half-applied writes)', () => {
   const projectingDiscriminants = new Set(['assistant', 'stream_event'])
+  // P2-2: these specific `user` samples correlate a `tool_result` (or a
+  // server-tool result riding an `assistant` frame) into the correlation
+  // map — a real, intentional state change, not a no-op. Named individually
+  // rather than excluding all of `user` wholesale, so any FUTURE `user`
+  // sample that is meant to stay a no-op still gets this check for free.
+  const correlatingSampleNames = new Set([
+    'user: tool_result carrier (P2-2 correlation scope)',
+    'user: FileEditTool tool_result carrying structuredPatch (P2-2 DiffView/MultiDiffCard source data)',
+    'user: tool_result error (P2-2 correlation — is_error true)',
+    'user: tool_result for a subagent-scoped tool_use (D2 nesting — parent_tool_use_id non-null)',
+  ])
   for (const sample of allSdkMessageSamples()) {
     if (projectingDiscriminants.has(sample.message.type)) continue
+    if (correlatingSampleNames.has(sample.name)) continue
     let state = createTranscriptState()
     state = projectServerFrame(state, ready('session-1'))
     const next = projectServerFrame(
@@ -556,4 +572,462 @@ test('replays the full S1 turn grammar end-to-end into a correct transcript', ()
     uuid: '00000000-0000-4000-8000-000000000107',
   })
   expect(state).toBe(before)
+})
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * P2-2 tool-card families + tool_use/tool_result correlation.
+ * Status is DERIVED (never stored): a ToolCard reads `pending` until its
+ * `tool_use_id` gets a correlated result, then `success`/`error` from that
+ * result's own signal — never from a stored flag on the row itself.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+test('a tool_use row is pending until its tool_result correlates, then resolves to success', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_corr_1',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_corr_1', name: 'Read', input: { file_path: '/a' } },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0001',
+    }),
+  )
+
+  const pendingRow = selectTranscriptRows(state, 'session-1')[0]
+  expect(pendingRow?.kind).toBe('tool-use')
+  if (pendingRow?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(pendingRow.status).toBe('pending')
+  expect(pendingRow.result).toBeNull()
+  expect(pendingRow.toolFamily).toBe('read')
+
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_corr_1',
+            content: [{ type: 'text', text: 'file contents' }],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0002',
+    }),
+  )
+
+  const resolvedRow = selectTranscriptRows(state, 'session-1')[0]
+  if (resolvedRow?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(resolvedRow.status).toBe('success')
+  expect(resolvedRow.result).toEqual({
+    isError: false,
+    content: 'file contents',
+    diff: null,
+  })
+  // The stored row itself was never mutated — only the read-time join changed.
+  expect(pendingRow.status).toBe('pending')
+})
+
+test('an is_error tool_result resolves the card to the error status', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_corr_2',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_corr_2', name: 'Bash', input: { command: 'exit 1' } },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0003',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_corr_2',
+            content: [{ type: 'text', text: 'command failed' }],
+            is_error: true,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0004',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('error')
+  expect(row.result?.isError).toBe(true)
+})
+
+test('a tool_result with no matching tool_use is tolerated (correlated but orphaned, no crash)', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  // No tool_use row was ever projected for this id.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_never_projected',
+            content: [{ type: 'text', text: 'orphaned result' }],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0005',
+    }),
+  )
+
+  // No row exists to correlate against — the transcript has zero rows, not a crash.
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+})
+
+test('a tool_use with no matching tool_result stays pending forever (not a crash, not an error)', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_corr_3',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_never_resolved', name: 'Bash', input: {} },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0006',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('pending')
+  expect(row.result).toBeNull()
+})
+
+test('a server-executed tool (server_tool_use) resolves via a result block riding a LATER assistant frame, no user reply', () => {
+  const useSample = SDK_MESSAGE_FIXTURE.assistant.find(sample =>
+    sample.name.startsWith('assistant: server_tool_use block'),
+  )
+  const resultSample = SDK_MESSAGE_FIXTURE.assistant.find(sample =>
+    sample.name.startsWith('assistant: web_search_tool_result block'),
+  )
+  if (!useSample || !resultSample) throw new Error('expected fixture samples missing')
+
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', useSample.message))
+
+  const pendingRow = selectTranscriptRows(state, 'session-1')[0]
+  if (pendingRow?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(pendingRow.status).toBe('pending')
+  expect(pendingRow.toolFamily).toBe('web')
+
+  // The result rides a SEPARATE later assistant frame (same message id in
+  // this fixture pair), never a `user` frame — no client round-trip exists
+  // for server-executed tools.
+  state = projectServerFrame(state, messageFrame('session-1', resultSample.message))
+
+  const resolvedRow = selectTranscriptRows(state, 'session-1')[0]
+  if (resolvedRow?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(resolvedRow.status).toBe('success')
+  expect(resolvedRow.result?.content).toContain('sun_path')
+})
+
+test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shape', () => {
+  const useSample = SDK_MESSAGE_FIXTURE.assistant.find(sample =>
+    sample.name.startsWith('assistant: FileEditTool diff result'),
+  )
+  const resultSample = SDK_MESSAGE_FIXTURE.user.find(sample =>
+    sample.name.startsWith('user: FileEditTool tool_result carrying structuredPatch'),
+  )
+  if (!useSample || !resultSample) throw new Error('expected fixture samples missing')
+
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', useSample.message))
+  state = projectServerFrame(state, messageFrame('session-1', resultSample.message))
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.toolFamily).toBe('edit')
+  expect(row.status).toBe('success')
+  expect(row.result?.diff).toEqual({
+    filePath: '/repo/src/config.ts',
+    hunks: [
+      {
+        oldStart: 1,
+        oldLines: 3,
+        newStart: 1,
+        newLines: 3,
+        lines: [
+          ' export const config = {',
+          '-  port: 3000,',
+          '+  port: 4000,',
+          ' }',
+        ],
+      },
+    ],
+  })
+})
+
+test('a foreign/malformed tool_use_result never crashes and yields diff: null', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_corr_4',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_corr_4', name: 'Bash', input: {} }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0007',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_corr_4',
+            content: 'plain string stdout, not a content-block array',
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      // A foreign shape: has a `structuredPatch`-like key but the wrong
+      // inner shape, plus no `filePath` — must degrade, never crash or guess.
+      tool_use_result: { structuredPatch: 'not an array', unrelated: true },
+      uuid: '00000000-0000-4000-8000-0000000c0008',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('success')
+  expect(row.result?.diff).toBeNull()
+  expect(row.result?.content).toBe('plain string stdout, not a content-block array')
+})
+
+test('D2/C4: subagent tool_use + tool_result nest under the owning agent card, never interleaving at top level', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+
+  // Top-level: the orchestrator's own Agent/Task tool_use — the owning card.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent_1',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_01FixTask1', name: 'Agent', input: { prompt: 'find call sites' } },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d0001',
+    }),
+  )
+
+  // Subagent full frame (P2-0 finding): non-null parent_tool_use_id, a
+  // nested Grep tool_use — must NOT appear at top level.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent_2',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_01FixSubGrep1', name: 'Grep', input: { pattern: 'projectServerFrame' } },
+        ],
+      },
+      parent_tool_use_id: 'toolu_01FixTask1',
+      uuid: '00000000-0000-4000-8000-0000000d0002',
+    }),
+  )
+
+  // Subagent tool_result — also carries the non-null parent id (S1 §1 +
+  // queryHelpers.ts:141-153, the same subagent progress re-emit path).
+  const subagentResultSample = SDK_MESSAGE_FIXTURE.user.find(sample =>
+    sample.name.startsWith('user: tool_result for a subagent-scoped tool_use'),
+  )
+  if (!subagentResultSample) throw new Error('expected fixture sample missing')
+  state = projectServerFrame(state, messageFrame('session-1', subagentResultSample.message))
+
+  // Flat selector: both rows present, arrival order, NOT interleaved by any
+  // reordering — but both still appear at the same flat level (this selector
+  // makes no nesting decision; selectNestedTranscriptRows does).
+  const flatRows = selectTranscriptRows(state, 'session-1')
+  expect(flatRows.map(r => (r.kind === 'tool-use' ? r.toolUseId : null))).toEqual([
+    'toolu_01FixTask1',
+    'toolu_01FixSubGrep1',
+  ])
+
+  // Nested selector: the subagent row must be a CHILD of the agent card, not
+  // a top-level sibling.
+  const nested = selectNestedTranscriptRows(state, 'session-1')
+  expect(nested).toHaveLength(1)
+  const agentRow = nested[0]
+  if (agentRow?.kind !== 'tool-use') throw new Error('expected agent tool-use row')
+  expect(agentRow.toolUseId).toBe('toolu_01FixTask1')
+  expect(agentRow.toolFamily).toBe('agent')
+  expect(agentRow.children).toHaveLength(1)
+  const childRow = agentRow.children[0]
+  if (childRow?.kind !== 'tool-use') throw new Error('expected child tool-use row')
+  expect(childRow.toolUseId).toBe('toolu_01FixSubGrep1')
+  expect(childRow.parentToolUseId).toBe('toolu_01FixTask1')
+  // The subagent's OWN tool_result correlated too — nesting doesn't block
+  // correlation, they are independent read-time joins.
+  expect(childRow.status).toBe('success')
+})
+
+test('a child row whose parent never arrived surfaces at top level (degraded placement, not data loss)', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  // Only the child frame arrives — its claimed parent tool_use_id was never
+  // projected as a row (e.g. truncated replay window).
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_orphan_child',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'orphaned subagent text' }],
+      },
+      parent_tool_use_id: 'toolu_never_seen',
+      uuid: '00000000-0000-4000-8000-0000000d0003',
+    }),
+  )
+
+  const nested = selectNestedTranscriptRows(state, 'session-1')
+  expect(nested).toHaveLength(1)
+  expect(nested[0]?.kind).toBe('assistant-text')
+  expect(nested[0]?.children).toEqual([])
+})
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * S1 §4 stop_reason/usage trap: assistant frames always serialize
+ * `stop_reason: null` (the engine's post-serialize write-back never reaches
+ * the renderer). The projector must never surface stop_reason/usage off an
+ * assistant frame — the ONLY real sources are the `message_delta` stream
+ * event and the terminal `result` frame. This test proves the projector
+ * holds that line: even though every assistant sample below LITERALLY
+ * CARRIES `stop_reason: null` (a truthy null, not absent), no row anywhere
+ * in this file's type or any correlation output exposes a stop_reason/usage
+ * field pulled from an assistant frame — TranscriptRow has no such field,
+ * and the real values are asserted to live on the message_delta/result
+ * frames themselves, never copied onto a row.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+test('S1 §4: stop_reason/usage are never read off an assistant frame — only message_delta and result carry them', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+
+  // Every real mint site serializes assistant frames with stop_reason:null
+  // (S1 §4) — confirm the fixture's own samples model this trap faithfully,
+  // then confirm no row ever surfaces a stop_reason/usage value from them.
+  for (const sample of SDK_MESSAGE_FIXTURE.assistant) {
+    const body = sample.message.message
+    if (body && typeof body === 'object' && 'stop_reason' in body) {
+      expect(body.stop_reason).toBeNull()
+    }
+  }
+
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_trap_1',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'about to call a tool' }],
+        // A real assistant frame literally carries this — the trap.
+        stop_reason: null,
+        usage: { input_tokens: 10, output_tokens: 2 },
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000e0001',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  // The row type structurally has no stop_reason/usage field to leak one
+  // into — this assertion would fail to compile (not just fail at runtime)
+  // if a future edit ever added one without sourcing it from message_delta
+  // or result, since TranscriptRow is a closed, explicit union.
+  expect(row).not.toHaveProperty('stop_reason')
+  expect(row).not.toHaveProperty('usage')
+
+  // The message_delta stream event is the ONLY event carrying the real
+  // stop_reason for this message — the projector tracks stream position off
+  // it (S1 grouping) but still never promotes stop_reason onto a row.
+  const messageDeltaSample = SDK_MESSAGE_FIXTURE.stream_event.find(sample =>
+    sample.name.startsWith('stream_event: message_delta'),
+  )
+  if (!messageDeltaSample) throw new Error('expected fixture sample missing')
+  const event = messageDeltaSample.message.event
+  expect(event && typeof event === 'object' && 'delta' in event).toBe(true)
+
+  const before = selectTranscriptRows(state, 'session-1')
+  state = projectServerFrame(state, messageFrame('session-1', messageDeltaSample.message))
+  // Confirmed droppable garnish (S1 §3 rule 5): no row set changes at all,
+  // let alone one gaining a stop_reason/usage field from it.
+  expect(selectTranscriptRows(state, 'session-1')).toEqual(before)
+
+  // The result frame is the other (and ONLY other) real source — turn
+  // totals live there (S1 §3 rule 3), never promoted onto a transcript row.
+  const resultSample = SDK_MESSAGE_FIXTURE.result.find(
+    sample => sample.name.startsWith('result: success'),
+  )
+  if (!resultSample) throw new Error('expected fixture sample missing')
+  expect(resultSample.message).toHaveProperty('stop_reason')
+  expect(resultSample.message).toHaveProperty('usage')
+  const beforeResult = selectTranscriptRows(state, 'session-1')
+  state = projectServerFrame(state, messageFrame('session-1', resultSample.message))
+  // The result frame carries the real values but still contributes NO row
+  // (P2-1 scope) — confirming today's rows never absorb them from here
+  // either.
+  expect(selectTranscriptRows(state, 'session-1')).toEqual(beforeResult)
 })

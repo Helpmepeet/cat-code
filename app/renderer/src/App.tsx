@@ -26,6 +26,7 @@ import {
 import {
   createTranscriptState,
   projectServerFrame,
+  selectNestedTranscriptRows,
   selectTranscriptRows,
   type TranscriptRow,
 } from './transcriptProjector.js'
@@ -80,6 +81,12 @@ export function App() {
 
   const activeLog = selectActiveRawMessageLog(state)
   const transcriptRows = selectTranscriptRows(transcript, state.activeSessionId)
+  // Nested for display only (D2/C4 subagent nesting) — the debug export and
+  // any other flat consumer keep reading `transcriptRows` untransformed.
+  const nestedTranscriptRows = selectNestedTranscriptRows(
+    transcript,
+    state.activeSessionId,
+  )
   const activeConnection = selectConnection(
     connection,
     state.activeSessionId,
@@ -277,7 +284,7 @@ export function App() {
       <section className="flex min-h-0 flex-1 flex-col">
         <h1 className="mb-2 text-sm text-text-muted">Transcript (projected)</h1>
         <div className="min-h-0 flex-1 overflow-auto rounded border border-text-subtle p-4">
-          <TranscriptView rows={transcriptRows} />
+          <TranscriptView rows={nestedTranscriptRows} />
         </div>
       </section>
 
