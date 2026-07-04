@@ -50,9 +50,15 @@
  * the variant arrives today:
  *  - 'app-seam'        — flows through the in-proc QueryEngine →
  *                        AppSessionController seam the sidecar forwards.
- *  - 'sdk-stdout-only' — minted only by the SDK stdout server
- *                        (src/cli/print.ts) / its streamlined transform;
- *                        never crosses the app seam today.
+ *  - 'sdk-stdout-only' — never crosses the app seam today: minted only by
+ *                        the SDK stdout server (src/cli/print.ts) / its
+ *                        streamlined transform, OR minted into the
+ *                        headless-gated sdkEventQueue whose only drain is
+ *                        print.ts (no drain wiring exists in
+ *                        src/app-runtime/ or app/sidecar/) — P2-0 review
+ *                        finding F1; wiring that drain is a §5
+ *                        extend-engine decision P2-1 will hit if it wants
+ *                        task/session-state rows.
  *  - 'type-only'       — no mint site found in src/ at all.
  * Coverage is intentionally total anyway: the wire tolerates drift, so the
  * projector must too.
@@ -896,8 +902,8 @@ export const SDK_MESSAGE_FIXTURE: {
     },
     {
       name: 'system: task_notification',
-      anchor: 'src/utils/sdkEventQueue.ts:126',
-      reach: 'app-seam',
+      anchor: 'src/utils/sdkEventQueue.ts:126 (queue-minted; drained only by cli/print.ts)',
+      reach: 'sdk-stdout-only',
       expectRows: 0,
       message: {
         type: 'system',
@@ -914,8 +920,8 @@ export const SDK_MESSAGE_FIXTURE: {
     },
     {
       name: 'system: task_started',
-      anchor: 'src/utils/task/framework.ts:98',
-      reach: 'app-seam',
+      anchor: 'src/utils/task/framework.ts:98 (via sdkEventQueue; drained only by cli/print.ts)',
+      reach: 'sdk-stdout-only',
       expectRows: 0,
       message: {
         type: 'system',
@@ -929,8 +935,8 @@ export const SDK_MESSAGE_FIXTURE: {
     },
     {
       name: 'system: task_progress',
-      anchor: 'src/utils/task/sdkProgress.ts:23',
-      reach: 'app-seam',
+      anchor: 'src/utils/task/sdkProgress.ts:23 (via sdkEventQueue; drained only by cli/print.ts)',
+      reach: 'sdk-stdout-only',
       expectRows: 0,
       message: {
         type: 'system',
@@ -946,8 +952,8 @@ export const SDK_MESSAGE_FIXTURE: {
     },
     {
       name: 'system: session_state_changed (authoritative turn-over signal per schema note)',
-      anchor: 'src/utils/sessionState.ts:130',
-      reach: 'app-seam',
+      anchor: 'src/utils/sessionState.ts:130 (via sdkEventQueue; drained only by cli/print.ts)',
+      reach: 'sdk-stdout-only',
       expectRows: 0,
       message: {
         type: 'system',
@@ -1035,7 +1041,7 @@ export const SDK_MESSAGE_FIXTURE: {
     },
     {
       name: 'result: error_during_execution (+ permission_denials entry)',
-      anchor: 'src/QueryEngine.ts:1040 region (error yields share the shape)',
+      anchor: 'src/QueryEngine.ts:1143 (error yields share the shape)',
       reach: 'app-seam',
       expectRows: 0,
       message: {
