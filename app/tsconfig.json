@@ -22,6 +22,7 @@
     "main/**/*.ts",
     "preload/**/*.ts",
     "supervisor/**/*.ts",
+    "host/**/*.ts",
     "shared/**/*.ts",
     "renderer/src/**/*.ts",
     "renderer/src/**/*.tsx",
