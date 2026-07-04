@@ -511,79 +511,166 @@ more than mechanical re-keying.
 
 ## P3-5 · 🔴 — The shell: root routing + TabBar + Sidebar hosting real sessions
 
+> **SPLIT into P3-5a + P3-5b (decided 2026-07-05).** P3-5 was the first Difficulty-8 session and
+> its own prompt named a fault line ("land routing+TabBar, land Sidebar separately if it
+> overruns"). We split it deliberately along that seam — BY SURFACE, not by layer — so each half
+> is a complete, independently GUI-verifiable unit and each is easier to build and review
+> (8/10 → 6/10 + 6/10). Both go to the SAME strong model (CLAUDE/visual-design), run IN ORDER
+> (5b depends on 5a's shell frame), NOT parallel. The guardrail that makes the split better and
+> not worse: **5b must EXTEND 5a's established visual language, not invent a second one** — the
+> shell must read as one designed system. Anchors below were re-verified against HEAD on
+> 2026-07-05 (the original block's `main.ts:287-294` restart anchor had drifted → now `:56`/`:385`;
+> the real `SessionDescriptor` field set is pinned so the fixture-field conflict is exact).
+> The original single-session prompt is preserved in git history (this file pre-2026-07-05) if the
+> whole-session form is ever wanted.
+
+### P3-5a · 🔴 — Shell frame + TabBar (live sessions, switch, close, dead-tab)
+
 ─── PASTE ───
 ```
-🧠 Model: CLAUDE (visual-design) · Difficulty: 8/10 · 🖐 GUI
+🧠 Model: CLAUDE (visual-design) · Difficulty: 6/10 · 🖐 GUI
 
-You are running P3-5 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
-Dependencies: P3-3 (host API) AND P3-4 (renderer keyed by sessionId) green. Echo the header
-line above back to the operator before starting.
+You are running P3-5a of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+This is the FIRST of two halves of the P3-5 shell (split for scope + reviewability): 5a builds
+the shell frame + TabBar (live sessions, switching, close, dead-tab); 5b adds the Sidebar +
+restore-offer. You establish the shell's visual language; 5b extends it. Dependencies: P3-3
+(host API) AND P3-4 (renderer keyed by sessionId) — both green. Echo the header line back to the
+operator before starting.
 
-=== CONTEXT (repeat of shared state — you start cold) ===
-Electron + N Bun sidecars over Unix sockets, raw fidelity, die-with-window v1 — all locked.
-The plumbing exists: typed host API (createSession/restoreSession/closeSession/listSessions/
-subscribe → SessionDescriptor/HostEvent, REGISTRY.md §6.1), durable registry, per-session
-renderer state. This session builds the visible frame: one window hosting N real sessions,
-switchable. Read first: STATUS.md, decisions/REGISTRY.md §6.1 + §10 (title seeding
-carry-forward), SECURITY-MINIMUM Addendum (HC1 — cwd via native picker ONLY).
-Step 0: read INVENTORY.md §W2 rows: `TabBar` (⚓4, S3, adapt — "durable desktop tab manager is
-app-owned", D1 now decided), `Sidebar` (⚓4, S3/S4, adapt — "prototype cost/model/tags/
-workspace are FIXTURE fields"), `Root state / routing` (AppV2.jsx, ⚓7, S3/S6, adapt/build-new
-— "prototype root is mock glue").
-Step 1 (UX spec, not code): /Users/pt/catcode_prototype/cat-app/TabBar.jsx, Sidebar.jsx,
-AppV2.jsx (loaded via "CatCode Web App.html"). Rebuild the look/feel in TS/Tailwind on real
-data; port zero prototype code.
+=== CONTEXT (you start cold) ===
+Electron + N Bun sidecars over Unix sockets, raw fidelity, die-with-window v1 — all locked. The
+plumbing exists and is the surface you build on:
+- Typed host API reachable from the renderer via FIXED preload senders (app/preload/preload.ts):
+  pickDirectory() → one-time cwd token (HC1: renderer NEVER types a path), createSession(cwdToken,
+  title?), closeSession(appSessionId), listSessions() → SessionDescriptor[], subscribeHost(cb) →
+  HostEvent stream, restoreSession(id) [that one is 5b's]. All typed; failures are HostError
+  values (invalid_cwd / session_not_found / session_limit / spawn_failed / registry_unavailable),
+  never thrown strings.
+- SessionDescriptor (app/shared/hostApi.ts:68) truthfully has: appSessionId, engineSessionId|null,
+  cwd, title|null, status ('spawning'|'ready'|'disconnected'|'exited'), restorable, createdAt,
+  lastAttachedAt. That is the ENTIRE truth surface — render only these.
+- P3-4 keyed every renderer store by sessionId with a root-owned activeSessionId; background
+  frames can't steal focus. You consume that; you don't re-key it.
+- Restart channel: app/main/main.ts (CH_RESTART='catcode:restart' :56, host.restartSession :385).
+Read first: STATUS.md, decisions/REGISTRY.md §6.1, SECURITY-MINIMUM Addendum (HC1/HC3).
+Step 0: INVENTORY §W2 rows TabBar (⚓4) + Root state/routing (AppV2.jsx, ⚓7 — "prototype root is
+mock glue").
+Step 1 (UX spec, NOT code to port): /Users/pt/catcode_prototype/cat-app/AppV2.jsx + TabBar.jsx
+(via "CatCode Web App.html"). Rebuild the look/feel in TS/Tailwind on the P0-2 tokens; port zero
+prototype code, no inline style={{}}.
 
-=== BUILD ===
-- **Root state/routing:** the app-level frame — which sessions exist, which is active, which
-  page/surface is showing — replacing AppV2's mock glue with a real projection of the host
-  API's `HostEvent` stream + P3-4 stores. The transcript spine (P2) renders inside the active
-  session's pane unchanged.
-- **TabBar:** one tab per LIVE session (SessionDescriptor stream). New-tab → `createSession`;
-  cwd comes from the native directory picker requested via the HC3 preload method (HC1: the
-  renderer never types a path). Close-tab → `closeSession` (row stays restorable — closing a
-  tab must not feel destructive). Per-tab status chips from `SessionDescriptor.status` +
-  P3-4's typed failure states; a dead tab offers restart (the existing restart channel,
-  app/main/main.ts:287-294).
-- **Sidebar:** the session list = live ∪ restorable (`listSessions`), ordered by
-  lastAttachedAt; `crashed` rows flagged; selecting a restorable row → `restoreSession` (this
-  IS the restore-offer surface REGISTRY §4.4 names — P3-8 gates on it working for real).
-  ⚠️ Conflict checkpoint (INVENTORY row): the prototype sidebar shows cost/model/tags/
-  workspace — fixture fields. v1 renders what `SessionDescriptor` truthfully has (title, cwd,
-  status, recency). For each prototype field you can't back with real data: FLAG it in your
-  report (extend-engine vs change-UI), render honestly without it — do NOT mock. Title
-  seeding from engine AI-generated titles is a flagged carry (REGISTRY §10): wire read-only if
-  cheap, else flag.
-- **Keyboard-first switching** (house interaction standard): ⌘1..9 jump-to-tab, plus
-  prototype-consistent bindings — match the prototype's shell feel.
-- Multi-session UX truths to honor: switching tabs must not lose in-flight streaming (frames
-  keep flowing into background sessions' stores — P3-4 guarantees state, you guarantee no
-  UI-driven unsubscribe); a permission request in a background session must be visibly
-  signaled on its tab (badge/pulse), not silently queued.
+=== BUILD (5a scope) ===
+- **Root state / routing:** the app-level frame — which sessions exist, which is active, which
+  surface shows — as a real projection of the host API's HostEvent stream + P3-4 stores,
+  replacing AppV2's mock glue. The P2 transcript spine renders unchanged inside the active
+  session's pane. This is where you set the shell's visual grammar (chrome, spacing, the frame)
+  that 5b will inherit — design it as a system, not a one-off.
+- **TabBar:** one tab per LIVE session (from the SessionDescriptor/HostEvent stream). New-tab →
+  pickDirectory() then createSession(token) (HC1). Switch tabs (must NOT unsubscribe or lose
+  in-flight streaming into background sessions — P3-4 guarantees the state, you guarantee no
+  UI-driven teardown). Close-tab → closeSession (the row stays restorable — closing must not feel
+  destructive; 5b surfaces its return). Per-tab status chip from SessionDescriptor.status +
+  P3-4's typed failure states; a dead/exited tab offers restart (CH_RESTART). A permission request
+  in a BACKGROUND session must be visibly signaled on its tab (badge/pulse), never silently queued.
+- **Keyboard-first switching:** ⌘1..9 jump-to-tab + prototype-consistent bindings; match the
+  prototype's shell feel.
 
 === GROUND RULES ===
-Locked decisions + full security baseline; preload changes only via the HC3 fixed-sender
-pattern (should already exist from P3-3 — if you need a NEW preload method, apply HC1-HC4 and
-say so). TS/Tailwind on the P0-2 tokens; no prototype idioms (no inline style={{}}, no
-window-glue). One sitting — if TabBar+Sidebar+routing overruns, land routing+TabBar complete
-and STOP, reporting the split.
+Locked decisions + full security baseline; preload only via the HC3 fixed-sender pattern (exists
+from P3-3 — a NEW method needs HC1-HC4 + a flag). No prototype idioms. If you hit a host-API gap,
+REPORT it — never extend the control plane ad hoc.
 
 === DELIVERABLE / DONE WHEN ===
-Headless (yours): `bun test app/` green (routing/store wiring, tab lifecycle state,
-restore-offer selectors); renderer tsc clean; sidecar tsconfig no NEW errors.
-GUI (operator's — STOP and print exact steps, then wait; do NOT drive it yourself with
-cua-driver/claude-in-chrome/any automation): launch command; create TWO sessions in two
-different directories via the picker; run a real turn in each; switch tabs — transcripts stay
-isolated and correctly attributed; verify two engine PIDs exist (e.g. `pgrep`-based check you
-print for the operator, or the sidebar's status data); close one tab and see it reappear in
-the sidebar as restorable; kill one sidecar process manually and see the dead-tab affordance.
-That checklist IS most of the Phase-3 gate line ("two real sessions in one window, each its
-own engine process, switchable") — quit/relaunch restore is P3-8's half.
-Update STATUS.md P3-5 row → ✅ + date + one-line note (note operator-verified).
+Headless (yours): bun test app/ green (routing/store wiring, tab lifecycle state, HostEvent
+projection); renderer tsc clean; sidecar tsconfig no NEW errors.
+GUI (operator's — STOP, print exact steps, wait; do NOT drive it yourself via cua-driver/
+claude-in-chrome/any automation): launch command; create TWO sessions in two different
+directories via the picker; run a real turn in each; switch tabs — transcripts stay isolated and
+correctly attributed, neither turn's streaming is lost on switch; confirm TWO engine PIDs exist
+(print a pgrep check for the operator); close one tab — it leaves the bar (its reappearance in
+the sidebar is 5b); kill one sidecar process manually — the dead-tab restart affordance appears.
+ALSO (host-plane review A watch-item — the shared settings-write race is first reachable with two
+live sessions): have BOTH sessions approve a permission with "always allow", then have the
+operator inspect .cat-code/settings.local.json — confirm BOTH rules landed, file not torn / no
+rule lost. If a write is lost/torn, FLAG it (do NOT fix — it's an engine-side persistPermissionUpdates
+concern) for P3-8.
+Update STATUS.md P3-5a row → ✅ + date + one-line note (operator-verified).
 
-Report back: the root state shape, every prototype-vs-real conflict you flagged (fixture
-fields, title seeding), the operator's verification transcript, and any host-API gap you hit
-(report it — don't extend the control plane ad hoc).
+Report back: the root state shape + the shell visual grammar you established (so 5b extends it),
+the operator's verification transcript, the settings-write observation (both rules, or a flagged
+race), and any host-API gap you hit.
+```
+─── PASTE ───
+
+### P3-5b · 🔴 — Sidebar + restore-offer (live∪restorable, real restore)
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 6/10 · 🖐 GUI
+
+You are running P3-5b of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+This is the SECOND half of the P3-5 shell: 5a built the shell frame + TabBar; you add the Sidebar
++ the restore-offer surface. Dependency: P3-5a green (the tabbed shell exists). Echo the header
+line back to the operator before starting.
+
+>> DESIGN CONTINUITY (the reason this split must not make the shell worse): 5a established the
+>> shell's visual language — chrome, tokens, spacing, the frame's grammar. EXTEND it; the Sidebar
+>> must read as one designed system with the TabBar, not a bolted-on second panel. Read 5a's
+>> components first and inherit their idioms before designing anything new. If you find yourself
+>> inventing a parallel visual language, stop and reuse 5a's.
+
+=== CONTEXT (you start cold) ===
+Same locked stack as 5a. The surfaces you consume:
+- listSessions() → SessionDescriptor[] and subscribeHost(cb) → HostEvent (app/preload/preload.ts).
+- restoreSession(appSessionId) → re-spawns the engine for a restorable row (THIS is your restore
+  trigger; it's real now — see below).
+- SessionDescriptor (app/shared/hostApi.ts:68): appSessionId, engineSessionId|null, cwd,
+  title|null, status, restorable (true when no process is live but the row+transcript can be
+  re-spawned), createdAt, lastAttachedAt. That is the ENTIRE truth surface.
+Read first: STATUS.md, decisions/REGISTRY.md §4.4 (restore-offer) + §6.1 + §10 (title seeding),
+decisions/RESTORE-HISTORY.md.
+Step 0: INVENTORY §W2 row Sidebar (⚓4 — "prototype cost/model/tags/workspace are FIXTURE fields").
+Step 1 (UX spec): /Users/pt/catcode_prototype/cat-app/Sidebar.jsx — look/feel only, port no code.
+
+>> RESTORE IS REAL (host-plane review A, since the backlog was written): F1 seeds a resumed
+>> session's history into the engine, F2 replays it to the renderer as replay:true event frames
+>> (decisions/RESTORE-HISTORY.md) — your active pane already renders those unchanged. So selecting
+>> a restorable row genuinely brings back its prior transcript; the operator can verify real
+>> restored history, not an empty re-spawn. P3-8 gates on this working end to end.
+
+=== BUILD (5b scope) ===
+- **Sidebar:** the session list = live ∪ restorable (listSessions), ordered by lastAttachedAt;
+  status/crashed state shown (a row with status 'exited'/'disconnected' + restorable:true is the
+  restore candidate). Selecting a restorable row → restoreSession(id) → it becomes a live tab in
+  5a's TabBar with its restored transcript. This IS the restore-offer surface (REGISTRY §4.4).
+  The live/restorable projection updates off the HostEvent stream, not a poll loop.
+- **Fixture-field conflict (do this honestly, do NOT mock):** the prototype sidebar shows cost /
+  model / tags / workspace. SessionDescriptor has NONE of these — they are fixture fields. Render
+  ONLY the real fields (title, cwd, status, recency). For EACH prototype field you drop, FLAG it
+  in your report as extend-engine-vs-change-UI (the C3 precedent). Render honestly without it.
+- **Title seeding (REGISTRY §10 carry):** a row's title may be null. If the engine's AI-generated
+  session title is cheaply readable, wire it READ-ONLY; if not, flag it and fall back to a
+  truthful label (e.g. the cwd basename). Do not invent titles.
+
+=== GROUND RULES ===
+Locked decisions + security baseline; preload only via HC3 fixed senders. Extend 5a's design, no
+new visual language. No prototype idioms / no inline style. Host-API gap → REPORT, don't extend.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless (yours): bun test app/ green (sidebar list selectors, live∪restorable projection,
+restore-trigger wiring); renderer tsc clean; sidecar tsconfig no NEW errors.
+GUI (operator's — STOP, print exact steps, wait; NO automation): with the app running, close one
+tab (from 5a's TabBar) → it appears in the Sidebar as a restorable row; select it → it restores
+as a live tab AND its prior transcript renders (the pre-close messages are back — this is the
+F1+F2 restore proof at the UI); confirm a crashed session (kill its sidecar) shows as restorable/
+crashed-flagged in the Sidebar. (Full quit/relaunch restore is P3-8, not here.)
+Update STATUS.md P3-5b row → ✅ + date + one-line note (operator-verified). If 5a and 5b together
+complete the shell, note in the Phase-3 header that the gate's "switchable shell" half is met
+(quit/relaunch restore remains P3-8).
+
+Report back: the Sidebar design (confirm it extends 5a's language), every fixture-field you
+flagged (cost/model/tags/workspace + title-seeding disposition), the operator's restore-verification
+transcript (did prior history actually render?), and any host-API gap.
 ```
 ─── PASTE ───
 
