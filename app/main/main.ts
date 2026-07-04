@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import {
+  isSidecarSendError,
   SidecarSupervisor,
   type SupervisorEvent,
 } from '../supervisor/supervisor.js'
@@ -208,6 +209,9 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
     deliver(attachmentGate.onFrame(event.sessionId, frame))
+    if (isTerminalLifecycleFrame(frame)) {
+      attachmentGate.clearSession(event.sessionId)
+    }
   })
 }
 
@@ -235,6 +239,15 @@ function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | nul
     }
   }
   return null
+}
+
+function isTerminalLifecycleFrame(frame: ServerFrame): boolean {
+  return (
+    frame.kind === 'lifecycle' &&
+    (frame.status === 'disconnected' ||
+      frame.status === 'failed' ||
+      frame.status === 'exited')
+  )
 }
 
 /**
@@ -327,13 +340,6 @@ function registerIpcHandlers(): void {
 
 function forward(sessionId: SessionId, message: SidecarClientMessage): void {
   if (!supervisor) {
-    process.stderr.write(`[main] forward to ${sessionId} dropped: no live host\n`)
-    return
-  }
-  try {
-    supervisor.send(sessionId, message)
-  } catch (error) {
-    const messageText = error instanceof Error ? error.message : String(error)
     const frame: ServerFrame = {
       kind: 'error',
       protocolVersion: PROTOCOL_VERSION,
@@ -341,9 +347,29 @@ function forward(sessionId: SessionId, message: SidecarClientMessage): void {
       ...('requestId' in message && typeof message.requestId === 'string'
         ? { requestId: message.requestId }
         : {}),
-      code: 'bad_request',
-      message: messageText,
+      code: 'session_not_found',
+      message: `session ${sessionId} was not found`,
       retryable: false,
+    }
+    deliver(attachmentGate.onFrame(sessionId, frame))
+    process.stderr.write(`[main] forward to ${sessionId} failed: no live host\n`)
+    return
+  }
+  try {
+    supervisor.send(sessionId, message)
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message : String(error)
+    const code = isSidecarSendError(error) ? error.code : 'bad_request'
+    const frame: ServerFrame = {
+      kind: 'error',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId,
+      ...('requestId' in message && typeof message.requestId === 'string'
+        ? { requestId: message.requestId }
+        : {}),
+      code,
+      message: messageText,
+      retryable: isSidecarSendError(error) ? error.retryable : false,
     }
     deliver(attachmentGate.onFrame(sessionId, frame))
     process.stderr.write(

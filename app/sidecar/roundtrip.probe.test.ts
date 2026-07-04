@@ -62,7 +62,7 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
   })
 
   const ready = await waitForFrame(supervisor, frame => frame.kind === 'ready')
-  expect(ready).toEqual({
+  expect(ready).toMatchObject({
     kind: 'ready',
     protocolVersion: 1,
     sessionId,
@@ -76,6 +76,11 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
       pendingPermissionRequests: [],
     },
   })
+  expect(ready.kind).toBe('ready')
+  if (ready.kind === 'ready') {
+    expect(typeof ready.engineSessionId).toBe('string')
+    expect(ready.engineSessionId.length).toBeGreaterThan(0)
+  }
 
   await Bun.sleep(200)
   unsubscribe()

@@ -116,6 +116,7 @@ export type ReadyFrame = {
   kind: 'ready'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
+  engineSessionId: string
   payload: AppReadyPayload
 }
 
@@ -158,6 +159,9 @@ export type ErrorFrame = {
     | 'permission_not_found'
     | 'unauthorized'
     | 'internal_error'
+	    | 'session_not_found'
+	    | 'session_not_ready'
+	    | 'session_disconnected'
   message: string
   retryable: boolean
 }

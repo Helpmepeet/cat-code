@@ -34,6 +34,7 @@ import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 
 const SESSION = 'test-session'
+const ENGINE_SESSION = 'engine-test-session'
 
 /** In-memory socket that decodes what the server writes back to it. */
 function makeSocket() {
@@ -108,6 +109,7 @@ function makeServer(
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
     controller,
     ...(permissions ? { permissions } : {}),
     log: () => {},
@@ -140,6 +142,7 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
     kind: 'ready',
     protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
+      engineSessionId: ENGINE_SESSION,
     payload: {
       type: 'app.ready',
       protocolVersion: PROTOCOL_VERSION,
@@ -903,6 +906,7 @@ test('F5 — ready frame with non-JSON-safe payload is rejected', () => {
   let loggedMessage = ''
   const server = new SidecarServer({
     sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
     controller,
     log: (msg) => { loggedMessage = msg }
   })

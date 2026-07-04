@@ -17,11 +17,12 @@ import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/pr
 
 const SID: SessionId = 'sess-1'
 
-function readyFrame(): ServerFrame {
+function readyFrame(sessionId: SessionId = SID): ServerFrame {
   return {
     kind: 'ready',
     protocolVersion: PROTOCOL_VERSION,
-    sessionId: SID,
+    sessionId,
+    engineSessionId: `engine-${sessionId}`,
     payload: {
       type: 'app.ready',
       protocolVersion: PROTOCOL_VERSION,
@@ -36,6 +37,16 @@ function readyFrame(): ServerFrame {
 
 function pong(nonce: string): ServerFrame {
   return { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: SID, nonce }
+}
+
+function exited(): ServerFrame {
+  return {
+    kind: 'lifecycle',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    status: 'exited',
+    exit: { code: null, signal: 'SIGTERM' },
+  }
 }
 
 /** Collect everything the gate would deliver to the renderer, in order. */
@@ -148,6 +159,20 @@ test('clearSession() drops stale replay while preserving the attached renderer',
   ])
   gate.onNavigationStart()
   expect(gate.onRendererReady()).toEqual([pong('replacement-live')])
+})
+
+test('terminal lifecycle can be delivered live and then evicted before reload replay', () => {
+  const gate = new AttachmentGate()
+  gate.onFrame(SID, readyFrame())
+  gate.onFrame(SID, pong('before-exit'))
+  gate.onFrame('keep-me', readyFrame('keep-me'))
+  gate.onRendererReady()
+
+  expect(gate.onFrame(SID, exited())).toEqual([exited()])
+  gate.clearSession(SID)
+
+  gate.onNavigationStart()
+  expect(gate.onRendererReady().map(frame => frame.sessionId)).toEqual(['keep-me'])
 })
 
 test('an injected buffer is used (cap/retention delegated to FrameReplayBuffer)', () => {

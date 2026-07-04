@@ -11,6 +11,7 @@ import { join } from 'node:path'
 
 import { MAX_PROMPT_BYTES } from '../shared/limits.js'
 import {
+  SidecarSendError,
   SidecarSupervisor,
   type SupervisorEvent,
   type SupervisorOptions,
@@ -18,6 +19,46 @@ import {
 
 const supervisors: SidecarSupervisor[] = []
 const tempDirs: string[] = []
+
+function readyScript({
+  sessionIdExpression = 'process.env.CATCODE_SIDECAR_SESSION_ID',
+  engineSessionIdExpression = "'engine-test-session'",
+  afterOpen = '',
+  omitEngineSessionId = false,
+}: {
+  sessionIdExpression?: string
+  engineSessionIdExpression?: string
+  afterOpen?: string
+  omitEngineSessionId?: boolean
+} = {}): string {
+  return `
+    const socketPath = process.env.CATCODE_SIDECAR_SOCKET
+    try { require('node:fs').unlinkSync(socketPath) } catch {}
+    function writeFrame(socket, payload) {
+      const json = Buffer.from(JSON.stringify(payload), 'utf8')
+      const prefix = Buffer.allocUnsafe(4)
+      prefix.writeUInt32BE(json.byteLength, 0)
+      socket.write(Buffer.concat([prefix, json]))
+    }
+    Bun.listen({
+      unix: socketPath,
+      socket: {
+        open(socket) {
+          writeFrame(socket, {
+            kind: 'ready',
+            protocolVersion: 1,
+            sessionId: ${sessionIdExpression},
+            ${omitEngineSessionId ? '' : `engineSessionId: ${engineSessionIdExpression},`}
+            payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true }
+          })
+          ${afterOpen}
+        },
+        data() {}
+      }
+    })
+    setInterval(() => {}, 1000)
+  `
+}
 
 afterEach(() => {
   for (const supervisor of supervisors.splice(0)) supervisor.shutdown()
@@ -118,18 +159,7 @@ test('rejects an oversized prompt before writing it and keeps the session usable
 
 test('remote FIN transitions ready to disconnected and the session can restart', async () => {
   const socketDir = makeTempDir('catcode-supervisor-fin-')
-  const script = `
-    const socketPath = process.env.CATCODE_SIDECAR_SOCKET
-    try { require('node:fs').unlinkSync(socketPath) } catch {}
-    Bun.listen({
-      unix: socketPath,
-      socket: {
-        open(socket) { setTimeout(() => socket.end(), 50) },
-        data() {},
-      },
-    })
-    setInterval(() => {}, 1000)
-  `
+  const script = readyScript({ afterOpen: 'setTimeout(() => socket.end(), 50)' })
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.execPath,
     sidecarArgs: ['-e', script],
@@ -180,31 +210,155 @@ test('F7 — spawn error transitions session status to failed without throwing',
   })
 })
 
+test('send to an unknown session throws terminal session_not_found', () => {
+  const socketDir = makeTempDir('catcode-supervisor-unknown-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    socketDir,
+  })
+  supervisors.push(supervisor)
+
+  try {
+    supervisor.send('missing-session', { type: 'app.ping', nonce: 'n' })
+    throw new Error('send unexpectedly succeeded')
+  } catch (error) {
+    expect(error).toBeInstanceOf(SidecarSendError)
+    expect((error as SidecarSendError).code).toBe('session_not_found')
+    expect((error as SidecarSendError).retryable).toBe(false)
+  }
+})
+
+test('send to a spawning session throws retryable session_not_ready', () => {
+  const socketDir = makeTempDir('catcode-supervisor-spawning-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', 'setInterval(() => {}, 1000)'],
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  const sessionId = supervisor.spawnSession('spawning-session')
+
+  try {
+    supervisor.send(sessionId, { type: 'app.ping', nonce: 'n' })
+    throw new Error('send unexpectedly succeeded')
+  } catch (error) {
+    expect(error).toBeInstanceOf(SidecarSendError)
+    expect((error as SidecarSendError).code).toBe('session_not_ready')
+    expect((error as SidecarSendError).retryable).toBe(true)
+  }
+})
+
+test('send to an exited session throws terminal session_disconnected', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-exited-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: [
+      '-e',
+      readyScript({ afterOpen: 'setTimeout(() => process.exit(0), 50)' }),
+    ],
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('exited-session')
+
+  await waitFor(
+    () =>
+      events.some(
+        event =>
+          event.type === 'status' &&
+          event.sessionId === sessionId &&
+          event.status === 'exited',
+      ),
+    'session did not exit',
+  )
+
+  try {
+    supervisor.send(sessionId, { type: 'app.ping', nonce: 'n' })
+    throw new Error('send unexpectedly succeeded')
+  } catch (error) {
+    expect(error).toBeInstanceOf(SidecarSendError)
+    expect((error as SidecarSendError).code).toBe('session_disconnected')
+    expect((error as SidecarSendError).retryable).toBe(false)
+  }
+})
+
+test('ready frame missing engineSessionId marks the session failed and is not emitted', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-ready-schema-')
+  const events: SupervisorEvent[] = []
+  const logs: string[] = []
+  const loggedSupervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', readyScript({ omitEngineSessionId: true })],
+    socketDir,
+    log: line => logs.push(line),
+  })
+  supervisors.push(loggedSupervisor)
+  loggedSupervisor.subscribe(event => events.push(event))
+  const sessionId = loggedSupervisor.spawnSession('bad-ready-session')
+
+  await waitFor(
+    () =>
+      events.some(
+        event =>
+          event.type === 'status' &&
+          event.sessionId === sessionId &&
+          event.status === 'failed',
+      ),
+    'session did not fail on malformed ready frame',
+  )
+
+  expect(events.some(event => event.type === 'frame')).toBe(false)
+  expect(logs.some(line => line.includes('missing engineSessionId'))).toBe(true)
+})
+
+test('outbound frame sessionId tripwire drops and logs a mis-stamped frame', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-tripwire-')
+  const logs: string[] = []
+  const script = readyScript({
+    afterOpen:
+      "writeFrame(socket, { kind: 'pong', protocolVersion: 1, sessionId: 'wrong-session', nonce: 'bad' })",
+  })
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script],
+    socketDir,
+    log: line => logs.push(line),
+  })
+  supervisors.push(supervisor)
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('tripwire-session')
+
+  await waitFor(
+    () =>
+      events.some(
+        event =>
+          event.type === 'frame' &&
+          event.sessionId === sessionId &&
+          event.frame.kind === 'ready',
+      ),
+    'valid ready frame was not emitted',
+  )
+  await waitFor(
+    () => logs.some(line => line.includes('did not match connection')),
+    'mis-stamped frame was not logged',
+  )
+
+  expect(
+    events.some(
+      event =>
+        event.type === 'frame' &&
+        event.frame.kind === 'pong' &&
+        event.frame.nonce === 'bad',
+    ),
+  ).toBe(false)
+})
+
 test('F11 — a stale old-child exit after restart does not mark the new session dead', async () => {
   const socketDir = makeTempDir('catcode-supervisor-stale-')
-  const script = `
-    const socketPath = process.env.CATCODE_SIDECAR_SOCKET
-    try { require('node:fs').unlinkSync(socketPath) } catch {}
-    Bun.listen({
-      unix: socketPath,
-      socket: {
-        open(socket) {
-          const payload = {
-            kind: 'ready',
-            protocolVersion: 1,
-            sessionId: process.env.CATCODE_SIDECAR_SESSION_ID,
-            payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true }
-          };
-          const json = Buffer.from(JSON.stringify(payload), 'utf8');
-          const prefix = Buffer.allocUnsafe(4);
-          prefix.writeUInt32BE(json.byteLength, 0);
-          socket.write(Buffer.concat([prefix, json]));
-        },
-        data() {}
-      }
-    })
-    setInterval(() => {}, 1000)
-  `
+  const script = readyScript()
 
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.execPath,

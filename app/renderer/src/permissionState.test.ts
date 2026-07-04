@@ -29,6 +29,7 @@ function readyFrame(
     kind: 'ready',
     protocolVersion: 1,
     sessionId,
+    engineSessionId: `engine-${sessionId}`,
     payload: {
       type: 'app.ready',
       protocolVersion: 1,

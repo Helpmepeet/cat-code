@@ -35,6 +35,7 @@ import {
 import {
   PROTOCOL_VERSION,
   type ClientFrame,
+  type ReadyFrame,
   type ServerFrame,
   type SessionId,
   type SidecarClientMessage,
@@ -85,6 +86,27 @@ export type SupervisorEvent =
   | { type: 'frame'; sessionId: SessionId; frame: ServerFrame }
   | { type: 'status'; sessionId: SessionId; status: SidecarStatus }
   | { type: 'exit'; sessionId: SessionId; code: number | null; signal: string | null }
+
+export type SendFailureCode =
+  | 'session_not_found'
+  | 'session_not_ready'
+  | 'session_disconnected'
+
+export class SidecarSendError extends Error {
+  readonly code: SendFailureCode
+  readonly retryable: boolean
+
+  constructor(code: SendFailureCode, message: string) {
+    super(message)
+    this.name = 'SidecarSendError'
+    this.code = code
+    this.retryable = code === 'session_not_ready'
+  }
+}
+
+export function isSidecarSendError(error: unknown): error is SidecarSendError {
+  return error instanceof SidecarSendError
+}
 
 export class SidecarSupervisor {
   private readonly registry = new Map<SessionId, SidecarRecord>()
@@ -216,8 +238,15 @@ export class SidecarSupervisor {
   /** Send an allowlisted client message to a session's sidecar. */
   send(sessionId: SessionId, message: SidecarClientMessage): void {
     const record = this.registry.get(sessionId)
-    if (!record || !record.socket || record.status !== 'ready') {
-      throw new Error(`session ${sessionId} is not connected`)
+    if (!record) {
+      throw new SidecarSendError(
+        'session_not_found',
+        `session ${sessionId} was not found`,
+      )
+    }
+    if (!record.socket || record.status !== 'ready') {
+      const code = sendFailureCodeForStatus(record.status)
+      throw new SidecarSendError(code, `session ${sessionId} is ${record.status}`)
     }
     const frame: ClientFrame = {
       protocolVersion: PROTOCOL_VERSION,
@@ -283,6 +312,11 @@ export class SidecarSupervisor {
     }))
   }
 
+  /** Advisory process id for crash/liveness probes; not a routing identity. */
+  getSessionProcessId(sessionId: SessionId): number | undefined {
+    return this.registry.get(sessionId)?.child.pid
+  }
+
   /* --------------------------------------------------------------------- */
 
   private connectWhenReady(record: SidecarRecord, attempt = 0): void {
@@ -317,7 +351,7 @@ export class SidecarSupervisor {
     record.socket = socket
 
     socket.on('connect', () => {
-      this.setStatus(record, 'ready')
+      this.setStatus(record, 'connecting')
     })
 
     socket.on('data', chunk => {
@@ -328,10 +362,46 @@ export class SidecarSupervisor {
           socket.destroy()
           return
         }
+        const frame = result.payload as ServerFrame
+        if (frame.kind === 'ready') {
+          const readyError = validateReadyFrame(record.sessionId, frame)
+          if (readyError) {
+            this.log(
+              `[supervisor] invalid ready frame from ${record.sessionId}: ${readyError}`,
+            )
+            this.setStatus(record, 'failed')
+            socket.destroy()
+            return
+          }
+          this.setStatus(record, 'ready')
+          this.emit({
+            type: 'frame',
+            sessionId: record.sessionId,
+            frame,
+          })
+          continue
+        }
+
+        if (!isObjectRecord(frame) || frame.sessionId !== record.sessionId) {
+          this.log(
+            `[supervisor] dropped frame from ${record.sessionId}: frame sessionId ${String(
+              isObjectRecord(frame) ? frame.sessionId : undefined,
+            )} did not match connection`,
+          )
+          continue
+        }
+        if (record.status !== 'ready') {
+          this.log(
+            `[supervisor] dropped ${String(frame.kind)} frame from ${record.sessionId} before a valid ready frame`,
+          )
+          this.setStatus(record, 'failed')
+          socket.destroy()
+          return
+        }
         this.emit({
           type: 'frame',
           sessionId: record.sessionId,
-          frame: result.payload as ServerFrame,
+          frame,
         })
       }
     })
@@ -380,4 +450,39 @@ export class SidecarSupervisor {
       listener(event)
     }
   }
+}
+
+function sendFailureCodeForStatus(status: SidecarStatus): SendFailureCode {
+  if (status === 'spawning' || status === 'connecting') return 'session_not_ready'
+  return 'session_disconnected'
+}
+
+function validateReadyFrame(
+  sessionId: SessionId,
+  frame: ServerFrame,
+): string | null {
+  const ready = frame as ReadyFrame
+  if (ready.protocolVersion !== PROTOCOL_VERSION) {
+    return 'missing or wrong protocolVersion'
+  }
+  if (ready.sessionId !== sessionId || typeof ready.sessionId !== 'string') {
+    return 'sessionId does not match supervisor record'
+  }
+  if (
+    typeof ready.engineSessionId !== 'string' ||
+    ready.engineSessionId.length === 0
+  ) {
+    return 'missing engineSessionId'
+  }
+  if (
+    !isObjectRecord(ready.payload) ||
+    ready.payload.type !== 'app.ready'
+  ) {
+    return 'payload is not app.ready'
+  }
+  return null
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

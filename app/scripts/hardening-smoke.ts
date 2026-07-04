@@ -28,6 +28,7 @@ const frames: ServerFrame[] = [
     kind: 'ready',
     protocolVersion: 1,
     sessionId: HARDENING_SESSION_ID,
+    engineSessionId: 'hardening-engine-session',
     payload: {
       type: 'app.ready',
       protocolVersion: 1,

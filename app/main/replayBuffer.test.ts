@@ -26,6 +26,7 @@ function readyFrame(sessionId: SessionId = SID): ServerFrame {
     kind: 'ready',
     protocolVersion: PROTOCOL_VERSION,
     sessionId,
+    engineSessionId: `engine-${sessionId}`,
     payload: {
       type: 'app.ready',
       protocolVersion: PROTOCOL_VERSION,

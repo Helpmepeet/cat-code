@@ -66,10 +66,15 @@ export function isAppReadyFrame(frame: unknown): frame is ReadyFrame {
   if (typeof frame !== 'object' || frame === null) return false
   const candidate = frame as {
     kind?: unknown
+    sessionId?: unknown
+    engineSessionId?: unknown
     payload?: { type?: unknown }
   }
   return (
     candidate.kind === 'ready' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.engineSessionId === 'string' &&
+    candidate.engineSessionId.length > 0 &&
     typeof candidate.payload === 'object' &&
     candidate.payload !== null &&
     candidate.payload.type === 'app.ready'

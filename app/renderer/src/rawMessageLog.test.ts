@@ -13,6 +13,7 @@ test('captures the ready session and appends every raw SDKMessage in arrival ord
     kind: 'ready',
     protocolVersion: 1,
     sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
     payload: {
       type: 'app.ready',
       protocolVersion: 1,
@@ -79,6 +80,7 @@ test('records transport errors without adding non-message events to the raw log'
     kind: 'ready',
     protocolVersion: 1,
     sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
     payload: {
       type: 'app.ready',
       protocolVersion: 1,
@@ -115,6 +117,7 @@ test('keys logs by ready session and rejects frames for an unattached session', 
     kind: 'ready',
     protocolVersion: 1,
     sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
     payload: {
       type: 'app.ready',
       protocolVersion: 1,
@@ -145,6 +148,7 @@ test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', ()
     kind: 'ready',
     protocolVersion: 1,
     sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
     payload: {
       type: 'app.ready',
       protocolVersion: 1,

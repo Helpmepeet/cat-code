@@ -76,6 +76,7 @@ type Connection = {
 
 export type SidecarServerOptions = {
   sessionId: SessionId
+  engineSessionId: string
   controller: AppSessionController
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
@@ -96,6 +97,7 @@ export type SidecarServerOptions = {
  */
 export class SidecarServer {
   private readonly sessionId: SessionId
+  private readonly engineSessionId: string
   private readonly controller: AppSessionController
   private readonly permissions: SidecarPermissionDomain | null
   private readonly log: (line: string) => void
@@ -106,6 +108,7 @@ export class SidecarServer {
 
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
+    this.engineSessionId = options.engineSessionId
     this.controller = options.controller
     this.permissions = options.permissions ?? null
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
@@ -156,6 +159,7 @@ export class SidecarServer {
         kind: 'ready',
         protocolVersion: PROTOCOL_VERSION,
         sessionId: this.sessionId,
+        engineSessionId: this.engineSessionId,
         payload: preparedPayload,
       })
     }

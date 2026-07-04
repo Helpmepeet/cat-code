@@ -18,6 +18,7 @@ function ready(sessionId: string) {
     kind: 'ready' as const,
     protocolVersion: 1 as const,
     sessionId,
+    engineSessionId: `engine-${sessionId}`,
     payload: {
       type: 'app.ready' as const,
       protocolVersion: 1 as const,

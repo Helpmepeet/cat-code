@@ -6,13 +6,14 @@
  * mounted (and again after a reload). With the buffer+replay fix, a renderer
  * that attaches late must still receive both. This harness:
  *
- *   1. spins up the REAL supervisor + Bun sidecar (probe on attach);
+ *   1. spins up the REAL supervisor + TWO Bun sidecars;
  *   2. uses the SAME `AttachmentGate` production `main.ts` uses (not a copy), so a
  *      regression in the gate fails this test too;
  *   3. loads a renderer that subscribes then calls rendererReady, but only AFTER a
  *      delay — so every frame is produced pre-attach (the F2 failure condition) —
  *      and calls rendererReady TWICE to mimic React StrictMode's double mount;
- *   4. asserts the renderer received `ready` + the `tool_use` event via replay,
+ *   4. asserts the renderer received both `ready` frames + addressed `pong`
+ *      frames via replay,
  *      with NO duplicates (the StrictMode double-signal regression);
  *   5. reloads the renderer and asserts it re-receives them, still without dupes.
  *
@@ -24,9 +25,19 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { SidecarSupervisor } from '../supervisor/supervisor.js'
+import {
+  isSidecarSendError,
+  SidecarSupervisor,
+  type SupervisorEvent,
+} from '../supervisor/supervisor.js'
 import { AttachmentGate } from '../main/attachmentGate.js'
-import type { ServerFrame } from '../shared/protocol.js'
+import {
+  PROTOCOL_VERSION,
+  type LifecycleFrame,
+  type ReadyFrame,
+  type ServerFrame,
+  type SessionId,
+} from '../shared/protocol.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -57,19 +68,62 @@ const RENDERER_HTML = `<!doctype html>
 
 function wireBridge(sup: SidecarSupervisor): void {
   sup.subscribe(event => {
-    if (event.type !== 'frame') return
-    deliver(attachmentGate.onFrame(event.sessionId, event.frame))
+    const frame = supervisorEventToServerFrame(event)
+    if (!frame) return
+    deliver(attachmentGate.onFrame(event.sessionId, frame))
+    if (isTerminalLifecycleFrame(frame)) {
+      attachmentGate.clearSession(event.sessionId)
+    }
   })
+}
+
+function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | null {
+  if (event.type === 'frame') return event.frame
+  if (event.type === 'exit') {
+    return {
+      kind: 'lifecycle',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: event.sessionId,
+      status: 'exited',
+      exit: { code: event.code, signal: event.signal },
+    } satisfies LifecycleFrame
+  }
+  if (
+    event.status === 'disconnected' ||
+    event.status === 'failed' ||
+    event.status === 'exited'
+  ) {
+    return {
+      kind: 'lifecycle',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: event.sessionId,
+      status: event.status,
+    } satisfies LifecycleFrame
+  }
+  return null
+}
+
+function isTerminalLifecycleFrame(frame: ServerFrame): boolean {
+  return (
+    frame.kind === 'lifecycle' &&
+    (frame.status === 'disconnected' ||
+      frame.status === 'failed' ||
+      frame.status === 'exited')
+  )
 }
 
 ipcMain.on(CH_RENDERER_READY, () => {
   deliver(attachmentGate.onRendererReady())
 })
 
+async function readFrames(window: BrowserWindow): Promise<ServerFrame[]> {
+  return window.webContents.executeJavaScript(`window.__frames || []`)
+}
+
 async function readFrameKinds(window: BrowserWindow): Promise<string[]> {
   return window.webContents.executeJavaScript(
     `(window.__frames || []).map(function (f) {
-       return f.kind + (f.kind === 'event' ? ':' + f.event.type : '');
+       return f.kind + ':' + f.sessionId + (f.kind === 'pong' ? ':' + f.nonce : '');
      })`,
   )
 }
@@ -92,10 +146,62 @@ app.whenReady().then(async () => {
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CATCODE_SIDECAR_PROBE: '1' },
   })
   wireBridge(supervisor)
-  supervisor.spawnSession()
+  const supervisorEvents: SupervisorEvent[] = []
+  supervisor.subscribe(event => supervisorEvents.push(event))
+  const sessionA = supervisor.spawnSession('f3-smoke-a')
+  const sessionB = supervisor.spawnSession('f3-smoke-b')
+
+  const readyFor = (sessionId: SessionId): ReadyFrame | undefined => {
+    const event = supervisorEvents.find(
+      event =>
+        event.type === 'frame' &&
+        event.sessionId === sessionId &&
+        event.frame.kind === 'ready',
+    )
+    return event?.type === 'frame' && event.frame.kind === 'ready'
+      ? event.frame
+      : undefined
+  }
+
+  const sawPong = (sessionId: SessionId, nonce: string): boolean =>
+    supervisorEvents.some(
+      event =>
+        event.type === 'frame' &&
+        event.sessionId === sessionId &&
+        event.frame.kind === 'pong' &&
+        event.frame.nonce === nonce,
+    )
+
+  const bothReady = await waitFor(
+    async () => readyFor(sessionA) !== undefined && readyFor(sessionB) !== undefined,
+  )
+  if (!bothReady) {
+    process.stdout.write('[f2-attach-smoke] FAIL: both sidecars did not become ready\n')
+    supervisor.shutdown()
+    app.exit(1)
+    return
+  }
+  process.stdout.write(
+    `[f2-attach-smoke] ready ${sessionA} engineSessionId=${readyFor(sessionA)!.engineSessionId}\n`,
+  )
+  process.stdout.write(
+    `[f2-attach-smoke] ready ${sessionB} engineSessionId=${readyFor(sessionB)!.engineSessionId}\n`,
+  )
+
+  supervisor.send(sessionA, { type: 'app.ping', nonce: 'pre-attach-a' })
+  supervisor.send(sessionB, { type: 'app.ping', nonce: 'pre-attach-b' })
+  const bothPonged = await waitFor(
+    async () =>
+      sawPong(sessionA, 'pre-attach-a') && sawPong(sessionB, 'pre-attach-b'),
+  )
+  if (!bothPonged) {
+    process.stdout.write('[f2-attach-smoke] FAIL: both sidecars did not answer pre-attach pings\n')
+    supervisor.shutdown()
+    app.exit(1)
+    return
+  }
 
   mainWindow = new BrowserWindow({
     show: false,
@@ -119,26 +225,45 @@ app.whenReady().then(async () => {
   }
 
   const count = (kinds: string[], k: string) => kinds.filter(x => x === k).length
-  const gotReadyAndProbe = async () => {
-    const kinds = await readFrameKinds(mainWindow!)
-    return kinds.includes('ready') && kinds.includes('event:message')
+  const gotInitialFrames = async () => {
+    const frames = await readFrames(mainWindow!)
+    return (
+      frames.some(frame => frame.kind === 'ready' && frame.sessionId === sessionA) &&
+      frames.some(frame => frame.kind === 'ready' && frame.sessionId === sessionB) &&
+      frames.some(
+        frame =>
+          frame.kind === 'pong' &&
+          frame.sessionId === sessionA &&
+          frame.nonce === 'pre-attach-a',
+      ) &&
+      frames.some(
+        frame =>
+          frame.kind === 'pong' &&
+          frame.sessionId === sessionB &&
+          frame.nonce === 'pre-attach-b',
+      )
+    )
   }
   // Despite the StrictMode double rendererReady, each one-shot frame must appear
   // EXACTLY once (no duplicate replay).
   const noDuplicates = async (): Promise<string | null> => {
     const kinds = await readFrameKinds(mainWindow!)
-    const ready = count(kinds, 'ready')
-    const probe = count(kinds, 'event:message')
-    if (ready !== 1) return `expected 1 ready, got ${ready} (kinds=${JSON.stringify(kinds)})`
-    if (probe !== 1) return `expected 1 probe event, got ${probe} (kinds=${JSON.stringify(kinds)})`
+    const readyA = count(kinds, `ready:${sessionA}`)
+    const readyB = count(kinds, `ready:${sessionB}`)
+    const pongA = count(kinds, `pong:${sessionA}:pre-attach-a`)
+    const pongB = count(kinds, `pong:${sessionB}:pre-attach-b`)
+    if (readyA !== 1) return `expected 1 ready for A, got ${readyA} (kinds=${JSON.stringify(kinds)})`
+    if (readyB !== 1) return `expected 1 ready for B, got ${readyB} (kinds=${JSON.stringify(kinds)})`
+    if (pongA !== 1) return `expected 1 pre-attach pong for A, got ${pongA} (kinds=${JSON.stringify(kinds)})`
+    if (pongB !== 1) return `expected 1 pre-attach pong for B, got ${pongB} (kinds=${JSON.stringify(kinds)})`
     return null
   }
 
   await mainWindow.loadURL(dataUrl)
 
   // First attach: renderer subscribes late, must catch up via replay.
-  if (!(await waitFor(gotReadyAndProbe))) {
-    return finish(false, 'first attach did not receive ready + probe via replay')
+  if (!(await waitFor(gotInitialFrames))) {
+    return finish(false, 'first attach did not receive both ready + pong frames via replay')
   }
   // Let a second StrictMode signal (and any erroneous re-replay) settle, then
   // assert there are no duplicates.
@@ -149,12 +274,75 @@ app.whenReady().then(async () => {
   // Reload: the one-shot frames must be re-delivered (not lost) and still dup-free.
   mainWindow.reload()
   await new Promise(r => setTimeout(r, 300))
-  if (!(await waitFor(gotReadyAndProbe))) {
-    return finish(false, 'after reload the renderer did not re-receive ready + probe')
+  if (!(await waitFor(gotInitialFrames))) {
+    return finish(false, 'after reload the renderer did not re-receive both ready + pong frames')
   }
   await new Promise(r => setTimeout(r, 400))
   const dupReload = await noDuplicates()
   if (dupReload) return finish(false, `duplicate delivery after reload: ${dupReload}`)
 
-  finish(true, 'renderer caught up on first attach AND reload, with no duplicates')
+  const crashedPid = supervisor.getSessionProcessId(sessionA)
+  if (!crashedPid) {
+    return finish(false, `no process id for ${sessionA}`)
+  }
+  process.kill(crashedPid, 'SIGTERM')
+  if (
+    !(await waitFor(async () =>
+      supervisorEvents.some(
+        event =>
+          event.type === 'status' &&
+          event.sessionId === sessionA &&
+          event.status === 'exited',
+      ),
+    ))
+  ) {
+    return finish(false, `terminated sidecar ${sessionA} did not report exited`)
+  }
+  let killedCode = 'none'
+  try {
+    supervisor.send(sessionA, { type: 'app.ping', nonce: 'dead-a' })
+  } catch (error) {
+    killedCode = isSidecarSendError(error) ? error.code : 'unexpected'
+  }
+  process.stdout.write(
+    `[f2-attach-smoke] killed ${sessionA}; send produced ${killedCode}\n`,
+  )
+  if (killedCode !== 'session_disconnected') {
+    return finish(false, `send to killed session produced ${killedCode}`)
+  }
+
+  supervisor.send(sessionB, { type: 'app.ping', nonce: 'post-kill-b' })
+  if (
+    !(await waitFor(async () => {
+      const frames = await readFrames(mainWindow!)
+      return frames.some(
+        frame =>
+          frame.kind === 'pong' &&
+          frame.sessionId === sessionB &&
+          frame.nonce === 'post-kill-b',
+      )
+    }))
+  ) {
+    return finish(false, 'surviving sidecar did not answer after peer kill')
+  }
+
+  mainWindow.reload()
+  await new Promise(r => setTimeout(r, 300))
+  if (
+    !(await waitFor(async () => {
+      const frames = await readFrames(mainWindow!)
+      return (
+        frames.length > 0 &&
+        frames.every(frame => frame.sessionId !== sessionA) &&
+        frames.some(frame => frame.kind === 'ready' && frame.sessionId === sessionB)
+      )
+    }))
+  ) {
+    return finish(false, 'killed session ghost-replayed after eviction')
+  }
+
+  process.stdout.write(
+    '[f2-attach-smoke] observed shared settings-file class risk: both real sidecars initialize from the same settings roots; no concurrent settings write was exercised\n',
+  )
+  finish(true, 'two sidecars routed independently; survivor stayed live; killed session was evicted')
 })

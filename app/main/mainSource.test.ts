@@ -33,6 +33,8 @@ test('bridges supervisor lifecycle events to renderer server frames', () => {
 
   expect(bridgeSource).not.toContain("if (event.type !== 'frame') return")
   expect(bridgeSource).toContain('supervisorEventToServerFrame')
+  expect(bridgeSource).toContain('isTerminalLifecycleFrame')
+  expect(bridgeSource).toContain('attachmentGate.clearSession(event.sessionId)')
 })
 
 test('configures the sidecar boot cwd to match the Phase-1 session cwd', () => {

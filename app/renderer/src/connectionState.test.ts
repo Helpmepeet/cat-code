@@ -11,6 +11,7 @@ const validReady = {
   kind: 'ready',
   protocolVersion: 1,
   sessionId: 'session-1',
+  engineSessionId: 'engine-session-1',
   payload: {
     type: 'app.ready',
     protocolVersion: 1,
@@ -32,6 +33,13 @@ test('rejects unrelated and malformed frames', () => {
     isAppReadyFrame({
       ...validReady,
       payload: { ...validReady.payload, type: 'app.pong' },
+    }),
+  ).toBe(false)
+  expect(isAppReadyFrame({ ...validReady, engineSessionId: '' })).toBe(false)
+  expect(
+    isAppReadyFrame({
+      ...validReady,
+      engineSessionId: undefined,
     }),
   ).toBe(false)
   expect(isAppReadyFrame({ kind: 'ready' })).toBe(false)

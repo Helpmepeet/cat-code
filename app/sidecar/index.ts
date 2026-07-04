@@ -17,6 +17,7 @@
 
 import { FrameDecoder } from '../shared/framing.js'
 import { MAX_FRAME_BYTES } from '../shared/limits.js'
+import { getSessionId } from '../../src/bootstrap/state.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
@@ -49,6 +50,9 @@ async function main(): Promise<void> {
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
   }
+  const engineSessionId = args.probeOnAttach
+    ? `probe:${args.sessionId}`
+    : getSessionId()
 
   const { controller, permissions } = await createSidecarSessionController({
     probe: args.probeOnAttach,
@@ -56,6 +60,7 @@ async function main(): Promise<void> {
 
   const server = new SidecarServer({
     sessionId: args.sessionId,
+    engineSessionId,
     controller,
     ...(permissions ? { permissions } : {}),
   })
