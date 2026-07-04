@@ -27,14 +27,17 @@ import type {
 } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
 
-type RowSource = {
+type FrameRowSource = {
   /** Stable React/projector identity derived only from producer identifiers. */
   id: string
   sessionId: SessionId
+  /** SDK frame UUID supplied by the producer. */
+  frameId: string
+}
+
+type RowSource = FrameRowSource & {
   /** Shared API message id; falls back to the assistant frame UUID. */
   messageId: string
-  /** SDK assistant-frame UUID, when supplied by the producer. */
-  frameId: string
   /** Content-block index within the shared API message. */
   blockIndex: number
   /**
@@ -61,7 +64,95 @@ export type ToolUseRow = RowSource & {
   input: Record<string, unknown>
 }
 
-export type TranscriptRow = AssistantTextRow | ToolUseRow
+export type ThinkingRow = RowSource & {
+  kind: 'thinking'
+  content: string
+  signature?: string
+  reasoningKind?: string
+}
+
+export type RedactedThinkingRow = RowSource & {
+  kind: 'redacted-thinking'
+  data: string
+}
+
+export type UserTextRow = RowSource & {
+  kind: 'user-text'
+  role: 'user'
+  content: string
+  timestamp?: string
+  isReplay: boolean
+}
+
+export type CommandEchoRow = RowSource & {
+  kind: 'command-echo'
+  commandName: string
+  args: string | null
+  content: string
+  skillFormat: boolean
+  timestamp?: string
+  isReplay: boolean
+}
+
+export type UserImageSource =
+  | { type: 'base64'; mediaType: string; data: string }
+  | { type: 'url'; url: string }
+
+export type UserImageRow = RowSource & {
+  kind: 'user-image'
+  source: UserImageSource
+  timestamp?: string
+  isReplay: boolean
+}
+
+export type SystemNoticeRow = FrameRowSource & {
+  kind: 'system-notice'
+  noticeType: 'api_retry' | 'local_command_output' | 'account_diagnostic'
+  content: string
+}
+
+export type SessionInitRow = FrameRowSource & {
+  kind: 'session-init'
+  cwd: string
+  model: string
+  tools: string[]
+  permissionMode: string
+}
+
+export type ResultRow = FrameRowSource & {
+  kind: 'result'
+  subtype: string
+  isError: boolean
+  result?: string
+  errors: string[]
+  durationMs?: number
+  totalCostUsd?: number
+}
+
+export type CompactBoundaryRow = FrameRowSource & {
+  kind: 'compact-boundary'
+  trigger: 'manual' | 'auto'
+  preTokens: number
+}
+
+/** Typed degraded rows: the current SDK seam never emits these discriminants. */
+export type SnipBoundaryRow = FrameRowSource & { kind: 'snip-boundary' }
+export type TombstoneRow = FrameRowSource & { kind: 'tombstone' }
+
+export type TranscriptRow =
+  | AssistantTextRow
+  | ToolUseRow
+  | ThinkingRow
+  | RedactedThinkingRow
+  | UserTextRow
+  | CommandEchoRow
+  | UserImageRow
+  | SystemNoticeRow
+  | SessionInitRow
+  | ResultRow
+  | CompactBoundaryRow
+  | SnipBoundaryRow
+  | TombstoneRow
 
 type TranscriptSessionState = {
   rows: TranscriptRow[]
@@ -148,24 +239,13 @@ function projectMessage(
       return trackStreamPosition(state, message)
 
     case 'user':
-      // P2-1 scope (user prompt/image rows) + P2-2 scope (`tool_result`
-      // blocks ride user frames and correlate to tool_use by id). No row yet.
-      return state
+      return projectUserFrame(sessionId, state, message)
 
     case 'result':
-      // The ONLY turn-end marker (S1 spec §3). P2-1 owns the boundary
-      // ResultRow; turn totals (usage/modelUsage/total_cost_usd) are read
-      // HERE and from message_delta — never off assistant frames (S1 §4
-      // stop_reason/usage trap). No transcript row yet.
-      return state
+      return projectResultFrame(sessionId, state, message)
 
     case 'system':
-      // Covers SDKSystemMessage + SDKCompactBoundaryMessage +
-      // SDKAccountDiagnosticMessage (same discriminant). P2-1 scope:
-      // init → SessionInitRow, compact/microcompact boundary rows,
-      // hook_*/task_* progress rows, local_command_output/api_retry/
-      // account-diagnostic notices. No row yet.
-      return state
+      return projectSystemFrame(sessionId, state, message)
 
     case 'tool_progress':
       // P2-2 scope: live activity on the correlated tool card
@@ -297,6 +377,211 @@ function projectAssistantFrame(
   }
 }
 
+function projectUserFrame(
+  sessionId: SessionId,
+  state: TranscriptSessionState,
+  message: Extract<SDKMessage, { type: 'user' }>,
+): TranscriptSessionState {
+  if (message.isSynthetic === true) return state
+
+  const frameId = nonEmptyString(message.uuid)
+  const body: unknown = message.message
+  if (!frameId || !isRecord(body)) return state
+  if (state.seenFrameIds[frameId]) return state
+
+  const rawContent = body.content
+  const blocks: unknown[] =
+    typeof rawContent === 'string'
+      ? [{ type: 'text', text: rawContent }]
+      : Array.isArray(rawContent)
+        ? rawContent
+        : []
+  if (blocks.length === 0) return state
+
+  const messageId = nonEmptyString(body.id) ?? frameId
+  const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
+  const timestamp =
+    message.timestamp === undefined
+      ? undefined
+      : nonEmptyString(message.timestamp)
+  if (message.timestamp !== undefined && timestamp === null) return state
+
+  const rows = blocks.flatMap((block, blockIndex) => {
+    const row = projectUserContentBlock(block, {
+      sessionId,
+      messageId,
+      frameId,
+      blockIndex,
+      parentToolUseId,
+    }, {
+      isReplay: message.isReplay === true,
+      timestamp: timestamp ?? undefined,
+    })
+    return row === null ? [] : [row]
+  })
+  if (rows.length === 0) return state
+  return appendFrameRows(state, frameId, rows)
+}
+
+function projectResultFrame(
+  sessionId: SessionId,
+  state: TranscriptSessionState,
+  message: Extract<SDKMessage, { type: 'result' }>,
+): TranscriptSessionState {
+  const frameId = nonEmptyString(message.uuid)
+  const subtype = nonEmptyString(message.subtype)
+  if (!frameId || !subtype || typeof message.is_error !== 'boolean') return state
+  if (state.seenFrameIds[frameId]) return state
+
+  const result = optionalString(message.result)
+  const errors = optionalStringArray(message.errors)
+  const durationMs = optionalNumber(message.duration_ms)
+  const totalCostUsd = optionalNumber(message.total_cost_usd)
+  if (
+    result === null ||
+    errors === null ||
+    durationMs === null ||
+    totalCostUsd === null
+  ) {
+    return state
+  }
+
+  const row: ResultRow = {
+    id: frameRowId(sessionId, frameId, 'result'),
+    sessionId,
+    frameId,
+    kind: 'result',
+    subtype,
+    isError: message.is_error,
+    ...(result === undefined ? {} : { result }),
+    errors: errors ?? [],
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(totalCostUsd === undefined ? {} : { totalCostUsd }),
+  }
+  return appendFrameRows(state, frameId, [row])
+}
+
+function projectSystemFrame(
+  sessionId: SessionId,
+  state: TranscriptSessionState,
+  message: Extract<SDKMessage, { type: 'system' }>,
+): TranscriptSessionState {
+  const frameId = nonEmptyString(message.uuid)
+  if (!frameId || state.seenFrameIds[frameId]) return state
+
+  switch (message.subtype) {
+    case 'init': {
+      const cwd = nonEmptyString(message.cwd)
+      const model = nonEmptyString(message.model)
+      const tools = stringArray(message.tools)
+      const permissionMode = nonEmptyString(message.permissionMode)
+      if (!cwd || !model || !tools || !permissionMode) return state
+      return appendFrameRows(state, frameId, [
+        {
+          id: frameRowId(sessionId, frameId, 'session-init'),
+          sessionId,
+          frameId,
+          kind: 'session-init',
+          cwd,
+          model,
+          tools,
+          permissionMode,
+        },
+      ])
+    }
+
+    case 'compact_boundary': {
+      const metadata = message.compact_metadata
+      if (
+        !isRecord(metadata) ||
+        (metadata.trigger !== 'manual' && metadata.trigger !== 'auto') ||
+        typeof metadata.pre_tokens !== 'number'
+      ) {
+        return state
+      }
+      return appendFrameRows(state, frameId, [
+        {
+          id: frameRowId(sessionId, frameId, 'compact-boundary'),
+          sessionId,
+          frameId,
+          kind: 'compact-boundary',
+          trigger: metadata.trigger,
+          preTokens: metadata.pre_tokens,
+        },
+      ])
+    }
+
+    case 'api_retry': {
+      const error = message.error
+      if (!isRecord(error) || typeof error.message !== 'string') return state
+      return appendSystemNotice(
+        state,
+        sessionId,
+        frameId,
+        'api_retry',
+        error.message,
+      )
+    }
+
+    case 'local_command_output':
+      return typeof message.content === 'string'
+        ? appendSystemNotice(
+            state,
+            sessionId,
+            frameId,
+            'local_command_output',
+            message.content,
+          )
+        : state
+
+    case 'cat_code_account_diagnostic':
+      return typeof message.user_message === 'string'
+        ? appendSystemNotice(
+            state,
+            sessionId,
+            frameId,
+            'account_diagnostic',
+            message.user_message,
+          )
+        : state
+
+    default:
+      return state
+  }
+}
+
+function appendSystemNotice(
+  state: TranscriptSessionState,
+  sessionId: SessionId,
+  frameId: string,
+  noticeType: SystemNoticeRow['noticeType'],
+  content: string,
+): TranscriptSessionState {
+  return appendFrameRows(state, frameId, [
+    {
+      id: frameRowId(sessionId, frameId, noticeType),
+      sessionId,
+      frameId,
+      kind: 'system-notice',
+      noticeType,
+      content,
+    },
+  ])
+}
+
+function appendFrameRows(
+  state: TranscriptSessionState,
+  frameId: string,
+  rows: TranscriptRow[],
+): TranscriptSessionState {
+  if (state.seenFrameIds[frameId] || rows.length === 0) return state
+  return {
+    ...state,
+    rows: [...state.rows, ...rows],
+    seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
+  }
+}
+
 /**
  * Grouping-position tracker over the six nested stream event types (S1 spec
  * §2: message_start / content_block_start / content_block_delta /
@@ -353,9 +638,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * (`coreTypes.generated.ts:96`), so discriminants are read at runtime with
  * zero casts. Explicit block dispositions (P2-0):
  *  - `text`, `tool_use` → rows (below).
- *  - `thinking`, `redacted_thinking` → no row yet; P2-1 owns
- *    ThinkingBlock/RedactedThinkingBlock (W3 ⚓8). Codex thinking carries a
- *    non-standard `reasoning_kind: 'summary'|'raw'` the P2-1 row must keep.
+ *  - `thinking`, `redacted_thinking` → P2-1 rows. Codex thinking carries a
+ *    non-standard `reasoning_kind: 'summary'|'raw'` at stream start and the
+ *    stored block uses `reasoningKind`; both spellings are preserved by value.
  *  - default → no row: the engine's own pass-through families
  *    (`server_tool_use`, `web_search_tool_result`,
  *    `code_execution_tool_result`, `mcp_tool_use`, `mcp_tool_result`,
@@ -396,10 +681,39 @@ function projectAssistantContentBlock(
         input: isRecord(block.input) ? block.input : {},
       }
 
-    case 'thinking':
+    case 'thinking': {
+      if (typeof block.thinking !== 'string') return null
+      const signature = optionalString(block.signature)
+      const snakeReasoningKind = optionalString(block.reasoning_kind)
+      const camelReasoningKind = optionalString(block.reasoningKind)
+      if (
+        signature === null ||
+        snakeReasoningKind === null ||
+        camelReasoningKind === null
+      ) {
+        return null
+      }
+      return {
+        ...source,
+        id: rowId(source, 'thinking'),
+        kind: 'thinking',
+        content: block.thinking,
+        ...(signature === undefined ? {} : { signature }),
+        ...(camelReasoningKind === undefined &&
+        snakeReasoningKind === undefined
+          ? {}
+          : { reasoningKind: camelReasoningKind ?? snakeReasoningKind }),
+      }
+    }
+
     case 'redacted_thinking':
-      // P2-1 scope — documented no-op (see function doc).
-      return null
+      if (typeof block.data !== 'string') return null
+      return {
+        ...source,
+        id: rowId(source, 'redacted-thinking'),
+        kind: 'redacted-thinking',
+        data: block.data,
+      }
 
     default:
       // P2-2 tool-card families / unknown or malformed blocks — documented
@@ -408,6 +722,147 @@ function projectAssistantContentBlock(
   }
 }
 
+function projectUserContentBlock(
+  block: unknown,
+  source: Omit<RowSource, 'id'>,
+  metadata: { timestamp?: string; isReplay: boolean },
+): UserTextRow | CommandEchoRow | UserImageRow | null {
+  if (!isRecord(block) || typeof block.type !== 'string') return null
+
+  if (block.type === 'text') {
+    if (typeof block.text !== 'string') return null
+    const command = parseCommandEcho(block.text)
+    if (command === false) return null
+    if (command) {
+      return {
+        ...source,
+        ...metadata,
+        id: rowId(source, 'command-echo'),
+        kind: 'command-echo',
+        ...command,
+      }
+    }
+    return {
+      ...source,
+      ...metadata,
+      id: rowId(source, 'user-text'),
+      kind: 'user-text',
+      role: 'user',
+      content: block.text,
+    }
+  }
+
+  if (block.type === 'image') {
+    const imageSource = projectUserImageSource(block.source)
+    if (!imageSource) return null
+    return {
+      ...source,
+      ...metadata,
+      id: rowId(source, 'user-image'),
+      kind: 'user-image',
+      source: imageSource,
+    }
+  }
+
+  // tool_result is P2-2 correlation scope; future blocks are tolerated.
+  return null
+}
+
+function projectUserImageSource(source: unknown): UserImageSource | null {
+  if (!isRecord(source)) return null
+  if (source.type === 'base64') {
+    return typeof source.media_type === 'string' &&
+      typeof source.data === 'string'
+      ? {
+          type: 'base64',
+          mediaType: source.media_type,
+          data: source.data,
+        }
+      : null
+  }
+  if (source.type === 'url') {
+    return typeof source.url === 'string'
+      ? { type: 'url', url: source.url }
+      : null
+  }
+  return null
+}
+
+function parseCommandEcho(
+  text: string,
+):
+  | {
+      commandName: string
+      args: string | null
+      content: string
+      skillFormat: boolean
+    }
+  | false
+  | null {
+  const commandOpen = '<command-message>'
+  if (!text.includes(commandOpen)) return null
+  const commandName = extractXmlTag(text, 'command-message')?.trim()
+  if (!commandName) return false
+  const args = extractXmlTag(text, 'command-args')?.trim() || null
+  const skillFormat = extractXmlTag(text, 'skill-format') === 'true'
+  return {
+    commandName,
+    args,
+    content: skillFormat
+      ? `Skill(${commandName})`
+      : `/${[commandName, args].filter(Boolean).join(' ')}`,
+    skillFormat,
+  }
+}
+
+function extractXmlTag(text: string, tag: string): string | null {
+  const startToken = `<${tag}>`
+  const endToken = `</${tag}>`
+  const start = text.indexOf(startToken)
+  if (start < 0) return null
+  const contentStart = start + startToken.length
+  const end = text.indexOf(endToken, contentStart)
+  return end < 0 ? null : text.slice(contentStart, end)
+}
+
 function rowId(source: Omit<RowSource, 'id'>, blockId: string): string {
   return `${source.sessionId}:${source.messageId}:${source.blockIndex}:${blockId}`
+}
+
+function frameRowId(
+  sessionId: SessionId,
+  frameId: string,
+  rowKind: string,
+): string {
+  return `${sessionId}:${frameId}:${rowKind}`
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function optionalString(value: unknown): string | null | undefined {
+  return value === undefined
+    ? undefined
+    : typeof value === 'string'
+      ? value
+      : null
+}
+
+function optionalNumber(value: unknown): number | null | undefined {
+  return value === undefined
+    ? undefined
+    : typeof value === 'number'
+      ? value
+      : null
+}
+
+function stringArray(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+    ? value
+    : null
+}
+
+function optionalStringArray(value: unknown): string[] | null | undefined {
+  return value === undefined ? undefined : stringArray(value)
 }

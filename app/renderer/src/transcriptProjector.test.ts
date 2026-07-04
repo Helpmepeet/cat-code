@@ -122,12 +122,13 @@ test('preserves real per-block producer identity, grouping, and order', () => {
 
   const rows = selectTranscriptRows(state, 'session-1')
   expect(rows).toHaveLength(3)
-  expect(rows.map(row => row.messageId)).toEqual([
+  const contentRows = rows.filter(row => 'messageId' in row)
+  expect(contentRows.map(row => row.messageId)).toEqual([
     'msg_shared_1',
     'msg_shared_1',
     'msg_shared_1',
   ])
-  expect(rows.map(row => row.blockIndex)).toEqual([0, 1, 2])
+  expect(contentRows.map(row => row.blockIndex)).toEqual([0, 1, 2])
   expect(new Set(rows.map(row => row.id)).size).toBe(3)
   expect(rows.filter(row => row.kind === 'tool-use').map(row => row.toolUseId)).toEqual([
     'toolu_1',
@@ -171,7 +172,7 @@ test('skips malformed blocks without dropping valid siblings', () => {
           'not a block',
           { type: 'text', text: 42 },
           { type: 'tool_use', input: { missing: 'name' } },
-          { type: 'thinking', thinking: 'unhandled variant' },
+          { type: 'thinking', thinking: 42 },
           { type: 'tool_use', id: 'toolu_ok', name: 'Bash', input: null },
         ],
       },
@@ -316,7 +317,13 @@ test('every fixture sample projects without crashing and adds exactly its docume
 })
 
 test('documented no-op variants leave state reference-equal (no half-applied writes)', () => {
-  const projectingDiscriminants = new Set(['assistant', 'stream_event'])
+  const projectingDiscriminants = new Set([
+    'assistant',
+    'result',
+    'stream_event',
+    'system',
+    'user',
+  ])
   for (const sample of allSdkMessageSamples()) {
     if (projectingDiscriminants.has(sample.message.type)) continue
     let state = createTranscriptState()
@@ -357,13 +364,22 @@ test('subagent frames preserve parent_tool_use_id on their rows', () => {
 
   const rows = selectTranscriptRows(state, 'session-1')
   expect(rows).toHaveLength(1)
-  expect(rows[0]?.parentToolUseId).toBe('toolu_01FixTask1')
+  expect(
+    rows[0] && 'parentToolUseId' in rows[0]
+      ? rows[0].parentToolUseId
+      : undefined,
+  ).toBe('toolu_01FixTask1')
 
   // Top-level frames stay null.
   const textSample = SDK_MESSAGE_FIXTURE.assistant[0]
   if (!textSample) throw new Error('assistant text fixture sample missing')
   state = projectServerFrame(state, messageFrame('session-1', textSample.message))
-  expect(selectTranscriptRows(state, 'session-1')[1]?.parentToolUseId).toBeNull()
+  const topLevelRow = selectTranscriptRows(state, 'session-1')[1]
+  expect(
+    topLevelRow && 'parentToolUseId' in topLevelRow
+      ? topLevelRow.parentToolUseId
+      : undefined,
+  ).toBeNull()
 })
 
 test('schema-drift wire frames are tolerated no-ops, never crashes', () => {
@@ -387,6 +403,196 @@ test('malformed assistant wire frames (no message body) are tolerated no-ops', (
   const before = state
   state = projectServerFrame(state, messageFrame('session-1', malformed))
   expect(state).toBe(before)
+})
+
+test('projects assistant thinking blocks and preserves Codex reasoning metadata', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg-thinking',
+        role: 'assistant',
+        content: [
+          {
+            type: 'thinking',
+            thinking: 'First inspect the boundary.',
+            signature: 'sig-1',
+            reasoning_kind: 'summary',
+          },
+          {
+            type: 'thinking',
+            thinking: 'Then preserve the engine spelling.',
+            reasoningKind: 'raw',
+          },
+          { type: 'redacted_thinking', data: 'encrypted-reasoning' },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000201',
+    }),
+  )
+
+  expect(selectTranscriptRows(state)).toMatchObject([
+    {
+      kind: 'thinking',
+      content: 'First inspect the boundary.',
+      signature: 'sig-1',
+      reasoningKind: 'summary',
+    },
+    {
+      kind: 'thinking',
+      content: 'Then preserve the engine spelling.',
+      reasoningKind: 'raw',
+    },
+    { kind: 'redacted-thinking', data: 'encrypted-reasoning' },
+  ])
+})
+
+test('projects plain user text, real command metadata, and image blocks', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'inspect this image' },
+          {
+            type: 'text',
+            text: '<command-message>compact</command-message>\n<command-args>focus on tests</command-args>',
+          },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: 'iVBORw0KGgoAAAANSUhEUg',
+            },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000202',
+      timestamp: '2026-07-04T09:00:00.000Z',
+    }),
+  )
+
+  expect(selectTranscriptRows(state)).toMatchObject([
+    { kind: 'user-text', role: 'user', content: 'inspect this image' },
+    {
+      kind: 'command-echo',
+      commandName: 'compact',
+      args: 'focus on tests',
+      content: '/compact focus on tests',
+    },
+    {
+      kind: 'user-image',
+      source: {
+        type: 'base64',
+        mediaType: 'image/png',
+        data: 'iVBORw0KGgoAAAANSUhEUg',
+      },
+    },
+  ])
+})
+
+test('rejects malformed P2-1 content blocks without partial rows', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg-malformed-p2-1',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 42 },
+          { type: 'thinking', thinking: 'valid', reasoning_kind: 42 },
+          { type: 'redacted_thinking', data: null },
+        ],
+      },
+      uuid: '00000000-0000-4000-8000-000000000203',
+    }),
+  )
+  const malformedUser = JSON.parse(
+    '{"type":"user","message":{"role":"user","content":[{"type":"text","text":42},{"type":"image","source":{"type":"base64","media_type":"image/png"}},{"type":"image","source":{"type":"future","url":"https://example.com"}}]},"uuid":"00000000-0000-4000-8000-000000000204"}',
+  ) as SDKMessage
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', malformedUser),
+  )
+
+  expect(selectTranscriptRows(state)).toEqual([])
+})
+
+test('projects user-visible system notices and emits boundary rows once', () => {
+  const messages: SDKMessage[] = [
+    {
+      type: 'system',
+      subtype: 'init',
+      cwd: '/Users/pt/cat-code',
+      model: 'claude-sonnet-5',
+      tools: ['Read', 'Edit'],
+      permissionMode: 'default',
+      uuid: '00000000-0000-4000-8000-000000000205',
+    },
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      compact_metadata: { trigger: 'auto', pre_tokens: 1234 },
+      uuid: '00000000-0000-4000-8000-000000000206',
+    },
+    {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 2,
+      max_retries: 10,
+      retry_delay_ms: 8000,
+      error: { type: 'assistant_error', message: 'Overloaded' },
+      uuid: '00000000-0000-4000-8000-000000000207',
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Finished',
+      duration_ms: 1200,
+      total_cost_usd: 0.01,
+      uuid: '00000000-0000-4000-8000-000000000208',
+    },
+  ]
+
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  for (const message of messages) {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  expect(selectTranscriptRows(state).map(row => row.kind)).toEqual([
+    'session-init',
+    'compact-boundary',
+    'system-notice',
+    'result',
+  ])
+  expect(selectTranscriptRows(state)).toMatchObject([
+    { cwd: '/Users/pt/cat-code', model: 'claude-sonnet-5' },
+    { trigger: 'auto', preTokens: 1234 },
+    { noticeType: 'api_retry', content: 'Overloaded' },
+    {
+      subtype: 'success',
+      isError: false,
+      result: 'Finished',
+      durationMs: 1200,
+      totalCostUsd: 0.01,
+    },
+  ])
 })
 
 test('replays the full S1 turn grammar end-to-end into a correct transcript', () => {
@@ -525,13 +731,20 @@ test('replays the full S1 turn grammar end-to-end into a correct transcript', ()
 
   const rows = selectTranscriptRows(state, 'session-1')
   expect(rows.map(row => row.kind)).toEqual([
+    'session-init',
     'assistant-text',
     'tool-use',
     'assistant-text',
+    'result',
   ])
-  expect(rows.map(row => row.messageId)).toEqual(['msg_S1', 'msg_S1', 'msg_S2'])
-  expect(rows.map(row => row.blockIndex)).toEqual([0, 1, 0])
-  expect(new Set(rows.map(row => row.id)).size).toBe(3)
+  const contentRows = rows.filter(row => 'messageId' in row)
+  expect(contentRows.map(row => row.messageId)).toEqual([
+    'msg_S1',
+    'msg_S1',
+    'msg_S2',
+  ])
+  expect(contentRows.map(row => row.blockIndex)).toEqual([0, 1, 0])
+  expect(new Set(rows.map(row => row.id)).size).toBe(5)
 
   // Duplicate delivery of an already-seen frame (uuid dedupe) is a no-op —
   // replay-buffer double-delivery must not duplicate rows.

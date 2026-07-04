@@ -166,11 +166,11 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'assistant: thinking block (P2-1 row scope — no row yet)',
+      name: 'assistant: thinking block',
       anchor:
         'src/components/Message.tsx:553 renders it; Codex adds reasoning_kind (claude.ts:2192)',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'assistant',
         message: {
@@ -182,6 +182,7 @@ export const SDK_MESSAGE_FIXTURE: {
               type: 'thinking',
               thinking: 'The user wants the config read before editing.',
               signature: 'EuYBCkQYAiJAoDgVvHRjqMEzZOB3PDco',
+              reasoningKind: 'summary',
             },
           ],
           stop_reason: null,
@@ -194,10 +195,10 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'assistant: redacted_thinking block (P2-1 row scope — no row yet)',
+      name: 'assistant: redacted_thinking block',
       anchor: 'src/components/Message.tsx:538 (AssistantRedactedThinkingMessage)',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'assistant',
         message: {
@@ -273,7 +274,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'assistant: non-streaming fallback frame (multi-block, new msg id)',
       anchor: 'src/services/api/claude.ts:2532-2560 (idle-watchdog fallback)',
       reach: 'app-seam',
-      expectRows: 2,
+      expectRows: 3,
       message: {
         type: 'assistant',
         message: {
@@ -609,7 +610,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'user: plain prompt (string content)',
       anchor: 'src/utils/queryHelpers.ts:203-218',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'user',
         message: { role: 'user', content: 'read the config file' },
@@ -649,7 +650,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'user: text + image blocks (P2-1 UserImageRow scope)',
       anchor: 'src/components/Message.tsx:405 (user image block render)',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 2,
       message: {
         type: 'user',
         message: {
@@ -673,13 +674,18 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'user: replay (SDKUserMessageReplay, isReplay)',
-      anchor: 'src/QueryEngine.ts:795-807 (queued-command ack replay)',
+      name: 'user: command replay (SDKUserMessageReplay, isReplay)',
+      anchor:
+        'src/QueryEngine.ts:795-807 + src/utils/processUserInput/processSlashCommand.tsx:795',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'user',
-        message: { role: 'user', content: 'also check the tests' },
+        message: {
+          role: 'user',
+          content:
+            '<command-message>compact</command-message>\n<command-args>focus on tests</command-args>',
+        },
         parent_tool_use_id: null,
         isReplay: true,
         session_id: SESSION,
@@ -713,7 +719,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'system: init (first frame of first turn)',
       anchor: 'src/utils/messages/systemInit.ts:57-97',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'system',
         subtype: 'init',
@@ -753,7 +759,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'system: compact_boundary (SDKCompactBoundaryMessage)',
       anchor: 'src/QueryEngine.ts:993-999 (toSDKCompactMetadata)',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'system',
         subtype: 'compact_boundary',
@@ -800,7 +806,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'system: api_retry',
       anchor: 'src/QueryEngine.ts:1001-1013',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'system',
         subtype: 'api_retry',
@@ -823,7 +829,7 @@ export const SDK_MESSAGE_FIXTURE: {
       anchor:
         'schema src/entrypoints/sdk/coreSchemas.ts:1646; no literal mint site found in src/',
       reach: 'type-only',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'system',
         subtype: 'local_command_output',
@@ -1008,7 +1014,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'result: success (full SDKResultSuccess shape)',
       anchor: 'src/QueryEngine.ts:1142 (terminal success yield)',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'result',
         subtype: 'success',
@@ -1043,7 +1049,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'result: error_during_execution (+ permission_denials entry)',
       anchor: 'src/QueryEngine.ts:1143 (error yields share the shape)',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'result',
         subtype: 'error_during_execution',
@@ -1071,7 +1077,7 @@ export const SDK_MESSAGE_FIXTURE: {
       name: 'result: error_max_turns',
       anchor: 'src/QueryEngine.ts:910-930',
       reach: 'app-seam',
-      expectRows: 0,
+      expectRows: 1,
       message: {
         type: 'result',
         subtype: 'error_max_turns',
