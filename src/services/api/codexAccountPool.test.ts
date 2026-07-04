@@ -5,14 +5,17 @@ import { tmpdir } from 'os'
 
 import {
   appendAccount,
+  applyRedeemedUsageReset,
   getCodexAccountAvailability,
   getCodexPlanMetadataFromIdToken,
   getPoolStatus,
+  getRedemptionEligibility,
   isCodexAccountLeaseSelectable,
   isCodexAccountSwitchable,
   loadVaultAccountsForTest,
   markAccountDead,
   mergePoolAccountsForTest,
+  REDEEM_HINT_LAG_GRACE_MS,
   removeCodexAccount,
   resetCodexAccountPoolForTest,
   resolveCodexAccountByPrefix,
@@ -21,6 +24,7 @@ import {
   switchToAccount,
   updateAccountUsageHints,
   type PoolAccount,
+  type RedemptionEligibility,
 } from './codexAccountPool.js'
 import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
@@ -53,6 +57,7 @@ function buildPoolAccount(
     planExpiresAt: overrides.planExpiresAt,
     lastRefreshIso: overrides.lastRefreshIso,
     vaultFilePath: overrides.vaultFilePath,
+    redeemedAt: overrides.redeemedAt,
   }
 }
 
@@ -1072,5 +1077,430 @@ describe('getPoolStatus', () => {
 
     const status = getPoolStatus()
     expect(Object.keys(status)).not.toContain('turnThreshold')
+  })
+})
+
+// ── Slice 2: applyRedeemedUsageReset ──────────────────────────────────────
+
+describe('applyRedeemedUsageReset', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  test('heals a capped/usage_cap account even when cappedAt is seconds old', () => {
+    const now = Date.now()
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'other',
+      accounts: [
+        buildPoolAccount({ accountId: 'other' }),
+        buildPoolAccount({
+          accountId: 'capped-acct',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: now - 5_000, // only 5s ago — well inside the 2min uncap grace
+          lastError: 'Usage cap hit (429)',
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: now - 3_000,
+          usageResetAt: Math.floor((now + 3600_000) / 1000),
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('capped-acct')
+
+    const acct = getPoolStatus().accounts.find(a => a.accountId === 'capped-acct')!
+    expect(acct.status).toBe('healthy')
+    expect(acct.statusReason).toBeUndefined()
+    expect(acct.lastError).toBeUndefined()
+    expect(acct.cappedAt).toBeUndefined()
+    // Hint fields cleared
+    expect(acct.usageAllowed).toBe(true)
+    expect(acct.usageLimitReached).toBe(false)
+    expect(acct.usageFetchedAt).toBeUndefined()
+    expect(acct.usageResetAt).toBeUndefined()
+    // redeemedAt set
+    expect(acct.redeemedAt).toBeGreaterThan(0)
+  })
+
+  test('clears hint fields so getCodexAccountAvailability returns available', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-1',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: Date.now() - 1_000,
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: Date.now(),
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('acct-1')
+
+    const acct = getPoolStatus().accounts[0]!
+    expect(getCodexAccountAvailability(acct)).toEqual({ kind: 'available' })
+  })
+
+  test('leaves dead account untouched', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'dead-acct',
+          status: 'dead',
+          statusReason: 'auth_dead',
+          lastError: 'Token expired',
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('dead-acct')
+
+    const acct = getPoolStatus().accounts[0]!
+    expect(acct.status).toBe('dead')
+    expect(acct.statusReason).toBe('auth_dead')
+    expect(acct.lastError).toBe('Token expired')
+    // Still sets redeemedAt (it's a no-op on status but stamps the time)
+    expect(acct.redeemedAt).toBeGreaterThan(0)
+  })
+
+  test('leaves quarantined account untouched', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'q-acct',
+          status: 'quarantined',
+          statusReason: 'probe_pending_transport',
+          lastError: 'connection problem',
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('q-acct')
+
+    const acct = getPoolStatus().accounts[0]!
+    expect(acct.status).toBe('quarantined')
+    expect(acct.statusReason).toBe('probe_pending_transport')
+  })
+
+  test('sets redeemedAt on the account', () => {
+    const before = Date.now()
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-1',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: before - 1_000,
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('acct-1')
+
+    const acct = getPoolStatus().accounts[0]!
+    expect(acct.redeemedAt).toBeDefined()
+    expect(acct.redeemedAt!).toBeGreaterThanOrEqual(before)
+    expect(acct.redeemedAt!).toBeLessThanOrEqual(Date.now())
+  })
+
+  test('emits account.usage.uncap diagnostic with reason "usage reset redeemed"', () => {
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'redeem-session',
+      createUuid: () => `redeem-${emitted.length + 1}`,
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-1',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: Date.now() - 1_000,
+          lastError: 'Usage cap hit (429)',
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('acct-1')
+
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0]).toMatchObject({
+      code: 'account.usage.uncap',
+      reason: 'usage reset redeemed: Usage cap hit (429)',
+    })
+  })
+
+  test('no-ops for a non-existent account', () => {
+    seedCodexAccountPoolForTest({ accounts: [] })
+    // Should not throw
+    applyRedeemedUsageReset('nonexistent')
+  })
+})
+
+// ── Slice 2: REDEEM_HINT_LAG_GRACE_MS guard ───────────────────────────────
+
+describe('REDEEM_HINT_LAG_GRACE_MS guard in updateAccountUsageHints', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  test('within the grace, a hint with limitReached:true is skipped', () => {
+    const now = Date.now()
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-1',
+          status: 'healthy',
+          redeemedAt: now - 10_000, // redeemed 10s ago — well inside 2min grace
+        }),
+      ],
+    })
+
+    updateAccountUsageHints([
+      {
+        accountId: 'acct-1',
+        primaryPercent: 100,
+        weeklyPercent: 100,
+        allowed: false,
+        limitReached: true,
+        fetchedAt: now,
+      },
+    ])
+
+    const acct = getPoolStatus().accounts[0]!
+    // The blocking fields should NOT have been applied
+    expect(acct.usageAllowed).toBeUndefined()
+    expect(acct.usageLimitReached).toBeUndefined()
+    expect(acct.usageFetchedAt).toBeUndefined()
+    // But the scoring fields were updated
+    expect(acct.usagePrimary).toBe(100)
+    expect(acct.usageWeekly).toBe(100)
+    // Account should still be available for routing
+    expect(getCodexAccountAvailability(acct).kind).not.toBe('blocked')
+  })
+
+  test('after the grace, the same hint applies normally', () => {
+    const now = Date.now()
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-1',
+          status: 'healthy',
+          redeemedAt: now - REDEEM_HINT_LAG_GRACE_MS - 1_000, // past grace
+        }),
+      ],
+    })
+
+    updateAccountUsageHints([
+      {
+        accountId: 'acct-1',
+        primaryPercent: 100,
+        weeklyPercent: 100,
+        allowed: false,
+        limitReached: true,
+        fetchedAt: now,
+      },
+    ])
+
+    const acct = getPoolStatus().accounts[0]!
+    expect(acct.usageAllowed).toBe(false)
+    expect(acct.usageLimitReached).toBe(true)
+    expect(acct.usageFetchedAt).toBeDefined()
+    // Fresh blocked hint should make it blocked
+    expect(getCodexAccountAvailability(acct).kind).toBe('blocked')
+  })
+
+  test('existing uncap-branch tests still pass — allowed:true hint still uncaps after normal grace', () => {
+    // This is a regression check: the REDEEM_HINT_LAG_GRACE_MS guard must not
+    // interfere with the normal uncap flow for accounts that have never been redeemed.
+    const now = Date.now()
+    const oldCappedAt = now - 3 * 60 * 1000 // 3min ago, past USAGE_UNCAP_GRACE_MS
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account' }),
+        buildPoolAccount({
+          accountId: 'capped-account',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: oldCappedAt,
+          // No redeemedAt — never redeemed
+        }),
+      ],
+    })
+
+    updateAccountUsageHints([
+      {
+        accountId: 'capped-account',
+        primaryPercent: 10,
+        weeklyPercent: 5,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: oldCappedAt + 60_000,
+      },
+    ])
+
+    const uncapped = getPoolStatus().accounts.find(a => a.accountId === 'capped-account')!
+    expect(uncapped.status).toBe('healthy')
+    expect(uncapped.cappedAt).toBeUndefined()
+  })
+})
+
+// ── Slice 2: Integration-style heal → stale hint → grace ─────────────────
+
+describe('usage reset integration: cap → heal → stale hint within grace → still available', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  test('fresh cap → heal → stale capped hint within grace → still available; after grace → hints govern', () => {
+    const now = Date.now()
+    // Step 1: Account gets capped (fresh cappedAt)
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'other',
+      accounts: [
+        buildPoolAccount({ accountId: 'other' }),
+        buildPoolAccount({
+          accountId: 'target',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: now - 2_000, // capped 2s ago — very fresh
+          lastError: 'Usage cap hit (429)',
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: now - 1_000,
+        }),
+      ],
+    })
+
+    // Step 2: Heal via applyRedeemedUsageReset (bypasses uncap grace)
+    applyRedeemedUsageReset('target')
+    let target = getPoolStatus().accounts.find(a => a.accountId === 'target')!
+    expect(target.status).toBe('healthy')
+    expect(getCodexAccountAvailability(target).kind).not.toBe('blocked')
+    expect(isCodexAccountSwitchable(target)).toBe(true)
+
+    // Step 3: A stale hint arrives within the REDEEM_HINT_LAG_GRACE_MS
+    // (server still reports the old state)
+    updateAccountUsageHints([
+      {
+        accountId: 'target',
+        primaryPercent: 100,
+        weeklyPercent: 100,
+        allowed: false,
+        limitReached: true,
+        fetchedAt: now, // stale data, fetched around now
+      },
+    ])
+
+    target = getPoolStatus().accounts.find(a => a.accountId === 'target')!
+    // Should still be available — the lag guard protects it
+    expect(target.status).toBe('healthy')
+    expect(getCodexAccountAvailability(target).kind).not.toBe('blocked')
+    expect(isCodexAccountSwitchable(target)).toBe(true)
+
+    // Step 4: Simulate time passing beyond the grace (re-seed with old redeemedAt)
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'other',
+      accounts: [
+        buildPoolAccount({ accountId: 'other' }),
+        buildPoolAccount({
+          accountId: 'target',
+          status: 'healthy', // healed
+          redeemedAt: now - REDEEM_HINT_LAG_GRACE_MS - 1_000, // past grace
+        }),
+      ],
+    })
+
+    // A hint with blocked data now applies normally
+    updateAccountUsageHints([
+      {
+        accountId: 'target',
+        primaryPercent: 100,
+        weeklyPercent: 100,
+        allowed: false,
+        limitReached: true,
+        fetchedAt: Date.now(),
+      },
+    ])
+
+    target = getPoolStatus().accounts.find(a => a.accountId === 'target')!
+    expect(target.usageAllowed).toBe(false)
+    expect(target.usageLimitReached).toBe(true)
+    // Now the hint blocks the account
+    expect(getCodexAccountAvailability(target).kind).toBe('blocked')
+  })
+})
+
+// ── Slice 2: Redemption eligibility predicate ─────────────────────────────
+
+describe('getRedemptionEligibility', () => {
+  test('healthy account with token is eligible', () => {
+    const acct = buildPoolAccount({ accountId: 'acct-1', status: 'healthy' })
+    expect(getRedemptionEligibility(acct)).toEqual({ eligible: true })
+  })
+
+  test('capped/usage_cap account with token is eligible', () => {
+    const acct = buildPoolAccount({
+      accountId: 'acct-1',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'Usage cap hit (429)',
+    })
+    expect(getRedemptionEligibility(acct)).toEqual({ eligible: true })
+  })
+
+  test('dead account is ineligible with reason', () => {
+    const acct = buildPoolAccount({
+      accountId: 'acct-1',
+      status: 'dead',
+      statusReason: 'auth_dead',
+      lastError: 'Token expired',
+    })
+    const result = getRedemptionEligibility(acct)
+    expect(result.eligible).toBe(false)
+    expect((result as { reason: string }).reason).toBe('re-login required')
+  })
+
+  test('quarantined account is ineligible with reason', () => {
+    const acct = buildPoolAccount({
+      accountId: 'acct-1',
+      status: 'quarantined',
+      statusReason: 'probe_pending_transport',
+    })
+    const result = getRedemptionEligibility(acct)
+    expect(result.eligible).toBe(false)
+    expect((result as { reason: string }).reason).toBe('connection problems; retry later')
+  })
+
+  test('account with no token is ineligible', () => {
+    const acct = buildPoolAccount({
+      accountId: 'acct-1',
+      status: 'healthy',
+      accessToken: '',
+    })
+    const result = getRedemptionEligibility(acct)
+    expect(result.eligible).toBe(false)
+    expect((result as { reason: string }).reason).toBe('re-login required')
+  })
+
+  test('capped/runtime_cap is ineligible', () => {
+    const acct = buildPoolAccount({
+      accountId: 'acct-1',
+      status: 'capped',
+      statusReason: 'runtime_cap',
+      lastError: 'Runtime cap hit',
+    })
+    const result = getRedemptionEligibility(acct)
+    expect(result.eligible).toBe(false)
+    expect((result as { reason: string }).reason).toBe('Runtime cap hit')
   })
 })

@@ -15,7 +15,7 @@ import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
 import { Byline } from '../design-system/Byline.js';
 import { ProgressBar } from '../design-system/ProgressBar.js';
 import { isEligibleForOverageCreditGrant, OverageCreditUpsell } from '../LogoV2/OverageCreditUpsell.js';
-import { isPoolActive, getPoolStatus } from '../../services/api/codexAccountPool.js';
+import { hasAnyPoolAccount, getPoolStatus } from '../../services/api/codexAccountPool.js';
 import { buildPoolUsageDisplayAccounts, fetchPoolUsage, isFreePlan, sortPoolUsageDisplayAccounts, type PoolUsageSnapshot } from '../../services/api/codexUsage.js';
 type LimitBarProps = {
   title: string;
@@ -260,7 +260,7 @@ export function Usage(): React.ReactNode {
 
       {isEligibleForOverageCreditGrant() && <OverageCreditUpsell maxWidth={maxWidth} />}
 
-      {isPoolActive() && <CodexPoolUsageSection maxWidth={maxWidth} />}
+      {hasAnyPoolAccount() && <CodexPoolUsageSection maxWidth={maxWidth} />}
 
       <Text dimColor>
         <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
@@ -471,6 +471,12 @@ function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactN
                     showTimeInReset={false}
                   />
                 ) : null}
+	                {acct.usage.resetCreditsAvailable !== undefined ? (
+	                  <Text dimColor>
+	                    {acct.usage.resetCreditsAvailable} usage limit reset{acct.usage.resetCreditsAvailable === 1 ? '' : 's'} available
+	                    {acct.usage.resetCreditsAvailable > 0 ? ' · Reset tab to redeem' : ''}
+	                  </Text>
+	                ) : null}
               </>
             ) : <Text dimColor={true}>{unavailableText}</Text>}
           </Box>

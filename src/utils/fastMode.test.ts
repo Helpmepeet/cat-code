@@ -7,6 +7,7 @@ import {
   setSessionProvider,
 } from '../bootstrap/state.js'
 import fastCommand from '../commands/fast/index.js'
+import usageCommand from '../commands/usage/index.js'
 import {
   getFastModeUnavailableReason,
   getFastModeModelDisplay,
@@ -78,5 +79,13 @@ describe('fast mode', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR = originalOauthTokenFd
       process.env.ANTHROPIC_AUTH_TOKEN = originalAnthropicAuthToken
     }
+  })
+
+  test('/usage is visible for Codex/OpenAI provider sessions', () => {
+    setIsInteractive(true)
+    setSessionProvider('openai')
+
+    expect(usageCommand.availability).toEqual(['claude-ai', 'openai'])
+    expect(meetsAvailabilityRequirement(usageCommand)).toBe(true)
   })
 })

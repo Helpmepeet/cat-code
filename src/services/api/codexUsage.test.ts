@@ -17,6 +17,7 @@ import {
   fetchPoolUsage,
   formatPoolUsage,
   invalidateUsageCache,
+  consumeUsageLimitReset,
   sortPoolUsageDisplayAccounts,
   type AccountUsage,
   type PoolUsageSnapshot,
@@ -403,6 +404,287 @@ describe('codexUsage display helpers', () => {
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
+    }
+  })
+
+  test('fetchPoolUsage parses reset credit availability without changing existing usage fields', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'with-credits',
+      accounts: [
+        buildPoolAccount({ accountId: 'with-credits' }),
+        buildPoolAccount({ accountId: 'without-field' }),
+        buildPoolAccount({ accountId: 'null-field' }),
+        buildPoolAccount({ accountId: 'malformed-field' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const accountId = new Headers(init?.headers).get('chatgpt-account-id') ?? ''
+      const resetCredits =
+        accountId === 'with-credits'
+          ? { available_count: 2 }
+          : accountId === 'null-field'
+            ? null
+            : accountId === 'malformed-field'
+              ? { available_count: '2' }
+              : undefined
+      return new Response(
+        JSON.stringify({
+          user_id: `user-${accountId}`,
+          email: `${accountId}@example.com`,
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 10,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 20,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+          ...(resetCredits !== undefined
+            ? { rate_limit_reset_credits: resetCredits }
+            : {}),
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const snapshot = await fetchPoolUsage(true)
+      const byId = new Map(snapshot.accounts.map((usage) => [usage.accountId, usage]))
+      expect(byId.get('with-credits')?.resetCreditsAvailable).toBe(2)
+      expect(byId.get('without-field')?.resetCreditsAvailable).toBeUndefined()
+      expect(byId.get('null-field')?.resetCreditsAvailable).toBeUndefined()
+      expect(byId.get('malformed-field')?.resetCreditsAvailable).toBeUndefined()
+      expect(byId.get('with-credits')?.primaryWindow.usedPercent).toBe(10)
+      expect(byId.get('with-credits')?.secondaryWindow.usedPercent).toBe(20)
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+  })
+
+  test('fetchPoolUsage reports an aborted availability read as a fetch error', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'timeout-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'timeout-account' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((callback: TimerHandler) => {
+      if (typeof callback === 'function') callback()
+      return 1 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout
+    globalThis.fetch = (async (_input, init) => {
+      const signal = init?.signal
+      if (signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError')
+      }
+      throw new Error('expected abort')
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const snapshot = await fetchPoolUsage(true)
+      expect(snapshot.accounts).toEqual([])
+      expect(snapshot.errors).toEqual([
+        { accountId: 'timeout-account', error: 'The operation was aborted.' },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+      globalThis.setTimeout = originalSetTimeout
+      invalidateUsageCache()
+    }
+  })
+
+  test('consumeUsageLimitReset posts the idempotency key without an originator header', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input, init) => {
+      expect(input).toBe('https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume')
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBe(JSON.stringify({ redeem_request_id: 'redeem-123' }))
+      const headers = new Headers(init?.headers)
+      expect(headers.get('Authorization')).toBe('Bearer access-main')
+      expect(headers.get('chatgpt-account-id')).toBe('main-account')
+      expect(headers.get('Content-Type')).toBe('application/json')
+      expect(headers.get('Accept')).toBe('application/json')
+      expect(headers.has('originator')).toBe(false)
+      return new Response(
+        JSON.stringify({ code: 'reset', windows_reset: 2 }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await expect(
+        consumeUsageLimitReset(
+          { accountId: 'main-account', accessToken: 'access-main' },
+          'redeem-123',
+        ),
+      ).resolves.toEqual({ kind: 'reset', windowsReset: 2 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset maps known response codes to outcomes', async () => {
+    const cases = [
+      [{ code: 'reset', windows_reset: 1 }, { kind: 'reset', windowsReset: 1 }],
+      [{ code: 'already_redeemed', windows_reset: 3 }, { kind: 'already_redeemed', windowsReset: 3 }],
+      [{ code: 'nothing_to_reset', windows_reset: 0 }, { kind: 'nothing_to_reset' }],
+      [{ code: 'no_credit', windows_reset: 0 }, { kind: 'no_credit' }],
+    ] as const
+
+    const originalFetch = globalThis.fetch
+    try {
+      for (const [body, expected] of cases) {
+        globalThis.fetch = (async () =>
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })) as unknown as typeof globalThis.fetch
+
+        await expect(
+          consumeUsageLimitReset(
+            { accountId: 'main-account', accessToken: 'access-main' },
+            'redeem-123',
+          ),
+        ).resolves.toEqual(expected)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset defaults a missing windows_reset to zero for reset outcomes', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ code: 'reset' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof globalThis.fetch
+
+    try {
+      await expect(
+        consumeUsageLimitReset(
+          { accountId: 'main-account', accessToken: 'access-main' },
+          'redeem-123',
+        ),
+      ).resolves.toEqual({ kind: 'reset', windowsReset: 0 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset rejects unknown success codes and malformed windows_reset values', async () => {
+    const bodies = [
+      null,
+      { code: 'unexpected', windows_reset: 1 },
+      { code: 'reset', windows_reset: null },
+      { code: 'reset', windows_reset: '1' },
+    ]
+
+    const originalFetch = globalThis.fetch
+    try {
+      for (const body of bodies) {
+        globalThis.fetch = (async () =>
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })) as unknown as typeof globalThis.fetch
+
+        const outcome = await consumeUsageLimitReset(
+          { accountId: 'main-account', accessToken: 'access-main' },
+          'redeem-123',
+        )
+        expect(outcome.kind).toBe('invalid_response')
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset returns http_error for non-2xx responses', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response('not authorized', { status: 401 })) as unknown as typeof globalThis.fetch
+
+    try {
+      await expect(
+        consumeUsageLimitReset(
+          { accountId: 'main-account', accessToken: 'access-main' },
+          'redeem-123',
+        ),
+      ).resolves.toEqual({
+        kind: 'http_error',
+        status: 401,
+        bodySnippet: 'not authorized',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset returns network_error when fetch throws', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new Error('socket closed')
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await expect(
+        consumeUsageLimitReset(
+          { accountId: 'main-account', accessToken: 'access-main' },
+          'redeem-123',
+        ),
+      ).resolves.toEqual({
+        kind: 'network_error',
+        error: 'socket closed',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset returns network_error when the consume request times out', async () => {
+    const originalFetch = globalThis.fetch
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((callback: TimerHandler) => {
+      if (typeof callback === 'function') callback()
+      return 1 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout
+    globalThis.fetch = (async (_input, init) => {
+      const signal = init?.signal
+      if (signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError')
+      }
+      throw new Error('expected abort')
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await expect(
+        consumeUsageLimitReset(
+          { accountId: 'main-account', accessToken: 'access-main' },
+          'redeem-123',
+        ),
+      ).resolves.toEqual({
+        kind: 'network_error',
+        error: 'The operation was aborted.',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      globalThis.setTimeout = originalSetTimeout
     }
   })
 

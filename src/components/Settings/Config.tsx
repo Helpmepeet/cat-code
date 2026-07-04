@@ -388,7 +388,7 @@ export function Config({
     }
   }] : []),
   // Speculation toggle (ant-only)
-  ...("external" === 'ant' ? [{
+	  ...(false ? [{
     id: 'speculationEnabled',
     label: 'Speculative execution',
     value: globalConfig.speculationEnabled ?? true,

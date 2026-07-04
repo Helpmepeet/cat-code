@@ -41,6 +41,7 @@ export interface AccountUsage {
     unlimited: boolean
     balance: string
   }
+  resetCreditsAvailable?: number
   fetchedAt: number
 }
 
@@ -69,9 +70,18 @@ export type FetchPoolUsageOptions = {
   updateRoutingHints?: boolean
 }
 
+export type ConsumeResetOutcome =
+  | { kind: 'reset' | 'already_redeemed'; windowsReset: number }
+  | { kind: 'nothing_to_reset' | 'no_credit' }
+  | { kind: 'http_error'; status: number; bodySnippet: string }
+  | { kind: 'invalid_response'; bodySnippet: string }
+  | { kind: 'network_error'; error: string }
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const WHAM_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const WHAM_RESET_CONSUME_URL =
+  'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume'
 const FETCH_TIMEOUT_MS = 10_000
 // Fixed product threshold for the Open Design capacity-warning diagnostic.
 const ACCOUNT_USAGE_WARNING_THRESHOLD_PERCENT = 80
@@ -93,6 +103,95 @@ export async function fetchAccountUsage(
 ): Promise<AccountUsage | null> {
   const { usage } = await fetchAccountUsageResult(account)
   return usage
+}
+
+export async function consumeUsageLimitReset(
+  account: Pick<PoolAccount, 'accountId' | 'accessToken'>,
+  redeemRequestId: string,
+): Promise<ConsumeResetOutcome> {
+  const accountPrefix = account.accountId.slice(0, 12)
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+
+    let response: Response
+    try {
+      response = await globalThis.fetch(WHAM_RESET_CONSUME_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${account.accessToken}`,
+          Accept: 'application/json',
+          'chatgpt-account-id': account.accountId,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ redeem_request_id: redeemRequestId }),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    const bodyText = await response.text()
+    const bodySnippet = snippetForDebugging(bodyText)
+    if (!response.ok) {
+      logForDebugging(
+        `[codex-usage] Reset consume HTTP ${response.status} for account ${accountPrefix}: ${bodySnippet}`,
+      )
+      return { kind: 'http_error', status: response.status, bodySnippet }
+    }
+
+    let data: Record<string, unknown>
+    try {
+      data = JSON.parse(bodyText) as Record<string, unknown>
+    } catch {
+      logForDebugging(
+        `[codex-usage] Reset consume invalid JSON for account ${accountPrefix}: ${bodySnippet}`,
+      )
+      return { kind: 'invalid_response', bodySnippet }
+    }
+    if (!isRecord(data)) {
+      logForDebugging(
+        `[codex-usage] Reset consume invalid response for account ${accountPrefix}: ${bodySnippet}`,
+      )
+      return { kind: 'invalid_response', bodySnippet }
+    }
+
+    const code = data.code
+    if (
+      code !== 'reset' &&
+      code !== 'already_redeemed' &&
+      code !== 'nothing_to_reset' &&
+      code !== 'no_credit'
+    ) {
+      logForDebugging(
+        `[codex-usage] Reset consume unknown code for account ${accountPrefix}: ${bodySnippet}`,
+      )
+      return { kind: 'invalid_response', bodySnippet }
+    }
+
+    const windowsReset = parseWindowsReset(data)
+    if (windowsReset === null) {
+      logForDebugging(
+        `[codex-usage] Reset consume invalid windows_reset for account ${accountPrefix}: ${bodySnippet}`,
+      )
+      return { kind: 'invalid_response', bodySnippet }
+    }
+
+    if (code === 'reset' || code === 'already_redeemed') {
+      return { kind: code, windowsReset }
+    }
+
+    logForDebugging(
+      `[codex-usage] Reset consume returned ${code} for account ${accountPrefix}: ${bodySnippet}`,
+    )
+    return { kind: code }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    logForDebugging(
+      `[codex-usage] Reset consume failed for ${accountPrefix}: ${error}`,
+    )
+    return { kind: 'network_error', error }
+  }
 }
 
 async function fetchAccountUsageResult(
@@ -515,6 +614,12 @@ function parseUsageResponse(
   const secondary = rateLimit.secondary_window as Record<string, unknown> | undefined
 
   const credits = data.credits as Record<string, unknown> | undefined
+  const resetCredits = data.rate_limit_reset_credits as Record<string, unknown> | undefined
+  const resetCreditsAvailable =
+    typeof resetCredits?.available_count === 'number' &&
+    Number.isFinite(resetCredits.available_count)
+      ? resetCredits.available_count
+      : undefined
 
   return {
     accountId,
@@ -541,8 +646,28 @@ function parseUsageResponse(
       unlimited: Boolean(credits?.unlimited),
       balance: String(credits?.balance ?? '0'),
     },
+    resetCreditsAvailable,
     fetchedAt: Date.now(),
   }
+}
+
+function parseWindowsReset(data: Record<string, unknown>): number | null {
+  if (!Object.prototype.hasOwnProperty.call(data, 'windows_reset')) {
+    return 0
+  }
+  const windowsReset = data.windows_reset
+  if (typeof windowsReset === 'number' && Number.isInteger(windowsReset)) {
+    return windowsReset
+  }
+  return null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function snippetForDebugging(body: string): string {
+  return body.slice(0, 500)
 }
 
 function usageBar(percent: number): string {

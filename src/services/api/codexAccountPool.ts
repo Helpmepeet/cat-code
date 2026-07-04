@@ -45,6 +45,7 @@ export interface PoolAccount {
   usageFetchedAt?: number       // when usage was last fetched
   usageResetAt?: number
   cappedAt?: number             // when a hard 429 capped this account; uncap only from usage data fetched after this
+  redeemedAt?: number           // when applyRedeemedUsageReset last healed this account; lag guard in updateAccountUsageHints
   // Saved id_token plan metadata. May be stale — warning only, never a blocker.
   planType?: string
   planExpiresAt?: string        // raw ISO string from chatgpt_subscription_active_until
@@ -1197,6 +1198,27 @@ export function updateAccountUsageHints(
   for (const hint of hints) {
     const acct = pool.accounts.find((a) => a.accountId === hint.accountId)
     if (acct) {
+      // Post-redemption lag guard: wham/usage lags reality by minutes, so a poll
+      // right after a confirmed reset can return stale limit_reached:true /
+      // allowed:false. Skip applying those blocking signals while the redemption
+      // is fresh — mirroring the USAGE_UNCAP_GRACE_MS idiom for the 429 uncap
+      // direction. After the grace, hints flow normally and reality wins.
+      const withinRedeemGrace =
+        acct.redeemedAt !== undefined &&
+        now - acct.redeemedAt < REDEEM_HINT_LAG_GRACE_MS
+      const hintReportsBlocked =
+        hint.allowed === false || hint.limitReached === true
+
+      if (withinRedeemGrace && hintReportsBlocked) {
+        // Silently skip — stale poll within the post-redeem grace window.
+        // Still update the non-blocking fields so scoring stays current.
+        acct.usagePrimary = hint.primaryPercent
+        acct.usageWeekly = hint.weeklyPercent
+        // Don't update usageFetchedAt/usageAllowed/usageLimitReached/usageResetAt:
+        // applying them would re-block the account via getCodexAccountAvailability.
+        continue
+      }
+
       acct.usagePrimary = hint.primaryPercent
       acct.usageWeekly = hint.weeklyPercent
       acct.usageFetchedAt = now
@@ -1245,6 +1267,11 @@ const USAGE_HINT_STALE_MS = 5 * 60 * 1000 // 5 minutes
 // hard 429 is more recent than this, even if the poll resolved after the cap.
 // ponytail: fixed grace; only the self-inflicted post-failover refresh races this tight.
 const USAGE_UNCAP_GRACE_MS = 2 * 60 * 1000 // 2 minutes
+// Post-redemption lag guard: after a confirmed usage-reset redemption, stale
+// polls can report allowed:false / limitReached:true for up to ~2 min while
+// the server state propagates. Skip applying those blocking hints during this
+// window — mirrors USAGE_UNCAP_GRACE_MS's purpose for the opposite direction.
+export const REDEEM_HINT_LAG_GRACE_MS = 2 * 60 * 1000 // 2 minutes
 const DEFAULT_USAGE_PRIMARY = 50
 const DEFAULT_USAGE_WEEKLY = 50
 const PRIMARY_USAGE_WEIGHT = 3
@@ -1447,4 +1474,82 @@ export function resetCodexAccountPoolForTest(): void {
 
 function truncId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 12)}...` : id
+}
+
+// ── Usage-reset redemption (Slice 2) ──────────────────────────────────────
+
+/**
+ * Heal a pool account after a confirmed server-side usage-reset redemption.
+ *
+ * A confirmed `reset` or `already_redeemed` from the server is authoritative
+ * in a way polls are not — the USAGE_UNCAP_GRACE_MS exists to distrust polls,
+ * not redemptions. This bypasses that grace intentionally.
+ *
+ * Only heals `capped` + `usage_cap`; dead/quarantined accounts have auth or
+ * network problems orthogonal to usage caps.
+ */
+export function applyRedeemedUsageReset(accountId: string): void {
+  const acct = pool.accounts.find((a) => a.accountId === accountId)
+  if (!acct) return
+
+  // Only heal capped/usage_cap — dead and quarantined are orthogonal.
+  if (acct.status === 'capped' && acct.statusReason === 'usage_cap') {
+    const previousLastError = acct.lastError
+    acct.status = 'healthy'
+    acct.statusReason = undefined
+    acct.lastError = undefined
+    acct.cappedAt = undefined
+    emitUsageStatusDiagnostic(
+      'account.usage.uncap',
+      acct.accountId,
+      previousLastError
+        ? `usage reset redeemed: ${previousLastError}`
+        : 'usage reset redeemed',
+    )
+  }
+
+  // Clear the hint block so getCodexAccountAvailability passes immediately.
+  // No fresh hint → scoring falls back to defaults until the next poll.
+  acct.usageAllowed = true
+  acct.usageLimitReached = false
+  acct.usageFetchedAt = undefined
+  acct.usageResetAt = undefined
+
+  // Stamp for the REDEEM_HINT_LAG_GRACE_MS guard in updateAccountUsageHints.
+  acct.redeemedAt = Date.now()
+}
+
+/**
+ * Per-account redemption eligibility predicate.
+ *
+ * Eligible iff the account has a token AND status is 'healthy' or
+ * 'capped' with statusReason 'usage_cap'. Credit-count-based disabling
+ * is the dialog's job (Slice 3), not this predicate's.
+ */
+export type RedemptionEligibility =
+  | { eligible: true }
+  | { eligible: false; reason: string }
+
+export function getRedemptionEligibility(account: PoolAccount): RedemptionEligibility {
+  if (!account.accessToken) {
+    return { eligible: false, reason: 're-login required' }
+  }
+  if (account.status === 'dead') {
+    return { eligible: false, reason: 're-login required' }
+  }
+  if (account.status === 'quarantined') {
+    return { eligible: false, reason: 'connection problems; retry later' }
+  }
+  if (account.status === 'capped' && account.statusReason === 'usage_cap') {
+    return { eligible: true }
+  }
+  if (account.status === 'capped') {
+    // capped for a non-usage reason (e.g. runtime_cap) — not eligible
+    return { eligible: false, reason: account.lastError ?? 'account is capped for a non-usage reason' }
+  }
+  if (account.status === 'healthy') {
+    return { eligible: true }
+  }
+  // Defensive: unknown status
+  return { eligible: false, reason: 'account is in an unknown state' }
 }

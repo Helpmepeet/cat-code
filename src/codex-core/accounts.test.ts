@@ -370,4 +370,44 @@ describe('codex-core/accounts identity mismatch reconciliation', () => {
     await expect(resolveCodexCoreAccount('main')).rejects.toThrow('Please re-login')
     expect(refreshCalls).toBe(0)
   })
+
+  test('refreshPoolAccountForRedeem writes a raw-branch rotation back to the in-memory pool', async () => {
+    await mock.module('../services/oauth/codex-client.js', () => ({
+      refreshCodexToken: async () => ({
+        accessToken: 'rotated-access',
+        refreshToken: 'rotated-refresh',
+        expiresAt: Date.now() + 3600_000,
+        accountId: OLD_ACCOUNT_ID,
+      }),
+    }))
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: OLD_ACCOUNT_ID,
+      accounts: [
+        buildPoolAccount({
+          accountId: OLD_ACCOUNT_ID,
+          accessToken: 'stale-access',
+          refreshToken: 'stale-refresh',
+          alias: 'main',
+          source: 'config',
+          expiresAt: 0, // forces the near-expiry refresh through the raw branch
+        }),
+      ],
+    })
+
+    const { refreshPoolAccountForRedeem } = await import('./accounts.js')
+    const poolAccount = getPoolStatus().accounts.find(a => a.accountId === OLD_ACCOUNT_ID)!
+    const outcome = await refreshPoolAccountForRedeem(poolAccount)
+
+    expect(outcome.kind).toBe('ok')
+    if (outcome.kind === 'ok') {
+      expect(outcome.accessToken).toBe('rotated-access')
+    }
+    // The raw refresh branch persists to config/vault on disk only. The redeem
+    // pre-flight must write the rotation back so the dialog's pool re-reads
+    // (availability fetch, §7.4 re-resolve before consume) see the fresh token.
+    const after = getPoolStatus().accounts.find(a => a.accountId === OLD_ACCOUNT_ID)
+    expect(after?.accessToken).toBe('rotated-access')
+    expect(after?.refreshToken).toBe('rotated-refresh')
+  })
 })

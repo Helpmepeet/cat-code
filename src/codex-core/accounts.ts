@@ -109,6 +109,90 @@ export async function resolveCodexCoreAccount(
   )
 }
 
+/**
+ * Outcome of a redemption pre-flight token refresh (§7.1).
+ * `ok` carries the possibly-rotated token; `reauth` degrades the account to
+ * "re-login required" (disabled); `transient` degrades it to "reset
+ * availability unknown" but keeps the flow going for other accounts.
+ */
+export type PreflightRefreshOutcome =
+  | { kind: 'ok'; accountId: string; accessToken: string; expiresAt: number }
+  | { kind: 'reauth'; message: string }
+  | { kind: 'transient'; message: string }
+
+/**
+ * Token pre-flight for the usage-reset redeem dialog (Slice 3, §7.1).
+ *
+ * Reuses codex-core's dual-path refresh (`maybeRefreshAccount` → stateful vault
+ * refresh when a vault file exists, else raw-under-lock) rather than forking its
+ * rotation/ledger machinery, and inherits the repo's TOKEN_REFRESH_SKEW_MS
+ * near-expiry threshold. `profile` is only used for logging/error strings, so it
+ * is synthesized from the pool account's alias/id.
+ *
+ * Never throws: refresh failures are returned as `reauth`/`transient` so the
+ * dialog can degrade one account without aborting the whole flow.
+ */
+export async function refreshPoolAccountForRedeem(
+  account: Pick<
+    PoolAccount,
+    'accountId' | 'accessToken' | 'refreshToken' | 'expiresAt' | 'source' | 'alias' | 'vaultFilePath'
+  >,
+): Promise<PreflightRefreshOutcome> {
+  const coreAccount: CodexCoreAccount = {
+    accountId: account.accountId,
+    accessToken: account.accessToken,
+    refreshToken: account.refreshToken,
+    expiresAt: account.expiresAt,
+    profile: account.alias ?? account.accountId,
+    source: account.source,
+    alias: account.alias,
+    vaultFilePath: account.vaultFilePath,
+  }
+  try {
+    const refreshed = await maybeRefreshAccount(coreAccount)
+    // The stateful vault refresh updates the in-memory pool itself (via
+    // appendAccount inside refreshAccountTokens), but the raw-under-lock branch
+    // only persists to config/vault on disk. Write the rotation back so the
+    // pool re-reads the dialog does next — the availability fetch and the §7.4
+    // re-resolve before consume — see the fresh token instead of replaying the
+    // stale one. Identity-mismatch rotations are already reconciled inside
+    // maybeRefreshAccount.
+    if (refreshed.accountId === account.accountId) {
+      const poolAccount = getPoolStatus().accounts.find(
+        (a) => a.accountId === refreshed.accountId,
+      )
+      if (poolAccount && poolAccount.accessToken !== refreshed.accessToken) {
+        appendAccount(
+          {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+            expiresAt: refreshed.expiresAt,
+            accountId: refreshed.accountId,
+          },
+          {
+            preserveCapped: true,
+            writer: 'codex-core.refreshPoolAccountForRedeem',
+            source: refreshed.source,
+            vaultFilePath: refreshed.vaultFilePath,
+          },
+        )
+      }
+    }
+    return {
+      kind: 'ok',
+      accountId: refreshed.accountId,
+      accessToken: refreshed.accessToken,
+      expiresAt: refreshed.expiresAt,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (error instanceof CodexCoreError && error.code === 'auth') {
+      return { kind: 'reauth', message }
+    }
+    return { kind: 'transient', message }
+  }
+}
+
 function findAccount(
   accounts: readonly PoolAccount[],
   profile: string,
