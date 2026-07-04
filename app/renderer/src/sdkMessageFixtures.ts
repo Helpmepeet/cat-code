@@ -247,9 +247,9 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'assistant: web_search_tool_result block (P2-2 server-tool result — resolves srvtoolu_01Fix001 inline, no user reply)',
+      name: 'assistant: web_search_tool_result block (P2-2 server-tool result — resolves srvtoolu_01Fix001 inline, no user reply; content is web_search_result sources, no text part — flattenToolResultContent yields an empty tool-card content string, see F6 Phase-4 flag)',
       anchor:
-        'src/utils/messages.ts:3137 block-start family; src/utils/messages.ts:1306-1328 (orphan-if-unresolved proves results ride inline)',
+        'src/utils/messages.ts:3137 block-start family; src/utils/messages.ts:1306-1328 (orphan-if-unresolved proves results ride inline); real content shape src/services/api/codex-fetch-adapter.ts:2061-2074 ({title,url} sources, no text block)',
       reach: 'app-seam',
       expectRows: 0,
       message: {
@@ -263,7 +263,13 @@ export const SDK_MESSAGE_FIXTURE: {
               type: 'web_search_tool_result',
               tool_use_id: 'srvtoolu_01Fix001',
               content: [
-                { type: 'text', text: 'bun sun_path limit is 104 bytes on macOS' },
+                {
+                  type: 'web_search_result',
+                  title: 'sun_path limit on macOS',
+                  url: 'https://example.com/sun-path-limit',
+                  encrypted_content: 'EuYBCkQYAiJAoDgVvHRjqMEzZOB3PDco',
+                  page_age: null,
+                },
               ],
             },
           ],
@@ -713,7 +719,7 @@ export const SDK_MESSAGE_FIXTURE: {
     {
       name: 'user: FileEditTool tool_result carrying structuredPatch (P2-2 DiffView/MultiDiffCard source data)',
       anchor:
-        'src/tools/FileEditTool/types.ts:63-80 output schema; src/tools/FileEditTool/utils.ts (diff npm structuredPatch shape)',
+        'src/tools/FileEditTool/types.ts:63-80 output schema; src/tools/FileEditTool/utils.ts (diff npm structuredPatch shape); real mapper emits string content, no is_error field, FileEditTool.ts:427-446',
       reach: 'app-seam',
       expectRows: 0,
       message: {
@@ -724,10 +730,7 @@ export const SDK_MESSAGE_FIXTURE: {
             {
               type: 'tool_result',
               tool_use_id: 'toolu_01FixEdit1',
-              content: [
-                { type: 'text', text: 'The file /repo/src/config.ts has been updated.' },
-              ],
-              is_error: false,
+              content: 'The file /repo/src/config.ts has been updated successfully.',
             },
           ],
         },
@@ -841,7 +844,7 @@ export const SDK_MESSAGE_FIXTURE: {
     {
       name: 'user: command replay (SDKUserMessageReplay, isReplay)',
       anchor:
-        'src/QueryEngine.ts:795-807 + src/utils/processUserInput/processSlashCommand.tsx:795',
+        'src/QueryEngine.ts:795-807 + src/utils/processUserInput/processSlashCommand.tsx:795 (formatSlashCommandLoadingMetadata mints all three tags)',
       reach: 'app-seam',
       expectRows: 1,
       message: {
@@ -849,7 +852,7 @@ export const SDK_MESSAGE_FIXTURE: {
         message: {
           role: 'user',
           content:
-            '<command-message>compact</command-message>\n<command-args>focus on tests</command-args>',
+            '<command-message>compact</command-message>\n<command-name>/compact</command-name>\n<command-args>focus on tests</command-args>',
         },
         parent_tool_use_id: null,
         isReplay: true,
@@ -1435,7 +1438,21 @@ export const S1_STREAMING_TEXT_TURN: {
   messages: [
     {
       type: 'stream_event',
-      event: { type: 'message_start', message: { id: 'msg_01S1Text' } },
+      event: {
+        type: 'message_start',
+        message: {
+          id: 'msg_01S1Text',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-5',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1200, output_tokens: 1, service_tier: null },
+        },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
       uuid: '00000000-0000-4000-8000-00000000s101',
     },
     {
@@ -1445,6 +1462,8 @@ export const S1_STREAMING_TEXT_TURN: {
         index: 0,
         content_block: { type: 'text', text: '' },
       },
+      parent_tool_use_id: null,
+      session_id: SESSION,
       uuid: '00000000-0000-4000-8000-00000000s102',
     },
     {
@@ -1454,15 +1473,20 @@ export const S1_STREAMING_TEXT_TURN: {
         index: 0,
         delta: { type: 'text_delta', text: 'Streaming preview' },
       },
+      parent_tool_use_id: null,
+      session_id: SESSION,
       uuid: '00000000-0000-4000-8000-00000000s103',
     },
     {
       type: 'assistant',
       message: {
         id: 'msg_01S1Text',
+        model: 'claude-sonnet-5',
         role: 'assistant',
         content: [{ type: 'text', text: 'Streaming preview final.' }],
         stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1200, output_tokens: 12, service_tier: null },
       },
       parent_tool_use_id: null,
       session_id: SESSION,
@@ -1471,6 +1495,8 @@ export const S1_STREAMING_TEXT_TURN: {
     {
       type: 'stream_event',
       event: { type: 'content_block_stop', index: 0 },
+      parent_tool_use_id: null,
+      session_id: SESSION,
       uuid: '00000000-0000-4000-8000-00000000s105',
     },
     {
@@ -1480,11 +1506,15 @@ export const S1_STREAMING_TEXT_TURN: {
         delta: { stop_reason: 'end_turn', stop_sequence: null },
         usage: { output_tokens: 12 },
       },
+      parent_tool_use_id: null,
+      session_id: SESSION,
       uuid: '00000000-0000-4000-8000-00000000s106',
     },
     {
       type: 'stream_event',
       event: { type: 'message_stop' },
+      parent_tool_use_id: null,
+      session_id: SESSION,
       uuid: '00000000-0000-4000-8000-00000000s107',
     },
     {

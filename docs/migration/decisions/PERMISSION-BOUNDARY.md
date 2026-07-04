@@ -25,8 +25,8 @@ T6b's threat is **renderer authorship of durable policy**: a compromised rendere
 `updatedPermissions` to an allow can install an arbitrary always-allow rule
 (`persistPermissionUpdates`, applied+persisted in
 `src/utils/permissions/PermissionPromptToolResultSchema.ts:95-106`). The P1-0 boundary therefore
-rejects the key outright (`checkStrictKeys`, `app/sidecar/sidecarServer.ts:678`) and strips it in
-the sanitizer backstop (`sidecarServer.ts:457`).
+rejects the key outright (`checkStrictKeys`, `app/sidecar/sidecarServer.ts:855-860`) and strips it in
+the sanitizer backstop (`sidecarServer.ts:598-602`).
 
 But the protocol has an asymmetry that makes a safe "always allow" possible: **the engine already
 mints the rules itself.** An `ask` decision carries `suggestions?: PermissionUpdate[]`
@@ -58,7 +58,7 @@ persistence beyond the compromised session — is analyzed and accepted in §7-A
 
 ### Inbound frame contract
 
-`PermissionResponseInput` (`app/shared/protocol.ts:182-196`) gains one optional field on the allow
+`PermissionResponseInput` (`app/shared/protocol.ts:289-302`) gains one optional field on the allow
 arm — additive, so `PROTOCOL_VERSION` stays `1`:
 
 ```jsonc
@@ -78,10 +78,11 @@ stays CUT per S2 §7).
 
 ### Sidecar validation rule (the T6b-preserving core)
 
-Order in `handlePermissionResponse` (`app/sidecar/sidecarServer.ts:363`): **T5a pending lookup →
-selection validation → T6/T6b sanitize → attach → resolve.**
+Order in `handlePermissionResponse` (`app/sidecar/sidecarServer.ts:492-554`): **T5a pending lookup
+(`:502-514`) → selection validation (`:522-530`) → T6/T6b sanitize (`:532-540`) → attach
+(`:548-551`) → resolve (`:553`).**
 
-`validateSuggestionSelection` (`sidecarServer.ts:745`) rejects fail-closed (error frame
+`validateSuggestionSelection` (`sidecarServer.ts:979-1036`) rejects fail-closed (error frame
 `bad_request`, request **stays pending**) unless ALL of:
 
 1. `applySuggestions` absent or an array (never coerced);
@@ -92,7 +93,7 @@ selection validation → T6/T6b sanitize → attach → resolve.**
 5. every entry is an integer in `[0, suggestions.length)`, no duplicates.
 
 On success the sidecar attaches `updatedPermissions: structuredClone(selectedEngineObjects)`
-(`sidecarServer.ts:419`) to the **already-sanitized** response. Two properties make this stronger
+(`sidecarServer.ts:542-551`) to the **already-sanitized** response. Two properties make this stronger
 than any compare-what-the-renderer-sent scheme:
 
 - the attached objects are **taken from the engine's own pending-request entry, never from the
@@ -100,13 +101,14 @@ than any compare-what-the-renderer-sent scheme:
 - the clone prevents the response from aliasing the pending request object.
 
 The renderer-facing key allowlist becomes `{behavior, updatedInput, message, applySuggestions}`
-(`sidecarServer.ts:678`). A raw `updatedPermissions` key is still **rejected** by F10 and still
+(`sidecarServer.ts:855-860`). A raw `updatedPermissions` key is still **rejected** by F10 and still
 **stripped** by the sanitizer backstop — the pre-existing T6b tests are untouched and green.
 
 One implementation subtlety, so nobody "simplifies" it away: the shared Zod schema
 (`appClientMessageSchema` → engine `outputSchema`) **strips unknown response keys**, so
-`applySuggestions` is read from the raw frame after the Zod parse succeeds
-(`sidecarServer.ts:393`) and validated structurally there. The engine's shared vocabulary is
+`applySuggestions` is read from the raw frame after the Zod parse succeeds (shared parse
+`sidecarServer.ts:279-291`, raw frame reaches the handler at `:327-329`, read at `:516-526`, field
+extraction at `:984-986`) and validated structurally there. The engine's shared vocabulary is
 deliberately not extended (see §3 on blast radius).
 
 ### Engine mapping — zero `src/` changes
@@ -126,7 +128,7 @@ multi-window "permanent" signal and the audit trail.
 
 ### Relay note (main is UX-coercion, not the boundary)
 
-`coercePermissionResponse` in Electron main (`app/main/main.ts:294`) passes a shape-valid
+`coercePermissionResponse` in Electron main (`app/main/main.ts:373-416`) passes a shape-valid
 `applySuggestions` through and **drops the whole response** on a malformed one (fail-closed — a
 silent field-drop would invisibly downgrade "always" to "once"). The sidecar remains the only
 trust boundary (SECURITY-MINIMUM §2 R2).
@@ -147,14 +149,14 @@ design — do not bolt renderer-authored content onto `applySuggestions`.
 
 ### Tests (all in `app/sidecar/sidecarServer.test.ts`, passing)
 
-- `:381` happy path — engine suggestion attached, deep-equal + cloned (not aliased), gated input
+- `:411` happy path — engine suggestion attached, deep-equal + cloned (not aliased), gated input
   still forwarded (T6 unchanged);
-- `:422` empty selection = allow-once, nothing attached;
-- `:453` out-of-range index → `bad_request`, request stays pending;
-- `:484` selection against a request that minted no suggestions → rejected;
-- `:515` non-integer / string / negative / duplicate / oversize / non-array → all six rejected;
-- `:555` selection on a deny → rejected;
-- `:586` two concurrent pendings: selection resolves against ITS OWN request's suggestions, the
+- `:452` empty selection = allow-once, nothing attached;
+- `:483` out-of-range index → `bad_request`, request stays pending;
+- `:514` selection against a request that minted no suggestions → rejected;
+- `:545` non-integer / string / negative / duplicate / oversize / non-array → all six rejected;
+- `:585` selection on a deny → rejected;
+- `:616` two concurrent pendings: selection resolves against ITS OWN request's suggestions, the
   other stays pending (T5a discipline extended to selection).
 
 Verification 2026-07-03: `bun test app/` **122 pass / 0 fail** (7 new C1 tests; every pre-existing
@@ -218,8 +220,9 @@ setAppState(prev => {
 — NOT a bare `applyPermissionUpdate({type:'setMode'})`, which skips the transition cleanup
 (`prePlanMode` stash/clear, plan-exit flag, auto-mode strip/restore —
 `src/utils/permissions/permissionSetup.ts:597`). The sidecar reaches the store by threading a
-capability from `createSidecarSessionController` (which owns `appStateStore`,
-`app/sidecar/sessionController.ts:37-43`) into `SidecarServerOptions`; construction site
+capability from `createSidecarSessionController` (which owns `appStateStore`, built by
+`createNormalSidecarQueryEngineConfig`, `app/sidecar/sessionController.ts:80-106`) into
+`SidecarServerOptions`; construction site
 `app/sidecar/index.ts:53-60`.
 
 ### Schema home
@@ -370,14 +373,17 @@ kill path is added, matching SECURITY-MINIMUM's one-channel posture.
 
 ## 8. Carry-forwards (flagged, deliberately not solved here)
 
-- **DEFECT → P2-4 must fix (same class as P1-3's `tools: []`):** the sidecar session builds its
-  permission context from `getEmptyToolPermissionContext()`
-  (`app/sidecar/sessionController.ts:37` → `AppStateStore.ts:535-538` → `src/Tool.ts:142-150`).
-  Settings-file rules and `defaultMode` are **never loaded** into a desktop session (the CLI path
-  is `applyPermissionRulesToPermissionContext`, `src/utils/permissions/permissionSetup.ts:1000`).
-  Consequence today: a C1-persisted rule takes effect immediately in the same session (in-memory
-  apply) and is correctly written to the settings file, but a **new** sidecar session will not
-  honor it — and C3 snapshots would show empty rules — until session bootstrap wires the loader.
+- **DEFECT → P2-4 must fix (same class as P1-3's `tools: []`)** — **FIXED in P2-4, verified by
+  cold review 2026-07-04.** At decision time, the sidecar session built its permission context
+  from `getEmptyToolPermissionContext()` (historical anchor: `AppStateStore.ts:535-538` →
+  `src/Tool.ts:142-150`; the symbol now survives only in the defect comment at
+  `app/sidecar/sessionController.ts:35-38`). Settings-file rules and `defaultMode` were **never
+  loaded** into a desktop session (the CLI path is `applyPermissionRulesToPermissionContext`,
+  `src/utils/permissions/permissionSetup.ts:1000`). P2-4 landed
+  `loadSidecarToolPermissionContext` (`app/sidecar/sessionController.ts:40-78`), which mirrors the
+  CLI bootstrap and is wired into session construction at `:80-85`; test:
+  `sessionController.test.ts` "PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode
+  actually load". The consequence described below is now historical, not current behavior.
 - **DR-2 (Phase-3, referenced not solved):** `persistPermissionUpdate` is read-modify-write with
   no cross-process lock — last-writer-wins under N-process
   (`reviews/2026-07-02-direction-review.md` §DR-2). C1 adds **no new settings-write path**; it

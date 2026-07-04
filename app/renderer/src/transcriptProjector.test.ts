@@ -1166,7 +1166,11 @@ test('a server-executed tool (server_tool_use) resolves via a result block ridin
   const resolvedRow = selectTranscriptRows(state, 'session-1')[0]
   if (resolvedRow?.kind !== 'tool-use') throw new Error('expected tool-use row')
   expect(resolvedRow.status).toBe('success')
-  expect(resolvedRow.result?.content).toContain('sun_path')
+  // Real web_search_tool_result content is web_search_result sources
+  // ({title, url, ...}), not text blocks — flattenToolResultContent only
+  // keeps type:'text' parts, so this legitimately flattens to empty (F6
+  // Phase-4 flag: whether that's acceptable tool-card chrome is undecided).
+  expect(resolvedRow.result?.content).toBe('')
 })
 
 test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shape', () => {
