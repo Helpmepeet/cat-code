@@ -37,8 +37,8 @@ import {
   type ClientFrame,
   type ServerFrame,
   type SessionId,
+  type SidecarClientMessage,
 } from '../shared/protocol.js'
-import type { AppClientMessage } from '@cat-code/engine/session-events'
 
 export type SupervisorOptions = {
   /**
@@ -214,7 +214,7 @@ export class SidecarSupervisor {
   }
 
   /** Send an allowlisted client message to a session's sidecar. */
-  send(sessionId: SessionId, message: AppClientMessage): void {
+  send(sessionId: SessionId, message: SidecarClientMessage): void {
     const record = this.registry.get(sessionId)
     if (!record || !record.socket || record.status !== 'ready') {
       throw new Error(`session ${sessionId} is not connected`)

@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-07-03 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-07-04 against `src/main.tsx`, `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
 `src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
 
@@ -32,11 +32,11 @@ the legacy REPL relay server.
 | Browser app state and reducer | `web/src/appState.ts` | `web/src/appState.test.ts`, `web/src/appProtocol.ts` | `reduceAppServerMessage()` is the owner for connection state, pending permissions, abort state, goal snapshots, and streamed message assembly in the browser. |
 | Browser chat surface | `web/src/App.tsx` | `web/src/components/MessageContent.tsx`, `web/src/hooks/useWebSocket.ts`, `web/src/appProtocol.ts` | `App.tsx` owns chat layout, submit gating, reconnect notices, and the browser permission panel, including edited JSON input plus selected persisted permission updates. `MessageContent.tsx` owns markdown/code rendering. |
 | Browser transport client | `web/src/hooks/useWebSocket.ts` | `web/src/appProtocol.ts`, `web/src/App.tsx` | The browser always connects back to `/ws` on the current host and uses `VITE_CAT_CODE_WS_TOKEN` to set the required subprotocol. |
-| Electron desktop startup and security | `app/main/main.ts` | `app/main/navigationPolicy.ts`, `app/main/attachmentGate.ts`, `app/main/replayBuffer.ts` | Electron main applies the window/security baseline, owns fixed IPC handlers, starts one sidecar-backed session, and buffers early frames until the renderer attaches. |
-| Desktop sidecar lifecycle | `app/supervisor/supervisor.ts` | `app/shared/framing.ts`, `app/shared/limits.ts`, `app/shared/protocol.ts` | The Electron-free supervisor owns the session-to-child registry, Unix-socket connection, framed transport, restart/kill behavior, and sidecar status events. |
-| Desktop engine boundary | `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` | `app/sidecar/sessionController.ts`, `app/sidecar/initializeRuntime.ts`, `src/app-runtime/` | The Bun sidecar initializes the real runtime, constructs a QueryEngine-backed controller, validates inbound allowlisted frames, and raw-forwards JSON-safe session events. The probe adapter is opt-in test infrastructure. |
-| Desktop preload contract | `app/preload/preload.ts` | `app/shared/protocol.ts`, `app/main/main.ts` | The context-isolated preload exposes fixed submit, abort, permission, ping, subscribe, and renderer-ready operations; there is no generic IPC channel API. |
-| Desktop renderer | `app/renderer/src/App.tsx` | `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts`, `app/renderer/src/bridge.ts`, `app/renderer/src/theme.css` | The renderer subscribes before signaling readiness, derives connection state from the canonical ready frame, submits prompts, and currently renders the raw SDK-message stream. |
+| Electron desktop startup and security | `app/main/main.ts` | `app/main/navigationPolicy.ts`, `app/main/attachmentGate.ts`, `app/main/replayBuffer.ts` | Electron main applies the window/security baseline, owns fixed IPC handlers, starts one sidecar-backed session, gates/replays frames across renderer attachment and reload, and exposes host-level sidecar restart. |
+| Desktop sidecar lifecycle | `app/supervisor/supervisor.ts` | `app/shared/framing.ts`, `app/shared/limits.ts`, `app/shared/protocol.ts` | The Electron-free supervisor owns the session-to-child registry, bounded Unix-socket path allocation, framed transport, restart/kill behavior, and sidecar status events. |
+| Desktop engine boundary | `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` | `app/sidecar/sessionController.ts`, `app/sidecar/initializeRuntime.ts`, `src/app-runtime/` | The Bun sidecar initializes the real runtime, constructs a QueryEngine-backed controller, strictly validates inbound allowlisted frames, reattaches only engine-minted permission updates, and raw-forwards cloneable, JSON-safe, secret-screened session events. |
+| Desktop preload contract | `app/preload/preload.ts` | `app/preload/rendererIpcGuard.ts`, `app/shared/protocol.ts`, `app/main/main.ts` | The context-isolated preload exposes fixed submit, abort, permission, ping, restart, subscribe, and renderer-ready operations; a byte/rate guard protects the fixed senders and there is no generic IPC channel API. |
+| Desktop renderer state and transcript projection | `app/renderer/src/App.tsx`, `app/renderer/src/transcriptProjector.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/permissionState.ts`, `app/renderer/src/rawMessageLog.ts` | The renderer subscribes before signaling readiness and keeps separate reducers for connection, permissions, bounded raw diagnostics, and projected transcript rows. The projector exhaustively dispatches the SDK message union; assistant text/tool-use rows render now while later variants remain explicit no-ops. |
 | Legacy REPL web relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts`, `src/screens/REPL.tsx` | This older server relays REPL events and intentionally disables sending; do not confuse it with `AppSessionWebSocketServer.ts` when routing runtime-backed browser work. |
 
 ## Validation
@@ -50,7 +50,7 @@ the legacy REPL relay server.
 | Browser frontend | `bun run --cwd web test && bun run --cwd web build` |
 | Desktop tests | `bun test app/` |
 | Desktop shell/preload/renderer typecheck | `bunx tsc --noEmit -p app/tsconfig.json` |
-| Desktop engine-sidecar typecheck | `bunx tsc --noEmit -p app/sidecar/tsconfig.json` |
+| Desktop engine-sidecar typecheck | `bun run --cwd app typecheck:sidecar` |
 | Desktop renderer build | `bun run --cwd app renderer:build` |
 | Desktop hardening smoke | `bun run --cwd app test:hardening` |
 
@@ -64,6 +64,9 @@ the legacy REPL relay server.
 - The desktop protocol snapshot in `app/shared/engine-types.snapshot.d.ts`
   isolates Electron/preload/renderer typechecking from the Bun engine graph.
   Keep it synchronized with the canonical source types it cites.
+- `app/renderer/src/transcriptProjector.ts` is the renderer anti-corruption
+  boundary for SDK messages. Keep its exhaustive switch and
+  `sdkMessageFixtures.ts` coverage aligned when the SDK union grows.
 - Desktop Electron main and the renderer must not import engine runtime modules.
   The Bun sidecar is the engine boundary; `app/supervisor/` must remain
   Electron-free.

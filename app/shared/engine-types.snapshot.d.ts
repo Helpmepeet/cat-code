@@ -19,7 +19,7 @@ import type {
   SDKMessage,
 } from './sdk-types.snapshot.js'
 
-export type { SDKMessage }
+export type { PermissionUpdate, SDKControlPermissionRequest, SDKMessage }
 
 type ThreadGoal = {
   threadId: string

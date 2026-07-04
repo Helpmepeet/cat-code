@@ -5,55 +5,138 @@ import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRu
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { getTools } from '../../src/tools.js'
 import { createStore } from '../../src/state/store.js'
+import type { ToolPermissionContext } from '../../src/Tool.js'
+import {
+  initializeToolPermissionContext,
+  initialPermissionModeFromCLI,
+  removeDangerousPermissions,
+  stripDangerousPermissionsForAutoMode,
+} from '../../src/utils/permissions/permissionSetup.js'
 import {
   createFileStateCacheWithSizeLimit,
   READ_FILE_STATE_CACHE_SIZE,
 } from '../../src/utils/fileStateCache.js'
 import { createProbeAdapter } from './probeAdapter.js'
+import {
+  createSidecarPermissionDomain,
+  type SidecarPermissionDomain,
+} from './permissionDomain.js'
 import { P1_1_CWD } from '../shared/sessionConfig.js'
 
 export { P1_1_CWD } from '../shared/sessionConfig.js'
 
-export function createNormalSidecarQueryEngineConfig() {
-  const appStateStore = createStore(getDefaultAppState())
-  const tools = getTools(appStateStore.getState().toolPermissionContext)
-
-  return createQueryEngineAppSessionConfigFromSetup({
-    cwd: P1_1_CWD,
-    tools,
-    commands: [],
-    mcpTools: [],
-    mcpCommands: [],
-    mcpClients: [],
-    mcpResources: {},
-    agents: [],
-    getAppState: appStateStore.getState,
-    setAppState: appStateStore.setState,
-    readFileCache: createFileStateCacheWithSizeLimit(
-      READ_FILE_STATE_CACHE_SIZE,
-    ),
+/**
+ * Load the REAL settings-derived permission context for a desktop session,
+ * mirroring the CLI bootstrap (src/main.tsx:1787-1811): mode from
+ * `initialPermissionModeFromCLI` (settings `permissions.defaultMode`, no CLI
+ * flags), rules/directories/bypass-availability from
+ * `initializeToolPermissionContext`, then the CLI's two post-steps. This
+ * fixes the PERMISSION-BOUNDARY.md §8 defect (same class as P1-3's
+ * `tools: []`): the P1-2..P2-3 sidecar built its context from
+ * `getEmptyToolPermissionContext()`, so settings-file allow/deny rules and
+ * defaultMode were never in effect and C3 snapshots would have shown a
+ * falsely empty policy.
+ */
+export async function loadSidecarToolPermissionContext(): Promise<ToolPermissionContext> {
+  const { mode } = initialPermissionModeFromCLI({
+    permissionModeCli: undefined,
+    dangerouslySkipPermissions: undefined,
   })
+  const initResult = await initializeToolPermissionContext({
+    allowedToolsCli: [],
+    disallowedToolsCli: [],
+    permissionMode: mode,
+    allowDangerouslySkipPermissions: false,
+    addDirs: [],
+  })
+
+  // The CLI's post-steps (main.tsx:1802-1811). Both arrays are only populated
+  // under their own engine-side gates (ant overly-broad detection; auto-mode
+  // dangerous-rule stripping), so presence is the faithful condition here.
+  let toolPermissionContext = initResult.toolPermissionContext
+  if (initResult.overlyBroadBashPermissions.length > 0) {
+    toolPermissionContext = removeDangerousPermissions(
+      toolPermissionContext,
+      initResult.overlyBroadBashPermissions,
+    )
+  }
+  if (initResult.dangerousPermissions.length > 0) {
+    toolPermissionContext = stripDangerousPermissionsForAutoMode(
+      toolPermissionContext,
+    )
+  }
+  return {
+    ...toolPermissionContext,
+    // PERMISSION-BOUNDARY.md §3: bypass is only grantable from a TRUSTED
+    // surface (the CLI expresses that as the --dangerously-skip-permissions
+    // launch flag; the desktop session has no such surface yet). The loader's
+    // settings-derived value reports policy only, which would silently drop
+    // the engine-side backstop the boundary's explicit rejection layers on —
+    // pin availability off until a trusted desktop grant surface is decided.
+    isBypassPermissionsModeAvailable: false,
+  }
 }
 
-export function createSidecarSessionController({
+export async function createNormalSidecarQueryEngineConfig() {
+  const toolPermissionContext = await loadSidecarToolPermissionContext()
+  const appStateStore = createStore({
+    ...getDefaultAppState(),
+    toolPermissionContext,
+  })
+  const tools = getTools(appStateStore.getState().toolPermissionContext)
+
+  return {
+    appStateStore,
+    queryEngineConfig: createQueryEngineAppSessionConfigFromSetup({
+      cwd: P1_1_CWD,
+      tools,
+      commands: [],
+      mcpTools: [],
+      mcpCommands: [],
+      mcpClients: [],
+      mcpResources: {},
+      agents: [],
+      getAppState: appStateStore.getState,
+      setAppState: appStateStore.setState,
+      readFileCache: createFileStateCacheWithSizeLimit(
+        READ_FILE_STATE_CACHE_SIZE,
+      ),
+    }),
+  }
+}
+
+export type SidecarSession = {
+  controller: AppSessionController
+  /**
+   * Permissions domain over the SAME store the runtime enforces (so C2 mode
+   * switches and C3 snapshots act on exactly what `canUseTool` reads). Null
+   * in probe mode, which has no engine app-state store.
+   */
+  permissions: SidecarPermissionDomain | null
+}
+
+export async function createSidecarSessionController({
   probe,
 }: {
   probe: boolean
-}): AppSessionController {
+}): Promise<SidecarSession> {
   if (probe) {
-    return createQueryEngineSessionController({
-      submitMessage(prompt, options) {
-        return createProbeAdapter().runTurn({
-          prompt,
-          options: { uuid: options?.uuid, isMeta: options?.isMeta },
-          signal: new AbortController().signal,
-          onPermissionRequest: async () => ({
-            behavior: 'deny',
-            message: 'probe: no permission handler',
-          }),
-        })
-      },
-    })
+    return {
+      controller: createQueryEngineSessionController({
+        submitMessage(prompt, options) {
+          return createProbeAdapter().runTurn({
+            prompt,
+            options: { uuid: options?.uuid, isMeta: options?.isMeta },
+            signal: new AbortController().signal,
+            onPermissionRequest: async () => ({
+              behavior: 'deny',
+              message: 'probe: no permission handler',
+            }),
+          })
+        },
+      }),
+      permissions: null,
+    }
   }
 
   // Derive the model-visible tool list from the SAME permission context the
@@ -61,7 +144,11 @@ export function createSidecarSessionController({
   // so what the model sees and what canUseTool allows never diverge. P1-2
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
-  const queryEngineConfig = createNormalSidecarQueryEngineConfig()
+  const { appStateStore, queryEngineConfig } =
+    await createNormalSidecarQueryEngineConfig()
 
-  return createRuntimeBackedWebAppSession({ queryEngineConfig })
+  return {
+    controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
+    permissions: createSidecarPermissionDomain(appStateStore),
+  }
 }

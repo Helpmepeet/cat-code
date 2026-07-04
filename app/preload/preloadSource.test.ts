@@ -6,5 +6,9 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
 
   expect(source).toContain("const CH_RESTART = 'catcode:restart'")
   expect(source).toContain('restart(sessionId: SessionId): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(6)
+  expect(source).toContain("const CH_SET_MODE = 'catcode:set-mode'")
+  expect(source).toContain(
+    'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
+  )
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(7)
 })

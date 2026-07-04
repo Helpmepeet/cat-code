@@ -50,13 +50,14 @@ async function main(): Promise<void> {
     await initializeSidecarRuntime()
   }
 
-  const controller = createSidecarSessionController({
+  const { controller, permissions } = await createSidecarSessionController({
     probe: args.probeOnAttach,
   })
 
   const server = new SidecarServer({
     sessionId: args.sessionId,
     controller,
+    ...(permissions ? { permissions } : {}),
   })
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a

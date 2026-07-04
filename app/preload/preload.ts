@@ -18,6 +18,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CatCodeBridge,
   PermissionResponseInput,
+  PermissionSetModeMode,
   ServerFrame,
   SessionId,
   SubmitOptions,
@@ -28,6 +29,7 @@ import { createRendererIpcGuard } from './rendererIpcGuard.js'
 const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
+const CH_SET_MODE = 'catcode:set-mode'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -54,6 +56,11 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, requestId, response }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_PERMISSION, payload)
+  },
+  setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void {
+    const payload = { sessionId, mode }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_SET_MODE, payload)
   },
   ping(sessionId: SessionId, nonce: string): void {
     const payload = { sessionId, nonce }

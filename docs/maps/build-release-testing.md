@@ -1,6 +1,6 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-07-03 against `CLAUDE.md`,
+Last refreshed: 2026-07-04 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/mcp/gpt-agent.ts`, `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
@@ -43,7 +43,7 @@ files, then verify current source before changing code.
 | Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | This is a temporary Tailwind v4 build harness for design-token handoff, not the final renderer scaffold. Run `bun run build` from `renderer-theme/`. |
 | Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | This portable type-only fixture currently uses cited snapshots because direct aliases pull in the engine runtime graph. Re-sync snapshots from their canonical source types before renderer adoption, then run the documented isolated `tsc` command. |
 | Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process. |
-| Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/sidecar/tsconfig.json`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the root lint configuration does not yet cover `app/**`. |
+| Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar` and `app/shared` diagnostics while tolerating known upstream engine diagnostics. |
 | Shell update command | `src/main.tsx` | `src/entrypoints/cli.tsx`, `src/cli/update.ts` | `program.command('update').alias('upgrade')` delegates to `src/cli/update.ts`. Early CLI rewrites `--update` and `--upgrade` to the `update` subcommand. |
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
@@ -150,7 +150,7 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Portable renderer theme | `cd renderer-theme && bun run build` | `renderer-theme/package.json`, Vite |
 | Renderer engine-type fixture | `bunx tsc --project scripts/typecheck/renderer-engine-types/tsconfig.json --noEmit` | Isolated renderer type-adoption config |
 | Electron desktop tests | `bun test app/` | Desktop unit, boundary, and round-trip tests |
-| Electron desktop typechecks | `bunx tsc --noEmit -p app/tsconfig.json && bunx tsc --noEmit -p app/sidecar/tsconfig.json` | Snapshot-isolated shell graph plus real engine-sidecar graph |
+| Electron desktop typechecks | `bun run --cwd app typecheck && bun run --cwd app typecheck:sidecar` | Snapshot-isolated shell graph plus scoped real engine-sidecar diagnostics |
 | Electron desktop renderer | `bun run --cwd app renderer:build` | Vite renderer bundle |
 | Electron hardening smoke | `bun run --cwd app test:hardening` | Packaged Electron security-baseline checks |
 | Codex standalone smoke | `bun run scripts/test-codex-core.ts --account <alias> --model <model> --prompt "hello"` | `scripts/test-codex-core.ts` |

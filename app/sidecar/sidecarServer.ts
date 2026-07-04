@@ -20,12 +20,14 @@
  * the supervisor.
  */
 
+import z from 'zod/v4'
 import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import type {
   AppPermissionRequest,
   AppPermissionResponse,
   AppSessionEvent,
 } from '../../src/app-runtime/sessionEvents.js'
+import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
 import type {
@@ -50,11 +52,14 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
+  PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
   type ClientFrame,
+  type PermissionContextSnapshot,
   type ServerFrame,
   type SessionId,
 } from '../shared/protocol.js'
+import type { SidecarPermissionDomain } from './permissionDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -72,6 +77,12 @@ type Connection = {
 export type SidecarServerOptions = {
   sessionId: SessionId
   controller: AppSessionController
+  /**
+   * Permissions domain capability (P2-4). Optional because the P1-0 probe
+   * fixture has no engine app-state store; when absent, `permission.setMode`
+   * fails closed and no `permission.context` snapshots are emitted.
+   */
+  permissions?: SidecarPermissionDomain
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -86,14 +97,17 @@ export type SidecarServerOptions = {
 export class SidecarServer {
   private readonly sessionId: SessionId
   private readonly controller: AppSessionController
+  private readonly permissions: SidecarPermissionDomain | null
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
+  private unsubscribePermissionContext: (() => void) | null = null
   private activeTurn = false
 
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
     this.controller = options.controller
+    this.permissions = options.permissions ?? null
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
     // Subscribe once; broadcast every event to all connected clients as a raw
@@ -102,6 +116,18 @@ export class SidecarServer {
     this.unsubscribe = this.controller.subscribe(event => {
       this.broadcastEvent(event)
     })
+
+    // C3 (PERMISSION-BOUNDARY.md §4) — emit a fresh snapshot on EVERY live
+    // context change. Store-subscription (not emit-after-boundary-writes) is
+    // required: the context also mutates without boundary involvement (C1
+    // updates applied by the engine's decision path, PermissionRequest hooks
+    // applying rules mid-turn).
+    if (this.permissions) {
+      this.unsubscribePermissionContext =
+        this.permissions.subscribeToolPermissionContext(context => {
+          this.broadcastPermissionContext(context)
+        })
+    }
   }
 
   /** Register a new client connection (called by the transport on connect). */
@@ -132,6 +158,14 @@ export class SidecarServer {
         sessionId: this.sessionId,
         payload: preparedPayload,
       })
+    }
+    // C3 — snapshot on attach, immediately after `ready` (a separate app-owned
+    // frame; the engine-owned AppReadyPayload is deliberately not widened).
+    if (this.permissions) {
+      this.sendPermissionContext(
+        connection,
+        this.permissions.getToolPermissionContext(),
+      )
     }
     return connection
   }
@@ -167,10 +201,12 @@ export class SidecarServer {
     }
   }
 
-  /** Tear down the controller subscription. */
+  /** Tear down the controller + permission-context subscriptions. */
   close(): void {
     this.unsubscribe?.()
     this.unsubscribe = null
+    this.unsubscribePermissionContext?.()
+    this.unsubscribePermissionContext = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -221,6 +257,19 @@ export class SidecarServer {
     if (strictError) {
       this.log(`[sidecar] rejected frame with unexpected keys: ${strictError}`)
       this.sendError(connection, undefined, 'bad_request', strictError, false)
+      return
+    }
+
+    // C2 — `permission.setMode` is app-owned vocabulary validated by a
+    // sidecar-LOCAL schema (PERMISSION-BOUNDARY.md §3). The engine's shared
+    // `appClientMessageSchema` is deliberately NOT extended: the WS server
+    // shares it and must not silently start accepting a frame it has no
+    // handler for (Phase-3 F3 owns any consolidation).
+    if (
+      (frame.message as { type?: unknown } | null | undefined)?.type ===
+      'permission.setMode'
+    ) {
+      this.handleSetMode(connection, frame.message)
       return
     }
 
@@ -362,6 +411,82 @@ export class SidecarServer {
       .finally(() => {
         this.activeTurn = false
       })
+  }
+
+  /**
+   * C2 — `permission.setMode` (decisions/PERMISSION-BOUNDARY.md §3).
+   * Fail-closed order: explicit escalation rejections → local schema →
+   * capability presence → apply. The apply is session-scoped by construction
+   * (no destination exists on the wire; nothing here can reach
+   * `permissions.defaultMode`). Success is acknowledged by the resulting
+   * `permission.context` snapshot; a same-mode no-op emits nothing.
+   */
+  private handleSetMode(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown; mode?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    // bypassPermissions is REJECTED at the boundary, always — it escalates
+    // beyond T5b (no per-action prompt is ever raised again, killing the
+    // round-trip and its audit trail). The engine-side context default
+    // (isBypassPermissionsModeAvailable: false) would also refuse it, but the
+    // boundary rejects explicitly rather than leaning on that default.
+    if (raw.mode === 'bypassPermissions') {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        'mode "bypassPermissions" is never grantable over IPC',
+        false,
+      )
+      return
+    }
+    // `auto` is engine-internal and feature-gated; not renderer-addressable.
+    if (raw.mode === 'auto') {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        'mode "auto" is engine-internal and not addressable over IPC',
+        false,
+      )
+      return
+    }
+
+    const parsed = permissionSetModeMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid permission.setMode message',
+        false,
+      )
+      return
+    }
+
+    if (!this.permissions) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'permission domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    try {
+      this.permissions.setMode(parsed.data.mode)
+    } catch (error) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        error instanceof Error ? error.message : String(error),
+        false,
+      )
+    }
   }
 
   private handlePermissionResponse(
@@ -564,6 +689,49 @@ export class SidecarServer {
     }
   }
 
+  /** C3 — build + send one snapshot frame to a single connection (attach). */
+  private sendPermissionContext(
+    connection: Connection,
+    context: ToolPermissionContext,
+  ): void {
+    const frame = this.preparePermissionContextFrame(context)
+    if (frame) {
+      this.send(connection, frame)
+    }
+  }
+
+  /** C3 — broadcast a snapshot to every connection (on live-context change). */
+  private broadcastPermissionContext(context: ToolPermissionContext): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    const frame = this.preparePermissionContextFrame(context)
+    if (!frame) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.send(connection, frame)
+    }
+  }
+
+  private preparePermissionContextFrame(
+    context: ToolPermissionContext,
+  ): ServerFrame | null {
+    const snapshot = this.prepareOutboundPayload(
+      buildPermissionContextSnapshot(context),
+      'permission.context snapshot',
+    )
+    if (!snapshot) {
+      return null
+    }
+    return {
+      kind: 'permission.context',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      context: snapshot,
+    }
+  }
+
   private send(connection: Connection, frame: ServerFrame): void {
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
@@ -670,6 +838,10 @@ function checkStrictKeys(message: unknown): string | null {
     ['app.submit', new Set(['type', 'requestId', 'prompt', 'options'])],
     ['app.abort', new Set(['type', 'requestId', 'reason'])],
     ['permission.response', new Set(['type', 'requestId', 'response'])],
+    // C2 (PERMISSION-BOUNDARY.md §3). NOTE: no `destination` key — scope is
+    // pinned to `session` at the sidecar; a renderer that tries to send one
+    // is rejected here.
+    ['permission.setMode', new Set(['type', 'requestId', 'mode'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
@@ -730,6 +902,63 @@ function checkStrictKeys(message: unknown): string | null {
   }
 
   return null
+}
+
+/**
+ * C2 — sidecar-LOCAL schema for `permission.setMode`
+ * (PERMISSION-BOUNDARY.md §3). Deliberately NOT part of the engine's shared
+ * `appClientMessageSchema` (the WS server shares that and has no handler for
+ * this frame). The mode allowlist is the wire constant; `bypassPermissions`
+ * and `auto` are rejected with explicit messages before this parse runs.
+ */
+const permissionSetModeMessageSchema = z.object({
+  type: z.literal('permission.setMode'),
+  requestId: z.string().min(1),
+  mode: z.enum(PERMISSION_SET_MODE_MODES),
+})
+
+/**
+ * C3 — convert the engine's live `ToolPermissionContext` into the wire
+ * snapshot (PERMISSION-BOUNDARY.md §4). Pure JSON POJO: the context's
+ * `additionalWorkingDirectories` is a Map, which `checkJsonSafe` fail-closes
+ * on, so it becomes an entries array here. Rule lists are copied so the frame
+ * never aliases live engine state. Faithfulness rule: this is the ONLY place
+ * a snapshot is built, and its input is always the engine's own context
+ * object — never a renderer-side reconstruction.
+ */
+export function buildPermissionContextSnapshot(
+  context: ToolPermissionContext,
+): PermissionContextSnapshot {
+  const additionalWorkingDirectories: Array<{ path: string; source: string }> =
+    []
+  context.additionalWorkingDirectories.forEach(
+    (entry: { path: string; source: string }) => {
+      additionalWorkingDirectories.push({
+        path: entry.path,
+        source: entry.source,
+      })
+    },
+  )
+  return {
+    mode: context.mode,
+    alwaysAllowRules: cloneRulesBySource(context.alwaysAllowRules),
+    alwaysDenyRules: cloneRulesBySource(context.alwaysDenyRules),
+    alwaysAskRules: cloneRulesBySource(context.alwaysAskRules),
+    additionalWorkingDirectories,
+    isBypassPermissionsModeAvailable: context.isBypassPermissionsModeAvailable,
+  }
+}
+
+function cloneRulesBySource(
+  rules: ToolPermissionRulesBySource,
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {}
+  for (const [source, ruleStrings] of Object.entries(rules)) {
+    if (ruleStrings) {
+      result[source] = [...ruleStrings]
+    }
+  }
+  return result
 }
 
 type SuggestionSelectionResult =

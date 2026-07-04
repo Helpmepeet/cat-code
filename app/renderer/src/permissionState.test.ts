@@ -5,7 +5,10 @@ import {
   buildDenyResponse,
   createPermissionState,
   reducePermissionState,
+  selectPermissionContext,
+  selectPermissionQueue,
   selectVisiblePermission,
+  type PermissionRequest,
 } from './permissionState.js'
 
 const REQUEST = {
@@ -282,4 +285,193 @@ test('resolved and error frames are isolated even when sessions reuse a request 
     },
   })
   expect(selectVisiblePermission(state, 'session-2')).toEqual(REQUEST)
+})
+
+/* ------------------------------------------------------------------------- *
+ * P2-4 — multi-pending queue, universal resolved dismiss, C3 context, C1
+ * suggestion selection (S2 §1–§2, decisions/PERMISSION-BOUNDARY.md)
+ * ------------------------------------------------------------------------- */
+
+const REQUEST_2 = {
+  requestId: 'perm-2',
+  request: {
+    subtype: 'can_use_tool' as const,
+    tool_name: 'Read',
+    input: { file_path: '/tmp/x' },
+    tool_use_id: 'toolu-2',
+  },
+}
+
+const CONTEXT_SNAPSHOT = {
+  mode: 'acceptEdits',
+  alwaysAllowRules: { userSettings: ['Bash(date:*)'] },
+  alwaysDenyRules: {},
+  alwaysAskRules: {},
+  additionalWorkingDirectories: [],
+  isBypassPermissionsModeAvailable: false,
+}
+
+function requestedFrame(
+  request: PermissionRequest,
+  sessionId = 'session-1',
+): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: 1,
+    sessionId,
+    event: { type: 'permission.requested', request },
+  }
+}
+
+function resolvedFrame(
+  request: PermissionRequest,
+  sessionId = 'session-1',
+  response: { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string } = {
+    behavior: 'deny',
+    message: 'Session aborted',
+  },
+): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: 1,
+    sessionId,
+    event: { type: 'permission.resolved', request, response },
+  }
+}
+
+test('multiple pendings queue in arrival order with no timeout', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  state = reducePermissionState(state, { type: 'frame', frame: requestedFrame(REQUEST) })
+  state = reducePermissionState(state, { type: 'frame', frame: requestedFrame(REQUEST_2) })
+
+  const queue = selectPermissionQueue(state, 'session-1')
+  expect(queue.map(item => item.request.requestId)).toEqual(['perm-1', 'perm-2'])
+  expect(queue.every(item => !item.submitted && !item.dismissed)).toBe(true)
+  // The keyboard target is the head of the queue.
+  expect(selectVisiblePermission(state, 'session-1')).toEqual(REQUEST)
+})
+
+test('permission.resolved is the universal dismiss — only the resolved card leaves', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  state = reducePermissionState(state, { type: 'frame', frame: requestedFrame(REQUEST) })
+  state = reducePermissionState(state, { type: 'frame', frame: requestedFrame(REQUEST_2) })
+
+  // Resolved by ANOTHER surface (this window never submitted an answer).
+  state = reducePermissionState(state, { type: 'frame', frame: resolvedFrame(REQUEST) })
+
+  expect(selectPermissionQueue(state, 'session-1').map(i => i.request.requestId)).toEqual([
+    'perm-2',
+  ])
+})
+
+test('an abort mass-deny arrives as N resolved frames and empties the queue', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  state = reducePermissionState(state, { type: 'frame', frame: requestedFrame(REQUEST) })
+  state = reducePermissionState(state, { type: 'frame', frame: requestedFrame(REQUEST_2) })
+
+  state = reducePermissionState(state, { type: 'frame', frame: resolvedFrame(REQUEST) })
+  state = reducePermissionState(state, { type: 'frame', frame: resolvedFrame(REQUEST_2) })
+
+  expect(selectPermissionQueue(state, 'session-1')).toEqual([])
+})
+
+test('a snoozed card can be restored for answering', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([REQUEST]),
+  })
+  state = reducePermissionState(state, {
+    type: 'dismissed',
+    sessionId: 'session-1',
+    requestId: REQUEST.requestId,
+  })
+  expect(selectVisiblePermission(state, 'session-1')).toBeNull()
+  expect(selectPermissionQueue(state, 'session-1')[0]?.dismissed).toBe(true)
+
+  state = reducePermissionState(state, {
+    type: 'restored',
+    sessionId: 'session-1',
+    requestId: REQUEST.requestId,
+  })
+  expect(selectVisiblePermission(state, 'session-1')).toEqual(REQUEST)
+})
+
+test('C3 — the permission.context frame is stored and selectable per session', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  expect(selectPermissionContext(state, 'session-1')).toBeNull()
+
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'permission.context',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      context: CONTEXT_SNAPSHOT,
+    },
+  })
+
+  expect(selectPermissionContext(state, 'session-1')).toEqual(CONTEXT_SNAPSHOT)
+})
+
+test('C3 — a reattach ready frame keeps the last snapshot until the next one lands', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'permission.context',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      context: CONTEXT_SNAPSHOT,
+    },
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+
+  expect(selectPermissionContext(state, 'session-1')).toEqual(CONTEXT_SNAPSHOT)
+})
+
+test('C1 — buildAllowResponse carries a suggestion SELECTION, never rule objects', () => {
+  const always = buildAllowResponse(REQUEST, [0])
+  expect(always).toEqual({
+    behavior: 'allow',
+    updatedInput: {},
+    applySuggestions: [0],
+  })
+  // Indices only — no rule content can originate in the renderer.
+  expect(JSON.stringify(always)).not.toContain('addRules')
+  expect('updatedPermissions' in always).toBe(false)
+
+  // Empty selection is allow-once and omits the key entirely.
+  expect(buildAllowResponse(REQUEST, [])).toEqual({
+    behavior: 'allow',
+    updatedInput: {},
+  })
+})
+
+test('deny uses the free-text feedback when provided, with a safe default', () => {
+  expect(buildDenyResponse('Use pnpm, not npm')).toEqual({
+    behavior: 'deny',
+    message: 'Use pnpm, not npm',
+  })
+  expect(buildDenyResponse('   ')).toEqual({
+    behavior: 'deny',
+    message: 'Denied by user',
+  })
 })

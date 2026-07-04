@@ -12,7 +12,10 @@ test('renders the live prompt input, permission surface, projected transcript, a
 
   expect(html).toContain('aria-label="Prompt"')
   expect(html).toContain('Copy for LLM')
-  expect(html).toContain('aria-label="Permission requests"')
+  // The queue renders nothing with zero pendings; the rules surface is
+  // always present (and waits for the first C3 snapshot).
+  expect(html).toContain('Permissions')
+  expect(html).toContain('Waiting for the engine')
   expect(html).toContain('Transcript (projected)')
   expect(html).toContain('<pre')
   expect(html).toContain('Raw SDKMessage events')

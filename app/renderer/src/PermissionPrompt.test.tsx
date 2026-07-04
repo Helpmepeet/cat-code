@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   PermissionPrompt,
+  describeSuggestion,
   permissionActionForKey,
 } from './PermissionPrompt.js'
 import type { PermissionRequest } from './permissionState.js'
@@ -32,7 +33,61 @@ test('renders the requested tool, exact input, controls, and inline key hints', 
   expect(html).toContain('Deny')
   expect(html).toContain('Enter allow')
   expect(html).toContain('N / ⌫ deny')
-  expect(html).toContain('Esc dismiss')
+  expect(html).toContain('Esc snooze')
+  // No engine-minted suggestions on this request → no always-allow option.
+  expect(html).not.toContain('Always allow')
+})
+
+test('renders an always-allow option per ENGINE-minted suggestion, verbatim', () => {
+  const request: PermissionRequest = {
+    requestId: 'perm-2',
+    request: {
+      ...REQUEST.request,
+      decision_reason: 'rule requires confirmation',
+      permission_suggestions: [
+        {
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'date:*' }],
+          behavior: 'allow',
+          destination: 'localSettings',
+        },
+      ],
+    },
+  }
+
+  const html = renderToStaticMarkup(
+    <PermissionPrompt onAllow={() => {}} onDeny={() => {}} request={request} />,
+  )
+
+  expect(html).toContain('Always allow')
+  // The engine's own rule serialization — never a client-side ruleImplication.
+  expect(html).toContain('allow Bash(date:*) · localSettings')
+  expect(html).toContain('Why: rule requires confirmation')
+})
+
+test('describeSuggestion renders the engine rule idiom for every update type', () => {
+  expect(
+    describeSuggestion({
+      type: 'addRules',
+      rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }, { toolName: 'Read' }],
+      behavior: 'allow',
+      destination: 'localSettings',
+    }),
+  ).toBe('allow Bash(npm test:*), Read · localSettings')
+  expect(
+    describeSuggestion({
+      type: 'setMode',
+      mode: 'acceptEdits',
+      destination: 'session',
+    }),
+  ).toBe('mode → acceptEdits · session')
+  expect(
+    describeSuggestion({
+      type: 'addDirectories',
+      directories: ['/tmp/x'],
+      destination: 'session',
+    }),
+  ).toBe('allow directory /tmp/x · session')
 })
 
 test('maps the permission keyboard contract and ignores unrelated keys', () => {

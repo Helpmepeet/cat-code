@@ -27,12 +27,14 @@ import {
   isAppOrigin,
   type NavigationConfig,
 } from './navigationPolicy.js'
-import type { AppClientMessage } from '@cat-code/engine/session-events'
 import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
 import {
+  PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
+  type PermissionSetModeMode,
   type ServerFrame,
   type SessionId,
+  type SidecarClientMessage,
 } from '../shared/protocol.js'
 import { P1_1_CWD } from '../shared/sessionConfig.js'
 
@@ -42,6 +44,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
+const CH_SET_MODE = 'catcode:set-mode'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -279,6 +282,27 @@ function registerIpcHandlers(): void {
     },
   )
 
+  ipcMain.on(
+    CH_SET_MODE,
+    (_e, arg: { sessionId: SessionId; mode: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // C2 — light UX coercion only; the SIDECAR is the trust boundary and
+      // re-validates (bypassPermissions/auto rejected there explicitly). A
+      // value outside the wire allowlist drops the whole message fail-closed
+      // rather than forwarding a frame that is guaranteed to be rejected.
+      if (
+        !PERMISSION_SET_MODE_MODES.includes(arg.mode as PermissionSetModeMode)
+      ) {
+        return
+      }
+      forward(arg.sessionId, {
+        type: 'permission.setMode',
+        requestId: generateRequestId(),
+        mode: arg.mode as PermissionSetModeMode,
+      })
+    },
+  )
+
   ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
@@ -301,7 +325,7 @@ function registerIpcHandlers(): void {
   })
 }
 
-function forward(sessionId: SessionId, message: AppClientMessage): void {
+function forward(sessionId: SessionId, message: SidecarClientMessage): void {
   if (!supervisor) {
     process.stderr.write(`[main] forward to ${sessionId} dropped: no live host\n`)
     return

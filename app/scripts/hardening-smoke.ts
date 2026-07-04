@@ -132,6 +132,7 @@ async function runProductionHardeningSmoke(
       'rendererReady',
       'respondPermission',
       'restart',
+      'setPermissionMode',
       'submit',
       'subscribe',
     ]

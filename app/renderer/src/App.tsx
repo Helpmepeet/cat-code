@@ -6,15 +6,16 @@ import {
   type FormEvent,
 } from 'react'
 import { getBridge } from './bridge.js'
-import {
-  PermissionPrompt,
-  permissionActionForKey,
-} from './PermissionPrompt.js'
+import { permissionActionForKey } from './PermissionPrompt.js'
+import { PermissionQueue } from './PermissionQueue.js'
+import { PermissionRulesEditor } from './PermissionRulesEditor.js'
 import {
   buildAllowResponse,
   buildDenyResponse,
   createPermissionState,
   reducePermissionState,
+  selectPermissionContext,
+  selectPermissionQueue,
   selectVisiblePermission,
 } from './permissionState.js'
 import {
@@ -40,6 +41,7 @@ import {
 import type {
   CatCodeBridge,
   PermissionResponseInput,
+  PermissionSetModeMode,
   SessionId,
 } from '../../shared/protocol.js'
 
@@ -114,74 +116,110 @@ export function App() {
     }
   }
 
+  const permissionQueue =
+    activeConnection.status === 'ready'
+      ? selectPermissionQueue(permissions, state.activeSessionId)
+      : []
+  const permissionContext = selectPermissionContext(
+    permissions,
+    state.activeSessionId,
+  )
+  // The card the keyboard shortcuts act on: first un-answered, un-snoozed.
   const pendingPermission =
     activeConnection.status === 'ready'
       ? selectVisiblePermission(permissions, state.activeSessionId)
       : null
 
-  const allowPermission = useCallback(() => {
-    if (!pendingPermission || !state.activeSessionId) return
-    dispatchPermission({
-      type: 'submitted',
-      sessionId: state.activeSessionId,
-      requestId: pendingPermission.requestId,
-    })
-    const error = sendPermissionResponse(
-      getBridge(),
-      state.activeSessionId,
-      pendingPermission.requestId,
-      buildAllowResponse(pendingPermission),
-    )
-    if (error) {
-      dispatchPermission({
-        type: 'submissionFailed',
-        sessionId: state.activeSessionId,
-        requestId: pendingPermission.requestId,
-      })
-      setTransportError(error)
-    } else {
-      setTransportError(null)
-    }
-  }, [pendingPermission, state.activeSessionId])
+  const respondToPermission = useCallback(
+    (requestId: string, response: PermissionResponseInput) => {
+      const sessionId = state.activeSessionId
+      if (!sessionId) return
+      dispatchPermission({ type: 'submitted', sessionId, requestId })
+      const error = sendPermissionResponse(
+        getBridge(),
+        sessionId,
+        requestId,
+        response,
+      )
+      if (error) {
+        dispatchPermission({ type: 'submissionFailed', sessionId, requestId })
+        setTransportError(error)
+      } else {
+        setTransportError(null)
+      }
+    },
+    [state.activeSessionId],
+  )
 
-  const denyPermission = useCallback(() => {
-    if (!pendingPermission || !state.activeSessionId) return
-    dispatchPermission({
-      type: 'submitted',
-      sessionId: state.activeSessionId,
-      requestId: pendingPermission.requestId,
-    })
-    const error = sendPermissionResponse(
-      getBridge(),
-      state.activeSessionId,
-      pendingPermission.requestId,
-      buildDenyResponse(),
-    )
-    if (error) {
+  const allowPermission = useCallback(
+    (requestId: string, applySuggestions: number[] = []) => {
+      const item = permissionQueue.find(
+        candidate => candidate.request.requestId === requestId,
+      )
+      if (!item) return
+      respondToPermission(
+        requestId,
+        buildAllowResponse(item.request, applySuggestions),
+      )
+    },
+    [permissionQueue, respondToPermission],
+  )
+
+  const denyPermission = useCallback(
+    (requestId: string, message?: string) => {
+      respondToPermission(requestId, buildDenyResponse(message))
+    },
+    [respondToPermission],
+  )
+
+  const restorePermission = useCallback(
+    (requestId: string) => {
+      if (!state.activeSessionId) return
       dispatchPermission({
-        type: 'submissionFailed',
+        type: 'restored',
         sessionId: state.activeSessionId,
-        requestId: pendingPermission.requestId,
+        requestId,
       })
-      setTransportError(error)
-    } else {
-      setTransportError(null)
-    }
-  }, [pendingPermission, state.activeSessionId])
+    },
+    [state.activeSessionId],
+  )
+
+  const setPermissionMode = useCallback(
+    (mode: PermissionSetModeMode) => {
+      if (!state.activeSessionId) return
+      // C2 — session-scoped mode switch; the sidecar validates the mode and
+      // answers with a fresh permission.context snapshot (the ack).
+      try {
+        getBridge().setPermissionMode(state.activeSessionId, mode)
+        setTransportError(null)
+      } catch (error) {
+        setTransportError(errorMessage(error))
+      }
+    },
+    [state.activeSessionId],
+  )
 
   useEffect(() => {
     const activeSessionId = state.activeSessionId
     if (!pendingPermission || !activeSessionId) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Never hijack keys while the user is typing (e.g. deny feedback).
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+      ) {
+        return
+      }
       const action = permissionActionForKey(event)
       if (!action) return
 
       event.preventDefault()
       if (action === 'allow') {
-        allowPermission()
+        allowPermission(pendingPermission.requestId, [])
       } else if (action === 'deny') {
-        denyPermission()
+        denyPermission(pendingPermission.requestId)
       } else {
         dispatchPermission({
           type: 'dismissed',
@@ -257,15 +295,29 @@ export function App() {
         </button>
       </form>
 
-      <div aria-label="Permission requests">
-        {pendingPermission ? (
-          <PermissionPrompt
-            onAllow={allowPermission}
-            onDeny={denyPermission}
-            request={pendingPermission}
+      <PermissionQueue
+        items={permissionQueue}
+        onAllow={allowPermission}
+        onDeny={denyPermission}
+        onRestore={restorePermission}
+      />
+
+      <details className="rounded border border-text-subtle/50 px-3 py-2">
+        <summary className="cursor-pointer text-sm text-text-muted">
+          Permissions
+          {permissionContext ? (
+            <span className="ml-2 font-mono text-xs text-accent">
+              {permissionContext.mode}
+            </span>
+          ) : null}
+        </summary>
+        <div className="mt-2">
+          <PermissionRulesEditor
+            context={permissionContext}
+            onSetMode={setPermissionMode}
           />
-        ) : null}
-      </div>
+        </div>
+      </details>
 
       {activeLog.error ? (
         <div className="text-sm text-tone-danger">{activeLog.error}</div>

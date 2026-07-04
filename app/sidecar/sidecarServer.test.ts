@@ -13,10 +13,23 @@ import type {
   AppPermissionRequest,
   AppPermissionResponse,
 } from '../../src/app-runtime/sessionEvents.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { createStore } from '../../src/state/store.js'
+import type { ToolPermissionContext } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
+import { applyPermissionUpdate } from '../../src/utils/permissions/PermissionUpdate.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import { MAX_FRAME_BYTES, MAX_PROMPT_BYTES } from '../shared/limits.js'
-import { PROTOCOL_VERSION, type ClientFrame, type ServerFrame } from '../shared/protocol.js'
+import {
+  PROTOCOL_VERSION,
+  type ClientFrame,
+  type PermissionContextFrame,
+  type ServerFrame,
+} from '../shared/protocol.js'
+import {
+  createSidecarPermissionDomain,
+  type SidecarPermissionDomain,
+} from './permissionDomain.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 
@@ -89,10 +102,27 @@ function bashSuggestion(ruleContent: string): PermissionUpdate {
 }
 
 let servers: SidecarServer[] = []
-function makeServer(controller: AppSessionController): SidecarServer {
-  const server = new SidecarServer({ sessionId: SESSION, controller, log: () => {} })
+function makeServer(
+  controller: AppSessionController,
+  permissions?: SidecarPermissionDomain,
+): SidecarServer {
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    controller,
+    ...(permissions ? { permissions } : {}),
+    log: () => {},
+  })
   servers.push(server)
   return server
+}
+
+/** Real engine app-state store seeded with an (optionally customized) context. */
+function makePermissionStore(context?: Partial<ToolPermissionContext>) {
+  const base = getDefaultAppState()
+  return createStore({
+    ...base,
+    toolPermissionContext: { ...base.toolPermissionContext, ...context },
+  })
 }
 
 afterEach(() => {
@@ -898,3 +928,350 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
     await new Promise(r => setTimeout(r, 5))
   }
 }
+
+/* ------------------------------------------------------------------------- *
+ * P2-4 — C2 `permission.setMode` + C3 `permission.context`
+ * (decisions/PERMISSION-BOUNDARY.md §3/§4)
+ * ------------------------------------------------------------------------- */
+
+function contextFrames(received: ServerFrame[]): PermissionContextFrame[] {
+  return received.filter(
+    (frame): frame is PermissionContextFrame =>
+      frame.kind === 'permission.context',
+  )
+}
+
+test('C3 — attach emits a permission.context snapshot faithful to the engine context', () => {
+  const store = makePermissionStore({
+    mode: 'acceptEdits',
+    alwaysAllowRules: { userSettings: ['Bash(date:*)'] },
+    alwaysDenyRules: { projectSettings: ['WebSearch'] },
+    additionalWorkingDirectories: new Map([
+      ['/tmp/extra', { path: '/tmp/extra', source: 'session' }],
+    ]),
+  })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  // Ready first, snapshot immediately after (§4: attach emission; the
+  // engine-owned AppReadyPayload is not widened).
+  expect(received[0]?.kind).toBe('ready')
+  expect(received[1]).toEqual({
+    kind: 'permission.context',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    context: {
+      mode: 'acceptEdits',
+      alwaysAllowRules: { userSettings: ['Bash(date:*)'] },
+      alwaysDenyRules: { projectSettings: ['WebSearch'] },
+      alwaysAskRules: {},
+      // The engine's Map, converted to the JSON POJO entries shape.
+      additionalWorkingDirectories: [{ path: '/tmp/extra', source: 'session' }],
+      isBypassPermissionsModeAvailable: false,
+    },
+  })
+})
+
+test('C3 — no permission domain (probe fixture) → ready only, no snapshot', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received[0]?.kind).toBe('ready')
+  expect(contextFrames(received)).toHaveLength(0)
+})
+
+test('C3 — a live-context change broadcasts a fresh snapshot (engine-applied rule)', () => {
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  const before = contextFrames(received).length
+
+  // The engine's own decision path applies C1 updates via setAppState
+  // (PermissionPromptToolResultSchema.ts:95-106); hooks do the same mid-turn.
+  // Reproduce that exact write shape with the engine's own applyPermissionUpdate.
+  store.setState(prev => ({
+    ...prev,
+    toolPermissionContext: applyPermissionUpdate(prev.toolPermissionContext, {
+      type: 'addRules',
+      rules: [{ toolName: 'Bash', ruleContent: 'date:*' }],
+      behavior: 'allow',
+      destination: 'session',
+    }),
+  }))
+
+  const snapshots = contextFrames(received)
+  expect(snapshots).toHaveLength(before + 1)
+  expect(snapshots.at(-1)!.context.alwaysAllowRules.session).toContain(
+    'Bash(date:*)',
+  )
+})
+
+test('C3 — an unrelated app-state change does NOT re-emit the snapshot', () => {
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  const before = contextFrames(received).length
+
+  store.setState(prev => ({ ...prev, thinkingEnabled: !prev.thinkingEnabled }))
+
+  expect(contextFrames(received)).toHaveLength(before)
+})
+
+test('C2 — permission.setMode applies every allowlisted mode via the engine transition', () => {
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  for (const mode of ['acceptEdits', 'plan', 'dontAsk', 'default'] as const) {
+    server.handleData(
+      conn,
+      clientFrame({ type: 'permission.setMode', requestId: `m-${mode}`, mode }),
+    )
+    expect(store.getState().toolPermissionContext.mode).toBe(mode)
+    // The fresh snapshot IS the acknowledgement.
+    expect(contextFrames(received).at(-1)!.context.mode).toBe(mode)
+  }
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+})
+
+test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () => {
+  const store = makePermissionStore({ mode: 'acceptEdits' })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = contextFrames(received).length
+  const contextBefore = store.getState().toolPermissionContext
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.setMode',
+      requestId: 'm-same',
+      mode: 'acceptEdits',
+    }),
+  )
+
+  expect(store.getState().toolPermissionContext).toBe(contextBefore)
+  expect(contextFrames(received)).toHaveLength(before)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+})
+
+test('C2 — bypassPermissions is REJECTED, always; mode unchanged, no snapshot', () => {
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = contextFrames(received).length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'permission.setMode',
+        requestId: 'm-bypass',
+        mode: 'bypassPermissions',
+      },
+    }),
+  )
+
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'error' &&
+        frame.code === 'bad_request' &&
+        frame.message.includes('bypassPermissions'),
+    ),
+  ).toBe(true)
+  expect(store.getState().toolPermissionContext.mode).toBe('default')
+  expect(contextFrames(received)).toHaveLength(before)
+})
+
+test('C2 — auto is engine-internal and REJECTED at the boundary', () => {
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'permission.setMode', requestId: 'm-auto', mode: 'auto' },
+    }),
+  )
+
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'error' &&
+        frame.code === 'bad_request' &&
+        frame.message.includes('auto'),
+    ),
+  ).toBe(true)
+  expect(store.getState().toolPermissionContext.mode).toBe('default')
+})
+
+test('C2 — an unknown mode string fails the sidecar-local schema', () => {
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'permission.setMode', requestId: 'm-junk', mode: 'yolo' },
+    }),
+  )
+
+  expect(
+    received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
+  ).toBe(true)
+  expect(store.getState().toolPermissionContext.mode).toBe('default')
+})
+
+test('C2/F10 — a setMode frame smuggling a destination key is rejected wholesale', () => {
+  // No destination exists on the wire — scope is pinned to `session` at the
+  // sidecar. A renderer that tries to address settings persistence is refused
+  // by strict-key checking before any schema runs.
+  const store = makePermissionStore()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'permission.setMode',
+        requestId: 'm-dest',
+        mode: 'acceptEdits',
+        destination: 'userSettings',
+      },
+    }),
+  )
+
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'error' &&
+        frame.code === 'bad_request' &&
+        frame.message.includes('destination'),
+    ),
+  ).toBe(true)
+  expect(store.getState().toolPermissionContext.mode).toBe('default')
+})
+
+test('C2 — setMode without a permission domain fails closed (probe fixture)', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.setMode',
+      requestId: 'm-nodomain',
+      mode: 'acceptEdits',
+    }),
+  )
+
+  expect(
+    received.some(
+      frame => frame.kind === 'error' && frame.code === 'internal_error',
+    ),
+  ).toBe(true)
+})
+
+test('C1+C3 — resolving with a suggestion selection then applying it re-snapshots', async () => {
+  // End-to-end shape of the "always allow" flow at this boundary: the C1
+  // selection resolves the pending request with ENGINE-minted updates attached
+  // (tested exhaustively above), and when the engine's decision path applies
+  // those updates to the live context, C3 broadcasts the new rule to every
+  // window. The engine-side apply is reproduced with the engine's own
+  // applyPermissionUpdate over the SAME store the domain watches.
+  const store = makePermissionStore()
+  const suggestion = bashSuggestion('date:*')
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'date' }, r => {
+      resolved = r
+    }, [suggestion]),
+  )
+  const server = makeServer(controller, createSidecarPermissionDomain(store))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.response',
+      requestId: 'perm-1',
+      response: { behavior: 'allow', updatedInput: {}, applySuggestions: [0] },
+    } as never),
+  )
+  await waitFor(() => resolved !== null)
+
+  const attached = (resolved as unknown as { updatedPermissions?: PermissionUpdate[] })
+    .updatedPermissions
+  expect(attached).toEqual([suggestion])
+
+  // The engine applies the attached updates via setAppState
+  // (PermissionPromptToolResultSchema.ts:95-106) — reproduce that write.
+  for (const update of attached!) {
+    store.setState(prev => ({
+      ...prev,
+      toolPermissionContext: applyPermissionUpdate(
+        prev.toolPermissionContext,
+        update,
+      ),
+    }))
+  }
+
+  const snapshots = contextFrames(received)
+  expect(snapshots.at(-1)!.context.alwaysAllowRules.localSettings).toContain(
+    'Bash(date:*)',
+  )
+})

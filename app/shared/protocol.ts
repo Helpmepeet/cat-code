@@ -19,11 +19,15 @@
  *    SDKMessage`) — NOT the flattened `appSessionEventMapper` shape. The mapper
  *    drops `tool_use`; we route around it.
  *
- *  - **Inbound = the four allowlisted client message types (SECURITY-MINIMUM §2).**
- *    `app.submit` / `app.abort` / `permission.response` / `app.ping` and nothing
- *    else. The inbound payloads reuse the existing, transport-agnostic
- *    `appClientMessageSchema` vocabulary (appSessionProtocol.ts), validated at the
- *    sidecar (the trust boundary), never at the preload.
+ *  - **Inbound = the allowlisted client message types (SECURITY-MINIMUM §2).**
+ *    `app.submit` / `app.abort` / `permission.response` / `app.ping` reuse the
+ *    existing, transport-agnostic `appClientMessageSchema` vocabulary
+ *    (appSessionProtocol.ts); `permission.setMode` (C2,
+ *    decisions/PERMISSION-BOUNDARY.md §3) is app-owned and validated by a
+ *    sidecar-LOCAL schema — the engine's shared schema is deliberately not
+ *    extended (the WS server shares it and has no handler for the frame).
+ *    Everything is validated at the sidecar (the trust boundary), never at the
+ *    preload.
  */
 
 // Engine types via the P0-3 type-only snapshot alias (NOT direct source), so the
@@ -51,15 +55,52 @@ export type SessionId = string
  * ------------------------------------------------------------------------- */
 
 /**
+ * C2 — the modes a renderer may request via `permission.setMode`
+ * (decisions/PERMISSION-BOUNDARY.md §3). All four sit inside T5b's
+ * already-conceded surface. `bypassPermissions` is REJECTED at the sidecar,
+ * always (it escalates beyond T5b: no per-action prompt is ever raised).
+ * `auto` is engine-internal/feature-gated and excluded. There is NO
+ * `destination` on the wire — the sidecar pins `session` scope; a renderer
+ * must never persist `permissions.defaultMode`.
+ */
+export const PERMISSION_SET_MODE_MODES = [
+  'default',
+  'acceptEdits',
+  'plan',
+  'dontAsk',
+] as const
+
+export type PermissionSetModeMode = (typeof PERMISSION_SET_MODE_MODES)[number]
+
+/**
+ * C2 inbound frame. App-owned vocabulary (NOT part of the engine's shared
+ * `appClientMessageSchema`); the sidecar validates it with its own local
+ * schema and applies it through the engine's `transitionPermissionMode`
+ * idiom. Acknowledgement is the resulting `permission.context` snapshot —
+ * a no-op switch (same mode) emits nothing.
+ */
+export type PermissionSetModeMessage = {
+  type: 'permission.setMode'
+  requestId: string
+  mode: PermissionSetModeMode
+}
+
+/**
+ * Everything a client may send toward a sidecar: the engine's allowlisted
+ * vocabulary plus the app-owned C2 frame.
+ */
+export type SidecarClientMessage = AppClientMessage | PermissionSetModeMessage
+
+/**
  * The complete set of frames a client may send toward a sidecar. The `message`
- * is the existing allowlisted client vocabulary; the envelope adds only the
- * protocol version and the session address. Anything whose `message` fails
- * `appClientMessageSchema` at the sidecar is rejected (SECURITY-MINIMUM §2 R2).
+ * is the allowlisted client vocabulary; the envelope adds only the protocol
+ * version and the session address. Anything whose `message` fails validation
+ * at the sidecar is rejected (SECURITY-MINIMUM §2 R2).
  */
 export type ClientFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
-  message: AppClientMessage
+  message: SidecarClientMessage
 }
 
 /* ------------------------------------------------------------------------- *
@@ -122,6 +163,38 @@ export type ErrorFrame = {
 }
 
 /**
+ * C3 — the read-only permission-context snapshot payload
+ * (decisions/PERMISSION-BOUNDARY.md §4). Built at the sidecar from the
+ * ENGINE's live `ToolPermissionContext` — never reconstructed renderer-side
+ * from update echoes (settings-file and hook-applied rules would be
+ * invisible). JSON-POJO shape on purpose: the engine context's
+ * `additionalWorkingDirectories` is a Map, which the JSON-safety guard
+ * fail-closes on, so the sidecar converts it to the entries array here.
+ */
+export type PermissionContextSnapshot = {
+  mode: string
+  /** Rule strings keyed by PermissionRuleSource (userSettings, cliArg, …). */
+  alwaysAllowRules: Record<string, string[]>
+  alwaysDenyRules: Record<string, string[]>
+  alwaysAskRules: Record<string, string[]>
+  additionalWorkingDirectories: Array<{ path: string; source: string }>
+  isBypassPermissionsModeAvailable: boolean
+}
+
+/**
+ * C3 outbound frame. Emitted on attach (immediately after `ready`) and on
+ * every change of the engine's live context (store subscription — the context
+ * also mutates without boundary involvement, e.g. PermissionRequest hooks
+ * applying rules mid-turn). Read-only; feeds the rules editor's read path.
+ */
+export type PermissionContextFrame = {
+  kind: 'permission.context'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  context: PermissionContextSnapshot
+}
+
+/**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
  */
@@ -142,6 +215,7 @@ export type ServerFrame =
   | PongFrame
   | ErrorFrame
   | LifecycleFrame
+  | PermissionContextFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
@@ -169,6 +243,12 @@ export type CatCodeBridge = {
     requestId: string,
     response: PermissionResponseInput,
   ): void
+  /**
+   * C2 — switch the addressed session's permission mode. Session-scoped only
+   * (never persisted); `bypassPermissions`/`auto` are rejected at the sidecar.
+   * The updated `permission.context` snapshot frame is the acknowledgement.
+   */
+  setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
   /** Restart the addressed sidecar process while retaining renderer attachment. */

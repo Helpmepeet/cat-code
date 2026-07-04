@@ -1,24 +1,81 @@
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import {
   P1_1_CWD,
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
+  loadSidecarToolPermissionContext,
 } from './sessionController.js'
 
-test('normal startup exposes the permission-context tools to the model', () => {
-  const config = createNormalSidecarQueryEngineConfig()
+test('normal startup exposes the permission-context tools to the model', async () => {
+  const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig()
 
-  expect(config.tools.length).toBeGreaterThan(0)
-  expect(config.tools.some(tool => tool.name === 'Bash')).toBe(true)
+  expect(queryEngineConfig.tools.length).toBeGreaterThan(0)
+  expect(queryEngineConfig.tools.some(tool => tool.name === 'Bash')).toBe(true)
 })
 
-test('normal startup constructs a real runtime-backed controller without starting a turn', () => {
-  const controller = createSidecarSessionController({ probe: false })
+test('normal startup constructs a real runtime-backed controller without starting a turn', async () => {
+  const { controller, permissions } = await createSidecarSessionController({
+    probe: false,
+  })
 
   expect(controller).toBeInstanceOf(AppSessionController)
+  expect(permissions).not.toBeNull()
   expect(P1_1_CWD).toBe('/Users/pt/cat-code')
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
+})
+
+test('probe startup has no permission domain (no engine app-state store)', async () => {
+  const { permissions } = await createSidecarSessionController({ probe: true })
+  expect(permissions).toBeNull()
+})
+
+test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually load', async () => {
+  // The P1-2..P2-3 sidecar built its context from getEmptyToolPermissionContext,
+  // so settings-file rules were silently never in effect (same defect class as
+  // P1-3's `tools: []`). Prove the loader reads real settings: inject a user
+  // settings file via CLAUDE_CONFIG_DIR (the engine's own override, memoize-keyed
+  // on the env var) and assert the rules and defaultMode land in the context.
+  const configDir = mkdtempSync(join(tmpdir(), 'catcode-p2-4-settings-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  try {
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        permissions: {
+          allow: ['Bash(catcode-p2-4-proof:*)'],
+          deny: ['WebSearch'],
+          defaultMode: 'acceptEdits',
+        },
+      }),
+    )
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    resetSettingsCache()
+
+    const context = await loadSidecarToolPermissionContext()
+
+    expect(context.alwaysAllowRules.userSettings).toContain(
+      'Bash(catcode-p2-4-proof:*)',
+    )
+    expect(context.alwaysDenyRules.userSettings).toContain('WebSearch')
+    expect(context.mode).toBe('acceptEdits')
+    // §3 pin: no trusted desktop grant surface exists for bypass, so the
+    // loader must keep the engine-side availability backstop OFF regardless
+    // of what settings policy alone would report.
+    expect(context.isBypassPermissionsModeAvailable).toBe(false)
+  } finally {
+    if (previousConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    }
+    resetSettingsCache()
+    rmSync(configDir, { recursive: true, force: true })
+  }
 })
