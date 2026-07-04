@@ -376,8 +376,9 @@ export const SDK_MESSAGE_FIXTURE: {
    * QueryEngine.ts:876-884 wrap; `event` is the Anthropic
    * RawMessageStreamEvent VERBATIM (S1 §1; runtime pin coreSchemas.ts:1525).
    * parent_tool_use_id is hardcoded null at this seam (QueryEngine.ts:881).
-   * All samples expect 0 rows — stream events are droppable garnish (S1 §3
-   * rule 5); the projector reads only grouping position from them. */
+   * Individual samples expect 0 rows in isolation. In a real sequence, text
+   * deltas may surface a live preview row, but stream events remain droppable
+   * garnish: the full assistant frame and result boundary are authoritative. */
   stream_event: [
     {
       name: 'stream_event: message_start (+ engine ttftMs bolt-on)',
@@ -1250,6 +1251,88 @@ export const SDK_MESSAGE_FIXTURE: {
         session_id: SESSION,
         uuid: '00000000-0000-4000-8000-00000000sl02',
       },
+    },
+  ],
+}
+
+export const S1_STREAMING_TEXT_TURN: {
+  readonly name: string
+  readonly expectFinalRows: number
+  readonly messages: readonly SDKMessage[]
+} = {
+  name: 'S1 streaming text turn: stream garnish reconciles to full assistant frame',
+  expectFinalRows: 1,
+  messages: [
+    {
+      type: 'stream_event',
+      event: { type: 'message_start', message: { id: 'msg_01S1Text' } },
+      uuid: '00000000-0000-4000-8000-00000000s101',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      },
+      uuid: '00000000-0000-4000-8000-00000000s102',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Streaming preview' },
+      },
+      uuid: '00000000-0000-4000-8000-00000000s103',
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_01S1Text',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Streaming preview final.' }],
+        stop_reason: null,
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000s104',
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'content_block_stop', index: 0 },
+      uuid: '00000000-0000-4000-8000-00000000s105',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 12 },
+      },
+      uuid: '00000000-0000-4000-8000-00000000s106',
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_stop' },
+      uuid: '00000000-0000-4000-8000-00000000s107',
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 10,
+      duration_api_ms: 8,
+      is_error: false,
+      num_turns: 1,
+      result: 'done',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 12 },
+      modelUsage: {},
+      permission_denials: [],
+      fast_mode_state: 'off',
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000s108',
     },
   ],
 }

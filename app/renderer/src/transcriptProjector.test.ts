@@ -8,6 +8,7 @@ import {
 import {
   allSdkMessageSamples,
   DRIFT_WIRE_SAMPLE_JSON,
+  S1_STREAMING_TEXT_TURN,
   SDK_MESSAGE_FIXTURE,
 } from './sdkMessageFixtures.js'
 
@@ -155,6 +156,208 @@ test('uses deterministic per-frame fallback identity without stream events', () 
     frameId: '00000000-0000-4000-8000-000000000010',
     blockIndex: 0,
   })
+})
+
+test('accumulates text deltas into an in-progress assistant row and reconciles to the full frame', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play({
+    type: 'stream_event',
+    event: { type: 'message_start', message: { id: 'msg-streaming-text' } },
+    uuid: '00000000-0000-4000-8000-000000000020',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: 'duplicated start must be ignored' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000021',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: 'Hello' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000022',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: ', world' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000023',
+  })
+
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    {
+      id: 'session-1:msg-streaming-text:0:text',
+      sessionId: 'session-1',
+      messageId: 'msg-streaming-text',
+      frameId: 'msg-streaming-text:stream:0',
+      blockIndex: 0,
+      parentToolUseId: null,
+      kind: 'assistant-text',
+      role: 'assistant',
+      content: 'Hello, world',
+      isStreaming: true,
+    },
+  ])
+
+  play({
+    type: 'assistant',
+    message: {
+      id: 'msg-streaming-text',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Hello, world.' }],
+      stop_reason: null,
+    },
+    parent_tool_use_id: null,
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000024',
+  })
+
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    {
+      id: 'session-1:msg-streaming-text:0:text',
+      sessionId: 'session-1',
+      messageId: 'msg-streaming-text',
+      frameId: '00000000-0000-4000-8000-000000000024',
+      blockIndex: 0,
+      parentToolUseId: null,
+      kind: 'assistant-text',
+      role: 'assistant',
+      content: 'Hello, world.',
+    },
+  ])
+})
+
+test('stream events are droppable garnish: final transcript matches with stream frames stripped', () => {
+  const project = (messages: readonly SDKMessage[]) => {
+    let state = createTranscriptState()
+    state = projectServerFrame(state, ready('session-1'))
+    for (const message of messages) {
+      state = projectServerFrame(state, messageFrame('session-1', message))
+    }
+    return selectTranscriptRows(state, 'session-1')
+  }
+
+  expect(project(S1_STREAMING_TEXT_TURN.messages)).toHaveLength(
+    S1_STREAMING_TEXT_TURN.expectFinalRows,
+  )
+  expect(project(S1_STREAMING_TEXT_TURN.messages)).toEqual(
+    project(
+      S1_STREAMING_TEXT_TURN.messages.filter(
+        message => message.type !== 'stream_event',
+      ),
+    ),
+  )
+})
+
+test('result is the only turn-end marker and assistant stop_reason is ignored', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play({
+    type: 'stream_event',
+    event: { type: 'message_start', message: { id: 'msg-before-result-1' } },
+    uuid: '00000000-0000-4000-8000-000000000040',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000041',
+  })
+  play({
+    type: 'assistant',
+    message: {
+      id: 'msg-before-result-1',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'First API message.' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 999, output_tokens: 999 },
+    },
+    parent_tool_use_id: null,
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000042',
+  })
+  play({
+    type: 'stream_event',
+    event: { type: 'message_stop' },
+    uuid: '00000000-0000-4000-8000-000000000043',
+  })
+  play({
+    type: 'stream_event',
+    event: { type: 'message_start', message: { id: 'msg-before-result-2' } },
+    uuid: '00000000-0000-4000-8000-000000000044',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000045',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: 'Still streaming before result.' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000046',
+  })
+
+  expect(
+    selectTranscriptRows(state, 'session-1')
+      .filter(row => row.kind === 'assistant-text')
+      .map(row => row.content),
+  ).toEqual([
+    'First API message.',
+    'Still streaming before result.',
+  ])
+
+  play({
+    type: 'result',
+    subtype: 'success',
+    duration_ms: 10,
+    duration_api_ms: 8,
+    is_error: false,
+    num_turns: 1,
+    result: 'done',
+    stop_reason: 'end_turn',
+    total_cost_usd: 0,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    modelUsage: {},
+    permission_denials: [],
+    fast_mode_state: 'off',
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000047',
+  })
+
+  expect(
+    selectTranscriptRows(state, 'session-1')
+      .filter(row => row.kind === 'assistant-text')
+      .map(row => row.content),
+  ).toEqual(['First API message.'])
 })
 
 test('skips malformed blocks without dropping valid siblings', () => {

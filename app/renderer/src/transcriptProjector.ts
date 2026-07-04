@@ -52,6 +52,7 @@ export type AssistantTextRow = RowSource & {
   kind: 'assistant-text'
   role: 'assistant'
   content: string
+  isStreaming?: true
 }
 
 export type ToolUseRow = RowSource & {
@@ -63,10 +64,17 @@ export type ToolUseRow = RowSource & {
 
 export type TranscriptRow = AssistantTextRow | ToolUseRow
 
+type StreamingTextBlock = {
+  messageId: string
+  blockIndex: number
+  content: string
+}
+
 type TranscriptSessionState = {
   rows: TranscriptRow[]
   currentStreamMessageId: string | null
   currentStreamBlockIndex: number | null
+  streamingTextBlocks: Record<string, StreamingTextBlock>
   nextBlockIndexByMessageId: Record<string, number>
   seenFrameIds: Record<string, true>
 }
@@ -81,6 +89,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     rows: [],
     currentStreamMessageId: null,
     currentStreamBlockIndex: null,
+    streamingTextBlocks: {},
     nextBlockIndexByMessageId: {},
     seenFrameIds: {},
   }
@@ -143,9 +152,9 @@ function projectMessage(
       return projectAssistantFrame(sessionId, state, message)
 
     case 'stream_event':
-      // Droppable garnish (S1 spec §3): only grouping position is tracked;
-      // delta accumulation/live preview is P2-3 scope.
-      return trackStreamPosition(state, message)
+      // Droppable garnish (S1 spec §3): deltas may project live preview rows,
+      // but full assistant frames and the result boundary remain authoritative.
+      return projectStreamEvent(sessionId, state, message)
 
     case 'user':
       // P2-1 scope (user prompt/image rows) + P2-2 scope (`tool_result`
@@ -157,7 +166,7 @@ function projectMessage(
       // ResultRow; turn totals (usage/modelUsage/total_cost_usd) are read
       // HERE and from message_delta — never off assistant frames (S1 §4
       // stop_reason/usage trap). No transcript row yet.
-      return state
+      return finalizeStreamingTurn(state)
 
     case 'system':
       // Covers SDKSystemMessage + SDKCompactBoundaryMessage +
@@ -283,10 +292,20 @@ function projectAssistantFrame(
     fallbackIndex,
     firstBlockIndex + body.content.length,
   )
+  const nextStreamingTextBlocks = { ...state.streamingTextBlocks }
+  for (const row of rows) {
+    delete nextStreamingTextBlocks[streamBlockKey(row.messageId, row.blockIndex)]
+  }
+  const streamingTextBlocks =
+    Object.keys(nextStreamingTextBlocks).length ===
+    Object.keys(state.streamingTextBlocks).length
+      ? state.streamingTextBlocks
+      : nextStreamingTextBlocks
 
   return {
     ...state,
-    rows: rows.length === 0 ? state.rows : [...state.rows, ...rows],
+    rows: rows.length === 0 ? state.rows : upsertRows(state.rows, rows),
+    streamingTextBlocks,
     nextBlockIndexByMessageId: {
       ...state.nextBlockIndexByMessageId,
       [messageId]: nextBlockIndex,
@@ -301,16 +320,16 @@ function projectAssistantFrame(
  * Grouping-position tracker over the six nested stream event types (S1 spec
  * §2: message_start / content_block_start / content_block_delta /
  * content_block_stop / message_delta / message_stop). Only the three that
- * carry grouping position are read; the rest are documented no-ops here:
- * delta accumulation and live previews are P2-3 scope, and per-message
- * stop_reason/usage (message_delta) is read by P2-3 activity state — never
- * projected from assistant frames (S1 §4 trap). Unknown event types (e.g.
- * citations_delta, connector_text_delta, future additions) fall through as
- * tolerated no-ops.
+ * carry grouping position or text deltas are read; the rest are documented
+ * no-ops here. Per-message stop_reason/usage (message_delta) is read from the
+ * stream/result layer — never projected from assistant frames (S1 §4 trap).
+ * Unknown event types (e.g. citations_delta, connector_text_delta, future
+ * additions) fall through as tolerated no-ops.
  */
-function trackStreamPosition(
+function projectStreamEvent(
+  sessionId: SessionId,
   state: TranscriptSessionState,
-  message: SDKMessage,
+  message: Extract<SDKMessage, { type: 'stream_event' }>,
 ): TranscriptSessionState {
   const event = isRecord(message.event) ? message.event : null
   if (!event || typeof event.type !== 'string') return state
@@ -330,7 +349,65 @@ function trackStreamPosition(
     state.currentStreamMessageId &&
     typeof event.index === 'number'
   ) {
+    const key = streamBlockKey(state.currentStreamMessageId, event.index)
+    const contentBlock = isRecord(event.content_block)
+      ? event.content_block
+      : null
+    if (contentBlock?.type === 'text') {
+      return {
+        ...state,
+        currentStreamBlockIndex: event.index,
+        streamingTextBlocks: {
+          ...state.streamingTextBlocks,
+          [key]: {
+            messageId: state.currentStreamMessageId,
+            blockIndex: event.index,
+            content: '',
+          },
+        },
+      }
+    }
+    if (state.streamingTextBlocks[key]) {
+      const nextStreamingTextBlocks = { ...state.streamingTextBlocks }
+      delete nextStreamingTextBlocks[key]
+      return {
+        ...state,
+        currentStreamBlockIndex: event.index,
+        streamingTextBlocks: nextStreamingTextBlocks,
+      }
+    }
     return { ...state, currentStreamBlockIndex: event.index }
+  }
+
+  if (
+    event.type === 'content_block_delta' &&
+    state.currentStreamMessageId &&
+    typeof event.index === 'number'
+  ) {
+    const delta = isRecord(event.delta) ? event.delta : null
+    if (delta?.type !== 'text_delta' || typeof delta.text !== 'string') {
+      return state
+    }
+    const key = streamBlockKey(state.currentStreamMessageId, event.index)
+    const existing = state.streamingTextBlocks[key] ?? {
+      messageId: state.currentStreamMessageId,
+      blockIndex: event.index,
+      content: '',
+    }
+    const nextBlock = {
+      ...existing,
+      content: existing.content + delta.text,
+    }
+    const row = createStreamingTextRow(sessionId, nextBlock)
+    return {
+      ...state,
+      currentStreamBlockIndex: event.index,
+      streamingTextBlocks: {
+        ...state.streamingTextBlocks,
+        [key]: nextBlock,
+      },
+      rows: upsertStreamingRows(state.rows, [row]),
+    }
   }
 
   if (event.type === 'message_stop') {
@@ -342,6 +419,93 @@ function trackStreamPosition(
   }
 
   return state
+}
+
+function createStreamingTextRow(
+  sessionId: SessionId,
+  block: StreamingTextBlock,
+): AssistantTextRow {
+  const source = {
+    sessionId,
+    messageId: block.messageId,
+    frameId: `${block.messageId}:stream:${block.blockIndex}`,
+    blockIndex: block.blockIndex,
+    parentToolUseId: null,
+  }
+  return {
+    ...source,
+    id: rowId(source, 'text'),
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: block.content,
+    isStreaming: true,
+  }
+}
+
+function finalizeStreamingTurn(
+  state: TranscriptSessionState,
+): TranscriptSessionState {
+  const hasStreamingRows = state.rows.some(
+    row => row.kind === 'assistant-text' && row.isStreaming === true,
+  )
+  const hasStreamingState =
+    state.currentStreamMessageId !== null ||
+    state.currentStreamBlockIndex !== null ||
+    Object.keys(state.streamingTextBlocks).length > 0
+  if (!hasStreamingRows && !hasStreamingState) return state
+
+  const rows = state.rows.filter(
+    row => row.kind !== 'assistant-text' || row.isStreaming !== true,
+  )
+  return {
+    ...state,
+    rows,
+    currentStreamMessageId: null,
+    currentStreamBlockIndex: null,
+    streamingTextBlocks: {},
+  }
+}
+
+function upsertRows(
+  rows: TranscriptRow[],
+  replacements: TranscriptRow[],
+): TranscriptRow[] {
+  if (replacements.length === 0) return rows
+  const byId = new Map(replacements.map(row => [row.id, row]))
+  const nextRows = rows.map(row => byId.get(row.id) ?? row)
+  const existingIds = new Set(rows.map(row => row.id))
+  for (const row of replacements) {
+    if (!existingIds.has(row.id)) nextRows.push(row)
+  }
+  return nextRows
+}
+
+function upsertStreamingRows(
+  rows: TranscriptRow[],
+  replacements: AssistantTextRow[],
+): TranscriptRow[] {
+  if (replacements.length === 0) return rows
+  const byId = new Map(replacements.map(row => [row.id, row]))
+  const nextRows = rows.map(row => {
+    const replacement = byId.get(row.id)
+    if (
+      replacement &&
+      row.kind === 'assistant-text' &&
+      row.isStreaming === true
+    ) {
+      return replacement
+    }
+    return row
+  })
+  const existingIds = new Set(rows.map(row => row.id))
+  for (const row of replacements) {
+    if (!existingIds.has(row.id)) nextRows.push(row)
+  }
+  return nextRows
+}
+
+function streamBlockKey(messageId: string, blockIndex: number): string {
+  return `${messageId}:${blockIndex}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
