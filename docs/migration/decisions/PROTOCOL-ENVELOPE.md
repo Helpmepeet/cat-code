@@ -150,6 +150,13 @@ housekeeping, not architecture:
 | Renderer state keyed by `frame.sessionId` | renderer stores (W2 shell work) | M | Actual multiplexed UI |
 | Spawn-config (cwd, resume id) via host API + env | supervisor/sidecar/`REGISTRY.md` §7.2 | S | Registry restore; retires `P1_1_CWD` |
 
+> **Addendum 2026-07-05 (post-host-plane-review):** one further additive-under-v1 item landed
+> with its own owning decision — `EventFrame.replay?: true` + the
+> `catcode.history-truncated` boundary id, the restored-history replay-on-attach
+> (→ `decisions/RESTORE-HISTORY.md`, F2 of `reviews/2026-07-05-p3-host-plane-review.md`).
+> Same pattern this audit blesses in E-7: app-owned vocabulary, no version bump, no new
+> inbound frame types.
+
 ## 7. Rejected
 
 - **R1 — Redesign/bump the envelope for Phase 3.** Nothing found requires a breaking change; the

@@ -123,8 +123,12 @@ function createSupervisor(): SidecarSupervisor {
 function validateCwd(cwd: string): CwdValidation {
   try {
     const real = realpathSync(cwd)
-    if (statSync(real).isDirectory()) return { ok: true, realpath: real }
-    return { ok: false }
+    if (!statSync(real).isDirectory()) return { ok: false }
+    // F6 — NFC-normalize to match the engine's canonicalization (realpath + NFC,
+    // sessionStoragePortable.ts canonicalizePath): the row's cwd must sanitize
+    // to the same project dir the engine writes, or a decomposed-Unicode
+    // (macOS-typical) path is wrongly refused at restore.
+    return { ok: true, realpath: real.normalize('NFC') }
   } catch {
     return { ok: false }
   }

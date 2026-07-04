@@ -769,3 +769,113 @@ test('createSession awaits the launch gate before spawning (no interleave)', asy
 
   rmSync(storageDir, { recursive: true, force: true })
 })
+
+/* ------------------------------------------------------------------------- *
+ * Host-plane review LOW fixes (2026-07-05): F3 crash labeling · F4 single
+ * restartCount bump · F5 session-removed on runtime reaps
+ * ------------------------------------------------------------------------- */
+
+test('F3: a mid-run sidecar crash marks the row crashed, and a later quit does NOT relabel it clean', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const id = created.value.appSessionId
+  h.supervisor.emitReady(id, 'engine-crash-test')
+  await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-crash-test')
+
+  // Crash: the child exits without the host asking (record stays, like the
+  // real supervisor's un-killed death path).
+  h.supervisor.emit({ type: 'exit', sessionId: id, code: 1, signal: null })
+  await settle(() => h.registry.findSession(id)?.shutdown === 'crashed')
+  expect(h.registry.findSession(id)?.shutdown).toBe('crashed')
+  expect(h.registry.findSession(id)?.enginePid).toBeUndefined()
+
+  // Quit after the crash: markLiveCleanSync must not relabel the crash.
+  h.host.shutdownAll()
+  expect(h.registry.findSession(id)?.shutdown).toBe('crashed')
+  // The row kept its engineSessionId — still restorable, honestly flagged.
+  expect(h.registry.findSession(id)?.engineSessionId).toBe('engine-crash-test')
+})
+
+test('F3: a failed spawn (no exit event behind it) also marks the row crashed', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const id = created.value.appSessionId
+
+  h.supervisor.setStatus(id, 'failed')
+  await settle(() => h.registry.findSession(id)?.shutdown === 'crashed')
+  expect(h.registry.findSession(id)?.shutdown).toBe('crashed')
+})
+
+test('F3: closeSession still records a CLEAN shutdown (the closing guard holds)', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const id = created.value.appSessionId
+  h.supervisor.emitReady(id, 'engine-clean-test')
+  await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-clean-test')
+
+  const closed = await h.host.closeSession(id)
+  expect(closed.ok).toBe(true)
+  await settle(() => h.registry.findSession(id)?.shutdown === 'clean')
+  expect(h.registry.findSession(id)?.shutdown).toBe('clean')
+})
+
+test('F4: a fresh createSession lands with restartCount 0; one restart bumps it exactly once', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const id = created.value.appSessionId
+  h.supervisor.emitReady(id, 'engine-f4')
+  await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-f4')
+
+  // Pre-fix, the create path's second (advisory) upsert had already bumped
+  // this to 1.
+  expect(h.registry.findSession(id)?.restartCount).toBe(0)
+  // The advisory fields still landed (the split must not lose them).
+  expect(h.registry.findSession(id)?.enginePid).toBeGreaterThan(0)
+  expect(h.registry.findSession(id)?.socketPath).toContain('/tmp/fake/')
+
+  const restarted = await h.host.restartSession(id)
+  expect(restarted.ok).toBe(true)
+  expect(h.registry.findSession(id)?.restartCount).toBe(1)
+})
+
+test('F5: a runtime bound-reap emits session-removed for the reaped terminal row', async () => {
+  const storageDir = tempDir()
+  // Fast no-op advisory lock: this test writes ~70 registry persists; the
+  // locking discipline itself is covered by the concurrent-writer test.
+  const registry = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+    acquireLock: async () => async () => {},
+  })
+  const h = makeHost({ registry })
+
+  // Fill the registry to the bound with terminal rows.
+  const seeded: string[] = []
+  for (let i = 0; i < 32; i++) {
+    const id = randomUUID()
+    seeded.push(id)
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: '/seeded' })
+    await registry.markClean(id)
+  }
+  expect(registry.sessions.length).toBe(32)
+
+  // The 33rd row (a live create) must reap one terminal row — and the reap
+  // must surface on the HostEvent stream, not silently vanish from the file.
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(`create failed: ${created.error.code}`)
+
+  const removed = h.events.filter(e => e.type === 'session-removed')
+  expect(removed.length).toBe(1)
+  expect(seeded).toContain(
+    (removed[0] as { type: 'session-removed'; appSessionId: string }).appSessionId,
+  )
+  expect(registry.sessions.length).toBe(32)
+  // The new live row survived; the reaped one is gone from the doc.
+  expect(registry.findSession(created.value.appSessionId)).toBeDefined()
+})

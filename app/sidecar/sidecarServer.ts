@@ -22,11 +22,13 @@
 
 import z from 'zod/v4'
 import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
 import type {
   AppPermissionRequest,
   AppPermissionResponse,
   AppSessionEvent,
 } from '../../src/app-runtime/sessionEvents.js'
+import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
@@ -45,6 +47,8 @@ import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
+  MAX_HISTORY_REPLAY_BYTES,
+  MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
   MAX_SUGGESTION_SELECTIONS,
@@ -52,6 +56,7 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
   type ClientFrame,
@@ -84,6 +89,15 @@ export type SidecarServerOptions = {
    * fails closed and no `permission.context` snapshots are emitted.
    */
   permissions?: SidecarPermissionDomain
+  /**
+   * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
+   * transcript, already converted by the engine's `toSDKMessages` (index.ts
+   * converts the SAME `resumeEngineSession().messages` array that seeded the
+   * engine — one source, no drift). Replayed to each attaching connection as
+   * `replay: true` event frames after `ready`, capped + truncation-signalled.
+   * Absent for fresh sessions.
+   */
+  history?: readonly SDKMessage[]
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -100,6 +114,7 @@ export class SidecarServer {
   private readonly engineSessionId: string
   private readonly controller: AppSessionController
   private readonly permissions: SidecarPermissionDomain | null
+  private readonly history: readonly SDKMessage[]
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
@@ -111,6 +126,7 @@ export class SidecarServer {
     this.engineSessionId = options.engineSessionId
     this.controller = options.controller
     this.permissions = options.permissions ?? null
+    this.history = options.history ?? []
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
     // Subscribe once; broadcast every event to all connected clients as a raw
@@ -171,7 +187,80 @@ export class SidecarServer {
         this.permissions.getToolPermissionContext(),
       )
     }
+    // F2 — restored-history replay, after ready + C3 and before any live event
+    // (single-socket ordering guarantees the renderer sees history first).
+    this.sendHistoryReplay(connection)
     return connection
+  }
+
+  /**
+   * F2 (decisions/RESTORE-HISTORY.md) — replay the restored transcript to one
+   * attaching connection as standard `event` frames with `replay: true`. The
+   * NEWEST contiguous tail is kept under BOTH caps (frames + serialized bytes,
+   * the same accounting main's replay buffer uses, so a renderer reload
+   * preserves the same history — the ≤-buffer alignment is test-enforced). Any
+   * omission emits the truncation-boundary error frame BEFORE the tail (the
+   * main replay-buffer idiom): a capped replay is visibly lossy, never a
+   * silent gap. Every frame goes through the normal outbound path —
+   * prepareOutboundPayload (clone + JSON-safe) and send (secretGuard + size
+   * cap) — the replay adds no security bypass.
+   */
+  private sendHistoryReplay(connection: Connection): void {
+    if (this.history.length === 0) return
+
+    const retained: ServerFrame[] = []
+    let retainedBytes = 0
+    let truncated = false
+    // Walk newest → oldest so the cap keeps the most recent history. Stop (not
+    // skip) at the first frame that would overflow: a contiguous newest tail,
+    // never a mid-history hole.
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const message = this.history[i]!
+      const prepared = this.prepareOutboundPayload(
+        createMessageEvent(message),
+        'history replay event',
+      )
+      if (!prepared) {
+        // Un-serializable restored message (should not happen for
+        // JSONL-round-tripped content) — an omission, so the replay is lossy.
+        truncated = true
+        continue
+      }
+      const frame: ServerFrame = {
+        kind: 'event',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        replay: true,
+        event: prepared,
+      }
+      const frameBytes = Buffer.byteLength(JSON.stringify(frame), 'utf8')
+      if (
+        retained.length + 1 > MAX_HISTORY_REPLAY_FRAMES ||
+        retainedBytes + frameBytes > MAX_HISTORY_REPLAY_BYTES
+      ) {
+        truncated = true
+        break
+      }
+      retained.push(frame)
+      retainedBytes += frameBytes
+    }
+    retained.reverse()
+
+    if (truncated) {
+      this.log(
+        `[sidecar] history replay truncated: retained ${retained.length}/${this.history.length} events (${retainedBytes} bytes)`,
+      )
+      this.sendError(
+        connection,
+        HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+        'internal_error',
+        'Earlier restored-session history was omitted because it exceeded the replay retention limit.',
+        false,
+      )
+    }
+    for (const frame of retained) {
+      this.send(connection, frame)
+    }
   }
 
   removeConnection(connection: Connection): void {

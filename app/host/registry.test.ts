@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  defaultTranscriptPath,
   MAX_REGISTRY_SESSIONS,
   REGISTRY_VERSION,
   SessionRegistry,
@@ -608,7 +609,8 @@ test('atomic writes under a simulated concurrent writer never produce torn JSON'
 
   // Interleave many writes from both. The advisory lock + atomic rename means
   // any reader between writes sees a consistent snapshot, last-writer-wins.
-  const work: Promise<void>[] = []
+  // (upsertOnSpawn returns reaped ids since F5; this test ignores them.)
+  const work: Promise<string[]>[] = []
   for (let i = 0; i < 25; i++) {
     work.push(a.upsertOnSpawn({ appSessionId: `a-${i}`, cwd: '/a' }))
     work.push(b.upsertOnSpawn({ appSessionId: `b-${i}`, cwd: '/b' }))
@@ -684,6 +686,75 @@ test('default transcript path resolves and reaps against the real engine encodin
     const registry = new SessionRegistry({ storageDir, log: () => {} })
     const restorable = await registry.launch()
     expect(restorable.map(r => r.appSessionId)).toEqual(['app-real'])
+  } finally {
+    if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = priorConfig
+  }
+})
+
+/* ------------------------------------------------------------------------- *
+ * Host-plane review LOW fixes (2026-07-05): F4 advisory split · F3 markCrashed
+ * · F6 NFC parity
+ * ------------------------------------------------------------------------- */
+
+test('F4: setAdvisoryRuntime refreshes pid/socketPath WITHOUT bumping restartCount or lastAttachedAt', async () => {
+  const { registry, registryPath } = makeRegistry()
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a' })
+  const before = readDoc(registryPath).sessions[0]!
+
+  await registry.setAdvisoryRuntime('app-1', { enginePid: 777, socketPath: '/s7' })
+
+  const row = readDoc(registryPath).sessions[0]!
+  expect(row.enginePid).toBe(777)
+  expect(row.socketPath).toBe('/s7')
+  // The hint refresh is not a re-spawn: the counter and recency are untouched.
+  expect(row.restartCount).toBe(0)
+  expect(row.lastAttachedAt).toBe(before.lastAttachedAt)
+  expect(row.shutdown).toBeNull()
+})
+
+test('F3: markCrashed flips a LIVE row to crashed + clears advisory fields, but never relabels a terminal row', async () => {
+  const { registry, registryPath } = makeRegistry()
+  await registry.upsertOnSpawn({ appSessionId: 'app-live', cwd: '/a', enginePid: 1, socketPath: '/s0' })
+  await registry.upsertOnSpawn({ appSessionId: 'app-closed', cwd: '/a' })
+  await registry.markClean('app-closed')
+
+  await registry.markCrashed('app-live')
+  await registry.markCrashed('app-closed') // terminal — must be a no-op
+
+  const doc = readDoc(registryPath)
+  const live = doc.sessions.find(r => r.appSessionId === 'app-live')!
+  const closed = doc.sessions.find(r => r.appSessionId === 'app-closed')!
+  expect(live.shutdown).toBe('crashed')
+  expect(live.enginePid).toBeUndefined()
+  expect(live.socketPath).toBeUndefined()
+  expect(closed.shutdown).toBe('clean')
+})
+
+test('F6: defaultTranscriptPath NFC-normalizes the cwd so a decomposed-Unicode path finds the engine-written transcript', () => {
+  const configDir = tempDir()
+  const priorConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  try {
+    // The engine canonicalizes realpath+NFC before sanitizing
+    // (sessionStoragePortable.ts canonicalizePath), so its project dir comes
+    // from the NFC form: 'café' = 'café' → sanitize → 'caf-'. The NFD form
+    // 'café' would sanitize to 'cafe-' — a DIFFERENT dir.
+    const cwdNfc = '/tmp/café-proj'
+    const cwdNfd = '/tmp/café-proj'
+    expect(cwdNfc).not.toBe(cwdNfd) // distinct code points…
+    expect(cwdNfd.normalize('NFC')).toBe(cwdNfc) // …same canonical path
+
+    const sanitizedNfc = cwdNfc.replace(/[^a-zA-Z0-9]/g, '-')
+    const projectDir = join(configDir, 'projects', sanitizedNfc)
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'engine-nfc.jsonl'), '{}\n')
+
+    // A registry row minted before the F6 fix may carry the NFD spelling; the
+    // resolver must still land on the engine's NFC-derived dir.
+    const resolved = defaultTranscriptPath(cwdNfd, 'engine-nfc')
+    expect(resolved).toBe(join(projectDir, 'engine-nfc.jsonl'))
+    expect(existsSync(resolved)).toBe(true)
   } finally {
     if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = priorConfig

@@ -16,7 +16,7 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -110,6 +110,7 @@ test('F1: the resumed transcript is the live turn context of the engine the side
     engineHeldCount: number
     engineHasMarker: boolean
     engineHeldUuidsMatchResumed: boolean
+    replayMatchesEngineSeed: boolean
   }
 
   // Id adoption (the old, insufficient claim) still holds…
@@ -122,4 +123,19 @@ test('F1: the resumed transcript is the live turn context of the engine the side
   expect(result.engineHeldCount).toBe(2)
   expect(result.engineHasMarker).toBe(true)
   expect(result.engineHeldUuidsMatchResumed).toBe(true)
+  // F2 same-source: the renderer-history conversion (toSDKMessages) over the
+  // same resumed array matches the engine-seeded state uuid-for-uuid.
+  expect(result.replayMatchesEngineSeed).toBe(true)
 }, TEST_TIMEOUT_MS)
+
+test('F1/F2 one-source wiring: index.ts feeds the SAME resumed array to the engine seed and the history replay', () => {
+  // Source-level guarantee (mainSource.test idiom): both consumers read the
+  // one `resumedMessages` variable — no second load, no divergent copy.
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+  expect(source).toContain('initialMessages: resumedMessages')
+  expect(source).toContain('toSDKMessages(resumedMessages)')
+  // And resumedMessages has exactly one assignment site (the resume result).
+  const assignments = source.match(/resumedMessages =/g) ?? []
+  expect(assignments.length).toBe(1)
+  expect(source).toContain('resumedMessages = resumed.messages')
+})

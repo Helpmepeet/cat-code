@@ -163,12 +163,22 @@ export class Host implements HostApi {
       // A graceful close already marked the row clean + emitted removed; don't
       // re-report the async exit that killSession triggers.
       if (!this.closing.has(appSessionId)) {
+        // F3 — an exit the host did not ask for IS the crash, and this event is
+        // the only moment the host knows it. Record it now; a later quit's
+        // markLiveCleanSync must not relabel a mid-run crash as a clean
+        // shutdown (markCrashed only transitions live rows, so the
+        // shutdownAll mark-clean-then-kill ordering is unaffected).
+        await this.registry.markCrashed(appSessionId)
         this.emitStatus(appSessionId)
       }
       return
     }
 
-    // status change
+    // status change. `failed` (spawn error / invalid ready) is a death with no
+    // exit event behind it in the spawn-error case — same F3 treatment.
+    if (event.status === 'failed' && !this.closing.has(appSessionId)) {
+      await this.registry.markCrashed(appSessionId)
+    }
     this.emitStatus(appSessionId)
   }
 
@@ -283,8 +293,13 @@ export class Host implements HostApi {
     this.recordSpawnTime()
 
     // Persist the live row BEFORE spawning so a crash between spawn and the next
-    // launch still finds a row to sweep (REGISTRY.md §4.5 write points).
-    await this.registry.upsertOnSpawn({ appSessionId, cwd, title })
+    // launch still finds a row to sweep (REGISTRY.md §4.5 write points). The
+    // upsert may reap terminal rows to stay under the bound — surface those as
+    // session-removed so a subscriber's projection drops them (F5).
+    const reaped = await this.registry.upsertOnSpawn({ appSessionId, cwd, title })
+    for (const reapedId of reaped) {
+      this.emitRemoved(reapedId)
+    }
 
     try {
       this.supervisor.spawnSession(appSessionId, {
@@ -304,11 +319,9 @@ export class Host implements HostApi {
     }
 
     // Record the advisory runtime fields now that the child exists (§9-A3 orphan
-    // identity + crash sweep). Persistence failure here degrades but never fails.
-    await this.registry.upsertOnSpawn({
-      appSessionId,
-      cwd,
-      title,
+    // identity + crash sweep). Advisory-only refresh (F4: a second upsert here
+    // double-bumped restartCount). Persistence failure degrades but never fails.
+    await this.registry.setAdvisoryRuntime(appSessionId, {
       enginePid: this.supervisor.getSessionProcessId(appSessionId),
       socketPath: this.supervisor.getSessionSocketPath(appSessionId),
     })

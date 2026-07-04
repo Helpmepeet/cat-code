@@ -140,8 +140,27 @@ export type EventFrame = {
   kind: 'event'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
+  /**
+   * Present (`true`) ONLY on restored-history frames a resumed sidecar replays
+   * at attach (F2 — decisions/RESTORE-HISTORY.md): the same resumed `Message[]`
+   * that seeded the engine's turn context (F1), converted by the engine's own
+   * `toSDKMessages`. Additive under v1; a renderer may ignore it (rows render
+   * identically) or use it for a "restored" divider / notification suppression.
+   * Never set on live events.
+   */
+  replay?: true
   event: AppSessionEvent
 }
+
+/**
+ * Well-known `ErrorFrame.requestId` marking a LOSSY history replay (F2): the
+ * restored transcript exceeded the replay caps (`MAX_HISTORY_REPLAY_FRAMES` /
+ * `MAX_HISTORY_REPLAY_BYTES`), so older events were omitted. Emitted BEFORE the
+ * retained tail — same boundary idiom as main's replay-buffer truncation frame
+ * (`catcode.replay-truncated`) — so a consumer can never mistake a capped
+ * replay for complete history.
+ */
+export const HISTORY_REPLAY_TRUNCATION_REQUEST_ID = 'catcode.history-truncated'
 
 /**
  * A `pong` in reply to `app.ping` (liveness only, no side effects —

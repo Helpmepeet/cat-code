@@ -48,3 +48,21 @@ export const MAX_TEXT_FIELD_CHARS = 4_096
  * policy gate.
  */
 export const MAX_SUGGESTION_SELECTIONS = 16
+
+/**
+ * Restored-history replay caps (F2 — decisions/RESTORE-HISTORY.md). On attach,
+ * a resumed sidecar replays its restored transcript as `replay: true` event
+ * frames; the NEWEST tail is kept under BOTH caps and any omission is signalled
+ * with the truncation-boundary error frame (never a silent gap).
+ *
+ * ALIGNMENT INVARIANT: both caps are deliberately BELOW main's per-session
+ * replay-buffer budgets (`DEFAULT_MAX_BUFFERED_FRAMES` 512 /
+ * `DEFAULT_MAX_BUFFERED_BYTES` 8 MiB, app/main/replayBuffer.ts) — with headroom
+ * for the ready head, permission.context snapshots, and early live frames — so
+ * a renderer RELOAD right after a restore replays the SAME history from main's
+ * buffer instead of silently losing its head. Enforced by test
+ * (historyReplay.test.ts); byte accounting matches the buffer's (serialized
+ * UTF-8 JSON of the whole frame).
+ */
+export const MAX_HISTORY_REPLAY_FRAMES = 400
+export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024

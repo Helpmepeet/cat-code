@@ -209,14 +209,20 @@ function sanitizePath(name: string): string {
  * `sessionStoragePortable.ts:354-372`) before declaring the transcript gone.
  */
 export function defaultTranscriptPath(cwd: string, engineSessionId: string): string {
+  // F6 (host-plane review 2026-07-05): the engine canonicalizes with realpath +
+  // NFC (`canonicalizePath`, sessionStoragePortable.ts:339-345) before
+  // sanitizing, so a decomposed-Unicode (NFD, macOS-typical) cwd must be
+  // NFC-normalized here too or the sanitized project dir diverges and a
+  // restorable session is wrongly refused.
+  const canonicalCwd = cwd.normalize('NFC')
   const projectsDir = join(claudeConfigHomeDir(), 'projects')
-  const exact = join(projectsDir, sanitizePath(cwd), `${engineSessionId}.jsonl`)
+  const exact = join(projectsDir, sanitizePath(canonicalCwd), `${engineSessionId}.jsonl`)
   if (existsSync(exact)) return exact
 
   // Long-path fallback: the exact dir may carry a different hash suffix than
   // the engine wrote. Scan for a project dir sharing the sanitized prefix that
   // actually contains this transcript, mirroring findProjectDir's tolerance.
-  const sanitized = cwd.replace(/[^a-zA-Z0-9]/g, '-')
+  const sanitized = canonicalCwd.replace(/[^a-zA-Z0-9]/g, '-')
   if (sanitized.length > MAX_SANITIZED_LENGTH) {
     const prefix = sanitized.slice(0, MAX_SANITIZED_LENGTH)
     try {
@@ -524,10 +530,11 @@ export class SessionRegistry {
   /**
    * Reap oldest terminal rows over the bound. Live rows (`shutdown == null`)
    * are never reaped; only `shutdown != null` rows are eligible, oldest
-   * (`lastAttachedAt`) first — matches §3.
+   * (`lastAttachedAt`) first — matches §3. Returns the reaped ids so a
+   * runtime caller can emit `session-removed` for them (F5).
    */
-  private enforceBound(): void {
-    if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return
+  private enforceBound(): string[] {
+    if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
     const terminal = this.doc.sessions
       .filter(r => r.shutdown !== null)
@@ -538,6 +545,7 @@ export class SessionRegistry {
       this.doc.sessions = this.doc.sessions.filter(r => !doomed.has(r.appSessionId))
       this.log(`[registry] reaped ${doomed.size} over-bound terminal row(s)`)
     }
+    return [...doomed]
   }
 
   /** (4) Restore-offer rows: by `lastAttachedAt` desc; `crashed` already flagged. */
@@ -554,8 +562,14 @@ export class SessionRegistry {
   /**
    * Upsert on spawn. Creates a live row (`shutdown: null`) or, if the row
    * already exists (restart / restore of a known appSessionId), refreshes its
-   * advisory fields and marks it live again. `engineSessionId` stays null until
-   * the ready frame fills it (§4.5).
+   * advisory fields, marks it live again, and bumps `restartCount` (one bump
+   * per actual re-spawn — F4: advisory-field refreshes go through
+   * `setAdvisoryRuntime`, which never touches the counter). `engineSessionId`
+   * stays null until the ready frame fills it (§4.5).
+   *
+   * Returns the appSessionIds of any terminal rows reaped to make room (F5):
+   * the host emits `session-removed` for them so a live subscriber's list
+   * projection never keeps ghosts.
    */
   async upsertOnSpawn(input: {
     appSessionId: string
@@ -563,8 +577,9 @@ export class SessionRegistry {
     title?: string
     enginePid?: number
     socketPath?: string
-  }): Promise<void> {
+  }): Promise<string[]> {
     const now = Date.now()
+    let reaped: string[] = []
     const existing = this.find(input.appSessionId)
     if (existing) {
       existing.cwd = input.cwd
@@ -588,8 +603,29 @@ export class SessionRegistry {
         restartCount: 0,
       })
       // A fresh spawn may push us over the bound; reap terminal rows to make room.
-      this.enforceBound()
+      reaped = this.enforceBound()
     }
+    await this.persist()
+    return reaped
+  }
+
+  /**
+   * Refresh only the advisory runtime hints for a live row (F4): the child's
+   * pid + socketPath once the spawn returned. Never touches `restartCount`,
+   * `lastAttachedAt`, or shutdown state — those belong to the §4.5 write
+   * points, not to this hint refresh.
+   */
+  async setAdvisoryRuntime(
+    appSessionId: string,
+    input: { enginePid?: number; socketPath?: string },
+  ): Promise<void> {
+    const row = this.find(appSessionId)
+    if (!row) {
+      this.log(`[registry] setAdvisoryRuntime: no row for ${appSessionId}`)
+      return
+    }
+    row.enginePid = input.enginePid
+    row.socketPath = input.socketPath
     await this.persist()
   }
 
@@ -624,6 +660,27 @@ export class SessionRegistry {
       return
     }
     row.lastAttachedAt = Date.now()
+    await this.persist()
+  }
+
+  /**
+   * Mark a LIVE row `crashed` when its sidecar died without a graceful close
+   * (F3): the exit/failed supervisor event, not the quit path, is what makes a
+   * crash a crash. Only transitions rows with `shutdown === null` — a row that
+   * is already terminal (clean close, quit-time `markLiveCleanSync`) keeps its
+   * state, so the shutdownAll ordering (mark clean, THEN kill) stays correct.
+   * Advisory runtime fields are cleared because the process is gone.
+   */
+  async markCrashed(appSessionId: string): Promise<void> {
+    const row = this.find(appSessionId)
+    if (!row) {
+      this.log(`[registry] markCrashed: no row for ${appSessionId}`)
+      return
+    }
+    if (row.shutdown !== null) return
+    row.shutdown = 'crashed'
+    row.enginePid = undefined
+    row.socketPath = undefined
     await this.persist()
   }
 

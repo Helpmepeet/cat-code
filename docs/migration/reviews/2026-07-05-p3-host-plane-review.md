@@ -215,8 +215,50 @@ copies into the model context, `QueryEngine.ts:454`) contains the pre-quit nonce
 matches the resumed array uuid-for-uuid; tripwire-verified (disabling the seed fails the
 test at `engineHeldCount`). The live credentialed answers-from-context proof remains
 P3-8's anti-Potemkin gate by design. Gates post-fix: 286/0 tests, app tsc clean, sidecar
-tsc unchanged at the pre-existing count (zero in app files), hardening 18/18. **F2 remains
-open** (proposal drafted for the operator; decide before P3-5's restore surface).
+tsc unchanged at the pre-existing count (zero in app files), hardening 18/18.
+
+## Addendum 2026-07-05 (later) — F2 DECIDED+IMPLEMENTED; F3–F6 FIXED
+
+**F2 — RESOLVED.** Operator approved the replay-on-attach recommendation as proposed; owning
+decision: `decisions/RESTORE-HISTORY.md` (+ dated pointer in `PROTOCOL-ENVELOPE.md` §6). As
+landed: the sidecar replays the restored transcript to each attaching connection as standard
+`event` frames converted by the engine's own `toSDKMessages`, after `ready`+C3 and before any
+live event; one additive field `EventFrame.replay?: true`; newest-tail cap 400 frames / 4 MiB
+(`app/shared/limits.ts`, test-enforced STRICTLY below main's replay-buffer budgets so a
+renderer reload preserves the same history) with the `catcode.history-truncated` boundary
+frame on any omission. The operator's two held seams are test-enforced: same-source-as-F1
+(one `resumedMessages` variable, source-grepped + uuid-for-uuid runtime match against the
+seeded QueryEngine) and reload preservation (at-cap pass through the real
+`AttachmentGate`+`FrameReplayBuffer`). E2E: a REAL resumed sidecar replays its minted
+transcript over the wire (`spawnConfig.probe.test.ts` (b)); renders as normal rows with the
+flag invisible to reducers (`restoredHistoryRender.test.ts`). Security baseline unchanged:
+outbound-only, per-frame `prepareOutboundPayload`+secretGuard+size caps, zero inbound
+vocabulary. Field note: the replay faithfully transmits the ENGINE's resumed state, e.g.
+recovery's API-validity sentinel replacing an incomplete trailing assistant
+(`conversationRecovery.ts:243`) — the mint fixture's assistant never survived resume, which
+the old marker-in-JSON assertions masked.
+
+**F3 — FIXED.** Un-asked-for exits and `failed` statuses now `markCrashed` the row
+(`host.ts` exit/status handlers; `registry.markCrashed` only transitions live rows, so
+`shutdownAll`'s mark-clean-then-kill ordering is unaffected and a mid-run crash is never
+relabeled clean at quit). Tests: crash→`crashed` survives quit; failed-spawn→`crashed`;
+closeSession still `clean`.
+
+**F4 — FIXED.** The create path's second upsert is now an advisory-only
+`registry.setAdvisoryRuntime` (no counter/recency bump); fresh sessions land with
+`restartCount: 0`, one restart bumps exactly once. Tests in registry + host suites.
+
+**F5 — FIXED.** `enforceBound` returns the reaped ids; `upsertOnSpawn` surfaces them and the
+host emits `session-removed` for each, so a live subscriber's projection drops runtime-reaped
+rows. Test: 33rd row over a 32-terminal-row registry emits exactly one removal.
+
+**F6 — FIXED.** `validateCwd` (main) and `defaultTranscriptPath` (registry) both NFC-normalize
+(engine `canonicalizePath` parity, `sessionStoragePortable.ts:339-345`); an NFD-spelled cwd
+now resolves the engine's NFC-derived project dir. Tests: NFD→NFC transcript resolution +
+mainSource NFC assertion.
+
+**All review findings (F1–F6) are now resolved. P3-5 is fully unblocked, restore surface
+included.**
 
 ## Reconciliation with prior review work
 

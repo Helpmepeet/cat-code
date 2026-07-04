@@ -225,3 +225,19 @@ test('control plane adds ZERO new socket frame types (stays off the wire in v1)'
     ]).toContain(t)
   }
 })
+
+test('F6: validateCwd NFC-normalizes the realpath (engine canonicalizePath parity)', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('function validateCwd(')
+  const end = source.indexOf('\n}\n', start)
+
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(-1)
+
+  const validateCwdSource = source.slice(start, end)
+  // The engine sanitizes project dirs from realpath + NFC
+  // (sessionStoragePortable.ts canonicalizePath); the host's validator must
+  // produce the same canonical form or non-ASCII cwds break restore (F6).
+  expect(validateCwdSource).toContain('realpathSync')
+  expect(validateCwdSource).toContain(".normalize('NFC')")
+})

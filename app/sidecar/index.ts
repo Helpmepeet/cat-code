@@ -21,6 +21,7 @@ import { FrameDecoder } from '../shared/framing.js'
 import { MAX_FRAME_BYTES } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import type { Message } from '../../src/types/message.js'
+import { toSDKMessages } from '../../src/utils/messages/mappers.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
@@ -119,11 +120,21 @@ async function main(): Promise<void> {
     ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
   })
 
+  // F2 (decisions/RESTORE-HISTORY.md): the renderer's restored history is the
+  // SAME resumedMessages array that seeded the engine above — one source, no
+  // drift — converted by the engine's own toSDKMessages (the mapper the remote
+  // bridge uses for exactly this replay-to-a-late-display job). Converted AFTER
+  // resume so getSessionId() stamps the adopted engine session id.
+  const historyEvents = resumedMessages !== undefined
+    ? toSDKMessages(resumedMessages)
+    : undefined
+
   const server = new SidecarServer({
     sessionId: args.sessionId,
     engineSessionId,
     controller,
     ...(permissions ? { permissions } : {}),
+    ...(historyEvents !== undefined ? { history: historyEvents } : {}),
   })
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a

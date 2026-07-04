@@ -132,18 +132,25 @@ function makeSupervisor(configHome: string): SidecarSupervisor {
   return sup
 }
 
-test('(b) a sidecar spawned with resumeEngineSessionId echoes it in the ready frame', async () => {
+test('(b) a resumed sidecar echoes the id in ready AND replays the restored history as replay:true event frames', async () => {
   const configHome = freshConfigHome()
   const cwd = tmp('catcode-p31-wd-')
   const engineSessionId = randomUUID()
+  const marker = `nonce-${randomUUID()}`
   await mintTranscript({
     configHome,
     cwd,
     engineSessionId,
-    marker: 'nonce-ready-echo',
+    marker,
   })
 
   const sup = makeSupervisor(configHome)
+  // Collect every frame from the start so the history replay (sent right after
+  // ready) cannot be missed between two waits.
+  const frames: ServerFrame[] = []
+  sup.subscribe(event => {
+    if (event.type === 'frame') frames.push(event.frame)
+  })
   sup.spawnSession('p31-resume-echo', { cwd, resumeEngineSessionId: engineSessionId })
 
   const ready = await waitForFrame(sup, frame => frame.kind === 'ready')
@@ -152,6 +159,51 @@ test('(b) a sidecar spawned with resumeEngineSessionId echoes it in the ready fr
     // P3-0 field: the ready frame carries the app-owned engineSessionId, and it
     // MUST equal the requested resume id — a re-minted fresh id would fail here.
     expect(ready.engineSessionId).toBe(engineSessionId)
+  }
+
+  // F2 (RESTORE-HISTORY): the REAL wiring — resume → toSDKMessages → server →
+  // socket → supervisor decode — delivers the minted transcript (2 messages)
+  // as replay-flagged event frames, in order, before any live event.
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('timed out waiting for history replay frames')),
+      45_000,
+    )
+    const check = () => {
+      if (
+        frames.filter(f => f.kind === 'event' && f.replay === true).length >= 2
+      ) {
+        clearTimeout(timer)
+        resolve()
+      } else {
+        setTimeout(check, 25)
+      }
+    }
+    check()
+  })
+  const replayFrames = frames.filter(
+    (f): f is Extract<ServerFrame, { kind: 'event' }> =>
+      f.kind === 'event' && f.replay === true,
+  )
+  expect(replayFrames.length).toBe(2)
+  for (const frame of replayFrames) {
+    expect(frame.event.type).toBe('message')
+    expect(frame.sessionId).toBe('p31-resume-echo')
+  }
+  // The replay carries what the ENGINE resumed (one source): the user nonce
+  // prompt verbatim, then an assistant message. NOTE the assistant is the
+  // engine's own API-validity sentinel, not the minted ack — recovery filters
+  // the hand-minted trailing assistant and appends "No response requested."
+  // (conversationRecovery.ts:243). The renderer history matching the ENGINE's
+  // restored state — sentinel included — is exactly the F2 same-source
+  // contract; uuid-level equality with the seeded engine state is asserted in
+  // resumeSeedProbe.fixture.ts.
+  expect(JSON.stringify(replayFrames[0])).toContain(`remember this nonce: ${marker}`)
+  const second = replayFrames[1]!
+  if (second.event.type === 'message') {
+    expect(second.event.message.type).toBe('assistant')
+  } else {
+    throw new Error('second replay frame is not a message event')
   }
 }, TEST_TIMEOUT_MS)
 
