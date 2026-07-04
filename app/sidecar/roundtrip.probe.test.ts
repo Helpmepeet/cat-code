@@ -52,6 +52,9 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
+    // A non-probe session boots the real engine, which now requires a session
+    // root (P3-1: cwd is caller-supplied, no P1_1_CWD hardcode).
+    sidecarCwd: process.cwd(),
   })
   const sessionId = supervisor.spawnSession('p1-1-real-ready')
   const events: ServerFrame[] = []
@@ -133,6 +136,8 @@ test('a connected session responds to a valid ping (happy-path liveness)', async
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
     sidecarEnv: { CATCODE_SIDECAR_PROBE: '0' },
+    // Non-probe session → real engine → session root required (P3-1).
+    sidecarCwd: process.cwd(),
   })
   const sessionId = supervisor.spawnSession('p1-0-test-forge')
 

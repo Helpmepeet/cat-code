@@ -80,12 +80,37 @@ type SidecarRecord = {
   decoder: FrameDecoder
   status: SidecarStatus
   restartCount: number
+  /** Spawn config to re-apply on restart (per-session cwd + resume id). */
+  config?: SpawnConfig
 }
 
 export type SupervisorEvent =
   | { type: 'frame'; sessionId: SessionId; frame: ServerFrame }
   | { type: 'status'; sessionId: SessionId; status: SidecarStatus }
   | { type: 'exit'; sessionId: SessionId; code: number | null; signal: string | null }
+
+/**
+ * Per-session spawn config (REGISTRY.md §6.1 / §7 item 2). Handed to the sidecar
+ * via env — `CATCODE_SIDECAR_CWD` and the optional
+ * `CATCODE_SIDECAR_RESUME_SESSION_ID` — exactly like the P1-0
+ * `CATCODE_SIDECAR_SESSION_ID` env. This is **main/host-owned input, never
+ * renderer input** (SECURITY-MINIMUM T8/HC1): validation-at-API is P3-3's job,
+ * but the sidecar still fail-closes on a missing/non-directory cwd.
+ */
+export type SpawnConfig = {
+  /**
+   * Session root. Also becomes the child process's actual spawn cwd, because the
+   * engine derives project identity from `process.cwd()` at boot
+   * (`src/bootstrap/state.ts` getInitialState → `originalCwd`/`projectRoot`).
+   */
+  cwd: string
+  /**
+   * When present, session construction resumes THIS engine session through the
+   * engine's real resume machinery (not a fresh mint) — REGISTRY.md R3. The
+   * sidecar's ready frame then echoes this id as `engineSessionId`.
+   */
+  resumeEngineSessionId?: string
+}
 
 export type SendFailureCode =
   | 'session_not_found'
@@ -155,11 +180,19 @@ export class SidecarSupervisor {
    * Spawn a new sidecar for a session and connect to its socket. Returns once
    * the child is launched; readiness is signalled asynchronously via a `status`
    * event (and the sidecar's own `app.ready` frame).
+   *
+   * `config` (REGISTRY.md §7 item 2): the caller-chosen working directory and an
+   * optional engine session to resume. Absent (P1-0/probe callers), the
+   * supervisor's `sidecarCwd` option is used and no resume is requested.
    */
-  spawnSession(sessionId: SessionId = randomUUID()): SessionId {
+  spawnSession(sessionId: SessionId = randomUUID(), config?: SpawnConfig): SessionId {
     if (this.registry.has(sessionId)) {
       throw new Error(`session ${sessionId} already exists`)
     }
+    // Per-session cwd wins over the supervisor-wide default; it must be both the
+    // child's spawn cwd AND the env the sidecar validates, because the engine's
+    // project identity is initialized from process.cwd() at boot.
+    const spawnCwd = config?.cwd ?? this.options.sidecarCwd
 
     // Short internal socket filename (not the UUID sessionId) to stay under the
     // platform `sun_path` limit. Fail loudly here if it would overflow rather
@@ -178,12 +211,22 @@ export class SidecarSupervisor {
 
     const child = spawn(this.options.sidecarCommand, this.options.sidecarArgs ?? [], {
       stdio: ['ignore', 'inherit', 'inherit'],
-      cwd: this.options.sidecarCwd,
+      // Actual spawn cwd: the engine reads process.cwd() at boot for project
+      // identity (src/bootstrap/state.ts getInitialState → originalCwd), so the
+      // child must actually start here — the env alone is not enough.
+      cwd: spawnCwd,
       env: {
         ...process.env,
         ...this.options.sidecarEnv,
         CATCODE_SIDECAR_SOCKET: socketPath,
         CATCODE_SIDECAR_SESSION_ID: sessionId,
+        // Host-owned inputs (T8/HC1). Only set the cwd env when we have one so
+        // the sidecar's own missing-cwd guard still fires for misconfigured
+        // callers. The resume id rides env only when a resume was requested.
+        ...(spawnCwd !== undefined ? { CATCODE_SIDECAR_CWD: spawnCwd } : {}),
+        ...(config?.resumeEngineSessionId !== undefined
+          ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
+          : {}),
       },
     })
 
@@ -197,6 +240,10 @@ export class SidecarSupervisor {
       decoder: new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES),
       status: 'spawning',
       restartCount: 0,
+      // Retained so restartSession re-roots the fresh engine process in the same
+      // cwd and re-resumes the same engine session (REGISTRY.md §2: a restarted
+      // engine re-announces its engineSessionId in its new ready frame).
+      ...(config ? { config } : {}),
     }
     this.registry.set(sessionId, record)
 
@@ -284,8 +331,11 @@ export class SidecarSupervisor {
       throw new Error(`session ${sessionId} does not exist`)
     }
     const restartCount = record.restartCount + 1
+    const config = record.config
     this.killSession(sessionId)
-    this.spawnSession(sessionId)
+    // Re-apply the same spawn config so the fresh process re-roots in the same
+    // cwd and re-resumes the same engine session.
+    this.spawnSession(sessionId, config)
     const restarted = this.registry.get(sessionId)
     if (restarted) {
       restarted.restartCount = restartCount

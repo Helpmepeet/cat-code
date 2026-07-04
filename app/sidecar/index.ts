@@ -15,16 +15,33 @@
  * ZERO `electron` imports. This is a plain Bun program.
  */
 
+import { statSync } from 'node:fs'
+
 import { FrameDecoder } from '../shared/framing.js'
 import { MAX_FRAME_BYTES } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
+import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
+
+/** Dedicated non-zero exit for an unresumable engine session id. */
+const RESUME_FAILED_EXIT_CODE = 4
 
 type SidecarArgs = {
   socketPath: string
   sessionId: string
+  /**
+   * Caller-chosen session root (REGISTRY.md §7). Host-owned input (T8/HC1); the
+   * supervisor also sets it as the child's spawn cwd, so the engine's project
+   * identity is already rooted here. Validated below as defense in depth.
+   */
+  cwd: string
+  /**
+   * Optional engine session to resume (REGISTRY.md R3). Present ⇒ resume that
+   * transcript through the engine's real machinery, never a fresh mint.
+   */
+  resumeEngineSessionId: string | undefined
   /** P1-0 only: inject the probe tool_use frame on first attach. */
   probeOnAttach: boolean
 }
@@ -37,10 +54,33 @@ function parseArgs(): SidecarArgs {
       'sidecar requires CATCODE_SIDECAR_SOCKET and CATCODE_SIDECAR_SESSION_ID',
     )
   }
+  const probeOnAttach = process.env.CATCODE_SIDECAR_PROBE === '1'
+  // The cwd is required for a real session (the engine roots project identity on
+  // it). Probe mode has no engine, so tolerate its absence there. Fail loudly on
+  // a missing/non-directory cwd rather than silently booting somewhere wrong
+  // (defense in depth behind the host's HC1 validation — this session never
+  // trusts a renderer-authored path, but it does verify a host-supplied one).
+  const cwd = process.env.CATCODE_SIDECAR_CWD
+  if (!probeOnAttach) {
+    if (!cwd) {
+      throw new Error('sidecar requires CATCODE_SIDECAR_CWD')
+    }
+    let isDir = false
+    try {
+      isDir = statSync(cwd).isDirectory()
+    } catch {
+      isDir = false
+    }
+    if (!isDir) {
+      throw new Error(`CATCODE_SIDECAR_CWD is not a directory: ${cwd}`)
+    }
+  }
   return {
     socketPath,
     sessionId,
-    probeOnAttach: process.env.CATCODE_SIDECAR_PROBE === '1',
+    cwd: cwd ?? process.cwd(),
+    resumeEngineSessionId: process.env.CATCODE_SIDECAR_RESUME_SESSION_ID || undefined,
+    probeOnAttach,
   }
 }
 
@@ -50,12 +90,23 @@ async function main(): Promise<void> {
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
   }
+
+  // Resume BEFORE reading the engine session id: processResumedConversation
+  // adopts the resumed id via switchSession, so getSessionId() then returns it
+  // and the ready frame's engineSessionId echoes the requested resume id. A bad
+  // id throws here → the fatal handler below exits non-zero + loudly (never a
+  // silent fresh session). Probe mode has no engine and cannot resume.
+  if (!args.probeOnAttach && args.resumeEngineSessionId) {
+    await resumeEngineSession(args.resumeEngineSessionId, args.cwd)
+  }
+
   const engineSessionId = args.probeOnAttach
     ? `probe:${args.sessionId}`
     : getSessionId()
 
   const { controller, permissions } = await createSidecarSessionController({
     probe: args.probeOnAttach,
+    cwd: args.cwd,
   })
 
   const server = new SidecarServer({
@@ -174,6 +225,14 @@ function toBuffer(chunk: Buffer | Uint8Array): Buffer {
 }
 
 void main().catch(error => {
+  // An unresumable engine session id is a distinguishable failure, not a generic
+  // crash: mark it explicitly on stderr and use a dedicated non-zero exit code so
+  // the supervisor/UI can surface "restore failed" rather than a silent fresh
+  // session (D6 anti-Potemkin).
+  if (error instanceof SidecarResumeError) {
+    process.stderr.write(`[sidecar] resume-failed: ${error.message}\n`)
+    process.exit(RESUME_FAILED_EXIT_CODE)
+  }
   process.stderr.write(
     `[sidecar] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
   )

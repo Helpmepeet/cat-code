@@ -21,9 +21,6 @@ import {
   createSidecarPermissionDomain,
   type SidecarPermissionDomain,
 } from './permissionDomain.js'
-import { P1_1_CWD } from '../shared/sessionConfig.js'
-
-export { P1_1_CWD } from '../shared/sessionConfig.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -77,7 +74,7 @@ export async function loadSidecarToolPermissionContext(): Promise<ToolPermission
   }
 }
 
-export async function createNormalSidecarQueryEngineConfig() {
+export async function createNormalSidecarQueryEngineConfig(cwd: string) {
   const toolPermissionContext = await loadSidecarToolPermissionContext()
   const appStateStore = createStore({
     ...getDefaultAppState(),
@@ -88,7 +85,7 @@ export async function createNormalSidecarQueryEngineConfig() {
   return {
     appStateStore,
     queryEngineConfig: createQueryEngineAppSessionConfigFromSetup({
-      cwd: P1_1_CWD,
+      cwd,
       tools,
       commands: [],
       mcpTools: [],
@@ -117,8 +114,11 @@ export type SidecarSession = {
 
 export async function createSidecarSessionController({
   probe,
+  cwd,
 }: {
   probe: boolean
+  /** Session root; the engine's QueryEngine is configured here. Ignored in probe mode. */
+  cwd: string
 }): Promise<SidecarSession> {
   if (probe) {
     return {
@@ -145,7 +145,7 @@ export async function createSidecarSessionController({
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
   const { appStateStore, queryEngineConfig } =
-    await createNormalSidecarQueryEngineConfig()
+    await createNormalSidecarQueryEngineConfig(cwd)
 
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),

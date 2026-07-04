@@ -146,6 +146,9 @@ app.whenReady().then(async () => {
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
     sidecarArgs: ['run', sidecarEntry],
+    // Non-probe sessions boot the real engine, which requires a session root
+    // (P3-1: cwd is caller-supplied; the P1_1_CWD hardcode is retired).
+    sidecarCwd: process.cwd(),
   })
   wireBridge(supervisor)
   const supervisorEvents: SupervisorEvent[] = []

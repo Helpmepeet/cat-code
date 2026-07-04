@@ -37,8 +37,6 @@ import {
   type SessionId,
   type SidecarClientMessage,
 } from '../shared/protocol.js'
-import { P1_1_CWD } from '../shared/sessionConfig.js'
-
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Fixed internal channel names — must match preload.ts.
@@ -89,7 +87,10 @@ function createSupervisor(): SidecarSupervisor {
   return new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarCwd: P1_1_CWD,
+    // Default boot cwd for the single startup session until the host API adds
+    // per-session cwd via the native picker (P3-3, HC1). The P1-1 pinned-literal
+    // hardcode is retired: main owns this default; it is not a fixed path.
+    sidecarCwd: process.cwd(),
   })
 }
 

@@ -5,34 +5,46 @@ import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import {
-  P1_1_CWD,
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
   loadSidecarToolPermissionContext,
 } from './sessionController.js'
 
 test('normal startup exposes the permission-context tools to the model', async () => {
-  const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig()
+  const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(
+    process.cwd(),
+  )
 
   expect(queryEngineConfig.tools.length).toBeGreaterThan(0)
   expect(queryEngineConfig.tools.some(tool => tool.name === 'Bash')).toBe(true)
 })
 
+test('normal startup roots the engine config at the caller-supplied cwd (P1_1_CWD retired)', async () => {
+  // The P1-1 hardcode is gone: the cwd is now an argument threaded from the
+  // sidecar's CATCODE_SIDECAR_CWD env, not a pinned literal.
+  const cwd = process.cwd()
+  const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(cwd)
+  expect(queryEngineConfig.cwd).toBe(cwd)
+})
+
 test('normal startup constructs a real runtime-backed controller without starting a turn', async () => {
   const { controller, permissions } = await createSidecarSessionController({
     probe: false,
+    cwd: process.cwd(),
   })
 
   expect(controller).toBeInstanceOf(AppSessionController)
   expect(permissions).not.toBeNull()
-  expect(P1_1_CWD).toBe('/Users/pt/cat-code')
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
 })
 
 test('probe startup has no permission domain (no engine app-state store)', async () => {
-  const { permissions } = await createSidecarSessionController({ probe: true })
+  const { permissions } = await createSidecarSessionController({
+    probe: true,
+    cwd: process.cwd(),
+  })
   expect(permissions).toBeNull()
 })
 

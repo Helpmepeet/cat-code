@@ -37,7 +37,7 @@ test('bridges supervisor lifecycle events to renderer server frames', () => {
   expect(bridgeSource).toContain('attachmentGate.clearSession(event.sessionId)')
 })
 
-test('configures the sidecar boot cwd to match the Phase-1 session cwd', () => {
+test('configures a main-owned default sidecar boot cwd (P1_1_CWD hardcode retired)', () => {
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   const createSupervisorStart = source.indexOf(
     'function createSupervisor(): SidecarSupervisor',
@@ -54,7 +54,10 @@ test('configures the sidecar boot cwd to match the Phase-1 session cwd', () => {
     createSupervisorEnd,
   )
 
-  expect(createSupervisorSource).toContain('sidecarCwd: P1_1_CWD')
+  // The P1-1 pinned literal is gone; main owns the default boot cwd until the
+  // host API adds a native-picker cwd (P3-3).
+  expect(createSupervisorSource).toContain('sidecarCwd: process.cwd()')
+  expect(source).not.toContain('P1_1_CWD')
 })
 
 test('restart IPC clears stale replay before restarting the addressed session', () => {
