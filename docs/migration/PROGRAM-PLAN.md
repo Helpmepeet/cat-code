@@ -344,6 +344,11 @@ agent). A **migration** session-unit matches that grain:
   report — the worker must **NOT** drive it with `cua-driver`, `claude-in-chrome`, or any
   computer/browser automation. Headless checks the worker can run itself (`bun test`, typecheck,
   build) stay the worker's job. Every generated prompt with a live GUI step carries this line.
+  Every generated `🖐 GUI` prompt must also say: read
+  `docs/migration/process/GUI-VERIFICATION.md` before the GUI section and build the
+  verification plan around the harness's launch/readiness/debug-export/registry guidance.
+  If a separate Codex GUI-driving verifier is spawned, paste that doc's "For The Driving Agent"
+  section into the verifier prompt.
 
 The per-session backlog (the actual pasteable prompts, in dependency order, per
 workstream) is the **next planning session's** deliverable, not this one.
@@ -383,7 +388,10 @@ workstream) is the **next planning session's** deliverable, not this one.
 - **Every generated session MUST carry the §6 🧠 Model/Difficulty header** (`Model: CLAUDE
   (visual-design|system-architecture) | ANY · Difficulty: N/10`, plus `· 🖐 GUI` only when the
   session needs the operator to drive a live GUI step) and instruct its reader to
-  echo it back. Add the new sessions to STATUS.md as rows, tags included.
+  echo it back. For every generated `🖐 GUI` session, include the
+  `docs/migration/process/GUI-VERIFICATION.md` read-first pointer from §6 so the
+  session uses the P3-H harness rather than rediscovering launch/readiness/PID
+  forensics. Add the new sessions to STATUS.md as rows, tags included.
 
 **This session (2026-06-26):** the big picture above — job, workstreams, dependency
 map, phases+gates, adapter boundary, session grain — plus two concrete artifacts the

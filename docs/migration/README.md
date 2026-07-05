@@ -19,7 +19,7 @@ on 2026-07-02 now that the production code lives in this repo.
 | [`decisions/`](decisions/) | Locked, load-bearing decision records: `TRANSPORT`, `SECURITY-MINIMUM`, `SHELL`, `SEAM-SPIKE` |
 | [`reviews/`](reviews/) | Dated point-in-time reviews — archival, not edited after the fact |
 | [`backlog/`](backlog/) | Active per-phase session backlogs (`phase0-1.md`) |
-| [`process/`](process/) | How-to scaffolding: `HANDOFF`, `REVIEW-PROMPT` |
+| [`process/`](process/) | How-to scaffolding: `HANDOFF`, `REVIEW-PROMPT`, `GUI-VERIFICATION` |
 
 `MIGRATION-DOMAINS.md` and `MIGRATION-STRATEGY.md` are earlier strategy notes carried over
 from the prototype's `audit/` root; they partly predate and overlap `PROGRAM-PLAN` /

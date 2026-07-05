@@ -21,7 +21,7 @@
 - **Faked?** — whether prototype runtime/data behavior is mocked or flattened; spec IDs identify the required behavior spec.
 - **Disposition** — `port` (faithful rebuild on real data), `adapt` (UX stays but real shape differs), `build-new` (new app-side wiring), `cut` (do not migrate as a product surface), `recon` (human/source decision still required).
 
-**Standing rule:** every build session still starts by reading this row, then opening cited `~/cat-code/src` files. A count here is a routing hint, not permission to skip source.
+**Standing rule:** every build session still starts by reading this row, then opening cited `~/cat-code/src` files. A count here is a routing hint, not permission to skip source. Any generated `🖐 GUI` session must also include the `docs/migration/process/GUI-VERIFICATION.md` read-first pointer and build its GUI verification plan around the P3-H harness.
 
 ---
 

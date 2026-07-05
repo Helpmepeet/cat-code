@@ -174,14 +174,14 @@ Gate: prototype feature parity (~80% wireable), each surface real. **Sessions no
 
 | Session | Model | Diff | Status | Note |
 |---|---|---:|---|---|
-| _(to be generated when Phase 4 opens)_ | — | — | ⬜ | INVENTORY W4 rows; most parallel phase. |
+| _(to be generated when Phase 4 opens)_ | — | — | ⬜ | INVENTORY W4 rows; most parallel phase. Every generated `🖐 GUI` row must include the `docs/migration/process/GUI-VERIFICATION.md` read-first pointer and use the P3-H harness for launch/readiness/debug-export/registry cross-checks. |
 
 ## PHASE 5 — production hardening & release
 Gate: installable, signed, auto-updating, tested build. **Sessions not generated yet.**
 
 | Session | Model | Diff | Status | Note |
 |---|---|---:|---|---|
-| _(to be generated when Phase 5 opens)_ | — | — | ⬜ | packaging/signing/perf/a11y/test suite. |
+| _(to be generated when Phase 5 opens)_ | — | — | ⬜ | packaging/signing/perf/a11y/test suite. Every generated `🖐 GUI` row must include the `docs/migration/process/GUI-VERIFICATION.md` read-first pointer and use the P3-H harness for launch/readiness/debug-export/registry cross-checks where the dev harness applies. |
 
 ---
 

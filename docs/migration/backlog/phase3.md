@@ -934,6 +934,10 @@ certify the gate. The engine-side resume anchors: loadConversationForResume
 (src/utils/conversationRecovery.ts:465), processResumedConversation
 (src/utils/sessionRestore.ts:493); switchSession (src/bootstrap/state.ts:474) alone is NOT a
 resume.
+Read `docs/migration/process/GUI-VERIFICATION.md` before planning the GUI/operator section.
+Use the harness for readiness waits, multi-session state cross-checks, PID correlation, and
+debug-export/registry forensics; the real-picker requirement below is the production-path
+counterweight, not a substitute for the harness plan.
 
 === THE GATE LINE (D6 §4 — execute as written) ===
 With two live sessions (each its own engine process), quit the app and relaunch. Both sessions
