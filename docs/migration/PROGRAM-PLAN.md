@@ -385,6 +385,12 @@ workstream) is the **next planning session's** deliverable, not this one.
 - **When a phase's sessions are all ✅ (gate cleared), generate the NEXT phase's backlog** from
   the relevant `INVENTORY.md` rows (its workstream slice) — in dependency order, one
   surface/capability per session, at the §6 grain.
+- **Enumerate the joins** (2026-07-05 postmortem, rec 1): while generating a phase's backlog,
+  list the cross-session contracts (who produces X, who consumes it) and assign each join
+  *by name* to a session or to that layer's integration review. Every Critical/High so far
+  was an unowned join (restore amnesia, restart Potemkin, shell RED, zombie socket). This
+  shrinks the unowned-join class; it does NOT replace the by-layer reviews — emergent paths
+  invisible to the plan (LR-1's restart-in-place) remain the reviews' job.
 - **Every generated session MUST carry the §6 🧠 Model/Difficulty header** (`Model: CLAUDE
   (visual-design|system-architecture) | ANY · Difficulty: N/10`, plus `· 🖐 GUI` only when the
   session needs the operator to drive a live GUI step) and instruct its reader to

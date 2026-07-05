@@ -327,8 +327,10 @@ Step 0: read INVENTORY.md §W2 row "N-process spawn/attach/multiplex + app regis
   layer; your module must not depend on client politeness.
 - **Launch sequence (§4):** (1) read+validate — unknown version/unparseable → move aside as
   `registry.json.corrupt-<ts>`, start empty, log loudly; (2) liveness sweep for rows with
-  `shutdown == null`: probe enginePid — alive → orphaned sidecar → v1 policy KILL (SIGTERM;
-  D6 §2), dead → nothing; either way mark `crashed`; best-effort unlink stale socketPath.
+  `shutdown == null`: probe enginePid — alive+identity → orphaned sidecar → v1 policy KILL
+  (SIGTERM; D6 §2), dead/recycled/identity-mismatch → nothing; either way mark `crashed`
+  and retain advisory `enginePid`/`socketPath` so restore can refuse while a prior writer
+  still matches identity.
   ⚠️ §9-A3: never kill on pid-match alone — require identity too (row's socketPath still
   exists AND the process cmdline is the sidecar binary; both cheap on darwin); (3) reap
   over-bound + missing-transcript rows AND `shutdown:"clean"` rows with
@@ -983,6 +985,31 @@ history, fails all three.
   app/supervisor/ + registry/host modules have zero `electron` imports; the channel is still
   a filesystem socket (no stdio/child-IPC regression); no Phase-3 code path derives session
   lifetime from the WINDOW process's exit (D6 §4 riders).
+
+=== RIDERS (2026-07-05 lifetime/restore review + postmortem rec 2) ===
+- Scratch registry: run the gate under a scratch CLAUDE_CONFIG_DIR so historical rows
+  (hardening/smoke runs write into the real registry) don't pollute the two-session Sidebar
+  assertions. Verify first that credentialed turns work from a scratch home (Codex tokens are
+  vault-held); if they don't, copy the minimal credential files in, or fall back to
+  ack-closing stale rows before operator step 1 and say so in the report.
+- Evidence for "resume machinery ran": capture/tee Electron main's stderr for the
+  `[sidecar] resume-seeded messages=N engineSessionId=…` line (app/sidecar/index.ts) on every
+  restore — it is the ONLY durable artifact of anti-Potemkin clause (c/d); file it with the
+  report, don't just eyeball it.
+- Restart-in-place step (safe only because LR-1 is fixed — host.restartSession now threads
+  the row's engineSessionId as the resume id): with a session that has history, use the tab's
+  RESTART affordance (not Sidebar restore) and re-run the nonce test. Pre-LR-1 this was the
+  documented Potemkin path (renderer keeps rendering history the fresh engine lost); the gate
+  must prove it no longer is.
+- Regression companion (land headless, so the lifetime line survives after this gate closes):
+  (a) the LR-7 chained test — ONE real registry file driven through markLiveCleanSync → fresh
+  SessionRegistry → launch() sweep/reap → restorable() → restoreSession → real resume (every
+  hop is tested separately today; the chain is not); (b) a descriptor state-machine invariant
+  test — random legal event sequences through the host fold + reduceShellState asserting
+  "a close eventually removes the tab", "tab ⇒ live record ∨ tombstone", "restorable ⇒
+  engineSessionId ≠ null". Derive the legal-transition vocabulary from REAL supervisor/host
+  guarantees, NOT from FakeSupervisor's orderings (it emits a synchronous kill-exit the real
+  supervisor never can — the exact divergence that hid the P3-5b bug).
 
 === GROUND RULES ===
 Locked decisions + full security baseline. This session may fix bugs anywhere in the Phase-3
