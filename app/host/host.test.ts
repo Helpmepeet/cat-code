@@ -644,6 +644,24 @@ test('listSessions returns live ∪ restorable with live status winning', async 
   expect(restDescriptor?.restorable).toBe(true)
 })
 
+test('a terminal tombstone whose registry row was reaped is not listed (no empty-id ghost)', () => {
+  // Reachable shape: a crashed session's terminal row is bound-reaped
+  // (enforceBound) while its supervisor tombstone lingers. descriptorFor must
+  // return undefined for it — pre-fix it minted a ghost descriptor with
+  // appSessionId '' via descriptorFromRow(undefined, live.status) (SF7).
+  const h = makeHost()
+  h.supervisor.records.set('tombstone-no-row', {
+    sessionId: 'tombstone-no-row',
+    status: 'exited',
+    pid: 999,
+    socketPath: '/tmp/fake/tomb.sock',
+    cwd: h.cwd,
+  })
+  const list = h.host.listSessions()
+  expect(list.some(s => s.appSessionId === '')).toBe(false)
+  expect(list.some(s => s.appSessionId === 'tombstone-no-row')).toBe(false)
+})
+
 /* ------------------------------------------------------------------------- *
  * HostEvent stream — status / exit / add / remove
  * ------------------------------------------------------------------------- */

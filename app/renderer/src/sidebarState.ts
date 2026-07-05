@@ -106,8 +106,12 @@ export function deriveSidebarRowVisual(
       label = 'live'
       break
     case 'disconnected':
+      // `disconnected` is overloaded (hostApi.ts status doc): a crash-marked
+      // DEAD row surfaces it with restorable:true, while a LIVE socket-drop
+      // (F13 — child may still be alive) carries restorable:false. Only the
+      // dead one is a crash; labeling the live drop "crashed" would lie.
       tone = 'dead'
-      label = 'crashed'
+      label = descriptor.restorable ? 'crashed' : 'disconnected'
       break
     case 'exited':
       tone = 'dead'

@@ -106,6 +106,23 @@ test('sessionAtSlot maps ⌘1..9 to 1-based tab order, out-of-range → null', (
   expect(sessionAtSlot(state, 10)).toBeNull()
 })
 
+test('sessionAtSlot indexes the TAB order, skipping restorable-only roster rows (P3-5 review)', () => {
+  // A hydrated restorable row sits in the roster (Sidebar offer) but is not a
+  // tab. ⌘n must match the TabBar's per-tab ⌘n hints — indexing the full
+  // roster would send ⌘2 to the dead row instead of tab #2.
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('tab1', { status: 'ready' })))
+  state = reduceShellState(
+    state,
+    added(descriptor('offer', { status: 'exited', restorable: true })),
+  )
+  state = reduceShellState(state, added(descriptor('tab2', { status: 'ready' })))
+
+  expect(sessionAtSlot(state, 1)).toBe('tab1')
+  expect(sessionAtSlot(state, 2)).toBe('tab2')
+  expect(sessionAtSlot(state, 3)).toBeNull() // the offer never absorbs a slot
+})
+
 test('selectLiveSessions excludes a closed (restorable) session but keeps it in the roster (F1)', () => {
   let state = createShellState()
   state = reduceShellState(state, added(descriptor('live', { status: 'ready' })))

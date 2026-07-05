@@ -105,6 +105,20 @@ test('a crashed (disconnected) restorable row flags dead/crashed', () => {
   expect(visual.restorable).toBe(true)
 })
 
+test('a LIVE socket-drop (disconnected, not restorable) is NOT labeled crashed', () => {
+  // The other half of the overloaded status (P3-5 review): a live session
+  // whose socket dropped (F13 — the child may still be alive) surfaces
+  // status:'disconnected' with restorable:false. It is kind:live (selecting it
+  // focuses the tab, no restore) and must not claim a crash.
+  const visual = deriveSidebarRowVisual(
+    descriptor('x', { status: 'disconnected', restorable: false }),
+  )
+  expect(visual.kind).toBe('live')
+  expect(visual.tone).toBe('dead')
+  expect(visual.label).toBe('disconnected')
+  expect(visual.restorable).toBe(false)
+})
+
 test('a spawning row reads as starting (warn), not yet restorable', () => {
   const visual = deriveSidebarRowVisual(descriptor('x', { status: 'spawning' }))
   expect(visual.tone).toBe('warn')

@@ -533,7 +533,10 @@ export class Host implements HostApi {
     // P3-5b kill/close parity fix): before this, the tombstone made the
     // descriptor read (status:'exited', restorable:false) and a crashed session
     // never became a Sidebar restore-offer.
-    if (!live || (row && isTerminalStatus(live.status))) {
+    // A terminal record with NO row (its terminal row was bound-reaped while
+    // the tombstone lingered) is neither live nor restorable — return
+    // undefined rather than minting an empty-id ghost descriptor (SF7).
+    if (!live || isTerminalStatus(live.status)) {
       return row ? this.descriptorFromRow(row, null) : undefined
     }
     return this.descriptorFromRow(row, live.status)

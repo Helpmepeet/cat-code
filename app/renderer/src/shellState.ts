@@ -175,8 +175,11 @@ function isDescriptor(
  * ------------------------------------------------------------------------- */
 
 /**
- * The tab a ⌘<n> jump targets: 1-based index into the visible tab order, or
- * null if that slot is empty. ⌘1..9 map to slots 1..9 (slot 9 is the LAST tab
+ * The tab a ⌘<n> jump targets: 1-based index into the visible TAB order (the
+ * run-local `tabs` projection the TabBar renders and numbers its ⌘n hints by),
+ * or null if that slot is empty. Indexing the full roster instead would let a
+ * hydrated restorable-only row (a Sidebar offer, not a tab) absorb a slot and
+ * shift every hint off by one. ⌘1..9 map to slots 1..9 (slot 9 is the LAST tab
  * in the prototype's convention when there are ≥9; here we keep the literal
  * 1..9 → index 0..8 mapping, matching a plain tab-order jump).
  */
@@ -185,5 +188,5 @@ export function sessionAtSlot(
   slot: number,
 ): SessionId | null {
   if (slot < 1 || slot > 9) return null
-  return state.order[slot - 1] ?? null
+  return selectLiveSessions(state)[slot - 1]?.appSessionId ?? null
 }
