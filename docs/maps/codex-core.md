@@ -1,6 +1,6 @@
 # Codex Core Map
 
-Last refreshed: 2026-07-01
+Last refreshed: 2026-07-05
 
 ## Purpose
 
@@ -47,6 +47,7 @@ Read in this order for most Codex/OpenAI work:
 | Change Codex transport continuation | `src/services/api/codex-websocket-transport.ts` | `src/services/api/codex-continuation-e2e.test.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/messages.ts` | This owns `previous_response_id`, canonical delta checks, prewarm, and stale response-id fallback. |
 | Change final text/usage parsing for standalone core | `src/codex-core/response.ts` | `src/services/api/codex-fetch-adapter.ts`, `src/codex-core/errors.ts` | Core parses Anthropic-style SSE events returned by the adapter and extracts text, stop reason, usage, and cache metadata. |
 | Change token refresh and vault persistence | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts`, `src/utils/auth.ts` | Refresh is a vault-state machine with file locking and ownership checks. It can reset safe offline failures to idle, mark ambiguous or fatal outcomes for reauth, preserve capped state, or save a new profile on identity mismatch. |
+| Change usage-reset redemption | `src/components/Settings/Reset.tsx`, `src/components/Settings/redeemResetMachine.ts` | `src/services/api/codexUsage.ts`, `src/services/api/codexAccountPool.ts` | The Reset tab owns preflight/fetch/consume side effects; the React-free machine owns account eligibility, default targeting, request-id lifetime, usage-window display data, and outcome mapping. Confirmed redemption heals the pool and guards briefly against stale usage hints. |
 
 ## Runtime Flow
 
@@ -76,6 +77,7 @@ src/codex-core/client.ts:runCodexLLM()
 | Codex core message validation | `src/codex-core/request.ts` | `src/codex-core/request.test.ts` | Rejects empty content, mixed `input`+`messages`, and conversation history that does not start with a user message. |
 | Developer vs instruction prefix placement | `src/codex-core/request.ts` | `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts` | Core and app paths both separate stable instructions from conversation messages before translation. |
 | Pool activation and active-account fallback | `src/services/api/codexAccountPool.ts` | `src/services/api/client.ts`, `src/services/api/codexUsage.ts` | `getActiveAccount()` can repair an invalid active account by finding another healthy one. `getCodexAccountAvailability()` owns normalized dead/capped reasons and treats an elapsed primary-window reset as routable even while a cached usage hint remains fresh. |
+| Usage-reset availability and consumption | `src/services/api/codexUsage.ts` | `src/components/Settings/Reset.tsx`, `src/components/Settings/redeemResetMachine.ts`, `src/services/api/codexAccountPool.ts` | Usage fetches provide reset credits and current primary/secondary window percentages. Redemption retries reuse one idempotency key; only confirmed reset outcomes call `applyRedeemedUsageReset()` to heal pool state. |
 | Lease-aware token selection | `src/services/api/client.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts` | `resolveCodexOAuthTokensForLeaseOwner()` is the bridge between pool/lease state and API client creation. |
 | Per-owner failover | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts` | Leased owners fail over locally; unleased main-thread requests fall back to pool switching. |
 | Structured account diagnostics | `src/services/api/accountDiagnostics.ts` | `src/entrypoints/sdk/coreSchemas.ts`, `src/services/api/client.ts`, `src/services/api/withRetry.ts` | Downstream remediation only requires `version`, `code`, `severity`, `provider`, and `recoverable`; optional fields are sanitized hints. |

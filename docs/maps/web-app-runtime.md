@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-07-04 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-07-05 against `src/main.tsx`, `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
 `src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
 
@@ -36,7 +36,8 @@ the legacy REPL relay server.
 | Desktop sidecar lifecycle | `app/supervisor/supervisor.ts` | `app/shared/framing.ts`, `app/shared/limits.ts`, `app/shared/protocol.ts` | The Electron-free supervisor owns the session-to-child registry, bounded Unix-socket path allocation, framed transport, restart/kill behavior, and sidecar status events. |
 | Desktop engine boundary | `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` | `app/sidecar/sessionController.ts`, `app/sidecar/initializeRuntime.ts`, `src/app-runtime/` | The Bun sidecar initializes the real runtime, constructs a QueryEngine-backed controller, strictly validates inbound allowlisted frames, reattaches only engine-minted permission updates, and raw-forwards cloneable, JSON-safe, secret-screened session events. |
 | Desktop preload contract | `app/preload/preload.ts` | `app/preload/rendererIpcGuard.ts`, `app/shared/protocol.ts`, `app/main/main.ts` | The context-isolated preload exposes fixed submit, abort, permission, ping, restart, subscribe, and renderer-ready operations; a byte/rate guard protects the fixed senders and there is no generic IPC channel API. |
-| Desktop renderer state and transcript projection | `app/renderer/src/App.tsx`, `app/renderer/src/transcriptProjector.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/permissionState.ts`, `app/renderer/src/rawMessageLog.ts` | The renderer subscribes before signaling readiness and keeps separate reducers for connection, permissions, bounded raw diagnostics, and projected transcript rows. The projector exhaustively dispatches the SDK message union; assistant text/tool-use rows render now while later variants remain explicit no-ops. |
+| Desktop renderer shell and session routing | `app/renderer/src/App.tsx`, `app/renderer/src/shellState.ts` | `app/renderer/src/TabBar.tsx`, `app/renderer/src/Sidebar.tsx`, `app/renderer/src/tabStatus.ts`, `app/renderer/src/sidebarState.ts` | `App` seeds the session roster from `listSessions()`, folds live host events without polling, and owns active selection plus create/close/restart/restore calls. Tabs retain arrival order; the sidebar independently projects the same live/restorable roster by recency. Per-session connection, transcript, and permission stores remain resident while focus changes. |
+| Desktop renderer transcript and permission state | `app/renderer/src/transcriptProjector.ts`, `app/renderer/src/permissionState.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts` | The renderer subscribes before signaling readiness and keeps session-keyed reducers for connection, permissions, bounded raw diagnostics, and projected transcript rows. The projector exhaustively dispatches the SDK message union; background permission counts feed tab attention without moving focus. |
 | Legacy REPL web relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts`, `src/screens/REPL.tsx` | This older server relays REPL events and intentionally disables sending; do not confuse it with `AppSessionWebSocketServer.ts` when routing runtime-backed browser work. |
 
 ## Validation
@@ -67,6 +68,9 @@ the legacy REPL relay server.
 - `app/renderer/src/transcriptProjector.ts` is the renderer anti-corruption
   boundary for SDK messages. Keep its exhaustive switch and
   `sdkMessageFixtures.ts` coverage aligned when the SDK union grows.
+- `app/renderer/src/shellState.ts` owns roster ordering, not active focus.
+  `App.tsx` owns focus transitions so background frames and host events cannot
+  silently steal the active pane.
 - Desktop Electron main and the renderer must not import engine runtime modules.
   The Bun sidecar is the engine boundary; `app/supervisor/` must remain
   Electron-free.
