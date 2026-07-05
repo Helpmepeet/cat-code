@@ -35,6 +35,9 @@ type UsageEntry = {
   planType?: string
   resetCreditsAvailable?: number
   limitWindowSeconds?: number
+  primaryUsedPercent?: number
+  secondaryUsedPercent?: number
+  hasSecondaryWindow?: boolean
 }
 
 function usageMap(entries: Record<string, UsageEntry>): Map<string, UsageEntry> {
@@ -271,6 +274,48 @@ describe('redeemResetMachine — confirm copy (§9)', () => {
       confirmDescription({ planType: 'pro', limitWindowSeconds: 5 * 60 * 60 }),
     ).toBe(COPY.descRolling)
     expect(confirmDescription({})).toBe(COPY.descRolling)
+  })
+})
+
+describe('redeemResetMachine — current usage display', () => {
+  test('carries the current 5h and 7d usage for the reset decision', () => {
+    const [candidate] = buildCandidates({
+      accounts: [account({ accountId: 'usage-000000000000' })],
+      activeIndex: 0,
+      usageByAccountId: usageMap({
+        'usage-000000000000': {
+          primaryUsedPercent: 91.8,
+          secondaryUsedPercent: 42.2,
+          hasSecondaryWindow: true,
+        },
+      }),
+    })
+
+    expect(candidate.currentUsage).toEqual({
+      primaryUsedPercent: 91.8,
+      secondaryUsedPercent: 42.2,
+      hasSecondaryWindow: true,
+    })
+  })
+
+  test('preserves when the backend omitted the secondary window', () => {
+    const [candidate] = buildCandidates({
+      accounts: [account({ accountId: 'usage-000000000000' })],
+      activeIndex: 0,
+      usageByAccountId: usageMap({
+        'usage-000000000000': {
+          primaryUsedPercent: 12,
+          secondaryUsedPercent: 0,
+          hasSecondaryWindow: false,
+        },
+      }),
+    })
+
+    expect(candidate.currentUsage).toEqual({
+      primaryUsedPercent: 12,
+      secondaryUsedPercent: 0,
+      hasSecondaryWindow: false,
+    })
   })
 })
 

@@ -119,6 +119,9 @@ export function Reset({
               planType: usage.planType,
               resetCreditsAvailable: usage.resetCreditsAvailable,
               limitWindowSeconds: usage.primaryWindow.limitWindowSeconds,
+              primaryUsedPercent: usage.primaryWindow.usedPercent,
+              secondaryUsedPercent: usage.secondaryWindow.usedPercent,
+              hasSecondaryWindow: usage.hasSecondaryWindow,
             },
           ]),
         )
@@ -369,6 +372,9 @@ function ConfirmView({
       <Text bold>{COPY.confirmTitle}</Text>
       {subtitle ? <Text dimColor>{subtitle}</Text> : null}
       <Text>{confirmDescription(target)} Account: {target.label}</Text>
+      {usageSummary(target) ? (
+        <Text dimColor>Current usage: {usageSummary(target)}</Text>
+      ) : null}
       <Select
         defaultFocusValue="cancel"
         options={[
@@ -457,10 +463,25 @@ function describeCandidate(candidate: RedeemCandidate): string {
   } else if (candidate.isActive) {
     parts.push('active')
   }
+  const usage = usageSummary(candidate)
+  if (usage) {
+    parts.push(usage)
+  }
   parts.push(
     typeof candidate.resetCreditsAvailable === 'number'
       ? `${candidate.resetCreditsAvailable} reset${candidate.resetCreditsAvailable === 1 ? '' : 's'}`
       : 'reset availability unknown',
   )
+  return parts.join(' · ')
+}
+
+function usageSummary(candidate: RedeemCandidate): string | undefined {
+  if (!candidate.currentUsage) return undefined
+  const primary = Math.floor(candidate.currentUsage.primaryUsedPercent)
+  const secondary = Math.floor(candidate.currentUsage.secondaryUsedPercent)
+  const parts = [`5h ${primary}% used`]
+  if (candidate.currentUsage.hasSecondaryWindow !== false) {
+    parts.push(`7d ${secondary}% used`)
+  }
   return parts.join(' · ')
 }

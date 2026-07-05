@@ -78,6 +78,11 @@ export type RedeemCandidate = {
   resetCreditsAvailable?: number
   planType?: string
   limitWindowSeconds?: number
+  currentUsage?: {
+    primaryUsedPercent: number
+    secondaryUsedPercent: number
+    hasSecondaryWindow?: boolean
+  }
   disabledReason?: string
 }
 
@@ -98,6 +103,9 @@ export function buildCandidates(input: {
       planType?: string
       resetCreditsAvailable?: number
       limitWindowSeconds?: number
+      primaryUsedPercent?: number
+      secondaryUsedPercent?: number
+      hasSecondaryWindow?: boolean
     }
   >
   preflightById?: Map<string, { kind: 'reauth' | 'transient'; message: string }>
@@ -127,6 +135,15 @@ export function buildCandidates(input: {
       resetCreditsAvailable: usage?.resetCreditsAvailable,
       planType: usage?.planType,
       limitWindowSeconds: usage?.limitWindowSeconds,
+      currentUsage:
+        typeof usage?.primaryUsedPercent === 'number' &&
+        typeof usage.secondaryUsedPercent === 'number'
+          ? {
+              primaryUsedPercent: usage.primaryUsedPercent,
+              secondaryUsedPercent: usage.secondaryUsedPercent,
+              hasSecondaryWindow: usage.hasSecondaryWindow,
+            }
+          : undefined,
       disabledReason,
     }
   })

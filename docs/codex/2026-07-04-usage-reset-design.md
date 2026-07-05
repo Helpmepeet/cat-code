@@ -1,7 +1,7 @@
 # Codex usage-limit reset redemption — technical design
 
 - Date: 2026-07-04
-- Status: proposed, rev 3 — Settings Reset tab rework; design only, implementation in working tree
+- Status: proposed, rev 4 — Reset tab also shows current 5h/7d usage; design only, implementation in working tree
 - Goal: let a Cat Code user redeem an available Codex usage-limit reset, at parity with upstream Codex CLI `/usage` → option 2 ("Redeem usage limit reset"), adapted to Cat Code's account pool.
 
 ## 1. Inputs and ground truth
@@ -252,3 +252,7 @@ External adversarial review returned 15 findings (verdict: needs rework). Dispos
 4. Accepted cost: selecting the Reset tab fires token pre-flight plus a forced usage read.
 5. Discoverability: with zero Codex accounts the tab is hidden and nothing points at redemption. The old no-accounts message is gone; accepted.
 6. Slice 4 is realized: Usage cards show per-account reset counts.
+
+## 16. Rev 4 — Current usage on the Reset tab (2026-07-04)
+
+The Reset tab now shows each target account's current 5h and 7d usage percentages next to reset availability, and repeats the selected account's current usage on the confirmation view. This makes the redemption decision self-contained: the user can see whether the account is actually near or at a relevant limit before spending a reset credit.
