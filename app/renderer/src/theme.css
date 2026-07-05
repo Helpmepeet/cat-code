@@ -10,19 +10,29 @@
   --tone-accent: var(--accent);
 
   /*
-   * TODO(P1-0): The prototype design-system sources name these tones but do
-   * not assign them hex values. Define them only after the palette is
-   * source-approved; leaving them unset prevents accidental invented colors.
-   *
-   * --tone-warn: <source-approved color>;
-   * --tone-danger: <source-approved color>;
-   * --tone-good: <source-approved color>;
-   * --tone-info: <source-approved color>;
+   * Status tones. Values taken from the prototype's own status palette
+   * (source-approved, resolving the P1-0 TODO): the prototype paints good/warn/
+   * danger runtime states with these exact hexes across its surfaces
+   *   good   #4ade80 · warn #fbbf24 · danger #f87171
+   * so the P3-5a status chips read as the prototype's shell. `--tone-info`
+   * stays the accent (the prototype has no distinct info hue).
    */
+  --tone-good: #4ade80;
+  --tone-warn: #fbbf24;
+  --tone-danger: #f87171;
+  --tone-info: var(--accent);
 }
 
 @theme inline {
   --color-app-bg: #09090b;
+  /* Shell chrome (P3-5a): the TabBar / sidebar rail sit one step darker than
+   * the app body, with a faint top-light hairline — the prototype's shell
+   * grammar (#070709 chrome, rgba(255,255,255,0.06) seams). 5b's Sidebar reuses
+   * these so the two panels read as one frame. */
+  --color-shell-chrome: #070709;
+  --color-shell-seam: rgba(255, 255, 255, 0.06);
+  --color-shell-hover: rgba(255, 255, 255, 0.045);
+  --color-shell-active: rgba(255, 255, 255, 0.06);
   --color-text-primary: #f4f4f5;
   --color-text-muted: #a1a1aa;
   --color-text-subtle: #71717a;

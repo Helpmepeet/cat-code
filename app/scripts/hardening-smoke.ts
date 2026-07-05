@@ -75,7 +75,38 @@ const frames: ServerFrame[] = [
   },
 ]
 
+// Capture the session id of the FIRST frame main delivers to the renderer (the
+// real startup session that owns the active pane), so the crafted Markdown can
+// be delivered into it. Wraps webContents.send before any frame flows.
+let liveSessionId: string | null = null
+
+function watchForLiveSession(window: BrowserWindow): void {
+  const contents = window.webContents
+  const originalSend = contents.send.bind(contents)
+  contents.send = ((channel: string, ...args: unknown[]) => {
+    if (liveSessionId === null && channel === CH_SERVER_FRAME) {
+      const frame = args[0] as { sessionId?: unknown } | undefined
+      if (frame && typeof frame.sessionId === 'string') {
+        liveSessionId = frame.sessionId
+      }
+    }
+    return originalSend(channel, ...args)
+  }) as typeof contents.send
+}
+
+async function resolveActiveSessionId(window: BrowserWindow): Promise<string> {
+  const deadline = Date.now() + 5_000
+  while (liveSessionId === null && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  // Fall back to the synthetic id if main never delivered a frame (e.g. the
+  // startup sidecar never reached ready); the crafted frame then acts as the
+  // first-ever streaming session and still becomes active.
+  return liveSessionId ?? HARDENING_SESSION_ID
+}
+
 app.once('browser-window-created', (_event, window) => {
+  watchForLiveSession(window)
   window.webContents.once('did-finish-load', () => {
     void runProductionHardeningSmoke(window)
   })
@@ -93,8 +124,19 @@ async function runProductionHardeningSmoke(
   try {
     // did-finish-load precedes React effects. Wait for the real app mount, then
     // use the same fixed server-frame channel that production main delivers.
+    //
+    // Multi-session shell (P3-5a): main auto-creates a real startup session, and
+    // that session owns the active pane (a background session's frames never
+    // steal focus). The crafted Markdown must therefore be delivered INTO the
+    // active session, not a synthetic id — otherwise it renders only in a
+    // background slice the probe cannot see. Sniff the live session id from the
+    // frames main delivers on CH_SERVER_FRAME, then stamp the crafted frames
+    // with it so the Markdown lands in the pane under test.
     await new Promise(resolve => setTimeout(resolve, 100))
-    for (const frame of frames) window.webContents.send(CH_SERVER_FRAME, frame)
+    const activeSessionId = await resolveActiveSessionId(window)
+    for (const frame of frames) {
+      window.webContents.send(CH_SERVER_FRAME, { ...frame, sessionId: activeSessionId })
+    }
 
     const deadline = Date.now() + 5_000
     while (Date.now() < deadline) {

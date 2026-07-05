@@ -539,15 +539,18 @@ export class Host implements HostApi {
 
   /**
    * A session is restorable when a registry row exists with a known
-   * engineSessionId (transcript key). The launch reap already dropped rows whose
-   * transcript is gone, so a row that survived launch WITH an engineSessionId is
-   * re-spawnable. A live-but-not-yet-ready session (no engineSessionId yet) is
-   * not restorable until its ready frame lands.
+   * engineSessionId (transcript key) AND no process is currently live for it.
+   * `restorable` means "no process is live but the row can be re-spawned"
+   * (app/shared/hostApi.ts:74) — a LIVE session is never a restore candidate
+   * (restoreSession rejects an already-live id), so `liveStatus != null` forces
+   * `false`. The launch reap already dropped rows whose transcript is gone, so a
+   * non-live row that survived launch WITH an engineSessionId is re-spawnable.
    */
   private isRestorable(
     row: RegistrySession | undefined,
-    _liveStatus: SidecarStatus | null,
+    liveStatus: SidecarStatus | null,
   ): boolean {
+    if (liveStatus !== null) return false
     return !!row && row.engineSessionId !== null
   }
 

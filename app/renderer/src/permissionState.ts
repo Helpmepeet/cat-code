@@ -240,6 +240,24 @@ export function selectVisiblePermission(
   )
 }
 
+/**
+ * How many permission requests in this session still need an answer (not yet
+ * submitted). Drives the TabBar's background-attention badge (P3-5a) — a request
+ * arriving in a BACKGROUND session must be visibly signalled on its tab, never
+ * silently queued. Snoozed (locally dismissed) cards still count: the engine
+ * request is live and the tab should still pulse.
+ */
+export function selectPendingPermissionCount(
+  state: PermissionState,
+  sessionId: SessionId | null,
+): number {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  if (!session) return 0
+  return session.pending.filter(
+    request => !session.submittedRequestIds.includes(request.requestId),
+  ).length
+}
+
 /** C3 — the latest engine context snapshot (null before the first frame). */
 export function selectPermissionContext(
   state: PermissionState,

@@ -297,7 +297,10 @@ test('ready frame bridges engineSessionId into the row and emits session-status'
   if (statusEvent?.type === 'session-status') {
     expect(statusEvent.session.status).toBe('ready')
     expect(statusEvent.session.engineSessionId).toBe('engine-abc')
-    expect(statusEvent.session.restorable).toBe(true)
+    // A LIVE ready session is NOT a restore candidate — restorable is set only
+    // when no process is live (app/shared/hostApi.ts:74). It becomes restorable
+    // on close/crash (see the closeSession test), never while ready.
+    expect(statusEvent.session.restorable).toBe(false)
   }
 })
 
