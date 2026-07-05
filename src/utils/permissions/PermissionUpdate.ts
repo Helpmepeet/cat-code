@@ -7,10 +7,7 @@ import type {
 } from '../../types/permissions.js'
 import { logForDebugging } from '../debug.js'
 import type { EditableSettingSource } from '../settings/constants.js'
-import {
-  getSettingsForSource,
-  updateSettingsForSource,
-} from '../settings/settings.js'
+import { updateSettingsForSource } from '../settings/settings.js'
 import { jsonStringify } from '../slowOperations.js'
 import { toPosixPath } from './filesystem.js'
 import type { PermissionRuleValue } from './PermissionRule.js'
@@ -245,23 +242,28 @@ export function persistPermissionUpdate(update: PermissionUpdate): void {
       logForDebugging(
         `Persisting ${update.directories.length} director${update.directories.length === 1 ? 'y' : 'ies'} to ${update.destination}`,
       )
-      const existingSettings = getSettingsForSource(update.destination)
-      const existingDirs =
-        existingSettings?.permissions?.additionalDirectories || []
+      // Compute the final array inside the updater so it runs under the
+      // cross-process settings lock against fresh on-disk state.
+      updateSettingsForSource(update.destination, current => {
+        const existingDirs =
+          current?.permissions?.additionalDirectories || []
 
-      // Add new directories, avoiding duplicates
-      const dirsToAdd = update.directories.filter(
-        dir => !existingDirs.includes(dir),
-      )
+        // Add new directories, avoiding duplicates
+        const dirsToAdd = update.directories.filter(
+          dir => !existingDirs.includes(dir),
+        )
+        if (dirsToAdd.length === 0) {
+          return null
+        }
 
-      if (dirsToAdd.length > 0) {
-        const updatedDirs = [...existingDirs, ...dirsToAdd]
-        updateSettingsForSource(update.destination, {
+        return {
+          ...current,
           permissions: {
-            additionalDirectories: updatedDirs,
+            ...current?.permissions,
+            additionalDirectories: [...existingDirs, ...dirsToAdd],
           },
-        })
-      }
+        }
+      })
       break
     }
 
@@ -270,26 +272,34 @@ export function persistPermissionUpdate(update: PermissionUpdate): void {
       logForDebugging(
         `Removing ${update.rules.length} ${update.behavior} rule(s) from ${update.destination}`,
       )
-      const existingSettings = getSettingsForSource(update.destination)
-      const existingPermissions = existingSettings?.permissions || {}
-      const existingRules = existingPermissions[update.behavior] || []
+      // Filter inside the updater so it runs under the cross-process
+      // settings lock against fresh on-disk state.
+      updateSettingsForSource(update.destination, current => {
+        const existingPermissions = current?.permissions || {}
+        const existingRules = existingPermissions[update.behavior] || []
 
-      // Convert rules to normalized strings for comparison
-      // Normalize via parse→serialize roundtrip so "Bash(*)" and "Bash" match
-      const rulesToRemove = new Set(
-        update.rules.map(permissionRuleValueToString),
-      )
-      const filteredRules = existingRules.filter(rule => {
-        const normalized = permissionRuleValueToString(
-          permissionRuleValueFromString(rule),
+        // Convert rules to normalized strings for comparison
+        // Normalize via parse→serialize roundtrip so "Bash(*)" and "Bash" match
+        const rulesToRemove = new Set(
+          update.rules.map(permissionRuleValueToString),
         )
-        return !rulesToRemove.has(normalized)
-      })
+        const filteredRules = existingRules.filter(rule => {
+          const normalized = permissionRuleValueToString(
+            permissionRuleValueFromString(rule),
+          )
+          return !rulesToRemove.has(normalized)
+        })
+        if (filteredRules.length === existingRules.length) {
+          return null
+        }
 
-      updateSettingsForSource(update.destination, {
-        permissions: {
-          [update.behavior]: filteredRules,
-        },
+        return {
+          ...current,
+          permissions: {
+            ...existingPermissions,
+            [update.behavior]: filteredRules,
+          },
+        }
       })
       break
     }
@@ -298,18 +308,26 @@ export function persistPermissionUpdate(update: PermissionUpdate): void {
       logForDebugging(
         `Removing ${update.directories.length} director${update.directories.length === 1 ? 'y' : 'ies'} from ${update.destination}`,
       )
-      const existingSettings = getSettingsForSource(update.destination)
-      const existingDirs =
-        existingSettings?.permissions?.additionalDirectories || []
+      // Filter inside the updater so it runs under the cross-process
+      // settings lock against fresh on-disk state.
+      updateSettingsForSource(update.destination, current => {
+        const existingDirs =
+          current?.permissions?.additionalDirectories || []
 
-      // Remove specified directories
-      const dirsToRemove = new Set(update.directories)
-      const filteredDirs = existingDirs.filter(dir => !dirsToRemove.has(dir))
+        // Remove specified directories
+        const dirsToRemove = new Set(update.directories)
+        const filteredDirs = existingDirs.filter(dir => !dirsToRemove.has(dir))
+        if (filteredDirs.length === existingDirs.length) {
+          return null
+        }
 
-      updateSettingsForSource(update.destination, {
-        permissions: {
-          additionalDirectories: filteredDirs,
-        },
+        return {
+          ...current,
+          permissions: {
+            ...current?.permissions,
+            additionalDirectories: filteredDirs,
+          },
+        }
       })
       break
     }

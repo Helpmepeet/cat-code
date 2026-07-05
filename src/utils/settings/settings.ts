@@ -19,6 +19,7 @@ import { readFileSync } from '../fileRead.js'
 import { getFsImplementation, safeResolvePath } from '../fsOperations.js'
 import { addFileGlobRuleToGitignore } from '../git/gitignore.js'
 import { safeParseJSON } from '../json.js'
+import * as lockfile from '../lockfile.js'
 import { logError } from '../log.js'
 import { getPlatform } from '../platform.js'
 import { clone, jsonStringify } from '../slowOperations.js'
@@ -406,16 +407,79 @@ export function getPolicySettingsOrigin():
   return null
 }
 
+const SETTINGS_LOCK_RETRY_TIMEOUT_MS = 2000
+const SETTINGS_LOCK_RETRY_DELAY_MS = 20
+
+/**
+ * Acquires the advisory lock on `filePath` for `updateSettingsForSource`,
+ * retrying on contention.
+ *
+ * proper-lockfile's `lockSync` throws immediately with `ELOCKED` when the
+ * lock is held (its sync adapter forbids retries — "Cannot use retries with
+ * the sync api" — since retries need an async wait). Without a retry loop
+ * here, a second same-cwd process would abandon its write outright instead
+ * of waiting for the first to finish.
+ *
+ * NOTE: this lock alone does not fix the lost-update race — it serializes
+ * the read/write syscalls, but a caller that pre-computes an array from a
+ * pre-lock read still clobbers the other process's write (arrays replace
+ * wholesale in the merge). Read-modify-write callers must use the
+ * `SettingsUpdater` form of `updateSettingsForSource` so the final state is
+ * computed under this lock.
+ *
+ * `realpath:false` because proper-lockfile's default realpath resolution
+ * requires the target file to already exist, which a first-ever settings
+ * write won't (registry.ts documents the same gotcha).
+ */
+function acquireSettingsLockSync(filePath: string): () => void {
+  const deadline = Date.now() + SETTINGS_LOCK_RETRY_TIMEOUT_MS
+  for (;;) {
+    try {
+      return lockfile.lockSync(filePath, {
+        lockfilePath: `${filePath}.lock`,
+        realpath: false,
+        onCompromised: err => {
+          logForDebugging(`Settings lock compromised: ${err}`, {
+            level: 'error',
+          })
+        },
+      })
+    } catch (e) {
+      if (getErrnoCode(e) !== 'ELOCKED' || Date.now() >= deadline) {
+        throw e
+      }
+      Bun.sleepSync(SETTINGS_LOCK_RETRY_DELAY_MS)
+    }
+  }
+}
+
+/**
+ * Computes the complete settings object to write, given the fresh on-disk
+ * settings (null when the file doesn't exist). Runs under the cross-process
+ * settings lock. Return null to skip the write.
+ */
+export type SettingsUpdater = (
+  current: SettingsJson | null,
+) => SettingsJson | null
+
 /**
  * Merges `settings` into the existing settings for `source` using lodash mergeWith.
  *
  * To delete a key from a record field (e.g. enabledPlugins, extraKnownMarketplaces),
  * set it to `undefined` — do NOT use `delete`. mergeWith only detects deletion when
  * the key is present with an explicit `undefined` value.
+ *
+ * For read-modify-write updates (e.g. appending to a permission array), pass a
+ * `SettingsUpdater` function instead of an object: it is invoked under the
+ * cross-process lock with the fresh on-disk settings and its return value is
+ * written verbatim (no merge). Passing a pre-computed array does NOT work for
+ * this — the merge customizer replaces arrays wholesale, so a value computed
+ * from a read taken before the lock silently clobbers another process's
+ * concurrent write (the settingsWriteContention probe proves this).
  */
 export function updateSettingsForSource(
   source: EditableSettingSource,
-  settings: SettingsJson,
+  settings: SettingsJson | SettingsUpdater,
 ): { error: Error | null } {
   if (
     (source as unknown) === 'policySettings' ||
@@ -430,8 +494,16 @@ export function updateSettingsForSource(
     return { error: null }
   }
 
+  let release: (() => void) | undefined
   try {
     getFsImplementation().mkdirSync(dirname(filePath))
+
+    // Cross-process lock: without it, two processes (e.g. two engine
+    // instances in the N-process desktop-app model, migration Phase-3)
+    // can both read-merge-write the same file and one's update is silently
+    // lost — the read below and the write further down are otherwise two
+    // unsynchronized syscalls. Mirrors saveConfigWithLock (config.ts).
+    release = acquireSettingsLockSync(filePath)
 
     // Try to get existing settings with validation. Bypass the per-source
     // cache — mergeWith below mutates its target (including nested refs),
@@ -470,29 +542,41 @@ export function updateSettingsForSource(
       }
     }
 
-    const updatedSettings = mergeWith(
-      existingSettings || {},
-      settings,
-      (
-        _objValue: unknown,
-        srcValue: unknown,
-        key: string | number | symbol,
-        object: Record<string | number | symbol, unknown>,
-      ) => {
-        // Handle undefined as deletion
-        if (srcValue === undefined && object && typeof key === 'string') {
-          delete object[key]
+    let updatedSettings: SettingsJson
+    if (typeof settings === 'function') {
+      // Updater form: the final state is computed here, under the lock, from
+      // the fresh on-disk read — a state computed before this call could be
+      // stale relative to another process's write.
+      const next = settings(existingSettings)
+      if (next === null) {
+        return { error: null }
+      }
+      updatedSettings = next
+    } else {
+      updatedSettings = mergeWith(
+        existingSettings || {},
+        settings,
+        (
+          _objValue: unknown,
+          srcValue: unknown,
+          key: string | number | symbol,
+          object: Record<string | number | symbol, unknown>,
+        ) => {
+          // Handle undefined as deletion
+          if (srcValue === undefined && object && typeof key === 'string') {
+            delete object[key]
+            return undefined
+          }
+          // For arrays, always replace with the provided array
+          // This puts the responsibility on the caller to compute the desired final state
+          if (Array.isArray(srcValue)) {
+            return srcValue
+          }
+          // For non-arrays, let lodash handle the default merge behavior
           return undefined
-        }
-        // For arrays, always replace with the provided array
-        // This puts the responsibility on the caller to compute the desired final state
-        if (Array.isArray(srcValue)) {
-          return srcValue
-        }
-        // For non-arrays, let lodash handle the default merge behavior
-        return undefined
-      },
-    )
+        },
+      ) as SettingsJson
+    }
 
     // Mark this as an internal write before writing the file
     markInternalWrite(filePath)
@@ -518,6 +602,10 @@ export function updateSettingsForSource(
     )
     logError(error)
     return { error }
+  } finally {
+    if (release) {
+      release()
+    }
   }
 
   return { error: null }

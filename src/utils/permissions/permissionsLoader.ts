@@ -1,6 +1,3 @@
-import { readFileSync } from '../fileRead.js'
-import { getFsImplementation, safeResolvePath } from '../fsOperations.js'
-import { safeParseJSON } from '../json.js'
 import { logError } from '../log.js'
 import {
   type EditableSettingSource,
@@ -8,7 +5,6 @@ import {
   type SettingSource,
 } from '../settings/constants.js'
 import {
-  getSettingsFilePathForSource,
   getSettingsForSource,
   updateSettingsForSource,
 } from '../settings/settings.js'
@@ -48,39 +44,6 @@ const SUPPORTED_RULE_BEHAVIORS = [
   'deny',
   'ask',
 ] as const satisfies PermissionBehavior[]
-
-/**
- * Lenient version of getSettingsForSource that doesn't fail on ANY validation errors.
- * Simply parses the JSON and returns it as-is without schema validation.
- *
- * Used when loading settings to append new rules (avoids losing existing rules
- * due to validation failures in unrelated fields like hooks).
- *
- * FOR EDITING ONLY - do not use this for reading settings for execution.
- */
-function getSettingsForSourceLenient_FOR_EDITING_ONLY_NOT_FOR_READING(
-  source: SettingSource,
-): SettingsJson | null {
-  const filePath = getSettingsFilePathForSource(source)
-  if (!filePath) {
-    return null
-  }
-
-  try {
-    const { resolvedPath } = safeResolvePath(getFsImplementation(), filePath)
-    const content = readFileSync(resolvedPath)
-    if (content.trim() === '') {
-      return {}
-    }
-
-    const data = safeParseJSON(content, false)
-    // Return raw parsed JSON without validation to preserve all existing settings
-    // This is safe because we're only using this for reading/appending, not for execution
-    return data && typeof data === 'object' ? (data as SettingsJson) : null
-  } catch {
-    return null
-  }
-}
 
 /**
  * Converts permissions JSON to an array of PermissionRule objects
@@ -169,46 +132,50 @@ export function deletePermissionRuleFromSettings(
   }
 
   const ruleString = permissionRuleValueToString(rule.ruleValue)
-  const settingsData = getSettingsForSource(rule.source)
-
-  // If there's no settings data or permissions, nothing to do
-  if (!settingsData || !settingsData.permissions) {
-    return false
-  }
-
-  const behaviorArray = settingsData.permissions[rule.ruleBehavior]
-  if (!behaviorArray) {
-    return false
-  }
 
   // Normalize raw settings entries via roundtrip parse→serialize so legacy
   // names (e.g. "KillShell") match their canonical form ("TaskStop").
   const normalizeEntry = (raw: string): string =>
     permissionRuleValueToString(permissionRuleValueFromString(raw))
 
-  if (!behaviorArray.some(raw => normalizeEntry(raw) === ruleString)) {
-    return false
-  }
-
   try {
-    // Keep a copy of the original permissions data to preserve unrecognized keys
-    const updatedSettingsData = {
-      ...settingsData,
-      permissions: {
-        ...settingsData.permissions,
-        [rule.ruleBehavior]: behaviorArray.filter(
-          raw => normalizeEntry(raw) !== ruleString,
-        ),
-      },
-    }
+    // Filter inside the updater (under the cross-process settings lock) so a
+    // concurrent same-cwd process's rule changes aren't clobbered by a
+    // pre-computed array from a stale read.
+    let found = false
+    const { error } = updateSettingsForSource(rule.source, current => {
+      // If there's no settings data or permissions, nothing to do
+      if (!current || !current.permissions) {
+        return null
+      }
 
-    const { error } = updateSettingsForSource(rule.source, updatedSettingsData)
+      const behaviorArray = current.permissions[rule.ruleBehavior]
+      if (!behaviorArray) {
+        return null
+      }
+
+      if (!behaviorArray.some(raw => normalizeEntry(raw) === ruleString)) {
+        return null
+      }
+      found = true
+
+      // Keep a copy of the original permissions data to preserve unrecognized keys
+      return {
+        ...current,
+        permissions: {
+          ...current.permissions,
+          [rule.ruleBehavior]: behaviorArray.filter(
+            raw => normalizeEntry(raw) !== ruleString,
+          ),
+        },
+      }
+    })
     if (error) {
       // Error already logged inside updateSettingsForSource
       return false
     }
 
-    return true
+    return found
   } catch (error) {
     logError(error)
     return false
@@ -247,42 +214,43 @@ export function addPermissionRulesToSettings(
   }
 
   const ruleStrings = ruleValues.map(permissionRuleValueToString)
-  // First try the normal settings loader which validates the schema
-  // If validation fails, fall back to lenient loading to preserve existing rules
-  // even if some fields (like hooks) have validation errors
-  const settingsData =
-    getSettingsForSource(source) ||
-    getSettingsForSourceLenient_FOR_EDITING_ONLY_NOT_FOR_READING(source) ||
-    getEmptyPermissionSettingsJson()
 
   try {
-    // Ensure permissions object exists
-    const existingPermissions = settingsData.permissions || {}
-    const existingRules = existingPermissions[ruleBehavior] || []
+    // Compute the final rule array inside the updater so it runs under the
+    // cross-process settings lock against the fresh on-disk state — another
+    // same-cwd engine process may have appended a rule since our last read.
+    // `current` already falls back to raw (unvalidated) JSON on schema
+    // failure, preserving existing rules even when unrelated fields (like
+    // hooks) don't validate.
+    const result = updateSettingsForSource(source, current => {
+      const settingsData = current || getEmptyPermissionSettingsJson()
+      // Ensure permissions object exists
+      const existingPermissions = settingsData.permissions || {}
+      const existingRules = existingPermissions[ruleBehavior] || []
 
-    // Filter out duplicates - normalize existing entries via roundtrip
-    // parse→serialize so legacy names match their canonical form.
-    const existingRulesSet = new Set(
-      existingRules.map(raw =>
-        permissionRuleValueToString(permissionRuleValueFromString(raw)),
-      ),
-    )
-    const newRules = ruleStrings.filter(rule => !existingRulesSet.has(rule))
+      // Filter out duplicates - normalize existing entries via roundtrip
+      // parse→serialize so legacy names match their canonical form.
+      const existingRulesSet = new Set(
+        existingRules.map(raw =>
+          permissionRuleValueToString(permissionRuleValueFromString(raw)),
+        ),
+      )
+      const newRules = ruleStrings.filter(rule => !existingRulesSet.has(rule))
 
-    // If no new rules to add, return success
-    if (newRules.length === 0) {
-      return true
-    }
+      // If no new rules to add, skip the write
+      if (newRules.length === 0) {
+        return null
+      }
 
-    // Keep a copy of the original settings data to preserve unrecognized keys
-    const updatedSettingsData = {
-      ...settingsData,
-      permissions: {
-        ...existingPermissions,
-        [ruleBehavior]: [...existingRules, ...newRules],
-      },
-    }
-    const result = updateSettingsForSource(source, updatedSettingsData)
+      // Keep a copy of the original settings data to preserve unrecognized keys
+      return {
+        ...settingsData,
+        permissions: {
+          ...existingPermissions,
+          [ruleBehavior]: [...existingRules, ...newRules],
+        },
+      }
+    })
 
     if (result.error) {
       throw result.error
