@@ -213,6 +213,35 @@ function isCredentialRefreshFailure(status: number, body: string): boolean {
   return /\b(?:invalid_grant|invalid_token|expired_token)\b/i.test(body)
 }
 
+/**
+ * Pull a specific OAuth error code out of the refresh-failure response body.
+ * OpenAI's error shape has varied between a flat `{"error":"invalid_grant"}`
+ * and a nested `{"error":{"code":"refresh_token_reused"}}` — try structured
+ * parsing first so real reasons (e.g. refresh_token_reused/expired/invalidated)
+ * surface instead of collapsing to a generic http_<status>, then fall back to
+ * the known flat-string codes for bodies that aren't JSON at all.
+ */
+function extractOAuthErrorCode(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown
+    if (parsed && typeof parsed === 'object') {
+      const error = (parsed as Record<string, unknown>).error
+      if (typeof error === 'string' && error.length > 0) return error
+      if (error && typeof error === 'object') {
+        const code = (error as Record<string, unknown>).code
+        if (typeof code === 'string' && code.length > 0) return code
+      }
+    }
+  } catch {
+    // Not JSON — fall through to substring matching below.
+  }
+
+  if (/invalid_grant/i.test(body)) return 'invalid_grant'
+  if (/invalid_token/i.test(body)) return 'invalid_token'
+  if (/expired_token/i.test(body)) return 'expired_token'
+  return undefined
+}
+
 function getHttpRefreshTransportClass(status: number): CodexRefreshTransportClass {
   if (status === 429 || status >= 500 || status === 400) {
     return 'server_transient'
@@ -436,14 +465,22 @@ async function refreshAccountTokensStateful(
       const bodyText = await response.text().catch(() => '')
       const latest = readVault(vaultFilePath)
       if (isCredentialRefreshFailure(response.status, bodyText)) {
-        const credentialReason =
-          /invalid_grant/i.test(bodyText)
-            ? 'invalid_grant'
-            : /invalid_token/i.test(bodyText)
-              ? 'invalid_token'
-              : /expired_token/i.test(bodyText)
-                ? 'expired_token'
-                : `http_${response.status}`
+        // Another process may have already rotated this token out from under
+        // us — a rotated-away refresh token legitimately 401s. Recover onto
+        // the newer token instead of declaring the account dead.
+        if (latest.tokens?.refresh_token && latest.tokens.refresh_token !== refreshToken) {
+          const refreshed = refreshedVaultTokensResult(
+            latest.tokens,
+            accountId,
+            vaultFilePath,
+            'codex-refresh.refreshAccountTokens.credential-failure-recovery',
+          )
+          if (refreshed) {
+            logForDebugging(`[codex-refresh] Credential failure but a newer token exists in the vault. Using new token...`)
+            return refreshed
+          }
+        }
+        const credentialReason = extractOAuthErrorCode(bodyText) ?? `http_${response.status}`
         if (latest.refresh?.attempt_id === attemptId) {
           latest.refresh = {
             state: 'reauth_required',
