@@ -179,7 +179,7 @@ test('HC1 ORIGIN rule: the renderer create handler resolves a token, never a ren
   expect(source).toContain('function consumeCwdToken(')
   // pickDirectory mints a token from the validated realpath — it must NOT return
   // the realpath to the renderer.
-  const pickStart = source.indexOf('CH_HOST_PICK_DIR')
+  const pickStart = source.indexOf('ipcMain.handle(\n    CH_HOST_PICK_DIR')
   const pickEnd = source.indexOf('ipcMain.handle(\n    CH_HOST_CREATE', pickStart)
   const pickBody = source.slice(pickStart, pickEnd)
   expect(pickBody).toContain('return mintCwdToken(chosen.realpath)')

@@ -51,12 +51,12 @@ async function run(window: BrowserWindow): Promise<void> {
       `[harness-demo] pids=${sessions.map(session => session.enginePid).join(',')}\n`,
     )
     process.stdout.write('[harness-demo] passed\n')
-    app.exit(0)
+    exitElectron(0)
   } catch (error) {
     process.stderr.write(
       `[harness-demo] failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
     )
-    app.exit(1)
+    exitElectron(1)
   }
 }
 
@@ -93,4 +93,9 @@ function mustEnv(name: string): string {
   const value = process.env[name]
   if (!value) throw new Error(`${name} is required`)
   return value
+}
+
+function exitElectron(code: number): void {
+  app.exit(code)
+  setTimeout(() => process.exit(code), 250).unref()
 }

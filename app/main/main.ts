@@ -42,6 +42,7 @@ import {
 import { AttachmentGate } from './attachmentGate.js'
 import {
   atomicWriteJson0600,
+  createDebouncedAction,
   createDevPickerBypass,
   createReadinessLatch,
   parseDebugSnapshot,
@@ -166,9 +167,14 @@ const devPickerBypass = createDevPickerBypass(devHarnessConfig, {
   log: line => process.stderr.write(`${line}\n`),
 })
 
+const scheduleDebugStateExport = createDebouncedAction(
+  () => writeDebugStateExport(),
+  { delayMs: 250 },
+)
+
 const readinessLatch = createReadinessLatch(() => {
   process.stdout.write('[main] renderer ready\n')
-  writeDebugStateExport()
+  scheduleDebugStateExport.schedule()
 })
 
 function applySecurityBaseline(): void {
@@ -318,7 +324,7 @@ function wireHostEvents(h: Host): void {
   h.subscribe(event => {
     const contents = mainWindow?.webContents
     if (contents) contents.send(CH_HOST_EVENT, event satisfies HostEvent)
-    writeDebugStateExport()
+    scheduleDebugStateExport.schedule()
   })
 }
 
@@ -550,7 +556,7 @@ function registerDebugStateHandler(): void {
       return
     }
     latestRendererSnapshot = parsed.value
-    writeDebugStateExport()
+    scheduleDebugStateExport.schedule()
   })
 }
 
@@ -781,7 +787,7 @@ function ensureHost(): Host {
             `[main] primary session create failed: ${result.error.code} ${result.error.message}\n`,
           )
         }
-        writeDebugStateExport()
+        scheduleDebugStateExport.schedule()
       })
       .catch(error => {
         process.stderr.write(`[main] primary session create threw: ${errText(error)}\n`)
@@ -871,6 +877,7 @@ app.on('window-all-closed', () => {
   // its launch sweep — the dock-reopen session goes through createSession again).
   host = null
   registryForDebug = null
+  scheduleDebugStateExport.cancel()
   // F2 — drop the old session's buffered frames so a macOS reopen (which spawns a
   // NEW session id via `ensureHost`) never replays dead-session frames into the
   // fresh window.

@@ -6,6 +6,7 @@ import type { SessionDescriptor } from '../shared/hostApi.js'
 import {
   atomicWriteJson0600,
   createDevPickerBypass,
+  createDebouncedAction,
   createReadinessLatch,
   parseDebugSnapshot,
   resolveDevHarnessConfig,
@@ -170,4 +171,37 @@ test('atomic debug-state writer creates a 0700 dir and 0600 JSON file', () => {
   expect((statSync(debugDir).mode & 0o777)).toBe(0o700)
   expect((statSync(target).mode & 0o777)).toBe(0o600)
   rmSync(root, { recursive: true, force: true })
+})
+
+test('debounced action coalesces repeated export requests until the timer fires', () => {
+  const callbacks: Array<() => void> = []
+  let cleared = 0
+  let calls = 0
+  const action = createDebouncedAction(() => {
+    calls++
+  }, {
+    delayMs: 250,
+    setTimer: callback => {
+      callbacks.push(callback)
+      return callbacks.length
+    },
+    clearTimer: () => {
+      cleared++
+    },
+  })
+
+  action.schedule()
+  action.schedule()
+  action.schedule()
+
+  expect(calls).toBe(0)
+  expect(cleared).toBe(2)
+  expect(callbacks).toHaveLength(3)
+
+  callbacks[2]?.()
+  expect(calls).toBe(1)
+
+  action.schedule()
+  callbacks[3]?.()
+  expect(calls).toBe(2)
 })

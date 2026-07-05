@@ -9,75 +9,122 @@ const appRoot = join(here, '..')
 const electronBin = join(appRoot, 'node_modules', '.bin', 'electron')
 const rendererUrl = 'http://localhost:5173'
 
-if (!existsSync(electronBin)) {
-  process.stderr.write(`[harness-demo] electron not installed at ${electronBin}\n`)
-  process.exit(3)
+const driverOut = join(here, 'harness-demo-driver.cjs')
+let scratch: string | null = null
+let configHome: string | null = null
+let viteProcess: ReturnType<typeof spawn> | null = null
+
+await main()
+process.exit(process.exitCode ?? 0)
+
+async function main(): Promise<void> {
+  if (!existsSync(electronBin)) {
+    process.stderr.write(`[harness-demo] electron not installed at ${electronBin}\n`)
+    process.exitCode = 3
+    return
+  }
+
+  scratch = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-harness-cwd-')))
+  configHome = mkdtempSync(join(tmpdir(), 'catcode-harness-config-'))
+
+  try {
+    const build = spawnSync('bun', ['run', join(here, 'build-electron.ts')], {
+      stdio: 'inherit',
+    })
+    if (build.status !== 0) {
+      process.exitCode = build.status ?? 1
+      return
+    }
+
+    const driver = await Bun.build({
+      entrypoints: [join(here, 'harness-demo-driver.ts')],
+      outdir: here,
+      target: 'node',
+      format: 'cjs',
+      external: ['electron'],
+      naming: 'harness-demo-driver.cjs',
+    })
+    if (!driver.success) {
+      for (const message of driver.logs) console.error(message)
+      process.exitCode = 1
+      return
+    }
+
+    viteProcess = spawn(
+      'bunx',
+      ['vite', '--config', join(appRoot, 'renderer', 'vite.config.ts')],
+      { cwd: appRoot, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+    viteProcess.stdout?.on('data', chunk => process.stdout.write(chunk))
+    viteProcess.stderr?.on('data', chunk => process.stderr.write(chunk))
+    await waitForServer(rendererUrl, 15_000)
+
+    let sawReady = false
+    const electron = spawn(electronBin, ['--require', driverOut, appRoot], {
+      cwd: appRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        CATCODE_RENDERER_URL: rendererUrl,
+        CATCODE_TEST_CWD_ALLOWLIST: scratch,
+        CATCODE_INITIAL_CWD: scratch,
+        CATCODE_DEBUG_STATE: '1',
+        CATCODE_HARNESS_DEMO_CWD: scratch,
+        CLAUDE_CONFIG_DIR: configHome,
+      },
+    })
+    electron.stdout?.on('data', chunk => {
+      const text = String(chunk)
+      if (text.includes('[main] renderer ready')) sawReady = true
+      process.stdout.write(chunk)
+    })
+    electron.stderr?.on('data', chunk => process.stderr.write(chunk))
+    const status = await waitForExit(electron, 45_000)
+    if (!sawReady) {
+      process.stderr.write('[harness-demo] readiness line was not observed\n')
+      process.exitCode = 1
+      return
+    }
+    if (status !== 0) {
+      process.exitCode = status ?? 1
+      return
+    }
+    process.exitCode = 0
+  } catch (error) {
+    process.stderr.write(
+      `[harness-demo] failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+    )
+    process.exitCode = 1
+  } finally {
+    await cleanup()
+  }
 }
 
-const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-harness-cwd-')))
-const configHome = mkdtempSync(join(tmpdir(), 'catcode-harness-config-'))
-const driverOut = join(here, 'harness-demo-driver.cjs')
-
-try {
-  const build = spawnSync('bun', ['run', join(here, 'build-electron.ts')], {
-    stdio: 'inherit',
-  })
-  if (build.status !== 0) process.exit(build.status ?? 1)
-
-  const driver = await Bun.build({
-    entrypoints: [join(here, 'harness-demo-driver.ts')],
-    outdir: here,
-    target: 'node',
-    format: 'cjs',
-    external: ['electron'],
-    naming: 'harness-demo-driver.cjs',
-  })
-  if (!driver.success) {
-    for (const message of driver.logs) console.error(message)
-    process.exit(1)
+async function cleanup(): Promise<void> {
+  const vite = viteProcess
+  viteProcess = null
+  if (vite) {
+    await terminateChild(vite)
   }
-
-  const vite = spawn(
-    'bunx',
-    ['vite', '--config', join(appRoot, 'renderer', 'vite.config.ts')],
-    { cwd: appRoot, stdio: ['ignore', 'pipe', 'pipe'] },
-  )
-  vite.stdout?.on('data', chunk => process.stdout.write(chunk))
-  vite.stderr?.on('data', chunk => process.stderr.write(chunk))
-  await waitForServer(rendererUrl, 15_000)
-
-  let sawReady = false
-  const electron = spawn(electronBin, ['--require', driverOut, appRoot], {
-    cwd: appRoot,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      CATCODE_RENDERER_URL: rendererUrl,
-      CATCODE_TEST_CWD_ALLOWLIST: scratch,
-      CATCODE_INITIAL_CWD: scratch,
-      CATCODE_DEBUG_STATE: '1',
-      CATCODE_HARNESS_DEMO_CWD: scratch,
-      CLAUDE_CONFIG_DIR: configHome,
-    },
-  })
-  electron.stdout?.on('data', chunk => {
-    const text = String(chunk)
-    if (text.includes('[main] renderer ready')) sawReady = true
-    process.stdout.write(chunk)
-  })
-  electron.stderr?.on('data', chunk => process.stderr.write(chunk))
-  const status = await waitForExit(electron, 45_000)
-  vite.kill()
-  if (!sawReady) {
-    process.stderr.write('[harness-demo] readiness line was not observed\n')
-    process.exit(1)
-  }
-  if (status !== 0) process.exit(status ?? 1)
-  process.exit(0)
-} finally {
   rmSync(driverOut, { force: true })
-  rmSync(scratch, { recursive: true, force: true })
-  rmSync(configHome, { recursive: true, force: true })
+  if (scratch) rmSync(scratch, { recursive: true, force: true })
+  if (configHome) rmSync(configHome, { recursive: true, force: true })
+}
+
+function terminateChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL')
+      }
+    }, 2_000)
+    child.once('exit', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    child.kill('SIGTERM')
+  })
 }
 
 async function waitForServer(url: string, timeoutMs: number): Promise<void> {

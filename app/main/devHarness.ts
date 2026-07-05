@@ -159,6 +159,37 @@ export function createReadinessLatch(onReady: () => void): {
   }
 }
 
+export function createDebouncedAction(
+  action: () => void,
+  options: {
+    delayMs: number
+    setTimer?: (callback: () => void, delayMs: number) => unknown
+    clearTimer?: (timer: unknown) => void
+  },
+): { schedule: () => void; cancel: () => void } {
+  const setTimer =
+    options.setTimer ??
+    ((callback: () => void, delayMs: number) => setTimeout(callback, delayMs))
+  const clearTimer =
+    options.clearTimer ?? ((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>))
+  let timer: unknown = null
+
+  return {
+    schedule() {
+      if (timer !== null) clearTimer(timer)
+      timer = setTimer(() => {
+        timer = null
+        action()
+      }, options.delayMs)
+    },
+    cancel() {
+      if (timer === null) return
+      clearTimer(timer)
+      timer = null
+    },
+  }
+}
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
