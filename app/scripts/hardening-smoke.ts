@@ -9,6 +9,8 @@
  */
 
 import { app, BrowserWindow } from 'electron'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { ServerFrame } from '../shared/protocol.js'
 
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -264,6 +266,18 @@ async function runProductionHardeningSmoke(
       'production window-open handler denied a new Electron window',
       openResult && BrowserWindow.getAllWindows().length === windowCount,
       `windows=${BrowserWindow.getAllWindows().length}`,
+    )
+
+    const debugExportPath = join(
+      process.env.CLAUDE_CONFIG_DIR ?? '',
+      'desktop',
+      'debug',
+      'state.json',
+    )
+    add(
+      'packaged production path did not create debug-state export',
+      !existsSync(debugExportPath),
+      debugExportPath,
     )
   } catch (error) {
     add(

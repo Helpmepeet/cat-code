@@ -674,6 +674,122 @@ transcript (did prior history actually render?), and any host-API gap.
 ```
 ─── PASTE ───
 
+## P3-H · 🟡 — GUI-verification dev harness (added 2026-07-05; runs BEFORE P3-6)
+
+> **Out-of-backlog addition (2026-07-05).** The P3-5a/5b GUI runs exposed the native folder
+> picker (NSOpenPanel) as THE agent-verification blocker; ~15–20 GUI runs remain across
+> P3/P4/P5. Requirements: `../2026-07-05-gui-harness-proposal.md`. Design:
+> `../2026-07-05-gui-harness-design.md` (rev 2 — pressure-tested same day, all findings
+> applied, rulings closed in its §11). The session IMPLEMENTS the decided design.
+> P3-6 is the harness's first real GUI consumer — run this first.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 4/10
+
+You are running P3-H of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (repeat of shared state — you start cold) ===
+CatCode is a desktop app rebuilt on the real cat-code engine: Electron shell + one headless
+Bun engine sidecar PER SESSION over per-session Unix-domain sockets, raw `SDKMessage`
+fidelity — all locked. Phase 3 built the multi-session shell (P3-0..P3-5b ✅). GUI acceptance
+runs are driven by agents via macOS AX, and every failure so far happened at the app↔OS
+boundary — the native folder picker (NSOpenPanel) destroyed a full agent dispatch on
+2026-07-05. This session builds the dev/test harness that removes that boundary from what
+GUI rows re-test, WITHOUT weakening the security baseline.
+
+THE SPEC IS DECIDED — implement it, do not redesign:
+- docs/migration/2026-07-05-gui-harness-design.md (rev 2 — pressure-tested 2026-07-05, all 8
+  findings applied; §11 records the closed rulings). Read IN FULL; every decision you need is
+  in it: D1–D5 mechanisms, the gating table (§6), export schema (§3), file plan (§8),
+  verification plan (§7), docs deliverables (§9).
+- docs/migration/2026-07-05-gui-harness-proposal.md — requirements + the NON-NEGOTIABLE §4
+  constraints (migration security baseline) and §5 verification-honesty rules.
+Read also: decisions/SECURITY-MINIMUM.md (esp. Addendum T8/HC1–HC4), STATUS.md P3-H row.
+
+=== BUILD (summary of the design's §8 file plan — the design doc is authoritative) ===
+1. D1 picker bypass: `CATCODE_TEST_CWD_ALLOWLIST` (+ `CATCODE_INITIAL_CWD` sugar) resolved
+   ONCE at startup into a frozen DevHarnessConfig (unconditionally disabled when
+   `app.isPackaged`); cyclic cursor; fail CLOSED — flag set ⇒ `dialog.showOpenDialog` is
+   unreachable; an invalid/vanished entry → null pick + loud log, NEVER the dialog, NEVER
+   skip-ahead. The resolved dir still runs `validateCwd` + the one-time token mint
+   (main.ts:416-508) — the renderer surface stays byte-identical.
+2. D2 defaultPath (unconditional product fix): `pickDirectory(activeSessionId?)` — the hint
+   is an HC2-validated id resolved against `host.listSessions()`, NEVER a path; fallback =
+   most-recently-attached live cwd, then undefined.
+3. D3 debug-state export: ONE new FIXED one-way channel `catcode:debug:shell-state`. Sender
+   compiled OUT of the packaged preload (build-electron.ts emits preload.cjs with
+   `__CATCODE_DEV_HARNESS__=false` + preload.dev.cjs with true; main selects by
+   `!app.isPackaged`); main registers the handler ONLY when dev AND `CATCODE_DEBUG_STATE=1`;
+   renderer pushes only under `import.meta.env.DEV`, computed from the SAME selectors the UI
+   renders (shellState/sidebarState/tabStatus/permissionState) INCLUDING the visible strings
+   (tab title, sidebar title/subtitle, permission prompt title + rendered suggestion labels
+   — the full tool input object stays OUT). Main strictly validates every push
+   (`parseDebugSnapshot`: exact version, bounded arrays/strings, enum checks, unknown-key
+   reject → drop + loud log) before an atomic 0600 write to
+   `<claude-config-home>/desktop/debug/state.json` (the registry's config-home derivation +
+   temp+fsync+rename idiom, registry.ts:160-170; dir 0700). Dual timestamps
+   writtenAt/rendererStateAt.
+4. D4 dev app name: `app.setName('Cat Code Dev')` dev-only + a dev-only
+   `page-title-updated` preventDefault (index.html's `<title>CatCode</title>` otherwise
+   overwrites the window title after load); source-test that nothing depends on
+   `app.getPath('userData')`.
+5. D5 readiness: a LATCH — first `ready-to-show` AND first renderer-ready (either order) —
+   emits exactly one stable stdout line `[main] renderer ready` (prefix is the contract);
+   the first export write fires with it. "The state is there" is the export PREDICATE
+   (poll until it parses and shows the expected row), never the log line.
+6. Docs (§9): NEW docs/migration/process/GUI-VERIFICATION.md (launch recipe, flags,
+   readiness latch + export predicate, export schema + rendererStateAt freshness rule, the
+   proposal's four §5 honesty rules verbatim); PATCH backlog/phase3.md — P3-8 gains the
+   real-picker rider (beside the settings-race rider), P3-6/P3-7 gain the aria-label
+   convention line + a GUI-VERIFICATION.md pointer.
+
+=== GROUND RULES ===
+Locked decisions + FULL security baseline (standing rules at the top of this file). The §4
+constraints are not preferences: the renderer never authors a path in ANY mode; everything
+dev-only is double-gated (`!app.isPackaged` AND env), and packaged builds contain NO
+reachable debug path (sender stripped from the packaged preload bundle AND handler
+unregistered); preload stays default-deny — extend the HC3 pins in preloadSource.test.ts
+DELIBERATELY (new counts, new channel constant, the pickDirectory hint arg, no-new-invoke)
+and add the bundle-level strip test; ZERO new engine-socket frames; registry is READ-only
+here (a read-only row accessor is fine, no new write points). app/ is its own package — use
+its scripts, never root build:dev:full. Re-verify every anchor in the design doc before
+relying on it; source wins. Deviating from the pressure-tested design requires a stated
+reason in your report — never a silent redesign.
+
+=== DELIVERABLE / DONE WHEN (headless — all yours; the design's §7) ===
+- `bun test app/` green with the new suites: devHarness (cursor / broken-state fail-closed /
+  latch both orders / parseDebugSnapshot strictness / defaultPath hint+fallback),
+  debugStateReport (selector parity incl. visible strings), preload pins + the bundle strip
+  test (packaged preload.cjs contains no `catcode:debug:` string; preload.dev.cjs does),
+  mainSource double-gate test, 0600 writer test.
+- `bunx tsc --noEmit -p app/tsconfig.json` clean; `-p app/sidecar/tsconfig.json` no NEW
+  errors (pre-existing ≈5.5k red is known).
+- `bun run --cwd app test:hardening` — MUST re-run (preload touched): the exact packaged
+  bridge-key assertion (hardening-smoke.ts:172) passes UNCHANGED — that untouched assertion
+  IS the proof no debug key leaked into packaged builds — plus a new no-export-file
+  assertion.
+- Scripted demo `app/scripts/harness-demo.ts` — runs the DEV renderer (the scripts/dev.ts
+  Vite pattern; the hardening runner's production renderer build would eliminate the DEV
+  push path): launch with all three flags against a temp dir → wait for the readiness line
+  → poll the export until the initial-cwd session is `ready` (assert file mode 0600) →
+  assert the post-load window title is 'Cat Code Dev' → drive the REAL full path via
+  `webContents.executeJavaScript` (`window.catcode.pickDirectory()` →
+  `createSession(token)`) → assert the export shows TWO same-cwd sessions with two distinct
+  pids. Paste its output in your report. This scripted Electron run is YOURS (house
+  precedent: the hardening smoke) — it is not an operator-GUI step; no
+  cua-driver/claude-in-chrome/browser automation anywhere.
+- Docs deliverables landed (GUI-VERIFICATION.md + both backlog patches).
+- Update STATUS.md P3-H row → ✅ + date + one-line note.
+
+Report back: the frozen-config surface as landed; proof the bypass path still runs
+validateCwd + the token mint (test names); the two-bundle preload mechanics; the parser's
+rejection behavior; the demo output; confirmation the hardening exact-keys assertion passed
+unchanged; the docs patches; and any anchor drift or (justified) design deviation.
+```
+─── PASTE ───
+
 ## P3-6 · 🟡 — WorkspaceLayout: 1–3 split panels, resize, drag
 
 ─── PASTE ───
@@ -690,6 +806,9 @@ state is keyed by sessionId (P3-4). This session adds the split-panel layer. Rea
 STATUS.md; decisions/REGISTRY.md §3 exclusions (window/tab LAYOUT is renderer-owned state —
 it may reference appSessionIds but lives with the UI; a registry rewrite must never destroy
 layout, and vice versa).
+Read `docs/migration/process/GUI-VERIFICATION.md` before the GUI section. Any new
+status-bearing panel/splitter/session element must carry an aria-label with session identity
++ state so the operator can cite an AX-observed label.
 Step 0: read INVENTORY.md §W2 row `WorkspaceLayout` (⚓4, adapt — "source backs panel/session
 routing; splitter resize chrome is prototype-only").
 Step 1 (UX spec): /Users/pt/catcode_prototype/cat-app/WorkspaceLayout.jsx.
@@ -741,6 +860,9 @@ P2-4's permission.setMode) — there is NO command-execution channel and you wil
 Read first: STATUS.md, decisions/SECURITY-MINIMUM.md, PROTOCOL-ENVELOPE.md E-7 (the additive
 pattern P2-4's C2/C3 followed — sidecar-local allowlist + checkStrictKeys — is the ONLY
 sanctioned way new vocabulary lands, and only with a decision behind it).
+Read `docs/migration/process/GUI-VERIFICATION.md` before the GUI section. Any new
+status-bearing palette/session result element must carry an aria-label with session identity
++ state so the operator can cite an AX-observed label.
 Step 0: read INVENTORY.md §W2 rows: `CommandPalette` (⚓6, adapt — "real command registry,
 bridge filtering, and session search are split across source") and `SlashCommandPicker`
 (⚓5, adapt — "real CommandBase / typeahead behavior; standalone picker is presentation
@@ -844,6 +966,8 @@ history, fails all three.
   no claude-in-chrome, no automation):
   1. Launch; create session A (cwd X) and session B (cwd Y); run one real turn in each; state
      a unique nonce to each session ("the magic word for this session is …A / …B").
+     At least one session must be created through the REAL native picker (not the P3-H
+     allowlist bypass) so the production create path is still exercised.
   2. Clean quit (⌘Q). Relaunch. Confirm BOTH sessions offered for restore; accept both;
      submit "what was the magic word?" in each — each must answer ITS OWN nonce.
   3. Report engine PIDs (you print the pgrep command) before quit and after restore.
@@ -884,7 +1008,9 @@ panels, palette) is real. Phase 4 (remaining domains, the most parallel phase) o
 generate its backlog then per PROGRAM-PLAN §8.
 
 ## Count
-**Phase 3: 9 sessions** — P3-0 envelope+smoke, P3-1 spawn/resume ∥ P3-2 registry, P3-3 host
-API, P3-4 renderer keying, P3-5 shell, P3-6 panels ∥ P3-7 palette ∥ P3-8 gate.
+**Phase 3: 9 sessions + P3-H** (out-of-backlog harness addition 2026-07-05, runs before
+P3-6) — P3-0 envelope+smoke, P3-1 spawn/resume ∥ P3-2 registry, P3-3 host
+API, P3-4 renderer keying, P3-5 shell (split 5a/5b), P3-H dev harness, P3-6 panels ∥ P3-7
+palette ∥ P3-8 gate.
 Tranche 1 (P3-0..P3-3) is host/sidecar-plane and may run before/alongside late Phase 2
 (except P2-4 — shared sidecar files); tranches 2–3 (P3-4..P3-8) require the Phase-2 gate.

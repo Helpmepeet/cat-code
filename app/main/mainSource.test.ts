@@ -120,9 +120,30 @@ test('main is a host-API caller: ensureHost composes supervisor + registry + hos
   expect(body).toContain('registry.launch()')
   // The primary session goes through the host API (call may wrap across lines).
   expect(/host\s*\.?\s*\n?\s*\.createSession\(/.test(body) || body.includes('host.createSession(')).toBe(true)
-  expect(body).toContain('createSession({ cwd: process.cwd() })')
+  expect(body).toContain('const primaryCwd = devHarnessConfig.initialCwd ?? process.cwd()')
+  expect(body).toContain('createSession({ cwd: primaryCwd })')
   // The P3-0 carry: replay eviction is wired via the injected gate callback.
   expect(body).toContain('attachmentGate.clearSession(appSessionId)')
+})
+
+test('debug-state channel is registered only behind the dev + env double gate', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('function registerDebugStateHandler(): void')
+  const end = source.indexOf('\nfunction writeDebugStateExport', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(-1)
+
+  const body = source.slice(start, end)
+  expect(body).toContain('if (!IS_DEV || !devHarnessConfig.debugState) return')
+  expect(body).toContain('ipcMain.on(DEBUG_SHELL_STATE_CHANNEL')
+  expect(body).toContain('parseDebugSnapshot(snapshot)')
+})
+
+test('dev app name does not depend on app.getPath(userData)', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  expect(source).toContain("app.setName('Cat Code Dev')")
+  expect(source).not.toContain("app.getPath('userData')")
+  expect(source).not.toContain('app.getPath("userData")')
 })
 
 test('control-plane cwd never trusts the renderer: HC1 native picker + host revalidation', () => {
@@ -158,7 +179,7 @@ test('HC1 ORIGIN rule: the renderer create handler resolves a token, never a ren
   expect(source).toContain('function consumeCwdToken(')
   // pickDirectory mints a token from the validated realpath — it must NOT return
   // the realpath to the renderer.
-  const pickStart = source.indexOf('ipcMain.handle(CH_HOST_PICK_DIR')
+  const pickStart = source.indexOf('CH_HOST_PICK_DIR')
   const pickEnd = source.indexOf('ipcMain.handle(\n    CH_HOST_CREATE', pickStart)
   const pickBody = source.slice(pickStart, pickEnd)
   expect(pickBody).toContain('return mintCwdToken(chosen.realpath)')

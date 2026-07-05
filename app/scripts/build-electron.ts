@@ -21,6 +21,7 @@ async function buildOne(
   entry: string,
   format: 'esm' | 'cjs',
   ext: 'js' | 'cjs',
+  options: { name?: string; define?: Record<string, string> } = {},
 ): Promise<void> {
   const result = await Bun.build({
     entrypoints: [entry],
@@ -28,8 +29,9 @@ async function buildOne(
     target: 'node',
     format,
     external: ['electron'],
-    naming: `[dir]/[name].${ext}`,
+    naming: options.name ?? `[dir]/[name].${ext}`,
     root: appRoot,
+    define: options.define,
   })
   if (!result.success) {
     for (const message of result.logs) console.error(message)
@@ -42,7 +44,13 @@ async function build(): Promise<void> {
   // main as ESM .js (package is type:module); preload as CJS .cjs (sandboxed
   // preload must be CommonJS, and .cjs opts out of the package's ESM default).
   await buildOne(join(appRoot, 'main', 'main.ts'), 'esm', 'js')
-  await buildOne(join(appRoot, 'preload', 'preload.ts'), 'cjs', 'cjs')
+  await buildOne(join(appRoot, 'preload', 'preload.ts'), 'cjs', 'cjs', {
+    define: { __CATCODE_DEV_HARNESS__: 'false' },
+  })
+  await buildOne(join(appRoot, 'preload', 'preload.ts'), 'cjs', 'cjs', {
+    name: '[dir]/[name].dev.cjs',
+    define: { __CATCODE_DEV_HARNESS__: 'true' },
+  })
 }
 
 void build()

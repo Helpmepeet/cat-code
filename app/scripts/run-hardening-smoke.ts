@@ -12,11 +12,13 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
 const electronBin = join(appRoot, 'node_modules', '.bin', 'electron')
+const configHome = mkdtempSync(join(tmpdir(), 'catcode-hardening-config-'))
 
 if (!existsSync(electronBin)) {
   process.stderr.write(
@@ -66,7 +68,7 @@ if (!harness.success) {
 const smoke = spawnSync(electronBin, ['--require', harnessOut, appRoot], {
   encoding: 'utf8',
   cwd: appRoot,
-  env: { ...process.env },
+  env: { ...process.env, CLAUDE_CONFIG_DIR: configHome },
   timeout: 20_000,
 })
 rmSync(harnessOut, { force: true })
@@ -77,5 +79,7 @@ if (
   !smoke.stdout?.includes('[hardening-smoke] production path passed')
 ) {
   process.stderr.write('[run-hardening-smoke] production-path assertions did not pass\n')
+  rmSync(configHome, { recursive: true, force: true })
   process.exit(1)
 }
+rmSync(configHome, { recursive: true, force: true })

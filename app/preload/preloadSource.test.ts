@@ -10,11 +10,15 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
   )
-  // 7 frame-plane senders + 5 payload-bearing control-plane senders
+  // 7 frame-plane senders + 5 payload-bearing control-plane senders + the
+  // DEV-only debug-state sender (compiled out of packaged preload.cjs).
   // (pickDirectory/createSession/restoreSession/closeSession/listSessions).
   // subscribe / subscribeHost register a listener and send no payload, so they
   // do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(12)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(13)
+  expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
+  expect(source).toContain('reportDebugShellState')
+  expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
 })
 
 test('control-plane senders are fixed per-method channels (HC3), no generic invoke', () => {
@@ -45,6 +49,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   for (const channel of invokeChannels) {
     expect(allowed.has(channel)).toBe(true)
   }
+  expect(source).not.toContain('ipcRenderer.invoke(CH_DEBUG_SHELL_STATE')
 
   // Default-deny stays intact: no generic escape hatches. Strip comments first
   // so the prose that DESCRIBES the forbidden pattern ("no generic send(channel,

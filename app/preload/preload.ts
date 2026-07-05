@@ -29,7 +29,10 @@ import type {
   HostResult,
   SessionDescriptor,
 } from '../shared/hostApi.js'
+import type { DebugRendererSnapshot } from '../shared/debugState.js'
 import { createRendererIpcGuard } from './rendererIpcGuard.js'
+
+declare const __CATCODE_DEV_HARNESS__: boolean
 
 // Fixed internal channel names. The renderer never sees or supplies these.
 const CH_SUBMIT = 'catcode:submit'
@@ -101,10 +104,11 @@ const bridge: CatCodeBridge = {
   // --- Control plane (HC3 — fixed per-method senders; no generic invoke, no
   // renderer-controlled channel names; each returns typed data, never file
   // contents). Rate/size-guarded like the frame senders. ---
-  pickDirectory(): Promise<string | null> {
-    sendGuard.assertAllowed({ pickDirectory: true })
+  pickDirectory(activeSessionId?: SessionId | null): Promise<string | null> {
+    const payload = { pickDirectory: true, activeSessionId }
+    sendGuard.assertAllowed(payload)
     // Returns a one-time cwdToken (or null), NOT the chosen path.
-    return ipcRenderer.invoke(CH_HOST_PICK_DIR) as Promise<string | null>
+    return ipcRenderer.invoke(CH_HOST_PICK_DIR, activeSessionId) as Promise<string | null>
   },
   createSession(
     input: CreateSessionInput,
@@ -140,6 +144,14 @@ const bridge: CatCodeBridge = {
       ipcRenderer.removeListener(CH_HOST_EVENT, handler)
     }
   },
+}
+
+if (__CATCODE_DEV_HARNESS__) {
+  const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'
+  bridge.reportDebugShellState = (snapshot: DebugRendererSnapshot): void => {
+    sendGuard.assertAllowed(snapshot)
+    ipcRenderer.send(CH_DEBUG_SHELL_STATE, snapshot)
+  }
 }
 
 contextBridge.exposeInMainWorld('catcode', bridge)

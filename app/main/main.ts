@@ -23,14 +23,31 @@ import {
   SidecarSupervisor,
   type SupervisorEvent,
 } from '../supervisor/supervisor.js'
-import { SessionRegistry } from '../host/registry.js'
+import {
+  defaultRegistryDir,
+  SessionRegistry,
+} from '../host/registry.js'
 import { Host, type CwdValidation } from '../host/host.js'
 import type {
   HostEvent,
   HostResult,
   SessionDescriptor,
 } from '../shared/hostApi.js'
+import {
+  DEBUG_SHELL_STATE_CHANNEL,
+  DEBUG_STATE_VERSION,
+  type DebugRendererSnapshot,
+  type DebugStateFile,
+} from '../shared/debugState.js'
 import { AttachmentGate } from './attachmentGate.js'
+import {
+  atomicWriteJson0600,
+  createDevPickerBypass,
+  createReadinessLatch,
+  parseDebugSnapshot,
+  resolveDevHarnessConfig,
+  resolvePickerDefaultPath,
+} from './devHarness.js'
 import {
   decideWindowOpen,
   isAppOrigin,
@@ -69,6 +86,7 @@ const CH_HOST_EVENT = 'catcode:host:event'
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
 const IS_DEV = !app.isPackaged
+if (IS_DEV) app.setName('Cat Code Dev')
 const VITE_REACT_PREAMBLE_CSP_HASH =
   "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
 
@@ -77,6 +95,8 @@ const VITE_REACT_PREAMBLE_CSP_HASH =
 let supervisor: SidecarSupervisor | null = null
 let host: Host | null = null
 let mainWindow: BrowserWindow | null = null
+let registryForDebug: SessionRegistry | null = null
+let latestRendererSnapshot: DebugRendererSnapshot | null = null
 
 /**
  * F2 — renderer attachment. Server frames arrive from the supervisor the moment
@@ -134,6 +154,23 @@ function validateCwd(cwd: string): CwdValidation {
   }
 }
 
+const devHarnessConfig = resolveDevHarnessConfig({
+  isPackaged: app.isPackaged,
+  env: process.env,
+  validateCwd,
+  log: line => process.stderr.write(`${line}\n`),
+})
+
+const devPickerBypass = createDevPickerBypass(devHarnessConfig, {
+  validateCwd,
+  log: line => process.stderr.write(`${line}\n`),
+})
+
+const readinessLatch = createReadinessLatch(() => {
+  process.stdout.write('[main] renderer ready\n')
+  writeDebugStateExport()
+})
+
 function applySecurityBaseline(): void {
   // CSP for any rendered content (SECURITY-MINIMUM §3 CSP). Delivered as a
   // response header on the app load so it also covers the dev server.
@@ -184,10 +221,22 @@ function createWindow(): void {
       nodeIntegrationInSubFrames: false,
       webviewTag: false,
       webSecurity: true,
-      preload: join(__dirname, '..', 'preload', 'preload.cjs'),
+      preload: join(
+        __dirname,
+        '..',
+        'preload',
+        IS_DEV ? 'preload.dev.cjs' : 'preload.cjs',
+      ),
     },
   })
   mainWindow = window
+
+  if (IS_DEV) {
+    window.webContents.on('page-title-updated', event => {
+      event.preventDefault()
+      window.setTitle('Cat Code Dev')
+    })
+  }
 
   // F2 — a fresh document (first load OR a reload of this window) has not yet
   // re-registered `subscribe`, so live frames must not be sent to it until it
@@ -221,7 +270,10 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  window.once('ready-to-show', () => window.show())
+  window.once('ready-to-show', () => {
+    window.show()
+    readinessLatch.windowReady()
+  })
 
   if (IS_DEV) {
     void window.loadURL(APP_ORIGIN_DEV)
@@ -265,8 +317,8 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
 function wireHostEvents(h: Host): void {
   h.subscribe(event => {
     const contents = mainWindow?.webContents
-    if (!contents) return
-    contents.send(CH_HOST_EVENT, event satisfies HostEvent)
+    if (contents) contents.send(CH_HOST_EVENT, event satisfies HostEvent)
+    writeDebugStateExport()
   })
 }
 
@@ -390,9 +442,11 @@ function registerIpcHandlers(): void {
   // load and returns nothing on a repeat signal (StrictMode double-invoke).
   ipcMain.on(CH_RENDERER_READY, () => {
     deliver(attachmentGate.onRendererReady())
+    readinessLatch.rendererReady()
   })
 
   registerHostControlPlane()
+  registerDebugStateHandler()
 }
 
 /**
@@ -413,20 +467,33 @@ function registerHostControlPlane(): void {
   // renderer may REQUEST it, never answer it. Returns a one-time TOKEN bound to
   // the realpath the user chose (never the path itself), or null (cancelled). The
   // renderer feeds the token to createSession; it can never author a path.
-  ipcMain.handle(CH_HOST_PICK_DIR, async (): Promise<string | null> => {
-    const parent = mainWindow ?? undefined
-    const result = parent
-      ? await dialog.showOpenDialog(parent, {
-          properties: ['openDirectory', 'createDirectory'],
-        })
-      : await dialog.showOpenDialog({
-          properties: ['openDirectory', 'createDirectory'],
-        })
-    if (result.canceled || result.filePaths.length === 0) return null
-    const chosen = validateCwd(result.filePaths[0])
-    if (!chosen.ok) return null
-    return mintCwdToken(chosen.realpath)
-  })
+  ipcMain.handle(
+    CH_HOST_PICK_DIR,
+    async (_event, activeSessionId?: unknown): Promise<string | null> => {
+      if (devPickerBypass.enabled) {
+        const bypassed = devPickerBypass.pick()
+        return bypassed ? mintCwdToken(bypassed) : null
+      }
+      const defaultPath = resolvePickerDefaultPath(
+        host?.listSessions() ?? [],
+        activeSessionId,
+      )
+      const parent = mainWindow ?? undefined
+      const result = parent
+        ? await dialog.showOpenDialog(parent, {
+            properties: ['openDirectory', 'createDirectory'],
+            ...(defaultPath ? { defaultPath } : {}),
+          })
+        : await dialog.showOpenDialog({
+            properties: ['openDirectory', 'createDirectory'],
+            ...(defaultPath ? { defaultPath } : {}),
+          })
+      if (result.canceled || result.filePaths.length === 0) return null
+      const chosen = validateCwd(result.filePaths[0])
+      if (!chosen.ok) return null
+      return mintCwdToken(chosen.realpath)
+    },
+  )
 
   ipcMain.handle(
     CH_HOST_CREATE,
@@ -472,6 +539,46 @@ function registerHostControlPlane(): void {
   ipcMain.handle(CH_HOST_LIST, (): SessionDescriptor[] => {
     return host ? host.listSessions() : []
   })
+}
+
+function registerDebugStateHandler(): void {
+  if (!IS_DEV || !devHarnessConfig.debugState) return
+  ipcMain.on(DEBUG_SHELL_STATE_CHANNEL, (_event, snapshot: unknown) => {
+    const parsed = parseDebugSnapshot(snapshot)
+    if (!parsed.ok) {
+      process.stderr.write(`[main] dropped invalid debug snapshot: ${parsed.error}\n`)
+      return
+    }
+    latestRendererSnapshot = parsed.value
+    writeDebugStateExport()
+  })
+}
+
+function writeDebugStateExport(): void {
+  if (!IS_DEV || !devHarnessConfig.debugState) return
+  try {
+    const rows = registryForDebug?.sessions ?? []
+    const byId = new Map(rows.map(row => [row.appSessionId, row]))
+    const sessions = (host?.listSessions() ?? []).map(session => {
+      const row = byId.get(session.appSessionId)
+      return {
+        ...session,
+        ...(typeof row?.enginePid === 'number' ? { enginePid: row.enginePid } : {}),
+        ...(typeof row?.socketPath === 'string' ? { socketPath: row.socketPath } : {}),
+        ...(row ? { shutdown: row.shutdown } : {}),
+      }
+    })
+    const file: DebugStateFile = {
+      debugStateVersion: DEBUG_STATE_VERSION,
+      writtenAt: Date.now(),
+      rendererStateAt: latestRendererSnapshot?.rendererStateAt ?? null,
+      sessions,
+      renderer: latestRendererSnapshot?.renderer ?? null,
+    }
+    atomicWriteJson0600(join(defaultRegistryDir(), 'debug', 'state.json'), file)
+  } catch (error) {
+    process.stderr.write(`[main] debug-state write failed: ${errText(error)}\n`)
+  }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -638,6 +745,7 @@ function ensureHost(): Host {
   const registry = new SessionRegistry({
     sidecarCommandMarker: SIDECAR_ENTRY,
   })
+  registryForDebug = registry
 
   // B4 — kick off the launch sequence (read → sweep orphans → reap) and hand the
   // promise to the host as its readiness GATE. Every host op awaits this before
@@ -661,18 +769,24 @@ function ensureHost(): Host {
   // The primary startup session: main's OWN process.cwd() (trusted main input,
   // not a renderer string). host.createSession awaits `launched` internally, so
   // this runs strictly after the sweep.
-  void host
-    .createSession({ cwd: process.cwd() })
-    .then(result => {
-      if (!result.ok) {
-        process.stderr.write(
-          `[main] primary session create failed: ${result.error.code} ${result.error.message}\n`,
-        )
-      }
-    })
-    .catch(error => {
-      process.stderr.write(`[main] primary session create threw: ${errText(error)}\n`)
-    })
+  const primaryCwd = devHarnessConfig.initialCwd ?? process.cwd()
+  if (devHarnessConfig.initialCwdInvalid) {
+    process.stderr.write('[main] primary session skipped: invalid CATCODE_INITIAL_CWD\n')
+  } else {
+    void host
+      .createSession({ cwd: primaryCwd })
+      .then(result => {
+        if (!result.ok) {
+          process.stderr.write(
+            `[main] primary session create failed: ${result.error.code} ${result.error.message}\n`,
+          )
+        }
+        writeDebugStateExport()
+      })
+      .catch(error => {
+        process.stderr.write(`[main] primary session create threw: ${errText(error)}\n`)
+      })
+  }
 
   // Smoke-run hook (verification only): if CATCODE_SMOKE_EXIT_MS is set, log the
   // frames the supervisor receives and exit after the timeout. Lets a headless
@@ -756,6 +870,7 @@ app.on('window-all-closed', () => {
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
   // its launch sweep — the dock-reopen session goes through createSession again).
   host = null
+  registryForDebug = null
   // F2 — drop the old session's buffered frames so a macOS reopen (which spawns a
   // NEW session id via `ensureHost`) never replays dead-session frames into the
   // fresh window.

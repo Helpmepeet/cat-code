@@ -49,6 +49,7 @@ import type {
   HostResult,
   SessionDescriptor,
 } from './hostApi.js'
+import type { DebugRendererSnapshot } from './debugState.js'
 
 /** Protocol wire version. Bump only on a breaking frame-shape change. */
 export const PROTOCOL_VERSION = 1 as const
@@ -313,7 +314,7 @@ export type CatCodeBridge = {
    * never sees the path itself — not a listing, not file contents, not even the
    * chosen string.
    */
-  pickDirectory(): Promise<string | null>
+  pickDirectory(activeSessionId?: SessionId | null): Promise<string | null>
   /**
    * Create a fresh session rooted at the directory a prior `pickDirectory()`
    * token names. The renderer supplies a token + optional title — it CANNOT
@@ -332,6 +333,12 @@ export type CatCodeBridge = {
    * of this, never a poll loop). Returns an unsubscribe function.
    */
   subscribeHost(listener: (event: HostEvent) => void): () => void
+  /**
+   * DEV preload bundle only. One-way renderer→main debug-state report; stripped
+   * from packaged preload builds, and main registers the receiver only under
+   * CATCODE_DEBUG_STATE=1.
+   */
+  reportDebugShellState?: (snapshot: DebugRendererSnapshot) => void
 }
 
 /**

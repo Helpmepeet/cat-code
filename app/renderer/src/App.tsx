@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from 'react'
 import { getBridge } from './bridge.js'
+import { buildDebugShellStateSnapshot } from './debugStateReport.js'
 import { permissionActionForKey } from './PermissionPrompt.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { PermissionRulesEditor } from './PermissionRulesEditor.js'
@@ -240,7 +241,7 @@ export function App() {
     const bridge = getBridge()
     try {
       // HC1 — the renderer never authors a path: pick → one-time token → create.
-      const token = await bridge.pickDirectory()
+      const token = await bridge.pickDirectory(activeSessionId)
       if (!token) return // cancelled
       const result = await bridge.createSession({ cwdToken: token })
       if (result.ok) {
@@ -252,7 +253,24 @@ export function App() {
     } catch (error) {
       setShellError(errorMessage(error))
     }
-  }, [])
+  }, [activeSessionId])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const bridge = getBridge()
+    if (!bridge.reportDebugShellState) return
+    const timer = window.setTimeout(() => {
+      bridge.reportDebugShellState?.(
+        buildDebugShellStateSnapshot({
+          shell,
+          connection,
+          permissions,
+          activeSessionId,
+        }),
+      )
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [shell, connection, permissions, activeSessionId])
 
   const selectTab = useCallback((sessionId: SessionId) => {
     // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
