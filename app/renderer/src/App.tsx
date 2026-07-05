@@ -263,10 +263,11 @@ export function App() {
   const closeTab = useCallback(async (sessionId: SessionId) => {
     // Non-destructive: closeSession keeps the registry row and emits
     // session-status(exited, restorable) — NOT session-removed (the row stays in
-    // the live∪restorable roster). The tab leaves the TabBar because the roster
-    // update flips the row non-live, so selectLiveSessions drops it; the row
-    // then surfaces in the Sidebar as a restorable restore-offer. No optimistic
-    // local delete — the projection follows the HostEvent.
+    // the live∪restorable roster). The tab leaves the TabBar because that clean
+    // -close descriptor revokes tab membership in the shell reducer (a CRASH —
+    // restorable + disconnected — would keep it); the row then surfaces in the
+    // Sidebar as a restorable restore-offer. No optimistic local delete — the
+    // projection follows the HostEvent.
     const bridge = getBridge()
     try {
       const result = await bridge.closeSession(sessionId)

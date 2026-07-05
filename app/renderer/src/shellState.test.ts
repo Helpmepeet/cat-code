@@ -123,15 +123,60 @@ test('selectLiveSessions excludes a closed (restorable) session but keeps it in 
   ])
 })
 
-test('selectLiveSessions keeps a crashed-but-not-reaped session (restart still valid)', () => {
-  // A crashed sidecar is still live process-wise (restorable:false) until
-  // reaped, so it stays a TabBar tab where restart is host-accepted.
+test('a crash (restorable + disconnected) keeps the session a tab AND in the roster (kill/close parity)', () => {
+  // The P3-5b kill/close parity descriptor: a killed sidecar surfaces
+  // restorable + disconnected. The tab STAYS (restart-in-place is still
+  // host-accepted off the tombstone record) while the same row is the
+  // Sidebar's crashed restore-offer.
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('crashed', { status: 'ready' })))
+  state = reduceShellState(state, {
+    type: 'session-status',
+    session: descriptor('crashed', { status: 'disconnected', restorable: true }),
+  })
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['crashed'])
+  expect(selectSessions(state).map(s => s.appSessionId)).toEqual(['crashed'])
+})
+
+test('a clean close (restorable + exited) revokes tab membership', () => {
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('a', { status: 'ready' })))
+  state = reduceShellState(state, {
+    type: 'session-status',
+    session: descriptor('a', { status: 'exited', restorable: true }),
+  })
+  expect(selectLiveSessions(state)).toEqual([])
+  // Roster keeps it — the Sidebar restore-offer.
+  expect(selectSessions(state).map(s => s.appSessionId)).toEqual(['a'])
+})
+
+test('a crashed row hydrated from a previous run is a restore-offer, never a tab', () => {
+  // Hydrate folds snapshot rows via session-added; a restorable+disconnected
+  // row that was never live THIS run has no restart tombstone, so it must not
+  // become a tab (its restart would be refused by the host).
   let state = createShellState()
   state = reduceShellState(
     state,
-    added(descriptor('crashed', { status: 'disconnected', restorable: false })),
+    added(descriptor('old-crash', { status: 'disconnected', restorable: true })),
   )
-  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['crashed'])
+  expect(selectLiveSessions(state)).toEqual([])
+  expect(selectSessions(state).map(s => s.appSessionId)).toEqual(['old-crash'])
+})
+
+test('restoring a crashed row makes it a tab again once it goes live', () => {
+  let state = createShellState()
+  state = reduceShellState(
+    state,
+    added(descriptor('x', { status: 'disconnected', restorable: true })),
+  )
+  expect(selectLiveSessions(state)).toEqual([])
+  // restoreSession re-spawns → session-added with a live (non-restorable)
+  // descriptor grants membership.
+  state = reduceShellState(
+    state,
+    added(descriptor('x', { status: 'spawning', restorable: false })),
+  )
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['x'])
 })
 
 test('activeAfterLiveChange: active session that left the live set moves to first live tab', () => {

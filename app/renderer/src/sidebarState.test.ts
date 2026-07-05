@@ -93,12 +93,16 @@ test('an exited restorable row is the restore candidate (kind:restorable, tone:d
 })
 
 test('a crashed (disconnected) restorable row flags dead/crashed', () => {
+  // The P3-5b kill/close parity descriptor (host surfaces disconnected +
+  // restorable for a crash-marked dead row): the Sidebar row must be a working
+  // restore-offer AND visibly crashed — never the clean-close "closed" label.
   const visual = deriveSidebarRowVisual(
     descriptor('x', { status: 'disconnected', restorable: true }),
   )
   expect(visual.kind).toBe('restorable')
   expect(visual.tone).toBe('dead')
   expect(visual.label).toBe('crashed')
+  expect(visual.restorable).toBe(true)
 })
 
 test('a spawning row reads as starting (warn), not yet restorable', () => {

@@ -252,7 +252,15 @@ export class Host implements HostApi {
         `transcript for ${appSessionId} is gone`,
       )
     }
-    if (this.isLive(appSessionId)) {
+    // Only a genuinely running process refuses a restore. A terminal supervisor
+    // record ('exited'/'failed') is a dead sidecar's tombstone — kept so the
+    // tab's restart-in-place works — and is exactly the crashed restore-offer
+    // case: deregister it below so the re-spawn can reuse the appSessionId
+    // (spawnSession rejects a duplicate id).
+    const record = this.supervisor
+      .listSessions()
+      .find(s => s.sessionId === appSessionId)
+    if (record && !isTerminalStatus(record.status)) {
       return hostError(
         'session_not_found',
         `session ${appSessionId} is already live`,
@@ -268,6 +276,15 @@ export class Host implements HostApi {
 
     const limit = this.checkSpawnLimits()
     if (limit) return limit
+
+    // Clear the crashed tombstone (guarded by `closing` so the fake/late exit
+    // the kill fires is not re-reported as a fresh crash — same suppression as
+    // closeSession; the child is already dead, so this only deregisters).
+    if (record) {
+      this.closing.add(appSessionId)
+      this.supervisor.killSession(appSessionId)
+      this.closing.delete(appSessionId)
+    }
 
     return this.spawn({
       appSessionId,
@@ -509,8 +526,14 @@ export class Host implements HostApi {
       .find(s => s.sessionId === appSessionId)
     const row = this.registry.findSession(appSessionId)
     if (!live && !row) return undefined
-    if (!live) {
-      // Not live but has a row → a restorable / exited row.
+    // A terminal supervisor record ('exited'/'failed') is a TOMBSTONE kept for
+    // the tab's restart-in-place affordance — the process is dead. When the row
+    // survives, project it exactly like any dead session so crash-marking and
+    // restorability surface the same for a kill as for a graceful close (the
+    // P3-5b kill/close parity fix): before this, the tombstone made the
+    // descriptor read (status:'exited', restorable:false) and a crashed session
+    // never became a Sidebar restore-offer.
+    if (!live || (row && isTerminalStatus(live.status))) {
       return row ? this.descriptorFromRow(row, null) : undefined
     }
     return this.descriptorFromRow(row, live.status)
@@ -519,12 +542,20 @@ export class Host implements HostApi {
   /**
    * Merge a registry row (durable identity) with a live supervisor status. When
    * `liveStatus` is null the session is not currently live (restorable/exited).
+   * A dead session's status carries the row's crash marking: `disconnected` for
+   * a crash-marked row vs `exited` for a clean close — the ONE signal that lets
+   * the Sidebar flag a crash distinctly from a close (REGISTRY §4.4; see the
+   * status doc in app/shared/hostApi.ts).
    */
   private descriptorFromRow(
     row: RegistrySession | undefined,
     liveStatus: SidecarStatus | null,
   ): SessionDescriptor {
-    const status = liveStatus ? mapStatus(liveStatus) : 'exited'
+    const status = liveStatus
+      ? mapStatus(liveStatus)
+      : row?.shutdown === 'crashed'
+        ? 'disconnected'
+        : 'exited'
     return {
       appSessionId: row?.appSessionId ?? '',
       engineSessionId: row?.engineSessionId ?? null,
@@ -592,6 +623,16 @@ export class Host implements HostApi {
 /* ------------------------------------------------------------------------- *
  * Module-private helpers
  * ------------------------------------------------------------------------- */
+
+/**
+ * A supervisor record in a terminal state is a dead process whose record is
+ * kept only as the restart-in-place tombstone (the supervisor deregisters on
+ * killSession, NOT on child exit) — never a live session for descriptor or
+ * restore purposes.
+ */
+function isTerminalStatus(status: SidecarStatus): boolean {
+  return status === 'exited' || status === 'failed'
+}
 
 /** Supervisor status → the coarser descriptor status the renderer consumes. */
 function mapStatus(status: SidecarStatus): SessionDescriptor['status'] {

@@ -71,7 +71,14 @@ export type SessionDescriptor = {
   engineSessionId: string | null
   cwd: string
   title: string | null
-  /** Live process/transport view. `restorable` is set when no process is live. */
+  /**
+   * Live process/transport view. `restorable` is set when no process is live.
+   * For a DEAD session the status carries the row's shutdown marking — a
+   * crash-marked row (sidecar died without a graceful close, REGISTRY §4.4)
+   * surfaces `disconnected`, a clean close surfaces `exited` — so a crash and a
+   * close are distinguishable without a new field (P3-5b kill/close parity; the
+   * minimal-extension route per the C3 extend-host-vs-change-UI precedent).
+   */
   status: 'spawning' | 'ready' | 'disconnected' | 'exited'
   /** Registry row + transcript both present (the row can be re-spawned). */
   restorable: boolean

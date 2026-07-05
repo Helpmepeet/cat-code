@@ -143,6 +143,19 @@ class FakeSupervisor {
     this.emit({ type: 'status', sessionId, status })
   }
 
+  /**
+   * Drive a REAL crash: the child dies WITHOUT killSession, so the record
+   * STAYS registered with a terminal status (the real supervisor deregisters
+   * only on killSession — supervisor.ts child.on('exit') keeps the record).
+   * This is the `kill <pid>` shape the P3-5b GUI acceptance exercised.
+   */
+  emitCrash(sessionId: SessionId): void {
+    const record = this.records.get(sessionId)
+    if (record) record.status = 'exited'
+    this.emit({ type: 'exit', sessionId, code: 1, signal: null })
+    this.emit({ type: 'status', sessionId, status: 'exited' })
+  }
+
   emit(event: SupervisorEvent): void {
     for (const listener of this.listeners) listener(event)
   }
@@ -511,6 +524,90 @@ test('closeSession evicts replay, marks the row clean, keeps it restorable', asy
   const listed = h.host.listSessions().find(s => s.appSessionId === appSessionId)
   expect(listed?.restorable).toBe(true)
   expect(listed?.status).toBe('exited')
+})
+
+/* ------------------------------------------------------------------------- *
+ * Kill/close parity (P3-5b GUI-acceptance fix) — a crash must surface as a
+ * restorable, crash-flagged descriptor, distinguishable from a clean close.
+ * ------------------------------------------------------------------------- */
+
+test('a sidecar crash (kill, no closeSession) yields a restorable + crashed descriptor; a clean close stays exited', async () => {
+  const h = makeHost()
+
+  // Session A: crashes (the record stays as the restart tombstone).
+  const crashed = await h.host.createSession({ cwd: h.cwd })
+  expect(crashed.ok).toBe(true)
+  if (!crashed.ok) return
+  const crashedId = crashed.value.appSessionId
+  h.supervisor.emitReady(crashedId, 'engine-killed')
+  await settle(() => h.registry.findSession(crashedId)?.engineSessionId === 'engine-killed')
+  writeTranscript(h.storageDir, 'engine-killed')
+
+  h.events.length = 0
+  h.supervisor.emitCrash(crashedId)
+  await settle(() => h.registry.findSession(crashedId)?.shutdown === 'crashed')
+
+  // The descriptor reads dead + crash-flagged + restorable — NOT the clean
+  // -close shape — even though the tombstone record is still registered.
+  const crashedDescriptor = h.host
+    .listSessions()
+    .find(s => s.appSessionId === crashedId)
+  expect(crashedDescriptor?.status).toBe('disconnected')
+  expect(crashedDescriptor?.restorable).toBe(true)
+  // The session-status the crash emitted carried the same shape (what the
+  // renderer's Sidebar actually receives).
+  const statusEvent = h.events.find(e => e.type === 'session-status')
+  expect(statusEvent).toBeDefined()
+  if (statusEvent?.type === 'session-status') {
+    expect(statusEvent.session.status).toBe('disconnected')
+    expect(statusEvent.session.restorable).toBe(true)
+  }
+  // Tombstone kept: restart-in-place stays host-accepted.
+  expect(h.supervisor.records.has(crashedId)).toBe(true)
+
+  // Session B: clean close — restorable but NOT crash-flagged (the two paths
+  // must stay distinguishable).
+  const closed = await h.host.createSession({ cwd: h.cwd })
+  expect(closed.ok).toBe(true)
+  if (!closed.ok) return
+  const closedId = closed.value.appSessionId
+  h.supervisor.emitReady(closedId, 'engine-closed')
+  await settle(() => h.registry.findSession(closedId)?.engineSessionId === 'engine-closed')
+  writeTranscript(h.storageDir, 'engine-closed')
+  await h.host.closeSession(closedId)
+
+  const closedDescriptor = h.host
+    .listSessions()
+    .find(s => s.appSessionId === closedId)
+  expect(closedDescriptor?.status).toBe('exited')
+  expect(closedDescriptor?.restorable).toBe(true)
+})
+
+test('restoreSession restores a crashed session whose tombstone record is still registered', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-resume-crash')
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-resume-crash')
+  writeTranscript(h.storageDir, 'engine-resume-crash')
+
+  h.supervisor.emitCrash(appSessionId)
+  await settle(() => h.registry.findSession(appSessionId)?.shutdown === 'crashed')
+
+  // Restore must deregister the tombstone and re-spawn with the resume id —
+  // pre-fix this failed as "already live" off the dead record.
+  const result = await h.host.restoreSession(appSessionId)
+  expect(result.ok).toBe(true)
+  if (!result.ok) return
+  expect(result.value.appSessionId).toBe(appSessionId)
+  const spawned = h.supervisor.records.get(appSessionId)
+  expect(spawned?.status).toBe('spawning')
+  expect(spawned?.resumeEngineSessionId).toBe('engine-resume-crash')
+  // Row flipped back to live — the deregistering kill was NOT re-reported as a
+  // fresh crash over the new spawn.
+  expect(h.registry.findSession(appSessionId)?.shutdown).toBeNull()
 })
 
 /* ------------------------------------------------------------------------- *

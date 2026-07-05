@@ -23,10 +23,19 @@ export type ShellState = {
   /** Tab order = arrival order of live sessions. */
   order: SessionId[]
   byId: Record<SessionId, SessionDescriptor>
+  /**
+   * Ids that are TabBar tabs this run. Tab membership is event history, not a
+   * descriptor predicate: a session that goes live grants it, a clean close
+   * (`restorable` + `exited`) or removal revokes it, and a CRASH (`restorable`
+   * + `disconnected`) keeps it — the dead tab stays for restart-in-place while
+   * the SAME descriptor is the Sidebar's crashed restore-offer. A restorable
+   * row folded from the hydrate snapshot (previous run) never becomes a tab.
+   */
+  tabs: Record<SessionId, true>
 }
 
 export function createShellState(): ShellState {
-  return { order: [], byId: {} }
+  return { order: [], byId: {}, tabs: {} }
 }
 
 /**
@@ -46,6 +55,7 @@ export function reduceShellState(
       return {
         order: present ? state.order : [...state.order, id],
         byId: { ...state.byId, [id]: event.session },
+        tabs: foldTabMembership(state.tabs, event.session),
       }
     }
     case 'session-status': {
@@ -60,6 +70,7 @@ export function reduceShellState(
       return {
         order: present ? state.order : [...state.order, id],
         byId: { ...state.byId, [id]: event.session },
+        tabs: foldTabMembership(state.tabs, event.session),
       }
     }
     case 'session-removed': {
@@ -67,14 +78,42 @@ export function reduceShellState(
       if (!state.byId[id]) return state
       const byId = { ...state.byId }
       delete byId[id]
+      const tabs = { ...state.tabs }
+      delete tabs[id]
       return {
         order: state.order.filter(candidate => candidate !== id),
         byId,
+        tabs,
       }
     }
     default:
       return state
   }
+}
+
+/**
+ * Fold one descriptor into the tab-membership set:
+ *  - not restorable (a process is live or restart-in-place pending) → tab;
+ *  - restorable + `disconnected` (CRASH) → membership unchanged: a session that
+ *    was a tab when its sidecar died stays one (restart stays valid), while a
+ *    crashed row from a previous run — no tab to keep — never gains one;
+ *  - restorable + anything else (clean close / plain exited row) → not a tab;
+ *    it lives on in the roster as the Sidebar's restore-offer only.
+ */
+function foldTabMembership(
+  tabs: ShellState['tabs'],
+  session: SessionDescriptor,
+): ShellState['tabs'] {
+  const id = session.appSessionId
+  if (!session.restorable) {
+    if (tabs[id]) return tabs
+    return { ...tabs, [id]: true }
+  }
+  if (session.status === 'disconnected') return tabs
+  if (!tabs[id]) return tabs
+  const next = { ...tabs }
+  delete next[id]
+  return next
 }
 
 /** Every descriptor in the roster (arrival order) — the Sidebar's live∪restorable source. */
@@ -83,16 +122,20 @@ export function selectSessions(state: ShellState): SessionDescriptor[] {
 }
 
 /**
- * The LIVE sessions the TabBar renders (arrival order) — one tab per live
- * session (P3-5a). A cleanly-closed row (no live process, `restorable:true`
- * after the isRestorable fix) leaves the bar and surfaces in the Sidebar's
- * restore-offer instead; a CRASHED-but-not-yet-reaped session stays live
- * process-wise (`restorable:false`) so its TabBar restart stays valid — exactly
- * the host's restart-acceptance boundary (host.ts restartSession isLive check).
+ * The sessions the TabBar renders (arrival order) — the run-local tab set
+ * (P3-5a/5b). A cleanly-closed row (`restorable` + `exited`) leaves the bar and
+ * surfaces in the Sidebar's restore-offer instead; a CRASHED session
+ * (`restorable` + `disconnected` — the P3-5b kill/close parity descriptor)
+ * keeps its tab so restart-in-place stays reachable, while the same row is
+ * simultaneously the Sidebar's crashed restore-offer. Membership is the
+ * event-history `tabs` set, NOT `!restorable`: a crashed row hydrated from a
+ * previous run is an offer only (its restart tombstone died with that run).
  * The row stays in the roster either way; only this projection is narrowed.
  */
 export function selectLiveSessions(state: ShellState): SessionDescriptor[] {
-  return selectSessions(state).filter(descriptor => !descriptor.restorable)
+  return selectSessions(state).filter(
+    descriptor => state.tabs[descriptor.appSessionId] === true,
+  )
 }
 
 /**
