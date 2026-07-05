@@ -82,7 +82,11 @@ class FakeSupervisor {
     const record = this.records.get(sessionId)
     if (!record) return
     this.records.delete(sessionId)
-    // Real supervisor fires an async 'exit' after a kill.
+    // The REAL supervisor emits NO exit after a kill (it deregisters first;
+    // the F11 guard drops the child's late exit). This synthetic exit is
+    // deliberately HARSHER than reality: it exercises the host's `closing`
+    // suppression — without which a host-asked kill would be mis-marked as a
+    // crash (F3).
     this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
   }
 
@@ -474,6 +478,44 @@ test('restoreSession re-spawns a clean row with its cwd + engineSessionId (resum
   expect(h.registry.findSession(appSessionId)?.shutdown).toBeNull()
 })
 
+test('a failed RESTORE spawn keeps the row as a restore-offer (SF-2), a failed CREATE spawn removes it', async () => {
+  const h = makeHost()
+  // Seed a restorable clean row with a transcript (a real offer).
+  const appSessionId = randomUUID()
+  writeTranscript(h.storageDir, 'engine-sf2')
+  await h.registry.upsertOnSpawn({ appSessionId, cwd: h.cwd })
+  await h.registry.fillEngineSessionId(appSessionId, 'engine-sf2')
+  await h.registry.markClean(appSessionId)
+
+  // Restore whose spawn throws synchronously: the row still holds its
+  // engineSessionId — it must STAY in the live∪restorable union as an offer
+  // (session-status, NOT session-removed: the renderer pins removed ids until
+  // relaunch, which would hide a perfectly restorable session).
+  h.events.length = 0
+  h.supervisor.throwOnNextSpawn = new Error('boom')
+  const restore = await h.host.restoreSession(appSessionId)
+  expect(restore.ok).toBe(false)
+  if (!restore.ok) expect(restore.error.code).toBe('spawn_failed')
+
+  expect(h.events.some(e => e.type === 'session-removed')).toBe(false)
+  const statusEvent = h.events.find(e => e.type === 'session-status')
+  expect(statusEvent).toBeDefined()
+  if (statusEvent?.type === 'session-status') {
+    expect(statusEvent.session.restorable).toBe(true)
+    expect(statusEvent.session.status).toBe('exited')
+  }
+  const listed = h.host.listSessions().find(s => s.appSessionId === appSessionId)
+  expect(listed?.restorable).toBe(true)
+
+  // Contrast: a fresh CREATE whose spawn throws has no engineSessionId — its
+  // row is neither a tab nor an offer, so it is removed (unchanged behavior).
+  h.events.length = 0
+  h.supervisor.throwOnNextSpawn = new Error('boom')
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(false)
+  expect(h.events.some(e => e.type === 'session-removed')).toBe(true)
+})
+
 test('restoreSession refuses an already-live session', async () => {
   const h = makeHost()
   writeTranscript(h.storageDir, 'engine-live')
@@ -682,8 +724,11 @@ test('HostEvent stream fires on add, status, exit', async () => {
   expect(types()).toContain('session-status')
 
   h.events.length = 0
-  // A raw supervisor exit (not a graceful close) still emits a status event.
-  h.supervisor.emit({ type: 'exit', sessionId: appSessionId, code: 1, signal: null })
+  // A sidecar death the host did not ask for (crash) still emits a status
+  // event. Driven via emitCrash so the fake's record state matches the real
+  // supervisor (record kept, terminal status) — a raw exit with the record
+  // left 'ready' is a state the real supervisor cannot produce (HA-6).
+  h.supervisor.emitCrash(appSessionId)
   await settle(() => types().includes('session-status'))
   expect(types()).toContain('session-status')
 })
@@ -901,9 +946,10 @@ test('F3: a mid-run sidecar crash marks the row crashed, and a later quit does N
   h.supervisor.emitReady(id, 'engine-crash-test')
   await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-crash-test')
 
-  // Crash: the child exits without the host asking (record stays, like the
-  // real supervisor's un-killed death path).
-  h.supervisor.emit({ type: 'exit', sessionId: id, code: 1, signal: null })
+  // Crash: the child exits without the host asking. emitCrash keeps the
+  // record with a terminal status, matching the real supervisor's un-killed
+  // death path (HA-6 — a raw exit left the record 'ready', an unreal state).
+  h.supervisor.emitCrash(id)
   await settle(() => h.registry.findSession(id)?.shutdown === 'crashed')
   expect(h.registry.findSession(id)?.shutdown).toBe('crashed')
   expect(h.registry.findSession(id)?.enginePid).toBeUndefined()

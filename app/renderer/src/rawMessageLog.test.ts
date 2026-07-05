@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import type { ServerFrame } from '../../shared/protocol.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -195,4 +196,70 @@ test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', ()
   expect(active.messages).toEqual([second])
   expect(active.retainedBytes).toBe(secondBytes)
   expect(active.truncated).toBe(true)
+})
+
+test('in-run restore: raw message log does not duplicate replayed history (SF-1)', () => {
+  // Same appSessionId, store never torn down, replay carries the same uuids
+  // (F1/F2 same-source). The transcript projector dedupes; the raw log must
+  // too — pre-fix this appended the whole history again (2 ≠ 1).
+  const sessionId = 'session-restore'
+  const ready = (): ServerFrame => ({
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId,
+    engineSessionId: 'engine-1',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  const message = (uuid: string, replay?: true) =>
+    ({
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId,
+      ...(replay ? { replay: true as const } : {}),
+      event: {
+        type: 'message',
+        message: {
+          type: 'assistant',
+          uuid,
+          session_id: 'engine-1',
+          parent_tool_use_id: null,
+          message: {
+            id: `msg_${uuid}`,
+            role: 'assistant',
+            content: [{ type: 'text', text: 'pineapple' }],
+          },
+        },
+      },
+    }) as never
+
+  let state = createRawMessageLogState()
+  state = reduceServerFrame(state, ready())
+  state = reduceServerFrame(state, message('00000000-0000-4000-8000-0000000000aa'))
+  // Crash → restore reuses the appSessionId; the resumed sidecar replays.
+  state = reduceServerFrame(state, ready())
+  state = reduceServerFrame(
+    state,
+    message('00000000-0000-4000-8000-0000000000aa', true),
+  )
+  expect(selectRawMessageLog(state, sessionId).messages).toHaveLength(1)
+
+  // A replayed message NOT already retained (e.g. evicted pre-crash, or the
+  // reload path where the store is fresh) still lands.
+  state = reduceServerFrame(
+    state,
+    message('00000000-0000-4000-8000-0000000000bb', true),
+  )
+  expect(selectRawMessageLog(state, sessionId).messages).toHaveLength(2)
+
+  // Live (non-replay) frames are never deduped — the raw view shows arrivals.
+  state = reduceServerFrame(state, message('00000000-0000-4000-8000-0000000000bb'))
+  expect(selectRawMessageLog(state, sessionId).messages).toHaveLength(3)
 })

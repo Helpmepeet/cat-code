@@ -94,6 +94,20 @@ export function reduceServerFrameWithLimits(
 
   if (frame.kind !== 'event' || frame.event.type !== 'message') return state
 
+  // An in-run restore reuses the appSessionId and this store is never torn
+  // down, so the resumed sidecar's replayed history (`replay:true`, same uuids
+  // — F1/F2 same-source) would append the whole history again behind the
+  // retained pre-crash rows (SF-1, P3-5 review). Skip a replayed message whose
+  // uuid is already retained — the transcript projector dedupes the same way
+  // (its seenFrameIds). Live (non-replay) frames are never deduped: this is
+  // the raw debug view and must show what actually arrived.
+  if (frame.replay === true) {
+    const uuid = messageUuid(frame.event.message)
+    if (uuid !== null && session.messages.some(m => messageUuid(m) === uuid)) {
+      return state
+    }
+  }
+
   const messageBytes = serializedUtf8Bytes(frame.event.message)
   let messages = [...session.messages, frame.event.message]
   let sizes = [...session.messageBytes, messageBytes]
@@ -133,4 +147,10 @@ function updateSession(
 
 function serializedUtf8Bytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
+}
+
+/** The message's engine uuid, or null when absent/empty (then never deduped). */
+function messageUuid(message: SDKMessage): string | null {
+  const uuid = (message as { uuid?: unknown }).uuid
+  return typeof uuid === 'string' && uuid.length > 0 ? uuid : null
 }

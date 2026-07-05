@@ -110,9 +110,14 @@ export class Host implements HostApi {
   private spawnTimes: number[] = []
 
   /**
-   * appSessionIds currently gracefully closing. `killSession` fires an async
-   * `exit` event; without this we would emit `session-status(exited)` for a row
-   * we already reported as `session-removed`/clean.
+   * appSessionIds currently gracefully closing (or having a crash tombstone
+   * cleared for restore). NOTE the real supervisor emits NO exit event after
+   * `killSession` — it deregisters first, and the F11 identity guard drops the
+   * child's late exit (supervisor.ts:262 after registry.delete) — so in
+   * production this set suppresses nothing today. It is defense-in-depth for
+   * any future exit path that fires during a close, and it suppresses the
+   * synthetic exit the test FakeSupervisor's killSession emits; without it a
+   * host-asked kill could be mis-marked as a crash (F3).
    */
   private readonly closing = new Set<SessionId>()
 
@@ -326,9 +331,19 @@ export class Host implements HostApi {
     } catch (error) {
       // Spawn threw synchronously (e.g. socket-path overflow, duplicate id). The
       // row we just wrote is now dead — mark it clean so it does not masquerade
-      // as a live crash on the next sweep, and report spawn_failed.
+      // as a live crash on the next sweep, and report spawn_failed. A fresh
+      // create's row (engineSessionId null) is neither a tab nor an offer —
+      // remove it; a RESTORE's row still holds its engineSessionId and remains
+      // a valid restore-offer — a session-removed would hide it until relaunch
+      // (the renderer pins removed ids), so re-emit its (exited, restorable)
+      // status instead (SF-2, P3-5 review).
       await this.registry.markClean(appSessionId)
-      this.emitRemoved(appSessionId)
+      const row = this.registry.findSession(appSessionId)
+      if (row && row.engineSessionId !== null) {
+        this.emitStatus(appSessionId)
+      } else {
+        this.emitRemoved(appSessionId)
+      }
       return hostError(
         'spawn_failed',
         `could not spawn session: ${errText(error)}`,
