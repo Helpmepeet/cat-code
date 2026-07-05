@@ -362,6 +362,16 @@ export class SessionRegistry {
     return existsSync(this.transcriptPathFor(row.cwd, row.engineSessionId))
   }
 
+  /**
+   * True when the row's advisory pid/socket still identify a live sidecar. Used
+   * before restore so a fresh sidecar never resumes the same transcript while an
+   * old writer is still plausibly alive.
+   */
+  hasLiveAdvisorySidecar(appSessionId: string): boolean {
+    const row = this.find(appSessionId)
+    return row ? this.matchesSidecarIdentity(row) : false
+  }
+
   /* --------------------------------------------------------------------- *
    * §4 — launch sequence (read+validate → sweep → reap → restore data)
    * --------------------------------------------------------------------- */
@@ -439,14 +449,15 @@ export class SessionRegistry {
    *  - alive AND identity matches (§9-A3) → orphaned sidecar → v1 policy KILL
    *    (SIGTERM, D6 §2).
    *  - dead, recycled pid, or identity mismatch → nothing to kill.
-   * Either way the row becomes `crashed`. Best-effort unlink of stale socketPath.
+   * Either way the row becomes `crashed`. Advisory pid/socket hints are retained
+   * so `restoreSession` can refuse while a prior writer still matches identity.
    */
   private sweepOrphans(): void {
     for (const row of this.doc.sessions) {
       if (row.shutdown !== null) continue
 
       const pid = row.enginePid
-      if (typeof pid === 'number' && this.shouldKillOrphan(pid, row)) {
+      if (typeof pid === 'number' && this.matchesSidecarIdentity(row)) {
         try {
           this.killProcess(pid)
           this.log(`[registry] swept orphaned sidecar pid=${pid} (session ${row.appSessionId})`)
@@ -456,10 +467,6 @@ export class SessionRegistry {
       }
 
       row.shutdown = 'crashed'
-      // Advisory runtime fields are stale now; drop them so no reader trusts them.
-      this.unlinkStaleSocket(row.socketPath)
-      row.socketPath = undefined
-      row.enginePid = undefined
     }
   }
 
@@ -471,7 +478,9 @@ export class SessionRegistry {
    * `concurrentSessions.ts:192`, which only probes liveness because it never
    * kills).
    */
-  private shouldKillOrphan(pid: number, row: RegistrySession): boolean {
+  private matchesSidecarIdentity(row: RegistrySession): boolean {
+    const pid = row.enginePid
+    if (typeof pid !== 'number') return false
     if (!this.isProcessAlive(pid)) return false
     // Identity signal 1: the row's socket file still exists.
     if (!row.socketPath || !existsSync(row.socketPath)) return false
@@ -481,15 +490,6 @@ export class SessionRegistry {
     const cmd = this.processCommand(pid)
     if (!cmd || !cmd.includes(this.sidecarCommandMarker)) return false
     return true
-  }
-
-  private unlinkStaleSocket(socketPath: string | undefined): void {
-    if (!socketPath) return
-    try {
-      if (existsSync(socketPath)) unlinkSync(socketPath)
-    } catch {
-      // best-effort
-    }
   }
 
   /**
@@ -669,7 +669,7 @@ export class SessionRegistry {
    * crash a crash. Only transitions rows with `shutdown === null` — a row that
    * is already terminal (clean close, quit-time `markLiveCleanSync`) keeps its
    * state, so the shutdownAll ordering (mark clean, THEN kill) stays correct.
-   * Advisory runtime fields are cleared because the process is gone.
+   * Advisory runtime fields are retained for restore-time prior-writer checks.
    */
   async markCrashed(appSessionId: string): Promise<void> {
     const row = this.find(appSessionId)
@@ -679,15 +679,13 @@ export class SessionRegistry {
     }
     if (row.shutdown !== null) return
     row.shutdown = 'crashed'
-    row.enginePid = undefined
-    row.socketPath = undefined
     await this.persist()
   }
 
   /**
    * Mark `shutdown: "clean"` on graceful close (§4.5, inside killSession/
-   * shutdown). The row is KEPT (restorable); advisory runtime fields are
-   * cleared because the process is gone.
+   * shutdown). The row is KEPT (restorable); advisory runtime fields are retained
+   * so restore can refuse if the old writer did not actually die.
    */
   async markClean(appSessionId: string): Promise<void> {
     const row = this.find(appSessionId)
@@ -696,8 +694,6 @@ export class SessionRegistry {
       return
     }
     row.shutdown = 'clean'
-    row.enginePid = undefined
-    row.socketPath = undefined
     await this.persist()
   }
 
@@ -707,8 +703,9 @@ export class SessionRegistry {
 
   /**
    * SYNCHRONOUS clean-marking for the exit path (B3 / die-with-window). Marks
-   * every currently-live row (`shutdown == null`) clean, clears advisory fields,
-   * and writes ONCE atomically — bypassing the async advisory lock because this
+   * every currently-live row (`shutdown == null`) clean, retaining advisory fields
+   * for restore-time prior-writer checks, and writes ONCE atomically — bypassing
+   * the async advisory lock because this
    * runs on `window-all-closed`/`before-quit`, where (a) we hold the OS
    * single-instance lock so we are the only writer, and (b) the process may exit
    * before an async persist could settle. A write failure is swallowed (the row
@@ -720,8 +717,6 @@ export class SessionRegistry {
     for (const row of this.doc.sessions) {
       if (row.shutdown !== null) continue
       row.shutdown = 'clean'
-      row.enginePid = undefined
-      row.socketPath = undefined
       marked.push(row.appSessionId)
     }
     if (marked.length === 0) return marked

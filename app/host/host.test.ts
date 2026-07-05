@@ -90,13 +90,22 @@ class FakeSupervisor {
     this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
   }
 
-  restartSession(sessionId: SessionId): void {
+  restartSession(
+    sessionId: SessionId,
+    config?: { cwd: string; resumeEngineSessionId?: string },
+  ): void {
     const record = this.records.get(sessionId)
     if (!record) throw new Error('no such session')
     // Fresh child = new pid + socketPath (what SF5 must re-record).
     record.pid = ++this.pidSeq
     record.socketPath = `/tmp/fake/s${this.sockSeq++}.sock`
     record.status = 'spawning'
+    record.cwd = config?.cwd ?? record.cwd
+    if (config?.resumeEngineSessionId !== undefined) {
+      record.resumeEngineSessionId = config.resumeEngineSessionId
+    } else {
+      delete record.resumeEngineSessionId
+    }
   }
 
   shutdown(): void {
@@ -534,6 +543,50 @@ test('restoreSession refuses an already-live session', async () => {
   if (!result.ok) expect(result.error.code).toBe('session_not_found')
 })
 
+test('restoreSession refuses when advisory pid/socket still identify a live prior sidecar', async () => {
+  const storageDir = tempDir()
+  const cwd = join(storageDir, 'project')
+  mkdirSync(cwd, { recursive: true })
+  const socketPath = join(storageDir, 'prior.sock')
+  writeFileSync(socketPath, '')
+  const marker = 'catcode-prior-sidecar'
+  const priorPid = 4242
+  const registry = new SessionRegistry({
+    storageDir,
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+    isProcessAlive: pid => pid === priorPid,
+    processCommand: pid => (pid === priorPid ? `/bin/bun ${marker}` : null),
+    sidecarCommandMarker: marker,
+  })
+  const supervisor = new FakeSupervisor()
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (candidate: string): CwdValidation =>
+      candidate === cwd ? { ok: true, realpath: candidate } : { ok: false },
+  })
+  const appSessionId = randomUUID()
+  writeTranscript(storageDir, 'engine-prior')
+  await registry.upsertOnSpawn({
+    appSessionId,
+    cwd,
+    enginePid: priorPid,
+    socketPath,
+  })
+  await registry.fillEngineSessionId(appSessionId, 'engine-prior')
+  await registry.markClean(appSessionId)
+
+  const result = await host.restoreSession(appSessionId)
+
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect(result.error.code).toBe('session_not_found')
+    expect(result.error.message).toContain('prior sidecar')
+  }
+  expect(supervisor.records.has(appSessionId)).toBe(false)
+})
+
 /* ------------------------------------------------------------------------- *
  * closeSession — evicts replay + marks the row clean + restorable
  * ------------------------------------------------------------------------- */
@@ -555,17 +608,39 @@ test('closeSession evicts replay, marks the row clean, keeps it restorable', asy
   expect(h.evicted).toContain(appSessionId)
   // Sidecar killed.
   expect(h.supervisor.records.has(appSessionId)).toBe(false)
-  // Row KEPT + marked clean + advisory fields cleared.
+  // Row KEPT + marked clean + advisory fields retained for restore-time
+  // prior-writer checks.
   const row = h.registry.findSession(appSessionId)
   expect(row).toBeDefined()
   expect(row?.shutdown).toBe('clean')
-  expect(row?.enginePid).toBeUndefined()
-  expect(row?.socketPath).toBeUndefined()
+  expect(row?.enginePid).toBe(10001)
+  expect(row?.socketPath).toBe('/tmp/fake/s0.sock')
   // Still restorable (transcript present, engineSessionId set).
   expect(row?.engineSessionId).toBe('engine-close')
   const listed = h.host.listSessions().find(s => s.appSessionId === appSessionId)
   expect(listed?.restorable).toBe(true)
   expect(listed?.status).toBe('exited')
+})
+
+test('closeSession removes a pre-ready row instead of emitting an uncloseable exited tab', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+
+  h.events.length = 0
+  const result = await h.host.closeSession(appSessionId)
+  expect(result.ok).toBe(true)
+
+  expect(h.supervisor.records.has(appSessionId)).toBe(false)
+  expect(h.host.listSessions().some(s => s.appSessionId === appSessionId)).toBe(false)
+  expect(
+    h.events.some(e => e.type === 'session-removed' && e.appSessionId === appSessionId),
+  ).toBe(true)
+  expect(
+    h.events.some(e => e.type === 'session-status' && e.session.appSessionId === appSessionId),
+  ).toBe(false)
 })
 
 /* ------------------------------------------------------------------------- *
@@ -851,6 +926,31 @@ test('restartSession refreshes the row pid + socketPath from the fresh child', a
   expect(h.evicted).toContain(appSessionId)
 })
 
+test('restartSession resumes the current engineSessionId instead of minting blank context', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-restart-context')
+  await settle(
+    () =>
+      h.registry.findSession(appSessionId)?.engineSessionId ===
+      'engine-restart-context',
+  )
+  writeTranscript(h.storageDir, 'engine-restart-context')
+
+  const result = await h.host.restartSession(appSessionId)
+  expect(result.ok).toBe(true)
+
+  expect(h.supervisor.records.get(appSessionId)?.resumeEngineSessionId).toBe(
+    'engine-restart-context',
+  )
+  expect(h.registry.findSession(appSessionId)?.engineSessionId).toBe(
+    'engine-restart-context',
+  )
+})
+
 test('restartSession rejects an unknown/non-live id (session_not_found)', async () => {
   const h = makeHost()
   const result = await h.host.restartSession(randomUUID())
@@ -952,7 +1052,7 @@ test('F3: a mid-run sidecar crash marks the row crashed, and a later quit does N
   h.supervisor.emitCrash(id)
   await settle(() => h.registry.findSession(id)?.shutdown === 'crashed')
   expect(h.registry.findSession(id)?.shutdown).toBe('crashed')
-  expect(h.registry.findSession(id)?.enginePid).toBeUndefined()
+  expect(h.registry.findSession(id)?.enginePid).toBe(10001)
 
   // Quit after the crash: markLiveCleanSync must not relabel the crash.
   h.host.shutdownAll()

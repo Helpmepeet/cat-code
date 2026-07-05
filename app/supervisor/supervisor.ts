@@ -325,13 +325,13 @@ export class SidecarSupervisor {
   }
 
   /** Restart a session's sidecar in place (fresh process = fresh STATE singleton). */
-  restartSession(sessionId: SessionId): void {
+  restartSession(sessionId: SessionId, configOverride?: SpawnConfig): void {
     const record = this.registry.get(sessionId)
     if (!record) {
       throw new Error(`session ${sessionId} does not exist`)
     }
     const restartCount = record.restartCount + 1
-    const config = record.config
+    const config = configOverride ?? record.config
     this.killSession(sessionId)
     // Re-apply the same spawn config so the fresh process re-roots in the same
     // cwd and re-resumes the same engine session.

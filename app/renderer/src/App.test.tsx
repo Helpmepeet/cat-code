@@ -5,6 +5,8 @@ import {
   ConnectionRecovery,
   SessionPane,
   buildDebugExport,
+  reducePromptDrafts,
+  selectPromptDraft,
   sendPermissionResponse,
 } from './App.js'
 import { createTranscriptState } from './transcriptProjector.js'
@@ -119,4 +121,13 @@ test('permission bridge failures are returned to the caller for reducer recovery
   )
 
   expect(error).toBe('renderer IPC rate limit exceeded')
+})
+
+test('prompt drafts are isolated by active session id', () => {
+  let drafts = reducePromptDrafts({}, 'session-a', 'draft for A')
+  drafts = reducePromptDrafts(drafts, 'session-b', 'draft for B')
+
+  expect(selectPromptDraft(drafts, 'session-a')).toBe('draft for A')
+  expect(selectPromptDraft(drafts, 'session-b')).toBe('draft for B')
+  expect(selectPromptDraft(drafts, null)).toBe('')
 })

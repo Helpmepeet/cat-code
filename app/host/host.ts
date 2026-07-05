@@ -257,6 +257,12 @@ export class Host implements HostApi {
         `transcript for ${appSessionId} is gone`,
       )
     }
+    if (this.registry.hasLiveAdvisorySidecar(appSessionId)) {
+      return hostError(
+        'session_not_found',
+        `prior sidecar for ${appSessionId} is still running`,
+      )
+    }
     // Only a genuinely running process refuses a restore. A terminal supervisor
     // record ('exited'/'failed') is a dead sidecar's tombstone — kept so the
     // tab's restart-in-place works — and is exactly the crashed restore-offer
@@ -394,11 +400,16 @@ export class Host implements HostApi {
     this.surfaceRegistryHealth(appSessionId)
     this.closing.delete(appSessionId)
 
-    // The row still exists (restorable) but is no longer live — the session left
-    // the "live" half of the union, so the list projection must drop the live
-    // entry and pick up the restorable one. A single session-status carries the
-    // new (exited, restorable) descriptor.
-    this.emitStatus(appSessionId)
+    const row = this.registry.findSession(appSessionId)
+    if (row?.engineSessionId === null) {
+      this.emitRemoved(appSessionId)
+    } else {
+      // The row still exists (restorable) but is no longer live — the session left
+      // the "live" half of the union, so the list projection must drop the live
+      // entry and pick up the restorable one. A single session-status carries the
+      // new (exited, restorable) descriptor.
+      this.emitStatus(appSessionId)
+    }
     return { ok: true, value: undefined }
   }
 
@@ -441,16 +452,24 @@ export class Host implements HostApi {
     if (!this.isLive(appSessionId)) {
       return hostError('session_not_found', `session ${appSessionId} is not live`)
     }
+    const row = this.registry.findSession(appSessionId)
+    if (!row) {
+      return hostError('session_not_found', `session ${appSessionId} has no registry row`)
+    }
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
-    this.supervisor.restartSession(appSessionId)
+    this.supervisor.restartSession(appSessionId, {
+      cwd: row.cwd,
+      ...(row.engineSessionId !== null
+        ? { resumeEngineSessionId: row.engineSessionId }
+        : {}),
+    })
     // Refresh advisory fields from the fresh child (new pid + socketPath). The
     // row stays live; upsertOnSpawn bumps restartCount and rewrites the hints.
-    const row = this.registry.findSession(appSessionId)
     await this.registry.upsertOnSpawn({
       appSessionId,
-      cwd: row?.cwd ?? '',
-      ...(row?.title !== undefined ? { title: row.title } : {}),
+      cwd: row.cwd,
+      ...(row.title !== undefined ? { title: row.title } : {}),
       enginePid: this.supervisor.getSessionProcessId(appSessionId),
       socketPath: this.supervisor.getSessionSocketPath(appSessionId),
     })

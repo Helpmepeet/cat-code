@@ -217,13 +217,14 @@ test('sweep KILLS a real orphaned process when pid AND identity both match', asy
 
   // Killed exactly this pid (identity matched: alive + socket exists + cmdline marker).
   expect(killed).toEqual([pid])
-  // Row is now flagged crashed and offered for restore, advisory fields cleared.
+  // Row is now flagged crashed and offered for restore, but the advisory identity
+  // hints are retained so restore can refuse while the old writer is still alive.
   const row = restorable.find(r => r.appSessionId === 'app-live')!
   expect(row.shutdown).toBe('crashed')
-  expect(row.enginePid).toBeUndefined()
-  expect(row.socketPath).toBeUndefined()
-  // Stale socket file was unlinked.
-  expect(existsSync(socketPath)).toBe(false)
+  expect(row.enginePid).toBe(pid)
+  expect(row.socketPath).toBe(socketPath)
+  expect(existsSync(socketPath)).toBe(true)
+  expect(registry.hasLiveAdvisorySidecar('app-live')).toBe(true)
 })
 
 test('sweep SPARES a recycled-pid impostor (pid alive but identity mismatch)', async () => {
@@ -566,7 +567,7 @@ test('setTitle and touchAttached update only their fields', async () => {
   expect(row.lastAttachedAt).toBeGreaterThanOrEqual(before)
 })
 
-test('markClean sets shutdown clean, clears advisory fields, keeps the row', async () => {
+test('markClean sets shutdown clean, keeps advisory fields and the row', async () => {
   const { registry, registryPath } = makeRegistry()
   await registry.upsertOnSpawn({
     appSessionId: 'app-1',
@@ -579,8 +580,8 @@ test('markClean sets shutdown clean, clears advisory fields, keeps the row', asy
 
   const row = readDoc(registryPath).sessions[0]!
   expect(row.shutdown).toBe('clean')
-  expect(row.enginePid).toBeUndefined()
-  expect(row.socketPath).toBeUndefined()
+  expect(row.enginePid).toBe(111)
+  expect(row.socketPath).toBe('/s0')
   expect(row.engineSessionId).toBe('engine-1') // durable field preserved
 })
 
@@ -713,7 +714,7 @@ test('F4: setAdvisoryRuntime refreshes pid/socketPath WITHOUT bumping restartCou
   expect(row.shutdown).toBeNull()
 })
 
-test('F3: markCrashed flips a LIVE row to crashed + clears advisory fields, but never relabels a terminal row', async () => {
+test('F3: markCrashed flips a LIVE row to crashed + retains advisory fields, but never relabels a terminal row', async () => {
   const { registry, registryPath } = makeRegistry()
   await registry.upsertOnSpawn({ appSessionId: 'app-live', cwd: '/a', enginePid: 1, socketPath: '/s0' })
   await registry.upsertOnSpawn({ appSessionId: 'app-closed', cwd: '/a' })
@@ -726,8 +727,8 @@ test('F3: markCrashed flips a LIVE row to crashed + clears advisory fields, but 
   const live = doc.sessions.find(r => r.appSessionId === 'app-live')!
   const closed = doc.sessions.find(r => r.appSessionId === 'app-closed')!
   expect(live.shutdown).toBe('crashed')
-  expect(live.enginePid).toBeUndefined()
-  expect(live.socketPath).toBeUndefined()
+  expect(live.enginePid).toBe(1)
+  expect(live.socketPath).toBe('/s0')
   expect(closed.shutdown).toBe('clean')
 })
 

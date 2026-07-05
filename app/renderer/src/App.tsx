@@ -82,7 +82,7 @@ export function App() {
     undefined,
     createPermissionState,
   )
-  const [prompt, setPrompt] = useState('')
+  const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>({})
   const [transportError, setTransportError] = useState<string | null>(null)
   const [shellError, setShellError] = useState<string | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
@@ -209,6 +209,7 @@ export function App() {
   const activeLog = selectRawMessageLog(state, activeSessionId)
   const transcriptRows = selectTranscriptRows(transcript, activeSessionId)
   const activeConnection = selectConnection(connection, activeSessionId)
+  const prompt = selectPromptDraft(promptDrafts, activeSessionId)
 
   // Build one tab model per live session, fusing the host descriptor with the
   // per-session connection view + pending-permission count (the background
@@ -341,12 +342,16 @@ export function App() {
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
       getBridge().submit(activeSessionId, text)
-      setPrompt('')
+      setPromptDrafts(drafts => reducePromptDrafts(drafts, activeSessionId, ''))
       setTransportError(null)
     } catch (error) {
       setTransportError(errorMessage(error))
     }
   }
+
+  const setPrompt = useCallback((value: string) => {
+    setPromptDrafts(drafts => reducePromptDrafts(drafts, activeSessionId, value))
+  }, [activeSessionId])
 
   const permissionQueue =
     activeConnection.status === 'ready'
@@ -774,6 +779,32 @@ export function sendPermissionResponse(
   } catch (error) {
     return errorMessage(error)
   }
+}
+
+export type PromptDraftState = Record<SessionId, string>
+
+export function selectPromptDraft(
+  drafts: PromptDraftState,
+  sessionId: SessionId | null,
+): string {
+  if (!sessionId) return ''
+  return drafts[sessionId] ?? ''
+}
+
+export function reducePromptDrafts(
+  drafts: PromptDraftState,
+  sessionId: SessionId | null,
+  value: string,
+): PromptDraftState {
+  if (!sessionId) return drafts
+  if (value.length === 0) {
+    if (!(sessionId in drafts)) return drafts
+    const next = { ...drafts }
+    delete next[sessionId]
+    return next
+  }
+  if (drafts[sessionId] === value) return drafts
+  return { ...drafts, [sessionId]: value }
 }
 
 function errorMessage(error: unknown): string {
