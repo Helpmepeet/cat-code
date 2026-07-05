@@ -114,6 +114,26 @@ registry row, then compare `enginePid` before/after restore or crash-sweep. The
 runtime fields (`enginePid`, `socketPath`) are advisory and must be checked
 against live processes/files before acting on them.
 
+## Model/Effort/Account For Migration Testing
+
+Temporary, for the duration of the migration effort only — revert to normal
+model/effort/account selection once all phases in `docs/migration/STATUS.md`
+are ✅. Dev/testing turns (GUI verification runs and other migration dev-loop
+testing) don't use the model's actual output — they only need a tool-call or
+permission-prompt turn to fire so the surrounding app behavior can be
+observed. Defaulting to a frontier model at high effort for that wastes real
+usage/quota for no benefit.
+
+- **Model:** GPT-5.4 Mini (`gpt-5.4-mini`), selected via `/model`.
+- **Effort:** low, via `/effort low`.
+- **Account:** whichever Codex account is currently healthy — do not hardcode
+  a specific account as policy. Check `/accounts` first; if the pool's active
+  account is dead/capped, use `/switch-account <alias>` once to move onto a
+  healthy one (a no-arg `/switch-account` only rotates among already-healthy
+  accounts, so it won't help if the active slot itself is stuck on a dead
+  one). Once more accounts are healthy again, let the pool rotate normally —
+  don't keep pinning to whichever account you picked here.
+
 ## Honesty Rules
 
 1. **The debug export may LOCATE and CROSS-CHECK, never substitute.** Every 🖐 acceptance claim must still cite an AX-observed label from the live window. Otherwise GUI rows stop testing rendering (reverse-Potemkin).
