@@ -256,6 +256,16 @@ type TranscriptSessionState = {
    * place tool status lives — never written onto a `ToolUseRow` in `rows`.
    */
   toolResultsByUseId: Record<string, ToolResultProjection>
+  /**
+   * P3-7 slash catalog: the user-invocable command names carried by the
+   * `system/init` frame's `slash_commands` field (engine-side, built from the
+   * session's real command list — `systemInit.ts:69`, already filtered to
+   * `userInvocable !== false`). Session metadata, NOT a transcript row, so it
+   * lives beside `toolResultsByUseId` and is read via `selectSlashCommands`.
+   * Re-emitted on every turn's init frame, so it stays fresh; `[]` until the
+   * first init frame arrives (or if the sidecar's catalog degraded to empty).
+   */
+  slashCommands: string[]
 }
 
 export type TranscriptState = {
@@ -271,6 +281,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     nextBlockIndexByMessageId: {},
     seenFrameIds: {},
     toolResultsByUseId: {},
+    slashCommands: [],
   }
 }
 
@@ -300,6 +311,21 @@ export function selectTranscriptRows(
     if (row.status === status && row.result === result) return row
     return { ...row, status, result }
   })
+}
+
+/**
+ * P3-7 SlashCommandPicker source: the active session's user-invocable command
+ * names, captured from the `system/init` frame's `slash_commands` field. `[]`
+ * before the first init frame or when the sidecar's catalog degraded to empty.
+ * Read-only projection — the picker only ever inserts `/name` text into the
+ * composer; command parsing/execution stays engine-side (T2/§2 posture).
+ */
+export function selectSlashCommands(
+  state: TranscriptState,
+  sessionId: SessionId | null,
+): string[] {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  return session?.slashCommands ?? []
 }
 
 /**
@@ -674,7 +700,12 @@ function projectSystemFrame(
       const tools = stringArray(message.tools)
       const permissionMode = nonEmptyString(message.permissionMode)
       if (!cwd || !model || !tools || !permissionMode) return state
-      return appendFrameRows(state, frameId, [
+      // The slash catalog rides the SAME init frame (no new wire vocabulary):
+      // `slash_commands` is the user-invocable command names the sidecar's real
+      // catalog produced (P3-7). Tolerate its absence — a session whose sidecar
+      // catalog degraded to `[]` still projects a valid session-init row.
+      const slashCommands = stringArray(message.slash_commands) ?? []
+      const next = appendFrameRows(state, frameId, [
         {
           id: frameRowId(sessionId, frameId, 'session-init'),
           sessionId,
@@ -686,6 +717,10 @@ function projectSystemFrame(
           permissionMode,
         },
       ])
+      // Store the catalog as session metadata (read by the SlashCommandPicker),
+      // separate from the row list. `appendFrameRows` returns a fresh state when
+      // the row lands, so this write never mutates the prior snapshot.
+      return next === state ? state : { ...next, slashCommands }
     }
 
     case 'compact_boundary': {

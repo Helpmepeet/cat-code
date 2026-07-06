@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
@@ -31,9 +32,11 @@ import {
   type ShellState,
 } from './shellState.js'
 import { deriveTabVisualState } from './tabStatus.js'
-import { TabBar, type TabModel } from './TabBar.js'
+import { TabBar, tabLabel, type TabModel } from './TabBar.js'
 import { Sidebar } from './Sidebar.js'
 import { selectSidebarRows } from './sidebarState.js'
+import { CommandPalette } from './CommandPalette.js'
+import { buildPaletteItems, type PaletteItem } from './commandPaletteModel.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -43,11 +46,38 @@ import {
 import {
   createTranscriptState,
   projectServerFrame,
+  selectSlashCommands,
   selectTranscriptRows,
   type TranscriptRow,
   type TranscriptState,
 } from './transcriptProjector.js'
 import { TranscriptView } from './TranscriptView.js'
+import {
+  completeSlashDraft,
+  filterSlashCommands,
+  nextSlashIndex,
+  parseSlashDraft,
+  SlashCommandPicker,
+} from './SlashCommandPicker.js'
+import {
+  WorkspaceLayout,
+  type WorkspacePanelView,
+} from './WorkspacePanels.js'
+import {
+  assignWorkspacePanelSession,
+  closeWorkspacePanel,
+  createWorkspaceLayout,
+  focusOrAssignWorkspaceSession,
+  focusWorkspacePanel,
+  readWorkspaceLayoutFromStorage,
+  reconcileWorkspaceLayout,
+  setWorkspaceWidths,
+  splitWorkspacePanel,
+  workspaceLayoutsEqual,
+  writeWorkspaceLayoutToStorage,
+  type WorkspaceLayoutState,
+  type WorkspaceSplitEdge,
+} from './workspaceLayout.js'
 import {
   createConnectionState,
   reduceConnectionState,
@@ -85,7 +115,16 @@ export function App() {
   const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>({})
   const [transportError, setTransportError] = useState<string | null>(null)
   const [shellError, setShellError] = useState<string | null>(null)
+  const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
+  const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
+  const [workspaceLayout, setWorkspaceLayoutState] =
+    useState<WorkspaceLayoutState>(
+      () =>
+        readWorkspaceLayoutFromStorage(getWorkspaceStorage()) ??
+        createWorkspaceLayout(null),
+    )
   const [connection, dispatchConnection] = useReducer(
     reduceConnectionState,
     undefined,
@@ -179,6 +218,9 @@ export function App() {
       .catch(() => {
         /* a failed initial list degrades to a live-only roster */
       })
+      .finally(() => {
+        if (!cancelled) setHostSnapshotReady(true)
+      })
     return () => {
       cancelled = true
       unsubscribe()
@@ -206,10 +248,7 @@ export function App() {
     })
   }, [shell])
 
-  const activeLog = selectRawMessageLog(state, activeSessionId)
-  const transcriptRows = selectTranscriptRows(transcript, activeSessionId)
   const activeConnection = selectConnection(connection, activeSessionId)
-  const prompt = selectPromptDraft(promptDrafts, activeSessionId)
 
   // Build one tab model per live session, fusing the host descriptor with the
   // per-session connection view + pending-permission count (the background
@@ -231,12 +270,41 @@ export function App() {
       })),
     [shell, connection, permissions, activeSessionId],
   )
+  const liveSessionIds = useMemo(
+    () => tabs.map(tab => tab.descriptor.appSessionId),
+    [tabs],
+  )
+  const liveSessionKey = liveSessionIds.join('\u0000')
+  const tabDescriptorsById = useMemo(
+    () =>
+      new Map(
+        tabs.map(tab => [tab.descriptor.appSessionId, tab.descriptor] as const),
+      ),
+    [tabs],
+  )
 
   // The Sidebar's own projection of the SAME roster (live ∪ restorable),
   // ordered by recency — not a second data source, and not a poll loop: it
   // reads the HostEvent-driven `shell` state the TabBar reads (App seeded it
   // once from listSessions, then keeps it live off subscribeHost).
   const sidebarRows = useMemo(() => selectSidebarRows(shell), [shell])
+
+  useEffect(() => {
+    if (!hostSnapshotReady && liveSessionIds.length === 0) return
+    setWorkspaceLayoutState(current => {
+      const next = reconcileWorkspaceLayout(
+        current,
+        liveSessionIds,
+        activeSessionId,
+      )
+      return workspaceLayoutsEqual(current, next) ? current : next
+    })
+  }, [activeSessionId, hostSnapshotReady, liveSessionIds, liveSessionKey])
+
+  useEffect(() => {
+    if (!hostSnapshotReady) return
+    writeWorkspaceLayoutToStorage(getWorkspaceStorage(), workspaceLayout)
+  }, [hostSnapshotReady, workspaceLayout])
 
   const newSession = useCallback(async () => {
     const bridge = getBridge()
@@ -276,7 +344,72 @@ export function App() {
   const selectTab = useCallback((sessionId: SessionId) => {
     // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
     // in-flight streaming into a background session is lost on switch.
+    const result = focusOrAssignWorkspaceSession(workspaceLayout, sessionId)
+    setWorkspaceLayoutState(result.state)
+    setLayoutNotice(null)
     setActiveSessionId(sessionId)
+  }, [workspaceLayout])
+
+  const focusWorkspacePanelSession = useCallback(
+    (index: number, sessionId: SessionId) => {
+      setWorkspaceLayoutState(current => focusWorkspacePanel(current, index))
+      setActiveSessionId(sessionId)
+    },
+    [],
+  )
+
+  const selectWorkspacePanelSession = useCallback(
+    (index: number, sessionId: SessionId) => {
+      const result = assignWorkspacePanelSession(
+        workspaceLayout,
+        index,
+        sessionId,
+      )
+      setWorkspaceLayoutState(result.state)
+      setActiveSessionId(
+        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
+      )
+      setLayoutNotice(
+        result.blocked === 'duplicate'
+          ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
+          : null,
+      )
+    },
+    [tabDescriptorsById, workspaceLayout],
+  )
+
+  const splitWorkspacePanelWithSession = useCallback(
+    (index: number, edge: WorkspaceSplitEdge, sessionId: SessionId) => {
+      const result = splitWorkspacePanel(workspaceLayout, index, edge, sessionId)
+      setWorkspaceLayoutState(result.state)
+      setActiveSessionId(
+        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
+      )
+      setLayoutNotice(
+        result.blocked === 'duplicate'
+          ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
+          : result.blocked === 'max-panels'
+            ? 'Workspace layout supports up to three panels.'
+            : null,
+      )
+    },
+    [tabDescriptorsById, workspaceLayout],
+  )
+
+  const closeWorkspacePanelAt = useCallback(
+    (index: number) => {
+      const next = closeWorkspacePanel(workspaceLayout, index)
+      setWorkspaceLayoutState(next)
+      setActiveSessionId(
+        next.panels[next.activeIndex]?.sessionId ?? activeSessionId,
+      )
+      setLayoutNotice(null)
+    },
+    [activeSessionId, workspaceLayout],
+  )
+
+  const updateWorkspaceWidths = useCallback((widths: number[]) => {
+    setWorkspaceLayoutState(current => setWorkspaceWidths(current, widths))
   }, [])
 
   const closeTab = useCallback(async (sessionId: SessionId) => {
@@ -327,13 +460,18 @@ export function App() {
     }
   }, [])
 
-  function submit(event: FormEvent<HTMLFormElement>): void {
+  function submitSession(
+    sessionId: SessionId,
+    event: FormEvent<HTMLFormElement>,
+  ): void {
     event.preventDefault()
-    const text = prompt.trim()
+    const sessionLog = selectRawMessageLog(state, sessionId)
+    const sessionConnection = selectConnection(connection, sessionId)
+    const sessionPrompt = selectPromptDraft(promptDrafts, sessionId)
+    const text = sessionPrompt.trim()
     if (
-      !activeSessionId ||
-      !activeLog.inputEnabled ||
-      !activeConnection.inputEnabled ||
+      !sessionLog.inputEnabled ||
+      !sessionConnection.inputEnabled ||
       text.length === 0
     ) return
 
@@ -341,26 +479,22 @@ export function App() {
     // goalSnapshot unless the renderer actually owns one; if added later, the
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
-      getBridge().submit(activeSessionId, text)
-      setPromptDrafts(drafts => reducePromptDrafts(drafts, activeSessionId, ''))
+      getBridge().submit(sessionId, text)
+      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
       setTransportError(null)
     } catch (error) {
       setTransportError(errorMessage(error))
     }
   }
 
-  const setPrompt = useCallback((value: string) => {
-    setPromptDrafts(drafts => reducePromptDrafts(drafts, activeSessionId, value))
-  }, [activeSessionId])
+  const setSessionPrompt = useCallback((sessionId: SessionId, value: string) => {
+    setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
+  }, [])
 
   const permissionQueue =
     activeConnection.status === 'ready'
       ? selectPermissionQueue(permissions, activeSessionId)
       : []
-  const permissionContext = selectPermissionContext(
-    permissions,
-    activeSessionId,
-  )
   // The card the keyboard shortcuts act on: first un-answered, un-snoozed.
   const pendingPermission =
     activeConnection.status === 'ready'
@@ -368,9 +502,11 @@ export function App() {
       : null
 
   const respondToPermission = useCallback(
-    (requestId: string, response: PermissionResponseInput) => {
-      const sessionId = activeSessionId
-      if (!sessionId) return
+    (
+      sessionId: SessionId,
+      requestId: string,
+      response: PermissionResponseInput,
+    ) => {
       dispatchPermission({ type: 'submitted', sessionId, requestId })
       const error = sendPermissionResponse(
         getBridge(),
@@ -385,55 +521,32 @@ export function App() {
         setTransportError(null)
       }
     },
-    [activeSessionId],
+    [],
   )
 
   const allowPermission = useCallback(
     (requestId: string, applySuggestions: number[] = []) => {
+      const sessionId = activeSessionId
+      if (!sessionId) return
       const item = permissionQueue.find(
         candidate => candidate.request.requestId === requestId,
       )
       if (!item) return
       respondToPermission(
+        sessionId,
         requestId,
         buildAllowResponse(item.request, applySuggestions),
       )
     },
-    [permissionQueue, respondToPermission],
+    [activeSessionId, permissionQueue, respondToPermission],
   )
 
   const denyPermission = useCallback(
     (requestId: string, message?: string) => {
-      respondToPermission(requestId, buildDenyResponse(message))
-    },
-    [respondToPermission],
-  )
-
-  const restorePermission = useCallback(
-    (requestId: string) => {
       if (!activeSessionId) return
-      dispatchPermission({
-        type: 'restored',
-        sessionId: activeSessionId,
-        requestId,
-      })
+      respondToPermission(activeSessionId, requestId, buildDenyResponse(message))
     },
-    [activeSessionId],
-  )
-
-  const setPermissionMode = useCallback(
-    (mode: PermissionSetModeMode) => {
-      if (!activeSessionId) return
-      // C2 — session-scoped mode switch; the sidecar validates the mode and
-      // answers with a fresh permission.context snapshot (the ack).
-      try {
-        getBridge().setPermissionMode(activeSessionId, mode)
-        setTransportError(null)
-      } catch (error) {
-        setTransportError(errorMessage(error))
-      }
-    },
-    [activeSessionId],
+	    [activeSessionId, respondToPermission],
   )
 
   useEffect(() => {
@@ -481,6 +594,13 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      if (event.key === 'k' || event.key === 'K') {
+        // ⌘K toggles the command palette. Palette-internal keys (↑↓/↵/Esc) are
+        // handled on its own focused input, so this only owns the open chord.
+        event.preventDefault()
+        setPaletteOpen(open => !open)
+        return
+      }
       if (event.key === 't' || event.key === 'T') {
         event.preventDefault()
         void newSession()
@@ -503,18 +623,115 @@ export function App() {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [shell, activeSessionId, newSession, closeTab, selectTab])
 
-  const partialCount = activeLog.messages.filter(
-    message => message.type === 'stream_event',
-  ).length
-
-  function copyForLlm(): void {
-    const text = buildDebugExport(transcriptRows, activeLog)
+  function copyForLlm(sessionId: SessionId): void {
+    const text = buildDebugExport(
+      selectTranscriptRows(transcript, sessionId),
+      selectRawMessageLog(state, sessionId),
+    )
     void navigator.clipboard.writeText(text)
   }
 
-  const activeDescriptor = tabs.find(
-    tab => tab.descriptor.appSessionId === activeSessionId,
-  )?.descriptor
+  const workspacePanels: WorkspacePanelView[] = workspaceLayout.panels
+    .map(panel => {
+	      const sessionId = panel.sessionId
+	      const sessionLog = selectRawMessageLog(state, sessionId)
+	      const sessionConnection = selectConnection(connection, sessionId)
+	      const sessionPermissionQueue =
+	        sessionConnection.status === 'ready'
+	          ? selectPermissionQueue(permissions, sessionId)
+	          : []
+	      const descriptor = tabDescriptorsById.get(sessionId)
+	      const panelPartialCount = sessionLog.messages.filter(
+	        message => message.type === 'stream_event',
+	      ).length
+	      return {
+	        sessionId,
+	        descriptor,
+	        connection: sessionConnection,
+	        content: (
+	          <SessionPane
+	            activeConnection={sessionConnection}
+	            activeDescriptor={descriptor}
+	            activeLog={sessionLog}
+	            activeSessionId={sessionId}
+	            allowPermission={(requestId, applySuggestions = []) => {
+	              const item = sessionPermissionQueue.find(
+	                candidate => candidate.request.requestId === requestId,
+	              )
+	              if (!item) return
+	              respondToPermission(
+	                sessionId,
+	                requestId,
+	                buildAllowResponse(item.request, applySuggestions),
+	              )
+	            }}
+	            copyForLlm={() => copyForLlm(sessionId)}
+	            denyPermission={(requestId, message) =>
+	              respondToPermission(
+	                sessionId,
+	                requestId,
+	                buildDenyResponse(message),
+	              )
+	            }
+	            partialCount={panelPartialCount}
+	            permissionContext={selectPermissionContext(permissions, sessionId)}
+	            permissionQueue={sessionPermissionQueue}
+	            prompt={selectPromptDraft(promptDrafts, sessionId)}
+	            restorePermission={requestId => {
+	              dispatchPermission({
+	                type: 'restored',
+	                sessionId,
+	                requestId,
+	              })
+	            }}
+	            setPermissionMode={mode => {
+	              try {
+	                getBridge().setPermissionMode(sessionId, mode)
+	                setTransportError(null)
+	              } catch (error) {
+	                setTransportError(errorMessage(error))
+	              }
+	            }}
+	            setPrompt={value => setSessionPrompt(sessionId, value)}
+	            submit={event => submitSession(sessionId, event)}
+	            transcript={transcript}
+	            transportError={transportError}
+	          />
+	        ),
+	      }
+	    })
+	    .filter(panel => panel.descriptor)
+
+  // The ⌘K palette inventory — every entry is a real action wired to an existing
+  // App handler (no mocked rows). Actions needing an active session / open panel
+  // are omitted when unavailable, and the session rows ARE the search corpus
+  // (the same live ∪ restorable roster the Sidebar renders). Built only while the
+  // palette is open: the palette owns its own query state, so App re-renders come
+  // only from streaming frames / composer keystrokes — rebuilding the inventory
+  // (and its closures) on those while the palette is closed is pure waste.
+  const paletteItems = paletteOpen
+    ? buildPaletteItems({
+        rows: sidebarRows,
+        activeSessionId,
+        hasPanels: workspacePanels.length > 0,
+        handlers: {
+          newSession: () => void newSession(),
+          closeActiveSession: () => {
+            if (activeSessionId) void closeTab(activeSessionId)
+          },
+          restartActiveSession: () => {
+            if (activeSessionId) restartTab(activeSessionId)
+          },
+          copyActiveTranscript: () => {
+            if (activeSessionId) copyForLlm(activeSessionId)
+          },
+          closeCurrentPanel: () =>
+            closeWorkspacePanelAt(workspaceLayout.activeIndex),
+          selectLiveSession: selectTab,
+          restoreSession,
+        },
+      })
+    : EMPTY_PALETTE_ITEMS
 
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
@@ -543,35 +760,32 @@ export function App() {
           </div>
         ) : null}
 
-        {/* The pane follows the FRAME stream (activeSessionId), not the
-         * HostEvent roster: a live session's transcript renders as soon as its
-         * first frame lands, even if its session-added event hasn't arrived yet
-         * (or is absent, as in the headless hardening probe). The empty shell
-         * shows only when no session is streaming at all. */}
-        {!activeSessionId ? (
+        {/* The workspace panels are renderer-owned layout over the P3-4
+         * session-keyed stores. Each panel reads its own session slice, so visible
+         * background sessions keep rendering without becoming the active tab. */}
+	        {workspacePanels.length === 0 || !activeSessionId ? (
           <EmptyShell onNewTab={newSession} />
         ) : (
-          <SessionPane
-            activeConnection={activeConnection}
-            activeDescriptor={activeDescriptor}
-            activeLog={activeLog}
-            activeSessionId={activeSessionId}
-            allowPermission={allowPermission}
-            copyForLlm={copyForLlm}
-            denyPermission={denyPermission}
-            partialCount={partialCount}
-            permissionContext={permissionContext}
-            permissionQueue={permissionQueue}
-            prompt={prompt}
-            restorePermission={restorePermission}
-            setPermissionMode={setPermissionMode}
-            setPrompt={setPrompt}
-            submit={submit}
-            transcript={transcript}
-            transportError={transportError}
+	          <WorkspaceLayout
+	            layout={workspaceLayout}
+	            panels={workspacePanels}
+	            sessions={tabs.map(tab => tab.descriptor)}
+	            notice={layoutNotice}
+	            onClosePanel={closeWorkspacePanelAt}
+	            onFocusPanel={focusWorkspacePanelSession}
+	            onSelectSession={selectWorkspacePanelSession}
+	            onSplitPanel={splitWorkspacePanelWithSession}
+	            onWidthsChange={updateWorkspaceWidths}
           />
         )}
       </div>
+
+      {/* ⌘K command palette (P3-7): a fixed overlay above the whole shell. */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        items={paletteItems}
+      />
     </div>
   )
 }
@@ -594,10 +808,9 @@ function EmptyShell({ onNewTab }: { onNewTab: () => void }) {
 }
 
 /**
- * The active session's pane — the P2 transcript spine + prompt + permission
- * surfaces, rendered UNCHANGED inside the shell frame. It reads only the active
- * session's slices (every prop is already active-scoped); switching tabs swaps
- * the props, never tears down a background session's state.
+ * One session pane — the P2 transcript spine + prompt + permission surfaces.
+ * App supplies one instance per visible workspace panel, scoped to that panel's
+ * session id; switching focus never tears down a background session's state.
  */
 export function SessionPane({
   activeConnection,
@@ -618,6 +831,72 @@ export function SessionPane({
   transcript,
   transportError,
 }: SessionPaneProps) {
+  // SlashCommandPicker (P3-7): typeahead over THIS session's real slash catalog
+  // (the `slash_commands` the sidecar's `getCommands(cwd)` produced, captured
+  // from the init frame). Picking inserts `/name ` into the draft; the user
+  // submits it verbatim through the existing app.submit — no command-execution
+  // capability is added to the renderer.
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0)
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const slashCommands = selectSlashCommands(transcript, activeSessionId)
+  const slashQuery = parseSlashDraft(prompt)
+  const slashMatches =
+    slashQuery === null ? [] : filterSlashCommands(slashCommands, slashQuery)
+  const slashOpen =
+    !slashDismissed && slashQuery !== null && slashMatches.length > 0
+  const slashIndex =
+    slashMatches.length === 0
+      ? 0
+      : Math.min(slashActiveIndex, slashMatches.length - 1)
+
+  // Reset selection (and re-open after an Escape) whenever the query text
+  // changes — i.e. the user typed. Keyed on the query so an Escape (which does
+  // not change the draft) leaves the picker dismissed until they type again.
+  useEffect(() => {
+    setSlashActiveIndex(0)
+    setSlashDismissed(false)
+  }, [slashQuery])
+
+  const pickSlashCommand = (name: string): void => {
+    setPrompt(completeSlashDraft(name))
+    setSlashDismissed(false)
+    setSlashActiveIndex(0)
+  }
+
+  const onComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLInputElement>,
+  ): void => {
+    if (!slashOpen) return
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault()
+        setSlashActiveIndex(index =>
+          nextSlashIndex(index, slashMatches.length, 1),
+        )
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        setSlashActiveIndex(index =>
+          nextSlashIndex(index, slashMatches.length, -1),
+        )
+        break
+      case 'Enter':
+      case 'Tab':
+        // Enter completes the command instead of submitting the form; Tab is the
+        // usual typeahead-accept key. Both keep the draft in the composer so the
+        // user can add arguments before submitting.
+        event.preventDefault()
+        pickSlashCommand(slashMatches[slashIndex])
+        break
+      case 'Escape':
+        event.preventDefault()
+        setSlashDismissed(true)
+        break
+      default:
+        break
+    }
+  }
+
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-8">
       <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
@@ -645,18 +924,28 @@ export function SessionPane({
       />
 
       <form className="flex gap-3" onSubmit={submit}>
-        <input
-          aria-label="Prompt"
-          className="min-w-0 flex-1 rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
-          disabled={
-            !activeSessionId ||
-            !activeLog.inputEnabled ||
-            !activeConnection.inputEnabled
-          }
-          onChange={event => setPrompt(event.target.value)}
-          placeholder="Send a prompt to the live engine"
-          value={prompt}
-        />
+        <div className="relative min-w-0 flex-1">
+          <SlashCommandPicker
+            open={slashOpen}
+            query={slashQuery ?? ''}
+            commands={slashMatches}
+            activeIndex={slashIndex}
+            onPick={pickSlashCommand}
+          />
+          <input
+            aria-label="Prompt"
+            className="w-full rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
+            disabled={
+              !activeSessionId ||
+              !activeLog.inputEnabled ||
+              !activeConnection.inputEnabled
+            }
+            onChange={event => setPrompt(event.target.value)}
+            onKeyDown={onComposerKeyDown}
+            placeholder="Send a prompt to the live engine"
+            value={prompt}
+          />
+        </div>
         <button
           className="rounded bg-accent px-4 py-2 text-app-bg disabled:opacity-50"
           disabled={
@@ -781,6 +1070,10 @@ export function sendPermissionResponse(
   }
 }
 
+/** Stable empty inventory for the closed palette — a fresh `[]` each render would
+ * bust the palette's `useMemo(filter)` identity check for no reason. */
+const EMPTY_PALETTE_ITEMS: PaletteItem[] = []
+
 export type PromptDraftState = Record<SessionId, string>
 
 export function selectPromptDraft(
@@ -809,6 +1102,19 @@ export function reducePromptDrafts(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function getWorkspaceStorage(): Pick<Storage, 'getItem' | 'removeItem' | 'setItem'> | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage
+}
+
+function sessionDisplayName(
+  sessionId: SessionId,
+  descriptors: ReadonlyMap<SessionId, SessionDescriptor>,
+): string {
+  const descriptor = descriptors.get(sessionId)
+  return descriptor ? tabLabel(descriptor) : sessionId
 }
 
 function hostErrorMessage(error: HostError): string {

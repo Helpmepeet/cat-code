@@ -8,7 +8,7 @@
  * ⌘1..9 chords (App) or with typing in the prompt input.
  */
 
-import { useRef, type KeyboardEvent } from 'react'
+import { useRef, type DragEvent, type KeyboardEvent } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
@@ -25,6 +25,7 @@ export function TabBar({
   onClose,
   onRestart,
   onNewTab,
+  onTabDragStart,
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
@@ -32,6 +33,7 @@ export function TabBar({
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
   onNewTab: () => void
+  onTabDragStart?: (sessionId: SessionId, event: DragEvent<HTMLDivElement>) => void
 }) {
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
@@ -98,6 +100,7 @@ export function TabBar({
             onSelect={onSelect}
             onClose={onClose}
             onRestart={onRestart}
+            onDragStart={onTabDragStart}
             onKeyDown={event => onTabKeyDown(event, index)}
           />
         ))}
@@ -125,6 +128,7 @@ function Tab({
   onSelect,
   onClose,
   onRestart,
+  onDragStart,
   onKeyDown,
 }: {
   ref: (element: HTMLDivElement | null) => void
@@ -135,6 +139,7 @@ function Tab({
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
+  onDragStart?: (sessionId: SessionId, event: DragEvent<HTMLDivElement>) => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }) {
   const { descriptor, visual } = tab
@@ -159,7 +164,14 @@ function Tab({
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
       title={`${descriptor.cwd}${shortcut}`}
+      aria-label={`Session ${title} (${id}) — ${visual.label}${visual.needsAttention ? ', permission request waiting' : ''}`}
+      draggable
       onClick={() => onSelect(id)}
+      onDragStart={event => {
+        event.dataTransfer.setData('text/sessionId', id)
+        event.dataTransfer.effectAllowed = 'copyMove'
+        onDragStart?.(id, event)
+      }}
       onKeyDown={onKeyDown}
     >
       {isActive ? (

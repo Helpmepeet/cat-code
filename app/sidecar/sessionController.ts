@@ -4,6 +4,7 @@ import { createQueryEngineSessionController } from '../../src/app-runtime/create
 import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRuntimeBackedWebAppSession.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { getTools } from '../../src/tools.js'
+import { getCommands, type Command } from '../../src/commands.js'
 import { createStore } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
 import {
@@ -75,6 +76,25 @@ export async function loadSidecarToolPermissionContext(): Promise<ToolPermission
   }
 }
 
+/**
+ * Load the real command catalog, degrading to `[]` on any failure. The catalog
+ * is not session-critical (see the call site), so a failed load must never
+ * throw out of session construction — it logs loudly and the session runs
+ * without slash commands (the pre-P3-7 behaviour).
+ */
+async function loadCommandCatalog(cwd: string): Promise<Command[]> {
+  try {
+    return await getCommands(cwd)
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] command catalog load failed (session runs without slash commands): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return []
+  }
+}
+
 export async function createNormalSidecarQueryEngineConfig(
   cwd: string,
   initialMessages?: readonly Message[],
@@ -86,13 +106,35 @@ export async function createNormalSidecarQueryEngineConfig(
   })
   const tools = getTools(appStateStore.getState().toolPermissionContext)
 
+  // Load the REAL command catalog for this cwd, mirroring the non-interactive
+  // CLI path (`cli/print.ts:1783` / `main.tsx:2069` both pass `getCommands(cwd)`
+  // into the query). Shipping `commands: []` was the same defect class as
+  // P1-3's `tools: []` and P2-4's empty permission context: the engine could
+  // parse/execute no slash command, and the `system/init` SDKMessage's
+  // `slash_commands` field (built from these commands in
+  // `systemInit.ts:69`, filtered to `userInvocable !== false`) arrived EMPTY —
+  // so the desktop shell's slash typeahead had nothing real to show. Populating
+  // it surfaces the catalog through the EXISTING outbound `system/init` frame
+  // (P3-7 CommandPalette/SlashCommandPicker wiring) with no new wire vocabulary,
+  // and lets the engine parse `/command` submits (execution stays engine-side;
+  // QueryEngine runs them under `isNonInteractiveSession: true`, the same guard
+  // print-mode relies on).
+  //
+  // Unlike resume (anti-Potemkin-critical → fail loud), the command catalog is
+  // NOT session-critical: a session is fully usable without slash commands. So a
+  // catalog-load failure degrades to `[]` (empty picker + no engine-side slash
+  // parsing — exactly the prior behaviour) with a loud stderr log, rather than
+  // crashing session construction. `getCommands` is already internally fail-soft
+  // for skill/plugin loads; this guards the remaining eager built-in factories.
+  const commands = await loadCommandCatalog(cwd)
+
   return {
     appStateStore,
     queryEngineConfig: {
       ...createQueryEngineAppSessionConfigFromSetup({
         cwd,
         tools,
-        commands: [],
+        commands,
         mcpTools: [],
         mcpCommands: [],
         mcpClients: [],

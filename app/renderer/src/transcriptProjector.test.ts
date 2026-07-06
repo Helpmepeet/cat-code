@@ -4,6 +4,7 @@ import {
   createTranscriptState,
   projectServerFrame,
   selectNestedTranscriptRows,
+  selectSlashCommands,
   selectTranscriptRows,
 } from './transcriptProjector.js'
 import {
@@ -737,6 +738,83 @@ test('rejects malformed P2-1 content blocks without partial rows', () => {
   )
 
   expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+})
+
+test('captures the init frame slash_commands catalog per session (P3-7)', () => {
+  const initWith = (
+    sessionId: string,
+    uuid: string,
+    slashCommands: unknown,
+  ): SDKMessage =>
+    ({
+      type: 'system',
+      subtype: 'init',
+      cwd: '/Users/pt/cat-code',
+      model: 'claude-sonnet-5',
+      tools: ['Read', 'Edit'],
+      permissionMode: 'default',
+      slash_commands: slashCommands,
+      uuid,
+    }) as SDKMessage
+
+  let state = createTranscriptState()
+  // No init frame yet → empty catalog (picker shows nothing, not a crash).
+  expect(selectSlashCommands(state, 'session-1')).toEqual([])
+
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, ready('session-2'))
+  state = projectServerFrame(
+    state,
+    messageFrame(
+      'session-1',
+      initWith('session-1', '00000000-0000-4000-8000-0000000003c1', [
+        'help',
+        'clear',
+        'compact',
+      ]),
+    ),
+  )
+  // A second session's catalog stays isolated (keyed by sessionId).
+  state = projectServerFrame(
+    state,
+    messageFrame(
+      'session-2',
+      initWith('session-2', '00000000-0000-4000-8000-0000000003c2', ['model']),
+    ),
+  )
+
+  expect(selectSlashCommands(state, 'session-1')).toEqual([
+    'help',
+    'clear',
+    'compact',
+  ])
+  expect(selectSlashCommands(state, 'session-2')).toEqual(['model'])
+
+  // A later turn's init frame refreshes the catalog for that session only.
+  state = projectServerFrame(
+    state,
+    messageFrame(
+      'session-1',
+      initWith('session-1', '00000000-0000-4000-8000-0000000003c3', ['help']),
+    ),
+  )
+  expect(selectSlashCommands(state, 'session-1')).toEqual(['help'])
+  expect(selectSlashCommands(state, 'session-2')).toEqual(['model'])
+
+  // A malformed/absent slash_commands degrades to [] without dropping the row.
+  let degraded = createTranscriptState()
+  degraded = projectServerFrame(degraded, ready('session-3'))
+  degraded = projectServerFrame(
+    degraded,
+    messageFrame(
+      'session-3',
+      initWith('session-3', '00000000-0000-4000-8000-0000000003c4', 'not-array'),
+    ),
+  )
+  expect(selectSlashCommands(degraded, 'session-3')).toEqual([])
+  expect(selectTranscriptRows(degraded, 'session-3').map(row => row.kind)).toEqual([
+    'session-init',
+  ])
 })
 
 test('projects user-visible system notices and emits boundary rows once', () => {
