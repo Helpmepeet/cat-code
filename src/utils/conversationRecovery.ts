@@ -425,7 +425,11 @@ export async function loadMessagesFromJsonlPath(path: string): Promise<{
   let tip: (typeof byUuid extends Map<UUID, infer T> ? T : never) | null = null
   let tipTs = 0
   for (const m of byUuid.values()) {
+    // Only user/assistant leaves are conversation tips. `system` frames (e.g.
+    // Codex diagnostics) can be leaves with a later timestamp than the assistant
+    // turn they follow; picking one collapses the chain to that lone frame.
     if (m.isSidechain || !leafUuids.has(m.uuid)) continue
+    if (m.type !== 'user' && m.type !== 'assistant') continue
     const ts = new Date(m.timestamp).getTime()
     if (ts > tipTs) {
       tipTs = ts

@@ -60,6 +60,65 @@ describe('session storage', () => {
     })
   })
 
+  test('resume tip skips a trailing dangling system frame (nonce survives)', async () => {
+    // Regression for the P3-8 restore blocker: the desktop sidecar writes Codex
+    // `system` frames (codex_send_path / account.route.selected) with
+    // parentUuid:null and a timestamp a few ms LATER than the assistant turn they
+    // follow. A tip-selection that only excludes sidechains picks that lone system
+    // leaf, so buildConversationChain returns just it and the resumed session loses
+    // all prior context. getLastSessionLog must pick the user/assistant tip.
+    const userUuid = randomUUID()
+    const assistantUuid = randomUUID()
+    const transcript = [
+      {
+        type: 'user',
+        uuid: userUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-06T00:00:00.000Z',
+        message: { role: 'user', content: 'The magic word is NONCE-XYZ.' },
+      },
+      {
+        type: 'assistant',
+        uuid: assistantUuid,
+        parentUuid: userUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-06T00:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Acknowledged: NONCE-XYZ.' }],
+        },
+      },
+      // The trap: a dangling system leaf, no parent, timestamp AFTER the assistant.
+      {
+        type: 'system',
+        subtype: 'codex_send_path',
+        uuid: randomUUID(),
+        parentUuid: null,
+        isSidechain: false,
+        sessionId: null,
+        timestamp: '2026-07-06T00:00:01.100Z',
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+
+    await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
+
+    const log = await getLastSessionLog(sessionId as UUID)
+    expect(log).not.toBeNull()
+    // Tip is the user/assistant turn, not the lone system frame.
+    expect(log!.firstPrompt).toBe('The magic word is NONCE-XYZ.')
+    expect(JSON.stringify(log!.messages)).toContain('Acknowledged: NONCE-XYZ.')
+  })
+
   test('enriched modified tracks last in-file timestamp, not drifted mtime', async () => {
     const lastMessageTs = '2026-06-20T11:53:25.000Z'
     // file-history-snapshot is written during the turn and carries a nested

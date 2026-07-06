@@ -4271,8 +4271,16 @@ export async function getLastSessionLog(
     )
   }
 
-  // Find the most recent non-sidechain message
-  const lastMessage = findLatestMessage(messages.values(), m => !m.isSidechain)
+  // Find the most recent non-sidechain user/assistant message. `system` frames
+  // (e.g. Codex codex_send_path / account.route.selected diagnostics) are written
+  // with parentUuid:null and a timestamp slightly later than the assistant turn
+  // they follow, so without the type filter one becomes the "latest" tip and
+  // buildConversationChain returns just that lone system frame — a resumed session
+  // with none of its prior context. Mirrors loadFullLog's leaf predicate.
+  const lastMessage = findLatestMessage(
+    messages.values(),
+    m => !m.isSidechain && (m.type === 'user' || m.type === 'assistant'),
+  )
   if (!lastMessage) return null
 
   // Build the transcript chain from the last message
