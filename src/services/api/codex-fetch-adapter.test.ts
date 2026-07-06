@@ -2355,6 +2355,35 @@ describe('codex tool-result truncation (Item 2)', () => {
     expect(wire).not.toContain('truncated')
   })
 
+  test('an orphaned tool_result (no matching tool_use in this pass) is exempt — fail safe', () => {
+    // The openai path doesn't run ensureToolResultPairing, so a resumed/teleported
+    // transcript can carry a tool_result whose tool_use isn't in the message set.
+    // toolName is then undefined; we must NOT truncate (it could be an orphaned
+    // schema-bearing ToolSearch payload — dropping its middle breaks tool loading).
+    const huge = 'O'.repeat(120_000)
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.5',
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_orphan_1',
+                content: [{ type: 'text', text: huge }],
+              },
+            ],
+          },
+        ],
+      },
+    })
+    const wire = outputStringFor(codexBody)
+    expect(wire.length).toBe(huge.length)
+    expect(wire).not.toContain('truncated')
+  })
+
   test('image tool_result blocks are never truncated (multimodal array preserved)', () => {
     const { codexBody } = translateToCodexBody({
       model: 'gpt-5.5',

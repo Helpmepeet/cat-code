@@ -861,6 +861,13 @@ export function truncateCodexToolOutputText(text: string): string {
  *  - ToolSearch results (schema-bearing; truncating them can drop deferred-tool
  *    definitions mid-payload and break tool loading — codex likewise exempts its
  *    ToolSearchOutput variant),
+ *  - results whose originating tool can't be identified (`toolName` undefined):
+ *    the openai path doesn't run ensureToolResultPairing (unlike messagesForAPI
+ *    in claude.ts), so a resumed/teleported transcript can carry an ORPHANED
+ *    tool_result whose tool_use isn't in this message set. Fail safe there
+ *    rather than risk truncating an orphaned schema-bearing ToolSearch payload;
+ *    the giant-Read case we target is always paired (its tool_use is present),
+ *    so this costs nothing on the hot path,
  *  - any output containing an image (`input_image`) part — never truncate an
  *    image or its accompanying multimodal array,
  *  - outputs already under the cap.
@@ -875,7 +882,7 @@ function applyCodexToolOutputTruncation(
   output: string | Array<Record<string, unknown>>,
   toolName: string | undefined,
 ): string | Array<Record<string, unknown>> {
-  if (toolName === TOOL_SEARCH_TOOL_NAME) {
+  if (toolName === undefined || toolName === TOOL_SEARCH_TOOL_NAME) {
     return output
   }
   if (typeof output === 'string') {
