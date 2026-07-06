@@ -229,11 +229,18 @@ function isWithinRefreshSkew(expiresAt: number): boolean {
 
 export async function maybeRefreshAccount(
   account: CodexCoreAccount,
+  options: { force?: boolean } = {},
 ): Promise<CodexCoreAccount> {
   if (!account.refreshToken) {
     return account
   }
-  if (!isWithinRefreshSkew(account.expiresAt)) {
+  // The expiry-skew gate is the NORMAL (refresh-on-use) optimization. A forced
+  // refresh — withRetry's post-401 recovery — must bypass it: a 401 can be a
+  // server-side revoke/rotate on a token that is still locally fresh, so the
+  // skew check would otherwise no-op and strand the dead token. Forcing still
+  // flows through refreshAccountNow, inheriting the vault-vs-raw dispatch,
+  // in-process single-flight dedup, and DR-2 cross-process safety unchanged.
+  if (!options.force && !isWithinRefreshSkew(account.expiresAt)) {
     return account
   }
 

@@ -59,6 +59,8 @@ import { basename, dirname, join } from 'path'
 const ACCOUNT_ID = 'ca11ab1e-0000-4000-8000-0000000000d2'
 const CRASH_ACCOUNT_ID = 'ca11ab1e-0000-4000-8000-0000000000c3'
 const IDSW_ACCOUNT_ID = 'ca11ab1e-0000-4000-8000-0000000000c4'
+/** F1 image-path scenario: a sole vault-backed account. */
+const IMAGE_ACCOUNT_ID = 'ca11ab1e-0000-4000-8000-0000000000f1'
 /** The account the mock rotates INTO for the identity-mismatch scenario. */
 const NEW_IDENTITY_ID = 'beefbeef-1111-4222-8333-000000000b0b'
 const CHILD_ENTRY = join(import.meta.dir, 'accountRefreshContention.probe.child.ts')
@@ -611,6 +613,102 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
         // The persisted config store now holds the NEW identity's tokens.
         const readBack = await runChild(dirs, { PROBE_MODE: 'read-config' })
         expect(readBack.tokens?.accountId).toBe(NEW_IDENTITY_ID)
+      } finally {
+        server.stop()
+      }
+    },
+    120_000,
+  )
+
+  /* ----------------------------------------------------------------------- *
+   * Scenario 5 — F1: the image path (GenerateImageTool.getImageAuth) on a
+   * sole near-expiry VAULT account, under two real processes. F1's fix
+   * rerouted image auth off the naked refresh + config-only save (which burned
+   * the vault's rotate-once token and stranded the successor in config) and
+   * onto resolveCodexOAuthTokensForLeaseOwner → maybeRefreshAccount → the vault
+   * state machine. This proves that reroute holds under contention: exactly one
+   * rotation is spent and the VAULT — not a config successor — ends up holding
+   * the live token. Login writes both config and vault, so both are seeded.
+   * ----------------------------------------------------------------------- */
+
+  test(
+    'image-auth path: two processes refreshing a sole vault account burn ONE rotation and leave the vault live',
+    async () => {
+      const server = new StrictRotationServer('R0', { mintAccountId: IMAGE_ACCOUNT_ID })
+      const dirs = scenarioDirs('s5-image-auth')
+      try {
+        // Login writes BOTH stores; the config mirror is the exact bait F1's
+        // bug poisoned. Seed it through the real writer, then write the vault.
+        const seed = await runChild(dirs, {
+          PROBE_MODE: 'seed-config',
+          PROBE_ACCOUNT_ID: IMAGE_ACCOUNT_ID,
+          PROBE_ACCESS_TOKEN: mintAccessJwt(IMAGE_ACCOUNT_ID, 0),
+          PROBE_REFRESH_TOKEN: 'R0',
+          PROBE_EXPIRES_AT: String(Date.now() + 30_000),
+        })
+        expect(seed.ok).toBe(true)
+
+        const accountsDir = join(dirs.home, 'codex-vault', 'accounts')
+        mkdirSync(accountsDir, { recursive: true })
+        const vaultFile = join(accountsDir, `${IMAGE_ACCOUNT_ID}.json`)
+        writeFileSync(
+          vaultFile,
+          `${JSON.stringify(
+            {
+              tokens: {
+                access_token: mintAccessJwt(IMAGE_ACCOUNT_ID, 0),
+                refresh_token: 'R0',
+                account_id: IMAGE_ACCOUNT_ID,
+                // Within the 60s refresh skew but not expired → the resolver
+                // refreshes it and the pool does not pre-mark it dead.
+                expires_at: Date.now() + 30_000,
+              },
+              refresh: { state: 'idle' },
+              version: 1,
+            },
+            null,
+            2,
+          )}\n`,
+        )
+
+        const goFile = join(scratch, 'go-image-auth')
+        const contenderEnv = {
+          PROBE_MODE: 'contend-image-auth',
+          PROBE_TOKEN_URL: server.url,
+          PROBE_GO_FILE: goFile,
+          PROBE_ACCOUNT_ID: IMAGE_ACCOUNT_ID,
+        }
+        const a = spawnChild(dirs, contenderEnv)
+        const b = spawnChild(dirs, contenderEnv)
+        await releaseBarrier(goFile)
+        const [resultA, resultB] = await Promise.all([a.result, b.result])
+
+        // The F1 clobber this guards: a second rotation burned, or a loser
+        // dropping the sole account ("logged in but cannot send").
+        expect(resultA.ok).toBe(true)
+        expect(resultB.ok).toBe(true)
+        expect(server.attempts).toHaveLength(1)
+        expect(server.attempts[0]).toEqual({ token: 'R0', outcome: 'rotated' })
+
+        // Both processes converge on the SAME live rotation via the image path.
+        expect(resultA.accountId).toBe(IMAGE_ACCOUNT_ID)
+        expect(resultB.accountId).toBe(IMAGE_ACCOUNT_ID)
+        expect(resultA.accessToken).toBe(server.lastAccessToken)
+        expect(resultB.accessToken).toBe(server.lastAccessToken)
+        expect(resultA.refreshToken).toBe(server.currentRefreshToken)
+        expect(resultB.refreshToken).toBe(server.currentRefreshToken)
+
+        // The VAULT (not just a config successor) holds the live rotation and
+        // its refresh state machine is settled — the poisoning F1 caused would
+        // instead strand the burned token here.
+        const vault = JSON.parse(readFileSync(vaultFile, 'utf-8')) as {
+          tokens?: { refresh_token?: string; account_id?: string }
+          refresh?: { state?: string }
+        }
+        expect(vault.tokens?.refresh_token).toBe(server.currentRefreshToken)
+        expect(vault.tokens?.account_id).toBe(IMAGE_ACCOUNT_ID)
+        expect(vault.refresh?.state).toBe('idle')
+        expect(existsSync(`${vaultFile}.lock`)).toBe(false)
       } finally {
         server.stop()
       }
