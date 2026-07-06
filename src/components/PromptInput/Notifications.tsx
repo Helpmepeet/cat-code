@@ -69,7 +69,7 @@ type Props = {
   isNarrow?: boolean;
 };
 export function Notifications(t0) {
-  const $ = _c(36);
+  const $ = _c(37);
   const {
     apiKeyStatus,
     autoUpdaterResult,
@@ -86,16 +86,20 @@ export function Notifications(t0) {
   } = t0;
   const isInputWrapped = t1 === undefined ? false : t1;
   const isNarrow = t2 === undefined ? false : t2;
+  const mainLoopModel = useMainLoopModel();
   let t3;
-  if ($[0] !== messages) {
-    t3 = tokenCountWithEstimation(messages);
+  if ($[0] !== messages || $[36] !== mainLoopModel) {
+    // Pass the current model so the context-warning banner re-estimates a full
+    // transcript after a gpt→claude switch (the gpt usage anchor reflects the
+    // truncated wire and would otherwise show the banner late).
+    t3 = tokenCountWithEstimation(messages, mainLoopModel);
     $[0] = messages;
+    $[36] = mainLoopModel;
     $[1] = t3;
   } else {
     t3 = $[1];
   }
   const tokenUsage = t3;
-  const mainLoopModel = useMainLoopModel();
   let t4;
   if ($[2] !== mainLoopModel || $[3] !== tokenUsage) {
     t4 = calculateTokenWarningState(tokenUsage, mainLoopModel);

@@ -363,7 +363,13 @@ export async function shouldAutoCompact(
     }
   }
 
-  const tokenCount = tokenCountWithEstimation(messages) - snipTokensFreed
+  // Pass the current request model so tokenCountWithEstimation invalidates a
+  // gpt-produced usage anchor on a gpt→claude switch: the anchor reflects the
+  // wire-truncated tool outputs the openai server billed, but a Claude request
+  // sends the full transcript, so trusting it would fire autocompact late (or
+  // let the first Claude call 413). See tokenCountWithEstimation's currentModel.
+  const tokenCount =
+    tokenCountWithEstimation(messages, model) - snipTokensFreed
   const threshold = getAutoCompactThreshold(model)
   const effectiveWindow = getEffectiveContextWindowSize(model)
 

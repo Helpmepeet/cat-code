@@ -2,6 +2,7 @@ import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messag
 import { roughTokenCountEstimationForMessages } from '../services/tokenEstimation.js'
 import type { AssistantMessage, Message } from '../types/message.js'
 import { findLastCompactBoundaryIndex, isCompactBoundaryMessage, SYNTHETIC_MESSAGES, SYNTHETIC_MODEL } from './messages.js'
+import { getProviderForModel } from './model/providers.js'
 import { jsonStringify } from './slowOperations.js'
 
 type ContextUsage = Pick<
@@ -317,7 +318,23 @@ export function getAssistantMessageContentLength(
  * bearing record we walk back to the FIRST sibling with the same message.id
  * so every interleaved tool_result is included in the rough estimate.
  */
-export function tokenCountWithEstimation(messages: readonly Message[]): number {
+export function tokenCountWithEstimation(
+  messages: readonly Message[],
+  // The model of the request this count is gating. When provided AND the
+  // usage-bearing anchor was produced under openai (a gpt-* model whose server
+  // usage reflects wire-TRUNCATED tool outputs) while the current request is
+  // NOT openai (a mid-session gpt→claude switch sends the FULL, untruncated
+  // transcript), the anchor understates the real context — autocompact/413
+  // warnings would fire late and the first Claude call can 413. In that case,
+  // invalidate the anchor and fall through to a full rough re-estimation of the
+  // whole array. claude→gpt is safe (anthropic anchor already reflects full
+  // sizes; gpt only shrinks the wire, so the estimate stays conservative), so
+  // that direction is left untouched.
+  currentModel?: string,
+): number {
+  const invalidateOpenaiAnchor =
+    currentModel !== undefined &&
+    getProviderForModel(currentModel) !== 'openai'
   const preserved = getPreservedSegmentRange(messages)
   let i = messages.length - 1
   while (i >= 0) {
@@ -337,6 +354,17 @@ export function tokenCountWithEstimation(messages: readonly Message[]): number {
     // last record with real numbers instead of reading the context as ~0 and
     // silently skipping autocompact until the API 413s. (GPT/Codex agents.)
     if (message && usage && getTokenCountFromUsage(usage) > 0) {
+      // gpt→claude switch: this anchor's usage reflects the wire-truncated tool
+      // outputs the openai server billed, but the current (non-openai) request
+      // sends the full transcript. Trusting it understates context, so force a
+      // full rough re-estimation of the whole array instead.
+      if (
+        invalidateOpenaiAnchor &&
+        message.type === 'assistant' &&
+        getProviderForModel(message.message.model) === 'openai'
+      ) {
+        return roughTokenCountEstimationForMessages(messages)
+      }
       // Walk back past any earlier sibling records split from the same API
       // response (same message.id) so interleaved tool_results between them
       // are included in the estimation slice.

@@ -18,6 +18,8 @@ import {
   translateCodexStreamToAnthropic,
   translateCodexWsStreamToAnthropic,
   translateToCodexBody,
+  truncateCodexToolOutputText,
+  CODEX_TOOL_OUTPUT_MAX_CHARS,
 } from './codex-fetch-adapter.js'
 import {
   resetCodexAccountPoolForTest,
@@ -2196,5 +2198,175 @@ describe('codex-fetch-adapter', () => {
     expect(
       mapConversationIdToTrackingKey('side/title/99999999-0000-1111-2222-333333333333'),
     ).toBe('generate_session_title')
+  })
+})
+
+describe('codex tool-result truncation (Item 2)', () => {
+  const OVER = CODEX_TOOL_OUTPUT_MAX_CHARS + 5_000
+
+  test('truncateCodexToolOutputText leaves under-cap output untouched', () => {
+    const small = 'x'.repeat(CODEX_TOOL_OUTPUT_MAX_CHARS)
+    expect(truncateCodexToolOutputText(small)).toBe(small)
+    expect(truncateCodexToolOutputText('hello')).toBe('hello')
+  })
+
+  test('truncateCodexToolOutputText middle-truncates over-cap output within budget', () => {
+    const big = 'A'.repeat(OVER)
+    const out = truncateCodexToolOutputText(big)
+    // Never exceeds the budget.
+    expect(out.length).toBeLessThanOrEqual(CODEX_TOOL_OUTPUT_MAX_CHARS)
+    // Keeps a head and a tail from the original.
+    expect(out.startsWith('A')).toBe(true)
+    expect(out.endsWith('A')).toBe(true)
+    // Marker names the retrieval mechanism the model must use.
+    expect(out).toContain('truncated')
+    expect(out).toContain('offset/limit')
+    expect(out).toContain('re-run the originating Bash/Grep command')
+    // The elided count is reported.
+    expect(out).toContain(`${OVER - CODEX_TOOL_OUTPUT_MAX_CHARS} characters`)
+  })
+
+  test('truncateCodexToolOutputText preserves distinct head and tail content', () => {
+    const head = 'HEAD_MARKER_LINE\n'
+    const tail = '\nTAIL_MARKER_LINE'
+    const middle = 'm'.repeat(OVER)
+    const out = truncateCodexToolOutputText(head + middle + tail)
+    expect(out.startsWith('HEAD_MARKER_LINE')).toBe(true)
+    expect(out.endsWith('TAIL_MARKER_LINE')).toBe(true)
+  })
+
+  test('truncateCodexToolOutputText is a pure function: byte-identical across calls', () => {
+    const big = 'Z'.repeat(OVER)
+    const a = truncateCodexToolOutputText(big)
+    const b = truncateCodexToolOutputText(big)
+    expect(a).toBe(b)
+  })
+
+  function buildBodyWithToolResult(
+    toolName: string,
+    resultText: string,
+  ): Record<string, unknown> {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.5',
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_trunc_1',
+                name: toolName,
+                input: { file_path: '/tmp/huge.txt' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_trunc_1',
+                content: [{ type: 'text', text: resultText }],
+              },
+            ],
+          },
+        ],
+      },
+    })
+    return codexBody
+  }
+
+  function outputStringFor(codexBody: Record<string, unknown>): string {
+    const input = codexBody.input as Array<Record<string, unknown>>
+    const fco = input.find(i => i.type === 'function_call_output')
+    expect(fco).toBeTruthy()
+    const out = (fco as Record<string, unknown>).output
+    if (typeof out === 'string') return out
+    // array form (input_text parts): flatten text
+    return (out as Array<Record<string, string>>)
+      .map(p => p.text ?? '')
+      .join('')
+  }
+
+  test('a >100KB Read tool_result is middle-truncated in the wire request with a retrieval hint', () => {
+    const huge = 'L'.repeat(120_000) // ~120KB, well over the 48k cap
+    const wire = outputStringFor(buildBodyWithToolResult('Read', huge))
+    expect(wire.length).toBeLessThanOrEqual(CODEX_TOOL_OUTPUT_MAX_CHARS)
+    expect(wire).toContain('offset/limit')
+    expect(wire).toContain('truncated')
+  })
+
+  test('the truncated wire form is byte-identical across two translations (prefix stability)', () => {
+    const huge = 'Q'.repeat(120_000)
+    const a = outputStringFor(buildBodyWithToolResult('Read', huge))
+    const b = outputStringFor(buildBodyWithToolResult('Read', huge))
+    expect(a).toBe(b)
+  })
+
+  test('ToolSearch results are exempt from truncation (schema-bearing)', () => {
+    const huge = 'S'.repeat(120_000)
+    const wire = outputStringFor(buildBodyWithToolResult('ToolSearch', huge))
+    // Untouched: full length, no marker.
+    expect(wire.length).toBe(huge.length)
+    expect(wire).not.toContain('truncated')
+  })
+
+  test('image tool_result blocks are never truncated (multimodal array preserved)', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.5',
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_img_1',
+                name: 'vision_tool',
+                input: {},
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_img_1',
+                content: [
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'ZmFrZQ==',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    })
+    const input = codexBody.input as Array<Record<string, unknown>>
+    const fco = input.find(i => i.type === 'function_call_output') as Record<
+      string,
+      unknown
+    >
+    // Output stays an array (image preserved), never coerced/truncated to string.
+    expect(Array.isArray(fco.output)).toBe(true)
+    expect((fco.output as Array<Record<string, string>>)[0].type).toBe(
+      'input_image',
+    )
+  })
+
+  test('an under-cap tool_result passes through unchanged in the wire request', () => {
+    const small = 'ok result'
+    const wire = outputStringFor(buildBodyWithToolResult('Read', small))
+    expect(wire).toBe(small)
   })
 })

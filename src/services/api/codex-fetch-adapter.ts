@@ -43,6 +43,7 @@ import {
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
+import { TOOL_SEARCH_TOOL_NAME } from '../../tools/ToolSearchTool/constants.js'
 import {
   normalizeToolInput,
   normalizeToolInputForAPI,
@@ -780,6 +781,113 @@ function recoverApplyPatchInput(input: unknown): string {
   return ''
 }
 
+// ── Record-time tool-result truncation (gpt models only) ─────────────
+//
+// Nothing prunes gpt history before autocompact (~229k) on this build, so
+// cat-code re-bills the full, untrimmed history on every cache miss. Codex CLI
+// middle-truncates every function/custom tool output to Tokens(10,000) ×1.2 at
+// record time (truncate_function_output_payload); gpt models were trained in
+// that environment. We mirror it at WIRE time inside translateMessages — the
+// single choke point every Codex request (fetch + WS, main + subagent + side
+// queries) passes through, and the ONLY translation path an openai request
+// takes. The transcript on disk stays full: a mid-session switch back to a
+// Claude model sees untruncated history and `--resume` is byte-stable.
+//
+// The truncated form is a PURE function of content (no timestamps, no counters):
+// identical across turns, so it does not break prompt-cache prefix stability and
+// does not fight Item 1's length-based incremental reconcile.
+
+// codex parity: Tokens(10,000) policy × 1.2 serialization allowance,
+// char-approximated at 4 bytes/token. Picked ONCE — changing it later is a
+// one-time cache break for every live conversation.
+const CODEX_TOOL_OUTPUT_TOKEN_BUDGET = 10_000
+const CODEX_TOOL_OUTPUT_SERIALIZATION_MULTIPLIER = 1.2
+const CODEX_APPROX_CHARS_PER_TOKEN = 4
+export const CODEX_TOOL_OUTPUT_MAX_CHARS = Math.floor(
+  CODEX_TOOL_OUTPUT_TOKEN_BUDGET *
+    CODEX_TOOL_OUTPUT_SERIALIZATION_MULTIPLIER *
+    CODEX_APPROX_CHARS_PER_TOKEN,
+) // 48,000 chars
+
+/**
+ * Middle-truncate an over-budget tool-result string to ~10k tokens, mirroring
+ * codex's truncate_function_output_payload: keep a head and a tail, drop the
+ * middle, splice in a deterministic marker. The marker tells the model the
+ * middle was elided and how to retrieve it — re-Read the file with offset/limit,
+ * or re-run the Bash/Grep command more narrowly (readFileState marks a file
+ * fully-read regardless of wire truncation, and Edit fails closed since
+ * old_string matches disk, so the model must be told explicitly).
+ *
+ * Pure function of `text`: no timestamps/counters, so the output is byte-
+ * identical across turns for the same input.
+ */
+export function truncateCodexToolOutputText(text: string): string {
+  if (text.length <= CODEX_TOOL_OUTPUT_MAX_CHARS) {
+    return text
+  }
+  const omitted = text.length - CODEX_TOOL_OUTPUT_MAX_CHARS
+  const marker =
+    `\n\n[... ${omitted} characters truncated to fit the model's tool-output ` +
+    `budget; full output was preserved on disk but is not in this request. To ` +
+    `see the elided middle, re-Read the file with an offset/limit around the ` +
+    `region you need, or re-run the originating Bash/Grep command scoped more ` +
+    `narrowly ...]\n\n`
+  // Reserve room for the marker inside the budget so the truncated payload never
+  // exceeds CODEX_TOOL_OUTPUT_MAX_CHARS. Split the remainder head-heavy (2/3
+  // head, 1/3 tail): the head carries the framing/most-relevant lines, the tail
+  // preserves the end (e.g. a final error or summary line).
+  const usable = Math.max(0, CODEX_TOOL_OUTPUT_MAX_CHARS - marker.length)
+  const headLen = Math.floor((usable * 2) / 3)
+  const tailLen = usable - headLen
+  const head = text.slice(0, headLen)
+  const tail = tailLen > 0 ? text.slice(text.length - tailLen) : ''
+  return head + marker + tail
+}
+
+/**
+ * Apply record-time truncation to a translated function_call_output `output`.
+ *
+ * Exemptions (returned unchanged):
+ *  - ToolSearch results (schema-bearing; truncating them can drop deferred-tool
+ *    definitions mid-payload and break tool loading — codex likewise exempts its
+ *    ToolSearchOutput variant),
+ *  - any output containing an image (`input_image`) part — never truncate an
+ *    image or its accompanying multimodal array,
+ *  - outputs already under the cap.
+ *
+ * Truncates:
+ *  - a plain string output (the common giant-Read case — Read returns its text
+ *    as a bare string), and
+ *  - a text-only array output (single/multiple `input_text` parts, no image):
+ *    the concatenated text collapses to one truncated `input_text` part.
+ */
+function applyCodexToolOutputTruncation(
+  output: string | Array<Record<string, unknown>>,
+  toolName: string | undefined,
+): string | Array<Record<string, unknown>> {
+  if (toolName === TOOL_SEARCH_TOOL_NAME) {
+    return output
+  }
+  if (typeof output === 'string') {
+    return truncateCodexToolOutputText(output)
+  }
+  if (!Array.isArray(output)) {
+    return output
+  }
+  // Any image present → never truncate (multimodal preserved verbatim).
+  const hasImage = output.some(part => part.type === 'input_image')
+  if (hasImage) {
+    return output
+  }
+  const combined = output
+    .map(part => (typeof part.text === 'string' ? part.text : ''))
+    .join('')
+  if (combined.length <= CODEX_TOOL_OUTPUT_MAX_CHARS) {
+    return output
+  }
+  return [{ type: 'input_text', text: truncateCodexToolOutputText(combined) }]
+}
+
 // ── Message translation: Anthropic → Codex input ────────────────────
 
 /**
@@ -800,6 +908,11 @@ function translateMessages(
   // we can also drop their paired tool_result blocks — otherwise the Codex
   // request would contain orphaned function_call_output items.
   const skippedToolCallIds = new Set<string>()
+  // Map each call_id to the tool that produced it. tool_use blocks always
+  // precede their paired tool_result in the transcript, so by the time a
+  // function_call_output is emitted its originating tool name is known. Used to
+  // exempt schema-bearing ToolSearch results from wire-time truncation.
+  const toolNameByCallId = new Map<string, string>()
 
   const resolveToolResultCallId = (block: AnthropicContentBlock): string => {
     if (typeof block.tool_use_id === 'string' && block.tool_use_id.length > 0) {
@@ -884,10 +997,14 @@ function translateMessages(
             continue
           }
           const callId = resolveToolResultCallId(block)
+          const output = applyCodexToolOutputTruncation(
+            translateToolResultOutput(block.content),
+            toolNameByCallId.get(callId),
+          )
           codexInput.push({
             type: 'function_call_output',
             call_id: callId,
-            output: translateToolResultOutput(block.content),
+            output,
           })
         } else if (block.type === 'text' && typeof block.text === 'string') {
           contentArr.push({ type: 'input_text', text: block.text })
@@ -951,6 +1068,9 @@ function translateMessages(
             continue
           }
           pendingToolCallIds.add(callId)
+          if (typeof block.name === 'string' && block.name.length > 0) {
+            toolNameByCallId.set(callId, block.name)
+          }
           if (block.name === APPLY_PATCH_TOOL_NAME) {
             // The server ALWAYS records Apply_patch as a custom_tool_call (it is
             // a custom lark-grammar tool). Emit custom_tool_call unconditionally

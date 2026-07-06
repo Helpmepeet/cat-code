@@ -325,3 +325,84 @@ describe('post-compaction preserved-segment skip', () => {
     expect(usage?.input_tokens).toBe(100)
   })
 })
+
+describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
+  // A gpt-anchored assistant whose server usage reflects the wire-TRUNCATED
+  // tool outputs, followed by a large user tool_result that IS in the transcript
+  // at full size. On the openai path the anchor is trusted (small); on a switch
+  // to a Claude model the full transcript is sent, so the anchor understates and
+  // must be invalidated in favour of a full rough estimate.
+  function bigUserToolResult(): Message {
+    return {
+      type: 'user',
+      uuid: 'user-big-tool-result',
+      timestamp: '2026-04-21T00:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_x',
+            content: 'W'.repeat(200_000), // ~50k tokens of real transcript
+          },
+        ],
+      },
+    } as Message
+  }
+
+  // Large tool_result BEFORE the anchor: the gpt server truncated it on the
+  // wire, so the anchor's small usage number (130) excludes it — but the full
+  // transcript sent to a Claude model contains it at full size.
+  const conversation = (): Message[] => [
+    createUserMessage('question'),
+    bigUserToolResult(), // ~50k tokens of real transcript, PRE-anchor
+    createAssistantUsageMessage(), // model gpt-5.4, usage total 130 (truncated)
+  ]
+
+  test('current model still openai: trusts the anchor (no invalidation)', () => {
+    const withGpt = tokenCountWithEstimation(conversation(), 'gpt-5.5')
+    const withNothing = tokenCountWithEstimation(conversation())
+    expect(withGpt).toBe(withNothing)
+    // Anchor total 130, trailing content is empty → tiny count.
+    expect(withGpt).toBeLessThan(1_000)
+  })
+
+  test('switch to a claude model: invalidates the gpt anchor, full re-estimate', () => {
+    const anchored = tokenCountWithEstimation(conversation(), 'gpt-5.5')
+    const reestimated = tokenCountWithEstimation(
+      conversation(),
+      'claude-sonnet-4-6',
+    )
+    // The gpt anchor hid the pre-anchor 50k tool_result; the full re-estimate
+    // sees it. reestimated must dwarf the truncated-anchor count.
+    expect(reestimated).toBeGreaterThan(40_000)
+    expect(reestimated).toBeGreaterThan(anchored * 10)
+  })
+
+  test('claude→gpt is safe: an anthropic anchor is never invalidated on gpt', () => {
+    // Anchor produced under claude (anthropic path already reflects full sizes).
+    const claudeAnchor: Message = {
+      type: 'assistant',
+      uuid: 'assistant-claude-usage',
+      message: {
+        id: 'msg-claude-usage',
+        model: 'claude-sonnet-4-6',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'done' }],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_creation_input_tokens: 3,
+          cache_read_input_tokens: 7,
+        },
+      },
+    } as Message
+    const msgs = [createUserMessage('q'), bigUserToolResult(), claudeAnchor]
+    // currentModel gpt-5.5 must NOT invalidate a claude-produced anchor.
+    const onGpt = tokenCountWithEstimation(msgs, 'gpt-5.5')
+    const noModel = tokenCountWithEstimation(msgs)
+    expect(onGpt).toBe(noModel)
+    // Anchor trusted → the pre-anchor big result is NOT re-counted.
+    expect(onGpt).toBeLessThan(1_000)
+  })
+})
