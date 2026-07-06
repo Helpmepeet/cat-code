@@ -26,7 +26,7 @@ import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 import {
   clearWebSocketSession,
-  schedulePrewarm,
+  closeSocketPreservingState,
   streamTurnViaWebSocketLocked,
   registerStaleResponseIdCallback,
   registerSendPathLogger,
@@ -405,14 +405,24 @@ function createCodexResponseFailedError(
   emittedVisibleOutput = false,
 ): Error {
   const failure = extractCodexResponseFailure(event)
+  const isAccountCap =
+    !emittedVisibleOutput && codexResponseFailureIndicatesAccountCap(failure)
   if (requestCacheMetadata) {
-    clearWebSocketSession(requestCacheMetadata.conversationId)
+    if (isAccountCap) {
+      // Item 3 rule 4: a cap failure means withRetry fails over to another
+      // account. `sessions` is keyed by conversationId only, so the preserved
+      // baseline was chained under the OLD account — drop it entirely so the
+      // new account's first request is a clean full send.
+      clearWebSocketSession(requestCacheMetadata.conversationId)
+    } else {
+      // Item 3 rule 3: a genuine (non-cap) response.failed left the previous
+      // GOOD baseline intact (state only commits on response.completed). Kill
+      // the socket so its late events cannot bleed into the next turn, but keep
+      // the baseline so the next turn continues instead of paying a full send.
+      closeSocketPreservingState(requestCacheMetadata.conversationId)
+    }
   }
-  if (
-    !emittedVisibleOutput &&
-    requestCacheMetadata &&
-    codexResponseFailureIndicatesAccountCap(failure)
-  ) {
+  if (isAccountCap && requestCacheMetadata) {
     return new CodexAccountCapError(requestCacheMetadata.accountId)
   }
   return new CodexResponseFailedError(failure)
@@ -3233,7 +3243,10 @@ export function createCodexFetch(
     if (isStreamingAnthropicRequest) {
       if (!hasStickyHttpFallback(conversationId)) {
         try {
-          schedulePrewarm(conversationId, codexBody, authHeaders)
+          // Item 3 rule 1: no per-request prewarm. It re-fired on every
+          // session-clearing event and never warmed ahead of time (the real
+          // request awaited it), so it just double-billed the prefix. The first
+          // real WS call seeds the same prefix.
           const wsRequestStartedAtMs = Date.now()
           const wsEvents = await primeCodexEvents(
             streamTurnViaWebSocketLocked(
@@ -3261,12 +3274,26 @@ export function createCodexFetch(
             },
           )
         } catch (wsError) {
-          clearWebSocketSession(conversationId)
           const normalized = normalizeInitialWebSocketError(
             wsError,
             currentAccountId,
             conversationId,
           )
+          // Item 3 rules 2a/4: distinguish rotation from transient failure.
+          //   - Cap error → withRetry fails over to another account; the
+          //     conversationId-keyed baseline was chained under THIS account, so
+          //     drop it (full teardown) — the next account must start clean.
+          //   - Everything else (idle timeout, closed-before-completed, generic
+          //     transport error → HTTP fallback) is transient: the socket is
+          //     already closed by the transport's failStream, and nothing was
+          //     committed this turn, so KEEP the baseline. The turn replays over
+          //     HTTP now and WS resumes from the preserved baseline after the
+          //     sticky window, avoiding an unnecessary full send.
+          if (normalized instanceof CodexAccountCapError) {
+            clearWebSocketSession(conversationId)
+          } else {
+            closeSocketPreservingState(conversationId)
+          }
           // Explicit upstream response failures must propagate. Cap errors let
           // withRetry fail over; non-cap failures preserve the upstream error
           // instead of replaying the turn over HTTP.

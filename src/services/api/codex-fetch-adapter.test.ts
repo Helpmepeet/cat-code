@@ -1632,8 +1632,9 @@ describe('codex-fetch-adapter', () => {
       )
     }) as unknown as typeof globalThis.fetch
 
+    // Item 3 rule 1: no per-request prewarm, so the first WS send is the real
+    // turn — a zero-event close on it drives the HTTP fallback.
     fakeWs.responseBatches = [
-      [completedWsResponse('resp_prewarm')],
       [{ __close: { code: 1000, reason: 'policy' } }],
     ]
 
@@ -1676,7 +1677,6 @@ describe('codex-fetch-adapter', () => {
     }) as unknown as typeof globalThis.fetch
 
     fakeWs.responseBatches = [
-      [completedWsResponse('resp_prewarm')],
       [{ type: 'error', error: { message: 'The usage limit has been reached' } }],
     ]
 
@@ -1713,7 +1713,6 @@ describe('codex-fetch-adapter', () => {
     }) as unknown as typeof globalThis.fetch
 
     fakeWs.responseBatches = [
-      [completedWsResponse('resp_prewarm')],
       [
         {
           type: 'response.failed',
@@ -1763,7 +1762,6 @@ describe('codex-fetch-adapter', () => {
     }) as unknown as typeof globalThis.fetch
 
     fakeWs.responseBatches = [
-      [completedWsResponse('resp_prewarm')],
       [
         {
           type: 'response.created',
@@ -1845,7 +1843,6 @@ describe('codex-fetch-adapter', () => {
     }) as unknown as typeof globalThis.fetch
 
     fakeWs.responseBatches = [
-      [completedWsResponse('resp_prewarm')],
       [
         {
           type: 'response.failed',
@@ -2125,7 +2122,6 @@ describe('codex-fetch-adapter', () => {
     }) as unknown as typeof globalThis.fetch
 
     fakeWs.responseBatches = [
-      [completedWsResponse('resp_prewarm')],
       [{ type: 'error', error: { message: 'transient websocket failure' } }],
     ]
 
@@ -2148,7 +2144,9 @@ describe('codex-fetch-adapter', () => {
       expect(firstBody).toContain('http fallback 1')
       expect(firstBody).toContain('event: message_stop')
       expect(fetchCalls).toHaveLength(1)
-      expect(fakeWs.getSentCount()).toBe(2)
+      // Item 3 rule 1: only the real WS turn is sent (no prewarm), and it errors
+      // → one WS send, then HTTP fallback.
+      expect(fakeWs.getSentCount()).toBe(1)
 
       const secondResponse = await codexFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -2165,11 +2163,55 @@ describe('codex-fetch-adapter', () => {
       const secondBody = await secondResponse.text()
       expect(secondBody).toContain('http fallback 2')
       expect(fetchCalls).toHaveLength(2)
-      expect(fakeWs.getSentCount()).toBe(2)
+      // Sticky HTTP fallback is active for the second turn, so no further WS
+      // send happens.
+      expect(fakeWs.getSentCount()).toBe(1)
     } finally {
       globalThis.fetch = originalFetch
       _setWebSocketFactoryForTest(null)
       clearWebSocketSession('conv_http_sticky')
+      resetCodexCacheContext()
+    }
+  })
+
+  // Item 3 rule 1: a normal streaming WS turn now sends exactly ONE request
+  // (the real turn) — the per-request prewarm that produced the second send was
+  // removed. This replaces the old six tests whose responseBatches[0] was a
+  // dedicated 'resp_prewarm' seed batch.
+  test('createCodexFetch sends a single WS request with no prewarm on the happy path', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+
+    globalThis.fetch = (async () => {
+      throw new Error('HTTP fallback must not run when the WS turn completes')
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [[completedWsResponse('resp_real')]]
+
+    try {
+      const response = await createCodexFetch(accessToken, 'conv_no_prewarm')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        },
+      )
+      await response.text()
+      // Exactly one WS send: the real turn, not a prewarm + real pair.
+      expect(fakeWs.getSentCount()).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_no_prewarm')
       resetCodexCacheContext()
     }
   })

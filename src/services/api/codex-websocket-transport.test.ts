@@ -6,9 +6,9 @@ import {
   CodexWebSocketIdleTimeoutError,
   CodexWebSocketUsageLimitError,
   clearWebSocketSession,
+  closeSocketPreservingState,
   ensureWebSocketSession,
   registerSendPathLogger,
-  schedulePrewarm,
   streamTurnViaWebSocket,
   streamTurnViaWebSocketLocked,
 } from './codex-websocket-transport.js'
@@ -174,44 +174,16 @@ describe('streamTurnViaWebSocket', () => {
     expect(fakeWs.getSent()[0]!['x-codex-turn-state']).toBeUndefined()
   })
 
-  test('schedulePrewarm sends empty input from a non-empty seed body', async () => {
+  // Item 3 rule 1: the per-request prewarm was removed. A locked turn now sends
+  // exactly ONE request (the real turn) — no generate=false prewarm seed ahead
+  // of it. (The three old tests here pinned the prewarm+real double-send that was
+  // the 156-prewarm-per-conversation pathology.)
+  test('streamTurnViaWebSocketLocked sends exactly one request (no prewarm)', async () => {
     installFakeWs()
-    fakeWs.responses = [completedEvent('resp_prewarm')]
+    await ensureWebSocketSession(CONV_ID, AUTH)
 
-    schedulePrewarm(
-      CONV_ID,
-      { instructions: 'sys', input: [{ role: 'user', content: 'real prompt' }] },
-      AUTH,
-    )
-
-    await new Promise(resolve => setTimeout(resolve, 0))
-
-    const sent = fakeWs.getSent()
-    expect(sent).toHaveLength(1)
-    expect(sent[0]!.generate).toBe(false)
-    expect(sent[0]!.input).toEqual([])
-  })
-
-  test('streamTurnViaWebSocketLocked waits for scheduled prewarm before real turn', async () => {
-    installFakeWs()
-
-    let sendCount = 0
-    fakeWs.send = (data: string) => {
-      fakeWs['sent'].push(data)
-      sendCount += 1
-      if (sendCount === 1) {
-        setTimeout(() => fakeWs.deliver(completedEvent('resp_prewarm')), 10)
-      } else {
-        Promise.resolve().then(() => fakeWs.deliver(completedEvent('resp_real')))
-      }
-    }
-
-    schedulePrewarm(
-      CONV_ID,
-      { instructions: 'sys', input: [{ role: 'user', content: 'real prompt' }] },
-      AUTH,
-    )
-    const realTurn = collectEvents(
+    fakeWs.responses = [completedEvent('resp_real')]
+    await collectEvents(
       streamTurnViaWebSocketLocked(
         CONV_ID,
         { instructions: 'sys', input: [{ role: 'user', content: 'real prompt' }] },
@@ -220,61 +192,12 @@ describe('streamTurnViaWebSocket', () => {
       ),
     )
 
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(fakeWs.getSent()).toHaveLength(1)
-
-    await realTurn
-
     const sent = fakeWs.getSent()
-    expect(sent).toHaveLength(2)
-    expect(sent[0]!.generate).toBe(false)
-    expect(sent[0]!.input).toEqual([])
-    expect(sent[1]!.previous_response_id).toBe('resp_prewarm')
-    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'real prompt' }])
-  })
-
-  test('coalesces prewarm and real turn while the socket is still opening', async () => {
-    const fakeSessions: FakeWebSocket[] = []
-    _setWebSocketFactoryForTest(() => {
-      const ws = new FakeWebSocket()
-      fakeSessions.push(ws)
-      return ws as never
-    })
-
-    const body = {
-      instructions: 'sys',
-      input: [{ role: 'user', content: 'real prompt' }],
-    }
-
-    schedulePrewarm(CONV_ID, body, AUTH)
-    const realTurn = collectEvents(
-      streamTurnViaWebSocketLocked(CONV_ID, body, AUTH, 1),
-    )
-
-    await Promise.resolve()
-    expect(fakeSessions).toHaveLength(1)
-
-    let sendCount = 0
-    fakeSessions[0]!.send = (data: string) => {
-      fakeSessions[0]!['sent'].push(data)
-      sendCount += 1
-      Promise.resolve().then(() => {
-        fakeSessions[0]!.deliver(
-          completedEvent(sendCount === 1 ? 'resp_prewarm' : 'resp_real'),
-        )
-      })
-    }
-    fakeSessions[0]!.triggerOpen()
-
-    await realTurn
-
-    const sent = fakeSessions[0]!.getSent()
-    expect(fakeSessions).toHaveLength(1)
-    expect(sent).toHaveLength(2)
-    expect(sent[0]!.generate).toBe(false)
-    expect(sent[0]!.input).toEqual([])
-    expect(sent[1]!.previous_response_id).toBe('resp_prewarm')
-    expect(sent[1]!.input).toEqual([{ role: 'user', content: 'real prompt' }])
+    expect(sent).toHaveLength(1)
+    // The single send is the real turn, not a generate=false prewarm.
+    expect(sent[0]!.generate).toBeUndefined()
+    expect(sent[0]!.previous_response_id).toBeUndefined()
+    expect(sent[0]!.input).toEqual([{ role: 'user', content: 'real prompt' }])
   })
 
   test('second turn sends delta with previous_response_id', async () => {
@@ -989,7 +912,11 @@ describe('streamTurnViaWebSocket', () => {
     expect(fakeSessions[1]?.readyState).toBe(FakeWebSocket.OPEN)
   })
 
-  test('preserves continuation state when the account changes', async () => {
+  // Item 3 rule 4: account rotation is NOT a transient reconnect. `sessions` is
+  // keyed by conversationId only, so chaining account A's previous_response_id
+  // from account B would mis-chain. On an account change the baseline is dropped
+  // and the new account's first request is a clean full send.
+  test('drops continuation state when the account changes (rule 4)', async () => {
     const fakeSessions: FakeWebSocket[] = []
 
     _setWebSocketFactoryForTest(() => {
@@ -1037,8 +964,10 @@ describe('streamTurnViaWebSocket', () => {
     )
 
     expect(fakeSessions).toHaveLength(2)
-    expect(fakeSessions[1]!.getSent()[0]!.previous_response_id).toBe('resp_001')
+    // Baseline dropped on rotation: no previous_response_id, full input resent.
+    expect(fakeSessions[1]!.getSent()[0]!.previous_response_id).toBeUndefined()
     expect(fakeSessions[1]!.getSent()[0]!.input).toEqual([
+      { role: 'user', content: 'first' },
       { role: 'user', content: 'second' },
     ])
   })
@@ -1139,5 +1068,210 @@ describe('streamTurnViaWebSocket', () => {
       globalThis.setTimeout = originalSetTimeout
       globalThis.clearTimeout = originalClearTimeout
     }
+  })
+
+  // ── Item 3: state-preserving lifecycle ─────────────────────────────────────
+
+  // Installs a factory that hands out a fresh auto-opening FakeWebSocket each
+  // time openSession() connects, so a socket swap (reconnect-preserve) after
+  // closeSocketPreservingState reopens onto a new socket.
+  function installMultiFakeWs(): FakeWebSocket[] {
+    const fakeSessions: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+    return fakeSessions
+  }
+
+  // Rule 2a: a transient mid-stream socket error kills the physical socket (so
+  // its late events cannot bleed into the next turn) but KEEPS the continuation
+  // baseline, so the next turn reconnects and continues incrementally.
+  test('transient socket error closes the socket but preserves the baseline (rule 2a)', async () => {
+    const sessionsList = installMultiFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    // Turn 1 completes and records a baseline.
+    sessionsList[0]!.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+
+    // Turn 2 hits an onerror mid-stream (transport 'error' event on the socket).
+    sessionsList[0]!.send = (data: string) => {
+      sessionsList[0]!['sent'].push(data)
+      Promise.resolve().then(() => sessionsList[0]!.triggerError({ message: 'boom' }))
+    }
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        {
+          instructions: 'sys',
+          input: [
+            { role: 'user', content: 'first' },
+            { role: 'user', content: 'second' },
+          ],
+        },
+        AUTH,
+        2,
+      ),
+    ).catch(() => undefined)
+
+    // The physical socket was closed...
+    expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.CLOSED)
+
+    // ...but the baseline survives: reconnect onto a fresh socket (the closed
+    // socket forces the reconnect-preserve branch), then the next turn sends an
+    // incremental delta anchored on resp_001 (not a full send).
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    expect(sessionsList).toHaveLength(2)
+    sessionsList[1]!.responses = [completedEvent('resp_003')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+    const resumed = sessionsList[1]!.getSent()[0]!
+    expect(resumed.previous_response_id).toBe('resp_001')
+  })
+
+  // Rule 2b: a chained-request server error that is NOT 'not found' must still
+  // reset the baseline, so the next send is a clean full send rather than a
+  // poisoned incremental that would loop through sticky HTTP fallback forever.
+  test('non-"not found" server error resets the baseline (rule 2b)', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    const defaultSend = fakeWs.send.bind(fakeWs)
+
+    // Turn 1 records a baseline.
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+
+    // Turn 2: server rejects the chained request with a generic (non-TTL) error.
+    fakeWs.send = (data: string) => {
+      fakeWs['sent'].push(data)
+      Promise.resolve().then(() =>
+        fakeWs.deliverError({ code: 'server_error', message: 'internal error' }),
+      )
+    }
+    const err = await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        {
+          instructions: 'sys',
+          input: [
+            { role: 'user', content: 'first' },
+            { role: 'user', content: 'second' },
+          ],
+        },
+        AUTH,
+        2,
+      ),
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+
+    // Baseline reset: the socket is still open (a bare server error doesn't close
+    // it), so the next turn sends a FULL request with no previous_response_id.
+    fakeWs.send = defaultSend
+    fakeWs.responses = [completedEvent('resp_003')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        {
+          instructions: 'sys',
+          input: [
+            { role: 'user', content: 'first' },
+            { role: 'user', content: 'second' },
+          ],
+        },
+        AUTH,
+        2,
+      ),
+    )
+    const sent = fakeWs.getSent()
+    const lastSend = sent[sent.length - 1]!
+    expect(lastSend.previous_response_id).toBeUndefined()
+    expect(lastSend.input).toEqual([
+      { role: 'user', content: 'first' },
+      { role: 'user', content: 'second' },
+    ])
+  })
+
+  // Rule 5: an aborted turn (consumer abandons iteration) leaves the socket open
+  // and the server still streaming. The generator's finally must close that
+  // socket (preserving the baseline) so the dead turn's late response.completed
+  // cannot land in the next turn's handler and poison the baseline.
+  test('aborted turn closes the socket without poisoning the next baseline (rule 5)', async () => {
+    const sessionsList = installMultiFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    // Turn 1 records a baseline.
+    sessionsList[0]!.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+
+    // Turn 2: deliver one event, then the consumer abandons iteration after the
+    // first yield (simulating Esc-abort) WITHOUT reaching response.completed.
+    sessionsList[0]!.send = (data: string) => {
+      sessionsList[0]!['sent'].push(data)
+      Promise.resolve().then(() => sessionsList[0]!.deliver({ type: 'response.created' }))
+    }
+    const gen = streamTurnViaWebSocket(
+      CONV_ID,
+      {
+        instructions: 'sys',
+        input: [
+          { role: 'user', content: 'first' },
+          { role: 'user', content: 'second' },
+        ],
+      },
+      AUTH,
+      2,
+    )
+    await gen.next() // consume the first yielded event
+    await gen.return(undefined) // abandon the turn (runs the generator finally)
+
+    // The dead socket is closed...
+    expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.CLOSED)
+
+    // ...even if the dead turn's late response.completed arrives now, it hits a
+    // closed socket whose listeners were detached and cannot overwrite the
+    // baseline. Reconnect, then the next turn still chains resp_001 from turn 1.
+    sessionsList[0]!.deliver(completedEvent('resp_ghost'))
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    expect(sessionsList).toHaveLength(2)
+    sessionsList[1]!.responses = [completedEvent('resp_003')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+    expect(sessionsList[1]!.getSent()[0]!.previous_response_id).toBe('resp_001')
   })
 })
