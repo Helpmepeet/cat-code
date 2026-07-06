@@ -49,6 +49,22 @@ export function registerSendPathLogger(cb: (entry: SendPathEntry) => void): void
   onSendPathComplete = cb
 }
 
+// Canonicalizer for recorded response output items. Registered by the fetch
+// adapter (canonicalizeCodexItem) so that the shape we RECORD at response time
+// matches the shape translateMessages REPLAYS on the next turn, keeping
+// reconcileCanonicalDelta's incremental path alive on unchanged history. The
+// transport cannot import the adapter (the adapter imports the transport), so
+// the dependency is injected here.
+let canonicalizeOutputItem:
+  | ((item: Record<string, unknown>) => Record<string, unknown>)
+  | null = null
+
+export function registerOutputItemCanonicalizer(
+  cb: (item: Record<string, unknown>) => Record<string, unknown>,
+): void {
+  canonicalizeOutputItem = cb
+}
+
 const CODEX_WS_URL = 'wss://chatgpt.com/backend-api/codex/responses'
 
 // OpenAI-Beta header value required for WebSocket transport (different from HTTP).
@@ -556,7 +572,7 @@ function getIncrementalInputDelta(
  * Returns the new-items delta (may be empty []) on success, or null with a
  * diagnostic reason when a full send is required.
  */
-function reconcileCanonicalDelta(
+export function reconcileCanonicalDelta(
   currentInput: Array<Record<string, unknown>>,
   previousInput: Array<Record<string, unknown>>,
   previousOutputItems: Array<Record<string, unknown>>,
@@ -620,12 +636,33 @@ function reconcileCanonicalDelta(
 function normalizeCompletedOutputItem(
   item: Record<string, unknown>,
 ): Record<string, unknown> {
+  // The adapter registers canonicalizeCodexItem, which produces the single
+  // canonical shape that translateMessages replays on the next turn (dropping
+  // volatile fields like logprobs and re-normalizing tool arguments through the
+  // real tool pipeline). Always prefer it so record-time and replay-time shapes
+  // are identical.
+  if (canonicalizeOutputItem) {
+    return canonicalizeOutputItem(item)
+  }
+
+  // Fallback for callers that never load the adapter (unit tests that exercise
+  // the transport in isolation). Mirrors the canonical message/reasoning/tool
+  // shapes so the transport is self-consistent, minus the tool-argument
+  // re-normalization that requires the adapter's tool registry.
   if (item.type === 'message') {
+    const parts = Array.isArray(item.content) ? item.content : []
     return {
       type: 'message',
       role: item.role,
-      content: cloneJsonValue(Array.isArray(item.content) ? item.content : []),
-      status: item.status,
+      content: parts.map(part => {
+        const p = part as Record<string, unknown>
+        return {
+          type: 'output_text',
+          text: p.text,
+          annotations: Array.isArray(p.annotations) ? p.annotations : [],
+        }
+      }),
+      status: 'completed',
     }
   }
 

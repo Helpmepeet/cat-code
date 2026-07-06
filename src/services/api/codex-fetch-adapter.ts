@@ -30,6 +30,7 @@ import {
   streamTurnViaWebSocketLocked,
   registerStaleResponseIdCallback,
   registerSendPathLogger,
+  registerOutputItemCanonicalizer,
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
   CodexWebSocketUsageLimitError,
@@ -42,6 +43,16 @@ import {
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
+import {
+  normalizeToolInput,
+  normalizeToolInputForAPI,
+  withSuppressedNormalizeSideEffects,
+} from '../../utils/api.js'
+import { getAllBaseTools } from '../../tools.js'
+import { findToolByName } from '../../Tool.js'
+import { safeParseJSON } from '../../utils/json.js'
+
+const APPLY_PATCH_TOOL_NAME = 'Apply_patch'
 
 // ── Session-level IDs for cache routing ───────────────────────────────
 // OpenAI's ChatGPT backend uses these headers to route requests to the
@@ -615,45 +626,158 @@ function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, u
     })
 }
 
-// ── Tool result content serialization ───────────────────────────────
+// ── Codex output-item canonicalization ──────────────────────────────
+//
+// The WebSocket transport only sends an incremental delta when the freshly
+// translated input[] byte-matches the server-recorded output items from the
+// previous turn (see reconcileCanonicalDelta / responseItemsEqual). For that to
+// hold, the shape we RECORD at response time (from raw server output items) must
+// be identical to the shape we REPLAY on the next turn (from the transcript via
+// translateMessages). canonicalizeCodexItem() defines that single shape; it is
+// applied on the record side (normalizeCompletedOutputItem in the transport) and
+// mirrored exactly by the replay branches in translateMessages below.
 
 /**
- * Serializes Anthropic tool_result content (string, array of blocks, or absent)
- * into the Codex function_call_output `output` field. Handles multimodal
- * content (text + base64 images).
+ * Recomputes the canonical wire form of a recorded function_call's `arguments`
+ * so it byte-matches what translateMessages will emit on replay.
+ *
+ * On replay, the transcript holds `normalizeToolInput(raw)` (applied once at
+ * decode, messages.ts) and the send path applies `normalizeToolInputForAPI` on
+ * top (messages.ts), then translateMessages emits `JSON.stringify(block.input)`.
+ * To match, the record side composes the same two passes over the raw server
+ * arguments — exactly once, with side effects suppressed (the decode-time pass
+ * already fired them). Unknown tools (no registry entry) and unparseable
+ * arguments fall back to a deterministic re-stringify (JSON.parse→stringify),
+ * which still kills whitespace/key-order drift.
  */
-function translateToolResultOutput(
-  content: AnthropicContentBlock['content'],
-): string | Array<Record<string, unknown>> {
-  if (typeof content === 'string') {
-    return content
+function canonicalizeToolArgumentsForRecord(
+  toolName: string,
+  rawArguments: unknown,
+): string {
+  const rawString =
+    typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments ?? {})
+  const parsed = safeParseJSON(rawString)
+  if (parsed === null || typeof parsed !== 'object') {
+    // Not JSON-object arguments (or empty): re-stringify deterministically.
+    return typeof parsed === 'undefined' ? rawString : JSON.stringify(parsed)
   }
 
-  if (!Array.isArray(content)) {
-    return ''
+  const tool = findToolByName(getAllBaseTools(), toolName)
+  if (!tool) {
+    // Unknown/MCP tool: normalizeToolInput is a no-op for these on replay too,
+    // so a deterministic re-stringify is the canonical form on both sides.
+    return JSON.stringify(parsed)
   }
 
-  const outputItems: Array<Record<string, unknown>> = []
-  for (const part of content) {
-    if (part.type === 'text') {
-      outputItems.push({
-        type: 'input_text',
-        text: part.text,
-      })
-    } else if (
-      part.type === 'image' &&
-      typeof part.source === 'object' &&
-      part.source !== null &&
-      (part.source as Record<string, unknown>).type === 'base64'
-    ) {
-      outputItems.push({
-        type: 'input_image',
-        image_url: `data:${(part.source as Record<string, string>).media_type};base64,${(part.source as Record<string, string>).data}`,
-      })
+  try {
+    return withSuppressedNormalizeSideEffects(() => {
+      const decoded = normalizeToolInput(
+        tool,
+        parsed as Record<string, unknown>,
+      )
+      const forApi = normalizeToolInputForAPI(tool, decoded)
+      return JSON.stringify(forApi)
+    })
+  } catch {
+    // Normalization threw (e.g. schema mismatch on a partial arg set): fall back
+    // to a deterministic re-stringify so record and replay still agree on shape
+    // for the common (no-mutation) case.
+    return JSON.stringify(parsed)
+  }
+}
+
+/**
+ * Produces the one canonical shape for a Codex response output item, dropping
+ * volatile/unknown fields (e.g. `logprobs` on output_text parts — codex-rs
+ * protocol types have no such field and the server tolerates its absence). Used
+ * at record time by the transport; the translateMessages replay branches emit
+ * the same shapes so responseItemsEqual passes on unchanged history.
+ */
+export function canonicalizeCodexItem(
+  item: Record<string, unknown>,
+): Record<string, unknown> {
+  if (item.type === 'message') {
+    const parts = Array.isArray(item.content) ? item.content : []
+    return {
+      type: 'message',
+      role: item.role,
+      content: parts.map(part => {
+        const p = part as Record<string, unknown>
+        // Canonical content part: drop logprobs and any other unknown fields.
+        return {
+          type: 'output_text',
+          text: p.text,
+          annotations: Array.isArray(p.annotations) ? p.annotations : [],
+        }
+      }),
+      status: 'completed',
     }
   }
 
-  return outputItems.length > 0 ? outputItems : ''
+  if (item.type === 'function_call') {
+    return {
+      type: 'function_call',
+      call_id: item.call_id,
+      name: item.name,
+      arguments: canonicalizeToolArgumentsForRecord(
+        typeof item.name === 'string' ? item.name : '',
+        item.arguments,
+      ),
+    }
+  }
+
+  if (item.type === 'custom_tool_call') {
+    return {
+      type: 'custom_tool_call',
+      call_id: item.call_id,
+      name: item.name,
+      input: item.input,
+    }
+  }
+
+  if (item.type === 'reasoning') {
+    return {
+      type: 'reasoning',
+      summary: [],
+      encrypted_content: item.encrypted_content,
+    }
+  }
+
+  // web_search_call and any future item kinds have no replay branch in
+  // translateMessages; preserve them verbatim (a full send on the next turn is
+  // the accepted residual).
+  return JSON.parse(JSON.stringify(item))
+}
+
+// Register the canonicalizer with the transport so normalizeCompletedOutputItem
+// runs the exact same record-side canonicalization as the replay path here.
+registerOutputItemCanonicalizer(canonicalizeCodexItem)
+
+/**
+ * Recovers the raw custom_tool_call `input` string for an Apply_patch tool_use
+ * so replay matches the server-recorded custom_tool_call baseline.
+ *
+ * The transcript stores Apply_patch input as a union (see FilePatchTool/types.ts
+ * and messages.ts's unparseable-envelope wrap):
+ *   - `{ input: "<raw envelope text>" }`  — the common case; recover raw.
+ *   - a bare string                       — already the raw envelope.
+ *   - `{ ops: [...] }`                     — the valid-JSON structured arm; the
+ *     server recorded the raw JSON string it received, so re-serialize it.
+ */
+function recoverApplyPatchInput(input: unknown): string {
+  if (typeof input === 'string') {
+    return input
+  }
+  if (input && typeof input === 'object') {
+    const obj = input as Record<string, unknown>
+    if (typeof obj.input === 'string') {
+      return obj.input
+    }
+    // `{ ops: [...] }` arm (or any other object shape): the custom_tool_call
+    // input the server saw was the serialized JSON, so serialize deterministically.
+    return JSON.stringify(input)
+  }
+  return ''
 }
 
 // ── Message translation: Anthropic → Codex input ────────────────────
@@ -827,14 +951,22 @@ function translateMessages(
             continue
           }
           pendingToolCallIds.add(callId)
-          if (block.name === 'Apply_patch' && typeof block.input === 'string') {
+          if (block.name === APPLY_PATCH_TOOL_NAME) {
+            // The server ALWAYS records Apply_patch as a custom_tool_call (it is
+            // a custom lark-grammar tool). Emit custom_tool_call unconditionally
+            // so replay matches the recorded baseline (previously this only fired
+            // when block.input was still a string, causing type_mismatch since
+            // the transcript stores it wrapped/parsed).
             codexInput.push({
               type: 'custom_tool_call',
               call_id: callId,
               name: block.name || '',
-              input: block.input,
+              input: recoverApplyPatchInput(block.input),
             })
           } else {
+            // Deterministic re-serialization on replay; the record side runs the
+            // same normalize pipeline (canonicalizeToolArgumentsForRecord) so the
+            // two agree byte-for-byte on unchanged history.
             codexInput.push({
               type: 'function_call',
               call_id: callId,

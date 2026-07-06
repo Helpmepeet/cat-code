@@ -12,7 +12,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { translateToCodexBody } from './codex-fetch-adapter.js'
+import { canonicalizeCodexItem, translateToCodexBody } from './codex-fetch-adapter.js'
+import { reconcileCanonicalDelta } from './codex-websocket-transport.js'
 import { normalizeMessagesForAPI } from '../../utils/messages.js'
 
 // ── Minimal message factories ─────────────────────────────────────────────────
@@ -94,39 +95,48 @@ function transcriptToCodexInput(
   return Array.isArray(codexBody.input) ? (codexBody.input as Array<Record<string, unknown>>) : []
 }
 
-/** Simulate what the WS transport stores after a completed turn. */
-function simulateCanonicalState(sentInput: Array<Record<string, unknown>>, outputText = 'Done.') {
-  // normalizeCompletedOutputItem strips volatile fields and keeps only stable ones
-  const outputItem: Record<string, unknown> = {
-    type: 'message',
-    role: 'assistant',
-    content: [{ type: 'output_text', text: outputText, annotations: [] }],
-    status: 'completed',
-  }
+/**
+ * Simulate what the WS transport stores after a completed turn.
+ *
+ * The output items MUST be built by running raw server output items through the
+ * REAL canonicalizer (canonicalizeCodexItem) — the same function the transport's
+ * normalizeCompletedOutputItem uses — otherwise these tests would only exercise
+ * a local reimplementation and pass while testing nothing. `rawOutputItems` are
+ * shaped exactly as the server sends them (e.g. output_text parts carry the
+ * `logprobs` field the replay path must drop).
+ */
+function simulateCanonicalState(
+  sentInput: Array<Record<string, unknown>>,
+  outputText = 'Done.',
+  rawOutputItems?: Array<Record<string, unknown>>,
+) {
+  const raw = rawOutputItems ?? [
+    {
+      type: 'message',
+      role: 'assistant',
+      status: 'completed',
+      // Server sends logprobs on output_text parts; canonicalizeCodexItem drops it.
+      content: [{ type: 'output_text', text: outputText, annotations: [], logprobs: [] }],
+    },
+  ]
   return {
     sentInput,
-    outputItems: [outputItem],
+    outputItems: raw.map(item => canonicalizeCodexItem(item)),
   }
 }
 
 // ── Helpers for checking canonical reconciliation ─────────────────────────────
 
-/** Returns the delta using the canonical hybrid strategy. */
+/**
+ * Returns the delta using the REAL transport reconciler (reconcileCanonicalDelta),
+ * so this file tests the actual continuation contract rather than a copy of it.
+ */
 function canonicalDelta(
   freshInput: Array<Record<string, unknown>>,
   sentInput: Array<Record<string, unknown>>,
   outputItems: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> | null {
-  const baselineLength = sentInput.length + outputItems.length
-  if (freshInput.length < baselineLength) return null
-
-  // Verify output items strictly (server-sourced, no drift)
-  for (let i = 0; i < outputItems.length; i++) {
-    const expected = JSON.stringify(outputItems[i]!)
-    const actual = JSON.stringify(freshInput[sentInput.length + i]!)
-    if (expected !== actual) return null
-  }
-  return freshInput.slice(baselineLength)
+  return reconcileCanonicalDelta(freshInput, sentInput, outputItems).delta
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -240,6 +250,32 @@ describe('codex continuation e2e: normalization → translation → reconciliati
     const turn2Input = transcriptToCodexInput([userMsg('fresh context')])
     const delta = canonicalDelta(turn2Input, sentInput, outputItems)
     expect(delta).toBeNull()
+  })
+
+  test('logprobs-bearing server message stays incremental (message_content_drift killed)', () => {
+    // Regression for message_content_drift len_delta=-14: the server's output_text
+    // part carries a `logprobs` field the replay path drops. The record side must
+    // drop it too so the two byte-match.
+    const turn1Input = transcriptToCodexInput([userMsg('hello')])
+    const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'world', [
+      {
+        type: 'message',
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: 'world', annotations: [], logprobs: [] }],
+      },
+    ])
+    // The canonical baseline must not contain logprobs.
+    expect(JSON.stringify(outputItems)).not.toContain('logprobs')
+
+    const turn2Input = transcriptToCodexInput([
+      userMsg('hello'),
+      assistantMsg('world'),
+      userMsg('next'),
+    ])
+    const delta = canonicalDelta(turn2Input, sentInput, outputItems)
+    expect(delta).not.toBeNull()
+    expect(delta!).toEqual([{ role: 'user', content: 'next' }])
   })
 
 })
