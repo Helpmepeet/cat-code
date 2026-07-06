@@ -26,10 +26,11 @@ import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 import {
   clearWebSocketSession,
-  schedulePrewarm,
+  closeSocketPreservingState,
   streamTurnViaWebSocketLocked,
   registerStaleResponseIdCallback,
   registerSendPathLogger,
+  registerOutputItemCanonicalizer,
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
   CodexWebSocketUsageLimitError,
@@ -42,6 +43,17 @@ import {
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
+import { TOOL_SEARCH_TOOL_NAME } from '../../tools/ToolSearchTool/constants.js'
+import {
+  normalizeToolInput,
+  normalizeToolInputForAPI,
+  withSuppressedNormalizeSideEffects,
+} from '../../utils/api.js'
+import { getAllBaseTools } from '../../tools.js'
+import { findToolByName } from '../../Tool.js'
+import { safeParseJSON } from '../../utils/json.js'
+
+const APPLY_PATCH_TOOL_NAME = 'Apply_patch'
 
 // ── Session-level IDs for cache routing ───────────────────────────────
 // OpenAI's ChatGPT backend uses these headers to route requests to the
@@ -393,14 +405,24 @@ function createCodexResponseFailedError(
   emittedVisibleOutput = false,
 ): Error {
   const failure = extractCodexResponseFailure(event)
+  const isAccountCap =
+    !emittedVisibleOutput && codexResponseFailureIndicatesAccountCap(failure)
   if (requestCacheMetadata) {
-    clearWebSocketSession(requestCacheMetadata.conversationId)
+    if (isAccountCap) {
+      // Item 3 rule 4: a cap failure means withRetry fails over to another
+      // account. `sessions` is keyed by conversationId only, so the preserved
+      // baseline was chained under the OLD account — drop it entirely so the
+      // new account's first request is a clean full send.
+      clearWebSocketSession(requestCacheMetadata.conversationId)
+    } else {
+      // Item 3 rule 3: a genuine (non-cap) response.failed left the previous
+      // GOOD baseline intact (state only commits on response.completed). Kill
+      // the socket so its late events cannot bleed into the next turn, but keep
+      // the baseline so the next turn continues instead of paying a full send.
+      closeSocketPreservingState(requestCacheMetadata.conversationId)
+    }
   }
-  if (
-    !emittedVisibleOutput &&
-    requestCacheMetadata &&
-    codexResponseFailureIndicatesAccountCap(failure)
-  ) {
+  if (isAccountCap && requestCacheMetadata) {
     return new CodexAccountCapError(requestCacheMetadata.accountId)
   }
   return new CodexResponseFailedError(failure)
@@ -615,45 +637,272 @@ function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, u
     })
 }
 
-// ── Tool result content serialization ───────────────────────────────
+// ── Codex output-item canonicalization ──────────────────────────────
+//
+// The WebSocket transport only sends an incremental delta when the freshly
+// translated input[] byte-matches the server-recorded output items from the
+// previous turn (see reconcileCanonicalDelta / responseItemsEqual). For that to
+// hold, the shape we RECORD at response time (from raw server output items) must
+// be identical to the shape we REPLAY on the next turn (from the transcript via
+// translateMessages). canonicalizeCodexItem() defines that single shape; it is
+// applied on the record side (normalizeCompletedOutputItem in the transport) and
+// mirrored exactly by the replay branches in translateMessages below.
 
 /**
- * Serializes Anthropic tool_result content (string, array of blocks, or absent)
- * into the Codex function_call_output `output` field. Handles multimodal
- * content (text + base64 images).
+ * Recomputes the canonical wire form of a recorded function_call's `arguments`
+ * so it byte-matches what translateMessages will emit on replay.
+ *
+ * On replay, the transcript holds `normalizeToolInput(raw)` (applied once at
+ * decode, messages.ts) and the send path applies `normalizeToolInputForAPI` on
+ * top (messages.ts), then translateMessages emits `JSON.stringify(block.input)`.
+ * To match, the record side composes the same two passes over the raw server
+ * arguments — exactly once, with side effects suppressed (the decode-time pass
+ * already fired them). Unknown tools (no registry entry) and unparseable
+ * arguments fall back to a deterministic re-stringify (JSON.parse→stringify),
+ * which still kills whitespace/key-order drift.
  */
-function translateToolResultOutput(
-  content: AnthropicContentBlock['content'],
-): string | Array<Record<string, unknown>> {
-  if (typeof content === 'string') {
-    return content
+function canonicalizeToolArgumentsForRecord(
+  toolName: string,
+  rawArguments: unknown,
+): string {
+  const rawString =
+    typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments ?? {})
+  const parsed = safeParseJSON(rawString)
+  if (parsed === null || typeof parsed !== 'object') {
+    // Not JSON-object arguments (or empty): re-stringify deterministically.
+    return typeof parsed === 'undefined' ? rawString : JSON.stringify(parsed)
   }
 
-  if (!Array.isArray(content)) {
-    return ''
+  const tool = findToolByName(getAllBaseTools(), toolName)
+  if (!tool) {
+    // Unknown/MCP tool: normalizeToolInput is a no-op for these on replay too,
+    // so a deterministic re-stringify is the canonical form on both sides.
+    return JSON.stringify(parsed)
   }
 
-  const outputItems: Array<Record<string, unknown>> = []
-  for (const part of content) {
-    if (part.type === 'text') {
-      outputItems.push({
-        type: 'input_text',
-        text: part.text,
-      })
-    } else if (
-      part.type === 'image' &&
-      typeof part.source === 'object' &&
-      part.source !== null &&
-      (part.source as Record<string, unknown>).type === 'base64'
-    ) {
-      outputItems.push({
-        type: 'input_image',
-        image_url: `data:${(part.source as Record<string, string>).media_type};base64,${(part.source as Record<string, string>).data}`,
-      })
+  try {
+    return withSuppressedNormalizeSideEffects(() => {
+      const decoded = normalizeToolInput(
+        tool,
+        parsed as Record<string, unknown>,
+      )
+      const forApi = normalizeToolInputForAPI(tool, decoded)
+      return JSON.stringify(forApi)
+    })
+  } catch {
+    // Normalization threw (e.g. schema mismatch on a partial arg set): fall back
+    // to a deterministic re-stringify so record and replay still agree on shape
+    // for the common (no-mutation) case.
+    return JSON.stringify(parsed)
+  }
+}
+
+/**
+ * Produces the one canonical shape for a Codex response output item, dropping
+ * volatile/unknown fields (e.g. `logprobs` on output_text parts — codex-rs
+ * protocol types have no such field and the server tolerates its absence). Used
+ * at record time by the transport; the translateMessages replay branches emit
+ * the same shapes so responseItemsEqual passes on unchanged history.
+ */
+export function canonicalizeCodexItem(
+  item: Record<string, unknown>,
+): Record<string, unknown> {
+  if (item.type === 'message') {
+    const parts = Array.isArray(item.content) ? item.content : []
+    return {
+      type: 'message',
+      role: item.role,
+      content: parts.map(part => {
+        const p = part as Record<string, unknown>
+        // Canonical content part: drop logprobs and any other unknown fields.
+        return {
+          type: 'output_text',
+          text: p.text,
+          annotations: Array.isArray(p.annotations) ? p.annotations : [],
+        }
+      }),
+      status: 'completed',
     }
   }
 
-  return outputItems.length > 0 ? outputItems : ''
+  if (item.type === 'function_call') {
+    return {
+      type: 'function_call',
+      call_id: item.call_id,
+      name: item.name,
+      arguments: canonicalizeToolArgumentsForRecord(
+        typeof item.name === 'string' ? item.name : '',
+        item.arguments,
+      ),
+    }
+  }
+
+  if (item.type === 'custom_tool_call') {
+    return {
+      type: 'custom_tool_call',
+      call_id: item.call_id,
+      name: item.name,
+      input: item.input,
+    }
+  }
+
+  if (item.type === 'reasoning') {
+    return {
+      type: 'reasoning',
+      summary: [],
+      encrypted_content: item.encrypted_content,
+    }
+  }
+
+  // web_search_call and any future item kinds have no replay branch in
+  // translateMessages; preserve them verbatim (a full send on the next turn is
+  // the accepted residual).
+  return JSON.parse(JSON.stringify(item))
+}
+
+// Register the canonicalizer with the transport so normalizeCompletedOutputItem
+// runs the exact same record-side canonicalization as the replay path here.
+registerOutputItemCanonicalizer(canonicalizeCodexItem)
+
+/**
+ * Recovers the raw custom_tool_call `input` string for an Apply_patch tool_use
+ * so replay matches the server-recorded custom_tool_call baseline.
+ *
+ * The transcript stores Apply_patch input as a union (see FilePatchTool/types.ts
+ * and messages.ts's unparseable-envelope wrap):
+ *   - `{ input: "<raw envelope text>" }`  — the common case; recover raw.
+ *   - a bare string                       — already the raw envelope.
+ *   - `{ ops: [...] }`                     — the valid-JSON structured arm; the
+ *     server recorded the raw JSON string it received, so re-serialize it.
+ */
+function recoverApplyPatchInput(input: unknown): string {
+  if (typeof input === 'string') {
+    return input
+  }
+  if (input && typeof input === 'object') {
+    const obj = input as Record<string, unknown>
+    if (typeof obj.input === 'string') {
+      return obj.input
+    }
+    // `{ ops: [...] }` arm (or any other object shape): the custom_tool_call
+    // input the server saw was the serialized JSON, so serialize deterministically.
+    return JSON.stringify(input)
+  }
+  return ''
+}
+
+// ── Record-time tool-result truncation (gpt models only) ─────────────
+//
+// Nothing prunes gpt history before autocompact (~229k) on this build, so
+// cat-code re-bills the full, untrimmed history on every cache miss. Codex CLI
+// middle-truncates every function/custom tool output to Tokens(10,000) ×1.2 at
+// record time (truncate_function_output_payload); gpt models were trained in
+// that environment. We mirror it at WIRE time inside translateMessages — the
+// single choke point every Codex request (fetch + WS, main + subagent + side
+// queries) passes through, and the ONLY translation path an openai request
+// takes. The transcript on disk stays full: a mid-session switch back to a
+// Claude model sees untruncated history and `--resume` is byte-stable.
+//
+// The truncated form is a PURE function of content (no timestamps, no counters):
+// identical across turns, so it does not break prompt-cache prefix stability and
+// does not fight Item 1's length-based incremental reconcile.
+
+// codex parity: Tokens(10,000) policy × 1.2 serialization allowance,
+// char-approximated at 4 bytes/token. Picked ONCE — changing it later is a
+// one-time cache break for every live conversation.
+const CODEX_TOOL_OUTPUT_TOKEN_BUDGET = 10_000
+const CODEX_TOOL_OUTPUT_SERIALIZATION_MULTIPLIER = 1.2
+const CODEX_APPROX_CHARS_PER_TOKEN = 4
+export const CODEX_TOOL_OUTPUT_MAX_CHARS = Math.floor(
+  CODEX_TOOL_OUTPUT_TOKEN_BUDGET *
+    CODEX_TOOL_OUTPUT_SERIALIZATION_MULTIPLIER *
+    CODEX_APPROX_CHARS_PER_TOKEN,
+) // 48,000 chars
+
+/**
+ * Middle-truncate an over-budget tool-result string to ~10k tokens, mirroring
+ * codex's truncate_function_output_payload: keep a head and a tail, drop the
+ * middle, splice in a deterministic marker. The marker tells the model the
+ * middle was elided and how to retrieve it — re-Read the file with offset/limit,
+ * or re-run the Bash/Grep command more narrowly (readFileState marks a file
+ * fully-read regardless of wire truncation, and Edit fails closed since
+ * old_string matches disk, so the model must be told explicitly).
+ *
+ * Pure function of `text`: no timestamps/counters, so the output is byte-
+ * identical across turns for the same input.
+ */
+export function truncateCodexToolOutputText(text: string): string {
+  if (text.length <= CODEX_TOOL_OUTPUT_MAX_CHARS) {
+    return text
+  }
+  const omitted = text.length - CODEX_TOOL_OUTPUT_MAX_CHARS
+  const marker =
+    `\n\n[... ${omitted} characters truncated to fit the model's tool-output ` +
+    `budget; full output was preserved on disk but is not in this request. To ` +
+    `see the elided middle, re-Read the file with an offset/limit around the ` +
+    `region you need, or re-run the originating Bash/Grep command scoped more ` +
+    `narrowly ...]\n\n`
+  // Reserve room for the marker inside the budget so the truncated payload never
+  // exceeds CODEX_TOOL_OUTPUT_MAX_CHARS. Split the remainder head-heavy (2/3
+  // head, 1/3 tail): the head carries the framing/most-relevant lines, the tail
+  // preserves the end (e.g. a final error or summary line).
+  const usable = Math.max(0, CODEX_TOOL_OUTPUT_MAX_CHARS - marker.length)
+  const headLen = Math.floor((usable * 2) / 3)
+  const tailLen = usable - headLen
+  const head = text.slice(0, headLen)
+  const tail = tailLen > 0 ? text.slice(text.length - tailLen) : ''
+  return head + marker + tail
+}
+
+/**
+ * Apply record-time truncation to a translated function_call_output `output`.
+ *
+ * Exemptions (returned unchanged):
+ *  - ToolSearch results (schema-bearing; truncating them can drop deferred-tool
+ *    definitions mid-payload and break tool loading — codex likewise exempts its
+ *    ToolSearchOutput variant),
+ *  - results whose originating tool can't be identified (`toolName` undefined):
+ *    the openai path doesn't run ensureToolResultPairing (unlike messagesForAPI
+ *    in claude.ts), so a resumed/teleported transcript can carry an ORPHANED
+ *    tool_result whose tool_use isn't in this message set. Fail safe there
+ *    rather than risk truncating an orphaned schema-bearing ToolSearch payload;
+ *    the giant-Read case we target is always paired (its tool_use is present),
+ *    so this costs nothing on the hot path,
+ *  - any output containing an image (`input_image`) part — never truncate an
+ *    image or its accompanying multimodal array,
+ *  - outputs already under the cap.
+ *
+ * Truncates:
+ *  - a plain string output (the common giant-Read case — Read returns its text
+ *    as a bare string), and
+ *  - a text-only array output (single/multiple `input_text` parts, no image):
+ *    the concatenated text collapses to one truncated `input_text` part.
+ */
+function applyCodexToolOutputTruncation(
+  output: string | Array<Record<string, unknown>>,
+  toolName: string | undefined,
+): string | Array<Record<string, unknown>> {
+  if (toolName === undefined || toolName === TOOL_SEARCH_TOOL_NAME) {
+    return output
+  }
+  if (typeof output === 'string') {
+    return truncateCodexToolOutputText(output)
+  }
+  if (!Array.isArray(output)) {
+    return output
+  }
+  // Any image present → never truncate (multimodal preserved verbatim).
+  const hasImage = output.some(part => part.type === 'input_image')
+  if (hasImage) {
+    return output
+  }
+  const combined = output
+    .map(part => (typeof part.text === 'string' ? part.text : ''))
+    .join('')
+  if (combined.length <= CODEX_TOOL_OUTPUT_MAX_CHARS) {
+    return output
+  }
+  return [{ type: 'input_text', text: truncateCodexToolOutputText(combined) }]
 }
 
 // ── Message translation: Anthropic → Codex input ────────────────────
@@ -676,6 +925,11 @@ function translateMessages(
   // we can also drop their paired tool_result blocks — otherwise the Codex
   // request would contain orphaned function_call_output items.
   const skippedToolCallIds = new Set<string>()
+  // Map each call_id to the tool that produced it. tool_use blocks always
+  // precede their paired tool_result in the transcript, so by the time a
+  // function_call_output is emitted its originating tool name is known. Used to
+  // exempt schema-bearing ToolSearch results from wire-time truncation.
+  const toolNameByCallId = new Map<string, string>()
 
   const resolveToolResultCallId = (block: AnthropicContentBlock): string => {
     if (typeof block.tool_use_id === 'string' && block.tool_use_id.length > 0) {
@@ -760,10 +1014,14 @@ function translateMessages(
             continue
           }
           const callId = resolveToolResultCallId(block)
+          const output = applyCodexToolOutputTruncation(
+            translateToolResultOutput(block.content),
+            toolNameByCallId.get(callId),
+          )
           codexInput.push({
             type: 'function_call_output',
             call_id: callId,
-            output: translateToolResultOutput(block.content),
+            output,
           })
         } else if (block.type === 'text' && typeof block.text === 'string') {
           contentArr.push({ type: 'input_text', text: block.text })
@@ -827,14 +1085,25 @@ function translateMessages(
             continue
           }
           pendingToolCallIds.add(callId)
-          if (block.name === 'Apply_patch' && typeof block.input === 'string') {
+          if (typeof block.name === 'string' && block.name.length > 0) {
+            toolNameByCallId.set(callId, block.name)
+          }
+          if (block.name === APPLY_PATCH_TOOL_NAME) {
+            // The server ALWAYS records Apply_patch as a custom_tool_call (it is
+            // a custom lark-grammar tool). Emit custom_tool_call unconditionally
+            // so replay matches the recorded baseline (previously this only fired
+            // when block.input was still a string, causing type_mismatch since
+            // the transcript stores it wrapped/parsed).
             codexInput.push({
               type: 'custom_tool_call',
               call_id: callId,
               name: block.name || '',
-              input: block.input,
+              input: recoverApplyPatchInput(block.input),
             })
           } else {
+            // Deterministic re-serialization on replay; the record side runs the
+            // same normalize pipeline (canonicalizeToolArgumentsForRecord) so the
+            // two agree byte-for-byte on unchanged history.
             codexInput.push({
               type: 'function_call',
               call_id: callId,
@@ -2981,7 +3250,10 @@ export function createCodexFetch(
     if (isStreamingAnthropicRequest) {
       if (!hasStickyHttpFallback(conversationId)) {
         try {
-          schedulePrewarm(conversationId, codexBody, authHeaders)
+          // Item 3 rule 1: no per-request prewarm. It re-fired on every
+          // session-clearing event and never warmed ahead of time (the real
+          // request awaited it), so it just double-billed the prefix. The first
+          // real WS call seeds the same prefix.
           const wsRequestStartedAtMs = Date.now()
           const wsEvents = await primeCodexEvents(
             streamTurnViaWebSocketLocked(
@@ -3009,12 +3281,26 @@ export function createCodexFetch(
             },
           )
         } catch (wsError) {
-          clearWebSocketSession(conversationId)
           const normalized = normalizeInitialWebSocketError(
             wsError,
             currentAccountId,
             conversationId,
           )
+          // Item 3 rules 2a/4: distinguish rotation from transient failure.
+          //   - Cap error → withRetry fails over to another account; the
+          //     conversationId-keyed baseline was chained under THIS account, so
+          //     drop it (full teardown) — the next account must start clean.
+          //   - Everything else (idle timeout, closed-before-completed, generic
+          //     transport error → HTTP fallback) is transient: the socket is
+          //     already closed by the transport's failStream, and nothing was
+          //     committed this turn, so KEEP the baseline. The turn replays over
+          //     HTTP now and WS resumes from the preserved baseline after the
+          //     sticky window, avoiding an unnecessary full send.
+          if (normalized instanceof CodexAccountCapError) {
+            clearWebSocketSession(conversationId)
+          } else {
+            closeSocketPreservingState(conversationId)
+          }
           // Explicit upstream response failures must propagate. Cap errors let
           // withRetry fail over; non-cap failures preserve the upstream error
           // instead of replaying the turn over HTTP.

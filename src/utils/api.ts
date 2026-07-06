@@ -604,6 +604,29 @@ export async function logContextMetrics(
   })
 }
 
+// When true, normalizeToolInput is being run purely to compute the canonical
+// wire form of a tool call (Codex record-side round-trip canonicalization,
+// see canonicalizeToolArgumentsForRecord). In that mode it must not fire
+// telemetry or remote-snapshot side effects: the same normalization already
+// ran once at decode time, and re-firing here would double-count.
+let suppressNormalizeSideEffects = false
+
+/**
+ * Runs `fn` with normalizeToolInput's side effects (analytics events, remote
+ * file-snapshot persistence) suppressed. Used by the Codex adapter to recompute
+ * the canonical wire form of a recorded function_call without re-triggering the
+ * side effects that already fired when the call was first decoded.
+ */
+export function withSuppressedNormalizeSideEffects<T>(fn: () => T): T {
+  const prev = suppressNormalizeSideEffects
+  suppressNormalizeSideEffects = true
+  try {
+    return fn()
+  } finally {
+    suppressNormalizeSideEffects = prev
+  }
+}
+
 // TODO: Generalize this to all tools
 export function normalizeToolInput<T extends Tool>(
   tool: T,
@@ -623,7 +646,9 @@ export function normalizeToolInput<T extends Tool>(
       const plan = getPlan(agentId)
       const planFilePath = getPlanFilePath(agentId)
       // Persist file snapshot for CCR sessions so the plan survives pod recycling
-      void persistFileSnapshotIfRemote()
+      if (!suppressNormalizeSideEffects) {
+        void persistFileSnapshotIfRemote()
+      }
       return plan !== null ? { ...input, plan, planFilePath } : input
     }
     case BashTool.name: {
@@ -643,7 +668,10 @@ export function normalizeToolInput<T extends Tool>(
       normalizedCommand = normalizedCommand.replace(/\\\\;/g, '\\;')
 
       // Logging for commands that are only echoing a string. This is to help us understand how often  Claude talks via bash
-      if (/^echo\s+["']?[^|&;><]*["']?$/i.test(normalizedCommand.trim())) {
+      if (
+        !suppressNormalizeSideEffects &&
+        /^echo\s+["']?[^|&;><]*["']?$/i.test(normalizedCommand.trim())
+      ) {
         logEvent('tengu_bash_tool_simple_echo', {})
       }
 

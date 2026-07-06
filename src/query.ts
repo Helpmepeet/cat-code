@@ -668,7 +668,10 @@ async function* queryLoop(
       !collapseOwnsIt
     ) {
       const { isAtBlockingLimit } = calculateTokenWarningState(
-        tokenCountWithEstimation(messagesForQuery) - snipTokensFreed,
+        tokenCountWithEstimation(
+          messagesForQuery,
+          toolUseContext.options.mainLoopModel,
+        ) - snipTokensFreed,
         toolUseContext.options.mainLoopModel,
       )
       if (isAtBlockingLimit) {

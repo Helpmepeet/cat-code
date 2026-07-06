@@ -49,6 +49,22 @@ export function registerSendPathLogger(cb: (entry: SendPathEntry) => void): void
   onSendPathComplete = cb
 }
 
+// Canonicalizer for recorded response output items. Registered by the fetch
+// adapter (canonicalizeCodexItem) so that the shape we RECORD at response time
+// matches the shape translateMessages REPLAYS on the next turn, keeping
+// reconcileCanonicalDelta's incremental path alive on unchanged history. The
+// transport cannot import the adapter (the adapter imports the transport), so
+// the dependency is injected here.
+let canonicalizeOutputItem:
+  | ((item: Record<string, unknown>) => Record<string, unknown>)
+  | null = null
+
+export function registerOutputItemCanonicalizer(
+  cb: (item: Record<string, unknown>) => Record<string, unknown>,
+): void {
+  canonicalizeOutputItem = cb
+}
+
 const CODEX_WS_URL = 'wss://chatgpt.com/backend-api/codex/responses'
 
 // OpenAI-Beta header value required for WebSocket transport (different from HTTP).
@@ -106,14 +122,11 @@ interface WsSession {
   // Final output items from the previous completed response. These are part of
   // the continuation baseline and must not be resent.
   lastResponseOutputItems: Array<Record<string, unknown>>
-  prewarmPromise: Promise<void> | null
-  prewarmDone: boolean
 }
 
 // One session per conversationId. Reused across turns until the connection
 // is closed (error, 60-min limit, or explicit clear).
 const sessions = new Map<string, WsSession>()
-const pendingPrewarms = new Map<string, Promise<void>>()
 const sessionOpenVersions = new Map<string, number>()
 
 interface PendingOpenSession {
@@ -182,7 +195,44 @@ export function clearWebSocketSession(conversationId: string): void {
     logForDebugging(`[codex-ws] session cleared for ${conversationId.slice(0, 8)}`)
   }
   openingSessions.delete(conversationId)
-  pendingPrewarms.delete(conversationId)
+}
+
+/**
+ * Closes the physical socket for a conversation while KEEPING the continuation
+ * baseline (lastResponseId / lastRequestInput / lastResponseOutputItems) in the
+ * sessions map. Used on transient error and abort paths (Item 3 rules 2a & 5):
+ *
+ *   - The open socket must die because `onMessage` has no response-id
+ *     correlation — an aborted or errored turn's late events would otherwise
+ *     bleed into the next turn's handler and poison the baseline.
+ *   - The baseline is still valid to chain from (a failed/aborted attempt never
+ *     commits state — that only happens on response.completed), so the next
+ *     turn should reconnect and reuse it rather than pay a full send + prewarm.
+ *
+ * Marking the socket closed here makes the next getOrOpenSession() take the
+ * reconnect-preserve branch, which reopens a fresh socket and carries the
+ * baseline across it — reusing the existing socket-swap pattern instead of
+ * duplicating it.
+ */
+export function closeSocketPreservingState(conversationId: string): void {
+  const session = sessions.get(conversationId)
+  if (!session) {
+    // No session to preserve; fall back to the full teardown so any pending
+    // open is invalidated.
+    clearWebSocketSession(conversationId)
+    return
+  }
+  // Invalidate any in-flight open() so a racing connect resolves to a closed
+  // socket instead of a live one attached to the errored turn.
+  sessionOpenVersions.set(
+    conversationId,
+    (sessionOpenVersions.get(conversationId) ?? 0) + 1,
+  )
+  try { session.ws.close() } catch { /* ignore */ }
+  openingSessions.delete(conversationId)
+  logForDebugging(
+    `[codex-ws] socket closed, continuation preserved for ${conversationId.slice(0, 8)}`,
+  )
 }
 
 /**
@@ -242,8 +292,6 @@ async function openSession(
         lastRequestSignature: null,
         lastRequestInput: [],
         lastResponseOutputItems: [],
-        prewarmPromise: pendingPrewarms.get(conversationId) ?? null,
-        prewarmDone: false,
       }
       sessions.set(conversationId, session)
       logForDebugging(
@@ -292,6 +340,13 @@ async function getOrOpenSession(
     const newAcct = authHeaders['chatgpt-account-id']
       ? authHeaders['chatgpt-account-id'].slice(0, 8)
       : 'none'
+    // Item 3 rule 4: account rotation is NOT a transient reconnect. `sessions`
+    // is keyed by conversationId only, so preserving lastResponseId here would
+    // make the new account's first request chain the OLD account's
+    // previous_response_id (which that account/node never saw) — a guaranteed
+    // "not found" full send at best, a mis-chain at worst. Only preserve the
+    // continuation baseline when the account is unchanged (a pure socket swap).
+    const accountChanged = existing.accountId !== requestedAccountId
     const reason =
       existing.ws.readyState !== WS_OPEN
         ? `ws_readyState=${existing.ws.readyState}`
@@ -300,26 +355,34 @@ async function getOrOpenSession(
       `[codex-ws] reconnecting conv=${conversationId.slice(0, 8)} ${reason}`,
       { level: 'warn' },
     )
-    const preserved = {
-      lastResponseId: existing.lastResponseId,
-      lastRequestSignature: existing.lastRequestSignature,
-      lastRequestInput: existing.lastRequestInput,
-      lastResponseOutputItems: existing.lastResponseOutputItems,
-      prewarmDone: existing.prewarmDone,
-    }
+    const preserved = accountChanged
+      ? null
+      : {
+          lastResponseId: existing.lastResponseId,
+          lastRequestSignature: existing.lastRequestSignature,
+          lastRequestInput: existing.lastRequestInput,
+          lastResponseOutputItems: existing.lastResponseOutputItems,
+        }
     try { existing.ws.close() } catch { /* ignore */ }
     sessions.delete(conversationId)
     const fresh = await openTrackedSession(conversationId, authHeaders)
-    fresh.lastResponseId = preserved.lastResponseId
-    fresh.lastRequestSignature = preserved.lastRequestSignature
-    fresh.lastRequestInput = preserved.lastRequestInput
-    fresh.lastResponseOutputItems = preserved.lastResponseOutputItems
-    fresh.prewarmDone = preserved.prewarmDone
-    logForDebugging(
-      `[codex-ws] continuation preserved across reconnect ` +
-      `conv=${conversationId.slice(0, 8)} ` +
-      `response_id=${preserved.lastResponseId?.slice(0, 16) ?? 'none'}`,
-    )
+    if (preserved) {
+      fresh.lastResponseId = preserved.lastResponseId
+      fresh.lastRequestSignature = preserved.lastRequestSignature
+      fresh.lastRequestInput = preserved.lastRequestInput
+      fresh.lastResponseOutputItems = preserved.lastResponseOutputItems
+      logForDebugging(
+        `[codex-ws] continuation preserved across reconnect ` +
+        `conv=${conversationId.slice(0, 8)} ` +
+        `response_id=${preserved.lastResponseId?.slice(0, 16) ?? 'none'}`,
+      )
+    } else {
+      logForDebugging(
+        `[codex-ws] continuation dropped on account rotation ` +
+        `conv=${conversationId.slice(0, 8)} old=${oldAcct} new=${newAcct}`,
+        { level: 'warn' },
+      )
+    }
     return fresh
   }
   return openTrackedSession(conversationId, authHeaders)
@@ -362,7 +425,16 @@ export async function ensureWebSocketSession(
 /**
  * Runs one logical websocket turn under a per-conversation lock so background
  * requests cannot interleave with the main turn on the same Codex session.
- * The lock spans connection setup, prewarm, and the streamed response.
+ * The lock spans connection setup and the streamed response.
+ *
+ * Item 3 rule 1: there is no longer a per-request prewarm. Upstream codex-rs
+ * prewarms once at session startup, not per turn; cat-code's per-request
+ * schedulePrewarm re-fired on every session-clearing event (report R2 measured
+ * up to 156 prewarms in one conversation, ≈ one per turn), and because the real
+ * request awaited it, prewarm never warmed anything ahead of time — it just
+ * double-billed the prefix back-to-back with the real send. The first real call
+ * seeds the prefix the prewarm used to seed, so the only cost of removal is that
+ * the first turn's prefix isn't warmed a few hundred ms early.
  */
 export async function* streamTurnViaWebSocketLocked(
   conversationId: string,
@@ -373,10 +445,6 @@ export async function* streamTurnViaWebSocketLocked(
   const releaseTurn = await acquireConversationTurn(conversationId)
   try {
     await ensureWebSocketSession(conversationId, authHeaders)
-    const session = sessions.get(conversationId)
-    if (session?.prewarmPromise && !session.prewarmDone) {
-      await session.prewarmPromise
-    }
     yield* streamTurnViaWebSocket(
       conversationId,
       codexBody,
@@ -386,58 +454,6 @@ export async function* streamTurnViaWebSocketLocked(
   } finally {
     releaseTurn()
   }
-}
-
-export function schedulePrewarm(
-  conversationId: string,
-  seedCodexBody: Record<string, unknown>,
-  authHeaders: Record<string, string>,
-): void {
-  const existing = sessions.get(conversationId)
-  if (existing?.prewarmDone || existing?.prewarmPromise) return
-  if (pendingPrewarms.has(conversationId)) return
-
-  let promise!: Promise<void>
-  promise = (async () => {
-    try {
-      await ensureWebSocketSession(conversationId, authHeaders)
-      const session = sessions.get(conversationId)
-      if (!session || session.ws.readyState !== WS_OPEN) return
-
-      const seedBody = { ...seedCodexBody, input: [] }
-      const events = streamTurnViaWebSocket(
-        conversationId,
-        seedBody,
-        authHeaders,
-        0,
-        true,
-      )
-      for await (const _event of events) { /* drain */ }
-      logForDebugging(
-        `[codex-ws] startup prewarm complete conv=${conversationId.slice(0, 8)} ` +
-        `response_id=${sessions.get(conversationId)?.lastResponseId?.slice(0, 16) ?? 'none'}`,
-      )
-    } catch (err) {
-      logForDebugging(
-        `[codex-ws] startup prewarm failed (non-fatal) conv=${conversationId.slice(0, 8)}: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
-        { level: 'warn' },
-      )
-    } finally {
-      const session = sessions.get(conversationId)
-      if (
-        pendingPrewarms.get(conversationId) === promise ||
-        session?.prewarmPromise === promise
-      ) {
-        if (session) session.prewarmDone = true
-        pendingPrewarms.delete(conversationId)
-      }
-    }
-  })()
-
-  pendingPrewarms.set(conversationId, promise)
-  const session = sessions.get(conversationId)
-  if (session) session.prewarmPromise = promise
 }
 
 // Sentinel thrown internally when previous_response_id is rejected so the
@@ -556,7 +572,7 @@ function getIncrementalInputDelta(
  * Returns the new-items delta (may be empty []) on success, or null with a
  * diagnostic reason when a full send is required.
  */
-function reconcileCanonicalDelta(
+export function reconcileCanonicalDelta(
   currentInput: Array<Record<string, unknown>>,
   previousInput: Array<Record<string, unknown>>,
   previousOutputItems: Array<Record<string, unknown>>,
@@ -620,12 +636,33 @@ function reconcileCanonicalDelta(
 function normalizeCompletedOutputItem(
   item: Record<string, unknown>,
 ): Record<string, unknown> {
+  // The adapter registers canonicalizeCodexItem, which produces the single
+  // canonical shape that translateMessages replays on the next turn (dropping
+  // volatile fields like logprobs and re-normalizing tool arguments through the
+  // real tool pipeline). Always prefer it so record-time and replay-time shapes
+  // are identical.
+  if (canonicalizeOutputItem) {
+    return canonicalizeOutputItem(item)
+  }
+
+  // Fallback for callers that never load the adapter (unit tests that exercise
+  // the transport in isolation). Mirrors the canonical message/reasoning/tool
+  // shapes so the transport is self-consistent, minus the tool-argument
+  // re-normalization that requires the adapter's tool registry.
   if (item.type === 'message') {
+    const parts = Array.isArray(item.content) ? item.content : []
     return {
       type: 'message',
       role: item.role,
-      content: cloneJsonValue(Array.isArray(item.content) ? item.content : []),
-      status: item.status,
+      content: parts.map(part => {
+        const p = part as Record<string, unknown>
+        return {
+          type: 'output_text',
+          text: p.text,
+          annotations: Array.isArray(p.annotations) ? p.annotations : [],
+        }
+      }),
+      status: 'completed',
     }
   }
 
@@ -704,7 +741,6 @@ export async function* streamTurnViaWebSocket(
   codexBody: Record<string, unknown>,
   authHeaders: Record<string, string>,
   fullInputLength: number,
-  isPrewarm?: boolean,
 ): AsyncGenerator<Record<string, unknown>> {
   let retryingAfterStaleResponseId = false
   // Allow up to 2 retries:
@@ -718,7 +754,6 @@ export async function* streamTurnViaWebSocket(
         codexBody,
         authHeaders,
         fullInputLength,
-        isPrewarm,
         retryingAfterStaleResponseId,
       )
       return
@@ -749,7 +784,6 @@ async function* _streamTurnAttempt(
   codexBody: Record<string, unknown>,
   authHeaders: Record<string, string>,
   fullInputLength: number,
-  isPrewarm?: boolean,
   retryingAfterStaleResponseId?: boolean,
 ): AsyncGenerator<Record<string, unknown>> {
   const session = await getOrOpenSession(conversationId, authHeaders)
@@ -765,23 +799,13 @@ async function* _streamTurnAttempt(
   const requestSignature = createRequestSignature(codexBody)
   const completedOutputItems: Array<Record<string, unknown>> = []
 
-  // Prewarm: send generate=false so the server seeds KV-cache without producing
-  // output. The resulting response_id is used as previous_response_id on the
-  // next real request, matching the real Codex client's prewarm_websocket path.
-  if (isPrewarm) {
-    requestBody.generate = false
-  }
-
   const instructions = typeof codexBody.instructions === 'string' ? codexBody.instructions : ''
   const instructionsHash = createHash('sha1').update(instructions).digest('hex').slice(0, 8)
   const currentEffort = (codexBody.reasoning as { effort?: string } | undefined)?.effort ?? null
 
   // Send-path mode for JSONL diagnostic entry.
-  let sendMode: 'incremental' | 'full' | 'prewarm' | 'stale_retry' = isPrewarm
-    ? 'prewarm'
-    : retryingAfterStaleResponseId
-      ? 'stale_retry'
-      : 'full'
+  let sendMode: 'incremental' | 'full' | 'prewarm' | 'stale_retry' =
+    retryingAfterStaleResponseId ? 'stale_retry' : 'full'
   const prevResponseIdAtSend = session.lastResponseId
   const prevSentItemsAtSend = session.lastRequestInput.length
 
@@ -806,7 +830,7 @@ async function* _streamTurnAttempt(
     if (delta !== null) {
       requestBody.previous_response_id = session.lastResponseId
       requestBody.input = delta
-      if (!isPrewarm) sendMode = 'incremental'
+      sendMode = 'incremental'
 
       // Also run the strict equality check purely for diagnostics — this shows
       // what the old path would have said without using it to block the send.
@@ -936,6 +960,25 @@ async function* _streamTurnAttempt(
         return
       }
 
+      // Item 3 rule 2b: ANY other server error on a chained request must reset
+      // the continuation baseline, not just the 'not found' TTL case. Otherwise
+      // a server rejection of this previous_response_id chain becomes a generic
+      // WS error → sticky HTTP fallback → the baseline is never reset → the next
+      // WS turn (after the sticky window) re-sends the same poisoned incremental
+      // and degrades again. Dropping the baseline here forces the next send to
+      // be a clean full send. (The response never completed, so no good baseline
+      // is being discarded.)
+      if (session.lastResponseId) {
+        logForDebugging(
+          `[codex-ws] server error on chained request — resetting continuation baseline ` +
+          `conv=${conversationId.slice(0, 8)} prev_resp=${session.lastResponseId.slice(0, 16)} msg="${msg}"`,
+          { level: 'warn' },
+        )
+        session.lastResponseId = null
+        session.lastRequestSignature = null
+        session.lastRequestInput = []
+        session.lastResponseOutputItems = []
+      }
       enqueue({ error: new Error(`Codex WS error: ${msg}`) })
       return
     }
@@ -976,15 +1019,23 @@ async function* _streamTurnAttempt(
   const failStream = (
     error: Error,
     options?: {
-      clearSession?: boolean
+      // Item 3 rule 2a: transient socket errors must still KILL the physical
+      // socket (onMessage has no response-id correlation, so an open socket
+      // would bleed this aborted turn's late events into the next turn's
+      // handler and poison the baseline) while KEEPING the continuation
+      // baseline (a mid-stream failure never committed state — that only
+      // happens on response.completed — so the previous good baseline is still
+      // valid to chain from next turn). Closing the socket makes the next
+      // getOrOpenSession take the reconnect-preserve branch.
+      closeSocket?: boolean
     },
   ) => {
     if (terminalError) {
       return
     }
     terminalError = error
-    if (options?.clearSession) {
-      clearWebSocketSession(conversationId)
+    if (options?.closeSocket) {
+      closeSocketPreservingState(conversationId)
     }
     enqueue({ error })
   }
@@ -1000,7 +1051,7 @@ async function* _streamTurnAttempt(
       { level: 'warn' },
     )
     failStream(new Error(`WebSocket error during stream (${detail})`), {
-      clearSession: true,
+      closeSocket: true,
     })
   }
 
@@ -1054,7 +1105,7 @@ async function* _streamTurnAttempt(
       // Match upstream behavior: surface the terminal timeout immediately
       // instead of letting the subsequent close handshake mask it.
       failStream(new CodexWebSocketIdleTimeoutError(IDLE_TIMEOUT_MS), {
-        clearSession: true,
+        closeSocket: true,
       })
     }, IDLE_TIMEOUT_MS)
   }
@@ -1072,9 +1123,22 @@ async function* _streamTurnAttempt(
     session.ws.off('message', onMessage)
     session.ws.off('error', onError)
     session.ws.off('close', onClose)
-    clearWebSocketSession(conversationId)
+    // Item 3 rule 2a: a send throw means the socket is unusable, but nothing
+    // was committed this turn — kill the socket and keep the baseline so the
+    // next turn reconnects and continues instead of paying a full send.
+    closeSocketPreservingState(conversationId)
     throw err
   }
+
+  // Tracks whether the generator reached a terminal disposition (completed,
+  // failed, done, or a thrown error whose handler already decided the socket's
+  // fate). If the generator's finally runs WITHOUT this — i.e. the consumer
+  // abandoned iteration mid-stream (Esc-abort) — the socket is still open and
+  // the server is still streaming the dead turn. Item 3 rule 5: close that
+  // socket (preserving the baseline) so the dead turn's late response.completed
+  // cannot bleed into the next turn's handler and poison the baseline. onMessage
+  // has no response-id correlation, so an open socket is the whole hazard.
+  let reachedTerminalDisposition = false
 
   // Yield events until response.completed, error, or close.
   try {
@@ -1083,10 +1147,12 @@ async function* _streamTurnAttempt(
       while (queue.length > 0) {
         const item = queue.shift()!
         if ('error' in item) {
+          reachedTerminalDisposition = true
           clearIdle()
           throw item.error
         }
         if ('done' in item) {
+          reachedTerminalDisposition = true
           clearIdle()
           return
         }
@@ -1098,6 +1164,7 @@ async function* _streamTurnAttempt(
 
         // After yielding response.completed, record state and stop.
         if (event.type === 'response.completed') {
+          reachedTerminalDisposition = true
           const response = event.response as Record<string, unknown> | undefined
           const responseId = typeof response?.id === 'string' ? response.id : null
           if (responseId) {
@@ -1107,14 +1174,12 @@ async function* _streamTurnAttempt(
             session.lastResponseOutputItems = cloneJsonValue(completedOutputItems)
             logForDebugging(
               `[codex-ws] recorded response_id=${responseId.slice(0, 16)} input_len=${fullInputLength} ` +
-              `effort=${currentEffort} instructions_hash=${instructionsHash} output_items=${completedOutputItems.length}` +
-              (isPrewarm ? ' (prewarm)' : ''),
+              `effort=${currentEffort} instructions_hash=${instructionsHash} output_items=${completedOutputItems.length}`,
             )
           }
 
-          // Record send-path and timing to session JSONL (skipped for prewarmed
-          // turns since they don't produce real usage data).
-          if (!isPrewarm && onSendPathComplete) {
+          // Record send-path and timing to session JSONL.
+          if (onSendPathComplete) {
             const nowTs = Date.now()
             const usage = (response?.usage as Record<string, unknown> | undefined)
             const inputDetails = (usage?.input_tokens_details ?? usage?.prompt_tokens_details) as Record<string, number> | undefined
@@ -1159,9 +1224,16 @@ async function* _streamTurnAttempt(
           return
         }
 
-        // response.failed: clear session so next turn starts fresh.
+        // response.failed: the attempt produced no committed baseline (state is
+        // only recorded on response.completed above), so the PREVIOUS good
+        // baseline is still valid to chain from. Item 3 rule 3: kill the socket
+        // (its late events must not bleed into the next turn) but keep the
+        // continuation baseline. Account-cap response.failed events are
+        // reclassified upstream (createCodexResponseFailedError → clear +
+        // CodexAccountCapError) so rotation still drops state where it must.
         if (event.type === 'response.failed') {
-          clearWebSocketSession(conversationId)
+          reachedTerminalDisposition = true
+          closeSocketPreservingState(conversationId)
           clearIdle()
           return
         }
@@ -1175,5 +1247,19 @@ async function* _streamTurnAttempt(
     session.ws.off('error', onError)
     session.ws.off('close', onClose)
     clearIdle()
+    // Item 3 rule 5: if we exit without a terminal disposition and no error
+    // handler already closed the socket (terminalError is set by failStream on
+    // onError/idle/close), the consumer abandoned iteration mid-turn (Esc-abort).
+    // The socket is still open and the server keeps streaming the dead turn — no
+    // response.cancel is sent — so close it now (keeping the baseline) to stop
+    // late events from poisoning the next turn.
+    if (!reachedTerminalDisposition && !terminalError) {
+      logForDebugging(
+        `[codex-ws] turn abandoned mid-stream — closing socket, preserving baseline ` +
+        `conv=${conversationId.slice(0, 8)}`,
+        { level: 'warn' },
+      )
+      closeSocketPreservingState(conversationId)
+    }
   }
 }
