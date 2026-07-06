@@ -6,6 +6,7 @@ import {
   createWorkspaceLayout,
   focusOrAssignWorkspaceSession,
   readWorkspaceLayoutFromStorage,
+  readyToRestoreLayout,
   reconcileWorkspaceLayout,
   resizeWorkspaceDivider,
   splitWorkspacePanel,
@@ -87,6 +88,29 @@ test('reconcile drops missing sessions and duplicate persisted references', () =
   expect(sessionIds(reconciled)).toEqual(['b'])
   expect(reconciled.widths).toEqual([100])
   expect(reconciled.activeIndex).toBe(0)
+})
+
+test('readyToRestoreLayout snaps back only once every referenced session is live', () => {
+  // The saved split from before a relaunch; its two sessions come back live one
+  // at a time as the operator restores them. The saved layout must apply ONLY
+  // when both are live — order-independent, atomic, ignoring interim state.
+  const saved: WorkspaceLayoutState = {
+    panels: [{ sessionId: 'a' }, { sessionId: 'b' }],
+    widths: [40, 60],
+    activeIndex: 1,
+  }
+  // Neither / only one live yet → keep waiting (null).
+  expect(readyToRestoreLayout(saved, [])).toBeNull()
+  expect(readyToRestoreLayout(saved, ['a'])).toBeNull()
+  expect(readyToRestoreLayout(saved, ['b'])).toBeNull()
+  // Both live (in EITHER discovery order, plus an unrelated live session) →
+  // return the exact saved layout to snap into place.
+  expect(readyToRestoreLayout(saved, ['fresh', 'b', 'a'])).toEqual(saved)
+})
+
+test('readyToRestoreLayout ignores an empty pending layout', () => {
+  const empty: WorkspaceLayoutState = { panels: [], widths: [], activeIndex: 0 }
+  expect(readyToRestoreLayout(empty, ['a'])).toBeNull()
 })
 
 test('single-panel layout follows tab focus without touching split layouts', () => {

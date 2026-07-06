@@ -70,6 +70,7 @@ import {
   focusOrAssignWorkspaceSession,
   focusWorkspacePanel,
   readWorkspaceLayoutFromStorage,
+  readyToRestoreLayout,
   reconcileWorkspaceLayout,
   setWorkspaceWidths,
   splitWorkspacePanel,
@@ -125,6 +126,15 @@ export function App() {
         readWorkspaceLayoutFromStorage(getWorkspaceStorage()) ??
         createWorkspaceLayout(null),
     )
+  // A persisted MULTI-panel split loaded at startup that must re-form once its
+  // sessions are restored (P3-6 relaunch). Held here so the active layout can
+  // degrade normally (the live startup session stays visible) while we wait to
+  // snap the split back atomically. `null` for a fresh/single-panel layout.
+  const [pendingRestore, setPendingRestore] =
+    useState<WorkspaceLayoutState | null>(() => {
+      const saved = readWorkspaceLayoutFromStorage(getWorkspaceStorage())
+      return saved && saved.panels.length > 1 ? saved : null
+    })
   const [connection, dispatchConnection] = useReducer(
     reduceConnectionState,
     undefined,
@@ -304,10 +314,40 @@ export function App() {
     // recompute) is the whole point of computing it.
   }, [activeSessionId, hostSnapshotReady, liveSessionKey])
 
+  // Re-apply-on-restore (P3-6): the held `pendingRestore` split snaps back once
+  // EVERY session it references is live again — order-independent, overriding
+  // whatever the operator clicked while restoring. Abandoned if a referenced
+  // session is unrecoverable (neither live nor restorable), which unblocks the
+  // disk write below so the operator's actual layout can persist instead.
+  const restorableIds = useMemo(
+    () =>
+      sidebarRows
+        .filter(row => row.visual.restorable)
+        .map(row => row.descriptor.appSessionId),
+    [sidebarRows],
+  )
+  const rosterKey = [...liveSessionIds, ...restorableIds].join(' ')
   useEffect(() => {
-    if (!hostSnapshotReady) return
+    if (!pendingRestore || !hostSnapshotReady) return
+    const ready = readyToRestoreLayout(pendingRestore, liveSessionIds)
+    if (ready) {
+      setWorkspaceLayoutState(ready)
+      setPendingRestore(null)
+      return
+    }
+    const known = new Set<SessionId>([...liveSessionIds, ...restorableIds])
+    if (pendingRestore.panels.some(panel => !known.has(panel.sessionId))) {
+      setPendingRestore(null) // a referenced session is gone; stop waiting
+    }
+    // rosterKey is the stable signature of live ∪ restorable ids.
+  }, [pendingRestore, hostSnapshotReady, rosterKey])
+
+  useEffect(() => {
+    // Don't let a startup-transient degrade overwrite the saved split while it
+    // is still awaiting restore (pendingRestore) — that was the relaunch bug.
+    if (!hostSnapshotReady || pendingRestore) return
     writeWorkspaceLayoutToStorage(getWorkspaceStorage(), workspaceLayout)
-  }, [hostSnapshotReady, workspaceLayout])
+  }, [hostSnapshotReady, pendingRestore, workspaceLayout])
 
   const newSession = useCallback(async () => {
     const bridge = getBridge()
@@ -369,6 +409,9 @@ export function App() {
         sessionId,
       )
       setWorkspaceLayoutState(result.state)
+      // Deliberately building a layout abandons any awaited saved-split restore
+      // so it can't later clobber what the operator is constructing now.
+      setPendingRestore(null)
       setActiveSessionId(
         result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
       )
@@ -385,6 +428,7 @@ export function App() {
     (index: number, edge: WorkspaceSplitEdge, sessionId: SessionId) => {
       const result = splitWorkspacePanel(workspaceLayout, index, edge, sessionId)
       setWorkspaceLayoutState(result.state)
+      setPendingRestore(null)
       setActiveSessionId(
         result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
       )
@@ -403,6 +447,7 @@ export function App() {
     (index: number) => {
       const next = closeWorkspacePanel(workspaceLayout, index)
       setWorkspaceLayoutState(next)
+      setPendingRestore(null)
       setActiveSessionId(
         next.panels[next.activeIndex]?.sessionId ?? activeSessionId,
       )
