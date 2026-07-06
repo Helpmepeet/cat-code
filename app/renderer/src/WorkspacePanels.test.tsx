@@ -76,6 +76,36 @@ test('panel selector exposes duplicate-session prevention affordance', () => {
   expect(html).toContain('Alpha — open in panel 1')
 })
 
+test('drop edges do not capture pointer events until a tab drag is active', () => {
+  const alpha = descriptor('session-a', 'Alpha')
+  const beta = descriptor('session-b', 'Beta')
+  const html = renderToStaticMarkup(
+    <WorkspaceLayout
+      layout={{
+        panels: [{ sessionId: 'session-a' }, { sessionId: 'session-b' }],
+        widths: [50, 50],
+        activeIndex: 0,
+      }}
+      panels={[
+        panel(alpha, <div>Alpha transcript</div>),
+        panel(beta, <div>Beta transcript</div>),
+      ]}
+      sessions={[alpha, beta]}
+      notice={null}
+      onClosePanel={() => {}}
+      onFocusPanel={() => {}}
+      onSelectSession={() => {}}
+      onSplitPanel={() => {}}
+      onWidthsChange={() => {}}
+    />,
+  )
+
+  // At rest the transparent edge strips must be click-through so they never
+  // steal the panel header's close/selector controls or transcript clicks.
+  expect(html).toContain('pointer-events-none')
+  expect(html).not.toContain('pointer-events-auto')
+})
+
 function descriptor(id: string, title: string): SessionDescriptor {
   return {
     appSessionId: id,

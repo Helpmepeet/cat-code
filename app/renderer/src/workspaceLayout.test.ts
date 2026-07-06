@@ -99,6 +99,20 @@ test('single-panel layout follows tab focus without touching split layouts', () 
   expect(sessionIds(unchanged)).toEqual(['b', 'c'])
 })
 
+test('reconcile keeps the focused split panel when the active session is not shown', () => {
+  const layout: WorkspaceLayoutState = {
+    panels: [{ sessionId: 'a' }, { sessionId: 'b' }],
+    widths: [50, 50],
+    activeIndex: 1,
+  }
+
+  // 'c' is a live, active session that is not one of the sticky split panels;
+  // the ring must stay on the already-focused panel, not snap to panel 0.
+  const reconciled = reconcileWorkspaceLayout(layout, ['a', 'b', 'c'], 'c')
+  expect(sessionIds(reconciled)).toEqual(['a', 'b'])
+  expect(reconciled.activeIndex).toBe(1)
+})
+
 test('closing a split panel collapses back to one panel', () => {
   const split = splitWorkspacePanel(
     createWorkspaceLayout('a'),

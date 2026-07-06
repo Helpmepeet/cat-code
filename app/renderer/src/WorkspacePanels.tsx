@@ -60,7 +60,23 @@ export function WorkspaceLayout({
     index: number
     edge: WorkspaceSplitEdge
   } | null>(null)
+  // The drop-zone strips overlay the panel edges (incl. the header controls and
+  // the transcript margins); they must only capture pointer events WHILE a tab
+  // drag is in flight, otherwise they swallow clicks on the close button /
+  // selector and block transcript selection at rest.
+  const [dragActive, setDragActive] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!dragActive) return
+    const clear = () => setDragActive(false)
+    window.addEventListener('drop', clear)
+    window.addEventListener('dragend', clear)
+    return () => {
+      window.removeEventListener('drop', clear)
+      window.removeEventListener('dragend', clear)
+    }
+  }, [dragActive])
 
   useEffect(() => {
     if (!resize) return
@@ -109,13 +125,22 @@ export function WorkspaceLayout({
           (resize ? 'cursor-col-resize select-none' : '')
         }
         aria-label={`Workspace layout — ${panels.length} panel${panels.length === 1 ? '' : 's'}`}
+        onDragOver={event => {
+          if (
+            event.dataTransfer.types.some(
+              type => type.toLowerCase() === 'text/sessionid',
+            )
+          ) {
+            setDragActive(true)
+          }
+        }}
       >
         {panels.map((panel, index) => {
           const width = layout.widths[index] ?? 100 / panels.length
           const active = index === layout.activeIndex
           const next = panels[index + 1]
           return (
-            <Fragment key={`${index}:${panel.sessionId}`}>
+            <Fragment key={panel.sessionId}>
               <div
                 className="flex min-w-0 shrink-0 flex-col overflow-hidden"
                 style={{ flexBasis: `${width}%` }}
@@ -148,6 +173,7 @@ export function WorkspaceLayout({
                     disabled={panels.length >= MAX_WORKSPACE_PANELS}
                     edge="left"
                     index={index}
+                    interactive={dragActive}
                     panel={panel}
                     onDragLeave={() => setDropTarget(null)}
                     onDragOver={event => {
@@ -162,6 +188,7 @@ export function WorkspaceLayout({
                     disabled={panels.length >= MAX_WORKSPACE_PANELS}
                     edge="right"
                     index={index}
+                    interactive={dragActive}
                     panel={panel}
                     onDragLeave={() => setDropTarget(null)}
                     onDragOver={event => {
@@ -290,6 +317,7 @@ function DropEdge({
   disabled,
   edge,
   index,
+  interactive,
   panel,
   onDragLeave,
   onDragOver,
@@ -299,6 +327,7 @@ function DropEdge({
   disabled: boolean
   edge: WorkspaceSplitEdge
   index: number
+  interactive: boolean
   panel: WorkspacePanelView
   onDragLeave: () => void
   onDragOver: (event: DragEvent<HTMLDivElement>) => void
@@ -308,6 +337,7 @@ function DropEdge({
     <div
       className={
         'absolute inset-y-0 z-20 w-8 transition-colors ' +
+        (interactive ? 'pointer-events-auto ' : 'pointer-events-none ') +
         (edge === 'left' ? 'left-0' : 'right-0') +
         ' ' +
         (active && !disabled ? 'bg-accent/20' : 'bg-transparent')

@@ -299,7 +299,10 @@ export function App() {
       )
       return workspaceLayoutsEqual(current, next) ? current : next
     })
-  }, [activeSessionId, hostSnapshotReady, liveSessionIds, liveSessionKey])
+    // liveSessionKey is the stable content signature of liveSessionIds; keying
+    // the effect on the key (not the array identity, which churns every tabs
+    // recompute) is the whole point of computing it.
+  }, [activeSessionId, hostSnapshotReady, liveSessionKey])
 
   useEffect(() => {
     if (!hostSnapshotReady) return

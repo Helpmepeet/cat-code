@@ -115,12 +115,13 @@ export function reconcileWorkspaceLayout(
     panels = [{ sessionId: liveSessionIds[0] }]
   }
 
-  const activeIndex = preferredSessionId
-    ? Math.max(
-        0,
-        panels.findIndex(panel => panel.sessionId === preferredSessionId),
-      )
-    : state.activeIndex
+  // Point the active ring at the preferred session's panel when it is shown; if
+  // it is not one of the (sticky) split panels, keep the previously focused
+  // panel rather than snapping the ring to panel 0.
+  const preferredIndex = preferredSessionId
+    ? panels.findIndex(panel => panel.sessionId === preferredSessionId)
+    : -1
+  const activeIndex = preferredIndex >= 0 ? preferredIndex : state.activeIndex
 
   return {
     panels,
