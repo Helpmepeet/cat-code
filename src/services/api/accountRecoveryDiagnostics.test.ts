@@ -63,7 +63,10 @@ function buildPoolAccount(
     accountId: overrides.accountId,
     accessToken: overrides.accessToken ?? buildCodexToken(overrides.accountId),
     refreshToken: overrides.refreshToken ?? `refresh-${overrides.accountId}`,
-    expiresAt: overrides.expiresAt ?? Date.now() + 60_000,
+    // Default well outside the refresh skew so token resolution does not fire an
+    // incidental refresh-on-use (network + ledger writes); tests that exercise
+    // refresh set a near-expiry expiresAt explicitly.
+    expiresAt: overrides.expiresAt ?? Date.now() + 60 * 60_000,
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
@@ -246,8 +249,20 @@ describe('account recovery diagnostics', () => {
       return new Response('unauthorized', { status: 401 })
     }) as typeof globalThis.fetch
 
+    // App traffic threads the pool-authoritative resolver into the adapter, so a
+    // per-request token carries source: 'pool' — that is what enables HTTP
+    // credential-error classification (matching getAnthropicClient()).
+    const token = buildCodexToken('account-one')
     await expect(
-      createCodexFetch(buildCodexToken('account-one'))(
+      createCodexFetch(token, undefined, {
+        resolveTokensForRequest: async () => ({
+          accessToken: token,
+          refreshToken: 'refresh-account-one',
+          expiresAt: Date.now() + 60 * 60_000,
+          accountId: 'account-one',
+          source: 'pool',
+        }),
+      })(
         'https://api.anthropic.com/v1/messages',
         {
           method: 'POST',

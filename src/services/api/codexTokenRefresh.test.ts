@@ -7,6 +7,7 @@ import { getGlobalConfig } from '../../utils/config.js'
 import {
   refreshAccountTokens,
   runQuarantineProbeOnce,
+  touchAll,
 } from './codexTokenRefresh.js'
 import {
   getCodexAccountAvailability,
@@ -1273,6 +1274,73 @@ describe('codexTokenRefresh security fixes (confirmed bugs)', () => {
       expect(after.refresh.consecutive_failures).toBe(1)
     } finally {
       releaseFetch?.()
+      globalThis.fetch = originalFetch
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('codexTokenRefresh touchAll refresh skew', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+  })
+
+  test('skips accounts outside refresh skew and refreshes near-expiry accounts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-touch-all-test-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+
+    const farAccountId = 'far-expiry-account'
+    const nearAccountId = 'near-expiry-account'
+    writeFileSync(
+      join(accountsDir, `${farAccountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: createAccessToken(farAccountId),
+          refresh_token: 'far-refresh',
+          account_id: farAccountId,
+          expires_at: Date.now() + 5 * 60_000,
+        },
+      }),
+      'utf-8',
+    )
+    writeFileSync(
+      join(accountsDir, `${nearAccountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: createAccessToken(nearAccountId),
+          refresh_token: 'near-refresh',
+          account_id: nearAccountId,
+          expires_at: Date.now() + 30_000,
+        },
+      }),
+      'utf-8',
+    )
+
+    const originalFetch = globalThis.fetch
+    const refreshTokensSpent: string[] = []
+    globalThis.fetch = Object.assign(
+      async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { refresh_token?: string }
+        refreshTokensSpent.push(body.refresh_token ?? '')
+        return new Response(
+          JSON.stringify({
+            access_token: createAccessToken(nearAccountId),
+            refresh_token: 'near-refresh-rotated',
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      },
+      { preconnect: originalFetch.preconnect },
+    )
+
+    try {
+      const results = await touchAll({ vaultPath: dir })
+      expect(results.find(result => result.accountId === farAccountId)?.status).toBe('skipped')
+      expect(results.find(result => result.accountId === nearAccountId)?.status).toBe('refreshed')
+      expect(refreshTokensSpent).toEqual(['near-refresh'])
+    } finally {
       globalThis.fetch = originalFetch
       rmSync(dir, { recursive: true, force: true })
     }

@@ -8,7 +8,7 @@ import {
   getPoolAccountsForLeaseSelection,
   getPoolStatus,
   hasFreshPoolAccountUsageHint,
-  isCodexAccountLeaseSelectable,
+  isCodexAccountSwitchable,
   markPoolAccountCapped,
   markPoolAccountLastError,
   setActiveAccountPersisted,
@@ -213,7 +213,7 @@ export function repairCodexLeaseIfNonSelectable(
   if (
     existingLease.state === 'active' &&
     account &&
-    isCodexAccountLeaseSelectable(account)
+    isCodexAccountSwitchable(account)
   ) {
     return existingLease
   }
@@ -447,12 +447,12 @@ function selectMainAccountForLease(): { account: PoolAccount; reason: string } {
   }
 
   const active = pool.activeIndex >= 0 ? pool.accounts[pool.activeIndex] : undefined
-  if (active && isCodexAccountLeaseSelectable(active)) {
+  if (active && isCodexAccountSwitchable(active)) {
     // The user chose this account; a plan-metadata warning does not override that.
     return { account: active, reason: 'main lease pinned to pool activeIndex' }
   }
 
-  const selectable = pool.accounts.filter((account) => isCodexAccountLeaseSelectable(account))
+  const selectable = pool.accounts.filter((account) => isCodexAccountSwitchable(account))
   const replacement =
     selectable.find((account) => getCodexAccountAvailability(account).kind === 'available') ??
     selectable[0]
@@ -469,7 +469,7 @@ function selectAccountForLease(
   const poolAccounts = getPoolAccountsForLeaseSelection()
   const healthyCandidates = poolAccounts.filter(
     (account) =>
-      isCodexAccountLeaseSelectable(account) && account.accountId !== excludedAccountId,
+      isCodexAccountSwitchable(account) && account.accountId !== excludedAccountId,
   )
 
   if (healthyCandidates.length === 0) {

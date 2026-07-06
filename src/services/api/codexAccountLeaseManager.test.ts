@@ -3,11 +3,13 @@ import { APIConnectionError } from '@anthropic-ai/sdk'
 
 import { setSessionProvider } from '../../bootstrap/state.js'
 import { getGlobalConfig } from '../../utils/config.js'
+import { clearCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { SettingsSchema } from '../../utils/settings/types.js'
 import { getRetryOwnerId } from './claude.js'
 import {
   _markStickyHttpFallbackForTest,
   createCodexFetch,
+  CodexAccountAuthError,
   CodexAccountCapError,
   resetCodexCacheContext,
 } from './codex-fetch-adapter.js'
@@ -54,7 +56,7 @@ function buildPoolAccount(
     accountId: overrides.accountId,
     accessToken: overrides.accessToken ?? buildCodexToken(overrides.accountId),
     refreshToken: overrides.refreshToken ?? `refresh-${overrides.accountId}`,
-    expiresAt: overrides.expiresAt ?? Date.now() + 60_000,
+    expiresAt: overrides.expiresAt ?? Date.now() + 5 * 60_000,
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     statusReason: overrides.statusReason,
@@ -117,7 +119,23 @@ describe('codexAccountLeaseManager', () => {
   afterEach(() => {
     _resetCodexNetworkOutageDelaysForTest()
     _resetKeepAliveForTesting()
+    clearCodexOAuthTokens()
   })
+
+  function createLeaseAwareCodexFetch(
+    accessToken: string,
+    conversationIdOverride?: string,
+  ): ReturnType<typeof createCodexFetch> {
+    return createCodexFetch(accessToken, conversationIdOverride, {
+      resolveTokensForRequest: () => {
+        const lease = moduleUnderTest.getCurrentCodexLease()
+        return resolveCodexOAuthTokensForLeaseOwner({
+          codexLeaseOwnerId: lease?.ownerId,
+          codexLeaseOwnerType: lease?.ownerType,
+        })
+      },
+    })
+  }
 
   test('stores leases and accepts follow-main strategy settings', () => {
     const settingsResult = SettingsSchema().safeParse({
@@ -290,7 +308,7 @@ describe('codexAccountLeaseManager', () => {
     expect(lease.accountId).toBe('backup-clean')
   })
 
-  test('token resolution falls back when the leased account is blocked', () => {
+  test('token resolution falls back when the leased account is blocked', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'backup-clean',
       accounts: [
@@ -312,7 +330,7 @@ describe('codexAccountLeaseManager', () => {
       strategy: 'follow-main',
     })
 
-    const tokens = resolveCodexOAuthTokensForLeaseOwner({
+    const tokens = await resolveCodexOAuthTokensForLeaseOwner({
       codexLeaseOwnerType: 'main',
     })
 
@@ -320,6 +338,83 @@ describe('codexAccountLeaseManager', () => {
     expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe(
       'backup-clean',
     )
+  })
+
+  test('single-account token resolution prefers pool token over stale config token', async () => {
+    saveCodexOAuthTokens({
+      accessToken: buildCodexToken('solo-account'),
+      refreshToken: 'stale-refresh',
+      expiresAt: Date.now() + 5 * 60_000,
+      accountId: 'solo-account',
+    })
+    const liveAccessToken = `${buildCodexToken('solo-account')}.live`
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'solo-account',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'solo-account',
+          accessToken: liveAccessToken,
+          refreshToken: 'live-refresh',
+          source: 'vault',
+        }),
+      ],
+    })
+
+    const tokens = await resolveCodexOAuthTokensForLeaseOwner({
+      codexLeaseOwnerType: 'main',
+    })
+
+    expect(tokens?.source).toBe('pool')
+    expect(tokens?.accessToken).toBe(liveAccessToken)
+    expect(tokens?.refreshToken).toBe('live-refresh')
+  })
+
+  test('single vault account without config entry resolves through the pool', async () => {
+    clearCodexOAuthTokens()
+    const liveAccessToken = buildCodexToken('vault-only')
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'vault-only',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'vault-only',
+          accessToken: liveAccessToken,
+          refreshToken: 'vault-refresh',
+          source: 'vault',
+        }),
+      ],
+    })
+
+    const tokens = await resolveCodexOAuthTokensForLeaseOwner({
+      codexLeaseOwnerType: 'main',
+    })
+
+    expect(tokens).toMatchObject({
+      accountId: 'vault-only',
+      accessToken: liveAccessToken,
+      refreshToken: 'vault-refresh',
+      source: 'pool',
+    })
+  })
+
+
+  test('config-only Codex fallback still resolves when the pool has no accounts', async () => {
+    resetCodexAccountPoolForTest()
+    saveCodexOAuthTokens({
+      accessToken: buildCodexToken('config-only'),
+      refreshToken: 'config-refresh',
+      expiresAt: Date.now() + 5 * 60_000,
+      accountId: 'config-only',
+    })
+
+    const tokens = await resolveCodexOAuthTokensForLeaseOwner({
+      codexLeaseOwnerType: 'main',
+    })
+
+    expect(tokens).toMatchObject({
+      accountId: 'config-only',
+      refreshToken: 'config-refresh',
+      source: 'config',
+    })
   })
 
   test('spread lease prefers a clean account over a warned one', () => {
@@ -808,6 +903,76 @@ describe('codexAccountLeaseManager', () => {
     ).toBe('rate_limit')
   })
 
+  test('withRetry records single-account cap/auth states without rotating', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'solo-cap',
+      accounts: [buildPoolAccount({ accountId: 'solo-cap' })],
+    })
+
+    let capThrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new CodexAccountCapError('solo-cap')
+        },
+        {
+          maxRetries: 0,
+          model: 'gpt-5.3-codex',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      capThrown = error
+    }
+
+    expect(capThrown).toBeInstanceOf(CannotRetryError)
+    expect(getPoolStatus().accounts[0]).toMatchObject({
+      accountId: 'solo-cap',
+      status: 'capped',
+      statusReason: 'usage_cap',
+    })
+    expect(((capThrown as CannotRetryError).originalError as Error).message).toContain(
+      'All Codex accounts are capped or unavailable',
+    )
+
+    resetCodexAccountPoolForTest()
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'solo-auth',
+      accounts: [buildPoolAccount({ accountId: 'solo-auth' })],
+    })
+
+    let authThrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new CodexAccountAuthError('solo-auth', 401)
+        },
+        {
+          maxRetries: 0,
+          model: 'gpt-5.3-codex',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      authThrown = error
+    }
+
+    expect(authThrown).toBeInstanceOf(CannotRetryError)
+    expect(getPoolStatus().accounts[0]).toMatchObject({
+      accountId: 'solo-auth',
+      status: 'dead',
+      statusReason: 'auth_dead',
+    })
+  })
+
   test('failover keeps the failed lease inspectable when no healthy replacement exists', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'worker-a',
@@ -924,6 +1089,35 @@ describe('codexAccountLeaseManager', () => {
     expect(snapshot.leases.find((lease) => lease.ownerId === 'subagent-stable')).toEqual(
       otherLease,
     )
+  })
+
+  test('single-account pool-managed sessions still use main-thread retry owner and lease', () => {
+    setSessionProvider('openai')
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'solo-main',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'solo-main',
+          alias: 'main',
+        }),
+      ],
+    })
+
+    expect(getRetryOwnerId({})).toBe('main-thread')
+
+    const lease = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      strategy: 'follow-main',
+    })
+
+    expect(lease).toMatchObject({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      accountId: 'solo-main',
+      state: 'active',
+    })
   })
 
   test('main-thread retries resolve to main-thread owner and fail over the main lease', async () => {
@@ -1085,7 +1279,7 @@ describe('codexAccountLeaseManager', () => {
 
     try {
       await moduleUnderTest.runWithCodexLeaseOwner('subagent-first-request', async () => {
-        const codexFetch = createCodexFetch('fallback-access-token')
+        const codexFetch = createLeaseAwareCodexFetch('fallback-access-token')
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1098,6 +1292,91 @@ describe('codexAccountLeaseManager', () => {
 
     expect(authorizationHeader).toBe(`Bearer ${buildCodexToken('worker-a')}`)
     expect(accountHeader).toBe('worker-a')
+  })
+
+  test('createCodexFetch per-request resolver repairs a blocked lease before sending', async () => {
+    setSessionProvider('openai')
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'backup-clean',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'leased-capped',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          lastError: 'Usage cap hit (429)',
+        }),
+        buildPoolAccount({ accountId: 'backup-clean' }),
+      ],
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'subagent-repair',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Repair',
+      accountId: 'leased-capped',
+    })
+
+    const originalFetch = globalThis.fetch
+    let accountHeader: string | null = null
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      accountHeader = new Headers(init?.headers).get('chatgpt-account-id')
+      return codexCompletedStreamResponse()
+    }) as typeof globalThis.fetch
+
+    try {
+      await moduleUnderTest.runWithCodexLeaseOwner('subagent-repair', async () => {
+        const codexFetch = createLeaseAwareCodexFetch(buildCodexToken('leased-capped'))
+        await codexFetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+        })
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(accountHeader).toBe('backup-clean')
+    expect(moduleUnderTest.getCodexLeaseForOwner('subagent-repair')?.accountId).toBe(
+      'backup-clean',
+    )
+  })
+
+  test('single-account HTTP 401/429 responses are classified as account errors', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'solo-account',
+      accounts: [buildPoolAccount({ accountId: 'solo-account' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    try {
+      globalThis.fetch = (async () =>
+        new Response('unauthorized expired token', { status: 401 })) as unknown as typeof globalThis.fetch
+      await expect(
+        createLeaseAwareCodexFetch(buildCodexToken('solo-account'))(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          },
+        ),
+      ).rejects.toBeInstanceOf(CodexAccountAuthError)
+
+      globalThis.fetch = (async () =>
+        new Response('usage limit reached', { status: 429 })) as unknown as typeof globalThis.fetch
+      await expect(
+        createLeaseAwareCodexFetch(buildCodexToken('solo-account'))(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          },
+        ),
+      ).rejects.toBeInstanceOf(CodexAccountCapError)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('createCodexFetch keeps conversation ids isolated across interleaved lease owners', async () => {
@@ -1147,7 +1426,7 @@ describe('codexAccountLeaseManager', () => {
     }) as typeof globalThis.fetch
 
     try {
-      const codexFetch = createCodexFetch(buildCodexToken('main-account'))
+      const codexFetch = createLeaseAwareCodexFetch(buildCodexToken('main-account'))
 
       await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
@@ -1219,7 +1498,7 @@ describe('codexAccountLeaseManager', () => {
     }) as typeof globalThis.fetch
 
     try {
-      const codexFetch = createCodexFetch(buildCodexToken('main-account'))
+      const codexFetch = createLeaseAwareCodexFetch(buildCodexToken('main-account'))
 
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
@@ -1272,7 +1551,7 @@ describe('codexAccountLeaseManager', () => {
     }) as typeof globalThis.fetch
 
     try {
-      const codexFetch = createCodexFetch(buildCodexToken('main-account'))
+      const codexFetch = createLeaseAwareCodexFetch(buildCodexToken('main-account'))
 
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
@@ -1520,7 +1799,7 @@ describe('codexAccountLeaseManager', () => {
         async () => ({}) as never,
         async () => {
           attempts += 1
-          const response = await createCodexFetch(
+          const response = await createLeaseAwareCodexFetch(
             buildCodexToken('main-account'),
             conversationId,
           )('https://api.anthropic.com/v1/messages', {

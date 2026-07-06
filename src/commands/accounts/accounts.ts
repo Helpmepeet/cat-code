@@ -1,4 +1,4 @@
-import { getPoolStatus } from '../../services/api/codexAccountPool.js'
+import { describeCodexAccountAvailability, getPoolStatus } from '../../services/api/codexAccountPool.js'
 import { getCodexLeaseSnapshot } from '../../services/api/codexAccountLeaseManager.js'
 import { getClaudePoolStatus } from '../../services/api/claudeAccountPool.js'
 import { fetchPoolUsage, formatPoolUsage } from '../../services/api/codexUsage.js'
@@ -38,27 +38,19 @@ export const call: LocalCommandCall = async () => {
       lines.push(formatPoolUsage(snapshot))
       lines.push('')
       lines.push(
-        `Pool: ${accounts.length} accounts (${accounts.filter((a) => a.status === 'healthy').length} healthy)`,
+        `Pool: ${accounts.length} accounts (${accounts.filter((a) => describeCodexAccountAvailability(a) === 'Ready').length} Ready)`,
       )
     } else {
       lines.push('Codex Account Pool:')
       lines.push('')
 
       let hasConfigOnly = false
-      for (let i = 0; i < accounts.length; i++) {
-        const acct = accounts[i]!
-        const isActive = i === activeIndex
+      const activeAccountId = leaseSnapshot.mainLease?.accountId ?? accounts[activeIndex]?.accountId
+      for (const acct of accounts) {
+        const isActive = acct.accountId === activeAccountId
         const dot = isActive ? '● ' : '  '
         const label = acct.alias ?? acct.accountId.slice(0, 12)
-        const needsReauth = acct.status === 'dead' && acct.statusReason === 'auth_dead'
-        const statusTag =
-          acct.status === 'healthy'
-            ? ''
-            : acct.status === 'capped'
-              ? '  [capped]'
-              : needsReauth
-                ? '  [needs re-login]'
-                : '  [dead]'
+        const statusTag = `  ${describeCodexAccountAvailability(acct, { format: 'bracket' })}`
         const sourceTag = acct.source === 'vault' ? '  vault' : '  config'
         if (acct.source !== 'vault') hasConfigOnly = true
 
@@ -66,20 +58,21 @@ export const call: LocalCommandCall = async () => {
         if (acct.lastError) {
           line += `\n    warning: ${acct.lastError}`
         }
-        if (needsReauth) {
+        if (acct.status === 'dead' && acct.statusReason === 'auth_dead') {
           line += `\n    fix: run /login (OpenAI) to re-authenticate this account`
         }
         lines.push(line)
       }
 
-      const healthy = accounts.filter((a) => a.status === 'healthy').length
-      const capped = accounts.filter((a) => a.status === 'capped').length
-      const dead = accounts.filter((a) => a.status === 'dead').length
+      const availabilityCounts = countCodexAvailabilityLabels(accounts)
+      const totalSummary = ['Ready', 'Limit reached', 'Connection issue (retrying)', 'Needs re-login']
+        .map(label => [label, availabilityCounts.get(label) ?? 0] as const)
+        .filter(([, count]) => count > 0)
+        .map(([label, count]) => `${count} ${label}`)
+        .join(', ')
 
       lines.push('')
-      lines.push(
-        `Total: ${accounts.length} (${healthy} healthy${capped ? `, ${capped} capped` : ''}${dead ? `, ${dead} dead` : ''})`,
-      )
+      lines.push(`Total: ${accounts.length}${totalSummary ? ` (${totalSummary})` : ''}`)
       if (hasConfigOnly) {
         lines.push('Note: config-only accounts cannot be deleted with /delete-account.')
       }
@@ -117,14 +110,14 @@ function formatLeaseAccountLabel(
   return acct?.alias ?? mainLease.accountId.slice(0, 12)
 }
 
-function formatTokenAge(lastRefreshIso?: string): string {
-  if (!lastRefreshIso) return '?'
-  const ageMs = Date.now() - new Date(lastRefreshIso).getTime()
-  const ageDays = ageMs / (1000 * 60 * 60 * 24)
-  if (ageDays < 1) {
-    const hours = Math.round(ageDays * 24)
-    return `${hours}h`
+function countCodexAvailabilityLabels(
+  accounts: ReturnType<typeof getPoolStatus>['accounts'],
+): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const account of accounts) {
+    const availability = describeCodexAccountAvailability(account)
+    const label = availability.startsWith('Limit reached') ? 'Limit reached' : availability
+    counts.set(label, (counts.get(label) ?? 0) + 1)
   }
-  const tag = ageDays > 7 ? ' CRITICAL' : ageDays > 5 ? ' WARN' : ''
-  return `${ageDays.toFixed(1)}d${tag}`
+  return counts
 }

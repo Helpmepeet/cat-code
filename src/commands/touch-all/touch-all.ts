@@ -23,7 +23,9 @@ export const call: LocalCommandCall = async () => {
         ? 'OK'
         : r.status === 'locked'
           ? 'LOCKED'
-          : 'FAILED'
+          : r.status === 'skipped'
+            ? 'SKIPPED'
+            : 'FAILED'
     let line = `  ${id}  [${statusTag}]`
     if (r.detail) line += `  ${r.detail}`
     lines.push(line)
@@ -32,10 +34,11 @@ export const call: LocalCommandCall = async () => {
   const refreshed = results.filter((r) => r.status === 'refreshed').length
   const locked = results.filter((r) => r.status === 'locked').length
   const failed = results.filter((r) => r.status === 'failed').length
+  const skipped = results.filter((r) => r.status === 'skipped').length
 
   lines.push('')
   lines.push(
-    `Total: ${results.length} (${refreshed} refreshed, ${locked} locked, ${failed} failed)`,
+    `Total: ${results.length} (${refreshed} refreshed, ${locked} locked, ${failed} failed, ${skipped} skipped)`,
   )
 
   return { type: 'text', value: lines.join('\n') }

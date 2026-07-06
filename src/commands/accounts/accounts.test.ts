@@ -145,4 +145,57 @@ describe('/accounts', () => {
     expect(afterProbe.accountId).toBe('worker-new')
     expect(getCodexLeaseForOwner('main-thread')?.accountId).toBe('main-account')
   })
+
+  test('fallback display marks the main lease account active before pool activeIndex', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'pool-active',
+      accounts: [
+        createCodexAccount('pool-active', 'pool-active'),
+        createCodexAccount('lease-active', 'lease-active'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'lease-active',
+      strategy: 'follow-main',
+    })
+
+    globalThis.fetch = (async () =>
+      new Response('unavailable', { status: 503 })) as unknown as typeof globalThis.fetch
+
+    const result = await call('', {} as Parameters<typeof call>[1])
+
+    if (result.type !== 'text') {
+      throw new Error(`Expected text result, got ${result.type}`)
+    }
+    expect(result.value).toContain('  pool-active  [Ready]')
+    expect(result.value).toContain('● lease-active  [Ready]')
+  })
+
+  test('fallback display uses shared availability labels for quarantined Codex accounts', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        createCodexAccount('main-account', 'main'),
+        {
+          ...createCodexAccount('quarantined-account', 'retrying'),
+          status: 'quarantined',
+          lastError: 'temporary connection failure',
+        },
+      ],
+    })
+
+    globalThis.fetch = (async () =>
+      new Response('unavailable', { status: 503 })) as unknown as typeof globalThis.fetch
+
+    const result = await call('', {} as Parameters<typeof call>[1])
+
+    if (result.type !== 'text') {
+      throw new Error(`Expected text result, got ${result.type}`)
+    }
+    expect(result.value).toContain('retrying  [Connection issue (retrying)]')
+    expect(result.value).toContain('Total: 2 (1 Ready, 1 Connection issue (retrying))')
+  })
 })

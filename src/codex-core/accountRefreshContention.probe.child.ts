@@ -53,7 +53,7 @@ function requireEnv(name: string): string {
  * fetch toward chatgpt.com; codexUsage.ts). Both real refresh clients hit the
  * token endpoint via global fetch at call time:
  *   - src/services/oauth/codex-client.ts postToTokenUrl (CODEX_TOKEN_URL)
- *   - src/services/api/codexTokenRefresh.ts TOKEN_REFRESH_URL
+ *   - src/services/api/codexTokenRefresh.ts refreshAccountTokens (CODEX_TOKEN_URL)
  */
 function patchFetch(mockUrl: string): void {
   const realFetch = globalThis.fetch.bind(globalThis)

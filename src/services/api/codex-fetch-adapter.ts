@@ -19,9 +19,7 @@ import { APIConnectionError } from '@anthropic-ai/sdk'
 import { createHash } from 'crypto'
 import { randomUUID } from 'crypto'
 import { logForDebugging } from '../../utils/debug.js'
-import { getCodexOAuthTokens } from '../../utils/auth.js'
 import { logEvent } from '../analytics/index.js'
-import { getActiveAccount, getPoolStatus, isPoolActive } from './codexAccountPool.js'
 import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 import {
@@ -244,7 +242,7 @@ export function getCodexCacheStats(): {
 // ── Pool-aware error ───────────────────────────────────────────────────
 
 /**
- * Thrown when a Codex account hits a 429/cap error and the account pool is active.
+ * Thrown when a Codex account hits a 429/cap error under pool-managed credentials.
  * Caught by withRetry to trigger instant failover to the next account.
  */
 export class CodexAccountCapError extends Error {
@@ -2758,27 +2756,27 @@ function normalizeInitialWebSocketError(
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
 
+type CodexFetchResolvedTokens = {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+  accountId: string
+  source?: 'pool' | 'config'
+}
+
+type CodexFetchOptions = {
+  resolveTokensForRequest?: () => Promise<CodexFetchResolvedTokens | null>
+}
+
 /**
  * Creates a fetch function that intercepts Anthropic API calls and routes them to Codex.
  * @param accessToken - The Codex access token for authentication
  * @returns A fetch function that translates Anthropic requests to Codex format
  */
-function getPoolAccountForCurrentLease() {
-  const currentLease = getCurrentCodexLease()
-  if (!currentLease) {
-    return getActiveAccount()
-  }
-
-  return (
-    getPoolStatus().accounts.find(
-      (account) => account.accountId === currentLease.accountId,
-    ) ?? null
-  )
-}
-
 export function createCodexFetch(
   accessToken: string,
   conversationIdOverride?: string,
+  options: CodexFetchOptions = {},
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input)
@@ -2802,14 +2800,21 @@ export function createCodexFetch(
       anthropicBody = {}
     }
 
-    // Get current token — pool-aware when multi-account is active.
-    // Re-derive both the token and account ID per request so that lease-local
-    // failover or account changes are picked up without sharing cache state.
-    const currentLease = getCurrentCodexLease()
-    const poolAcct =
-      currentLease && isPoolActive() ? getPoolAccountForCurrentLease() : null
-    const currentToken = poolAcct?.accessToken || accessToken
-    const currentAccountId = poolAcct?.accountId ?? extractAccountId(currentToken)
+    // Get current token. App traffic passes the shared async resolver so
+    // per-request re-derivation uses the same lease/selectability/refresh
+    // semantics as initial client creation. Standalone core calls omit it and
+    // keep using the explicit token resolved by codex-core/accounts.ts.
+    const resolvedTokens = options.resolveTokensForRequest
+      ? await options.resolveTokensForRequest()
+      : null
+    if (options.resolveTokensForRequest && !resolvedTokens?.accessToken) {
+      throw new APIConnectionError({
+        message: 'No healthy Codex account is available for this request.',
+      })
+    }
+    const currentToken = resolvedTokens?.accessToken || accessToken
+    const currentAccountId = resolvedTokens?.accountId ?? extractAccountId(currentToken)
+    const poolManagedCredentials = resolvedTokens?.source === 'pool'
 
     // Translate to Codex format
     const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
@@ -2946,7 +2951,7 @@ export function createCodexFetch(
       const { response: codexResponse, transportContext } = await performHttpRequest()
       if (!codexResponse.ok) {
         const errorText = await codexResponse.text()
-        if (isPoolActive()) {
+        if (poolManagedCredentials) {
           const accountError = classifyCodexHttpAccountError(
             codexResponse.status,
             errorText,
@@ -3042,7 +3047,7 @@ export function createCodexFetch(
 
     if (!codexResponse.ok) {
       const errorText = await codexResponse.text()
-      if (isPoolActive()) {
+      if (poolManagedCredentials) {
         const accountError = classifyCodexHttpAccountError(
           codexResponse.status,
           errorText,

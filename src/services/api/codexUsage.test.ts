@@ -12,6 +12,10 @@ import {
   installStreamJsonAccountDiagnosticHook,
 } from './accountDiagnostics.js'
 import {
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from './codexAccountLeaseManager.js'
+import {
   buildPoolUsageDisplayAccounts,
   emitCachedUsageWarningsForActiveSink,
   fetchPoolUsage,
@@ -86,11 +90,13 @@ function buildUsage(
 describe('codexUsage display helpers', () => {
   beforeEach(() => {
     resetCodexAccountPoolForTest()
+    resetCodexLeaseManagerForTest()
     _resetAccountDiagnosticStreamJsonHookForTesting()
     invalidateUsageCache()
   })
 
   afterEach(() => {
+    resetCodexLeaseManagerForTest()
     _resetAccountDiagnosticStreamJsonHookForTesting()
     invalidateUsageCache()
   })
@@ -1173,11 +1179,40 @@ describe('codexUsage display helpers', () => {
       ],
     })
 
-    expect(output).toContain('● main')
-    expect(output).toContain('  backup2  [capped]')
-    expect(output).toContain('  backup1  [usage unavailable]')
+    expect(output).toContain('● main  [Ready]')
+    expect(output).toContain('  backup2  [Limit reached (resets in unknown)]')
+    expect(output).toContain('  backup1  [Ready]')
     expect(output).toContain('usage      unavailable (HTTP 401)')
-    expect(output).toContain('3 accounts, 2 routable, 2 with usage data, 1 capped, 1 usage unavailable')
+    expect(output).toContain('3 accounts, 2 routable, 2 with usage data, 1 Limit reached, 1 usage unavailable')
+  })
+
+  test('formatPoolUsage marks the main lease account active before pool activeIndex', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'pool-active',
+      accounts: [
+        buildPoolAccount({ accountId: 'pool-active', alias: 'pool' }),
+        buildPoolAccount({ accountId: 'lease-active', alias: 'leased' }),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'lease-active',
+      strategy: 'follow-main',
+    })
+
+    const output = formatPoolUsage({
+      accounts: [
+        buildUsage('pool-active', 10, 10),
+        buildUsage('lease-active', 20, 20),
+      ],
+      fetchedAt: Date.now(),
+      errors: [],
+    })
+
+    expect(output).toContain('  pool  [Ready]')
+    expect(output).toContain('● leased  [Ready]')
   })
 
   test('formatPoolUsage omits the weekly row when the secondary window is absent', () => {
@@ -1226,7 +1261,7 @@ describe('codexUsage display helpers', () => {
     // No usage bars or reset timers for a plan that has no quota.
     expect(output).not.toContain('5h')
     expect(output).not.toContain('7d')
-    expect(output).not.toContain('[capped]')
+    expect(output).not.toContain('Limit reached')
   })
 
   test('formatPoolUsage keeps the weekly row when the secondary window is present', () => {
@@ -1245,7 +1280,7 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain('7d')
   })
 
-  test('formatPoolUsage shows internal capped status even when live usage is available', () => {
+  test('formatPoolUsage shows shared availability status even when live usage is available', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -1269,7 +1304,7 @@ describe('codexUsage display helpers', () => {
       errors: [],
     })
 
-    expect(output).toContain('blocked  [not switchable: capped] [quota info only]')
+    expect(output).toContain('blocked  [Limit reached (resets in unknown)]')
     expect(output).toContain('reason: Usage cap hit (429)')
   })
 
@@ -1300,7 +1335,7 @@ describe('codexUsage display helpers', () => {
       ],
     })
 
-    expect(output).toContain('dead  [not switchable: dead] [quota info only]')
+    expect(output).toContain('dead  [Needs re-login]')
     expect(output).toContain('reason: Token refresh failed: HTTP 401')
     expect(output).toContain('3 accounts, 2 routable, 2 with usage data, 1 usage unavailable')
     expect(output).not.toContain('2 available')
@@ -1326,7 +1361,7 @@ describe('codexUsage display helpers', () => {
     })
 
     expect(output).toContain('● main')
-    expect(output).not.toContain('[not switchable')
+    expect(output).toContain('[Ready]')
     expect(output).toContain(
       'warning: saved plan metadata says expired (2026-04-12T03:30:01+00:00); live usage decides availability',
     )

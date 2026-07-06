@@ -32,6 +32,7 @@ import {
   getActiveClaudeAccount,
   updateActiveClaudeAccountTokens,
 } from '../services/api/claudeAccountPool.js'
+import { getActiveAccount, hasAnyPoolAccount } from '../services/api/codexAccountPool.js'
 import {
   getApiKeyFromFileDescriptor,
   getOAuthTokenFromFileDescriptor,
@@ -1677,7 +1678,7 @@ export function isClaudeAISubscriber(): boolean {
  */
 export function hasCodexTokens(): boolean {
   try {
-    const { hasAnyPoolAccount, getActiveAccount } = require('../services/api/codexAccountPool.js')
+    const { hasAnyPoolAccount } = require('../services/api/codexAccountPool.js')
     // Check if any pool account exists with tokens — even capped/dead accounts
     // count, because the user IS logged in; they're just at a usage limit.
     // This prevents the "Not logged in to OpenAI" notification from appearing
@@ -1995,6 +1996,20 @@ export type UserAccountInfo = {
 export function getAccountInformation() {
   const apiProvider = getAPIProvider()
   if (apiProvider === 'openai') {
+    const activePoolAccount = getActiveAccount()
+    if (activePoolAccount) {
+      return {
+        provider: 'OpenAI',
+        subscription: 'OpenAI',
+        tokenSource: 'ChatGPT OAuth',
+        accountId: activePoolAccount.accountId,
+      } satisfies UserAccountInfo
+    }
+
+    if (hasAnyPoolAccount()) {
+      return undefined
+    }
+
     const codexTokens = getCodexOAuthTokens()
     if (!codexTokens) {
       return undefined

@@ -7,11 +7,13 @@
 
 import { logForDebugging } from '../../utils/debug.js'
 import {
+  describeCodexAccountAvailability,
   getCodexAccountAvailability,
   getPoolStatus,
   updateAccountUsageHints,
   type PoolAccount,
 } from './codexAccountPool.js'
+import { getCodexLeaseSnapshot } from './codexAccountLeaseManager.js'
 import {
   emitAccountDiagnostic,
   hasAccountDiagnosticSink,
@@ -347,7 +349,7 @@ export function scoreAccountUsage(usage: AccountUsage): number {
 export function buildPoolUsageDisplayAccounts(
   poolAccounts: readonly PoolAccount[],
   snapshot: PoolUsageSnapshot | null,
-  activeIndex = -1,
+  activeAccount: number | string = -1,
 ): PoolUsageDisplayAccount[] {
   const usageById = new Map(
     (snapshot?.accounts ?? []).map((usage) => [usage.accountId, usage] as const),
@@ -356,12 +358,16 @@ export function buildPoolUsageDisplayAccounts(
     (snapshot?.errors ?? []).map((entry) => [entry.accountId, entry.error] as const),
   )
 
-  return poolAccounts.map((account, index) => {
+  const activeAccountId = typeof activeAccount === 'string'
+    ? activeAccount
+    : poolAccounts[activeAccount]?.accountId
+
+  return poolAccounts.map((account) => {
     const availability = getCodexAccountAvailability(account)
     return {
       accountId: account.accountId,
       alias: account.alias,
-      isActive: index === activeIndex,
+      isActive: account.accountId === activeAccountId,
       status: account.status,
       statusReason: account.statusReason,
       lastError: account.lastError,
@@ -383,7 +389,8 @@ export function sortPoolUsageDisplayAccounts(
   const statusOrder: Record<PoolAccount['status'], number> = {
     healthy: 0,
     capped: 1,
-    dead: 2,
+    quarantined: 2,
+    dead: 3,
   }
 
   return [...displayAccounts].sort((a, b) => {
@@ -414,8 +421,9 @@ export function sortPoolUsageDisplayAccounts(
  */
 export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   const { accounts: poolAccounts, activeIndex } = getPoolStatus()
+  const mainLeaseAccountId = getCodexLeaseSnapshot().mainLease?.accountId
   const displayAccounts = sortPoolUsageDisplayAccounts(
-    buildPoolUsageDisplayAccounts(poolAccounts, snapshot, activeIndex),
+    buildPoolUsageDisplayAccounts(poolAccounts, snapshot, mainLeaseAccountId ?? activeIndex),
   )
 
   if (displayAccounts.length === 0) {
@@ -460,14 +468,14 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   // Pool summary
   const totalRoutable = displayAccounts.filter((account) => account.switchable !== false).length
   const totalWithUsageData = displayAccounts.filter((account) => !!account.usage).length
-  const totalCapped = displayAccounts.filter(
-    (account) => account.usage && (!account.usage.allowed || account.usage.limitReached),
+  const totalLimitReached = displayAccounts.filter(
+    (account) => describeCodexAccountAvailability(account).startsWith('Limit reached'),
   ).length
   const totalUnavailable = displayAccounts.filter((account) => !account.usage).length
   const noun = displayAccounts.length === 1 ? 'account' : 'accounts'
   let summary = `${displayAccounts.length} ${noun}, ${totalRoutable} routable`
   if (totalWithUsageData > 0) summary += `, ${totalWithUsageData} with usage data`
-  if (totalCapped > 0) summary += `, ${totalCapped} capped`
+  if (totalLimitReached > 0) summary += `, ${totalLimitReached} Limit reached`
   if (totalUnavailable > 0) summary += `, ${totalUnavailable} usage unavailable`
   lines.push(summary)
 
@@ -476,33 +484,12 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
 
 function formatDisplayStatusTag(account: PoolUsageDisplayAccount): string {
   if (account.usage && isFreePlan(account.usage.planType)) {
-    // A free plan can't run Codex at all — "capped" would imply an exhausted
-    // quota that resets, which is wrong.
+    // A free plan can't run Codex at all — "Limit reached" would imply an
+    // exhausted quota that resets, which is wrong.
     return '  [free — no Codex access]'
   }
 
-  if (
-    account.switchable === false &&
-    account.usage &&
-    account.usage.allowed &&
-    !account.usage.limitReached
-  ) {
-    return `  [not switchable: ${account.status}] [quota info only]`
-  }
-
-  if (account.usage) {
-    return account.usage.allowed && !account.usage.limitReached ? '' : '  [capped]'
-  }
-
-  if (account.status === 'dead') {
-    return '  [dead]'
-  }
-
-  if (account.error) {
-    return '  [usage unavailable]'
-  }
-
-  return ''
+  return `  ${describeCodexAccountAvailability(account, { format: 'bracket' })}`
 }
 
 export function isFreePlan(planType: string): boolean {

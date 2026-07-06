@@ -21,7 +21,8 @@ import {
 import {
   getActiveAccount,
   getPoolStatus,
-  isPoolActive,
+  canFailover,
+  poolManagesCredentials,
   markPoolAccountCapped,
   markPoolAccountQuarantined,
   markPoolAccountLastError,
@@ -346,7 +347,7 @@ export async function* withRetry<T>(
       options.isCodexRequest === true ||
       originalError instanceof CodexAccountCapError ||
       originalError instanceof CodexAccountAuthError ||
-      (options.ownerId !== undefined && isPoolActive())
+      (options.ownerId !== undefined && poolManagesCredentials())
     ) {
       emitCodexDiagnostic({
         code: 'account.retry.exhausted',
@@ -494,13 +495,14 @@ export async function* withRetry<T>(
         { level: 'error' },
       )
 
-      // Codex account failover: on 429 from a leased pooled account, reassign
-      // only the current lease and retry immediately with a fresh client.
+      // Codex account failover: on 429 from a pool-managed account, cap
+      // the failed account. Rotate only when another selectable account exists.
       if (error instanceof CodexAccountCapError) {
         const currentLease =
           getCurrentCodexLease() ??
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
-        if (currentLease) {
+        const canRotateBeforeCap = canFailover()
+        if (currentLease && canRotateBeforeCap) {
           try {
             assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
             const nextLease = failoverCodexLease(
@@ -542,26 +544,31 @@ export async function* withRetry<T>(
             )
           }
         }
-        // No active lease — this is a main-session (no subagent) request.
-        // Directly rotate the pool's active account and retry.
-        if (isPoolActive()) {
+
+        if (poolManagesCredentials()) {
           markPoolAccountCapped(error.accountId, error.message, {
             rerollActive: false,
           })
-          const next = switchToAccount(null)
-          if (next) {
-            emitCodexFailoverSucceeded(
-              retryContext.model,
-              next.accountId,
-              'usage cap failover succeeded',
-            )
-            logForDebugging(
-              `[codex-pool] Main session rotated from ${error.accountId} to ${next.accountId} on cap error`,
-            )
-            options.onCodexAccountSwitch?.()
-            client = null
-            continue
+
+          // No active lease — this is a main-session (no subagent) request.
+          // Directly rotate the pool's active account and retry when possible.
+          if (!currentLease && canRotateBeforeCap) {
+            const next = switchToAccount(null)
+            if (next) {
+              emitCodexFailoverSucceeded(
+                retryContext.model,
+                next.accountId,
+                'usage cap failover succeeded',
+              )
+              logForDebugging(
+                `[codex-pool] Main session rotated from ${error.accountId} to ${next.accountId} on cap error`,
+              )
+              options.onCodexAccountSwitch?.()
+              client = null
+              continue
+            }
           }
+
           emitCodexDiagnostic({
             code: getCodexExhaustionDiagnosticCode(),
             severity: 'error',
@@ -570,7 +577,6 @@ export async function* withRetry<T>(
             reason: 'no healthy Codex account remained after usage cap failover',
             model: retryContext.model,
           })
-          // Pool exhausted — no healthy accounts left
           throwRetryExhausted(
             new Error(getCodexLeaseExhaustedMessage()),
             attempt,
@@ -587,10 +593,15 @@ export async function* withRetry<T>(
         const currentAccount = getPoolStatus().accounts.find(
           account => account.accountId === accountId,
         )
+        const canRotateBeforeAuthBlock = canFailover()
 
         let refreshRecovered = false
         let refreshFailure: unknown
-        if (currentAccount?.refreshToken && currentAccount.vaultFilePath) {
+        if (
+          poolManagesCredentials() &&
+          currentAccount?.refreshToken &&
+          currentAccount.vaultFilePath
+        ) {
           try {
             const refreshed = await refreshAccountTokens(
               currentAccount.accountId,
@@ -611,81 +622,83 @@ export async function* withRetry<T>(
           continue
         }
 
-        if (refreshFailure && !(refreshFailure instanceof ReauthenticationRequiredError)) {
-          markPoolAccountQuarantined(
-            accountId,
-            'connection problem during token refresh; retrying',
-            { rerollActive: false },
-          )
-        } else {
-          markPoolAccountStatus(
-            accountId,
-            'dead',
-            'Codex account authentication failed',
-            { rerollActive: false },
-          )
-        }
-        emitCodexDiagnostic({
-          code: 'account.token_refresh.failed',
-          severity: 'warning',
-          recoverable: true,
-          account_ref: accountId,
-          reason: 'Codex account authentication failed and refresh did not recover it',
-          model: retryContext.model,
-        })
-
-        if (currentLease) {
-          try {
-            assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
-            const nextLease = failoverCodexLease(
-              currentLease.ownerId,
+        if (poolManagesCredentials()) {
+          if (refreshFailure && !(refreshFailure instanceof ReauthenticationRequiredError)) {
+            markPoolAccountQuarantined(
               accountId,
+              'connection problem during token refresh; retrying',
+              { rerollActive: false },
+            )
+          } else {
+            markPoolAccountStatus(
+              accountId,
+              'dead',
               'Codex account authentication failed',
-              { markAccountCapped: false },
-            )
-            persistMainLeaseActiveAccount(nextLease)
-            emitCodexFailoverSucceeded(
-              retryContext.model,
-              nextLease.accountId,
-              'authentication failover succeeded',
-            )
-            options.onCodexAccountSwitch?.()
-            client = null
-            noteCodexLeaseFailover()
-            continue
-          } catch (failoverError) {
-            if (failoverError instanceof CannotRetryError) {
-              throw failoverError
-            }
-            emitCodexDiagnostic({
-              code: getCodexExhaustionDiagnosticCode(),
-              severity: 'error',
-              recoverable: false,
-              account_ref: accountId,
-              reason: 'no healthy Codex account remained after authentication failure',
-              model: retryContext.model,
-            })
-            throwRetryExhausted(
-              failoverError instanceof Error
-                ? failoverError
-                : new Error(getCodexLeaseExhaustedMessage()),
-              attempt,
-              accountId,
+              { rerollActive: false },
             )
           }
-        }
+          emitCodexDiagnostic({
+            code: 'account.token_refresh.failed',
+            severity: 'warning',
+            recoverable: true,
+            account_ref: accountId,
+            reason: 'Codex account authentication failed and refresh did not recover it',
+            model: retryContext.model,
+          })
 
-        if (isPoolActive()) {
-          const next = switchToAccount(null)
-          if (next) {
-            emitCodexFailoverSucceeded(
-              retryContext.model,
-              next.accountId,
-              'authentication failover succeeded',
-            )
-            options.onCodexAccountSwitch?.()
-            client = null
-            continue
+          if (currentLease && canRotateBeforeAuthBlock) {
+            try {
+              assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
+              const nextLease = failoverCodexLease(
+                currentLease.ownerId,
+                accountId,
+                'Codex account authentication failed',
+                { markAccountCapped: false },
+              )
+              persistMainLeaseActiveAccount(nextLease)
+              emitCodexFailoverSucceeded(
+                retryContext.model,
+                nextLease.accountId,
+                'authentication failover succeeded',
+              )
+              options.onCodexAccountSwitch?.()
+              client = null
+              noteCodexLeaseFailover()
+              continue
+            } catch (failoverError) {
+              if (failoverError instanceof CannotRetryError) {
+                throw failoverError
+              }
+              emitCodexDiagnostic({
+                code: getCodexExhaustionDiagnosticCode(),
+                severity: 'error',
+                recoverable: false,
+                account_ref: accountId,
+                reason: 'no healthy Codex account remained after authentication failure',
+                model: retryContext.model,
+              })
+              throwRetryExhausted(
+                failoverError instanceof Error
+                  ? failoverError
+                  : new Error(getCodexLeaseExhaustedMessage()),
+                attempt,
+                accountId,
+              )
+            }
+          }
+
+          if (!currentLease && canRotateBeforeAuthBlock) {
+            const next = switchToAccount(null)
+            if (next) {
+              emitCodexFailoverSucceeded(
+                retryContext.model,
+                next.accountId,
+                'authentication failover succeeded',
+              )
+              options.onCodexAccountSwitch?.()
+              client = null
+              continue
+            }
           }
 
           emitCodexDiagnostic({
@@ -714,7 +727,7 @@ export async function* withRetry<T>(
       if (
         error instanceof APIConnectionError &&
         options.isCodexRequest === true &&
-        isPoolActive()
+        poolManagesCredentials()
       ) {
         const trackingLease =
           getCurrentCodexLease() ??
@@ -732,7 +745,7 @@ export async function* withRetry<T>(
       if (
         error instanceof APIConnectionError &&
         options.isCodexRequest === true &&
-        isPoolActive() &&
+        canFailover() &&
         attempt >= 2
       ) {
         const currentLease =
@@ -1111,7 +1124,7 @@ export async function* withRetry<T>(
     }
   }
 
-  throwRetryExhausted(lastError, maxRetries + 1)
+  return throwRetryExhausted(lastError, maxRetries + 1)
 }
 
 function getRetryAfter(error: unknown): string | null {

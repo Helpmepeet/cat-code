@@ -6,8 +6,8 @@
  *   2. Single codexOAuth entry in ~/.claude.json (backward compat)
  *
  * Provides LRU-based account selection and instant failover on 429/cap errors.
- * When the pool has ≤1 healthy account (or hasn't initialized), all code paths
- * fall through to the existing single-account behavior — zero behavioral change.
+ * A single initialized pool account is still the credential authority; failover
+ * only becomes possible when there is another selectable account to rotate to.
  */
 
 import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
@@ -15,7 +15,11 @@ import { join, basename } from 'path'
 import { homedir } from 'os'
 import { hostname } from 'os'
 
-import { regenerateSessionId, resetCostState } from '../../bootstrap/state.js'
+import {
+  getIsNonInteractiveSession,
+  regenerateSessionId,
+  resetCostState,
+} from '../../bootstrap/state.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { clearCodexOAuthTokens, getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
@@ -74,6 +78,10 @@ export type PoolAccountStatusReason =
 export type MarkPoolAccountStatusOptions = {
   rerollActive?: boolean
   statusReason?: PoolAccountStatusReason
+}
+
+export type MarkPoolAccountCappedOptions = MarkPoolAccountStatusOptions & {
+  resetAt?: number
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -150,6 +158,10 @@ function emitUsageStatusDiagnostic(
   })
 }
 
+export function shouldRunStartupCodexTouchAll(): boolean {
+  return !getIsNonInteractiveSession()
+}
+
 export function applyPostCodexAccountSwitchRefresh(): void {
   regenerateSessionId()
   resetUserCache()
@@ -164,7 +176,7 @@ export async function initAccountPool(): Promise<void> {
   try {
     const vaultPath = readVaultPath()
     const vaultAccounts = vaultPath ? loadVaultAccounts(vaultPath) : []
-    const configAccount = loadConfigAccount()
+    const configAccount = vaultAccounts.length === 0 ? loadConfigAccount() : null
 
     pool.accounts = mergePoolAccounts(vaultAccounts, configAccount)
 
@@ -194,7 +206,9 @@ export async function initAccountPool(): Promise<void> {
       const { startPeriodicRefresh, startQuarantineProbe, touchAll } = await import('./codexTokenRefresh.js')
       startPeriodicRefresh()
       startQuarantineProbe()
-      void touchAll().catch(() => {})
+      if (shouldRunStartupCodexTouchAll()) {
+        void touchAll().catch(() => {})
+      }
     }
 
     // Fire-and-forget: fetch initial usage data for scoring and diagnostics.
@@ -213,15 +227,25 @@ export async function initAccountPool(): Promise<void> {
 }
 
 /**
- * True when the pool is initialized and has more than one account (any status).
- * This gates pool-based token resolution and failover logic. The pool stays
- * "active" even when some accounts are capped/dead so that:
- *  - remaining healthy accounts are still reachable via the pool path
- *  - the UI doesn't flip to "Not logged in" when one account hits a cap
- *  - /accounts still shows all accounts with their statuses
+ * True when initialized pool inventory should be the credential authority.
+ * A single account still matters here: pool/vault tokens may be fresher than
+ * the legacy config mirror, and account health must block doomed requests.
+ */
+export function poolManagesCredentials(): boolean {
+  return pool.initialized && pool.accounts.length >= 1
+}
+
+/** True when there are at least two currently selectable accounts to rotate between. */
+export function canFailover(): boolean {
+  return pool.initialized && pool.accounts.filter((account) => isCodexAccountSwitchable(account)).length >= 2
+}
+
+/**
+ * Legacy failover predicate. Prefer poolManagesCredentials() for credential
+ * routing/classification and canFailover() for rotation decisions.
  */
 export function isPoolActive(): boolean {
-  return pool.initialized && pool.accounts.length > 1
+  return canFailover()
 }
 
 /**
@@ -279,52 +303,6 @@ export function setActiveAccountPersisted(
     persistActiveCodexAccountId(accountId)
   }
   return result
-}
-
-/**
- * Called on 429/cap from the current account.
- * Marks it capped and returns the next healthy LRU account, or null if all exhausted.
- */
-export function rotateOnFailure(): PoolAccount | null {
-  const current = pool.accounts[pool.activeIndex]
-  if (current) {
-    current.status = 'capped'
-    current.statusReason = 'usage_cap'
-    current.usagePrimary = 100 // Mark as fully used
-    current.usageAllowed = false
-    current.usageLimitReached = true
-    current.cappedAt = Date.now()
-    current.lastError = 'Usage cap hit (429)'
-    logForDebugging(
-      `[codex-pool] Account ${truncId(current.accountId)} capped`,
-    )
-  }
-
-  const next = findLRUHealthy(-1)
-  if (next < 0) {
-    logForDebugging('[codex-pool] All accounts exhausted')
-    return null
-  }
-
-  pool.activeIndex = next
-  const acct = pool.accounts[next]!
-  persistActiveCodexAccountId(acct.accountId)
-  emitActiveRerollDiagnostic(
-    current?.accountId,
-    acct.accountId,
-    'rotateOnFailure: usage cap hit (429)',
-  )
-  acct.lastUsedAt = Date.now()
-  logForDebugging(
-    `[codex-pool] Failover to ${truncId(acct.accountId)}`,
-  )
-
-  // Refresh usage data after failover (fire-and-forget)
-  import('./codexUsage.js').then(({ fetchPoolUsage }) => {
-    void fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
-  }).catch(() => {})
-
-  return acct
 }
 
 /** Add or update an account in the live pool (called by login flow). */
@@ -475,7 +453,7 @@ export function markPoolAccountStatus(
 export function markPoolAccountCapped(
   accountId: string,
   reason: string,
-  options: MarkPoolAccountStatusOptions = {},
+  options: MarkPoolAccountCappedOptions = {},
 ): void {
   markPoolAccountStatus(accountId, 'capped', reason, {
     ...options,
@@ -488,6 +466,9 @@ export function markPoolAccountCapped(
   acct.usagePrimary = 100
   acct.usageAllowed = false
   acct.usageLimitReached = true
+  if (options.resetAt !== undefined) {
+    acct.usageResetAt = options.resetAt
+  }
   acct.cappedAt = Date.now()
 }
 
@@ -1013,7 +994,7 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
   return results
 }
 
-function loadConfigAccount(): PoolAccount | null {
+export function loadConfigAccount(): PoolAccount | null {
   const tokens = getCodexOAuthTokens()
   if (!tokens?.accessToken || !tokens.accountId) return null
   return {
@@ -1037,14 +1018,14 @@ function mergePoolAccounts(
   }
 
   if (configAccount) {
-    if (!byId.has(configAccount.accountId)) {
+    if (byId.size === 0) {
       byId.set(configAccount.accountId, configAccount)
       logForDebugging(
         `[codex-profile] profile-merge account=${configAccount.accountId} vault=false config=true action=added-config-profile`,
       )
     } else {
       logForDebugging(
-        `[codex-profile] profile-merge account=${configAccount.accountId} vault=true config=true action=kept-vault-metadata`,
+        `[codex-profile] profile-merge account=${configAccount.accountId} vault=true config=true action=ignored-config-mirror`,
       )
     }
   }
@@ -1198,19 +1179,11 @@ export function updateAccountUsageHints(
   for (const hint of hints) {
     const acct = pool.accounts.find((a) => a.accountId === hint.accountId)
     if (acct) {
-      // Post-redemption lag guard: wham/usage lags reality by minutes, so a poll
-      // right after a confirmed reset can return stale limit_reached:true /
-      // allowed:false. Skip applying those blocking signals while the redemption
-      // is fresh — mirroring the USAGE_UNCAP_GRACE_MS idiom for the 429 uncap
-      // direction. After the grace, hints flow normally and reality wins.
-      const withinRedeemGrace =
-        acct.redeemedAt !== undefined &&
-        now - acct.redeemedAt < REDEEM_HINT_LAG_GRACE_MS
       const hintReportsBlocked =
         hint.allowed === false || hint.limitReached === true
 
-      if (withinRedeemGrace && hintReportsBlocked) {
-        // Silently skip — stale poll within the post-redeem grace window.
+      if (hintReportsBlocked && !canUsagePollBlockOverrideRedeem(acct, hint, now)) {
+        // Silently skip — stale poll within the post-redeem propagation window.
         // Still update the non-blocking fields so scoring stays current.
         acct.usagePrimary = hint.primaryPercent
         acct.usageWeekly = hint.weeklyPercent
@@ -1219,30 +1192,23 @@ export function updateAccountUsageHints(
         continue
       }
 
+      const hintReportsUncapped = hint.allowed === true && hint.limitReached === false
+      const hintUncapsHard429 =
+        hintReportsUncapped &&
+        acct.status === 'capped' &&
+        acct.statusReason === 'usage_cap' &&
+        canUsagePollUncapHard429(acct, hint, now)
+
       acct.usagePrimary = hint.primaryPercent
       acct.usageWeekly = hint.weeklyPercent
       acct.usageFetchedAt = now
       acct.usageAllowed = hint.allowed
       acct.usageLimitReached = hint.limitReached
-      acct.usageResetAt = hint.resetAt
-      // A hard 429 (markPoolAccountCapped/rotateOnFailure) is authoritative.
-      // wham/usage lags by minutes, so a poll can carry a stale allowed:true
-      // snapshot even when it *resolves* after the cap (e.g. the forceRefresh
-      // fetch rotateOnFailure fires right after capping). Only let usage data
-      // uncap when it was fetched after the cap AND the cap is older than the
-      // endpoint's lag grace; otherwise leave it capped for the next request.
-      const usageNewerThanCap =
-        acct.cappedAt === undefined ||
-        (hint.fetchedAt !== undefined &&
-          hint.fetchedAt > acct.cappedAt &&
-          now - acct.cappedAt > USAGE_UNCAP_GRACE_MS)
-      if (
-        hint.allowed === true &&
-        hint.limitReached === false &&
-        acct.status === 'capped' &&
-        acct.statusReason === 'usage_cap' &&
-        usageNewerThanCap
-      ) {
+      if (!hintReportsUncapped || hintUncapsHard429 || acct.status !== 'capped' || acct.statusReason !== 'usage_cap') {
+        acct.usageResetAt = hint.resetAt
+      }
+
+      if (hintUncapsHard429) {
         const previousLastError = acct.lastError
         acct.status = 'healthy'
         acct.statusReason = undefined
@@ -1272,12 +1238,155 @@ const USAGE_UNCAP_GRACE_MS = 2 * 60 * 1000 // 2 minutes
 // the server state propagates. Skip applying those blocking hints during this
 // window — mirrors USAGE_UNCAP_GRACE_MS's purpose for the opposite direction.
 export const REDEEM_HINT_LAG_GRACE_MS = 2 * 60 * 1000 // 2 minutes
+type QuotaObservationState = 'allowed' | 'blocked'
+type QuotaObservationSource = 'usage_poll' | 'hard_429' | 'redeem'
+
+type QuotaObservation = {
+  state: QuotaObservationState
+  source: QuotaObservationSource
+  observedAt: number
+  authority: number
+  propagationLagMs: number
+  resetAt?: number
+}
+
+const QUOTA_OBSERVATION_SOURCE_PROPERTIES: Record<QuotaObservationSource, {
+  authority: number
+  propagationLagMs: number
+}> = {
+  usage_poll: { authority: 1, propagationLagMs: 0 },
+  hard_429: { authority: 2, propagationLagMs: USAGE_UNCAP_GRACE_MS },
+  redeem: { authority: 2, propagationLagMs: REDEEM_HINT_LAG_GRACE_MS },
+}
+
+function createQuotaObservation(
+  source: QuotaObservationSource,
+  state: QuotaObservationState,
+  observedAt: number,
+  resetAt?: number,
+): QuotaObservation {
+  const sourceProperties = QUOTA_OBSERVATION_SOURCE_PROPERTIES[source]
+  return {
+    state,
+    source,
+    observedAt,
+    authority: sourceProperties.authority,
+    propagationLagMs: sourceProperties.propagationLagMs,
+    ...(resetAt !== undefined ? { resetAt } : {}),
+  }
+}
+
+function getFiniteTimestamp(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function canQuotaObservationOverride(
+  currentBelief: QuotaObservation,
+  nextObservation: QuotaObservation,
+  now: number,
+): boolean {
+  if (nextObservation.observedAt <= currentBelief.observedAt) {
+    return false
+  }
+  return (
+    nextObservation.authority > currentBelief.authority ||
+    now - currentBelief.observedAt >= currentBelief.propagationLagMs
+  )
+}
+
+function getHard429QuotaBelief(account: CodexAccountAvailabilityAccount): QuotaObservation | null {
+  const cappedAt = getFiniteTimestamp(account.cappedAt)
+  if (
+    account.status !== 'capped' ||
+    account.statusReason !== 'usage_cap' ||
+    cappedAt === undefined
+  ) {
+    return null
+  }
+  // Only carry a reset that post-dates the cap. The hard-429 path calls
+  // markPoolAccountCapped without a resetAt, so any prior usageResetAt survives
+  // the cap; a value already elapsed when the cap was placed belongs to an
+  // earlier window (or a stale poll), not this cap, and must not silently uncap
+  // a freshly capped account (which would flip it "available" → re-select →
+  // 429 → hot loop, and inflate canFailover()'s selectable count).
+  const resetAt =
+    typeof account.usageResetAt === 'number' && account.usageResetAt * 1000 >= cappedAt
+      ? account.usageResetAt
+      : undefined
+  return createQuotaObservation('hard_429', 'blocked', cappedAt, resetAt)
+}
+
+function getUsagePollQuotaBelief(account: CodexAccountAvailabilityAccount): QuotaObservation | null {
+  const fetchedAt = getFiniteTimestamp(account.usageFetchedAt)
+  if (fetchedAt === undefined) {
+    return null
+  }
+  const state = account.usageAllowed === false || account.usageLimitReached === true
+    ? 'blocked'
+    : 'allowed'
+  return createQuotaObservation('usage_poll', state, fetchedAt, account.usageResetAt)
+}
+
+function isQuotaObservationResetElapsed(
+  observation: QuotaObservation | null,
+  now: number,
+): boolean {
+  return (
+    typeof observation?.resetAt === 'number' &&
+    observation.resetAt > 0 &&
+    now >= observation.resetAt * 1000
+  )
+}
+
+function getUsageHintObservationTime(
+  hint: { fetchedAt?: number },
+  fallback: number,
+): number {
+  return getFiniteTimestamp(hint.fetchedAt) ?? fallback
+}
+
+function canUsagePollBlockOverrideRedeem(
+  account: PoolAccount,
+  hint: { fetchedAt?: number; resetAt?: number },
+  now: number,
+): boolean {
+  const redeemedAt = getFiniteTimestamp(account.redeemedAt)
+  if (redeemedAt === undefined) {
+    return true
+  }
+  const redeemBelief = createQuotaObservation('redeem', 'allowed', redeemedAt)
+  const pollObservation = createQuotaObservation(
+    'usage_poll',
+    'blocked',
+    getUsageHintObservationTime(hint, now),
+    hint.resetAt,
+  )
+  return canQuotaObservationOverride(redeemBelief, pollObservation, now)
+}
+
+function canUsagePollUncapHard429(
+  account: PoolAccount,
+  hint: { fetchedAt?: number; resetAt?: number },
+  now: number,
+): boolean {
+  const hard429Belief = getHard429QuotaBelief(account)
+  if (!hard429Belief) {
+    return true
+  }
+  const fetchedAt = getFiniteTimestamp(hint.fetchedAt)
+  if (fetchedAt === undefined) {
+    return false
+  }
+  const pollObservation = createQuotaObservation('usage_poll', 'allowed', fetchedAt, hint.resetAt)
+  return canQuotaObservationOverride(hard429Belief, pollObservation, now)
+}
+
 const DEFAULT_USAGE_PRIMARY = 50
 const DEFAULT_USAGE_WEEKLY = 50
 const PRIMARY_USAGE_WEIGHT = 3
 
 export function hasFreshPoolAccountUsageHint(
-  account: PoolAccount,
+  account: CodexAccountAvailabilityAccount,
   now = Date.now(),
 ): boolean {
   return (
@@ -1300,6 +1409,20 @@ export function getPoolAccountUsageScore(
   )
 }
 
+export type CodexAccountAvailabilityAccount = Pick<
+  PoolAccount,
+  | 'status'
+  | 'statusReason'
+  | 'lastError'
+  | 'usageAllowed'
+  | 'usageLimitReached'
+  | 'usageFetchedAt'
+  | 'usageResetAt'
+  | 'cappedAt'
+  | 'planType'
+  | 'planExpiresAt'
+>
+
 export type CodexAccountAvailabilityWarningCode =
   | 'plan_metadata_expired'
   | 'plan_metadata_ineligible'
@@ -1315,7 +1438,7 @@ export type CodexAccountAvailability =
   | { kind: 'blocked'; reason: string }
 
 function getPlanMetadataWarnings(
-  account: PoolAccount,
+  account: CodexAccountAvailabilityAccount,
   now: number,
 ): CodexAccountAvailabilityWarning[] {
   const warnings: CodexAccountAvailabilityWarning[] = []
@@ -1336,14 +1459,17 @@ function getPlanMetadataWarnings(
 }
 
 export function getCodexAccountAvailability(
-  account: PoolAccount,
+  account: CodexAccountAvailabilityAccount,
   now = Date.now(),
 ): CodexAccountAvailability {
   if (account.status === 'dead') {
     return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'account auth is unavailable' }
   }
   if (account.status === 'capped') {
-    return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'account is capped' }
+    const hard429Belief = getHard429QuotaBelief(account)
+    if (!hard429Belief || !isQuotaObservationResetElapsed(hard429Belief, now)) {
+      return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'account is capped' }
+    }
   }
   if (account.status === 'quarantined') {
     return { kind: 'blocked', reason: normalizeCodexAccountBlockReason(account.lastError) ?? 'connection problem; retrying' }
@@ -1352,19 +1478,74 @@ export function getCodexAccountAvailability(
     hasFreshPoolAccountUsageHint(account, now) &&
     (account.usageAllowed === false || account.usageLimitReached === true) &&
     // ...unless the window the hint reported has already reset. usageResetAt is
-    // wham/usage reset_at in Unix *seconds* (hence *1000); 0 is its "unknown"
-    // sentinel, so only trust a positive, already-elapsed value.
-    !(
-      typeof account.usageResetAt === 'number' &&
-      account.usageResetAt > 0 &&
-      now >= account.usageResetAt * 1000
-    )
+    // wham/usage reset_at in Unix *seconds*; 0 is its "unknown" sentinel.
+    !isQuotaObservationResetElapsed(getUsagePollQuotaBelief(account), now)
   ) {
     return { kind: 'blocked', reason: 'fresh usage data reports this account is capped' }
   }
 
   const warnings = getPlanMetadataWarnings(account, now)
   return warnings.length > 0 ? { kind: 'warned', warnings } : { kind: 'available' }
+}
+
+export type CodexAccountAvailabilityDescriptionOptions = {
+  now?: number
+  format?: 'plain' | 'bracket'
+}
+
+export function describeCodexAccountAvailability(
+  account: CodexAccountAvailabilityAccount,
+  options: CodexAccountAvailabilityDescriptionOptions = {},
+): string {
+  const now = options.now ?? Date.now()
+  const availability = getCodexAccountAvailability(account, now)
+  const label = describeCodexAccountAvailabilityLabel(account, availability, now)
+  return options.format === 'bracket' ? `[${label}]` : label
+}
+
+function describeCodexAccountAvailabilityLabel(
+  account: CodexAccountAvailabilityAccount,
+  availability: CodexAccountAvailability,
+  now: number,
+): string {
+  if (availability.kind !== 'blocked') {
+    return 'Ready'
+  }
+
+  if (account.status === 'dead' || account.statusReason === 'auth_dead') {
+    return 'Needs re-login'
+  }
+
+  if (account.status === 'quarantined' || account.statusReason === 'probe_pending_transport') {
+    return 'Connection issue (retrying)'
+  }
+
+  return `Limit reached (resets in ${formatCodexAvailabilityReset(account.usageResetAt, now)})`
+}
+
+function formatCodexAvailabilityReset(
+  resetAtSeconds: number | undefined,
+  now: number,
+): string {
+  if (typeof resetAtSeconds !== 'number' || !Number.isFinite(resetAtSeconds) || resetAtSeconds <= 0) {
+    return 'unknown'
+  }
+
+  const seconds = Math.max(0, Math.ceil(resetAtSeconds - now / 1000))
+  if (seconds <= 0) return 'now'
+
+  const totalMinutes = Math.ceil(seconds / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24)
+    const remainingHours = hours % 24
+    return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+  }
+  return `${minutes}m`
 }
 
 export function normalizeCodexAccountBlockReason(reason: string | undefined): string | undefined {
@@ -1377,13 +1558,6 @@ export function normalizeCodexAccountBlockReason(reason: string | undefined): st
 }
 
 export function isCodexAccountSwitchable(
-  account: PoolAccount,
-  now = Date.now(),
-): boolean {
-  return getCodexAccountAvailability(account, now).kind !== 'blocked'
-}
-
-export function isCodexAccountLeaseSelectable(
   account: PoolAccount,
   now = Date.now(),
 ): boolean {

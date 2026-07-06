@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
   resetCodexLeaseManagerForTest,
@@ -13,6 +13,11 @@ import {
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { getGlobalConfig } from '../../utils/config.js'
+import {
+  clearCodexOAuthTokens,
+  saveCodexOAuthTokens,
+} from '../../utils/auth.js'
 import {
   _generateImageToolInternalsForTest,
   GenerateImageTool,
@@ -28,11 +33,25 @@ function buildPoolAccount(accountId: string): PoolAccount {
     accountId,
     accessToken: `access-${accountId}`,
     refreshToken: `refresh-${accountId}`,
-    expiresAt: Date.now() + 60_000,
+    expiresAt: Date.now() + 5 * 60_000,
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
   }
+}
+
+function b64url(value: object): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url')
+}
+
+function mintAccessJwt(accountId: string, serial: number): string {
+  const header = b64url({ alg: 'none', typ: 'JWT' })
+  const payload = b64url({
+    'https://api.openai.com/auth': { chatgpt_account_id: accountId },
+    email: 'image-auth-refresh@example.com',
+    serial,
+  })
+  return `${header}.${payload}.test-sig`
 }
 
 function basePermissionContext(): ToolPermissionContext {
@@ -46,10 +65,16 @@ function basePermissionContext(): ToolPermissionContext {
   }
 }
 
+function clearCodexOAuthTokensForTest(): void {
+  clearCodexOAuthTokens()
+  delete getGlobalConfig().codexOAuth
+}
+
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'cat-code-image-gen-'))
   resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
+  clearCodexOAuthTokensForTest()
   process.env.OPENAI_API_KEY = 'test-openai-key'
   process.env.CAT_CODE_IMAGE_BACKEND = 'openai-api'
 })
@@ -70,6 +95,7 @@ afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true })
     tempDir = undefined
   }
+  clearCodexOAuthTokensForTest()
   resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
 })
@@ -489,6 +515,140 @@ describe('GenerateImageTool', () => {
     expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/responses')
     expect(authorization).toBe('Bearer access-main-account')
     expect(accountId).toBe('main-account')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+    expect(result.data.filePath).toBe(outputPath)
+  })
+
+  test('refreshes a near-expiry sole vault-backed Codex account through the vault for image auth', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+
+    const accountId = 'ca11ab1e-0000-4000-8000-00000000f101'
+    const oldAccessToken = mintAccessJwt(accountId, 0)
+    const newAccessToken = mintAccessJwt(accountId, 1)
+    const oldRefreshToken = 'image-refresh-old'
+    const newRefreshToken = 'image-refresh-new'
+    const expiredAt = Date.now() - 10_000
+    const vaultFilePath = join(tempDir!, 'vault', 'accounts', `${accountId}.json`)
+    await mkdir(dirname(vaultFilePath), { recursive: true })
+    await writeFile(
+      vaultFilePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          tokens: {
+            access_token: oldAccessToken,
+            refresh_token: oldRefreshToken,
+            account_id: accountId,
+            expires_at: expiredAt,
+          },
+          refresh: { state: 'idle' },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+
+    saveCodexOAuthTokens({
+      accessToken: oldAccessToken,
+      refreshToken: oldRefreshToken,
+      expiresAt: expiredAt,
+      accountId,
+    })
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [
+        {
+          accountId,
+          accessToken: oldAccessToken,
+          refreshToken: oldRefreshToken,
+          expiresAt: expiredAt,
+          source: 'vault',
+          status: 'healthy',
+          lastUsedAt: 0,
+          vaultFilePath,
+        },
+      ],
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    let refreshCalls = 0
+    let authorization: string | null = null
+    let requestAccountId: string | null = null
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+
+      if (requestUrl === 'https://auth.openai.com/oauth/token') {
+        refreshCalls += 1
+        const body = JSON.parse(String(init?.body)) as { refresh_token?: string }
+        expect(body.refresh_token).toBe(oldRefreshToken)
+        return Response.json({
+          access_token: newAccessToken,
+          refresh_token: newRefreshToken,
+          id_token: newAccessToken,
+          expires_in: 3600,
+        })
+      }
+
+      if (requestUrl === 'https://chatgpt.com/backend-api/codex/responses') {
+        const headers = new Headers(init?.headers)
+        authorization = headers.get('authorization')
+        requestAccountId = headers.get('chatgpt-account-id')
+        return new Response(
+          [
+            'event: response.output_item.done',
+            `data: ${JSON.stringify({
+              type: 'response.output_item.done',
+              item: {
+                type: 'image_generation_call',
+                result: generatedBytes.toString('base64'),
+              },
+            })}`,
+            '',
+          ].join('\n'),
+          { status: 200 },
+        )
+      }
+
+      throw new Error(`Unexpected fetch in image auth refresh test: ${requestUrl}`)
+    }) as typeof fetch
+
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'refresh through vault before image generation',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        options: { mainLoopModel: 'gpt-5.5' },
+      } as ToolUseContext,
+    )
+
+    const savedVault = JSON.parse(await readFile(vaultFilePath, 'utf8')) as {
+      tokens?: {
+        access_token?: string
+        refresh_token?: string
+        account_id?: string
+        expires_at?: number
+      }
+      refresh?: { state?: string }
+    }
+
+    expect(refreshCalls).toBe(1)
+    expect(authorization).toBe(`Bearer ${newAccessToken}`)
+    expect(requestAccountId).toBe(accountId)
+    expect(savedVault.tokens?.access_token).toBe(newAccessToken)
+    expect(savedVault.tokens?.refresh_token).toBe(newRefreshToken)
+    expect(savedVault.tokens?.account_id).toBe(accountId)
+    expect(savedVault.tokens?.expires_at).toBeGreaterThan(Date.now())
+    expect(savedVault.refresh?.state).toBe('idle')
     expect(await readFile(outputPath)).toEqual(generatedBytes)
     expect(result.data.filePath).toBe(outputPath)
   })

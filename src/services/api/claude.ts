@@ -272,7 +272,7 @@ import {
   registerCodexLease,
   releaseCodexLease,
 } from './codexAccountLeaseManager.js'
-import { isPoolActive } from './codexAccountPool.js'
+import { poolManagesCredentials } from './codexAccountPool.js'
 
 // Define a type that represents valid JSON values
 type JsonValue = string | number | boolean | null | JsonObject | JsonArray
@@ -737,7 +737,7 @@ export function getRetryOwnerId(options: Pick<Options, 'agentId'>): string | und
     return options.agentId
   }
 
-  if (getAPIProvider() === 'openai' && isPoolActive()) {
+  if (getAPIProvider() === 'openai' && poolManagesCredentials()) {
     return 'main-thread'
   }
 
@@ -1132,7 +1132,7 @@ async function* queryModel(
   const registeredQueryLease =
     requestProvider === 'openai' &&
     options.agentId &&
-    isPoolActive() &&
+    poolManagesCredentials() &&
     !getCurrentCodexLease()
 
   if (registeredQueryLease) {

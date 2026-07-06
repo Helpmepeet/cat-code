@@ -10,6 +10,7 @@ import * as usageModule from '../../services/api/usage.js'
 import * as codexUsageModule from '../../services/api/codexUsage.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
 import { resetClaudeAccountPoolForTest } from '../../services/api/claudeAccountPool.js'
+import { resetCodexLeaseManagerForTest, seedCodexLeaseForTest } from '../../services/api/codexAccountLeaseManager.js'
 import { _setGlobalConfigCacheForTesting } from 'src/utils/config.js'
 
 const SYNC_START = '\x1b[?2026h'
@@ -182,6 +183,7 @@ async function renderFrameForDuration(
 afterEach(() => {
   mock.restore()
   codexPoolModule.resetCodexAccountPoolForTest()
+  resetCodexLeaseManagerForTest()
   resetClaudeAccountPoolForTest()
   _setGlobalConfigCacheForTesting(null)
   delete process.env.DEMO_VERSION
@@ -507,6 +509,57 @@ describe('LogoV2', () => {
     expect(output).toContain('78%')
     expect(output).not.toContain('55%')
     expect(output).not.toContain('66%')
+  })
+
+  test('accounts panel marks the main lease account active before pool activeIndex', async () => {
+    process.env.DEMO_VERSION = 'test'
+
+    const firstAccount = createCodexAccount('codex-account-one', 'codex-one', 1)
+    const secondAccount = createCodexAccount('codex-account-two', 'codex-two', 2)
+
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [firstAccount, secondAccount],
+      activeAccountId: firstAccount.accountId,
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: secondAccount.accountId,
+      strategy: 'follow-main',
+    })
+
+    _setGlobalConfigCacheForTesting({
+      numStartups: 0,
+      theme: 'dark',
+      customApiKeyResponses: {
+        approved: [],
+        rejected: [],
+      },
+    } as never)
+
+    spyOn(usageModule, 'fetchUtilization').mockResolvedValue({})
+    spyOn(codexUsageModule, 'fetchPoolUsage').mockResolvedValue(
+      createCodexUsageSnapshot(
+        firstAccount.accountId,
+        11,
+        22,
+        secondAccount.accountId,
+        33,
+        44,
+      ),
+    )
+
+    const { AccountsPanel } = await import('./AccountsPanel.js')
+
+    const output = await renderFrameForDuration(
+      <AppStateProvider initialState={getDefaultAppState()}>
+        <AccountsPanel availableWidth={100} />
+      </AppStateProvider>,
+    )
+
+    expect(output).toContain('○ codex-one')
+    expect(output).toContain('● codex-two')
   })
 
   test('can switch from full to compact layout without changing hook order', async () => {

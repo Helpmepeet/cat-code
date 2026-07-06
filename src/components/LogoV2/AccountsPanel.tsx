@@ -11,7 +11,8 @@ import {
   isFreePlan,
   type PoolUsageSnapshot,
 } from '../../services/api/codexUsage.js'
-import { getPoolStatus } from '../../services/api/codexAccountPool.js'
+import { describeCodexAccountAvailability, getPoolStatus } from '../../services/api/codexAccountPool.js'
+import { getCodexLeaseSnapshot } from '../../services/api/codexAccountLeaseManager.js'
 import { getClaudePoolStatus, isClaudePoolActive } from '../../services/api/claudeAccountPool.js'
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -214,10 +215,11 @@ function CodexSection({ usageSnapshot, accentColor, textColor }: CodexSectionPro
 
   if (!initialized || accounts.length === 0) return null
 
+  const mainLeaseAccountId = getCodexLeaseSnapshot().mainLease?.accountId
   const displayAccounts = buildPoolUsageDisplayAccounts(
     accounts,
     usageSnapshot,
-    activeIndex,
+    mainLeaseAccountId ?? activeIndex,
   )
 
   return (
@@ -225,13 +227,9 @@ function CodexSection({ usageSnapshot, accentColor, textColor }: CodexSectionPro
       <Text color={textColor} bold>Codex</Text>
       {displayAccounts.map((acct) => {
         const label = acct.alias ?? acct.accountId.slice(0, 12)
-        const unavailableLabel = acct.status === 'capped'
-          ? 'capped'
-          : acct.status === 'dead'
-            ? 'unavailable'
-            : acct.error
-              ? 'usage unavailable'
-              : '—'
+        const unavailableLabel = acct.error && acct.switchable !== false
+          ? `${describeCodexAccountAvailability(acct)} · usage unavailable`
+          : describeCodexAccountAvailability(acct)
 
         return (
           <Box key={acct.accountId} flexDirection="column">
@@ -323,6 +321,9 @@ function AccountsPanelContent({
   useEffect(() => {
     if (!hasCodexAccounts) return
     let cancelled = false
+    // Deliberate (F10): rendering this panel refreshes routing hints so the next
+    // request routes on the freshest usage data. Display drives routing here on
+    // purpose; keep in sync with the Usage tab's fetch.
     fetchPoolUsage({ updateRoutingHints: true })
       .then((snapshot) => { if (!cancelled) setCodexUsageSnapshot(snapshot) })
       .catch(() => { if (!cancelled) setCodexUsageSnapshot(null) })

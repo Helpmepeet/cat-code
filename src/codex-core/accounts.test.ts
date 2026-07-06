@@ -266,7 +266,7 @@ describe('codex-core/accounts identity mismatch reconciliation', () => {
     const { resolveCodexCoreAccount } = await import('./accounts.js')
 
     await expect(resolveCodexCoreAccount('raw401')).rejects.toThrow(
-      'Codex account "raw401" cannot be used: Token refresh failed: HTTP 401',
+      'Codex account "raw401": Needs re-login',
     )
     await expect(resolveCodexCoreAccount('raw401')).rejects.not.toThrow('http_401')
   })

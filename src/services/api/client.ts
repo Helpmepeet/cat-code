@@ -4,10 +4,13 @@ import Anthropic, {
 } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import {
+  appendAccount,
   getActiveAccount,
   getPoolStatus,
-  isCodexAccountLeaseSelectable,
-  isPoolActive,
+  isCodexAccountSwitchable,
+  loadConfigAccount,
+  poolManagesCredentials,
+  type PoolAccount,
 } from './codexAccountPool.js'
 import {
   getActiveClaudeAccount,
@@ -15,7 +18,6 @@ import {
   isClaudePoolActive,
 } from './claudeAccountPool.js'
 import {
-  getCurrentCodexLease,
   getCodexLeaseForOwner,
   repairCodexLeaseIfNonSelectable,
 } from './codexAccountLeaseManager.js'
@@ -30,9 +32,7 @@ import {
   getAnthropicApiKey,
   getApiKeyFromApiKeyHelper,
   getClaudeAIOAuthTokens,
-  getCodexOAuthTokens,
   isClaudeAISubscriber,
-  isCodexSubscriber,
   refreshAndGetAwsCredentials,
   refreshGcpCredentialsIfNeeded,
 } from 'src/utils/auth.js'
@@ -57,8 +57,8 @@ import {
   isEnvTruthy,
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
-import type { PoolAccount } from './codexAccountPool.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
+import { maybeRefreshAccount, type CodexCoreAccount } from '../../codex-core/accounts.js'
 
 /**
  * Environment variables for different client types:
@@ -121,11 +121,12 @@ type CodexLeaseOwnerOptions = {
   codexLeaseOwnerType?: 'main' | 'subagent'
 }
 
-type ResolvedCodexOAuthTokens = {
+export type ResolvedCodexOAuthTokens = {
   accessToken: string
   refreshToken: string
   expiresAt: number
   accountId: string
+  source: 'pool' | 'config'
 }
 
 type AccountStatusCounts = Record<string, number>
@@ -228,19 +229,116 @@ function throwNoHealthyCodexAccount(model: string | undefined): never {
   })
 }
 
-export function resolveCodexOAuthTokensForLeaseOwner({
+function toCoreAccount(
+  account: PoolAccount,
+  profile = account.alias ?? account.accountId,
+): CodexCoreAccount {
+  return {
+    accountId: account.accountId,
+    accessToken: account.accessToken,
+    refreshToken: account.refreshToken,
+    expiresAt: account.expiresAt,
+    profile,
+    source: account.source,
+    alias: account.alias,
+    vaultFilePath: account.vaultFilePath,
+  }
+}
+
+function rememberRefreshedPoolAccount(
+  original: PoolAccount,
+  refreshed: CodexCoreAccount,
+): void {
+  if (refreshed.accountId !== original.accountId) {
+    return
+  }
+  if (
+    refreshed.accessToken === original.accessToken &&
+    refreshed.refreshToken === original.refreshToken &&
+    refreshed.expiresAt === original.expiresAt
+  ) {
+    return
+  }
+
+  appendAccount(
+    {
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAt: refreshed.expiresAt,
+      accountId: refreshed.accountId,
+      alias: refreshed.alias ?? original.alias,
+    },
+    {
+      preserveCapped: true,
+      writer: 'client.resolveCodexOAuthTokensForLeaseOwner',
+      source: refreshed.source === 'config' ? 'config' : original.source,
+      vaultFilePath: refreshed.vaultFilePath ?? original.vaultFilePath,
+    },
+  )
+}
+
+/**
+ * Eager refresh-on-use is an optimization, not a gate. `maybeRefreshAccount`
+ * throws on any refresh failure — a revoked/rotated-away token
+ * (`CodexCoreError` auth) or a transient network error (`CodexCoreError`
+ * backend). If that throw escapes the resolver it aborts `getAnthropicClient`
+ * (and the per-request adapter callback) with an error `withRetry` cannot
+ * classify, bypassing the post-401 refresh/dead-mark/failover path entirely —
+ * so a single bad token dead-ends every request even when a healthy account
+ * exists. Instead, fall back to the account's current token: a genuinely dead
+ * token then surfaces as a 401 the retry layer classifies and fails over, and a
+ * transient blip on a still-valid near-expiry token simply proceeds. This keeps
+ * expiry refresh a complement to, not a replacement for, forced post-401
+ * refresh.
+ */
+async function refreshCoreAccountBestEffort(
+  account: CodexCoreAccount,
+): Promise<CodexCoreAccount> {
+  try {
+    return await maybeRefreshAccount(account)
+  } catch (error) {
+    logForDebugging(
+      `[codex-profile] resolver-refresh-fallback account=${account.accountId} source=${account.source} reason=${error instanceof Error ? error.message : String(error)}`,
+      { level: 'warn' },
+    )
+    return account
+  }
+}
+
+async function resolvePoolManagedAccount(
+  account: PoolAccount,
+): Promise<ResolvedCodexOAuthTokens> {
+  const refreshed = await refreshCoreAccountBestEffort(toCoreAccount(account))
+  rememberRefreshedPoolAccount(account, refreshed)
+  return {
+    accessToken: refreshed.accessToken,
+    refreshToken: refreshed.refreshToken,
+    expiresAt: refreshed.expiresAt,
+    accountId: refreshed.accountId,
+    source: 'pool',
+  }
+}
+
+async function resolveConfigAccount(
+  account: PoolAccount,
+): Promise<ResolvedCodexOAuthTokens> {
+  const refreshed = await refreshCoreAccountBestEffort(toCoreAccount(account))
+  return {
+    accessToken: refreshed.accessToken,
+    refreshToken: refreshed.refreshToken,
+    expiresAt: refreshed.expiresAt,
+    accountId: refreshed.accountId,
+    source: 'config',
+  }
+}
+
+export async function resolveCodexOAuthTokensForLeaseOwner({
   codexLeaseOwnerId,
   codexLeaseOwnerType,
-}: CodexLeaseOwnerOptions): ResolvedCodexOAuthTokens | null {
-  if (!isPoolActive()) {
-    const poolStatus = getPoolStatus()
-    const solePoolAccount = poolStatus.initialized && poolStatus.accounts.length === 1
-      ? poolStatus.accounts[0]
-      : undefined
-    if (solePoolAccount && !isCodexAccountLeaseSelectable(solePoolAccount)) {
-      return null
-    }
-    return getCodexOAuthTokens()
+}: CodexLeaseOwnerOptions): Promise<ResolvedCodexOAuthTokens | null> {
+  if (!poolManagesCredentials()) {
+    const configAccount = loadConfigAccount()
+    return configAccount ? resolveConfigAccount(configAccount) : null
   }
 
   const poolStatus = getPoolStatus()
@@ -265,32 +363,25 @@ export function resolveCodexOAuthTokensForLeaseOwner({
     ? poolAccountById.get(leasedAccountId)
     : null
   const repairedLease =
-    leaseOwnerId && leasedAccount && !isCodexAccountLeaseSelectable(leasedAccount)
+    leaseOwnerId && leasedAccount && !isCodexAccountSwitchable(leasedAccount)
       ? repairCodexLeaseIfNonSelectable(leaseOwnerId)
       : undefined
   const repairedAccount = repairedLease
     ? poolAccountById.get(repairedLease.accountId)
     : null
   const poolAccount =
-    repairedAccount && isCodexAccountLeaseSelectable(repairedAccount)
+    repairedAccount && isCodexAccountSwitchable(repairedAccount)
       ? repairedAccount
-      : leasedAccount && isCodexAccountLeaseSelectable(leasedAccount)
+      : leasedAccount && isCodexAccountSwitchable(leasedAccount)
       ? leasedAccount
-      : getActiveAccount()
+      : getActiveAccount() ?? poolStatus.accounts.find((account) => isCodexAccountSwitchable(account)) ?? null
 
   if (poolAccount) {
-    return {
-      accessToken: poolAccount.accessToken,
-      refreshToken: poolAccount.refreshToken,
-      expiresAt: poolAccount.expiresAt,
-      accountId: poolAccount.accountId,
-    }
+    return resolvePoolManagedAccount(poolAccount)
   }
 
-  // Pool is active but no healthy account found — don't fall through to raw
-  // config tokens, which may belong to an exhausted account. Return null so
-  // callers can emit a clear "all accounts exhausted" error instead of sending
-  // a doomed request that returns a confusing 401.
+  // Pool inventory exists, so the pool is the credential authority. Do not fall
+  // through to raw config tokens that may belong to a stale or blocked account.
   return null
 }
 
@@ -371,10 +462,11 @@ export async function getAnthropicClient({
   }
   // Request-aware provider routing with lease-aware Codex credential lookup.
   if (resolvedProvider === 'openai') {
-    const codexTokens = resolveCodexOAuthTokensForLeaseOwner({
+    const codexTokenOptions = {
       codexLeaseOwnerId,
       codexLeaseOwnerType,
-    })
+    }
+    const codexTokens = await resolveCodexOAuthTokensForLeaseOwner(codexTokenOptions)
     if (codexTokens?.accessToken) {
       emitRouteSelectedDiagnostic({
         provider: 'openai',
@@ -383,7 +475,14 @@ export async function getAnthropicClient({
         accountRef: codexTokens.accountId,
         counts: countStatuses(getPoolStatus().accounts),
       })
-      const codexFetch = createCodexFetch(codexTokens.accessToken, codexConversationIdOverride)
+      const codexFetch = createCodexFetch(
+        codexTokens.accessToken,
+        codexConversationIdOverride,
+        {
+          resolveTokensForRequest: () =>
+            resolveCodexOAuthTokensForLeaseOwner(codexTokenOptions),
+        },
+      )
       const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
         apiKey: 'codex-placeholder', // SDK requires a key but the fetch adapter handles auth
         ...ARGS,
@@ -546,38 +645,6 @@ export async function getAnthropicClient({
     return new AnthropicVertex(vertexArgs) as unknown as Anthropic
   }
 
-  // ── Codex (OpenAI) provider via fetch adapter ─────────────────────
-  // Only route through Codex when this specific request resolves to openai.
-  // Callers that explicitly pin to firstParty (e.g. /insights facet extraction)
-  // must reach the Anthropic client path even when the user's session
-  // provider is openai.
-  if (resolvedProvider === 'openai' && isCodexSubscriber()) {
-    const codexTokens = resolveCodexOAuthTokensForLeaseOwner({
-      codexLeaseOwnerId,
-      codexLeaseOwnerType,
-    })
-    if (codexTokens?.accessToken) {
-      emitRouteSelectedDiagnostic({
-        provider: 'openai',
-        pool: 'codex',
-        model,
-        accountRef: codexTokens.accountId,
-        counts: countStatuses(getPoolStatus().accounts),
-      })
-      const codexFetch = createCodexFetch(codexTokens.accessToken, codexConversationIdOverride)
-      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-        apiKey: 'codex-placeholder', // SDK requires a key but the fetch adapter handles auth
-        ...ARGS,
-        fetch: codexFetch as unknown as typeof globalThis.fetch,
-        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-      }
-      return new Anthropic(clientConfig)
-    }
-    // Pool is active but all accounts are exhausted — throw a clear error
-    // instead of falling through to the Anthropic client path.
-    throwNoHealthyCodexAccount(model)
-  }
-
   // Determine authentication method based on available tokens
   if (isClaudePoolActive()) {
     const activeClaudeAccount = getActiveClaudeAccount()
@@ -607,19 +674,6 @@ export async function getAnthropicClient({
   }
 
   return new Anthropic(clientConfig)
-}
-
-function getPoolAccountForCurrentLease(): PoolAccount | null {
-  const currentLease = getCurrentCodexLease()
-  if (!currentLease) {
-    return getActiveAccount()
-  }
-
-  return (
-    getPoolStatus().accounts.find(
-      (account) => account.accountId === currentLease.accountId,
-    ) ?? null
-  )
 }
 
 async function configureApiKeyHeaders(
