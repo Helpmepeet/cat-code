@@ -10,6 +10,11 @@ import { readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, exist
 import { join, dirname, basename } from 'path'
 import { createHash, randomUUID } from 'crypto'
 import { lock } from 'proper-lockfile'
+import {
+  CODEX_CLIENT_ID,
+  CODEX_TOKEN_URL,
+  isWithinCodexRefreshSkew,
+} from '../../constants/codex-oauth.js'
 
 import { logForDebugging } from '../../utils/debug.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
@@ -23,46 +28,15 @@ import {
   markAccountDead,
   markPoolAccountQuarantined,
   normalizeCodexAccountBlockReason,
-  saveCodexTokenToVault,
-  setActiveAccountPersisted,
 } from './codexAccountPool.js'
-import { getCodexLeaseForOwner, reassignCodexLeaseToActiveAccount } from './codexAccountLeaseManager.js'
-import { emitAccountDiagnostic } from './accountDiagnostics.js'
+import { reconcileCodexIdentityMismatch } from './codexIdentityReconciliation.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const TOKEN_REFRESH_URL = 'https://auth.openai.com/oauth/token'
-const TOKEN_REFRESH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const DEFAULT_REFRESH_INTERVAL_HOURS = 4
 // Fallback expiry when the OAuth response omits expires_in. Chosen to match the
 // typical 1h token TTL so the next request still refreshes before expiry.
 const DEFAULT_TOKEN_EXPIRY_MS = 60 * 60 * 1000
-
-function countPoolStatuses(): Record<string, number> {
-  const accounts = getPoolStatus().accounts
-  const counts: Record<string, number> = { total: accounts.length }
-  for (const account of accounts) {
-    counts[account.status] = (counts[account.status] ?? 0) + 1
-  }
-  return counts
-}
-
-function emitIdentityMismatchDiagnostic(
-  oldAccountId: string,
-  newAccountId: string,
-): void {
-  emitAccountDiagnostic({
-    code: 'account.identity_mismatch',
-    severity: 'warning',
-    provider: 'openai',
-    pool: 'codex',
-    recoverable: true,
-    from_account_ref: oldAccountId,
-    account_ref: newAccountId,
-    reason: `refresh returned different account ${newAccountId}`,
-    counts: countPoolStatuses(),
-  })
-}
 
 function parseExpiresAt(data: Record<string, unknown>): number {
   const expiresIn = data.expires_in
@@ -76,7 +50,7 @@ function parseExpiresAt(data: Record<string, unknown>): number {
 
 export interface RefreshResult {
   accountId: string
-  status: 'refreshed' | 'locked' | 'failed' | 'identity_mismatch'
+  status: 'refreshed' | 'locked' | 'failed' | 'identity_mismatch' | 'skipped'
   detail?: string
   refreshedAccountId?: string
   transportClass?: CodexRefreshTransportClass
@@ -409,7 +383,7 @@ async function refreshAccountTokensStateful(
     // 5. Send network request
     let response: Response
     try {
-      response = await globalThis.fetch(TOKEN_REFRESH_URL, {
+      response = await globalThis.fetch(CODEX_TOKEN_URL, {
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
         headers: {
@@ -417,7 +391,7 @@ async function refreshAccountTokensStateful(
           originator: 'codex_cli_rs',
         },
         body: JSON.stringify({
-          client_id: TOKEN_REFRESH_CLIENT_ID,
+          client_id: CODEX_CLIENT_ID,
           grant_type: 'refresh_token',
           refresh_token: refreshToken,
         }),
@@ -556,57 +530,23 @@ async function refreshAccountTokensStateful(
         `[codex-profile] identity-mismatch writer=codex-refresh.refreshAccountTokens before_account=${accountId} after_account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} action=save-as-new-profile`,
         { level: 'warn' },
       )
-      const poolBefore = getPoolStatus()
-      const wasActive =
-        poolBefore.activeIndex >= 0 &&
-        poolBefore.accounts[poolBefore.activeIndex]?.accountId === accountId
-      const mainLease = getCodexLeaseForOwner('main-thread')
-      const wasMain = mainLease?.accountId === accountId
-      const wasActiveOrMain = wasActive || wasMain
-
-      markAccountDead(
-        accountId,
-        `Refresh returned different account ${refreshedAccountId}`,
-        { rerollActive: false },
-      )
-      const saved = saveCodexTokenToVault(
-        {
+      reconcileCodexIdentityMismatch({
+        oldAccountId: accountId,
+        newAccountId: refreshedAccountId,
+        tokens: {
           accessToken: newAccessToken,
           refreshToken: newRefreshToken,
-          accountId: refreshedAccountId,
           idToken: newIdToken,
           expiresAt,
         },
-        {
-          writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
+        writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
+        source: 'vault',
+        saveNewVault: {
           expectedPreviousAccountId: accountId,
           filePath: join(dirname(vaultFilePath), `${refreshedAccountId}.json`),
           preserveExistingMetadata: false,
         },
-      )
-      appendAccount(
-        {
-          accessToken: newAccessToken,
-          refreshToken: newRefreshToken,
-          idToken: newIdToken,
-          expiresAt,
-          accountId: refreshedAccountId,
-        },
-        {
-          preserveCapped: true,
-          writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
-          source: saved ? 'vault' : 'config',
-          vaultFilePath: saved?.filePath,
-          activate: wasActiveOrMain,
-        },
-      )
-
-      if (wasActiveOrMain) {
-        setActiveAccountPersisted(refreshedAccountId)
-        reassignCodexLeaseToActiveAccount('main-thread')
-      }
-
-      emitIdentityMismatchDiagnostic(accountId, refreshedAccountId)
+      })
 
       // Fix 7: Mark old vault reauth_required rather than idle on identity mismatch.
       latest.refresh = {
@@ -682,8 +622,8 @@ async function refreshAccountTokensStateful(
  * Refresh tokens for all unlocked vault accounts.
  * Skips locked accounts. Returns per-account results.
  */
-export async function touchAll(): Promise<RefreshResult[]> {
-  const vaultPath = getVaultPath()
+export async function touchAll(options: { vaultPath?: string } = {}): Promise<RefreshResult[]> {
+  const vaultPath = options.vaultPath ?? getVaultPath()
   if (!vaultPath) return []
 
   const accountsDir = join(vaultPath, 'accounts')
@@ -717,6 +657,18 @@ export async function touchAll(): Promise<RefreshResult[]> {
       }
 
       accountId = String(tokens.account_id)
+      const expiresAt =
+        typeof tokens.expires_at === 'number' && Number.isFinite(tokens.expires_at)
+          ? tokens.expires_at
+          : 0
+      if (!isWithinCodexRefreshSkew(expiresAt)) {
+        results.push({
+          accountId,
+          status: 'skipped',
+          detail: 'Access token is not within refresh skew',
+        })
+        continue
+      }
 
       // Check lock
       if (isAccountLocked(locksDir, accountId)) {
@@ -757,7 +709,8 @@ export async function touchAll(): Promise<RefreshResult[]> {
   logForDebugging(
     `[codex-refresh] touch-all: ${results.filter((r) => r.status === 'refreshed').length} refreshed, ` +
       `${results.filter((r) => r.status === 'locked').length} locked, ` +
-      `${results.filter((r) => r.status === 'failed').length} failed`,
+      `${results.filter((r) => r.status === 'failed').length} failed, ` +
+      `${results.filter((r) => r.status === 'skipped').length} skipped`,
   )
 
   return results

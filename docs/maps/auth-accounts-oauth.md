@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-07-01
+Last refreshed: 2026-07-06
 
 ## Purpose
 
@@ -27,13 +27,14 @@ Read in this order for most auth/account work:
 | 5 | [`../../src/services/oauth/client.ts`](../../src/services/oauth/client.ts) | Anthropic OAuth URLs, token exchange/refresh, profile, roles, Console API-key creation. |
 | 6 | [`../../src/services/oauth/codex-client.ts`](../../src/services/oauth/codex-client.ts) | OpenAI/Codex OAuth client, fixed callback server, token exchange/refresh, account ID extraction. |
 | 7 | [`../../src/services/api/claudeAccountPool.ts`](../../src/services/api/claudeAccountPool.ts) | Claude multi-account vault, active account pointer, keychain/config sync, aliases, deletes. |
-| 8 | [`../../src/services/api/codexAccountPool.ts`](../../src/services/api/codexAccountPool.ts) | Codex pool inventory, vault/config merge, health, active account, aliases, deletes, usage hints, and normalized availability reasons. |
-| 9 | [`../../src/services/api/codexTokenRefresh.ts`](../../src/services/api/codexTokenRefresh.ts) | Vault-backed Codex refresh state machine, file locking, ambiguous transport handling, and identity-mismatch persistence. |
-| 10 | [`../../src/services/api/codexAccountLeaseManager.ts`](../../src/services/api/codexAccountLeaseManager.ts) | Main-thread/subagent account pinning and lease-local failover. |
-| 11 | [`../../src/services/api/client.ts`](../../src/services/api/client.ts) | Request-time provider routing and lease-aware Codex token selection. |
-| 12 | [`../../src/services/api/withRetry.ts`](../../src/services/api/withRetry.ts) | Auth retry, Codex cap failover, and connection-error failover. |
-| 13 | [`../../src/services/api/accountDiagnostics.ts`](../../src/services/api/accountDiagnostics.ts) | Structured `cat_code_account_diagnostic` emission, sanitization, and stderr fallback. |
-| 14 | [`../../src/utils/secureStorage/`](../../src/utils/secureStorage/) | macOS keychain/plaintext storage selection, cache, prefetch, fallback, and delete behavior. |
+| 8 | [`../../src/services/api/codexAccountPool.ts`](../../src/services/api/codexAccountPool.ts) | Codex pool inventory, credential authority, vault/config merge, health/classification, active account, aliases, deletes, usage hints, normalized availability reasons, and config mirror demotion. |
+| 9 | [`../../src/codex-core/accounts.ts`](../../src/codex-core/accounts.ts) | Exported `maybeRefreshAccount()` refresh-on-use entry point for pool, core, reset, and image callers. |
+| 10 | [`../../src/services/api/codexTokenRefresh.ts`](../../src/services/api/codexTokenRefresh.ts) | Vault-backed Codex refresh state machine, file locking, ambiguous transport handling, and identity-mismatch persistence. |
+| 11 | [`../../src/services/api/codexAccountLeaseManager.ts`](../../src/services/api/codexAccountLeaseManager.ts) | Main-thread/subagent account pinning and lease-local failover. |
+| 12 | [`../../src/services/api/client.ts`](../../src/services/api/client.ts) | Request-time provider routing, async lease-aware Codex token selection, and per-request adapter resolver setup. |
+| 13 | [`../../src/services/api/withRetry.ts`](../../src/services/api/withRetry.ts) | Auth retry, Codex cap failover, and connection-error failover. |
+| 14 | [`../../src/services/api/accountDiagnostics.ts`](../../src/services/api/accountDiagnostics.ts) | Structured `cat_code_account_diagnostic` emission, sanitization, and stderr fallback. |
+| 15 | [`../../src/utils/secureStorage/`](../../src/utils/secureStorage/) | macOS keychain/plaintext storage selection, cache, prefetch, fallback, and delete behavior. |
 
 ## Auth Source Selection
 
@@ -42,10 +43,10 @@ Read in this order for most auth/account work:
 | Whether Anthropic OAuth is enabled | `src/utils/auth.ts:isAnthropicAuthEnabled()` | `src/utils/model/providers.ts`, `src/bootstrap/state.ts` | Disabled for bare mode, third-party provider env, or external API/auth-token sources unless in managed OAuth contexts. |
 | Bearer token source | `src/utils/auth.ts:getAuthTokenSource()` | `src/utils/authFileDescriptor.ts`, `src/services/oauth/client.ts` | Order is bare-mode helper, env token, OAuth token FD or CCR fallback, apiKeyHelper, then stored Claude.ai OAuth. |
 | Anthropic API key source | `src/utils/auth.ts:getAnthropicApiKeyWithSource()` | `src/utils/secureStorage/keychainPrefetch.ts`, `src/utils/authPortable.ts` | Order differs for bare/CI/print flows. User-approved env keys, FD keys, apiKeyHelper, and `/login` managed keychain/config keys are separate sources. |
-| Provider-specific request routing | `src/services/api/client.ts:getAnthropicClient()` | `src/utils/model/providers.ts`, `src/services/api/codex-fetch-adapter.ts` | OpenAI provider injects Codex fetch with Codex OAuth tokens. Anthropic/Bedrock/Vertex/Foundry use their own auth branches. |
-| Account summary/status | `src/utils/auth.ts:getAccountInformation()` | `src/cli/handlers/auth.ts:authStatus()` | OpenAI summary reads the single Codex config token; pooled display lives in `/accounts`. |
+| Provider-specific request routing | `src/services/api/client.ts:getAnthropicClient()` | `src/utils/model/providers.ts`, `src/services/api/codex-fetch-adapter.ts` | OpenAI provider injects Codex fetch with async Codex OAuth token resolution. The adapter gets a resolver callback so every request re-derives lease-aware, refresh-on-use tokens instead of reusing a stale construction-time token. Anthropic/Bedrock/Vertex/Foundry use their own auth branches. |
+| Account summary/status | `src/utils/auth.ts:getAccountInformation()` | `src/cli/handlers/auth.ts:authStatus()` | OpenAI summary reads the legacy Codex config token mirror; pooled display lives in `/accounts`. |
 | Token freshness | `src/utils/auth.ts:checkAndRefreshOAuthTokenIfNeeded()` | `src/services/oauth/client.ts:refreshOAuthToken()`, `src/services/api/claudeAccountPool.ts:updateActiveClaudeAccountTokens()` | Anthropic refresh uses a config-dir lock and writes refreshed tokens back to secure storage and the active Claude vault account. |
-| Codex refresh state and retry safety | `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts:getCodexAccountAvailability()`, `src/services/api/withRetry.ts` | Codex refresh persists ownership and outcome in the vault before and after network calls so later processes can distinguish retry-safe offline failures from ambiguous or reauth-required states. |
+| Codex refresh state and retry safety | `src/codex-core/accounts.ts:maybeRefreshAccount()` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountPool.ts:getCodexAccountAvailability()`, `src/services/api/withRetry.ts` | Codex callers should use `maybeRefreshAccount()` as the single refresh-on-use entry point. It routes vault-backed accounts through the persisted refresh state machine and raw/no-vault accounts through the cross-process ledger path, so later processes can distinguish retry-safe offline failures from ambiguous or reauth-required states. |
 
 ## OAuth And Login Flows
 
@@ -55,7 +56,7 @@ Read in this order for most auth/account work:
 | Anthropic Claude.ai login | `ConsoleOAuthFlow.startOAuth()` | `OAuthService.startOAuthFlow()` -> `exchangeCodeForTokens()` -> `fetchProfileInfo()` | `installOAuthTokens()` stores profile, appends Claude vault account, saves `claudeAiOauth`. |
 | Anthropic Console login | `ConsoleOAuthFlow.startOAuth()` with `loginWithClaudeAi=false` | Same OAuth service with Console authorize URL | `installOAuthTokens()` stores profile, creates Console API key through `createAndStoreApiKey()`, and saves managed key. |
 | Anthropic `setup-token` | `ConsoleOAuthFlow` mode `setup-token` | `OAuthService.startOAuthFlow({ inferenceOnly, expiresIn })` | Token is displayed for env use and is not saved to keychain. |
-| OpenAI/Codex login | `ConsoleOAuthFlow.startCodexOAuth()` | `runCodexOAuthFlow()` in `src/services/oauth/codex-client.ts` | Saves single config token via `saveCodexOAuthTokens()`, saves vault profile via `saveCodexTokenToVault()`, appends active pool account. |
+| OpenAI/Codex login | `ConsoleOAuthFlow.startCodexOAuth()` | `runCodexOAuthFlow()` in `src/services/oauth/codex-client.ts` | Saves the legacy config token mirror via `saveCodexOAuthTokens()`, saves vault profile via `saveCodexTokenToVault()`, and appends active pool account. Vault-backed pool inventory is authoritative once present. |
 | Non-interactive CLI auth | `src/cli/handlers/auth.ts:authLogin()` | `OAuthService.startOAuthFlow()` plus readline manual input or refresh-token env fast path | `installOAuthTokens()` handles shared post-token state. |
 | Forced login constraints | `ConsoleOAuthFlow`, `authLogin()` | `settings.forceLoginMethod`, `settings.forceLoginOrgUUID` | `validateForceLoginOrg()` checks the active OAuth profile after login. |
 
@@ -72,45 +73,45 @@ Codex client.
 | Anthropic profile metadata | `src/services/oauth/client.ts:storeOAuthAccountInfo()` | Global config `oauthAccount` | Roles and organization names are filled by `fetchAndStoreUserRoles()` or direct pool sync. |
 | Anthropic Console managed API key | `src/utils/auth.ts:saveApiKey()` | macOS legacy keychain entry or global config `primaryApiKey` | API key approval state is tracked in global config `customApiKeyResponses`. |
 | Claude account pool | `src/services/api/claudeAccountPool.ts` | `~/claude-vault/accounts/<accountUuid>.json` plus keychain/config fallback | Login appends/migrates accounts. Switch syncs active account back to keychain and `oauthAccount` for existing consumers. |
-| Codex single-account fallback | `src/utils/auth.ts:getCodexOAuthTokens()` | Global config `codexOAuth` | Backward-compatible path when Codex pool is not active. |
-| Codex account pool | `src/services/api/codexAccountPool.ts` | `~/codex-vault/accounts/<accountId>.json`, optional `.codex-nootp/config.toml` vault path, plus config fallback | Pool owns health, aliases, active account, usage hints, plan eligibility, and config active-account pointer. |
-| Codex token refresh | `src/services/api/codexTokenRefresh.ts` | Codex vault JSON plus persisted `refresh` state | Refresh now writes `idle` / `in_flight` / `unknown` / `reauth_required` state into the vault, uses file locking to serialize writers, distinguishes definitely-not-sent transport errors from ambiguous outcomes, and leaves identity-mismatch refreshes marked for reauth on the old vault file. |
-| Codex usage hints | `src/services/api/codexUsage.ts` | `src/components/Settings/Usage.tsx`, `src/components/LogoV2/AccountsPanel.tsx`, pool account fields | Usage fetches are best-effort and send provider account-selection headers. Treat plan type, quota data, and switchability separately: free accounts can be healthy and displayable even when their quota shape differs from paid accounts. |
+| Codex config token mirror | `src/utils/auth.ts:getCodexOAuthTokens()` | Global config `codexOAuth` | Backward-compatible mirror written by login and raw/no-vault refresh. It is used only when there is no vault-backed pool inventory; a single pool account is enough for pool-managed credentials. |
+| Codex account pool | `src/services/api/codexAccountPool.ts` | `~/codex-vault/accounts/<accountId>.json`, optional `.codex-nootp/config.toml` vault path, plus config mirror only when no vault profiles exist | Pool owns credential authority, health/classification, aliases, active account, usage hints, quota observation reconciliation, plan eligibility, config active-account pointer, and stale-config-fallback prevention. `poolManagesCredentials()` is true with one or more accounts; `canFailover()` is reserved for rotation. |
+| Codex token refresh | `src/codex-core/accounts.ts:maybeRefreshAccount()` | Codex vault JSON plus persisted `refresh` state, or raw config/vault writes with ledger for no-vault accounts | `maybeRefreshAccount()` is the caller-facing refresh entry point. Vault refresh writes `idle` / `in_flight` / `unknown` / `reauth_required` state into the vault, uses file locking to serialize writers, distinguishes definitely-not-sent transport errors from ambiguous outcomes, and leaves identity-mismatch refreshes marked for reauth on the old vault file. Raw/no-vault refresh uses the ledger path before `saveCodexOAuthTokens()` / vault persistence. |
+| Codex usage hints | `src/services/api/codexUsage.ts` | `src/components/Settings/Usage.tsx`, `src/components/LogoV2/AccountsPanel.tsx`, pool account fields | Usage fetches are best-effort and send provider account-selection headers. Treat plan type, quota data, and switchability separately: free accounts can be healthy and displayable even when their quota shape differs from paid accounts. Hard-429, usage-poll, and reset-redemption observations are reconciled by the pool before availability changes. |
 
 ## Command Routing
 
 | Command | Owner | Account surfaces touched |
 |---|---|---|
-| `/login` | `src/commands/login/` | Shows `ConsoleOAuthFlow`; post-login refresh clears signature blocks, regenerates session/cost state, refreshes policy/remote settings/GrowthBook, increments `authVersion`. |
+| `/login` | `src/commands/login/` | Shows `ConsoleOAuthFlow`; post-login refresh clears signature blocks, regenerates session/cost state, refreshes policy/remote settings/GrowthBook, increments `authVersion`. Codex login writes both the config mirror and pool/vault profile. |
 | `/logout` | `src/commands/logout/logout.tsx` | With multiple Claude accounts, removes only active Claude account and switches. Otherwise deletes secure storage, clears Codex config token, clears `oauthAccount`, and leaves Codex vault profiles on disk. |
-| `/accounts` | `src/commands/accounts/accounts.ts` | Displays Claude pool, Codex pool, live usage when available, main lease, subagent strategy, and lease holders. |
+| `/accounts` | `src/commands/accounts/accounts.ts` | Displays Claude pool, Codex pool, shared Codex availability labels (`Ready`, `Limit reached`, `Connection issue (retrying)`, `Needs re-login`), live usage when available, main lease, subagent strategy, and lease holders. Codex active display is lease-first. |
 | `/switch-account` | `src/commands/switch-account/switch-account.ts` | Matches Claude aliases/email/UUID and Codex aliases/account IDs. No arg rotates within current provider. Codex switch reassigns main lease and resets Codex cache context. Free accounts remain selectable when healthy; revoked refresh tokens render as “needs re-login.” User-facing dead/capped reasons should come from normalized pool availability text, not raw stored refresh-state codes such as `http_401`. |
 | `/delete-account` | `src/commands/delete-account/delete-account.ts` | Deletes vault-backed Claude or Codex accounts only. Codex delete repairs or releases main lease; config-only Codex accounts are not deletable here. |
 | `/rename-account` | `src/commands/rename-account/rename-account.ts` | Renames vault-backed Claude or Codex accounts. Codex aliases are validated by `validateCodexAccountAlias()`. |
-
 
 ## Structured Diagnostics Boundary
 
 | Concern | Inspect first | Then inspect | Notes |
 |---|---|---|---|
-| SDK/system-event schema | `src/entrypoints/sdk/coreSchemas.ts:SDKAccountDiagnosticMessageSchema` | `src/entrypoints/sdk/coreTypes.generated.ts`, `src/entrypoints/sdk/accountDiagnosticsSchema.test.ts` | Durable cross-process contract is `type: "system"`, `subtype: "cat_code_account_diagnostic"`, `version: 1`, plus `code`, `severity`, `provider`, and `recoverable`. Downstream remediation can key off those required fields alone. |
+| SDK/system-event schema | `src/entrypoints/sdk/coreSchemas.ts:SDKAccountDiagnosticMessageSchema` | `src/entrypoints/sdk/coreTypes.generated.ts`, `src/entrypoints/sdk/accountDiagnosticsSchema.test.ts`, `src/app-runtime/sessionEvents.ts` | Durable cross-process contract is `type: "system"`, `subtype: "cat_code_account_diagnostic"`, `version: 1`, plus `code`, `severity`, `provider`, and `recoverable`. Downstream remediation can key off those required fields alone. App/session-event validation must continue to accept this system event without exposing private account identifiers. |
 | Sanitized emission and stderr fallback | `src/services/api/accountDiagnostics.ts` | `src/services/api/accountDiagnostics.test.ts` | `buildAccountDiagnosticBody()` redacts aliases, emails, account IDs, tokens, API keys, auth headers, and serialized vault records before emitting stream-json or `CAT_CODE_DIAGNOSTIC ...` stderr fallback lines. |
 | Public optional fields | `src/services/api/accountDiagnostics.ts` | `/Users/pt/open-design/apps/daemon/src/claude-diagnostics.ts`, `/Users/pt/open-design/packages/contracts/src/api/connectionTest.ts` | Aggregate `counts` (`total`, `healthy`, `capped`, `dead`, `locked`) are the stable optional public field Open Design consumes for backend-readiness display. Other optional fields are support-log-only unless a future boundary review says otherwise. No public or user-facing diagnostic field may carry identity-bearing account IDs, aliases, emails, or tokens. |
 | Route-selection and pre-send diagnostics | `src/services/api/client.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/claudeAccountPool.ts` | `getAnthropicClient()` emits `account.route.selected`, `model.provider_mismatch`, and unrecoverable pool/auth diagnostics before a doomed request is sent. |
-| Retry/failover diagnostics | `src/services/api/withRetry.ts` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountLeaseManager.ts` | Retry paths emit `account.failover.succeeded`, `account.transient_failure`, `account.token_refresh.failed`, `quota.exhausted`, or `account.pool.unavailable` based on the recovery branch taken. |
+| Retry/failover diagnostics | `src/services/api/withRetry.ts` | `src/codex-core/accounts.ts`, `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountLeaseManager.ts` | Retry paths emit `account.failover.succeeded`, `account.transient_failure`, `account.token_refresh.failed`, `quota.exhausted`, or `account.pool.unavailable` based on the recovery branch taken. |
 | Open Design consumer parser/display | `/Users/pt/open-design/apps/daemon/src/claude-stream.ts` | `/Users/pt/open-design/apps/daemon/src/claude-diagnostics.ts`, `/Users/pt/open-design/apps/daemon/src/server.ts`, `/Users/pt/open-design/apps/daemon/src/connectionTest.ts`, `/Users/pt/open-design/apps/web/src/components/SettingsDialog.tsx` | Open Design owns downstream parsing/display only. It should surface unrecoverable account-backend diagnostics, log recoverable diagnostics with sanitized metadata, and never select Cat Code profiles or accounts. The single non-unrecoverable diagnostic allowed in normal run UX is `account.usage.warning`, rendered as the inline FYI `Cat Code is near provider capacity.` at most once per Cat Code `session_id` per Open Design tab. It has no remediation link or account vocabulary. All recoverable routing codes remain support-log-only. |
 
 ## Codex Pool And Lease Touchpoints
 
 | Concern | Inspect first | Then inspect | Notes |
 |---|---|---|---|
-| Pool initialization | `src/entrypoints/init.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/claudeAccountPool.ts` | Startup initializes Codex pool fire-and-forget and Claude pool synchronously after OAuth profile population. |
-| Main-thread lease | `src/query.ts` | `src/services/api/codexAccountLeaseManager.ts` | Main OpenAI turns register `ownerId: "main-thread"` when the pool is active and release it on query exit. |
+| Pool initialization | `src/entrypoints/init.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/claudeAccountPool.ts` | Startup initializes Codex pool fire-and-forget and Claude pool synchronously after OAuth profile population. Codex pool merge demotes the legacy config mirror when vault profiles exist. Vault accounts start periodic refresh and quarantine probes; startup `touchAll()` runs only outside non-interactive print mode and only refreshes accounts inside the shared refresh skew. |
+| Main-thread lease | `src/query.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts` | Main OpenAI turns register `ownerId: "main-thread"` when `poolManagesCredentials()` is true and release it on query exit. |
 | Subagent leases | `src/tools/AgentTool/AgentTool.tsx` | `src/tasks/LocalAgentTask/LocalAgentTask.tsx` | AgentTool registers leases for async and foreground subagents; task cleanup/kill paths release them. |
-| Lease-aware token lookup | `src/services/api/client.ts:resolveCodexOAuthTokensForLeaseOwner()` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts` | Pooled requests use subagent lease, main lease, or active pool account. When pool is active and no healthy account exists, do not fall through to raw config tokens. |
-| Cap failover | `src/services/api/withRetry.ts` | `src/services/api/codex-fetch-adapter.ts:CodexAccountCapError` | 429 from Codex reassigns only the current lease when one exists; unleased calls rotate pool active account. |
-| Connection-error failover | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts` | Repeated Codex connection errors can move to another account without marking the failed account capped. |
+| Lease-aware token lookup | `src/services/api/client.ts:resolveCodexOAuthTokensForLeaseOwner()` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts`, `src/codex-core/accounts.ts` | Pooled requests use subagent lease, main lease, repaired lease, active pool account, or any selectable pool account. The async resolver is pool-authoritative, calls `maybeRefreshAccount()`, and refuses raw config fallback whenever `poolManagesCredentials()` is true, including a single-account pool. `createCodexFetch()` uses a resolver callback for per-request token derivation. |
+| Cap failover | `src/services/api/withRetry.ts` | `src/services/api/codex-fetch-adapter.ts:CodexAccountCapError`, `src/services/api/codexAccountPool.ts:canFailover()` | 429 from Codex reassigns only the current lease when one exists; unleased calls rotate pool active account. Rotation decisions use `canFailover()`, not credential-authority predicates. |
+| Connection-error failover | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts`, `src/services/api/codexAccountPool.ts` | Repeated Codex connection errors can move to another account without marking the failed account capped. |
 | Standalone Codex core profile selection | `src/codex-core/accounts.ts` | `src/codex-core/client.ts` | `runCodexLLM()` requires explicit account alias or account ID prefix; it does not silently rotate. |
+| Image-generation auth | `src/tools/GenerateImageTool/GenerateImageTool.ts` | `src/services/api/client.ts`, `src/codex-core/accounts.ts` | Image requests use the shared async Codex resolver and refresh route so main/subagent leases and token freshness match text requests. Image endpoint 401/429 pool-state reporting remains deferred to the shared API retry/failover path. |
 
 ## Secure Storage Route
 
@@ -130,18 +131,21 @@ Use the closest test first:
 | Area | Entry point |
 |---|---|
 | Codex OAuth callback and token parsing | `bun test src/services/oauth/codex-client.test.ts` |
-| Codex pool merge, aliases, deletes, health, plan eligibility | `bun test src/services/api/codexAccountPool.test.ts` |
+| Codex pool merge, credential authority, aliases, deletes, health, plan eligibility, config mirror demotion, and startup touch-all gating | `bun test src/services/api/codexAccountPool.test.ts` |
 | Codex lease selection, failover, retry integration | `bun test src/services/api/codexAccountLeaseManager.test.ts` |
+| Codex refresh-on-use and raw/vault paths | `bun test src/codex-core/accounts.test.ts` |
 | Codex vault refresh and identity mismatch | `bun test src/services/api/codexTokenRefresh.test.ts` |
 | Codex usage display and usage hint behavior | `bun test src/services/api/codexUsage.test.ts` |
 | Codex adapter auth/cap errors and transport bridge | `bun test src/services/api/codex-fetch-adapter.test.ts` |
+| Image-generation Codex auth resolver/refresh | `bun test src/tools/GenerateImageTool/GenerateImageTool.test.ts` |
 | Structured account diagnostics envelope + redaction | `bun test src/services/api/accountDiagnostics.test.ts` |
-| `/accounts` behavior | `bun test src/commands/accounts/accounts.test.ts` |
+| SDK/app account-diagnostic validation | `bun test src/entrypoints/sdk/accountDiagnosticsSchema.test.ts src/app-runtime/sessionEvents.test.ts` |
+| `/accounts` behavior and availability vocabulary | `bun test src/commands/accounts/accounts.test.ts` |
 | `/switch-account` behavior | `bun test src/commands/switch-account/switch-account.test.ts` |
 | `/rename-account` behavior | `bun test src/commands/rename-account/rename-account.test.ts` |
 | `/delete-account` behavior | `bun test src/commands/delete-account/delete-account.test.ts` |
 | Full documented build | `bun run build:dev:full` |
-| Docs-only changes | `git diff --check -- docs/maps/auth-accounts-oauth.md` |
+| Docs-only changes | `git diff --check -- docs/maps/auth-accounts-oauth.md docs/maps/codex-core.md` |
 
 There are focused tests for `/switch-account` and `/rename-account`. There are
 also focused tests for `/accounts` and `/delete-account`. There are still no
@@ -157,10 +161,11 @@ inspection with a focused manual or integration check.
 | OAuth browser callback stalls | Anthropic: `src/services/oauth/auth-code-listener.ts`, `src/services/oauth/index.ts`; Codex: `src/services/oauth/codex-client.ts` | Anthropic uses dynamic localhost ports and manual fallback; Codex requires fixed port 1455 and has its own completion page. |
 | Wrong Anthropic profile after switching | `src/commands/switch-account/switch-account.ts` -> `src/services/api/claudeAccountPool.ts:syncClaudeAccountToStorage()` -> `src/utils/auth.ts:clearOAuthTokenCache()` | Active Claude account must be copied back to keychain/config for legacy consumers. |
 | Wrong Codex account after `/switch-account` | `src/commands/switch-account/switch-account.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codex-fetch-adapter.ts` | Pool activeIndex alone is not enough; main lease and Codex cache context must be updated. |
-| Codex pool appears exhausted | `src/services/api/client.ts` -> `src/services/api/withRetry.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codexAccountPool.ts` -> `src/services/api/codexUsage.ts` | Distinguish `auth.missing` (no account), `account.pool.unavailable` (accounts exist but none are healthy), `quota.exhausted` (all known accounts are capped), dead refresh tokens, recent connection errors, and usage-hint premarking. |
+| Codex pool appears exhausted | `src/services/api/client.ts` -> `src/services/api/withRetry.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codexAccountPool.ts` -> `src/services/api/codexUsage.ts` | Distinguish `auth.missing` (no account), `account.pool.unavailable` (accounts exist but none are healthy), `quota.exhausted` (all known accounts are capped), dead refresh tokens, recent connection errors, and usage-hint premarking. Single-account pool inventory still manages credentials and prevents stale config fallback. |
 | Open Design or SDK consumer received `cat_code_account_diagnostic` | `src/services/api/accountDiagnostics.ts` -> `src/services/api/client.ts` -> `src/services/api/withRetry.ts` -> `src/commands/accounts/accounts.ts` | Check the diagnostic code before reading optional fields: the required envelope drives remediation, while optional fields are sanitized hints only. Recovery stays on Cat Code login and `/accounts`, not downstream profile selection. |
-| Codex refresh changes account identity | `src/services/api/codexTokenRefresh.ts` -> `src/services/api/codexAccountPool.ts` -> `src/codex-core/accounts.ts` | Identity mismatch intentionally saves a new profile and does not transfer alias metadata to the new account. |
+| Codex refresh changes account identity | `src/codex-core/accounts.ts` -> `src/services/api/codexTokenRefresh.ts` -> `src/services/api/codexAccountPool.ts` | Identity mismatch intentionally saves a new profile and does not transfer alias metadata to the new account. |
 | `/logout` did not delete Codex vault accounts | `src/commands/logout/logout.tsx` -> `src/commands/delete-account/delete-account.ts` | Full logout clears session/config credentials but intentionally leaves Codex vault profiles for `/delete-account`. |
+| Image generation uses the wrong Codex account or stale token | `src/tools/GenerateImageTool/GenerateImageTool.ts` -> `src/services/api/client.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/codex-core/accounts.ts` | Image auth should use the same async lease-aware resolver and refresh-on-use path as text requests. |
 
 ## Traps And Stale Assumptions
 
@@ -173,18 +178,25 @@ inspection with a focused manual or integration check.
   descriptors, managed OAuth env tokens, third-party providers, and bare mode
   each alter selection.
 - Do not assume keychain and global config hold the same data. Anthropic OAuth
-  tokens live in secure storage; Anthropic profile metadata and Codex fallback
-  tokens live in global config; vault accounts live under `~/claude-vault` or
-  `~/codex-vault`.
+  tokens live in secure storage; Anthropic profile metadata and the Codex config
+  token mirror live in global config; vault accounts live under `~/claude-vault`
+  or `~/codex-vault`.
+- Do not assume the Codex config token mirror is the source of truth once vault
+  pool inventory exists. A single pool account is enough for pool-managed
+  credentials, classification, and refresh recovery.
+- Do not use `isPoolActive()` for Codex credential routing. Use
+  `poolManagesCredentials()` for token/classification authority and
+  `canFailover()` for rotation; `isPoolActive()` is the legacy failover alias.
 - Do not assume pool active account and request account are always identical.
-  Codex leases can pin main-thread or subagent requests independently.
+  Codex leases can pin main-thread or subagent requests independently, and UI
+  should prefer lease-first display.
 - Do not mark Codex accounts capped for generic connection errors. The retry
   path has a separate non-capping failover branch.
 - Do not bypass `accountDiagnostics.ts` when crossing process boundaries.
-  Structured diagnostics must be sanitized before they reach SDK or Open Design
-  consumers.
+  Structured diagnostics must be sanitized before they reach SDK, app/sidecar,
+  or Open Design consumers.
 - Do not tell downstream clients to choose Cat Code profiles or accounts.
   Recovery stays inside Cat Code: downstream surfaces can prompt for Cat Code
   login or Cat Code `/accounts`, but they do not select profiles themselves.
 - Do not use old Codex design docs as the source of truth without checking the
-  current pool, lease, retry, and client files above.
+  current pool, lease, retry, client, and refresh files above.

@@ -6,15 +6,12 @@ import { z } from 'zod/v4'
 import { FilePathLink } from '../../components/FilePathLink.js'
 import { MessageResponse } from '../../components/MessageResponse.js'
 import { Box, Text } from '../../ink.js'
-import { isPoolActive } from '../../services/api/codexAccountPool.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import { resolveCodexOAuthTokensForLeaseOwner } from '../../services/api/client.js'
-import { refreshCodexToken } from '../../services/oauth/codex-client.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { PNG } from 'pngjs'
 import promptingGuideText from './PROMPTING_GUIDE.md' with { type: 'text' }
 import { getXDGDataHome } from '../../utils/xdg.js'
-import { saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
 import { checkWritePermissionForTool } from '../../utils/permissions/filesystem.js'
@@ -31,7 +28,6 @@ const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
 const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.5'
 const CODEX_IMAGE_GENERATION_INSTRUCTIONS =
   'Generate the requested image using the image_generation tool.'
-const TOKEN_REFRESH_SKEW_MS = 60 * 1000
 const TERMINAL_PREVIEW_WIDTH_COLUMNS = 48
 const TERMINAL_PREVIEW_HEIGHT_ROWS = 16
 const DEFAULT_GENERATED_IMAGE_DIR = 'generated-images'
@@ -487,21 +483,11 @@ async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
 
   // Image requests must resolve Codex auth at request time so subagents use
   // their leased account instead of whatever pool.activeIndex currently points at.
-  const codexTokens = resolveCodexOAuthTokensForLeaseOwner({
+  const codexTokens = await resolveCodexOAuthTokensForLeaseOwner({
     codexLeaseOwnerId: context.agentId ?? getSessionId(),
     codexLeaseOwnerType: context.agentId ? 'subagent' : 'main',
   })
   if (codexTokens?.accessToken) {
-    if (!isPoolActive() && codexTokens.expiresAt <= Date.now() + TOKEN_REFRESH_SKEW_MS) {
-      const refreshed = await refreshCodexToken(codexTokens.refreshToken)
-      saveCodexOAuthTokens(refreshed)
-      return {
-        token: refreshed.accessToken,
-        accountId: refreshed.accountId,
-        backend: 'codex',
-      }
-    }
-
     return {
       token: codexTokens.accessToken,
       accountId: codexTokens.accountId,

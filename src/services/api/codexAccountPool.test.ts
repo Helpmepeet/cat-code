@@ -3,17 +3,20 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
+import { setIsInteractive, setSessionProvider } from '../../bootstrap/state.js'
+import { getAccountInformation } from '../../utils/auth.js'
 import {
   appendAccount,
   applyRedeemedUsageReset,
+  describeCodexAccountAvailability,
   getCodexAccountAvailability,
   getCodexPlanMetadataFromIdToken,
   getPoolStatus,
   getRedemptionEligibility,
-  isCodexAccountLeaseSelectable,
   isCodexAccountSwitchable,
   loadVaultAccountsForTest,
   markAccountDead,
+  markPoolAccountCapped,
   mergePoolAccountsForTest,
   REDEEM_HINT_LAG_GRACE_MS,
   removeCodexAccount,
@@ -21,6 +24,7 @@ import {
   resolveCodexAccountByPrefix,
   saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
+  shouldRunStartupCodexTouchAll,
   switchToAccount,
   updateAccountUsageHints,
   type PoolAccount,
@@ -91,7 +95,6 @@ describe('codexAccountPool availability', () => {
       ],
     })
     expect(isCodexAccountSwitchable(account, NOW)).toBe(true)
-    expect(isCodexAccountLeaseSelectable(account, NOW)).toBe(true)
   })
 
   test('free plan metadata is a warning, not a blocker', () => {
@@ -131,6 +134,39 @@ describe('codexAccountPool availability', () => {
       reason: 'Usage cap hit (429)',
     })
     expect(isCodexAccountSwitchable(account, NOW)).toBe(false)
+  })
+
+  test('a fresh hard-429 cap stays blocked even when a stale usageResetAt is already elapsed', () => {
+    // The hard-429 path (markPoolAccountCapped) does not refresh usageResetAt, so
+    // a prior elapsed reset can linger. It belongs to an earlier window, not this
+    // cap, and must not silently unblock a just-capped account.
+    const staleReset = buildPoolAccount({
+      accountId: 'capped-stale-reset',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'Usage cap hit (429)',
+      cappedAt: NOW,
+      usageResetAt: Math.floor(NOW / 1000) - 3600, // reset an hour ago, before this cap
+    })
+    expect(getCodexAccountAvailability(staleReset, NOW)).toEqual({
+      kind: 'blocked',
+      reason: 'Usage cap hit (429)',
+    })
+    expect(isCodexAccountSwitchable(staleReset, NOW)).toBe(false)
+  })
+
+  test('a hard-429 cap whose post-cap reset window has elapsed becomes available', () => {
+    const cappedAt = NOW - 90 * 60 * 1000
+    const reset = buildPoolAccount({
+      accountId: 'capped-reset-elapsed',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'Usage cap hit (429)',
+      cappedAt,
+      // reset was set after the cap (future at cap time) and has now elapsed
+      usageResetAt: Math.floor((cappedAt + 60 * 60 * 1000) / 1000),
+    })
+    expect(getCodexAccountAvailability(reset, NOW)).toEqual({ kind: 'available' })
   })
 
   test('dead auth is blocked', () => {
@@ -204,6 +240,43 @@ describe('codexAccountPool availability', () => {
       kind: 'blocked',
       reason: 'fresh usage data reports this account is capped',
     })
+  })
+
+
+  test('describes shared account availability vocabulary', () => {
+    expect(describeCodexAccountAvailability(
+      buildPoolAccount({ accountId: 'healthy-account' }),
+      { now: NOW },
+    )).toBe('Ready')
+
+    expect(describeCodexAccountAvailability(
+      buildPoolAccount({
+        accountId: 'capped-account',
+        status: 'capped',
+        statusReason: 'usage_cap',
+        cappedAt: NOW - 1_000,
+        usageResetAt: Math.floor((NOW + 90 * 60 * 1000) / 1000),
+      }),
+      { now: NOW },
+    )).toBe('Limit reached (resets in 1h 30m)')
+
+    expect(describeCodexAccountAvailability(
+      buildPoolAccount({
+        accountId: 'dead-account',
+        status: 'dead',
+        statusReason: 'auth_dead',
+      }),
+      { now: NOW },
+    )).toBe('Needs re-login')
+
+    expect(describeCodexAccountAvailability(
+      buildPoolAccount({
+        accountId: 'quarantined-account',
+        status: 'quarantined',
+        statusReason: 'probe_pending_transport',
+      }),
+      { now: NOW, format: 'bracket' },
+    )).toBe('[Connection issue (retrying)]')
   })
 })
 
@@ -561,6 +634,57 @@ describe('codexAccountPool appendAccount', () => {
     })
     expect((emittedMessages[0] as { from_account_ref?: string }).from_account_ref).toBeDefined()
     expect((emittedMessages[0] as { account_ref?: string }).account_ref).toBeDefined()
+  })
+
+
+  test('ignores the legacy config mirror when any vault account exists', () => {
+    const merged = mergePoolAccountsForTest(
+      [
+        buildPoolAccount({
+          accountId: 'vault-account',
+          accessToken: 'vault-access',
+          refreshToken: 'vault-refresh',
+          source: 'vault',
+        }),
+      ],
+      buildPoolAccount({
+        accountId: 'config-only-account',
+        accessToken: 'config-access',
+        refreshToken: 'config-refresh',
+        source: 'config',
+      }),
+    )
+
+    expect(merged.map(account => account.accountId)).toEqual(['vault-account'])
+  })
+
+  test('uses the legacy config mirror only when there are no vault accounts', () => {
+    const merged = mergePoolAccountsForTest(
+      [],
+      buildPoolAccount({
+        accountId: 'config-only-account',
+        accessToken: 'config-access',
+        refreshToken: 'config-refresh',
+        source: 'config',
+      }),
+    )
+
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toMatchObject({
+      accountId: 'config-only-account',
+      source: 'config',
+      accessToken: 'config-access',
+    })
+  })
+
+  test('startup touchAll is skipped for non-interactive print sessions', () => {
+    setIsInteractive(false)
+    expect(shouldRunStartupCodexTouchAll()).toBe(false)
+
+    setIsInteractive(true)
+    expect(shouldRunStartupCodexTouchAll()).toBe(true)
+
+    setIsInteractive(false)
   })
 
   test('keeps the vault account unchanged when config contains the same account id', () => {
@@ -1080,6 +1204,233 @@ describe('getPoolStatus', () => {
   })
 })
 
+
+// ── Slice 4: quota belief reconciler directional semantics ─────────────────
+
+describe('quota belief reconciler directional semantics', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  test('429 then stale uncap poll stays capped', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'capped-acct',
+      accounts: [
+        buildPoolAccount({ accountId: 'capped-acct' }),
+        buildPoolAccount({ accountId: 'backup-acct' }),
+      ],
+    })
+
+    const resetAt = Math.floor((Date.now() + 60 * 60 * 1000) / 1000)
+    markPoolAccountCapped('capped-acct', 'Usage cap hit (429)', { rerollActive: false, resetAt })
+    const cappedAt = getPoolStatus().accounts.find(a => a.accountId === 'capped-acct')!.cappedAt!
+
+    updateAccountUsageHints([
+      {
+        accountId: 'capped-acct',
+        primaryPercent: 10,
+        weeklyPercent: 5,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: cappedAt + 1,
+      },
+    ])
+
+    const acct = getPoolStatus().accounts.find(a => a.accountId === 'capped-acct')!
+    expect(acct.status).toBe('capped')
+    expect(acct.cappedAt).toBe(cappedAt)
+    expect(acct.usageResetAt).toBe(resetAt)
+    expect(getCodexAccountAvailability(acct).kind).toBe('blocked')
+  })
+
+  test('redeem then stale block poll stays healed', () => {
+    const now = Date.now()
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'backup-acct',
+      accounts: [
+        buildPoolAccount({ accountId: 'backup-acct' }),
+        buildPoolAccount({
+          accountId: 'redeemed-acct',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: now - 1_000,
+          usageAllowed: false,
+          usageLimitReached: true,
+          usageFetchedAt: now - 500,
+        }),
+      ],
+    })
+
+    applyRedeemedUsageReset('redeemed-acct')
+    const redeemedAt = getPoolStatus().accounts.find(a => a.accountId === 'redeemed-acct')!.redeemedAt!
+
+    updateAccountUsageHints([
+      {
+        accountId: 'redeemed-acct',
+        primaryPercent: 100,
+        weeklyPercent: 100,
+        allowed: false,
+        limitReached: true,
+        fetchedAt: redeemedAt + 1,
+      },
+    ])
+
+    const acct = getPoolStatus().accounts.find(a => a.accountId === 'redeemed-acct')!
+    expect(acct.status).toBe('healthy')
+    expect(acct.usageAllowed).toBe(true)
+    expect(acct.usageLimitReached).toBe(false)
+    expect(acct.usageFetchedAt).toBeUndefined()
+    expect(getCodexAccountAvailability(acct).kind).not.toBe('blocked')
+  })
+
+  test('redeem belief rejects older blocking polls even after propagation lag', () => {
+    const now = Date.now()
+    const redeemedAt = now - REDEEM_HINT_LAG_GRACE_MS - 1_000
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'redeemed-acct',
+          status: 'healthy',
+          redeemedAt,
+          usageAllowed: true,
+          usageLimitReached: false,
+        }),
+      ],
+    })
+
+    updateAccountUsageHints([
+      {
+        accountId: 'redeemed-acct',
+        primaryPercent: 100,
+        weeklyPercent: 100,
+        allowed: false,
+        limitReached: true,
+        fetchedAt: redeemedAt - 1,
+      },
+    ])
+
+    const acct = getPoolStatus().accounts.find(a => a.accountId === 'redeemed-acct')!
+    expect(acct.usageAllowed).toBe(true)
+    expect(acct.usageLimitReached).toBe(false)
+    expect(acct.usageFetchedAt).toBeUndefined()
+    expect(getCodexAccountAvailability(acct).kind).not.toBe('blocked')
+  })
+
+  test('post-failover forceRefresh uncap poll does not undo the fresh cap', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'failed-acct',
+      accounts: [
+        buildPoolAccount({ accountId: 'failed-acct', lastUsedAt: 10 }),
+        buildPoolAccount({ accountId: 'backup-acct', lastUsedAt: 0 }),
+      ],
+    })
+
+    markPoolAccountCapped('failed-acct', 'Usage cap hit (429)')
+    const statusAfterFailover = getPoolStatus()
+    const cappedAt = statusAfterFailover.accounts.find(a => a.accountId === 'failed-acct')!.cappedAt!
+    expect(statusAfterFailover.accounts[statusAfterFailover.activeIndex]?.accountId).toBe('backup-acct')
+
+    updateAccountUsageHints([
+      {
+        accountId: 'failed-acct',
+        primaryPercent: 1,
+        weeklyPercent: 1,
+        allowed: true,
+        limitReached: false,
+        fetchedAt: cappedAt + 1,
+      },
+    ])
+
+    const status = getPoolStatus()
+    const failed = status.accounts.find(a => a.accountId === 'failed-acct')!
+    expect(failed.status).toBe('capped')
+    expect(isCodexAccountSwitchable(failed)).toBe(false)
+    expect(status.accounts[status.activeIndex]?.accountId).toBe('backup-acct')
+  })
+
+  test('missing and zero resetAt do not unblock quota blocks', () => {
+    const now = Date.parse('2026-04-21T00:00:00.000Z')
+
+    const missingResetAt = buildPoolAccount({
+      accountId: 'missing-reset',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: now - 1_000,
+    })
+    expect(getCodexAccountAvailability(missingResetAt, now)).toEqual({
+      kind: 'blocked',
+      reason: 'fresh usage data reports this account is capped',
+    })
+
+    const zeroResetAt = buildPoolAccount({
+      accountId: 'zero-reset',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: now - 1_000,
+      usageResetAt: 0,
+    })
+    expect(getCodexAccountAvailability(zeroResetAt, now)).toEqual({
+      kind: 'blocked',
+      reason: 'fresh usage data reports this account is capped',
+    })
+
+    const elapsedResetAt = buildPoolAccount({
+      accountId: 'elapsed-reset',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: now - 1_000,
+      usageResetAt: Math.floor((now - 1_000) / 1000),
+    })
+    expect(getCodexAccountAvailability(elapsedResetAt, now)).toEqual({ kind: 'available' })
+
+    const cappedZeroResetAt = buildPoolAccount({
+      accountId: 'capped-zero-reset',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      cappedAt: now - 1_000,
+      usageResetAt: 0,
+    })
+    expect(getCodexAccountAvailability(cappedZeroResetAt, now)).toEqual({
+      kind: 'blocked',
+      reason: 'account is capped',
+    })
+
+    const cappedElapsedResetAt = buildPoolAccount({
+      accountId: 'capped-elapsed-reset',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      cappedAt: now - 1_000,
+      usageResetAt: Math.floor((now - 1_000) / 1000),
+    })
+    expect(getCodexAccountAvailability(cappedElapsedResetAt, now)).toEqual({ kind: 'available' })
+  })
+
+  test('poll block only blocks while within the usage hint TTL', () => {
+    const now = Date.parse('2026-04-21T00:00:00.000Z')
+    const usageHintStaleMs = 5 * 60 * 1000
+
+    const barelyFresh = buildPoolAccount({
+      accountId: 'barely-fresh',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: now - usageHintStaleMs + 1,
+    })
+    expect(getCodexAccountAvailability(barelyFresh, now)).toEqual({
+      kind: 'blocked',
+      reason: 'fresh usage data reports this account is capped',
+    })
+
+    const exactlyStale = buildPoolAccount({
+      accountId: 'exactly-stale',
+      usageAllowed: false,
+      usageLimitReached: true,
+      usageFetchedAt: now - usageHintStaleMs,
+    })
+    expect(getCodexAccountAvailability(exactlyStale, now)).toEqual({ kind: 'available' })
+  })
+})
+
 // ── Slice 2: applyRedeemedUsageReset ──────────────────────────────────────
 
 describe('applyRedeemedUsageReset', () => {
@@ -1502,5 +1853,34 @@ describe('getRedemptionEligibility', () => {
     const result = getRedemptionEligibility(acct)
     expect(result.eligible).toBe(false)
     expect((result as { reason: string }).reason).toBe('Runtime cap hit')
+  })
+})
+
+describe('OpenAI account information', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    setSessionProvider(null)
+  })
+
+  test('reports the routable active Codex account when the raw active account is blocked', () => {
+    try {
+      setSessionProvider('openai')
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'blocked-active',
+        accounts: [
+          buildPoolAccount({
+            accountId: 'blocked-active',
+            status: 'quarantined',
+            lastError: 'temporary connection failure',
+          }),
+          buildPoolAccount({ accountId: 'healthy-backup' }),
+        ],
+      })
+
+      expect(getAccountInformation()?.accountId).toBe('healthy-backup')
+    } finally {
+      setSessionProvider(null)
+      resetCodexAccountPoolForTest()
+    }
   })
 })

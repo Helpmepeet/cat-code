@@ -243,7 +243,7 @@ describe('/switch-account', () => {
     )
 
     expect(result?.value).toContain('Cannot switch to hiby')
-    expect(result?.value).toContain('free plan')
+    expect(result?.value).toContain('Limit reached (resets in unknown)')
     expect(result?.value).toContain('Staying on main2')
     // The switch must not have been committed.
     expect(reassignSpy).not.toHaveBeenCalled()
@@ -283,7 +283,7 @@ describe('/switch-account', () => {
     )
 
     expect(result?.value).toContain('Cannot switch to hiby')
-    expect(result?.value).toContain('free plan')
+    expect(result?.value).toContain('Limit reached (resets in unknown)')
     expect(result?.value).toContain('Staying on main2')
     // Already blocked, so no live fetch is needed.
     expect(fetchUsageSpy).not.toHaveBeenCalled()
@@ -575,7 +575,7 @@ describe('/switch-account', () => {
     )
 
     expect(result?.value).toContain('Cannot switch to blocked')
-    expect(result?.value).toContain('Usage cap hit (429)')
+    expect(result?.value).toContain('Limit reached (resets in unknown)')
     expect(result?.value).toContain('Staying on current')
   })
 
@@ -602,7 +602,7 @@ describe('/switch-account', () => {
     )
 
     expect(result?.value).toContain('Cannot switch to authdead')
-    expect(result?.value).toContain('login expired — run /login (OpenAI) to re-authenticate this account')
+    expect(result?.value).toContain('Needs re-login')
     expect(result?.value).not.toContain('http_401')
   })
 

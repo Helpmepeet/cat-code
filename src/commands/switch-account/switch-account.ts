@@ -1,6 +1,7 @@
 import { clearAuthRelatedCaches } from '../logout/logout.js'
 import {
   applyPostCodexAccountSwitchRefresh,
+  describeCodexAccountAvailability,
   getCodexAccountAvailability,
   getPoolStatus,
   isCodexAccountSwitchable,
@@ -353,39 +354,6 @@ export const call: LocalCommandCall = async (args, context) => {
 
 type CodexPoolAccount = ReturnType<typeof getPoolStatus>['accounts'][number]
 
-/**
- * Build a human-readable reason an account can't be switched to. Prefers a
- * plan/usage-specific explanation (free plan, expired subscription, usage cap)
- * over the internal availability string, falling back to that string otherwise.
- */
-function humanizeCodexBlockReason(account: CodexPoolAccount): string {
-  const availability = getCodexAccountAvailability(account)
-  const fallback =
-    availability.kind === 'blocked'
-      ? availability.reason
-      : 'account is unavailable for switching'
-
-  if (account.planType === 'free') {
-    return 'on the ChatGPT free plan (Codex requires a paid plan)'
-  }
-
-  const expiresAtMs = account.planExpiresAt ? Date.parse(account.planExpiresAt) : Number.NaN
-  if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
-    const date = account.planExpiresAt!.slice(0, 10)
-    return `subscription expired ${date}`
-  }
-
-  if (account.statusReason === 'auth_dead') {
-    return 'login expired — run /login (OpenAI) to re-authenticate this account'
-  }
-
-  if (account.usageLimitReached === true || (account.usagePrimary ?? 0) >= 100) {
-    return 'usage limit reached (live usage 100% used)'
-  }
-
-  return fallback
-}
-
 /** Unified refusal message shared by every "can't switch to this Codex account" path. */
 function formatCodexSwitchRefusal(
   target: CodexPoolAccount,
@@ -393,7 +361,7 @@ function formatCodexSwitchRefusal(
 ): string {
   const targetLabel = target.alias ?? target.accountId.slice(0, 12)
   const stayLabel = current?.alias ?? current?.accountId.slice(0, 12) ?? 'current account'
-  return `Cannot switch to ${targetLabel} — ${humanizeCodexBlockReason(target)}. Staying on ${stayLabel}.`
+  return `Cannot switch to ${targetLabel} — ${describeCodexAccountAvailability(target)}. Staying on ${stayLabel}.`
 }
 
 /**
@@ -414,7 +382,8 @@ async function liveUsageIsBlocked(account: CodexPoolAccount): Promise<boolean> {
       weeklyPercent: usage.secondaryWindow.usedPercent,
       allowed: usage.allowed,
       limitReached: usage.limitReached,
-      resetAt: Math.max(usage.primaryWindow.resetAt, usage.secondaryWindow.resetAt),
+      resetAt: usage.primaryWindow.resetAt,
+      fetchedAt: usage.fetchedAt,
     },
   ])
 

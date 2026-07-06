@@ -42,3 +42,11 @@ export const CODEX_JWT_AUTH_CLAIM = 'https://api.openai.com/auth'
  * from Anthropic credentials.
  */
 export const CODEX_PROVIDER_ID = 'openai-codex' as const
+
+/** Shared token refresh skew. Tokens at or inside this window are refresh-eligible. */
+export const CODEX_TOKEN_REFRESH_SKEW_MS = 60_000
+
+/** True when a Codex access token is missing, expired, or close enough to expiry to refresh. */
+export function isWithinCodexRefreshSkew(expiresAt: number, now = Date.now()): boolean {
+  return !expiresAt || expiresAt - now <= CODEX_TOKEN_REFRESH_SKEW_MS
+}

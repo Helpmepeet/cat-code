@@ -5,7 +5,7 @@ import type {
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
-import { isPoolActive } from './services/api/codexAccountPool.js'
+import { poolManagesCredentials } from './services/api/codexAccountPool.js'
 import {
   registerCodexLease,
   releaseCodexLease,
@@ -321,7 +321,7 @@ async function* queryLoop(
   // Codex account routing: the main thread now uses a lease too, preserving
   // compatibility while sharing the same lease-local failover semantics.
   let registeredMainCodexLease = false
-  if (getAPIProvider() === 'openai' && isPoolActive() && !state.toolUseContext.agentId) {
+  if (getAPIProvider() === 'openai' && poolManagesCredentials() && !state.toolUseContext.agentId) {
     registerCodexLease({
       ownerId: 'main-thread',
       ownerType: 'main',

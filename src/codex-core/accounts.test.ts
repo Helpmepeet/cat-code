@@ -266,7 +266,7 @@ describe('codex-core/accounts identity mismatch reconciliation', () => {
     const { resolveCodexCoreAccount } = await import('./accounts.js')
 
     await expect(resolveCodexCoreAccount('raw401')).rejects.toThrow(
-      'Codex account "raw401" cannot be used: Token refresh failed: HTTP 401',
+      'Codex account "raw401": Needs re-login',
     )
     await expect(resolveCodexCoreAccount('raw401')).rejects.not.toThrow('http_401')
   })
@@ -409,5 +409,58 @@ describe('codex-core/accounts identity mismatch reconciliation', () => {
     const after = getPoolStatus().accounts.find(a => a.accountId === OLD_ACCOUNT_ID)
     expect(after?.accessToken).toBe('rotated-access')
     expect(after?.refreshToken).toBe('rotated-refresh')
+  })
+
+  test('force refreshes a locally-fresh config/no-vault account (post-401 recovery caveat) while the normal path stays gated', async () => {
+    let refreshCalls = 0
+    await mock.module('../services/oauth/codex-client.js', () => ({
+      refreshCodexToken: async (refreshToken: string) => {
+        refreshCalls += 1
+        expect(refreshToken).toBe('config-refresh-old')
+        return {
+          accessToken: 'config-access-new',
+          refreshToken: 'config-refresh-new',
+          expiresAt: Date.now() + 3600_000,
+          accountId: OLD_ACCOUNT_ID,
+        }
+      },
+    }))
+
+    const { maybeRefreshAccount } = await import('./accounts.js')
+    const { getCodexOAuthTokens } = await import('../utils/auth.js')
+
+    const freshConfigAccount = {
+      accountId: OLD_ACCOUNT_ID,
+      accessToken: 'config-access-old',
+      refreshToken: 'config-refresh-old',
+      // Locally fresh — an hour out, far outside the refresh skew. The normal
+      // refresh-on-use path must NOT touch it; a post-401 forced refresh
+      // (withRetry) must, because a 401 can be a server-side revoke on a token
+      // that is still locally valid.
+      expiresAt: Date.now() + 3600_000,
+      profile: 'main',
+      source: 'config' as const,
+    }
+
+    // Gate preserved: the normal path no-ops on a fresh token.
+    const unchanged = await maybeRefreshAccount(freshConfigAccount)
+    expect(unchanged.accessToken).toBe('config-access-old')
+    expect(refreshCalls).toBe(0)
+
+    // Forced: bypasses the expiry gate and routes the config/no-vault account
+    // through the raw refresh stack (the caveat: this path previously got no
+    // proper refresh on post-401 recovery at all — withRetry only handled
+    // vault accounts).
+    const refreshed = await maybeRefreshAccount(freshConfigAccount, { force: true })
+    expect(refreshCalls).toBe(1)
+    expect(refreshed.accountId).toBe(OLD_ACCOUNT_ID)
+    expect(refreshed.accessToken).toBe('config-access-new')
+    expect(refreshed.refreshToken).toBe('config-refresh-new')
+    expect(refreshed.source).toBe('config')
+
+    // The rotation reached the config store (the raw branch's persist target).
+    const stored = getCodexOAuthTokens()
+    expect(stored?.accessToken).toBe('config-access-new')
+    expect(stored?.refreshToken).toBe('config-refresh-new')
   })
 })

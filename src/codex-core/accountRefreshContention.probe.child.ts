@@ -11,6 +11,7 @@
  *
  * Env contract (set by the parent test):
  *   PROBE_MODE          seed-config | read-config | contend-config | contend-vault
+ *                       | contend-image-auth
  *   PROBE_TOKEN_URL     mock OAuth token endpoint (replaces auth.openai.com)
  *   PROBE_GO_FILE       barrier file; contend-* modes block until it exists
  *   PROBE_ACCOUNT_ID    the account under contention
@@ -53,7 +54,7 @@ function requireEnv(name: string): string {
  * fetch toward chatgpt.com; codexUsage.ts). Both real refresh clients hit the
  * token endpoint via global fetch at call time:
  *   - src/services/oauth/codex-client.ts postToTokenUrl (CODEX_TOKEN_URL)
- *   - src/services/api/codexTokenRefresh.ts TOKEN_REFRESH_URL
+ *   - src/services/api/codexTokenRefresh.ts refreshAccountTokens (CODEX_TOKEN_URL)
  */
 function patchFetch(mockUrl: string): void {
   const realFetch = globalThis.fetch.bind(globalThis)
@@ -165,6 +166,48 @@ async function main(): Promise<void> {
         accessToken: refreshed.accessToken,
         refreshToken: refreshed.refreshToken,
         status: refreshed.status,
+      })
+    } catch (error) {
+      printResult({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return
+  }
+
+  if (mode === 'contend-image-auth') {
+    // F1 regression: the image path (GenerateImageTool.getImageAuth) resolves
+    // Codex auth through resolveCodexOAuthTokensForLeaseOwner — NOT the old raw
+    // refresh + config-only save that burned the vault's rotate-once token. For
+    // a sole near-expiry VAULT account this resolver refreshes via the safe
+    // vault state machine (maybeRefreshAccount → refreshAccountTokens), so two
+    // real processes must burn exactly ONE rotation and leave the VAULT (not a
+    // stranded config successor) holding the live token.
+    //
+    // initAccountPool loads the vault account into the pool so
+    // poolManagesCredentials() is true. The startup touchAll() is gated on an
+    // interactive session (shouldRunStartupCodexTouchAll) which defaults off in
+    // this headless child, so it does NOT pre-empt the resolver refresh; the
+    // periodic-refresh and quarantine timers are unref()'d so the child exits.
+    const { initAccountPool } = await import('../services/api/codexAccountPool.js')
+    const { resolveCodexOAuthTokensForLeaseOwner } = await import(
+      '../services/api/client.js'
+    )
+    const { writeFileSync } = await import('fs')
+    await initAccountPool()
+    writeFileSync(`${goFile}.ready.${process.pid}`, '1')
+    await waitForGoFile(goFile)
+    try {
+      const tokens = await resolveCodexOAuthTokensForLeaseOwner({
+        codexLeaseOwnerType: 'main',
+      })
+      printResult({
+        ok: tokens != null,
+        accountId: tokens?.accountId,
+        accessToken: tokens?.accessToken,
+        refreshToken: tokens?.refreshToken,
+        error: tokens == null ? 'resolver returned null tokens' : undefined,
       })
     } catch (error) {
       printResult({

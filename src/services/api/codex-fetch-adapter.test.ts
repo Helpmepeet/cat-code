@@ -2025,6 +2025,15 @@ describe('codex-fetch-adapter', () => {
           createCodexFetch(
             createAccessToken('acct_http_classification'),
             `conv_precise_${testCase.status}`,
+            {
+              resolveTokensForRequest: async () => ({
+                accessToken: createAccessToken('acct_http_classification'),
+                refreshToken: 'refresh-a',
+                expiresAt: Date.now() + 5 * 60_000,
+                accountId: 'acct_http_classification',
+                source: 'pool',
+              }),
+            },
           )('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             body: JSON.stringify({

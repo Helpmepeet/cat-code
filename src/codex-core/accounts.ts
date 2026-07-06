@@ -2,11 +2,9 @@ import {
   appendAccount,
   initAccountPool,
   getPoolStatus,
-  getCodexAccountAvailability,
+  describeCodexAccountAvailability,
   getVaultPath,
-  markAccountDead,
   saveCodexTokenToVault,
-  setActiveAccountPersisted,
   type PoolAccount,
 } from '../services/api/codexAccountPool.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
@@ -15,7 +13,6 @@ import { createHash, randomUUID } from 'crypto'
 import * as lockfile from '../utils/lockfile.js'
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 import { getGlobalClaudeFile } from '../utils/env.js'
-import { getCodexLeaseForOwner, reassignCodexLeaseToActiveAccount } from '../services/api/codexAccountLeaseManager.js'
 import {
   CodexTokenRefreshError,
   refreshCodexToken,
@@ -27,8 +24,9 @@ import {
 } from '../services/api/codexTokenRefresh.js'
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../utils/auth.js'
 import { logForDebugging } from '../utils/debug.js'
-import { emitAccountDiagnostic } from '../services/api/accountDiagnostics.js'
 import { CodexCoreError } from './errors.js'
+import { isWithinCodexRefreshSkew } from '../constants/codex-oauth.js'
+import { reconcileCodexIdentityMismatch } from '../services/api/codexIdentityReconciliation.js'
 
 export type CodexCoreAccount = {
   accountId: string
@@ -41,7 +39,6 @@ export type CodexCoreAccount = {
   vaultFilePath?: string
 }
 
-const TOKEN_REFRESH_SKEW_MS = 60_000
 
 export async function resolveCodexCoreAccount(
   accountProfile: string,
@@ -56,26 +53,25 @@ export async function resolveCodexCoreAccount(
   const poolStatus = getPoolStatus()
   const match = findAccount(poolStatus.accounts, profile)
   if (match) {
-    const availability = getCodexAccountAvailability(match)
-    const reason = availability.kind === 'blocked' ? availability.reason : undefined
+    const availability = describeCodexAccountAvailability(match)
     if (match.status === 'quarantined') {
       throw new CodexCoreError(
         'backend',
-        `Codex account "${profile}" is temporarily unavailable: ${reason ?? 'connection problem; retrying'}`,
+        `Codex account "${profile}": ${availability}`,
         { status: 503 },
       )
     }
     if (match.status === 'capped') {
       throw new CodexCoreError(
         'quota',
-        `Codex account "${profile}" is capped or not eligible: ${reason ?? match.accountId}`,
+        `Codex account "${profile}": ${availability}`,
         { status: 429 },
       )
     }
     if (match.status === 'dead') {
       throw new CodexCoreError(
         'auth',
-        `Codex account "${profile}" cannot be used: ${reason ?? 'token is expired'}`,
+        `Codex account "${profile}": ${availability}`,
         { status: 401 },
       )
     }
@@ -91,16 +87,18 @@ export async function resolveCodexCoreAccount(
     })
   }
 
-  const configTokens = getCodexOAuthTokens()
-  if (configTokens && matchesProfile(profile, configTokens.accountId, undefined)) {
-    return maybeRefreshAccount({
-      accountId: configTokens.accountId,
-      accessToken: configTokens.accessToken,
-      refreshToken: configTokens.refreshToken,
-      expiresAt: configTokens.expiresAt,
-      profile,
-      source: 'config',
-    })
+  if (poolStatus.accounts.length === 0) {
+    const configTokens = getCodexOAuthTokens()
+    if (configTokens && matchesProfile(profile, configTokens.accountId, undefined)) {
+      return maybeRefreshAccount({
+        accountId: configTokens.accountId,
+        accessToken: configTokens.accessToken,
+        refreshToken: configTokens.refreshToken,
+        expiresAt: configTokens.expiresAt,
+        profile,
+        source: 'config',
+      })
+    }
   }
 
   throw new CodexCoreError(
@@ -217,15 +215,6 @@ function matchesProfile(
   return lowerId.startsWith(lower) || lowerAlias?.startsWith(lower) === true
 }
 
-function countCodexPoolStatuses(): Record<string, number> {
-  const accounts = getPoolStatus().accounts
-  const counts: Record<string, number> = { total: accounts.length }
-  for (const account of accounts) {
-    counts[account.status] = (counts[account.status] ?? 0) + 1
-  }
-  return counts
-}
-
 /**
  * In-process single-flight per accountId. Two concurrent resolutions of the
  * same account share ONE refresh instead of both entering the critical
@@ -235,16 +224,23 @@ const pendingAccountRefreshes = new Map<string, Promise<CodexCoreAccount>>()
 
 /** True when the token needs a refresh (same condition the guard below used). */
 function isWithinRefreshSkew(expiresAt: number): boolean {
-  return !expiresAt || expiresAt - Date.now() <= TOKEN_REFRESH_SKEW_MS
+  return isWithinCodexRefreshSkew(expiresAt)
 }
 
-async function maybeRefreshAccount(
+export async function maybeRefreshAccount(
   account: CodexCoreAccount,
+  options: { force?: boolean } = {},
 ): Promise<CodexCoreAccount> {
   if (!account.refreshToken) {
     return account
   }
-  if (!isWithinRefreshSkew(account.expiresAt)) {
+  // The expiry-skew gate is the NORMAL (refresh-on-use) optimization. A forced
+  // refresh — withRetry's post-401 recovery — must bypass it: a 401 can be a
+  // server-side revoke/rotate on a token that is still locally fresh, so the
+  // skew check would otherwise no-op and strand the dead token. Forcing still
+  // flows through refreshAccountNow, inheriting the vault-vs-raw dispatch,
+  // in-process single-flight dedup, and DR-2 cross-process safety unchanged.
+  if (!options.force && !isWithinRefreshSkew(account.expiresAt)) {
     return account
   }
 
@@ -318,48 +314,18 @@ async function refreshAccountNow(
       // refreshed identity so subsequent selection does not keep returning
       // the stale account record. The vault was already written above; do not
       // write it a second time here.
-      const poolBefore = getPoolStatus()
-      const wasActive =
-        poolBefore.activeIndex >= 0 &&
-        poolBefore.accounts[poolBefore.activeIndex]?.accountId === account.accountId
-      const mainLease = getCodexLeaseForOwner('main-thread')
-      const wasMain = mainLease?.accountId === account.accountId
-
-      markAccountDead(
-        account.accountId,
-        `Refresh returned different account ${refreshed.accountId}`,
-        { rerollActive: false },
-      )
-      appendAccount(
-        {
+      reconcileCodexIdentityMismatch({
+        oldAccountId: account.accountId,
+        newAccountId: refreshed.accountId,
+        tokens: {
           accessToken: refreshed.accessToken,
           refreshToken: refreshed.refreshToken,
           idToken: refreshed.idToken || undefined,
           expiresAt: refreshed.expiresAt,
-          accountId: refreshed.accountId,
         },
-        {
-          preserveCapped: true,
-          writer: 'codex-core.maybeRefreshAccount.identity-mismatch',
-          source: account.source === 'config' ? 'config' : 'vault',
-          vaultFilePath: savedVaultPath,
-          activate: wasActive || wasMain,
-        },
-      )
-      if (wasActive || wasMain) {
-        setActiveAccountPersisted(refreshed.accountId)
-        reassignCodexLeaseToActiveAccount('main-thread')
-      }
-      emitAccountDiagnostic({
-        code: 'account.identity_mismatch',
-        severity: 'warning',
-        provider: 'openai',
-        pool: 'codex',
-        recoverable: true,
-        from_account_ref: account.accountId,
-        account_ref: refreshed.accountId,
-        reason: `refresh returned different account ${refreshed.accountId}`,
-        counts: countCodexPoolStatuses(),
+        writer: 'codex-core.maybeRefreshAccount.identity-mismatch',
+        source: account.source === 'config' ? 'config' : 'vault',
+        vaultFilePath: savedVaultPath,
       })
     }
     logForDebugging(
