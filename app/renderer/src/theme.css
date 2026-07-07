@@ -6,6 +6,11 @@
 
 :root {
   --accent: #f472b6;
+  /* The prototype's lighter active-pink (pink-300): active nav destination /
+   * session-row emphasis text sits one step brighter than the #f472b6 accent
+   * (Sidebar.jsx active nav `#f9a8d4`). One shared token so the rail's active
+   * states match the prototype without scattering raw hexes. */
+  --accent-soft: #f9a8d4;
   --tone-default: #f4f4f5;
   --tone-accent: var(--accent);
 
@@ -33,10 +38,18 @@
   --color-shell-seam: rgba(255, 255, 255, 0.06);
   --color-shell-hover: rgba(255, 255, 255, 0.045);
   --color-shell-active: rgba(255, 255, 255, 0.06);
+  /* Raised floating surfaces (P4-1 shared primitives): a toast/popover sits one
+   * step ABOVE the app body (#111113), a side drawer (ToolInspector, goal
+   * drawer) one step below it (#0a0a0c). The prototype paints these exact shades
+   * for its floating/overlay chrome; tokenised here so every W4 domain's
+   * popovers/drawers read as one system instead of scattering raw hexes. */
+  --color-surface-raised: #111113;
+  --color-surface-panel: #0a0a0c;
   --color-text-primary: #f4f4f5;
   --color-text-muted: #a1a1aa;
   --color-text-subtle: #71717a;
   --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
 
   --color-tone-default: var(--tone-default);
   --color-tone-accent: var(--tone-accent);
@@ -45,6 +58,16 @@
   --color-tone-good: var(--tone-good);
   --color-tone-success: var(--tone-good);
   --color-tone-info: var(--tone-info);
+
+  /* Settings source badges (P4-3): per-source hues from the prototype's
+   * SETTING_SOURCES palette (Settings.jsx) so the badges read as the prototype.
+   * user=muted, project=blue, local=purple, flag reuses warn, policy reuses
+   * danger. Same source-of-hex justification as the tone tokens above. */
+  --color-source-user: #a1a1aa;
+  --color-source-project: #60a5fa;
+  --color-source-local: #c084fc;
+  --color-source-flag: var(--tone-warn);
+  --color-source-policy: var(--tone-danger);
 
   --font-sans:
     "DM Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
@@ -71,5 +94,25 @@
   select,
   textarea {
     font: inherit;
+  }
+}
+
+/* P4-1 ToastHost entrance — transient toasts fade+rise in (Surfaces.jsx:876
+ * `toast-in`). A class, not an inline style, so it stays on the no-inline-style
+ * rule; SSR emits the class and skips the animation (no effects run). */
+@keyframes catcode-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@layer components {
+  .animate-toast-in {
+    animation: catcode-toast-in 0.18s ease-out both;
   }
 }
