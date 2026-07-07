@@ -14,7 +14,7 @@
  * generic separator-aware row those chips live in. Flagged in the report.
  */
 
-import { Children, Fragment, isValidElement, type ReactNode } from 'react'
+import { Children, Fragment, type ReactNode } from 'react'
 import { toneClasses, type Tone } from './tone.js'
 
 export type { Tone } from './tone.js'
@@ -42,19 +42,14 @@ export function Chip({
   onClick?: () => void
 }) {
   const t = toneClasses(tone)
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={
-        'inline-flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[11px] font-medium transition-colors ' +
-        `${t.text} ` +
-        (active
-          ? `${t.softBg} ${t.softBorder}`
-          : `border-white/[0.06] bg-transparent ${t.hoverTint}`)
-      }
-    >
+  const className =
+    'inline-flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[11px] font-medium transition-colors ' +
+    `${t.text} ` +
+    (active
+      ? `${t.softBg} ${t.softBorder}`
+      : `border-white/[0.06] bg-transparent ${t.hoverTint}`)
+  const body = (
+    <>
       {icon ? <span className="flex">{icon}</span> : null}
       <span>{label}</span>
       {value != null ? (
@@ -70,6 +65,20 @@ export function Chip({
           {badge}
         </span>
       ) : null}
+    </>
+  )
+  // A chip with no `onClick` is a display indicator, not a control — render a
+  // <span> so it doesn't land in the tab order as an inert, actionless button.
+  if (!onClick) {
+    return (
+      <span className={className} title={title}>
+        {body}
+      </span>
+    )
+  }
+  return (
+    <button type="button" onClick={onClick} title={title} className={className}>
+      {body}
     </button>
   )
 }
@@ -87,9 +96,11 @@ export function ChipStrip({
   separated?: boolean
   className?: string
 }) {
-  const items = Children.toArray(children).filter(
-    child => child !== null && child !== undefined,
-  )
+  // Children.toArray already drops null/undefined/boolean children and assigns
+  // each a stable key — no extra filtering needed. Index keys are safe here: the
+  // strip is a static, positional row of stateless chips (nothing to preserve
+  // across a reorder).
+  const items = Children.toArray(children)
   return (
     <div
       className={`flex min-w-0 items-center gap-[7px] ${className}`.trimEnd()}
@@ -97,7 +108,7 @@ export function ChipStrip({
     >
       {separated
         ? items.map((child, index) => (
-            <Fragment key={keyFor(child, index)}>
+            <Fragment key={index}>
               {index > 0 ? <Separator /> : null}
               {child}
             </Fragment>
@@ -116,9 +127,4 @@ function Separator() {
       ·
     </span>
   )
-}
-
-function keyFor(child: ReactNode, index: number): string {
-  if (isValidElement(child) && child.key != null) return String(child.key)
-  return `chip-${index}`
 }

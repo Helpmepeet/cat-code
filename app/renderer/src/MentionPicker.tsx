@@ -117,7 +117,9 @@ export function MentionPicker({
         ) : (
           filtered.map((item, index) => (
             <button
-              key={item.value ?? item.label}
+              // Index-suffixed so two items sharing a label (and no distinct
+              // value) don't collide on the same React key.
+              key={`${index}:${item.value ?? item.label}`}
               type="button"
               role="option"
               aria-selected={index === activeIndex}

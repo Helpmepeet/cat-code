@@ -128,6 +128,20 @@ export function ToastHost({ children }: { children?: ReactNode }) {
     [dismiss],
   )
 
+  // Reconcile timers with the live queue: a toast evicted by the newest-wins cap
+  // (toastReducer) never went through `dismiss`, so its expiry timer would
+  // otherwise linger and fire a tick late. Clearing every timer whose toast is
+  // no longer live promptly reaps it (and covers any other removal path).
+  useEffect(() => {
+    const live = new Set(toasts.map(t => t.id))
+    for (const [id, timer] of timers.current) {
+      if (!live.has(id)) {
+        clearTimeout(timer)
+        timers.current.delete(id)
+      }
+    }
+  }, [toasts])
+
   useEffect(() => {
     const pending = timers.current
     return () => {

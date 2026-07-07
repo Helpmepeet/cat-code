@@ -95,20 +95,28 @@ export function ConnectionChip({
   if (!model) return null
   const t = toneClasses(CONN_STATES[model.visual].tone)
   const clickable = model.canRetry && Boolean(onRetry)
+  const className =
+    'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-[3px] font-mono text-[11px] font-medium ' +
+    `${t.text} ${t.softBg} ${t.softBorder}`
+  // No retry action → this is a live status readout, not a control; render a
+  // <span> so it doesn't land in the tab order as an inert button.
+  if (!clickable) {
+    return (
+      <span className={className} role="status">
+        <ConnDot visual={model.visual} />
+        {model.label}
+      </span>
+    )
+  }
   return (
     <button
       type="button"
-      onClick={clickable ? onRetry : undefined}
-      aria-disabled={!clickable}
-      className={
-        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-[3px] font-mono text-[11px] font-medium transition-colors ' +
-        `${t.text} ${t.softBg} ${t.softBorder} ` +
-        (clickable ? 'cursor-pointer hover:brightness-125' : 'cursor-default')
-      }
+      onClick={onRetry}
+      className={`${className} cursor-pointer transition-colors hover:brightness-125`}
     >
       <ConnDot visual={model.visual} />
       {model.label}
-      {clickable ? <span className="text-[10px] opacity-70">· retry</span> : null}
+      <span className="text-[10px] opacity-70">· retry</span>
     </button>
   )
 }
