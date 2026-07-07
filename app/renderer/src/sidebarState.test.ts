@@ -39,39 +39,47 @@ test('selectSidebarRows lists the full roster (live ∪ restorable)', () => {
   expect(ids.sort()).toEqual(['dead', 'live'])
 })
 
-test('rows are ordered by lastAttachedAt (most recent first)', () => {
+test('rows are in stable arrival order, NOT sorted by lastAttachedAt', () => {
+  // Prototype parity (see module doc): Sidebar.jsx never re-sorts rows within
+  // a group by recency, only arrival order — a row with a MORE recent
+  // lastAttachedAt does not jump ahead of one that arrived earlier.
   let state = createShellState()
   state = reduceShellState(state, added(descriptor('old', { lastAttachedAt: 100 })))
   state = reduceShellState(state, added(descriptor('new', { lastAttachedAt: 300 })))
   state = reduceShellState(state, added(descriptor('mid', { lastAttachedAt: 200 })))
 
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
+    'old',
     'new',
     'mid',
-    'old',
   ])
 })
 
-test('recency ties break by createdAt then id (stable order)', () => {
+test('restoring a closed session appends its row after tabs opened since, not to the top', () => {
+  // The regression this order fix targets: restoreSession fires session-added
+  // for an already-known id, which only reorders `order` when the id is just
+  // regaining tab membership (shellState.ts's reorderOnArrival) — so a
+  // restored session's Sidebar row settles at the END, matching where it now
+  // sits in the TabBar, instead of jumping to the top of its group.
   let state = createShellState()
-  state = reduceShellState(
-    state,
-    added(descriptor('b', { lastAttachedAt: 5, createdAt: 1 })),
-  )
-  state = reduceShellState(
-    state,
-    added(descriptor('a', { lastAttachedAt: 5, createdAt: 1 })),
-  )
-  state = reduceShellState(
-    state,
-    added(descriptor('c', { lastAttachedAt: 5, createdAt: 9 })),
-  )
-
-  // createdAt 9 wins recency tie; then a before b by id.
+  state = reduceShellState(state, added(descriptor('a', { status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('b', { status: 'ready' })))
+  state = reduceShellState(state, {
+    type: 'session-status',
+    session: descriptor('a', { status: 'exited', restorable: true }),
+  })
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
-    'c',
     'a',
     'b',
+  ])
+
+  state = reduceShellState(
+    state,
+    added(descriptor('a', { status: 'spawning', restorable: false })),
+  )
+  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
+    'b',
+    'a',
   ])
 })
 

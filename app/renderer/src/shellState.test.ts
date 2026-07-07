@@ -196,6 +196,49 @@ test('restoring a crashed row makes it a tab again once it goes live', () => {
   expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['x'])
 })
 
+test('restoring a cleanly-closed session appends it after tabs opened since, not its original arrival slot', () => {
+  // Regression: restoreSession re-spawns via the SAME `spawn()` path as
+  // createSession, so it fires session-added — but `a` was already known
+  // (never dropped from `order`, only from `tabs`), so a naive "known id never
+  // reorders" rule would leave it at index 0 (its original arrival slot),
+  // jumping it ahead of `b` in the TabBar instead of appending like a freshly
+  // reopened tab.
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('a', { status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('b', { status: 'ready' })))
+  state = reduceShellState(state, {
+    type: 'session-status',
+    session: descriptor('a', { status: 'exited', restorable: true }),
+  })
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['b'])
+
+  state = reduceShellState(
+    state,
+    added(descriptor('a', { status: 'spawning', restorable: false })),
+  )
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['b', 'a'])
+})
+
+test('crash-then-restart-in-place does NOT reorder — the tab never lost membership', () => {
+  // Contrast with the restore-after-close case above: a crashed session KEEPS
+  // its tab membership the whole time (foldTabMembership), so its restart must
+  // stay in place — reordering here would jump a tab the user never closed.
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('a', { status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('b', { status: 'ready' })))
+  state = reduceShellState(state, {
+    type: 'session-status',
+    session: descriptor('a', { status: 'disconnected', restorable: true }),
+  })
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['a', 'b'])
+
+  state = reduceShellState(
+    state,
+    added(descriptor('a', { status: 'spawning', restorable: false })),
+  )
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['a', 'b'])
+})
+
 test('activeAfterLiveChange: active session that left the live set moves to first live tab', () => {
   expect(activeAfterLiveChange('closed', ['live'])).toBe('live')
 })

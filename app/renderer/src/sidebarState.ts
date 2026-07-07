@@ -1,13 +1,25 @@
 /**
- * Sidebar projection (P3-5b) — the FULL roster (live ∪ restorable) the left rail
- * renders, ordered by recency.
+ * Sidebar projection (P3-5b, order corrected to prototype parity) — the FULL
+ * roster (live ∪ restorable) the left rail renders, in stable arrival order —
+ * the SAME order the TabBar uses, not a recency sort.
  *
- * A second projection over the SAME `ShellState` the TabBar reads. The two
- * orderings differ deliberately: the TabBar keeps arrival order so a tab never
- * jumps mid-session, while the Sidebar orders by `lastAttachedAt` so a
- * just-closed row surfaces at the top as the obvious restore candidate. Pure
- * (no React) so the descriptor → row-visual mapping is unit-testable, and it
- * reuses `TabTone` so both panels share one status vocabulary.
+ * An earlier version of this projection sorted every row by `lastAttachedAt`
+ * descending on every render, on the theory that a just-closed/just-restored
+ * row should surface at the top as the obvious restore candidate. The
+ * prototype does not actually do this: `Sidebar.jsx`'s `groupByWorkspace` only
+ * ever sorts the GROUPS (current-workspace-first, then alphabetical); rows
+ * within a group keep whatever order they arrive in and are never re-sorted
+ * by an interaction. (Proof in the prototype's own mock data — `data.js`'s
+ * `s-phase1a` entry, "13h" old, sits at the END of the `cat-code` group, after
+ * "Yesterday"-old entries, which only makes sense if nothing re-sorts by
+ * recency within a group.) The recency sort meant restoring a session visibly
+ * jumped its row to the top of its group instead of settling into a stable
+ * spot — surprising in actual use. `lastAttachedAt` still drives the row's
+ * displayed recency text (`Sidebar.tsx`'s `formatRecency`); it no longer
+ * drives row ORDER.
+ *
+ * Pure (no React) so the descriptor → row-visual mapping is unit-testable,
+ * and it reuses `TabTone` so both panels share one status vocabulary.
  */
 
 import type { SessionDescriptor } from '../../shared/hostApi.js'
@@ -42,37 +54,21 @@ export type SidebarRow = {
 }
 
 /**
- * The rows the Sidebar renders: the full roster, ordered by `lastAttachedAt`
- * descending (most-recently touched first), ties broken by `createdAt` then id
- * for a stable order. This is `listSessions()` folded into `ShellState` already
- * (App seeds the roster from it, then keeps it live off the HostEvent stream),
- * so there is no separate poll — same event-driven source as the TabBar.
+ * The rows the Sidebar renders: the full roster in stable arrival order (the
+ * same `state.order` the TabBar reads — see the module doc for why this is
+ * NOT a recency sort). This is `listSessions()` folded into `ShellState`
+ * already (App seeds the roster from it, then keeps it live off the
+ * HostEvent stream), so there is no separate poll — same event-driven source
+ * as the TabBar.
  */
 export function selectSidebarRows(state: ShellState): SidebarRow[] {
-  const descriptors = state.order
+  return state.order
     .map(id => state.byId[id])
     .filter((value): value is SessionDescriptor => value !== undefined)
-
-  return descriptors
-    .slice()
-    .sort(byRecency)
     .map(descriptor => ({
       descriptor,
       visual: deriveSidebarRowVisual(descriptor),
     }))
-}
-
-/**
- * Most-recently-attached first. `lastAttachedAt` is the restore-offer's recency
- * key (REGISTRY §4.4); `createdAt` and the id are deterministic tie-breakers so
- * two rows with the same attach time never reorder between renders.
- */
-function byRecency(a: SessionDescriptor, b: SessionDescriptor): number {
-  if (b.lastAttachedAt !== a.lastAttachedAt) {
-    return b.lastAttachedAt - a.lastAttachedAt
-  }
-  if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt
-  return a.appSessionId < b.appSessionId ? -1 : 1
 }
 
 /**

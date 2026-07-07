@@ -52,10 +52,12 @@ export function reduceShellState(
     case 'session-added': {
       const id = event.session.appSessionId
       const present = Boolean(state.byId[id])
+      const wasTab = Boolean(state.tabs[id])
+      const tabs = foldTabMembership(state.tabs, event.session)
       return {
-        order: present ? state.order : [...state.order, id],
+        order: reorderOnArrival(state.order, id, present, wasTab, tabs),
         byId: { ...state.byId, [id]: event.session },
-        tabs: foldTabMembership(state.tabs, event.session),
+        tabs,
       }
     }
     case 'session-status': {
@@ -64,13 +66,17 @@ export function reduceShellState(
       // that races ahead of its `session-added` is not a ghost — ADOPT it
       // (append like an add) rather than dropping it, or the row is lost until a
       // later event happens to re-add it. A known id updates in place (no
-      // reorder). This closes the hydrate/subscribe ordering race (Finding 3):
-      // a status landing between listSessions() and subscribeHost() survives.
+      // reorder) UNLESS it is just regaining tab membership (see
+      // `reorderOnArrival`). This closes the hydrate/subscribe ordering race
+      // (Finding 3): a status landing between listSessions() and
+      // subscribeHost() survives.
       const present = Boolean(state.byId[id])
+      const wasTab = Boolean(state.tabs[id])
+      const tabs = foldTabMembership(state.tabs, event.session)
       return {
-        order: present ? state.order : [...state.order, id],
+        order: reorderOnArrival(state.order, id, present, wasTab, tabs),
         byId: { ...state.byId, [id]: event.session },
-        tabs: foldTabMembership(state.tabs, event.session),
+        tabs,
       }
     }
     case 'session-removed': {
@@ -114,6 +120,35 @@ function foldTabMembership(
   const next = { ...tabs }
   delete next[id]
   return next
+}
+
+/**
+ * Where an id lands in `order` on `session-added` / `session-status`:
+ *  - unknown id → append (a genuinely new tab arrives at the end);
+ *  - known id, tab membership unchanged → unchanged (a plain status update,
+ *    e.g. busy→ready, or the crash→restart-in-place path where the tab was
+ *    kept the whole time — must NOT reorder, or a live tab would jump under
+ *    the user for an unrelated status frame);
+ *  - known id that JUST regained tab membership (restoreSession on a closed
+ *    row, or crashed-restorable adopted from a hydrate snapshot) → moved to
+ *    the end, like a freshly-opened tab. Without this, `order` still holds
+ *    the id at its ORIGINAL arrival index from earlier in the run (only
+ *    `session-removed` ever drops an id from `order`), so restoring an old
+ *    session would snap it back to that stale slot — e.g. index 0 if it was
+ *    the very first session — jumping it ahead of tabs the user has open
+ *    now instead of appending after them.
+ */
+function reorderOnArrival(
+  order: SessionId[],
+  id: SessionId,
+  present: boolean,
+  wasTab: boolean,
+  tabs: ShellState['tabs'],
+): SessionId[] {
+  if (!present) return [...order, id]
+  const becameTab = !wasTab && tabs[id] === true
+  if (!becameTab) return order
+  return [...order.filter(candidate => candidate !== id), id]
 }
 
 /** Every descriptor in the roster (arrival order) — the Sidebar's live∪restorable source. */

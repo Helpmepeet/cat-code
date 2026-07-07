@@ -294,10 +294,11 @@ export function App() {
     [tabs],
   )
 
-  // The Sidebar's own projection of the SAME roster (live ∪ restorable),
-  // ordered by recency — not a second data source, and not a poll loop: it
-  // reads the HostEvent-driven `shell` state the TabBar reads (App seeded it
-  // once from listSessions, then keeps it live off subscribeHost).
+  // The Sidebar's own projection of the SAME roster (live ∪ restorable), in
+  // stable arrival order (same order the TabBar uses — see sidebarState.ts) —
+  // not a second data source, and not a poll loop: it reads the
+  // HostEvent-driven `shell` state the TabBar reads (App seeded it once from
+  // listSessions, then keeps it live off subscribeHost).
   const sidebarRows = useMemo(() => selectSidebarRows(shell), [shell])
 
   useEffect(() => {
