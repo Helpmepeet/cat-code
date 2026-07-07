@@ -165,6 +165,21 @@ test('compresses durable Agent Mode worker sessions using workerUxSummary semant
       resumable: false,
     }),
   ).toBe('stale')
+  expect(
+    deriveAgentModeWorkerState({
+      ...base,
+      status: 'completed',
+      origin: 'prior',
+    }),
+  ).toBe('completed')
+  expect(
+    deriveAgentModeWorkerState({
+      ...base,
+      status: 'completed',
+      origin: 'prior',
+      synthesisStatus: 'pending',
+    }),
+  ).toBe('result-ready')
   expect(deriveAgentModeWorkerState({ ...base, status: 'failed' })).toBe('attention')
   expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('attention')
 })
@@ -211,6 +226,27 @@ test('maps real task lifecycle and attention fields without prototype activity f
   ).toBe('resumed')
   expect(
     deriveTaskAgentState({
+      type: 'local_agent',
+      id: 'task-a3b',
+      status: 'running',
+      description: 'Backgrounded worker',
+      agentType: 'general-purpose',
+      isBackgrounded: true,
+    }),
+  ).toBe('background')
+  expect(
+    deriveTaskAgentState({
+      type: 'local_agent',
+      id: 'task-a3c',
+      status: 'running',
+      description: 'Backgrounded resumed worker',
+      agentType: 'general-purpose',
+      isBackgrounded: true,
+      resumedAt: 123,
+    }),
+  ).toBe('background')
+  expect(
+    deriveTaskAgentState({
       type: 'in_process_teammate',
       id: 'task-t1',
       status: 'running',
@@ -248,6 +284,15 @@ test('maps real task lifecycle and attention fields without prototype activity f
       description: 'Stopped agent',
       agentType: 'Explore',
     }),
+  ).toBe('stopped')
+  expect(
+    deriveTaskAgentState({
+      type: 'local_agent',
+      id: 'task-a5',
+      status: 'future-status',
+      description: 'Unknown future status',
+      agentType: 'Explore',
+    } as never),
   ).toBe('stopped')
 })
 

@@ -306,9 +306,8 @@ export type AgentStateDerivationOptions = {
 export function deriveAgentModeWorkerState(
   worker: AgentModeWorkerSource,
 ): AgentStateKey {
-  if (worker.origin === 'prior') {
-    return worker.resumable === true ? 'resumable' : 'stale'
-  }
+  if (worker.origin === 'prior' && worker.resumable === true) return 'resumable'
+  if (worker.origin === 'prior' && worker.resumable === false) return 'stale'
   if (worker.synthesisStatus === 'pending') return 'result-ready'
   if (worker.synthesisStatus === 'synthesized') return 'reviewed'
   if (worker.status === 'failed' || worker.status === 'killed') return 'attention'
@@ -323,6 +322,9 @@ export function deriveTaskAgentState(
   if (task.type === 'local_agent') {
     if (task.handoffStatus === 'blocked') {
       return options.blockedOwner === 'orchestrator' ? 'blocked' : 'needs-you'
+    }
+    if (task.status === 'running' && task.isBackgrounded === true) {
+      return 'background'
     }
     if (typeof task.resumedAt === 'number' && task.status === 'running') {
       return 'resumed'
@@ -382,12 +384,14 @@ function stateFromTaskStatus(
     case 'pending':
       return isBackgrounded === false ? 'running' : 'background'
     case 'running':
-      return 'running'
+      return isBackgrounded === true ? 'background' : 'running'
     case 'completed':
       return 'completed'
     case 'failed':
       return 'failed'
     case 'killed':
+      return 'stopped'
+    default:
       return 'stopped'
   }
 }
