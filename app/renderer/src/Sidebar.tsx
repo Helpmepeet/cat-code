@@ -5,7 +5,8 @@
  * a nav destination rail — replacing P3-5b's static 240px roster.
  *
  * Data is unchanged: it renders the real `SidebarRow[]` (`selectSidebarRows`,
- * live ∪ restorable, recency-ordered) and raises the SAME intent callbacks
+ * live ∪ restorable, stable arrival order — see `sidebarState.ts`) and raises
+ * the SAME intent callbacks
  * (`onSelectLive` reuses App's `selectTab`; `onRestore` calls the host
  * `restoreSession`). Only real `SessionDescriptor` fields (title, cwd, status,
  * recency) are rendered — no cost/model/tags fixtures (C3).
@@ -242,9 +243,11 @@ type WorkspaceGroup = {
 
 /**
  * Group rows by their session's cwd (the derivable "workspace"), preserving the
- * incoming recency order within each group. Group order mirrors the prototype's
- * "current workspace first, then alphabetical": the group holding the active
- * session leads, the rest sort alphabetically by label, ties broken by cwd.
+ * incoming stable arrival order within each group (matches the prototype's
+ * `Sidebar.jsx` `groupByWorkspace`, which never re-sorts within a group either).
+ * Group order mirrors the prototype's "current workspace first, then
+ * alphabetical": the group holding the active session leads, the rest sort
+ * alphabetically by label, ties broken by cwd.
  */
 function groupByWorkspace(
   rows: SidebarRow[],
@@ -350,8 +353,10 @@ function SidebarRowItem({
   return (
     <div
       className={
-        'group relative flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 transition-colors ' +
-        (isActive ? 'bg-accent/10' : 'hover:bg-accent/[0.06]')
+        'group relative flex cursor-pointer select-none items-center gap-2 rounded-md border px-2 py-1.5 transition-colors ' +
+        (isActive
+          ? 'border-accent/[0.18] bg-accent/[0.09]'
+          : 'border-transparent hover:border-accent/[0.22] hover:bg-accent/[0.07]')
       }
       role="button"
       tabIndex={0}
@@ -378,7 +383,7 @@ function SidebarRowItem({
       <div className="min-w-0 flex-1">
         <div
           className={
-            'truncate text-xs ' +
+            'truncate text-xs font-medium ' +
             (isActive ? 'text-accent-soft' : 'text-text-muted')
           }
         >
@@ -419,7 +424,7 @@ function NavItemExpanded({ item }: { item: NavItem }) {
         disabled
         aria-disabled="true"
         title={`${item.label} — not yet migrated`}
-        className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/40"
+        className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
       >
         <span className="flex h-5 w-8 shrink-0 items-center justify-center">
           {item.icon}
@@ -459,7 +464,7 @@ function NavItemRail({ item }: { item: NavItem }) {
         aria-disabled="true"
         aria-label={item.label}
         title={`${item.label} — not yet migrated`}
-        className="flex h-8 w-8 items-center justify-center rounded-md text-text-subtle/40"
+        className="flex h-8 w-8 items-center justify-center rounded-md text-text-subtle/55"
       >
         {item.icon}
       </button>
@@ -490,9 +495,13 @@ function NavItemRail({ item }: { item: NavItem }) {
  */
 function StatusChip({ tone, label }: { tone: TabTone; label: string }) {
   if (tone === 'live') return null
+  // Opacity-dimmed relative to the TabBar's full-strength chip (Sidebar.tsx-local
+  // — not shared with TabBar's own StatusChip): the row's headline is the session
+  // title, not the runtime state, so the tone still reads at a glance without
+  // out-shouting the title text next to it (fidelity fix — row IA rebalance).
   return (
     <span
-      className={`shrink-0 font-mono text-[10px] uppercase tracking-wide ${toneTextClass(tone)}`}
+      className={`shrink-0 font-mono text-[10px] uppercase tracking-wide ${toneTextClass(tone)}/75`}
     >
       {label}
     </span>
