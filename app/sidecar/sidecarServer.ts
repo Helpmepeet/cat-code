@@ -65,6 +65,7 @@ import {
   type SessionId,
 } from '../shared/protocol.js'
 import type { SidecarPermissionDomain } from './permissionDomain.js'
+import type { SidecarSettingsDomain } from './settingsDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -90,6 +91,11 @@ export type SidecarServerOptions = {
    */
   permissions?: SidecarPermissionDomain
   /**
+   * Settings read-seam (P4-3). Optional because the P1-0 probe fixture has no
+   * cwd-configured engine; when absent, no `settings.snapshot` frame is emitted.
+   */
+  settings?: SidecarSettingsDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -114,6 +120,7 @@ export class SidecarServer {
   private readonly engineSessionId: string
   private readonly controller: AppSessionController
   private readonly permissions: SidecarPermissionDomain | null
+  private readonly settings: SidecarSettingsDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
@@ -126,6 +133,7 @@ export class SidecarServer {
     this.engineSessionId = options.engineSessionId
     this.controller = options.controller
     this.permissions = options.permissions ?? null
+    this.settings = options.settings ?? null
     this.history = options.history ?? []
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
@@ -187,6 +195,9 @@ export class SidecarServer {
         this.permissions.getToolPermissionContext(),
       )
     }
+    // P4-3 — the settings source/precedence snapshot, after C3 (read-only,
+    // point-in-time on attach; source/editable/managed model only, no values).
+    this.sendSettingsSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -823,6 +834,31 @@ export class SidecarServer {
       sessionId: this.sessionId,
       context: snapshot,
     }
+  }
+
+  /**
+   * P4-3 — build + send the settings snapshot to a single connection (attach).
+   * The snapshot carries no setting values (source/editable/managed model only),
+   * so `send`'s secret guard and JSON-safety check pass by construction. A same
+   * outbound-size cap still applies via the shared `send` path.
+   */
+  private sendSettingsSnapshot(connection: Connection): void {
+    if (!this.settings) {
+      return
+    }
+    const snapshot = this.prepareOutboundPayload(
+      this.settings.getSnapshot(),
+      'settings.snapshot',
+    )
+    if (!snapshot) {
+      return
+    }
+    this.send(connection, {
+      kind: 'settings.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      settings: snapshot,
+    })
   }
 
   private send(connection: Connection, frame: ServerFrame): void {

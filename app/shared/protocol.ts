@@ -228,6 +228,93 @@ export type PermissionContextFrame = {
   context: PermissionContextSnapshot
 }
 
+/* ------------------------------------------------------------------------- *
+ * Settings read-seam (P4-3) — the read-only settings source/precedence model
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The five settings layers, ASCENDING precedence (later wins) —
+ * `src/utils/settings/constants.ts:7-22` `SETTING_SOURCES`. Redeclared here as a
+ * local string-literal union (the P0-3 isolation idiom — never a direct engine
+ * import) so main/preload/renderer typecheck without the engine's Bun graph.
+ * Structurally identical to the engine's `SettingSource`, so the sidecar assigns
+ * across without a cast.
+ */
+export type SettingSourceId =
+  | 'userSettings'
+  | 'projectSettings'
+  | 'localSettings'
+  | 'flagSettings'
+  | 'policySettings'
+
+/**
+ * Where the active policy (managed) layer resolves from —
+ * `getPolicySettingsOrigin()` (settings.ts:376). null when nothing is managed.
+ */
+export type PolicySettingsOrigin =
+  | 'remote'
+  | 'plist'
+  | 'hklm'
+  | 'file'
+  | 'hkcu'
+
+/**
+ * P4-3 — the read-only settings snapshot (C3 precedent: read-only outbound,
+ * secretGuard-clean BY CONSTRUCTION). It carries the SOURCE / editable /
+ * managed MODEL only — never a setting VALUE — so no credential-bearing value
+ * (`env`, `apiKeyHelper`, …) ever serializes; the snapshot cannot leak a secret
+ * and the outbound secret guard trivially passes. Panels (P4-12) render values
+ * through their own controls; this seam only tells each field WHERE its value is
+ * resolved from and whether it is editable or managed.
+ *
+ * Built at the sidecar from the engine's `getSettingsWithSources()` (settings.ts
+ * :924 — the same merged-with-provenance read the CLI makes). Resolution is
+ * rooted at the sidecar's own cwd (P3-1), so the project/local layers are the
+ * SESSION's, matching what the engine's `canUseTool` enforces.
+ */
+export type SettingsSnapshot = {
+  /**
+   * The enabled, non-empty layers in ASCENDING precedence (index 0 lowest).
+   * `keys` are the top-level setting NAMES present at that layer — names only,
+   * never values. `origin` is the layer's settings-file path (or a policy
+   * descriptor), for the source-badge tooltip.
+   */
+  layers: Array<{ source: SettingSourceId; origin: string; keys: string[] }>
+  /**
+   * Per effective top-level key, the WINNING (highest-precedence) layer that set
+   * it, plus its editable/managed status. An ARRAY, not a keyed record, so
+   * setting names ride as string VALUES — never as object keys the outbound
+   * secret guard would inspect (a key literally named `apiKey` could otherwise
+   * block the frame). `managed` ⇒ the policy layer (locked); `editable === false`
+   * also covers `flagSettings` (a session CLI override settings cannot rewrite,
+   * though it is not "managed").
+   */
+  resolved: Array<{
+    key: string
+    source: SettingSourceId
+    editable: boolean
+    managed: boolean
+  }>
+  /** The active policy layer's origin, or null when nothing is managed. */
+  policyOrigin: PolicySettingsOrigin | null
+}
+
+/**
+ * P4-3 outbound frame. Emitted on attach (after `ready` + the C3
+ * `permission.context`, before history replay). Read-only; the renderer never
+ * writes settings across this seam — writes go through the engine's
+ * `SettingsUpdater`-under-lock form (P3-5a, `settings.ts:480`), a later decided
+ * action. Live re-emit on change is deferred: general settings require a restart
+ * in the engine today (the session settings cache, `settings.ts:944`), and
+ * permission-rule mutations already flow via the C3 snapshot.
+ */
+export type SettingsSnapshotFrame = {
+  kind: 'settings.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  settings: SettingsSnapshot
+}
+
 /**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
@@ -250,6 +337,7 @@ export type ServerFrame =
   | ErrorFrame
   | LifecycleFrame
   | PermissionContextFrame
+  | SettingsSnapshotFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)

@@ -23,6 +23,10 @@ import {
   createSidecarPermissionDomain,
   type SidecarPermissionDomain,
 } from './permissionDomain.js'
+import {
+  createSidecarSettingsDomain,
+  type SidecarSettingsDomain,
+} from './settingsDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -168,6 +172,12 @@ export type SidecarSession = {
    * in probe mode, which has no engine app-state store.
    */
   permissions: SidecarPermissionDomain | null
+  /**
+   * Settings read-seam (P4-3) — the engine's real settings source/precedence
+   * model, resolved at this session's cwd. Read-only; null in probe mode (no
+   * cwd-configured engine, so a disk read would be meaningless).
+   */
+  settings: SidecarSettingsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -201,6 +211,7 @@ export async function createSidecarSessionController({
         },
       }),
       permissions: null,
+      settings: null,
     }
   }
 
@@ -215,5 +226,6 @@ export async function createSidecarSessionController({
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
     permissions: createSidecarPermissionDomain(appStateStore),
+    settings: createSidecarSettingsDomain(),
   }
 }
