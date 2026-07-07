@@ -273,6 +273,18 @@ function PanelHeader({
         }
         aria-hidden="true"
       />
+      {/* Project pill — the panel session's workspace (cwd basename), matching
+       * the prototype's WorkspaceLayout.jsx header pill. §0: the prototype turns
+       * this amber on a cross-project resume; that state is deferred — HC1's
+       * one-cwd-per-session model has no single "current workspace" to diff
+       * against, so every pill renders the neutral (same-project) blue. */}
+      <span
+        className="flex shrink-0 items-center gap-1 rounded border border-[#60a5fa]/25 bg-[#60a5fa]/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#93c5fd]"
+        title={`Project: ${panel.descriptor?.cwd ?? panel.sessionId}`}
+      >
+        <FolderIcon />
+        {workspaceLabel(panel)}
+      </span>
       <select
         className="min-w-0 flex-1 truncate rounded border border-shell-seam bg-app-bg px-2 py-1 text-xs text-text-primary"
         value={panel.sessionId}
@@ -408,4 +420,39 @@ function sessionIdentity(panel: WorkspacePanelView): string {
 function sessionState(panel: WorkspacePanelView): string {
   const host = panel.descriptor?.status ?? 'missing'
   return `host ${host}, connection ${panel.connection.status}`
+}
+
+/** The panel session's workspace name — its cwd basename, else a short id. */
+function workspaceLabel(panel: WorkspacePanelView): string {
+  const cwd = panel.descriptor?.cwd
+  if (cwd) {
+    const base = basename(cwd)
+    if (base) return base
+  }
+  return panel.sessionId.slice(0, 8)
+}
+
+function basename(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/, '')
+  const parts = trimmed.split(/[/\\]/)
+  return parts[parts.length - 1] ?? ''
+}
+
+/** Folder glyph for the project pill (prototype WorkspaceLayout.jsx). */
+function FolderIcon() {
+  return (
+    <svg
+      width="9"
+      height="9"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  )
 }

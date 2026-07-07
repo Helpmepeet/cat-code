@@ -69,6 +69,7 @@ import {
   createWorkspaceLayout,
   focusOrAssignWorkspaceSession,
   focusWorkspacePanel,
+  MAX_WORKSPACE_PANELS,
   readWorkspaceLayoutFromStorage,
   readyToRestoreLayout,
   reconcileWorkspaceLayout,
@@ -460,6 +461,30 @@ export function App() {
     setWorkspaceLayoutState(current => setWorkspaceWidths(current, widths))
   }, [])
 
+  // TabBar Split (P4-4): open the next un-panelled live session as a new panel,
+  // split off the active panel's right edge. Reuses the SAME split reducer the
+  // drag-tab-to-edge path uses (P3-6) — no new wiring. The layout model forbids
+  // the same session in two panels, so "split" adds a DIFFERENT session (the
+  // prototype duplicates the active one; §0 flag on TabBar).
+  const addWorkspacePanel = useCallback(() => {
+    if (workspaceLayout.panels.length >= MAX_WORKSPACE_PANELS) return
+    const shown = new Set(workspaceLayout.panels.map(panel => panel.sessionId))
+    const next = liveSessionIds.find(id => !shown.has(id))
+    if (!next) {
+      setLayoutNotice(
+        'No other session to open in a split — create or select another session first.',
+      )
+      return
+    }
+    splitWorkspacePanelWithSession(workspaceLayout.activeIndex, 'right', next)
+  }, [liveSessionIds, splitWorkspacePanelWithSession, workspaceLayout])
+
+  // TabBar Unsplit (P4-4): drop the last panel — the existing close-panel path.
+  const removeWorkspacePanel = useCallback(() => {
+    if (workspaceLayout.panels.length <= 1) return
+    closeWorkspacePanelAt(workspaceLayout.panels.length - 1)
+  }, [closeWorkspacePanelAt, workspaceLayout])
+
   const closeTab = useCallback(async (sessionId: SessionId) => {
     // Non-destructive: closeSession keeps the registry row and emits
     // session-status(exited, restorable) — NOT session-removed (the row stays in
@@ -800,6 +825,10 @@ export function App() {
           onClose={closeTab}
           onRestart={restartTab}
           onNewTab={newSession}
+          panelCount={workspaceLayout.panels.length}
+          canAddPanel={liveSessionIds.length > workspaceLayout.panels.length}
+          onAddPanel={addWorkspacePanel}
+          onRemovePanel={removeWorkspacePanel}
         />
 
         {shellError ? (

@@ -25,6 +25,10 @@ export function TabBar({
   onClose,
   onRestart,
   onNewTab,
+  panelCount = 1,
+  canAddPanel = false,
+  onAddPanel,
+  onRemovePanel,
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
@@ -32,6 +36,20 @@ export function TabBar({
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
   onNewTab: () => void
+  /**
+   * Split-view controls (P4-4 fidelity — the prototype's TabBar.jsx owns the
+   * Split/Unsplit cluster). Optional + additive: the cluster renders only when
+   * `onAddPanel` is wired, so headless TabBar tests (which omit these) are
+   * untouched. They call App's EXISTING split/close-panel layout reducers — no
+   * new host wiring, and the drag-tab-to-edge split path (P3-6) is unchanged.
+   * §0: the prototype's "Split" duplicates the active session into a new panel;
+   * ours opens the next un-panelled live session instead, because the layout
+   * model forbids the same session in two panels (a real-behavior adaptation).
+   */
+  panelCount?: number
+  canAddPanel?: boolean
+  onAddPanel?: () => void
+  onRemovePanel?: () => void
 }) {
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
@@ -112,7 +130,68 @@ export function TabBar({
           +
         </button>
       </div>
+
+      {onAddPanel ? (
+        <div className="flex shrink-0 items-center gap-1 border-l border-shell-seam px-2.5">
+          {panelCount < 3 ? (
+            <button
+              type="button"
+              onClick={onAddPanel}
+              disabled={!canAddPanel}
+              title={canAddPanel ? 'Split view' : 'No other session to split'}
+              aria-label="Split view"
+              className="flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-[3px] text-[11px] text-text-subtle transition-colors hover:border-accent/35 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:text-text-subtle"
+            >
+              <SplitIcon panelCount={panelCount} />
+              <span>Split</span>
+            </button>
+          ) : null}
+          {panelCount > 1 ? (
+            <button
+              type="button"
+              onClick={onRemovePanel}
+              title="Close last panel"
+              aria-label="Unsplit"
+              className="flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-[3px] text-[11px] text-text-subtle transition-colors hover:border-white/20 hover:text-text-primary"
+            >
+              <UnsplitIcon />
+              <span>Unsplit</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+/** Split-view icon — one darker column being added (prototype TabBar.jsx). */
+function SplitIcon({ panelCount }: { panelCount: number }) {
+  return (
+    <svg width="15" height="11" viewBox="0 0 15 11" fill="none" aria-hidden="true">
+      {panelCount === 1 ? (
+        <>
+          <rect x="0" y="0" width="6.5" height="11" rx="1.5" fill="currentColor" opacity="0.45" />
+          <rect x="8.5" y="0" width="6.5" height="11" rx="1.5" fill="currentColor" opacity="1" />
+        </>
+      ) : null}
+      {panelCount === 2 ? (
+        <>
+          <rect x="0" y="0" width="3.8" height="11" rx="1.2" fill="currentColor" opacity="0.3" />
+          <rect x="5.6" y="0" width="3.8" height="11" rx="1.2" fill="currentColor" opacity="0.65" />
+          <rect x="11.2" y="0" width="3.8" height="11" rx="1.2" fill="currentColor" opacity="1" />
+        </>
+      ) : null}
+    </svg>
+  )
+}
+
+/** Unsplit icon — a single merged panel (prototype TabBar.jsx). */
+function UnsplitIcon() {
+  return (
+    <svg width="15" height="11" viewBox="0 0 15 11" fill="none" aria-hidden="true">
+      <rect x="0" y="0" width="15" height="11" rx="1.5" fill="currentColor" opacity="0.6" />
+      <line x1="7.5" y1="1.5" x2="7.5" y2="9.5" stroke="#09090b" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
   )
 }
 
