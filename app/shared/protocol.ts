@@ -267,10 +267,11 @@ export type PolicySettingsOrigin =
  * through their own controls; this seam only tells each field WHERE its value is
  * resolved from and whether it is editable or managed.
  *
- * Built at the sidecar from the engine's `getSettingsWithSources()` (settings.ts
- * :924 — the same merged-with-provenance read the CLI makes). Resolution is
- * rooted at the sidecar's own cwd (P3-1), so the project/local layers are the
- * SESSION's, matching what the engine's `canUseTool` enforces.
+ * Built at the sidecar ONCE at spawn, from the engine's non-resetting per-source
+ * reader (`getSettingsForSource` over the enabled `SETTING_SOURCES`) — NOT
+ * `getSettingsWithSources()`, which resets the engine's global settings cache.
+ * Resolution is rooted at the sidecar's own cwd (P3-1), so the project/local
+ * layers are the SESSION's, matching what the engine's `canUseTool` enforces.
  */
 export type SettingsSnapshot = {
   /**

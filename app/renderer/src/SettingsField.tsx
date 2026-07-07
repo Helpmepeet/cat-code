@@ -94,14 +94,28 @@ export function SourceBadge({
   origin?: string | null
   meta?: { label: string; className: string; origin?: string }
 }) {
-  const label = meta?.label ?? (source ? SOURCE_LABEL[source] : SOURCE_LABEL.userSettings)
-  const className =
-    meta?.className ??
-    (source ? SOURCE_BADGE_CLASS[source] : SOURCE_BADGE_CLASS.userSettings)
-  const title = meta?.origin ?? origin ?? undefined
+  if (meta) {
+    return (
+      <span
+        className={`${BADGE_BASE} ${meta.className}`}
+        title={meta.origin ?? origin ?? undefined}
+      >
+        {meta.label}
+      </span>
+    )
+  }
+  // Honest provenance: with neither a real source nor an explicit meta, render
+  // nothing rather than fabricate a "User" badge (a value with no resolved
+  // source is at its built-in default — review LOW#3).
+  if (!source) {
+    return null
+  }
   return (
-    <span className={`${BADGE_BASE} ${className}`} title={title}>
-      {label}
+    <span
+      className={`${BADGE_BASE} ${SOURCE_BADGE_CLASS[source]}`}
+      title={origin ?? undefined}
+    >
+      {SOURCE_LABEL[source]}
     </span>
   )
 }

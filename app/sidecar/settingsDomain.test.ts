@@ -3,6 +3,7 @@ import { scanForSecrets } from '../shared/secretGuard.js'
 import type { SettingsSnapshotFrame } from '../shared/protocol.js'
 import {
   buildSettingsSnapshot,
+  createSidecarSettingsDomain,
   type SettingsSourceLayer,
 } from './settingsDomain.js'
 
@@ -89,6 +90,15 @@ test('empty layers → empty model, null policy origin', () => {
   expect(snapshot.layers).toEqual([])
   expect(snapshot.resolved).toEqual([])
   expect(snapshot.policyOrigin).toBeNull()
+})
+
+test('the domain reads once at spawn — getSnapshot returns a stable reference', () => {
+  // Captured at construction, not re-read (and not reset) per attach: the same
+  // reference comes back every call (null === null if the env has no settings).
+  const domain = createSidecarSettingsDomain()
+  const first = domain.getSnapshot()
+  const second = domain.getSnapshot()
+  expect(first).toBe(second)
 })
 
 test('carries no secret material even when a source holds tokens (redaction proof)', () => {

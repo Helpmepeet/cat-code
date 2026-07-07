@@ -841,24 +841,39 @@ export class SidecarServer {
    * The snapshot carries no setting values (source/editable/managed model only),
    * so `send`'s secret guard and JSON-safety check pass by construction. A same
    * outbound-size cap still applies via the shared `send` path.
+   *
+   * `getSnapshot()` is a pure read of the spawn-time value (null if that read
+   * failed) — it does no I/O and cannot throw. The whole body is nonetheless
+   * wrapped so a settings-snapshot failure can NEVER strand the connection in the
+   * broadcast set or skip the subsequent history replay (review MED#2): on any
+   * failure we simply skip the snapshot and let attach continue.
    */
   private sendSettingsSnapshot(connection: Connection): void {
     if (!this.settings) {
       return
     }
-    const snapshot = this.prepareOutboundPayload(
-      this.settings.getSnapshot(),
-      'settings.snapshot',
-    )
-    if (!snapshot) {
-      return
+    try {
+      const raw = this.settings.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'settings.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'settings.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        settings: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] settings.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
     }
-    this.send(connection, {
-      kind: 'settings.snapshot',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      settings: snapshot,
-    })
   }
 
   private send(connection: Connection, frame: ServerFrame): void {

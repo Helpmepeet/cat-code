@@ -30,6 +30,12 @@ test('SourceBadge meta escape hatch overrides label + class (AgentsPage reuse)',
   expect(html).toContain('Builtin')
 })
 
+test('SourceBadge renders nothing (no fabricated provenance) when source is absent', () => {
+  // A value with no resolved source is at its built-in default — never "User".
+  expect(renderToStaticMarkup(<SourceBadge />)).toBe('')
+  expect(renderToStaticMarkup(<SourceBadge origin="/somewhere" />)).toBe('')
+})
+
 test('ManagedBadge renders a lock and the Managed label', () => {
   const html = renderToStaticMarkup(<ManagedBadge origin="managed-settings.json" />)
   expect(html).toContain('Managed')

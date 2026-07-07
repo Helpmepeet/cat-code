@@ -4,34 +4,50 @@
  * `permissionDomain.ts`, in its read-only form).
  *
  * Unlike the permission domain (which subscribes to the live app-state store),
- * settings resolve from disk relative to the process cwd via the engine's
- * `getSettingsWithSources()` (settings.ts:924). The sidecar process is spawned in
- * the session's cwd (P3-1), so the project/local layers are the SESSION's — the
- * same read the CLI makes and the same one `canUseTool` enforces. v1 is a
- * point-in-time read on attach (see `SettingsSnapshotFrame`); live re-emit is
- * deferred (general settings need a restart in the engine today).
+ * settings resolve from disk relative to the process cwd. The read runs ONCE at
+ * spawn via a NON-resetting path — `getSettingsForSource` per enabled source, in
+ * the canonical `SETTING_SOURCES` precedence order — NOT `getSettingsWithSources()`,
+ * whose first line is `resetSettingsCache()` (settings.ts:927) and would wipe the
+ * engine's process-global settings cache against its "valid for the entire
+ * session" invariant (:941). We only need the per-source layers (not the merged
+ * `effective`), so the cached per-source reader suffices and mutates nothing.
+ * The sidecar process is spawned in the session's cwd (P3-1), so the
+ * project/local layers are the SESSION's — the same read `canUseTool` enforces.
+ * v1 is thus a spawn-time snapshot; live re-emit is deferred (general settings
+ * need a restart in the engine today; permission-rule changes flow via C3).
  *
  * Secret posture: the snapshot carries the source/editable/managed MODEL only,
  * never setting VALUES, so no credential-bearing value (`env`, `apiKeyHelper`, …)
  * crosses IPC — the outbound `secretGuard` is satisfied by construction (proven
  * in `settingsDomain.test.ts`).
  *
+ * §0 flag: this read-seam front-runs the canonical domain read-seam recipe P4-5
+ * (Accounts) will set; reconcile the shape/lifecycle with it at P4-5 if it diverges.
+ *
  * This module has ZERO transport knowledge: frames, validation, and limits stay
  * in `sidecarServer.ts`.
  */
 
-import { getSettingSourceDisplayNameLowercase } from '../../src/utils/settings/constants.js'
+import {
+  getSettingSourceDisplayNameLowercase,
+  isSettingSourceEnabled,
+  SETTING_SOURCES,
+} from '../../src/utils/settings/constants.js'
 import type { SettingSource } from '../../src/utils/settings/constants.js'
 import {
   getPolicySettingsOrigin,
   getSettingsFilePathForSource,
-  getSettingsWithSources,
+  getSettingsForSource,
 } from '../../src/utils/settings/settings.js'
 import type { SettingSourceId, SettingsSnapshot } from '../shared/protocol.js'
 
 export type SidecarSettingsDomain = {
-  /** A point-in-time read of the engine's settings source/precedence model. */
-  getSnapshot(): SettingsSnapshot
+  /**
+   * The spawn-time settings source/precedence model — a pure read of the value
+   * captured at construction (no disk I/O on the attach path). null if the
+   * spawn-time read failed.
+   */
+  getSnapshot(): SettingsSnapshot | null
 }
 
 /**
@@ -108,18 +124,46 @@ function describeOrigin(source: SettingSource): string {
 }
 
 export function createSidecarSettingsDomain(): SidecarSettingsDomain {
+  // Read ONCE at spawn (see the module header for why: the attach path must do no
+  // disk I/O and must not reset the engine's global settings cache). getSnapshot()
+  // then just returns the captured value — a pure read that cannot throw or
+  // strand an attaching connection (review MED#1 + MED#2).
+  const snapshot = readSettingsSnapshotOnce()
   return {
     getSnapshot() {
-      // `sources` is ascending precedence, enabled + non-empty only
-      // (settings.ts:924). Its `source` values are the engine's `SettingSource`,
-      // structurally identical to the wire `SettingSourceId`.
-      const { sources } = getSettingsWithSources()
-      const layers: SettingsSourceLayer[] = sources.map(({ source, settings }) => ({
-        source,
-        origin: describeOrigin(source),
-        settings: settings as Record<string, unknown>,
-      }))
-      return buildSettingsSnapshot(layers, getPolicySettingsOrigin())
+      return snapshot
     },
+  }
+}
+
+/**
+ * Build the snapshot once from the cached per-source settings, ordered by the
+ * canonical `SETTING_SOURCES` precedence (ascending; policy last, so it wins) —
+ * never `getEnabledSettingSources()` insertion order, which appends policy before
+ * flag. Returns null (and logs) on any read failure so the caller degrades
+ * gracefully instead of crashing a session.
+ */
+function readSettingsSnapshotOnce(): SettingsSnapshot | null {
+  try {
+    const layers: SettingsSourceLayer[] = []
+    for (const source of SETTING_SOURCES) {
+      if (!isSettingSourceEnabled(source)) continue
+      const settings = getSettingsForSource(source)
+      if (settings && Object.keys(settings).length > 0) {
+        layers.push({
+          source,
+          origin: describeOrigin(source),
+          settings: settings as Record<string, unknown>,
+        })
+      }
+    }
+    return buildSettingsSnapshot(layers, getPolicySettingsOrigin())
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] settings snapshot read failed (session runs without a settings snapshot): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return null
   }
 }
