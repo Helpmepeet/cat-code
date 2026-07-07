@@ -49,6 +49,17 @@ prompt along with the scenario-specific steps:
   also cite a live AX-observed label or title from the app window.
 - For P3-8 and any production-create-path check, exercise the real native picker
   at least once; do not rely only on `CATCODE_TEST_CWD_ALLOWLIST`.
+- **⚠ HOVER-ONLY / focus-dependent surfaces → the OPERATOR drives, never the agent.**
+  Some surfaces respond ONLY to a real `onMouseEnter` with no backgrounded or keyboard
+  fallback (e.g. the Sidebar hover-expand rail). `cua-driver` has no backgrounded "hover"
+  primitive, so driving them forces you to activate the window and **warp the real cursor** —
+  which on 2026-07-07 repeatedly stole focus while the operator was working and forced a machine
+  restart (verification screenshots were lost with it). For any check that depends on hover/focus
+  with no backgrounded primitive: **STOP, hand the operator exact hover/click steps, and wait** —
+  do NOT warp the cursor or steal focus. One approved focus-steal is NOT a standing license
+  (cursor-warp feedback rule). If a hover/focus behavior can't be verified without stealing focus,
+  mark it **UNVERIFIED** and defer to the operator (or close it by source inspection when the logic
+  is trivial). A repeatable machine restart is never worth a checkbox.
 
 ## Debug Export
 

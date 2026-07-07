@@ -680,8 +680,8 @@ transcript (did prior history actually render?), and any host-API gap.
 
 > **Out-of-backlog addition (2026-07-05).** The P3-5a/5b GUI runs exposed the native folder
 > picker (NSOpenPanel) as THE agent-verification blocker; ~15–20 GUI runs remain across
-> P3/P4/P5. Requirements: `../2026-07-05-gui-harness-proposal.md`. Design:
-> `../2026-07-05-gui-harness-design.md` (rev 2 — pressure-tested same day, all findings
+> P3/P4/P5. Requirements: `../specs/2026-07-05-gui-harness-proposal.md`. Design:
+> `../specs/2026-07-05-gui-harness-design.md` (rev 2 — pressure-tested same day, all findings
 > applied, rulings closed in its §11). The session IMPLEMENTS the decided design.
 > P3-6 is the harness's first real GUI consumer — run this first.
 
@@ -702,11 +702,11 @@ boundary — the native folder picker (NSOpenPanel) destroyed a full agent dispa
 GUI rows re-test, WITHOUT weakening the security baseline.
 
 THE SPEC IS DECIDED — implement it, do not redesign:
-- docs/migration/2026-07-05-gui-harness-design.md (rev 2 — pressure-tested 2026-07-05, all 8
+- docs/migration/specs/2026-07-05-gui-harness-design.md (rev 2 — pressure-tested 2026-07-05, all 8
   findings applied; §11 records the closed rulings). Read IN FULL; every decision you need is
   in it: D1–D5 mechanisms, the gating table (§6), export schema (§3), file plan (§8),
   verification plan (§7), docs deliverables (§9).
-- docs/migration/2026-07-05-gui-harness-proposal.md — requirements + the NON-NEGOTIABLE §4
+- docs/migration/specs/2026-07-05-gui-harness-proposal.md — requirements + the NON-NEGOTIABLE §4
   constraints (migration security baseline) and §5 verification-honesty rules.
 Read also: decisions/SECURITY-MINIMUM.md (esp. Addendum T8/HC1–HC4), STATUS.md P3-H row.
 

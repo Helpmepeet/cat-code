@@ -1,8 +1,9 @@
 # CatCode migration — program plan (big picture)
 
 **Status: AUTHORITATIVE (2026-06-26).** This supersedes the 2026-06-19 doc set
-(`MIGRATION-STRATEGY.md`, `MIGRATION-DOMAINS.md`, `process/HANDOFF.md`,
-`decisions/SEAM-SPIKE.md`, `decisions/SHELL.md`). Those remain as
+(`MIGRATION-STRATEGY.md`, `MIGRATION-DOMAINS.md`,
+`decisions/SEAM-SPIKE.md`, `decisions/SHELL.md`; the 06-19 `process/HANDOFF.md`
+was retired 2026-07-07). Those remain as
 historical reference for their spikes; where they disagree with this file, this
 file wins. We restarted the planning from zero by interview on 2026-06-26.
 
@@ -319,6 +320,24 @@ agent). A **migration** session-unit matches that grain:
   must exist before wiring. The row exists so the agent doesn't re-derive its approach.
 - **Step 1 is then "read the prototype surface + its `// SOURCE:` anchors"** — no
   separate spec doc (§2). (For ⚓ ❌ rows, step 1 includes the recon the row flagged.)
+- **Visual-fidelity acceptance (REQUIRED for any surface that renders UI).** The Step-1
+  prototype surface is the *acceptance bar for how it looks* — not merely a data/behavior
+  reference. The session's done-criteria MUST include a **side-by-side visual check against that
+  prototype surface** (layout, chrome, spacing, states); a surface is done only when it *reads as*
+  the prototype, not merely when its data is wired. The prototype IS the visual grammar — a
+  session must **not** invent a parallel one. Every intentional divergence is a **§0 case-by-case
+  conflict**: flag it with the trade-off (extend-engine vs change-UI), never silently drop or
+  restyle. (Phases 0–3 gated on function only; that under-enforcement let the shell chrome drift
+  from the prototype — this closes it.)
+- **Prototype parity is the DEFAULT disposition — deviate only when *blocked* or *needs redesign*,
+  and FLAG rather than stop-and-ask.** Build the surface to match the prototype unless: **(a)
+  blocked** — no source backing to build on (an invention; e.g. read-only mode has no engine
+  state) → render truth, defer the invention, flag the make-it-real path (spec-first); or **(b)
+  needs redesign** — the prototype collides with real engine behavior (e.g. a blocking reauth
+  modal vs. the pool's multi-account failover) → adapt to reality, flag the trade-off. Both are
+  §0 case-by-case flags **resolved in the prompt**, not operator questions. Reserve an actual
+  operator question for a genuine *investment* fork the principle can't settle (fund a net-new
+  feature now?) — and even those default to defer.
 - **Tiered** like the prototype backlog (🟢 mechanical / 🟡 extend-pattern / 🔴 net-new
   state+architecture) so the model is picked per session.
 - **🧠 Model/Difficulty header (REQUIRED on every session).** Each session block starts with
@@ -398,6 +417,24 @@ workstream) is the **next planning session's** deliverable, not this one.
   `docs/migration/process/GUI-VERIFICATION.md` read-first pointer from §6 so the
   session uses the P3-H harness rather than rediscovering launch/readiness/PID
   forensics. Add the new sessions to STATUS.md as rows, tags included.
+- **Every surface-rendering session MUST also carry the §6 visual-fidelity acceptance
+  criterion**: name the exact prototype surface (file + component under
+  `~/catcode_prototype/cat-app/`), require a **side-by-side visual check as a done-criterion**,
+  and route every divergence through the §0 case-by-case flag. Do **not** instruct a session to
+  establish its own visual grammar — that phrasing (P3-5's "set the shell's visual grammar") is
+  what let the Phase-3 shell chrome drift from the prototype while passing its function-only gate.
+- **Whole-prototype coverage lives in `PARITY-LEDGER.md` (CC-1 — STATUS.md top, in progress).**
+  The function-only gates through Phase 3 let elements/flows drop silently (the Phase-4 Tranche-A
+  fidelity gap: a ✅/review-GREEN sidebar still missed 4 chrome items + a whole feature). `INVENTORY.md`
+  is surface-level; the ledger is the **element/UX-state + flow** instrument that makes the Phase-4
+  "feature parity" gate measurable. Once built, every surface session updates its ledger rows as a
+  DONE-criterion, and each phase gate audits it — the **❓missing-no-owner** column must be empty or
+  explicitly waived. This is where "did we silently drop a prototype element?" gets answered.
+- **Resolve prototype-vs-reality collisions IN the prompt, not by asking.** Parity is the default
+  (§6); a collision is either *blocked* (invention, no source backing → defer + flag, spec-first)
+  or *needs-redesign* (adapt to real behavior + flag) — write it as a §0 flag in the session, not
+  an operator question. Only a genuine *investment* fork (fund a net-new feature now?) goes to the
+  operator, and it defaults to defer.
 
 **This session (2026-06-26):** the big picture above — job, workstreams, dependency
 map, phases+gates, adapter boundary, session grain — plus two concrete artifacts the

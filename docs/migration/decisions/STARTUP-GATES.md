@@ -80,6 +80,14 @@ whether even that blocks or just disables submit is §5-Q2.
 > Recommendation: **banner + act-on-it**; the pool's multi-account health model exists so one
 > dead account isn't a wall.
 
+> **✅ OPERATOR RULING 2026-07-07.** Q1: **TUI parity** — no read-only mode; `ReadOnlyModeGate`
+> + the "Open read-only" buttons are CUT (decline trust = exit). Q2: **non-blocking reauth banner
+> + action** — banner driven by pool status, submit blocked only when *zero* healthy accounts
+> remain; the prototype's blocking `ReauthGate` modal is CUT. With the G4 ruling
+> (`WorkspaceSwitchPrompt` CUT), the D4 startup surface = per-session-create trust gate +
+> first-run OAuth + reauth banner. This row is now CLOSED — generated as **P4-15** in
+> `backlog/phase4.md`.
+
 ## 6. Pressure test
 
 - **"Trust checked only at create-time misses cwd changes mid-session."** In the engine, cwd
