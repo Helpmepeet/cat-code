@@ -24,7 +24,8 @@
  *    edge (P3-6), which stays intact.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { basename } from './pathUtils.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { SidebarRow } from './sidebarState.js'
 import type { TabTone } from './tabStatus.js'
@@ -92,14 +93,19 @@ export function Sidebar({
   )
 
   const query = search.trim().toLowerCase()
-  const filtered = query
-    ? rows.filter(
-        row =>
-          tabLabel(row.descriptor).toLowerCase().includes(query) ||
-          row.descriptor.cwd.toLowerCase().includes(query),
-      )
-    : rows
-  const groups = groupByWorkspace(filtered, activeSessionId)
+  // Grouping (filter → group → sort) recomputes only when the roster, the query,
+  // or the active session changes — not on every hover / pin / group-collapse
+  // re-render (all of which are frequent and leave the grouping identical).
+  const groups = useMemo(() => {
+    const filtered = query
+      ? rows.filter(
+          row =>
+            tabLabel(row.descriptor).toLowerCase().includes(query) ||
+            row.descriptor.cwd.toLowerCase().includes(query),
+        )
+      : rows
+    return groupByWorkspace(filtered, activeSessionId)
+  }, [rows, query, activeSessionId])
 
   return (
     <>
@@ -514,12 +520,6 @@ function formatRecency(ms: number): string {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h`
   return `${Math.floor(hrs / 24)}d`
-}
-
-function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, '')
-  const parts = trimmed.split(/[/\\]/)
-  return parts[parts.length - 1] ?? ''
 }
 
 function toneTextClass(tone: TabTone): string {

@@ -11,7 +11,9 @@
 import { useRef, type KeyboardEvent } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
+import { basename } from './pathUtils.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
+import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 
 export type TabModel = {
   descriptor: SessionDescriptor
@@ -133,7 +135,7 @@ export function TabBar({
 
       {onAddPanel ? (
         <div className="flex shrink-0 items-center gap-1 border-l border-shell-seam px-2.5">
-          {panelCount < 3 ? (
+          {panelCount < MAX_WORKSPACE_PANELS ? (
             <button
               type="button"
               onClick={onAddPanel}
@@ -353,12 +355,6 @@ export function tabLabel(descriptor: SessionDescriptor): string {
   }
   const base = basename(descriptor.cwd)
   return base.length > 0 ? base : 'New session'
-}
-
-function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, '')
-  const parts = trimmed.split(/[/\\]/)
-  return parts[parts.length - 1] ?? ''
 }
 
 function toneTextClass(tone: TabTone): string {

@@ -12,6 +12,7 @@ import { selectSidebarRows } from './sidebarState.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { selectConnection, type ConnectionState } from './connectionState.js'
 import { describeSuggestion } from './PermissionPrompt.js'
+import { basename } from './pathUtils.js'
 import { tabLabel } from './TabBar.js'
 
 export function buildDebugShellStateSnapshot(args: {
@@ -83,10 +84,4 @@ export function buildDebugShellStateSnapshot(args: {
       ),
     },
   }
-}
-
-function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, '')
-  const parts = trimmed.split(/[/\\]/)
-  return parts[parts.length - 1] ?? ''
 }

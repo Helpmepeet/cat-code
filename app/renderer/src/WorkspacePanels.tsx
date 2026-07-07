@@ -11,6 +11,7 @@ import {
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { ConnectionSnapshot } from './connectionState.js'
+import { basename } from './pathUtils.js'
 import { tabLabel } from './TabBar.js'
 import {
   MAX_WORKSPACE_PANELS,
@@ -430,12 +431,6 @@ function workspaceLabel(panel: WorkspacePanelView): string {
     if (base) return base
   }
   return panel.sessionId.slice(0, 8)
-}
-
-function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, '')
-  const parts = trimmed.split(/[/\\]/)
-  return parts[parts.length - 1] ?? ''
 }
 
 /** Folder glyph for the project pill (prototype WorkspaceLayout.jsx). */
