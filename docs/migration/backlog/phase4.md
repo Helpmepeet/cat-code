@@ -45,13 +45,14 @@ self-contained. Respect the dependency note. When done, flip the session's row i
   Phase-3 shell surface established real chrome (post-P4-4 true-up), extend THAT. Every
   intentional divergence is a **§0 case-by-case conflict**: flag it with the trade-off
   (extend-engine vs change-UI), never silently drop or restyle.
-- **PARITY LEDGER (CC-1 — see STATUS.md top).** A whole-prototype coverage ledger
-  (`docs/migration/PARITY-LEDGER.md`, element/UX-state + flow granularity) is being built to catch
-  silently-dropped prototype elements (the Tranche-A fidelity gap). **Once it exists, your DONE-WHEN
-  includes appending/updating your surface's ledger rows** (each tagged built / adapted(why) /
-  real-added / deferred(owner) / cut(reason) / ❓missing). Until it lands, keep every §0 cut or
-  adaptation as an explicit flagged line so the ledger backfill captures it. NEVER silently drop a
-  prototype element — an un-flagged omission is the exact failure the ledger exists to prevent.
+- **PARITY LEDGER (CC-1 — ✅ landed 2026-07-07, `docs/migration/PARITY-LEDGER.md`).** The
+  whole-prototype element/UX-state + flow coverage ledger now exists (1,894 rows; 126 ❓
+  missing-no-owner). **Read your surface's section in Part A before building** — it already
+  enumerates the elements + current dispositions. **Your DONE-WHEN includes updating your surface's
+  ledger rows**: flip each built element to ✅ with its `app/…:line`, and tag every divergence
+  built / adapted(why) / real-added / deferred(owner) / cut(reason). **Clear or explicitly own every
+  ❓ row for your surface** — an un-flagged omission is the exact failure the ledger exists to
+  prevent, and each phase gate audits Part C (❓ must be empty or waived).
 - **PARITY IS THE DEFAULT — deviate only when *blocked* or *needs-redesign*, and FLAG in-session.**
   Build every surface to match the prototype unless: **(a) blocked** — an invention with no source
   backing (e.g. read-only mode) → render truth, defer the invention, flag the spec-first path; or

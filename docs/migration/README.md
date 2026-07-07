@@ -10,7 +10,7 @@ on 2026-07-02 now that the production code lives in this repo.
 - **[STATUS.md](STATUS.md)** — single source of truth for "what's done." Read this first.
 - **[PROGRAM-PLAN.md](PROGRAM-PLAN.md)** — the phased plan (Phases 0–5) and how sessions are generated.
 - **[INVENTORY.md](INVENTORY.md)** — what exists in the prototype/engine to migrate (surface-level).
-- **[PARITY-LEDGER.md](PARITY-LEDGER.md)** — *(CC-1, in progress)* element/UX-state + flow coverage across all 30 prototype surfaces, disposition-tagged; the "nothing silently dropped" instrument + the Phase-4 parity-gate measure.
+- **[PARITY-LEDGER.md](PARITY-LEDGER.md)** — *(CC-1 ✅ landed 2026-07-07 — 1,894 rows, 126 ❓ danger items)* element/UX-state + flow coverage across all 30 prototype surfaces + 8 flows, disposition-tagged; the "nothing silently dropped" instrument + the Phase-4 parity-gate measure (Part D).
 
 ## Layout
 

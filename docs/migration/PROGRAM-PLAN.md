@@ -423,7 +423,7 @@ workstream) is the **next planning session's** deliverable, not this one.
   and route every divergence through the §0 case-by-case flag. Do **not** instruct a session to
   establish its own visual grammar — that phrasing (P3-5's "set the shell's visual grammar") is
   what let the Phase-3 shell chrome drift from the prototype while passing its function-only gate.
-- **Whole-prototype coverage lives in `PARITY-LEDGER.md` (CC-1 — STATUS.md top, in progress).**
+- **Whole-prototype coverage lives in `PARITY-LEDGER.md` (CC-1 — ✅ landed 2026-07-07).**
   The function-only gates through Phase 3 let elements/flows drop silently (the Phase-4 Tranche-A
   fidelity gap: a ✅/review-GREEN sidebar still missed 4 chrome items + a whole feature). `INVENTORY.md`
   is surface-level; the ledger is the **element/UX-state + flow** instrument that makes the Phase-4
