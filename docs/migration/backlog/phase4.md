@@ -52,7 +52,10 @@ self-contained. Respect the dependency note. When done, flip the session's row i
   ledger rows**: flip each built element to ✅ with its `app/…:line`, and tag every divergence
   built / adapted(why) / real-added / deferred(owner) / cut(reason). **Clear or explicitly own every
   ❓ row for your surface** — an un-flagged omission is the exact failure the ledger exists to
-  prevent, and each phase gate audits Part C (❓ must be empty or waived).
+  prevent, and each phase gate audits Part C (❓ must be empty or waived). **Your prompt names your
+  Part A § + ❓-to-clear count (see the `Ledger anchors` table above); if your section is bigger
+  than one sitting, STOP and split into sub-sessions and flag the sub-scoping in your report — don't
+  cram** (the P4-18 → 18a/18b/18c precedent).
 - **PARITY IS THE DEFAULT — deviate only when *blocked* or *needs-redesign*, and FLAG in-session.**
   Build every surface to match the prototype unless: **(a) blocked** — an invention with no source
   backing (e.g. read-only mode) → render truth, defer the invention, flag the spec-first path; or
@@ -134,6 +137,37 @@ trued-up shell grammar → **P4-4** → every C domain's visual-fidelity check i
 
 ---
 
+## Ledger anchors — CC-1 sections per session
+
+`PARITY-LEDGER.md` enumerated every prototype element into disposition-tagged rows. **A session's
+Part A section IS its element checklist + visual-acceptance bar, and its ❓ rows are its danger-list
+scope** (Standing rule: read it before building). The coordinate per session:
+
+| Session | Surface(s) | Part A § | ❓ to clear |
+|---|---|---|---:|
+| P4-0 | Chat.jsx (composer) | §6 | 3 (attach + slash-footer) |
+| P4-5 | Pages.jsx Accounts · AccountLifecycle.jsx | §14 · §15 | 0 |
+| P4-6 | SessionsPage · SessionActions · MetadataInspector | §16 · §17 · §18 | 0 |
+| P4-8 | OrchestratorMode.jsx | §20 | 0 |
+| P4-9 | TasksPage.jsx | §21 | 0 |
+| P4-11 | PlanPanel.jsx | §24 | 0 |
+| P4-12 | SettingsExtensions.jsx | §25 | 0 |
+| P4-13 | RemoteSettings.jsx | §26 | 0 |
+| P4-14 | Pages.jsx Diagnostics/Trust | §14 | 0 |
+| P4-15 | Startup.jsx | §27 | 0 |
+| P4-16 | ResumeStates.jsx | §28 | 0 |
+| P4-17 | Welcome.jsx | §29 | 0 |
+| **P4-18** | Messages.jsx · Chat activity | §5 · §6 | **64** |
+| **P4-19** | Settings.jsx core editors | §11 | **45** |
+
+Done sessions own their sections too (P4-1 §12 · P4-2 §13 · P4-3 §11-shell · P4-4 §2/§3/§4 · P4-7 §19 ·
+P4-10 §22/§23); their residual ❓ = 0. **Danger-list ownership (126 ❓ → 0 silent):** 64 → P4-18,
+45 → P4-19, 3 → P4-0, 1 → CC-2 (restore-reorder), 5 waived (mock/cosmetic), **8 → recommended P4-20
+(AskUserQuestion renderer, §7 — not yet drafted; operator greenlight).** Full row-level resolution:
+`PARITY-LEDGER.md` Part C.
+
+---
+
 ## TRANCHE A — foundations
 
 ## P4-0 · 🟡 — Composer / ChatView enrichment (@-mention, paste-collapse, history)
@@ -153,6 +187,9 @@ parity: @-mention (file/agent), paste-collapse (large paste → a collapsed atta
 and input history (↑/↓ recall). Submit still rides the EXISTING `app.submit` — the renderer
 gains NO new execution capability.
 Step 0: INVENTORY §W4 row "Composer `ChatView`" (⚓9, S1/S2 partial, adapt/build-new).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §6 (Chat.jsx) = your element checklist + visual-acceptance
+bar. NOTE §6's activity/streaming/scroll rows are P4-18's scope — you own the composer rows + 3 ❓
+(add-attachment button + slash-picker footer §10). DONE-WHEN flips/clears your rows to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Chat.jsx.
 
 === BUILD ===
@@ -388,6 +425,9 @@ status only (`secretGuard` on every outbound frame; SECURITY-MINIMUM secret-owne
 Step 0: INVENTORY §W4 rows "Accounts `AccountsPage`, Codex pool, leases" (⚓10, S8 partial, adapt)
 + "`AccountLifecycle` dialogs" (⚓2). Read `decisions/PERMISSION-BOUNDARY.md` (C3 read-only
 snapshot precedent) + `decisions/SECURITY-MINIMUM.md` (secret owner).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §14 (Pages→AccountsPage) + §15 (AccountLifecycle) = your
+pre-enumerated element checklist + visual-acceptance bar (0 ❓ — all rows ⬜ deferred to you; §14 also
+holds Diagnostics/Trust = P4-14, take only the Accounts rows). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Pages.jsx (AccountsPage) +
 AccountLifecycle.jsx.
 
@@ -441,6 +481,9 @@ copy/delete), and a read-only MetadataInspector. Real branch/export/rewind comma
 separately in the engine — wire to them, don't reinvent.
 Step 0: INVENTORY §W4 rows "Sessions page" (⚓1, S4), "SessionActionsMenu + dialogs" (⚓6, S4
 partial), "MetadataInspector" (⚓1, S4). S4 = real file-backed LogOption/transcript metadata.
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §16 (SessionsPage) + §17 (SessionActions) + §18
+(MetadataInspector) = your element checklist + visual-acceptance bar (0 ❓ — all rows ⬜ deferred to
+you; the session-titles gap in §2 Sidebar is your rider, below). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/SessionsPage.jsx, SessionActions.jsx,
 MetadataInspector.jsx.
 
@@ -471,7 +514,7 @@ shared catalog-selector join with P4-17.
 ```
 ─── PASTE ───
 
-## P4-7 · 🟡 — Agents config (AgentsPage)
+## P4-7 · ✅ — Agents config (AgentsPage)
 
 ─── PASTE ───
 ```
@@ -522,6 +565,8 @@ real inline idiom, `AgentTool/UI.tsx:458,740`); their fixture data feeds are CUT
 projector derivation). **Binding: subagent frames NEST under the owning agent card, never
 interleave** (resolves P2-0's open finding; P2-2's `selectNestedTranscriptRows` is the seam).
 Step 0: INVENTORY §W4 row "Orchestrator …" (⚓8, S5). Read `decisions/AGENT-CHROME.md` IN FULL.
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §20 (OrchestratorMode — the 8 D2 sub-surfaces) = your
+element checklist + visual-acceptance bar (0 ❓ — all rows ⬜ deferred to you). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/OrchestratorMode.jsx (IGNORE the
 `OrchestratorDemoSwitch` A/B/C scaffold — INVENTORY CUT list).
 
@@ -563,6 +608,8 @@ Background-tasks surfaces: `BgTasksDialog` (grounded) and the in-session `TasksP
 GUI). Per the prototype nav, tasks attach to the session (a strip below the transcript / ⌘K →
 /tasks), not a top-level page. Reuse D2/`AgentIdentity` (P4-2) vocabulary and the P4-5 read-seam.
 Step 0: INVENTORY §W4 row "Tasks `BgTasksDialog` / `TasksPanel`" (⚓4 / ⚓0, S5).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §21 (TasksPage) = your element checklist + visual-acceptance
+bar (0 ❓ — all rows ⬜ deferred to you). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/TasksPage.jsx + OrchestratorMode.jsx
 (TasksPanel).
 
@@ -629,6 +676,8 @@ The plan surface. Real "plan" = file/tool approval state (plan mode); the protot
 checklist/progress drawer is GUI-owned storytelling over it. Adapt to the real approval state,
 flag the invented progress chrome.
 Step 0: INVENTORY §W4 row "`PlanBar` / `PlanPanel`" (⚓3, S6, adapt/build-new).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §24 (PlanPanel) = your element checklist + visual-acceptance
+bar (0 ❓ — all rows ⬜ deferred to you). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/PlanPanel.jsx.
 
 === BUILD ===
@@ -662,6 +711,9 @@ domains exist; the prototype flattens scoped state and hook outcomes. Plug panel
 Settings shell + Field primitives.
 Step 0: INVENTORY §W4-Settings row "`MCPPanel`, `PluginsPanel`, `SkillsPanel`, `HooksPanel`,
 `ElicitationDialog`" (⚓5, S7, adapt).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §25 (SettingsExtensions) = your element checklist +
+visual-acceptance bar (0 ❓ — all rows ⬜ deferred to you). NOTE the CORE settings editors (§11) are
+P4-19's scope, NOT yours — you own only the extension panels. DONE-WHEN flips your §25 rows to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/SettingsExtensions.jsx.
 
 === BUILD ===
@@ -671,6 +723,18 @@ Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/SettingsExtensions.js
   render real scope, flag the flattening. Read-seam per the P4-5 recipe.
 - `ElicitationDialog` maps to the real elicitation request flow (recon; if it's a control
   request/response, treat it with the permission-round-trip rigor — flag if so).
+- **MCP runtime wiring guardrail (two-strikes owner — this session):** desktop MCP startup is
+  EMPTY today: `app/sidecar/sessionController.ts:172-187` feeds
+  `createQueryEngineAppSessionConfigFromSetup` hardcoded empty `mcpClients`/`mcpTools`/
+  `mcpCommands`/`mcpResources`. Flagged twice (P4-7 §0 flag in STATUS +
+  `docs/reports/2026-07-08-app-engine-duplication-review.md`), so per the two-strikes rule this
+  session is the named owner. If you (or a rider you propose) wire LIVE MCP runtime state, do NOT
+  hand-wire it in the sidecar: extract the engine's own runtime setup — `src/main.tsx:3159-3198`
+  awaits `mcpPromise`, writes real clients/tools/commands/resources into app state, then combines —
+  into a `src/app-runtime/` entry point and have `sessionController.ts` consume it. A hand-wired
+  sidecar copy would be the FOURTH instance of the §8.1 stub-context defect class (P1-3/P2-4/P3-7).
+  If this session ships config panels only and defers live wiring, keep the deferral tagged with
+  this same owner note in your report + STATUS row.
 
 === GROUND RULES ===
 Locked decisions + security baseline. Writes via SettingsUpdater-under-lock. No inline style.
@@ -698,6 +762,8 @@ paired-device roster/wizard, NO device identity/authz model (deferred to v2). v1
 toggle/status + read-only command-filter TRUTH + a direct-connect form over the real primitives.
 Step 0: INVENTORY §W4-Settings row "`RemoteSettingsPanel`, `RemoteRolePill`" (⚓9, S7, **D3 CUT**).
 Read `decisions/PAIRED-DEVICES.md` §3 (the cut-down buildable surface).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §26 (RemoteSettings) = your element checklist +
+visual-acceptance bar (0 ❓ — the D3 cut/deferred split is already tagged per row). DONE-WHEN flips your kept rows to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/RemoteSettings.jsx — but build ONLY the
 cut-scope surface; the roster/wizard is CUT, do not port it.
 
@@ -738,6 +804,9 @@ Two settings sections with no surface-local anchors but real backing: a Diagnost
 Workspace-Trust section. Recon-first (⚓0).
 Step 0: INVENTORY §W4-Settings row "`DiagnosticsSection`, `WorkspaceTrustSection`" (⚓0, S6/S7,
 adapt/recon).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §14 (Pages→Diagnostics/WorkspaceTrust sections) = your
+element checklist + visual-acceptance bar (0 ❓; §14 also holds AccountsPage = P4-5, take only the
+Diagnostics/Trust rows). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Pages.jsx (the two sections).
 
 === BUILD ===
@@ -788,6 +857,8 @@ The startup gates, at the OPERATOR-RULED scope (D4, `decisions/STARTUP-GATES.md`
 - `WorkspaceSwitchPrompt` = CUT (D4/G4 — one-cwd-per-session dissolves it).
 Step 0: INVENTORY §W5 row "Startup/trust `StartupFlow`, `ReauthGate`, `WorkspaceSwitchPrompt`"
 (⚓11, S6, **D4**). Read `decisions/STARTUP-GATES.md` §1-§4 IN FULL.
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §27 (Startup) = your element checklist + visual-acceptance
+bar (0 ❓ — the D4 cut/deferred split is already tagged per row). DONE-WHEN flips your kept rows to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Startup.jsx — build ONLY the ruled
 surfaces (trust gate, first-run OAuth, reauth banner); ReadOnlyModeGate + WorkspaceSwitchPrompt +
 blocking ReauthGate are CUT.
@@ -834,6 +905,8 @@ Resume UI. Real resume is the synchronous restore/recovery already built (P3-1/P
 HISTORY) — the prototype's overlay + cross-project diff list is VISUALIZATION over it. Adapt to
 real resume; the diff/hydration animation is presentation.
 Step 0: INVENTORY §W5 row "Resume `CrossProjectResumeDialog`, `HydrationOverlay`" (⚓2, S6, adapt).
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §28 (ResumeStates) = your element checklist +
+visual-acceptance bar (0 ❓ — all rows ⬜ deferred to you). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/ResumeStates.jsx.
 
 === BUILD ===
@@ -877,6 +950,8 @@ The launcher, at the OPERATOR-RULED scope (D5, `decisions/WELCOME-LAUNCHER.md`):
   the domains' seams.
 Step 0: INVENTORY §W5 row "`WelcomeScreen`" (⚓1, S6/S8, **D5**). Read `decisions/WELCOME-LAUNCHER.md`
 §3 (keep/cut) IN FULL.
+Ledger (CC-1): `PARITY-LEDGER.md` Part A §29 (Welcome) = your element checklist + visual-acceptance
+bar (0 ❓ — all rows ⬜ deferred to you). DONE-WHEN flips them to ✅ with `app/…:line`.
 Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Welcome.jsx — build the derived-recents
 scope; worktree + branch chooser are CUT/deferred.
 
@@ -899,5 +974,188 @@ real recent projects (from registry + history), trust-badged; open a folder → 
 session; the account table shows real pool status.
 Report back: the derived-recents selector (shared with P4-6), confirmation no new store / no
 worktree / no branch chooser, and the domain seams it reads (P4-5 accounts, Agent Mode).
+```
+─── PASTE ───
+
+---
+
+# TRANCHE E — CC-1 parity backfill
+
+*Surfaced by the CC-1 Parity Ledger (2026-07-07): the two ❓-clusters the A–D tranches never reached.
+Not new prototype surfaces — render/wire gaps under already-"built" surfaces.*
+
+## P4-18 · 🔴 — Transcript rendering: user turns + core/boundary rows + tool-card families + activity (CC-1 §5/§6)
+
+*Oversized — run as 18a → 18b → 18c (one sitting each). 18a is the functional fix; do it first.*
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 9/10 · 🖐 GUI
+
+You are running P4-18 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+The desktop transcript renders almost nothing. P2-0..P2-3 built the PROJECTOR (data layer) — every
+row type is derived — but `TranscriptView.tsx` only draws `assistant-text` + `tool-use`; line 63
+`if (row.kind !== 'tool-use') return null` DROPS user turns, thinking, boundaries, and every rich
+tool card. This session builds the RENDER layer. **This is not polish — user messages are invisible.**
+Ledger: `PARITY-LEDGER.md` Part A §5 (Messages, 49 ❓) + §6 (Chat activity/scroll, 15 ❓) = your
+64-row scope + acceptance bar. Honor D2 (`decisions/AGENT-CHROME.md`): AgentMsgCard adapt; subagent
+frames NEST under the owning card; AgentEventRow/AttachmentCard stay CUT.
+Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Messages.jsx (the row zoo) + Chat.jsx
+(activity indicator + scroll UX). Real row shapes: `app/renderer/src/transcriptProjector.ts`.
+
+=== BUILD (three sub-sessions — one sitting each) ===
+18a — CORE ROWS (the functional fix, do FIRST): render every projected NestedTranscriptRow kind —
+  user-text (role=user bubble), thinking + redacted-thinking, session-init, result, compact/turn-
+  duration/interrupted boundaries, system-notice, command-echo, user-image. Extend the
+  `TranscriptView` switch (replace the `return null` fall-through with a tolerant unknown-row
+  fallback, never a throw). Every projected kind gets a visible row; exhaustiveness tripwire stays green.
+18b — TOOL-CARD FAMILIES: per-family cards off the derived `toolFamily` — Bash (stdout/stderr,
+  tail-peek, truncation), FileRead/FileWrite, DiffView (word-level, dual gutters), Grep/Glob, Web,
+  Mcp (server›tool), Notebook, Lsp, Skill, GenerateImage (inline image + save actions). Reuse the
+  projector's row shape (zero casts). A shared quiet-panel card frame (mark/word/target/state-dot/collapse).
+18c — PROSE + ACTIVITY: markdown GFM tables (remark-gfm) + fenced-code syntax highlighting (the
+  approved highlighter) + per-block copy; long-content collapse; render-error boundary. Live activity
+  indicator (verb + elapsed + per-turn token byline off real SpinnerMode phases) + pulse dots;
+  auto-scroll stick-to-bottom + jump-to-bottom control; Stop/interrupt control wired to the real
+  `app.abort` boundary capability (+ a keybinding).
+
+=== GROUND RULES ===
+Locked decisions + security baseline. RENDER layer only — do NOT change the projector's data contract
+(P2 is ✅). Runtime-narrow every block, zero `as` casts, tolerant fallback (display = degrade
+gracefully, never throw). No inline style; P0-2 tokens + the trued-up shell grammar. Re-verify anchors.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (a render test per row kind + per tool family; a user-turn render
+regression; the exhaustiveness tripwire fires if a kind is unhandled); renderer/sidecar tsc no NEW errors.
+Visual-fidelity: transcript vs Messages.jsx per family; activity vs Chat.jsx; flag divergences.
+GUI (operator's — STOP, print steps, wait; NO automation): run a real turn with a user message,
+thinking, a Bash + an Edit + a web tool, and an interrupt → every row renders, the user turn is
+visible, the activity indicator + stop button work, jump-to-bottom works.
+LEDGER: flip §5 + §6 rows from ❓/⬜ to ✅ with `app/…:line`; report any residual left ❓ (with reason).
+Report back which sub-sessions (18a/18b/18c) landed.
+```
+─── PASTE ───
+
+## P4-19 · 🟡 — Settings core value-editors: General/Model/Privacy/Theme/Keybindings/IDE/LSP (CC-1 §11)
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 7/10 · 🖐 GUI
+
+You are running P4-19 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Dependencies: P4-3 (Settings shell + Field/SourceBadge/ManagedBadge) green; P4-5 (write-seam recipe)
+green. Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+P4-3 built the Settings SHELL + field/source/managed primitives over the real `settings.snapshot`
+read-seam, but every core value-editor is a stub. P4-12 covers ONLY the extension panels (MCP/Plugins/
+Skills/Hooks) — the core settings fall in the gap. This session wires them.
+Ledger: `PARITY-LEDGER.md` Part A §11 (Settings, 40 ❓) = your scope + acceptance bar. Also absorbs
+the settings-edit flow ❓ (Part B FLOW-8) and the PermissionRules classifier + managed-rules-only
+toggles (§8) — both are real settings controls.
+Step 1 (UX spec + VISUAL BAR): ~/catcode_prototype/cat-app/Settings.jsx (the General/Model/Privacy/
+Theme/Keybindings/IDE/LSP panes). Real shapes: `src/utils/settings/` + `app/sidecar/settingsDomain.ts`
+(the P4-3 read-seam).
+
+=== BUILD ===
+- **Value editors** reusing P4-3's `Field`/`SourceBadge`/`ManagedBadge`/`PaneSection`: toggle/select/
+  text controls bound to real settings keys. Managed keys render disabled with ManagedBadge; flag-
+  sourced keys non-resettable (the `editable` gate P4-3 built).
+- **Write path (P4-3 deferred it):** edits go through `SettingsUpdater`-under-lock
+  (`src/utils/settings/settings.ts`, the P3-5a/DR-2 single-writer form) via a minimal decided inbound
+  verb (T5a/T6/T7). Renderer NEVER writes engine state directly. Live re-emit the snapshot on write.
+- **Per-pane:** General (display/editor/startup/update-channel[flag]/max-tokens[validate]/telemetry
+  [managed]/co-author), Model (default/effort/thinking/fast/summaries/autocompact), Privacy (retention/
+  share/crash[managed]), Theme (accent swatch→`--accent`/syntax/code-theme/font/output-style over real
+  `src/constants/outputStyles.ts`), Keybindings (vim + shortcuts ref), IDE/LSP (status + connect/diagnose
+  over real `useIdeConnectionStatus`/`LSPServerInstance`). Fixture-only fields with no real backing →
+  flag (render truth, don't mock).
+- **Classifier + managed-rules-only toggles** (from §8 PermissionRules): real settings, surface here.
+
+=== GROUND RULES ===
+Locked decisions + FULL security baseline; the write verb is the FIRST renderer→engine settings write —
+it MUST use the SettingsUpdater-under-lock form (no lost-update), be a minimal decided verb, and carry
+T5a/T6/T7. `secretGuard` on the re-emitted snapshot. No inline style. Re-verify anchors.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (per-editor read/write round-trip, validation, managed-disabled, flag-
+non-resettable, under-lock no-lost-update, secretGuard on re-emit); renderer/sidecar tsc no NEW errors;
+`test:hardening` if a new inbound verb was added.
+Visual-fidelity: each pane vs Settings.jsx; flag fixture-only fields.
+GUI (operator's — STOP, print steps, wait; NO automation): edit a value (e.g. accent, effort) →
+persists + re-reads; a managed key is disabled; an invalid max-tokens is rejected.
+LEDGER: flip §11 rows (+ FLOW-8 + §8 toggles) ❓/⬜ → ✅ with `app/…:line`; report any residual.
+Report back: the settings WRITE-seam contract (the first one), the under-lock proof, the redaction proof.
+```
+─── PASTE ───
+
+## P4-21 · 🟢 — Engine-vocabulary parity fixtures (drift-risk sweep)
+
+(P4-20 remains reserved for AskUserQuestion per the CC-1 follow-ons — not yet drafted.)
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 5/10
+
+You are running P4-21 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+No hard dependency (the owning surfaces P4-3/P4-7/P4-10 are landed). Echo the header line above
+back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+Source: `docs/reports/2026-07-08-app-engine-duplication-review.md` (module-level app↔engine
+duplication review). Verdict there: zero unowned true duplication, but 15 drift-risk surfaces —
+engine-free planes mirror engine vocabulary (labels, unions, orderings) with NOTHING forcing
+agreement as `src/` evolves. Displays rot silently: no test fails today when the engine adds a
+`PermissionUpdate` variant or renames a settings source. This session is one batched insurance
+sweep: parity fixtures / sync tests per vocabulary family so engine drift fails `bun test app/`
+loudly instead. TEST-ONLY session: no behavior changes, no new wire vocabulary; if a fixture
+exposes vocabulary that has ALREADY drifted, report it — don't silently fix it.
+
+=== BUILD (one family each; the report's §Drift-risk reasoning is the spec) ===
+- **Settings sources** (`app/sidecar/settingsDomain.ts`, `app/renderer/src/SettingsField.tsx`):
+  snapshot source list/order/labels/editability vs `src/utils/settings/constants.ts` + effective
+  precedence in `src/utils/settings/settings.ts`.
+- **Agent/tool/MCP taxonomy** (`app/sidecar/agentConfigDomain.ts`,
+  `app/renderer/src/agentConfigState.ts`, `AgentsPage.tsx`, `agentIdentity.ts`): fixtures from real
+  `AgentDefinitionsResult` cases (`src/tools/AgentTool/loadAgentsDir.ts`) — built-ins,
+  user/project/local, overrides, MCP-required; worker role/status vocabulary vs `src/agent-mode/`
+  + `src/tools/AgentTool/UI.tsx`.
+- **Goals** (`app/sidecar/goalDomain.ts`, `goalMemoryState.ts`, `GoalsPage.tsx`): compile-time
+  shape checks vs the engine goal type (`src/utils/threadGoal.ts`) + fixtures for every
+  status/progress/budget display case.
+- **Memory** (`app/sidecar/memoryDomain.ts`, `MemoryPage.tsx`): fixtures for every memory type +
+  instruction-file metadata from the engine scanners (`src/utils/claudemd.ts`,
+  `src/services/SessionMemory/sessionMemoryUtils.ts`).
+- **Permissions display** (`app/renderer/src/PermissionPrompt.tsx`): one fixture per
+  `PermissionUpdate` variant (`src/utils/permissions/PermissionUpdate.ts`) with a tripwire so a
+  NEW variant fails visibly (P2-0 exhaustiveness pattern).
+- **Tool-input summaries** (`app/renderer/src/ToolInspector.tsx`): fixtures from representative
+  real built-in tool inputs (`src/Tool.ts` shapes).
+- **Protocol mirrored unions** (`app/shared/protocol.ts`): type-level parity checks for the
+  mirrored snapshot vocabulary (settings/agents/goals/memory) against engine definitions — follow
+  the existing `engine-types.snapshot.d.ts` discipline in `app/shared/`; additive only, NO wire
+  change, no version bump.
+- **Host transcript-path codec** (`app/host/registry.ts`): parity tests vs engine transcript
+  layout (`src/utils/sessionStorage.ts`, `sessionStoragePortable.ts`): normal paths, long-path
+  hash fallback, Unicode normalization, `CLAUDE_CONFIG_DIR`.
+
+Import discipline: sidecar-side families may import `src/` directly (sidecar tsconfig).
+Renderer/shared/host families stay engine-free at RUNTIME — type-only imports / generated
+fixtures per the snapshot discipline, never a runtime engine import outside the sidecar.
+
+=== GROUND RULES ===
+Locked decisions + security baseline untouched (test-only; no new inbound vocabulary). Known-red
+sidecar tsc baseline: zero NEW owned diagnostics is the bar. Prefer `_forTest` helpers; fixtures
+colocated per CLAUDE.md §7 conventions.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless ONLY (no GUI): `bun test app/` green with the new families; renderer tsc clean; sidecar
+wrapper no new owned diagnostics. Each family demonstrably FAILS on drift — prove one per family
+by temporarily perturbing the mirrored value/union and restoring (P2-0 tripwire discipline).
+Report back: per-family fixture location + the engine anchor (`src/…:line`) it syncs against, and
+any already-drifted vocabulary the fixtures exposed. No PARITY-LEDGER changes (adds no surface).
 ```
 ─── PASTE ───
