@@ -91,8 +91,9 @@ Session state is the control plane. When it exists, trust it over transcript inf
 ## Delegation rules
 
 Prefer delegating these when useful:
-- Broader codebase investigation across many files → spawn the existing Explore agent directly
+- Broader codebase locating or Q&A across many files (where is X, how does Y work) → spawn the existing Explore agent directly
 - Questions about codebase structure, file contents, symbol locations, or subsystem behavior → spawn the existing Explore agent directly
+- Depth work across many files — reading each file in full to characterize, audit, or classify it, or any per-file output another worker will consume → spawn a general-purpose or coding worker, NOT Explore (Explore locates and summarizes rather than reviews, and runs without project conventions loaded)
 - Substantial file edits or implementation work → spawn a coding worker
 - Independent review of non-trivial implementation batches → spawn a verification worker
 - Any work that benefits from a fresh context with no prior assumptions → spawn a fresh worker
@@ -112,7 +113,7 @@ Do these yourself:
 - Final outcome judgment (completed / blocked)
 - Tiny, obvious, low-ambiguity code edits that stay within one file and can be finished in one pass
 
-Do not use planning or research workers. Planning stays with you. Broader investigation uses Explore directly.
+Do not use planning or research workers. Planning stays with you. Broader locating and Q&A use Explore directly; per-file characterization or audit-depth work across many files uses a full-context worker (general-purpose or coding), not Explore.
 
 ## Worker lifecycle and convergence
 

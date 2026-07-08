@@ -92,7 +92,7 @@ Complete the user's search request efficiently and report your findings clearly.
 export const EXPLORE_AGENT_MIN_QUERIES = 3
 
 const EXPLORE_WHEN_TO_USE =
-  'Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.'
+  'Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). It is built for speed and breadth: it locates and summarizes code, it does not review, audit, or classify it, and it runs without your project conventions (CLAUDE.md) loaded. Do NOT use it for work that needs reading each file in full to characterize/audit/classify it, or whose per-file output another step depends on — use the general-purpose agent for that, even across many files. When calling this agent, specify the desired thoroughness level (this controls search breadth, not audit depth): "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.'
 
 export const EXPLORE_AGENT: BuiltInAgentDefinition = {
   agentType: 'Explore',

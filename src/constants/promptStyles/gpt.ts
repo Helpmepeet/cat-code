@@ -435,7 +435,7 @@ export function getGPTSessionGuidanceSection(
     !isForkSubagentEnabled()
       ? [
           `SEARCH RULE: For simple, directed codebase searches (a specific file/class/function) use ${searchTools} directly.`,
-          `EXPLORE RULE: Do up to ${EXPLORE_AGENT_MIN_QUERIES} targeted lookups directly. If after that you still do not have the answer, or the question spans multiple files or subsystems, delegate to the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType} rather than continuing inline — it fans out many searches and returns only conclusions, keeping your context small.`,
+          `EXPLORE RULE: Do up to ${EXPLORE_AGENT_MIN_QUERIES} targeted lookups directly. If after that you still do not have the answer, or the question spans multiple files or subsystems, delegate to the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType} rather than continuing inline — it fans out many searches and returns only conclusions, keeping your context small. Use it to locate and answer, not to read each file in full to characterize/audit/classify it or to produce per-file output another step consumes — send depth work like that to a general-purpose or coding worker, even across many files.`,
         ]
       : []),
     hasAgentTool

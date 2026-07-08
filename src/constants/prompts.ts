@@ -456,7 +456,7 @@ function getSessionSpecificGuidanceSection(
     !isForkSubagentEnabled()
       ? [
           `For simple, directed codebase searches (e.g. for a specific file/class/function) use ${searchTools} directly.`,
-          `For broader codebase exploration and deep research, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType}. This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
+          `For broader codebase exploration across many files, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType} to locate code and answer structure/behavior questions — not to read each file in full to characterize, audit, or classify it (use a general-purpose worker for that, even across many files). This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
         ]
       : []),
     hasAgentTool
