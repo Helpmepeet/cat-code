@@ -53,7 +53,12 @@ test('the active session pane renders the P2 transcript spine + prompt unchanged
       allowPermission={() => {}}
       copyForLlm={() => {}}
       denyPermission={() => {}}
+      history={[]}
+      mentionItems={[]}
+      onPaste={() => {}}
+      onRemovePaste={() => {}}
       partialCount={0}
+      pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
       prompt=""

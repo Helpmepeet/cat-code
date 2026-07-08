@@ -161,6 +161,26 @@ export function SlashCommandPicker({
           )
         })}
       </ul>
+
+      {/* Footer keyboard-hint bar (SlashCommandPicker.jsx:162-186). The shortcuts
+       * themselves live in the composer's keydown handler (App.tsx); this is the
+       * visual affordance that labels them. */}
+      <div className="flex items-center gap-3.5 border-t border-shell-seam px-3 pb-1.5 pt-1">
+        {SLASH_FOOTER_HINTS.map(([keyLabel, action]) => (
+          <span key={keyLabel} className="flex items-center gap-1">
+            <kbd className="rounded border border-shell-seam bg-white/[0.04] px-1.5 font-mono text-[9.5px] leading-relaxed text-text-subtle">
+              {keyLabel}
+            </kbd>
+            <span className="text-[10px] text-text-subtle">{action}</span>
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
+
+const SLASH_FOOTER_HINTS: ReadonlyArray<readonly [string, string]> = [
+  ['↑↓', 'navigate'],
+  ['↵', 'select'],
+  ['esc', 'dismiss'],
+]

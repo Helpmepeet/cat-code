@@ -5,6 +5,7 @@ import {
   useReducer,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
@@ -64,6 +65,36 @@ import {
   parseSlashDraft,
   SlashCommandPicker,
 } from './SlashCommandPicker.js'
+import {
+  filterMentionItems,
+  MentionPicker,
+  type MentionItem,
+} from './MentionPicker.js'
+import {
+  applyMention,
+  createHistoryState,
+  createPasteState,
+  EMPTY_HISTORY_NAV,
+  expandPasteRefs,
+  formatPasteRef,
+  navigateHistory,
+  parseMentionQuery,
+  reduceHistoryPushed,
+  reducePasteAdded,
+  reducePasteRemoved,
+  reducePasteStateForDraftWrite,
+  reduceSessionPastesCleared,
+  selectAgentMentionItems,
+  selectHistory,
+  selectSessionPasteList,
+  selectSessionPasteState,
+  shouldCollapsePaste,
+  type DraftWriteReason,
+  type HistoryNav,
+  type HistoryState,
+  type PasteEntry,
+  type PasteState,
+} from './composerState.js'
 import {
   WorkspaceLayout,
   type WorkspacePanelView,
@@ -138,6 +169,12 @@ export function App() {
     createPermissionState,
   )
   const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>({})
+  // P4-0 composer state, per-session-keyed exactly like `promptDrafts` so a
+  // background session's collapsed pastes and input history survive a focus
+  // switch (SessionPane unmounts for off-screen sessions). Renderer-local; never
+  // crosses the wire.
+  const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
+  const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
   const [transportError, setTransportError] = useState<string | null>(null)
   const [shellError, setShellError] = useState<string | null>(null)
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
@@ -645,7 +682,11 @@ export function App() {
     const sessionLog = selectRawMessageLog(state, sessionId)
     const sessionConnection = selectConnection(connection, sessionId)
     const sessionPrompt = selectPromptDraft(promptDrafts, sessionId)
-    const text = sessionPrompt.trim()
+    // Expand collapsed-paste tokens back to their full text before submit — the
+    // engine receives plain prompt text, never a `[Pasted text #N]` ref (parity
+    // with `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
+    const pasteEntries = selectSessionPasteState(pasteState, sessionId).entries
+    const text = expandPasteRefs(sessionPrompt, pasteEntries).trim()
     if (
       !sessionLog.inputEnabled ||
       !sessionConnection.inputEnabled ||
@@ -658,15 +699,51 @@ export function App() {
     try {
       getBridge().submit(sessionId, text)
       setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
+      setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
+      setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
       setTransportError(null)
     } catch (error) {
       setTransportError(errorMessage(error))
     }
   }
 
-  const setSessionPrompt = useCallback((sessionId: SessionId, value: string) => {
-    setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
-  }, [])
+  const setSessionPrompt = useCallback(
+    (
+      sessionId: SessionId,
+      value: string,
+      reason: DraftWriteReason = 'edit',
+    ) => {
+      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
+      // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
+      // drop a live, uncommitted paste that ↓ is about to restore.
+      setPasteState(prev =>
+        reducePasteStateForDraftWrite(prev, sessionId, value, reason),
+      )
+    },
+    [],
+  )
+
+  const addSessionPaste = useCallback(
+    (sessionId: SessionId, currentDraft: string, content: string): void => {
+      const { state: nextPasteState, token } = reducePasteAdded(
+        pasteState,
+        sessionId,
+        content,
+      )
+      setPasteState(nextPasteState)
+      setSessionPrompt(sessionId, currentDraft + token)
+    },
+    [pasteState, setSessionPrompt],
+  )
+
+  const removeSessionPaste = useCallback(
+    (sessionId: SessionId, currentDraft: string, entry: PasteEntry): void => {
+      setPasteState(prev => reducePasteRemoved(prev, sessionId, entry.id))
+      const token = formatPasteRef(entry.id, entry.numLines)
+      setSessionPrompt(sessionId, currentDraft.replace(token, ''))
+    },
+    [setSessionPrompt],
+  )
 
   const permissionQueue =
     activeConnection.status === 'ready'
@@ -869,8 +946,29 @@ export function App() {
 	                setTransportError(errorMessage(error))
 	              }
 	            }}
-	            setPrompt={value => setSessionPrompt(sessionId, value)}
+	            setPrompt={(value, reason) =>
+	              setSessionPrompt(sessionId, value, reason)
+	            }
 	            submit={event => submitSession(sessionId, event)}
+	            mentionItems={selectAgentMentionItems(
+	              selectAgentConfigSnapshot(agentConfig, sessionId),
+	            )}
+	            pastes={selectSessionPasteList(pasteState, sessionId)}
+	            history={selectHistory(historyState, sessionId)}
+	            onPaste={content =>
+	              addSessionPaste(
+	                sessionId,
+	                selectPromptDraft(promptDrafts, sessionId),
+	                content,
+	              )
+	            }
+	            onRemovePaste={entry =>
+	              removeSessionPaste(
+	                sessionId,
+	                selectPromptDraft(promptDrafts, sessionId),
+	                entry,
+	              )
+	            }
 	            transcript={transcript}
 	            transportError={transportError}
 	          />
@@ -1064,7 +1162,12 @@ export function SessionPane({
   allowPermission,
   copyForLlm,
   denyPermission,
+  history,
+  mentionItems,
+  onPaste,
+  onRemovePaste,
   partialCount,
+  pastes,
   permissionContext,
   permissionQueue,
   prompt,
@@ -1107,37 +1210,130 @@ export function SessionPane({
     setSlashActiveIndex(0)
   }
 
+  // @-mention typeahead (P4-0): same trigger discipline as the slash picker but
+  // fired by a trailing `@token`. `parseSlashDraft` only matches a whole-draft
+  // `/token`, so slash and mention are mutually exclusive by construction; the
+  // `slashQuery === null` guard makes that explicit. Items are this session's
+  // real AVAILABLE agents (`selectAgentMentionItems`, App→SessionPane prop);
+  // a pick inserts PLAIN `@label ` text — no wire vocabulary.
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
+  const [mentionDismissed, setMentionDismissed] = useState(false)
+  const mentionQuery = slashQuery === null ? parseMentionQuery(prompt) : null
+  const mentionMatches =
+    mentionQuery === null ? [] : filterMentionItems(mentionItems, mentionQuery)
+  const mentionOpen =
+    !mentionDismissed && mentionQuery !== null && mentionMatches.length > 0
+  const mentionIndex =
+    mentionMatches.length === 0
+      ? 0
+      : Math.min(mentionActiveIndex, mentionMatches.length - 1)
+
+  useEffect(() => {
+    setMentionActiveIndex(0)
+    setMentionDismissed(false)
+  }, [mentionQuery])
+
+  const pickMention = (item: MentionItem): void => {
+    setPrompt(applyMention(prompt, item.label))
+    setMentionDismissed(false)
+    setMentionActiveIndex(0)
+  }
+
+  // ↑/↓ input-history recall (P4-0). Renderer-local, per-session (`history` prop
+  // keyed by activeSessionId upstream); `historyNav` is the ephemeral editor
+  // cursor and resets when the pane rebinds to a different session.
+  const [historyNav, setHistoryNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
+  useEffect(() => {
+    setHistoryNav(EMPTY_HISTORY_NAV)
+  }, [activeSessionId])
+
+  // A large paste collapses to a chip (App holds the full text aside and inserts
+  // the `[Pasted text #N]` token); a small paste falls through to the browser's
+  // default plain-text insert. Adapted for the single-line `<input>`: the token
+  // is appended at the END of the draft, not the caret (see §0 flag).
+  const handlePaste = (
+    event: ReactClipboardEvent<HTMLInputElement>,
+  ): void => {
+    const text = event.clipboardData.getData('text')
+    if (!text || !shouldCollapsePaste(text)) return
+    event.preventDefault()
+    onPaste(text)
+  }
+
   const onComposerKeyDown = (
     event: ReactKeyboardEvent<HTMLInputElement>,
   ): void => {
-    if (!slashOpen) return
-    switch (event.key) {
-      case 'ArrowDown':
+    if (slashOpen) {
+      switch (event.key) {
+        case 'ArrowDown':
+          event.preventDefault()
+          setSlashActiveIndex(index =>
+            nextSlashIndex(index, slashMatches.length, 1),
+          )
+          return
+        case 'ArrowUp':
+          event.preventDefault()
+          setSlashActiveIndex(index =>
+            nextSlashIndex(index, slashMatches.length, -1),
+          )
+          return
+        case 'Enter':
+        case 'Tab':
+          // Enter completes the command instead of submitting the form; Tab is
+          // the usual typeahead-accept key. Both keep the draft in the composer
+          // so the user can add arguments before submitting.
+          event.preventDefault()
+          pickSlashCommand(slashMatches[slashIndex])
+          return
+        case 'Escape':
+          event.preventDefault()
+          setSlashDismissed(true)
+          return
+        default:
+          return
+      }
+    }
+    if (mentionOpen) {
+      switch (event.key) {
+        case 'ArrowDown':
+          event.preventDefault()
+          setMentionActiveIndex(index =>
+            nextSlashIndex(index, mentionMatches.length, 1),
+          )
+          return
+        case 'ArrowUp':
+          event.preventDefault()
+          setMentionActiveIndex(index =>
+            nextSlashIndex(index, mentionMatches.length, -1),
+          )
+          return
+        case 'Enter':
+        case 'Tab':
+          event.preventDefault()
+          pickMention(mentionMatches[mentionIndex])
+          return
+        case 'Escape':
+          event.preventDefault()
+          setMentionDismissed(true)
+          return
+        default:
+          return
+      }
+    }
+    // No typeahead open — ↑/↓ walk the submitted-prompt history for this session.
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const result = navigateHistory(
+        history,
+        historyNav,
+        event.key === 'ArrowUp' ? 'up' : 'down',
+        prompt,
+      )
+      if (result) {
         event.preventDefault()
-        setSlashActiveIndex(index =>
-          nextSlashIndex(index, slashMatches.length, 1),
-        )
-        break
-      case 'ArrowUp':
-        event.preventDefault()
-        setSlashActiveIndex(index =>
-          nextSlashIndex(index, slashMatches.length, -1),
-        )
-        break
-      case 'Enter':
-      case 'Tab':
-        // Enter completes the command instead of submitting the form; Tab is the
-        // usual typeahead-accept key. Both keep the draft in the composer so the
-        // user can add arguments before submitting.
-        event.preventDefault()
-        pickSlashCommand(slashMatches[slashIndex])
-        break
-      case 'Escape':
-        event.preventDefault()
-        setSlashDismissed(true)
-        break
-      default:
-        break
+        setHistoryNav(result.nav)
+        // history-nav: this draft swap must not prune the live paste held aside.
+        setPrompt(result.value, 'history-nav')
+      }
     }
   }
 
@@ -1167,6 +1363,41 @@ export function SessionPane({
         sessionId={activeSessionId}
       />
 
+      {pastes.length > 0 ? (
+        <div className="flex flex-wrap gap-2" aria-label="Collapsed pastes">
+          {pastes.map(entry => (
+            // Collapsed-paste chip: <details> gives the expand affordance (the
+            // full text held aside), the × removes it (strips the token + drops
+            // the stored content). On submit the token expands back inline.
+            <details
+              key={entry.id}
+              className="min-w-0 rounded-md border border-shell-seam bg-surface-raised text-[11px]"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-text-muted">
+                <span className="truncate font-mono text-[10.5px]">
+                  {formatPasteRef(entry.id, entry.numLines)}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Remove paste"
+                  title="Remove"
+                  className="shrink-0 text-text-subtle transition-colors hover:text-tone-danger"
+                  onClick={event => {
+                    event.preventDefault()
+                    onRemovePaste(entry)
+                  }}
+                >
+                  ×
+                </button>
+              </summary>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap border-t border-shell-seam px-2 py-1.5 font-mono text-[10.5px] text-text-subtle">
+                {entry.content}
+              </pre>
+            </details>
+          ))}
+        </div>
+      ) : null}
+
       <form className="flex gap-3" onSubmit={submit}>
         <div className="relative min-w-0 flex-1">
           <SlashCommandPicker
@@ -1176,6 +1407,13 @@ export function SessionPane({
             activeIndex={slashIndex}
             onPick={pickSlashCommand}
           />
+          <MentionPicker
+            open={mentionOpen}
+            query={mentionQuery ?? ''}
+            items={mentionItems}
+            activeIndex={mentionIndex}
+            onPick={pickMention}
+          />
           <input
             aria-label="Prompt"
             className="w-full rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
@@ -1184,12 +1422,38 @@ export function SessionPane({
               !activeLog.inputEnabled ||
               !activeConnection.inputEnabled
             }
-            onChange={event => setPrompt(event.target.value)}
+            onChange={event => {
+              // A genuine keystroke abandons any active ↑/↓ recall cursor
+              // (parity with the prototype resetting historyIdx on input) and
+              // prunes pastes whose token was actually deleted (reason 'edit').
+              setHistoryNav(EMPTY_HISTORY_NAV)
+              setPrompt(event.target.value)
+            }}
             onKeyDown={onComposerKeyDown}
+            onPaste={handlePaste}
             placeholder="Send a prompt to the live engine"
             value={prompt}
           />
         </div>
+        {/* Add-attachment control (§10 ❓). Parity stub, matching the prototype's
+         * own stub (Chat.jsx:1435 fires a placeholder toast): a real file picker
+         * would need an engine attachment capability that is NOT on the wire —
+         * inventing one is out of scope (no new vocabulary). The working attach
+         * path today is a large paste, which the title spells out. */}
+        <button
+          aria-label="Add attachment"
+          title="Add attachment — paste a large block to attach it as a collapsed chip"
+          className="rounded border border-text-subtle px-3 py-2 text-lg leading-none text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
+          disabled={
+            !activeSessionId ||
+            !activeLog.inputEnabled ||
+            !activeConnection.inputEnabled
+          }
+          onClick={() => {}}
+          type="button"
+        >
+          +
+        </button>
         <button
           className="rounded bg-accent px-4 py-2 text-app-bg disabled:opacity-50"
           disabled={
@@ -1420,8 +1684,18 @@ type SessionPaneProps = {
   prompt: string
   restorePermission: (requestId: string) => void
   setPermissionMode: (mode: PermissionSetModeMode) => void
-  setPrompt: (value: string) => void
+  setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
+  /** Real @-mention sources for this session (agents; files need a read-seam). */
+  mentionItems: MentionItem[]
+  /** Collapsed pastes held aside for this session, oldest first. */
+  pastes: PasteEntry[]
+  /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
+  history: string[]
+  /** Store a large paste as a collapsed chip and insert its token. */
+  onPaste: (content: string) => void
+  /** Remove a collapsed paste (strip its token + drop the stored content). */
+  onRemovePaste: (entry: PasteEntry) => void
   transcript: TranscriptState
   transportError: string | null
 }
