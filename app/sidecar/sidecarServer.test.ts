@@ -18,6 +18,11 @@ import { createStore } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { applyPermissionUpdate } from '../../src/utils/permissions/PermissionUpdate.js'
+import {
+  createTranscriptState,
+  projectServerFrame,
+  selectTranscriptRows,
+} from '../renderer/src/transcriptProjector.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import { MAX_FRAME_BYTES, MAX_PROMPT_BYTES } from '../shared/limits.js'
 import {
@@ -211,6 +216,85 @@ test('T7 — rejects a prompt over the length cap', () => {
   const conn = server.addConnection(socket)
   server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'r1', prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1) }))
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('app.submit emits the live user event before the assistant and the projector renders it once', async () => {
+  let controllerUuid: string | undefined
+  let controllerPrompt: unknown
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      controllerPrompt = prompt
+      controllerUuid = options?.uuid
+      yield {
+        type: 'assistant',
+        message: {
+          id: 'msg-live-assistant',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'assistant response' }],
+        },
+        parent_tool_use_id: null,
+        session_id: ENGINE_SESSION,
+        uuid: '00000000-0000-4000-8000-00000000a001',
+      } as never
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'r-live-user',
+      prompt: 'hello desktop',
+    }),
+  )
+  await waitFor(() => received.filter(f => f.kind === 'event').length >= 2)
+
+  const events = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'event' }> =>
+      frame.kind === 'event',
+  )
+  const firstEvent = events[0]!.event
+  const secondEvent = events[1]!.event
+  expect(firstEvent.type).toBe('message')
+  expect(secondEvent.type).toBe('message')
+  if (
+    firstEvent.type !== 'message' ||
+    secondEvent.type !== 'message' ||
+    firstEvent.message.type !== 'user'
+  ) {
+    throw new Error('expected first live event to be the submitted user message')
+  }
+  expect(secondEvent.message.type).toBe('assistant')
+
+  const userMessage = firstEvent.message
+  expect(userMessage.message).toEqual({
+    role: 'user',
+    content: 'hello desktop',
+  })
+  expect(userMessage.session_id).toBe(ENGINE_SESSION)
+  expect(userMessage.parent_tool_use_id).toBe(null)
+  expect(typeof userMessage.uuid).toBe('string')
+  expect(controllerPrompt).toBe('hello desktop')
+  expect(controllerUuid).toBe(userMessage.uuid)
+
+  let state = createTranscriptState()
+  state = projectServerFrame(state, received[0]!)
+  state = projectServerFrame(state, events[0]!)
+  let rows = selectTranscriptRows(state, SESSION)
+  expect(rows.filter(row => row.kind === 'user-text')).toEqual([
+    expect.objectContaining({
+      kind: 'user-text',
+      content: 'hello desktop',
+      frameId: userMessage.uuid,
+    }),
+  ])
+
+  state = projectServerFrame(state, { ...events[0]!, replay: true })
+  rows = selectTranscriptRows(state, SESSION)
+  expect(rows.filter(row => row.kind === 'user-text')).toHaveLength(1)
 })
 
 test('T4 — rejects a submit whose goalSnapshot is not a valid ThreadGoal', () => {

@@ -20,6 +20,7 @@
  * the supervisor.
  */
 
+import { randomUUID } from 'crypto'
 import z from 'zod/v4'
 import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
@@ -561,10 +562,20 @@ export class SidecarServer {
       return
     }
 
+    const turnUuid = randomUUID()
     this.activeTurn = true
+    this.broadcastEvent(createMessageEvent({
+      type: 'user',
+      message: { role: 'user', content: message.prompt },
+      session_id: this.engineSessionId,
+      parent_tool_use_id: null,
+      uuid: turnUuid,
+      timestamp: new Date().toISOString(),
+      isSynthetic: message.options?.isMeta === true,
+    }))
     void this.controller
       .submit(message.prompt, {
-        uuid: message.options?.uuid,
+        uuid: turnUuid,
         isMeta: message.options?.isMeta,
         // Only pass goalSnapshot through if the client supplied the key, so the
         // controller's `'goalSnapshot' in options` check keeps its meaning.
