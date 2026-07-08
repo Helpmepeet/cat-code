@@ -82,7 +82,6 @@ function foldBatched() {
 test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () => {
   const calls: Record<string, number> = {}
   let transcriptBatchLen = -1
-  let resumeBatchLen = -1
   const count =
     (name: string) =>
     (...args: unknown[]) => {
@@ -103,10 +102,6 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
       calls.transcript = (calls.transcript ?? 0) + 1
       transcriptBatchLen = action.actions.length
     },
-    dispatchResumeUi: action => {
-      calls.resumeUi = (calls.resumeUi ?? 0) + 1
-      resumeBatchLen = action.actions.length
-    },
   }
 
   applyServerFrameBatch(delivery, handlers)
@@ -122,14 +117,11 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'goalMemory',
     'accounts',
     'transcript',
-    'resumeUi',
   ]) {
     expect(calls[store]).toBe(1)
   }
-  // That single transcript dispatch carried the entire delivery...
+  // That single transcript dispatch carried the entire delivery.
   expect(transcriptBatchLen).toBe(delivery.length)
-  // ...and resume saw the ready ('attached') + every replay frame ('replayed').
-  expect(resumeBatchLen).toBe(delivery.length)
 })
 
 test('an empty delivery dispatches nothing', () => {
@@ -148,7 +140,6 @@ test('an empty delivery dispatches nothing', () => {
     dispatchGoalMemory: mark as never,
     dispatchAccounts: mark as never,
     dispatchTranscript: mark as never,
-    dispatchResumeUi: mark as never,
   })
   expect(touched).toBe(false)
 })

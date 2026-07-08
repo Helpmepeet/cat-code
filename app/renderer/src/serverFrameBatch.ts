@@ -41,10 +41,6 @@ export function withBatch<S, A>(
 
 /** The `{type:'frame'}` action the permission/settings/agent/goal/account reducers take. */
 export type FrameReducerAction = { type: 'frame'; frame: ServerFrame }
-/** The resume-UI transitions a batch can produce (mirror of resumeDialogState). */
-export type ResumeBatchAction =
-  | { type: 'attached'; sessionId: SessionId }
-  | { type: 'replayed'; sessionId: SessionId }
 
 /** The dispatchers `applyServerFrameBatch` drives — each called at most ONCE per batch. */
 export type ServerFrameBatchHandlers = {
@@ -58,14 +54,13 @@ export type ServerFrameBatchHandlers = {
   dispatchAgentConfig: (action: BatchAction<FrameReducerAction>) => void
   dispatchGoalMemory: (action: BatchAction<FrameReducerAction>) => void
   dispatchAccounts: (action: BatchAction<FrameReducerAction>) => void
-  dispatchResumeUi: (action: BatchAction<ResumeBatchAction>) => void
 }
 
 /**
  * Fold one delivered `ServerFrame[]` into every store with ONE dispatch each.
  * Semantics are identical to the old per-frame loop — a background frame never
- * steals focus from another live tab; ready/replay drive the resume overlay —
- * only the dispatch COUNT changes (per-batch, not per-frame).
+ * steals focus from another live tab — only the dispatch COUNT changes
+ * (per-batch, not per-frame).
  */
 export function applyServerFrameBatch(
   frames: readonly ServerFrame[],
@@ -95,14 +90,4 @@ export function applyServerFrameBatch(
   h.dispatchGoalMemory(batch(frameActions))
   h.dispatchAccounts(batch(frameActions))
   h.dispatchTranscript(batch(frames))
-
-  const resumeActions: ResumeBatchAction[] = []
-  for (const frame of frames) {
-    if (frame.kind === 'ready') {
-      resumeActions.push({ type: 'attached', sessionId: frame.sessionId })
-    } else if (frame.kind === 'event' && frame.replay === true) {
-      resumeActions.push({ type: 'replayed', sessionId: frame.sessionId })
-    }
-  }
-  if (resumeActions.length > 0) h.dispatchResumeUi(batch(resumeActions))
 }
