@@ -96,11 +96,117 @@ export type PermissionSetModeMessage = {
   mode: PermissionSetModeMode
 }
 
+/* ------------------------------------------------------------------------- *
+ * P4-5 — account lifecycle verbs (app-owned inbound; sidecar-LOCAL schema)
+ * ------------------------------------------------------------------------- *
+ *
+ * The Accounts domain is the first W4 domain to accept MUTATION frames. Like
+ * `permission.setMode` (C2), these are app-owned vocabulary the engine's shared
+ * `appClientMessageSchema` deliberately does NOT carry — each is validated by a
+ * sidecar-LOCAL Zod schema at the trust boundary and dispatched to the engine's
+ * OWN account machinery (`codexAccountPool`/`codexTokenRefresh`), never a
+ * re-implementation.
+ *
+ * The decision that makes these safe (recorded here inline, the way C2's
+ * reasoning lives in PERMISSION-BOUNDARY.md §3):
+ *
+ *  - **Secret-owner invariant is untouched (SECURITY-MINIMUM §4).** No verb
+ *    carries or returns token material, and none makes a token cross IPC. The
+ *    renderer NAMES an account (by `accountId`) or an alias string; it never
+ *    sees, sends, or receives a credential. Deletion/logout are availability
+ *    operations, not confidentiality ones — the redacted `accounts.snapshot`
+ *    read-seam remains the only account data the renderer ever holds.
+ *  - **T6 — renderer authors no policy, only a target.** The sidecar RE-RESOLVES
+ *    every `accountId` against the live pool (never trusts a renderer-held
+ *    record), validates aliases against the engine's OWN regex + uniqueness rule
+ *    (`validateCodexAccountAlias`, not a renderer claim), and re-derives every
+ *    guard (switchable/vault-backed) from the real pool. The worst a compromised
+ *    renderer gains is the ability to run the same account commands the user can
+ *    already run in the TUI (`/switch-account`, `/rename-account`,
+ *    `/delete-account`, `/logout`, `/touch-all`, `/login`) — TUI-equivalent, and
+ *    strictly less than the live auto-approval T5b already concedes.
+ *  - **Destructive ops fail closed.** `account.delete` requires an explicit
+ *    `confirm: true` (mirroring the TUI's `--confirm`); a missing/false confirm
+ *    is rejected at the boundary, request unperformed.
+ *  - **T5a-analog — every verb carries a renderer-minted `requestId`** echoed on
+ *    the resulting `account.result` frame, so a UI can correlate the outcome;
+ *    the sidecar never mints account state from an unmatched id.
+ *  - **T7 — the existing inbound size/rate caps apply unchanged.**
+ *
+ * `account.login` begins the engine's REAL OAuth flow (browser + localhost:1455
+ * callback, `codex-client.ts`); the engine owns the token write. Its live
+ * completion/alias sub-protocol is coordinated with P4-15 (first-run auth owns
+ * the shared OAuth surface); here the renderer drives navigation and the newly
+ * added account simply appears on the next `accounts.snapshot` re-broadcast.
+ */
+export const ACCOUNT_VERB_TYPES = [
+  'account.switch',
+  'account.rename',
+  'account.delete',
+  'account.logout',
+  'account.touchAll',
+  'account.login',
+] as const
+
+export type AccountVerbType = (typeof ACCOUNT_VERB_TYPES)[number]
+
+/** Switch the persisted active account new sessions seed from. Synchronous. */
+export type AccountSwitchMessage = {
+  type: 'account.switch'
+  requestId: string
+  accountId: string
+}
+
+/** Rename a vault-backed account's alias. Alias re-validated at the sidecar. */
+export type AccountRenameMessage = {
+  type: 'account.rename'
+  requestId: string
+  accountId: string
+  alias: string
+}
+
+/** Delete a vault-backed account profile. Destructive → requires `confirm`. */
+export type AccountDeleteMessage = {
+  type: 'account.delete'
+  requestId: string
+  accountId: string
+  confirm: true
+}
+
+/** Sign out the active account (clears its token; the profile stays on disk). */
+export type AccountLogoutMessage = {
+  type: 'account.logout'
+  requestId: string
+}
+
+/** Refresh OAuth tokens for every unlocked vault account (per-account result). */
+export type AccountTouchAllMessage = {
+  type: 'account.touchAll'
+  requestId: string
+}
+
+/** Begin the engine's real OAuth login flow (engine owns the token write). */
+export type AccountLoginMessage = {
+  type: 'account.login'
+  requestId: string
+}
+
+export type AccountVerbMessage =
+  | AccountSwitchMessage
+  | AccountRenameMessage
+  | AccountDeleteMessage
+  | AccountLogoutMessage
+  | AccountTouchAllMessage
+  | AccountLoginMessage
+
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
- * vocabulary plus the app-owned C2 frame.
+ * vocabulary plus the app-owned C2 frame and the P4-5 account verbs.
  */
-export type SidecarClientMessage = AppClientMessage | PermissionSetModeMessage
+export type SidecarClientMessage =
+  | AppClientMessage
+  | PermissionSetModeMessage
+  | AccountVerbMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -468,6 +574,125 @@ export type MemorySnapshotFrame = {
   memory: MemorySnapshot
 }
 
+/* ------------------------------------------------------------------------- *
+ * Accounts read-seam (P4-5) — the CANONICAL domain read-seam recipe
+ * ------------------------------------------------------------------------- *
+ *
+ * The Accounts domain surfaces the real Codex account pool (`codexAccountPool`).
+ * It is the reference implementation every later W4 domain copies:
+ *
+ *  1. **Read-only OUTBOUND snapshot (C3 precedent).** The renderer receives a
+ *     REDACTED status projection only — never a `PoolAccount` record. The pool's
+ *     two secrets (`accessToken`, `refreshToken`) and its `vaultFilePath` /
+ *     `idToken` NEVER appear on this shape by construction; `secretGuard` also
+ *     blocks those key names on the outbound path as defence-in-depth, so the
+ *     redaction is proven twice (projection omits them + guard would block them).
+ *  2. **Built at the sidecar from the engine's OWN pool** (`getPoolStatus()`),
+ *     not a re-read or a renderer reconstruction — the same live pool the engine
+ *     request path consumes (`src/services/api/client.ts`). `getSnapshot()` is a
+ *     pure, throw-free read (read-at-spawn discipline, like the settings seam).
+ *  3. **Emitted on attach after the other snapshots, then re-broadcast** whenever
+ *     the sidecar processes an account verb that mutated the pool (action-driven,
+ *     NOT a poll). NOTE (source-wins drift from the P4-5 brief): the pool is a
+ *     bare module singleton with NO reactive store/emitter
+ *     (`codexAccountPool.ts` — no `subscribe`), so a live async-refresh push is
+ *     not possible without the account-diagnostic sink. That sink
+ *     (`accountDiagnostics.ts`, already secret-scrubbed) is the named reactive
+ *     hook for P4-15 (reauth banner) + P4-17 (welcome table); wiring it is
+ *     deferred to P4-15, which owns the reauth surface. v1 is thus attach +
+ *     verb-driven re-emit, matching the settings seam's spawn-time posture.
+ */
+
+/** Redacted per-account status. NO token, NO vault path — see `secretGuard`. */
+export type AccountStatus = {
+  /**
+   * The pool's `accountId` (an OpenAI account UUID) — an identifier, NOT a
+   * secret (`secretGuard` does not block it); it is the addressing key the
+   * renderer echoes back on a lifecycle verb. The sidecar always re-resolves it
+   * against the live pool (T6) — it is never trusted as state.
+   */
+  id: string
+  alias: string | null
+  status: 'healthy' | 'dead' | 'capped' | 'quarantined'
+  /** `PoolAccountStatusReason` (usage_cap/auth_dead/runtime_cap/…) or null. */
+  statusReason: string | null
+  /** Derived from the engine's `getCodexAccountAvailability().kind`. */
+  availability: 'available' | 'warned' | 'blocked'
+  /** Redacted human label from `describeCodexAccountAvailability` (never a token). */
+  availabilityLabel: string
+  /** True for the pool's persisted active account (the `activeIndex` account). */
+  isDefault: boolean
+  /**
+   * True when the account has a vault profile on disk — the presence flag ONLY,
+   * NEVER the path (`vaultFilePath` is a `secretGuard`-blocked key). Gates the
+   * rename/delete affordances (config-only accounts cannot be renamed/deleted).
+   */
+  hasVaultProfile: boolean
+  source: 'vault' | 'config'
+  /** 5-hour window used-percent (0–100), or null when no fresh usage hint. */
+  usagePrimary: number | null
+  /** Weekly window used-percent (0–100), or null. */
+  usageWeekly: number | null
+  usageLimitReached: boolean
+  /** wham/usage reset, Unix SECONDS (the pool's native unit), or null. */
+  usageResetAt: number | null
+  lastRefreshIso: string | null
+  /** Normalized block reason (no token content by construction), or null. */
+  lastError: string | null
+  planType: string | null
+  /**
+   * Sidecar-derived: may this account be switched to right now? The authoritative
+   * rule (`isCodexAccountSwitchable`: availability !== 'blocked') AND not already
+   * the default. The renderer renders this; it never re-derives switchability.
+   */
+  switchable: boolean
+}
+
+export type AccountsSnapshot = {
+  /** Redacted account rows, pool order (the pool's `activeIndex` account first-class via `isDefault`). */
+  accounts: AccountStatus[]
+  /** The persisted active account's id, or null when the pool is empty/uninitialized. */
+  activeAccountId: string | null
+  /** Healthy + not-usage-capped count (the "N of M ready" header stat). */
+  readyCount: number
+  /** Total pool size. */
+  poolCount: number
+  /** Whether the engine has completed pool initialization (`getPoolStatus().initialized`). */
+  initialized: boolean
+}
+
+/**
+ * P4-5 outbound frame. Emitted on attach (after the other snapshots, before
+ * history replay) and re-broadcast after a pool-mutating account verb. Read-only;
+ * writes cross via the app-owned `account.*` verbs, never this frame.
+ */
+export type AccountsSnapshotFrame = {
+  kind: 'accounts.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  accounts: AccountsSnapshot
+}
+
+/** The outcome of one account verb (echoes the renderer-minted `requestId`, T5a-analog). */
+export type AccountResultFrame = {
+  kind: 'account.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: AccountVerbType
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries token material. */
+  message: string
+  /**
+   * `account.touchAll` only — per-account refresh outcomes for the results list.
+   * `alias` is the redacted label; `result` is the touch-all status class.
+   */
+  touchAllResults?: Array<{
+    alias: string | null
+    result: 'OK' | 'LOCKED' | 'FAILED'
+  }>
+}
+
 /**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
@@ -494,6 +719,8 @@ export type ServerFrame =
   | AgentConfigSnapshotFrame
   | ThreadGoalSnapshotFrame
   | MemorySnapshotFrame
+  | AccountsSnapshotFrame
+  | AccountResultFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
@@ -527,6 +754,15 @@ export type CatCodeBridge = {
    * The updated `permission.context` snapshot frame is the acknowledgement.
    */
   setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void
+  /**
+   * P4-5 — request an account lifecycle verb on the addressed session's sidecar.
+   * The renderer NAMES a target (`accountId`/`alias`); the sidecar re-resolves it
+   * against the live pool and validates aliases against the engine's own rule
+   * (T6). No token ever crosses either way. The outcome arrives as an
+   * `account.result` frame echoing `requestId`, followed by an updated
+   * `accounts.snapshot` when the pool changed.
+   */
+  accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
   /** Restart the addressed sidecar process while retaining renderer attachment. */

@@ -59,6 +59,7 @@ import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
+  type AccountVerbMessage,
   type ClientFrame,
   type PermissionContextSnapshot,
   type ServerFrame,
@@ -69,6 +70,7 @@ import type { SidecarSettingsDomain } from './settingsDomain.js'
 import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
+import type { SidecarAccountsDomain } from './accountsDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -114,6 +116,12 @@ export type SidecarServerOptions = {
    */
   memory?: SidecarMemoryDomain
   /**
+   * Accounts read-seam + lifecycle verbs (P4-5). Optional because the P1-0 probe
+   * fixture has no engine; when absent, no `accounts.snapshot` frame is emitted
+   * and account verbs fail closed.
+   */
+  accounts?: SidecarAccountsDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -142,6 +150,7 @@ export class SidecarServer {
   private readonly agentConfig: SidecarAgentConfigDomain | null
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
+  private readonly accounts: SidecarAccountsDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
@@ -160,6 +169,7 @@ export class SidecarServer {
     this.agentConfig = options.agentConfig ?? null
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
+    this.accounts = options.accounts ?? null
     this.history = options.history ?? []
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
@@ -240,6 +250,10 @@ export class SidecarServer {
     // inbound vocabulary or renderer-authored state.
     this.sendThreadGoalSnapshot(connection)
     this.sendMemorySnapshot(connection)
+    // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
+    // after the other snapshots and before replay. Read-only + secretGuard-clean by
+    // construction; re-broadcast after any pool-mutating account verb.
+    this.sendAccountsSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -420,6 +434,16 @@ export class SidecarServer {
       'permission.setMode'
     ) {
       this.handleSetMode(connection, frame.message)
+      return
+    }
+
+    // P4-5 — account lifecycle verbs are app-owned vocabulary (like C2), each
+    // validated by a sidecar-LOCAL schema and dispatched to the engine's own
+    // account machinery. The engine's shared schema is deliberately not extended.
+    const messageType = (frame.message as { type?: unknown } | null | undefined)
+      ?.type
+    if (typeof messageType === 'string' && messageType.startsWith('account.')) {
+      this.handleAccountVerb(connection, frame.message)
       return
     }
 
@@ -637,6 +661,77 @@ export class SidecarServer {
         false,
       )
     }
+  }
+
+  /**
+   * P4-5 — account lifecycle verbs (protocol.ts: the decision rationale lives on
+   * `ACCOUNT_VERB_TYPES`). Fail-closed order: sidecar-LOCAL structural schema →
+   * domain presence → pool-RESOLVED business validation + dispatch (in the
+   * domain) → `account.result` frame → re-broadcast the snapshot when the pool
+   * changed. Structural validation here NEVER trusts the renderer's account
+   * state: it checks shape only; the domain re-resolves the target against the
+   * live pool (T6) and re-validates aliases with the engine's own rule. No token
+   * crosses either direction.
+   */
+  private handleAccountVerb(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = accountVerbMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid account verb',
+        false,
+      )
+      return
+    }
+    if (!this.accounts) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'accounts domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    // The verb is now structurally valid; the domain owns the pool-resolved
+    // business rules + dispatch. Errors there degrade to an ok:false result
+    // frame (a business failure), never a thrown internal error to the client.
+    const verb = parsed.data as AccountVerbMessage
+    void this.accounts
+      .runVerb(verb)
+      .then(({ verb: verbType, result, poolChanged }) => {
+        this.send(connection, {
+          kind: 'account.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbType,
+          ok: result.ok,
+          message: result.message,
+          ...(result.touchAllResults !== undefined
+            ? { touchAllResults: result.touchAllResults }
+            : {}),
+        })
+        if (poolChanged) {
+          this.broadcastAccountsSnapshot()
+        }
+      })
+      .catch(error => {
+        this.sendError(
+          connection,
+          verb.requestId,
+          'internal_error',
+          error instanceof Error ? error.message : String(error),
+          false,
+        )
+      })
   }
 
   private handlePermissionResponse(
@@ -1035,6 +1130,50 @@ export class SidecarServer {
     }
   }
 
+  /**
+   * P4-5 — build + send the redacted accounts snapshot to one connection. Same
+   * idiom as the other read-seams: `getSnapshot()` is a pure, throw-free read of
+   * the live pool; the shared `send` path applies clone/JSON checks, the outbound
+   * secret guard, and the size cap. Wrapped so a snapshot failure can never
+   * strand the attaching connection.
+   */
+  private sendAccountsSnapshot(connection: Connection): void {
+    if (!this.accounts) {
+      return
+    }
+    try {
+      const raw = this.accounts.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'accounts.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'accounts.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        accounts: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] accounts.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastAccountsSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendAccountsSnapshot(connection)
+    }
+  }
+
   private send(connection: Connection, frame: ServerFrame): void {
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
@@ -1145,6 +1284,15 @@ function checkStrictKeys(message: unknown): string | null {
     // pinned to `session` at the sidecar; a renderer that tries to send one
     // is rejected here.
     ['permission.setMode', new Set(['type', 'requestId', 'mode'])],
+    // P4-5 account verbs (app-owned; see ACCOUNT_VERB_TYPES). Each key set is the
+    // exact renderer-facing contract; anything else is rejected before the Zod
+    // parse. `account.delete` requires `confirm` (destructive → fail-closed).
+    ['account.switch', new Set(['type', 'requestId', 'accountId'])],
+    ['account.rename', new Set(['type', 'requestId', 'accountId', 'alias'])],
+    ['account.delete', new Set(['type', 'requestId', 'accountId', 'confirm'])],
+    ['account.logout', new Set(['type', 'requestId'])],
+    ['account.touchAll', new Set(['type', 'requestId'])],
+    ['account.login', new Set(['type', 'requestId'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
@@ -1219,6 +1367,51 @@ const permissionSetModeMessageSchema = z.object({
   requestId: z.string().min(1),
   mode: z.enum(PERMISSION_SET_MODE_MODES),
 })
+
+/**
+ * P4-5 — sidecar-LOCAL schemas for the account lifecycle verbs (protocol.ts:
+ * ACCOUNT_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + bounds. The business rules (target exists, alias
+ * unique, vault-backed) are re-checked against the LIVE pool in the domain (T6),
+ * never trusted from the frame. `requestId`/`accountId` are length-bounded like
+ * every other renderer-controlled string; `confirm` MUST be literal `true`
+ * (a missing/false confirm on a destructive verb is rejected here, fail-closed).
+ */
+const accountRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const accountIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const accountAliasSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+
+const accountVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('account.switch'),
+    requestId: accountRequestIdSchema,
+    accountId: accountIdSchema,
+  }),
+  z.object({
+    type: z.literal('account.rename'),
+    requestId: accountRequestIdSchema,
+    accountId: accountIdSchema,
+    alias: accountAliasSchema,
+  }),
+  z.object({
+    type: z.literal('account.delete'),
+    requestId: accountRequestIdSchema,
+    accountId: accountIdSchema,
+    confirm: z.literal(true),
+  }),
+  z.object({
+    type: z.literal('account.logout'),
+    requestId: accountRequestIdSchema,
+  }),
+  z.object({
+    type: z.literal('account.touchAll'),
+    requestId: accountRequestIdSchema,
+  }),
+  z.object({
+    type: z.literal('account.login'),
+    requestId: accountRequestIdSchema,
+  }),
+])
 
 /**
  * C3 — convert the engine's live `ToolPermissionContext` into the wire

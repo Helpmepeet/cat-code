@@ -31,6 +31,16 @@ import {
   type SidecarPermissionDomain,
 } from './permissionDomain.js'
 import { createSidecarGoalDomain, type SidecarGoalDomain } from './goalDomain.js'
+import {
+  createSidecarAccountsDomain,
+  type AccountsCommandExecutor,
+  type SidecarAccountsDomain,
+} from './accountsDomain.js'
+import {
+  resetCodexAccountPoolForTest,
+  seedCodexAccountPoolForTest,
+  type PoolAccount,
+} from '../../src/services/api/codexAccountPool.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 
@@ -108,6 +118,7 @@ function makeServer(
   controller: AppSessionController,
   permissions?: SidecarPermissionDomain,
   goals?: SidecarGoalDomain,
+  accounts?: SidecarAccountsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -115,6 +126,7 @@ function makeServer(
     controller,
     ...(permissions ? { permissions } : {}),
     ...(goals ? { goals } : {}),
+    ...(accounts ? { accounts } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -1331,4 +1343,171 @@ test('C1+C3 — resolving with a suggestion selection then applying it re-snapsh
   expect(snapshots.at(-1)!.context.alwaysAllowRules.localSettings).toContain(
     'Bash(date:*)',
   )
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-5 — Accounts read-seam + lifecycle-verb boundary tests
+ * ------------------------------------------------------------------------- */
+
+/** A token-BEARING pool account, to prove no credential reaches the wire. */
+function acctFixture(overrides: Partial<PoolAccount> = {}): PoolAccount {
+  return {
+    accountId: 'acct-aaaa',
+    accessToken: 'SECRET-access-should-never-leak',
+    refreshToken: 'SECRET-refresh-should-never-leak',
+    expiresAt: 9_999_999_999,
+    source: 'vault',
+    status: 'healthy',
+    lastUsedAt: 1,
+    vaultFilePath: '/Users/secret/.cat-code/vault/acct.json',
+    alias: 'main',
+    ...overrides,
+  }
+}
+
+function accountFrame(message: ClientFrame['message']): Buffer {
+  return encodeFrame({
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    message,
+  } satisfies ClientFrame)
+}
+
+/** Flush the async `runVerb().then(send)` microtask chain. */
+const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsCommandExecutor {
+  return {
+    switch: () => ({ ok: true, message: 'switched' }),
+    rename: () => ({ ok: true, message: 'renamed' }),
+    delete: () => ({ ok: true, message: 'deleted' }),
+    logout: () => ({ ok: true, message: 'signed out' }),
+    touchAll: async () => ({ ok: true, message: 'done', touchAllResults: [] }),
+    login: () => ({ ok: false, message: 'deferred' }),
+    ...over,
+  }
+}
+
+afterEach(() => {
+  resetCodexAccountPoolForTest()
+})
+
+test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-clean', () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const snap = received.find(f => f.kind === 'accounts.snapshot')
+  expect(snap?.kind).toBe('accounts.snapshot')
+  const serialized = JSON.stringify(snap)
+  expect(serialized).not.toContain('SECRET-access')
+  expect(serialized).not.toContain('SECRET-refresh')
+  expect(serialized).not.toContain('/Users/secret')
+})
+
+test('P4-5 — a valid account.switch produces an ok account.result and re-broadcasts the snapshot', async () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({ accountId: 'a', alias: 'a' }), acctFixture({ accountId: 'b', alias: 'b' })],
+    activeAccountId: 'a',
+  })
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'accounts.snapshot').length
+
+  server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'r1', accountId: 'b' }))
+  await flush()
+
+  const result = received.find(f => f.kind === 'account.result')
+  expect(result?.kind).toBe('account.result')
+  expect(result && result.kind === 'account.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'account.result' && result.requestId).toBe('r1')
+  // pool changed → a fresh snapshot was broadcast
+  expect(received.filter(f => f.kind === 'accounts.snapshot').length).toBeGreaterThan(before)
+})
+
+test('P4-5 — account.result never carries token material', async () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'r', accountId: 'a' }))
+  await flush()
+  const result = received.find(f => f.kind === 'account.result')
+  expect(JSON.stringify(result)).not.toContain('SECRET')
+})
+
+test('P4-5 — rejects an account verb carrying an unexpected key (checkStrictKeys)', () => {
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'account.switch', requestId: 'r', accountId: 'a', updatedPermissions: [] } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('P4-5 — rejects account.switch with a missing accountId (schema)', () => {
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'account.switch', requestId: 'r' } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('P4-5 — rejects account.delete without confirm:true (destructive fail-closed)', () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
+  let deleted = false
+  const accounts = createSidecarAccountsDomain({
+    executor: fakeExecutor({ delete: () => { deleted = true; return { ok: true, message: 'x' } } }),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  // confirm omitted
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'account.delete', requestId: 'r', accountId: 'a' } as unknown as ClientFrame['message'],
+    }),
+  )
+  // confirm:false
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'account.delete', requestId: 'r2', accountId: 'a', confirm: false } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBeGreaterThanOrEqual(2)
+  expect(deleted).toBe(false)
+})
+
+test('P4-5 — an account verb with no accounts domain fails closed (internal_error)', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
+  expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })

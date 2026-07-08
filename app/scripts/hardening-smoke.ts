@@ -174,6 +174,7 @@ async function runProductionHardeningSmoke(
     const expectedBridgeKeys = [
       // Frame plane (engine commands + attachment).
       'abort',
+      'accountVerb',
       'ping',
       'rendererReady',
       'respondPermission',

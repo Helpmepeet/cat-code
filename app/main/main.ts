@@ -56,8 +56,11 @@ import {
 } from './navigationPolicy.js'
 import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
 import {
+  ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
+  type AccountVerbMessage,
+  type AccountVerbType,
   type PermissionSetModeMode,
   type ServerFrame,
   type SessionId,
@@ -70,6 +73,7 @@ const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
+const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -426,6 +430,27 @@ function registerIpcHandlers(): void {
         requestId: generateRequestId(),
         mode: arg.mode as PermissionSetModeMode,
       })
+    },
+  )
+
+  ipcMain.on(
+    CH_ACCOUNT_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-5 — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (schema + pool-resolved business rules). Drop any
+      // frame whose `type` is not an account verb fail-closed, rather than
+      // forwarding a message guaranteed to be rejected. The renderer authors the
+      // `requestId` for result correlation (a UX field, not a security one; the
+      // sidecar bounds it structurally).
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !ACCOUNT_VERB_TYPES.includes(verb.type as AccountVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as AccountVerbMessage)
     },
   )
 

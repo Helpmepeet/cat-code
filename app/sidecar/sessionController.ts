@@ -43,6 +43,10 @@ import {
   createSidecarMemoryDomain,
   type SidecarMemoryDomain,
 } from './memoryDomain.js'
+import {
+  createSidecarAccountsDomain,
+  type SidecarAccountsDomain,
+} from './accountsDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -235,6 +239,13 @@ export type SidecarSession = {
    * auto-memory memdir. Read-only; null in probe mode.
    */
   memory: SidecarMemoryDomain | null
+  /**
+   * Accounts domain (P4-5) — the redacted Codex pool read-seam + lifecycle verbs
+   * over the engine's own account machinery. The pool is a process-global
+   * singleton (not per-session), so this shares one live pool with the engine;
+   * null in probe mode (no engine). Read-seam is secretGuard-clean by construction.
+   */
+  accounts: SidecarAccountsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -272,6 +283,7 @@ export async function createSidecarSessionController({
       agentConfig: null,
       goals: null,
       memory: null,
+      accounts: null,
     }
   }
 
@@ -293,5 +305,6 @@ export async function createSidecarSessionController({
     }),
     goals: createSidecarGoalDomain(appStateStore),
     memory: createSidecarMemoryDomain(),
+    accounts: createSidecarAccountsDomain(),
   }
 }

@@ -21,8 +21,16 @@
  * crosses IPC — the outbound `secretGuard` is satisfied by construction (proven
  * in `settingsDomain.test.ts`).
  *
- * §0 flag: this read-seam front-runs the canonical domain read-seam recipe P4-5
- * (Accounts) will set; reconcile the shape/lifecycle with it at P4-5 if it diverges.
+ * §0 reconciled (P4-5): the canonical domain read-seam recipe landed in
+ * `accountsDomain.ts`. This seam CONFORMS to it — `createSidecar<X>Domain()`
+ * returning a narrow interface, a throw-free `getSnapshot(): Snapshot | null`
+ * that is secretGuard-clean by construction, emitted on attach after the C3
+ * permission context. The one per-domain trait difference is deliberate, not a
+ * divergence: settings freeze at spawn (the engine's session settings cache is
+ * "valid for the entire session", settings.ts) so there is no `subscribe()`,
+ * whereas accounts re-reads the live pool each `getSnapshot()` and re-broadcasts
+ * after a mutating verb. Both are legitimate points on the recipe's lifecycle
+ * axis (spawn-frozen ↔ attach + action-driven re-emit ↔ store-subscribed).
  *
  * This module has ZERO transport knowledge: frames, validation, and limits stay
  * in `sidecarServer.ts`.

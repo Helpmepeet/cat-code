@@ -16,6 +16,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AccountVerbMessage,
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
@@ -39,6 +40,7 @@ const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
+const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -78,6 +80,14 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, mode }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SET_MODE, payload)
+  },
+  accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void {
+    // P4-5 — HC3 fixed sender. The renderer supplies only a decided verb payload;
+    // main light-coerces the type and the sidecar is the trust boundary (schema +
+    // pool-resolved re-validation). No token ever crosses in either direction.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_ACCOUNT_VERB, payload)
   },
   ping(sessionId: SessionId, nonce: string): void {
     const payload = { sessionId, nonce }

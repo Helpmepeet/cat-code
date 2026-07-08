@@ -10,12 +10,17 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
   )
-  // 7 frame-plane senders + 5 payload-bearing control-plane senders + the
-  // DEV-only debug-state sender (compiled out of packaged preload.cjs).
-  // (pickDirectory/createSession/restoreSession/closeSession/listSessions).
-  // subscribe / subscribeHost register a listener and send no payload, so they
-  // do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(13)
+  // P4-5 — account lifecycle verb sender rides its own fixed channel (HC3).
+  expect(source).toContain("const CH_ACCOUNT_VERB = 'catcode:account-verb'")
+  expect(source).toContain(
+    'accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void',
+  )
+  // 8 frame-plane senders (incl. P4-5 accountVerb) + 5 payload-bearing
+  // control-plane senders + the DEV-only debug-state sender (compiled out of
+  // packaged preload.cjs). (pickDirectory/createSession/restoreSession/
+  // closeSession/listSessions). subscribe / subscribeHost register a listener
+  // and send no payload, so they do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(14)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')

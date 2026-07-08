@@ -138,9 +138,16 @@ import {
   selectMemorySnapshot,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
+import {
+  createAccountsState,
+  reduceAccountsState,
+  selectAccountsSnapshot,
+} from './accountsState.js'
 import { GoalsPage } from './GoalsPage.js'
+import { AccountsPage } from './AccountsPage.js'
 import { SettingsShell } from './SettingsShell.js'
 import type {
+  AccountVerbMessage,
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
@@ -216,8 +223,10 @@ export function App() {
     undefined,
     createGoalMemoryState,
   )
-  const [activeView, setActiveView] = useState<'chat' | 'goals' | 'settings'>(
-    'chat',
+  const [accounts, dispatchAccounts] = useReducer(
+    reduceAccountsState,
+    undefined,
+    createAccountsState,
   )
   // Resume confirm/hydration UI (P4-16) — presentation state around the SAME
   // `bridge.restoreSession` call `performRestore` below already makes; see
@@ -227,6 +236,9 @@ export function App() {
     undefined,
     createResumeUiState,
   )
+  const [activeView, setActiveView] = useState<
+    'chat' | 'goals' | 'accounts' | 'settings'
+  >('chat')
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
   // listSessions() below, then kept live off subscribeHost.
@@ -269,6 +281,7 @@ export function App() {
       dispatchSettings({ type: 'frame', frame })
       dispatchAgentConfig({ type: 'frame', frame })
       dispatchGoalMemory({ type: 'frame', frame })
+      dispatchAccounts({ type: 'frame', frame })
       dispatchSessionEvent(frame)
       if (frame.kind === 'ready') {
         dispatchResumeUi({ type: 'attached', sessionId: frame.sessionId })
@@ -490,6 +503,18 @@ export function App() {
     setActiveSessionId(sessionId)
     setActiveView('chat')
   }, [workspaceLayout])
+
+  // P4-5 — dispatch an account lifecycle verb to the active session's sidecar.
+  // The renderer only NAMES a target; the sidecar re-resolves + re-validates it
+  // (T6). The verb rides the HC3 fixed `accountVerb` channel. The outcome returns
+  // as an `account.result` frame (→ accountsState.lastResult).
+  const sendAccountVerb = useCallback(
+    (verb: AccountVerbMessage) => {
+      if (!activeSessionId) return
+      getBridge().accountVerb(activeSessionId, verb)
+    },
+    [activeSessionId],
+  )
 
   const focusWorkspacePanelSession = useCallback(
     (index: number, sessionId: SessionId) => {
@@ -1078,6 +1103,12 @@ export function App() {
                 : undefined
             }
             snapshot={selectThreadGoalSnapshot(goalMemory, activeSessionId)}
+          />
+        ) : activeView === 'accounts' ? (
+          <AccountsPage
+            snapshot={selectAccountsSnapshot(accounts, activeSessionId)}
+            lastResult={accounts.lastResult}
+            onVerb={sendAccountVerb}
           />
         ) : workspacePanels.length === 0 || !activeSessionId ? (
           <EmptyShell onNewTab={newSession} />

@@ -12,9 +12,9 @@
  * recency) are rendered — no cost/model/tags fixtures (C3).
  *
  * §0 fidelity flags (divergences from the prototype, by design):
- *  - Nav destinations Sessions/Accounts are rendered DISABLED (visual
- *    grammar only); their pages are unbuilt (P4-6/P4-5). Chat, Goals, and Settings
- *    are wired. None are mocked (honesty: disabled, flagged, not faked).
+ *  - Nav destination Sessions is rendered DISABLED (visual grammar only); its
+ *    page is unbuilt (P4-6). Chat, Goals, Accounts (P4-5), and Settings are wired.
+ *    None are mocked (honesty: disabled, flagged, not faked).
  *  - The prototype's per-row actions menu (rename/branch/rewind/export/delete) is
  *    omitted — those verbs are P4-6 (`SessionActions.jsx`); the restore-offer is
  *    the only row action here.
@@ -45,17 +45,17 @@ type NavItem = {
 }
 
 // The prototype's destination rail (Chat/Sessions/Goals/Accounts/Settings — its
-// own comments already dropped Tasks/Agents from the rail). Chat and Settings are
-// built; the rest are disabled placeholders (see §0).
+// own comments already dropped Tasks/Agents from the rail). Chat/Goals/Accounts/
+// Settings are built; Sessions is a disabled placeholder (P4-6) — see §0.
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: false, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
-  { id: 'accounts', label: 'Accounts', enabled: false, icon: <AccountsIcon /> },
+  { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'chat' | 'goals' | 'settings'
+type SidebarView = 'chat' | 'goals' | 'accounts' | 'settings'
 
 export function Sidebar({
   rows,
@@ -461,7 +461,7 @@ function NavItemExpanded({
       type="button"
       aria-current={active ? 'page' : undefined}
       onClick={() => {
-	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'settings') {
+	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
 	          onSelectView(item.id)
 	        }
       }}
@@ -513,7 +513,7 @@ function NavItemRail({
       aria-label={item.label}
       title={item.label}
       onClick={() => {
-	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'settings') {
+	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
 	          onSelectView(item.id)
 	        }
       }}
