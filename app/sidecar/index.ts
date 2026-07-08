@@ -25,7 +25,8 @@ import { toSDKMessages } from '../../src/utils/messages/mappers.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
-import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
+import { SidecarServer } from './sidecarServer.js'
+import { createBackpressuredSocket } from './backpressuredSocket.js'
 
 /** Dedicated non-zero exit for an unresumable engine session id. */
 const RESUME_FAILED_EXIT_CODE = 4
@@ -160,17 +161,21 @@ async function main(): Promise<void> {
     unix: args.socketPath,
     socket: {
       open(socket) {
-        const wrapper: SidecarSocketLike = {
-          write: data => {
-            socket.write(data)
+        // Bun's socket.write() can accept fewer bytes than given once the send
+        // buffer fills; the raw wrapper used to discard that short count, which
+        // silently truncated any frame over ~8 KiB and desynced the length-
+        // prefixed stream. This wrapper queues the remainder and flushes it on
+        // `drain` (see backpressuredSocket.ts).
+        const { wrapper, drain } = createBackpressuredSocket(socket, {
+          onOverflow: queuedBytes => {
+            process.stderr.write(
+              `[sidecar] outbound queue overflow (${queuedBytes} bytes), dropping connection\n`,
+            )
           },
-          end: () => {
-            socket.end()
-          },
-        }
+        })
         const connection = server.addConnection(wrapper)
-        // Stash per-socket state so data/close can find its connection.
-        socketState.set(socket, { connection, decoder: connection.decoder })
+        // Stash per-socket state so data/close/drain can find its connection.
+        socketState.set(socket, { connection, decoder: connection.decoder, drain })
 
         if (args.probeOnAttach) {
           // P1-0 gate: drive the real controller so its emit()/subscribe() path
@@ -185,6 +190,21 @@ async function main(): Promise<void> {
                 }\n`,
               )
             })
+        }
+      },
+      drain(socket) {
+        const state = socketState.get(socket)
+        if (!state) return
+        try {
+          state.drain()
+        } catch (error) {
+          process.stderr.write(
+            `[sidecar] drain failed, dropping connection: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          )
+          server.removeConnection(state.connection)
+          socketState.delete(socket)
         }
       },
       data(socket, chunk) {
@@ -243,7 +263,11 @@ async function main(): Promise<void> {
 // directly here (the connection owns it) but kept in the type for clarity.
 const socketState = new WeakMap<
   object,
-  { connection: ReturnType<SidecarServer['addConnection']>; decoder: FrameDecoder }
+  {
+    connection: ReturnType<SidecarServer['addConnection']>
+    decoder: FrameDecoder
+    drain: () => void
+  }
 >()
 
 function toBuffer(chunk: Buffer | Uint8Array): Buffer {
