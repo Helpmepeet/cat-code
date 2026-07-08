@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  defaultRegistryDir,
   defaultTranscriptPath,
   MAX_REGISTRY_SESSIONS,
   REGISTRY_VERSION,
@@ -687,6 +688,36 @@ test('default transcript path resolves and reaps against the real engine encodin
     const registry = new SessionRegistry({ storageDir, log: () => {} })
     const restorable = await registry.launch()
     expect(restorable.map(r => r.appSessionId)).toEqual(['app-real'])
+  } finally {
+    if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = priorConfig
+  }
+})
+
+test('default registry dir honors CLAUDE_CONFIG_DIR and NFC-normalizes like the engine config home', () => {
+  const configDir = join(tempDir(), 'café-config')
+  const priorConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  try {
+    expect(defaultRegistryDir()).toBe(join(configDir.normalize('NFC'), 'desktop'))
+  } finally {
+    if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = priorConfig
+  }
+})
+
+test('default transcript path finds long-path project dirs by sanitized prefix', () => {
+  const configDir = tempDir()
+  const priorConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  try {
+    const cwd = `/tmp/${'very-long-project-name-'.repeat(12)}`
+    const sanitized = cwd.normalize('NFC').replace(/[^a-zA-Z0-9]/g, '-')
+    const projectDir = join(configDir, 'projects', `${sanitized.slice(0, 200)}-enginehash`)
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'engine-long.jsonl'), '{}\n')
+
+    expect(defaultTranscriptPath(cwd, 'engine-long')).toBe(join(projectDir, 'engine-long.jsonl'))
   } finally {
     if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = priorConfig

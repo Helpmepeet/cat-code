@@ -21,6 +21,13 @@ const GOAL: ThreadGoalSnapshot = {
     'Goal: active\nObjective: Ship P4-10 Goals + Memory panels\nToken budget: 25,000\nTokens used: 1,250\nTime used: 30s',
 }
 
+const GOAL_BY_STATUS: ThreadGoalSnapshot[] = [
+  { ...GOAL, status: 'active', summary: 'Goal: active' },
+  { ...GOAL, status: 'paused', summary: 'Goal: paused' },
+  { ...GOAL, status: 'budget_limited', summary: 'Goal: limited by budget' },
+  { ...GOAL, status: 'complete', summary: 'Goal: complete' },
+]
+
 const MEMORY: MemorySnapshot = {
   autoMemoryEnabled: true,
   autoMemoryDir: '/config/projects/repo/memory/',
@@ -56,6 +63,15 @@ test('renders the current thread goal snapshot', () => {
   expect(html).toContain('/goal')
 })
 
+test('renders every thread-goal status label and summary', () => {
+  for (const goal of GOAL_BY_STATUS) {
+    const html = renderToStaticMarkup(<GoalsPage snapshot={goal} />)
+    const label = goal.status === 'budget_limited' ? 'budget limited' : goal.status
+    expect(html).toContain(label)
+    expect(html).toContain(goal.summary)
+  }
+})
+
 test('renders the empty goal state without fixtures', () => {
   const html = renderToStaticMarkup(<GoalsPage snapshot={null} />)
 
@@ -73,6 +89,47 @@ test('renders memory metadata without file contents', () => {
   expect(html).toContain('Memory bodies stay engine-side')
   expect(html).not.toContain('do not expose')
   expect(html).not.toContain('MOCK')
+})
+
+test('renders every memory instruction and auto-memory type', () => {
+  const instructionTypes = [
+    'Managed',
+    'User',
+    'Project',
+    'Local',
+    'AutoMem',
+    'TeamMem',
+  ] as const satisfies readonly MemorySnapshot['instructionFiles'][number]['type'][]
+  const autoMemoryTypes = [
+    'user',
+    'feedback',
+    'project',
+    'reference',
+  ] as const satisfies readonly NonNullable<MemorySnapshot['autoMemories'][number]['type']>[]
+  const memory: MemorySnapshot = {
+    ...MEMORY,
+    instructionFiles: instructionTypes.map(type => ({
+      path: `/memory/${type}.md`,
+      type,
+      contentDiffersFromDisk: type === 'AutoMem',
+    })),
+    autoMemories: autoMemoryTypes.map(type => ({
+      filename: `${type}.md`,
+      filePath: `/config/memory/${type}.md`,
+      mtimeMs: 1,
+      description: `${type} description`,
+      type,
+    })),
+  }
+
+  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={memory} />)
+  for (const label of instructionTypes) {
+    expect(html).toContain(label)
+    expect(html).toContain(`${label}</span><span class="float-right font-mono text-text-muted">1</span>`)
+  }
+  for (const label of autoMemoryTypes) {
+    expect(html).toContain(`${label}.md`)
+  }
 })
 
 test('renders memory waiting state without fixtures', () => {

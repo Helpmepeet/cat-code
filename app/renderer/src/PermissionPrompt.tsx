@@ -48,6 +48,13 @@ export function describeSuggestion(update: PermissionUpdate): string {
     case 'addDirectories':
     case 'removeDirectories':
       return `${update.type === 'addDirectories' ? 'allow' : 'remove'} directory ${update.directories.join(', ')} · ${update.destination}`
+    default: {
+      // Compile-time exhaustiveness tripwire (P2-0 idiom, see
+      // transcriptProjector.ts): if PermissionUpdate grows a variant, this
+      // assignment errors until it gets an explicit case above.
+      const _exhaustive: never = update
+      return `unknown permission update · ${JSON.stringify(_exhaustive)}`
+    }
   }
 }
 

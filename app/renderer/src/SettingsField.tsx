@@ -16,8 +16,13 @@ import type { ReactNode } from 'react'
 import type { SettingSourceId } from '../../shared/protocol.js'
 import { SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 
-/** Display label per source — mirrors `getSourceDisplayName` (constants.ts:46). */
-const SOURCE_LABEL: Record<SettingSourceId, string> = {
+/**
+ * Display label per source — mirrors `getSourceDisplayName` (constants.ts:46).
+ * Exported (read-only) so `settingsDomain.test.ts` can prove this table
+ * still agrees with the engine's real display names without a runtime `src/`
+ * import here (P4-21 drift-risk insurance; see docs/reports/2026-07-08-app-engine-duplication-review.md).
+ */
+export const SOURCE_LABEL: Record<SettingSourceId, string> = {
   userSettings: 'User',
   projectSettings: 'Project',
   localSettings: 'Local',

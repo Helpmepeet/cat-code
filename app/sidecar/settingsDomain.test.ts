@@ -1,11 +1,29 @@
 import { expect, test } from 'bun:test'
+import {
+  getSourceDisplayName,
+  SETTING_SOURCES,
+  type EditableSettingSource,
+  type SettingSource,
+} from '../../src/utils/settings/constants.js'
+import { SOURCE_LABEL } from '../renderer/src/SettingsField.js'
+import { SETTING_SOURCE_PRECEDENCE } from '../renderer/src/settingsState.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { SettingsSnapshotFrame } from '../shared/protocol.js'
+import type { SettingSourceId, SettingsSnapshotFrame } from '../shared/protocol.js'
 import {
   buildSettingsSnapshot,
   createSidecarSettingsDomain,
   type SettingsSourceLayer,
 } from './settingsDomain.js'
+
+type AssertAssignable<T extends true> = T
+type ProtocolCoversEngineSettingSources = AssertAssignable<
+  Exclude<SettingSource, SettingSourceId> extends never ? true : false
+>
+type EngineCoversProtocolSettingSources = AssertAssignable<
+  Exclude<SettingSourceId, SettingSource> extends never ? true : false
+>
+void (null as unknown as ProtocolCoversEngineSettingSources)
+void (null as unknown as EngineCoversProtocolSettingSources)
 
 // Ascending precedence (index 0 lowest), matching getSettingsWithSources().sources.
 const LAYERS: SettingsSourceLayer[] = [
@@ -68,15 +86,47 @@ test('editable/managed status follows the winning source', () => {
 
 test('layers carry key NAMES only (never values) and keep ascending order', () => {
   const snapshot = buildSettingsSnapshot(LAYERS, 'file')
-  expect(snapshot.layers.map(l => l.source)).toEqual([
+  expect(snapshot.layers.map(l => l.source)).toEqual([...SETTING_SOURCES])
+  expect(snapshot.layers[0]!.keys.sort()).toEqual(['displayName', 'model', 'theme'])
+  expect(snapshot.policyOrigin).toBe('file')
+})
+
+test('settings source labels, display order, and editability mirror the engine taxonomy', () => {
+  // Source order: src/utils/settings/constants.ts:7-22.
+  expect(SETTING_SOURCES).toEqual([
     'userSettings',
     'projectSettings',
     'localSettings',
     'flagSettings',
     'policySettings',
   ])
-  expect(snapshot.layers[0]!.keys.sort()).toEqual(['displayName', 'model', 'theme'])
-  expect(snapshot.policyOrigin).toBe('file')
+  expect(SETTING_SOURCE_PRECEDENCE).toEqual([...SETTING_SOURCES].reverse())
+
+  // Display labels: src/utils/settings/constants.ts:46-64.
+  for (const source of SETTING_SOURCES) {
+    expect(SOURCE_LABEL[source]).toBe(getSourceDisplayName(source))
+  }
+
+  // Editability: src/utils/settings/constants.ts:180-185.
+  const editableSources: ReadonlySet<SettingSource> = new Set<EditableSettingSource>([
+    'userSettings',
+    'projectSettings',
+    'localSettings',
+  ])
+  const bySource = new Map(
+    buildSettingsSnapshot(
+      SETTING_SOURCES.map(source => ({
+        source,
+        origin: source,
+        settings: { [source]: true },
+      })),
+      null,
+    ).resolved.map(resolution => [resolution.source, resolution]),
+  )
+  for (const source of SETTING_SOURCES) {
+    expect(bySource.get(source)?.editable).toBe(editableSources.has(source))
+    expect(bySource.get(source)?.managed).toBe(source === 'policySettings')
+  }
 })
 
 test('resolved is sorted by key for stable rendering', () => {

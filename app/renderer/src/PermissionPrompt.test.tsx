@@ -90,6 +90,67 @@ test('describeSuggestion renders the engine rule idiom for every update type', (
   ).toBe('allow directory /tmp/x · session')
 })
 
+test('describeSuggestion covers every PermissionUpdate variant mirrored by the schema', () => {
+  // PermissionUpdate: src/types/permissions.ts:98-131; schema mirror:
+  // src/utils/permissions/PermissionUpdateSchema.ts:42-78.
+  // addRules — src/types/permissions.ts:100
+  expect(
+    describeSuggestion({
+      type: 'addRules',
+      destination: 'localSettings',
+      rules: [{ toolName: 'Bash', ruleContent: 'date:*' }],
+      behavior: 'allow',
+    }),
+  ).toBe('allow Bash(date:*) · localSettings')
+
+  // replaceRules — src/types/permissions.ts:106
+  expect(
+    describeSuggestion({
+      type: 'replaceRules',
+      destination: 'projectSettings',
+      rules: [{ toolName: 'Read' }],
+      behavior: 'ask',
+    }),
+  ).toBe('ask Read · projectSettings')
+
+  // removeRules — src/types/permissions.ts:112
+  expect(
+    describeSuggestion({
+      type: 'removeRules',
+      destination: 'userSettings',
+      rules: [{ toolName: 'Write', ruleContent: '/tmp/**' }],
+      behavior: 'deny',
+    }),
+  ).toBe('deny Write(/tmp/**) · userSettings')
+
+  // setMode — src/types/permissions.ts:118
+  expect(
+    describeSuggestion({
+      type: 'setMode',
+      destination: 'session',
+      mode: 'acceptEdits',
+    }),
+  ).toBe('mode → acceptEdits · session')
+
+  // addDirectories — src/types/permissions.ts:123
+  expect(
+    describeSuggestion({
+      type: 'addDirectories',
+      destination: 'session',
+      directories: ['/tmp/x'],
+    }),
+  ).toBe('allow directory /tmp/x · session')
+
+  // removeDirectories — src/types/permissions.ts:128
+  expect(
+    describeSuggestion({
+      type: 'removeDirectories',
+      destination: 'cliArg',
+      directories: ['/tmp/y', '/tmp/z'],
+    }),
+  ).toBe('remove directory /tmp/y, /tmp/z · cliArg')
+})
+
 test('maps the permission keyboard contract and ignores unrelated keys', () => {
   expect(permissionActionForKey({ key: 'Enter' })).toBe('allow')
   expect(permissionActionForKey({ key: 'n' })).toBe('deny')

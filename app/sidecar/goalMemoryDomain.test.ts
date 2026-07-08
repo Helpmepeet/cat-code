@@ -1,12 +1,53 @@
 import { expect, test } from 'bun:test'
+import {
+  MEMORY_TYPES,
+  type MemoryType as AutoMemoryType,
+} from '../../src/memdir/memoryTypes.js'
 import type { MemoryFileInfo } from '../../src/utils/claudemd.js'
+import type { MemoryType as EngineInstructionMemoryType } from '../../src/utils/memory/types.js'
+import {
+  formatThreadGoalStatus,
+  type ThreadGoalStatus,
+} from '../../src/utils/threadGoal.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
+  MemoryInstructionType,
   MemorySnapshotFrame,
   ThreadGoalSnapshotFrame,
 } from '../shared/protocol.js'
 import { threadGoalSnapshot } from './goalDomain.js'
 import { buildMemorySnapshot } from './memoryDomain.js'
+
+type AssertAssignable<T extends true> = T
+type ProtocolCoversEngineGoalStatuses = AssertAssignable<
+  Exclude<ThreadGoalStatus, NonNullable<ThreadGoalSnapshotFrame['goal']>['status']> extends never
+    ? true
+    : false
+>
+type EngineCoversProtocolGoalStatuses = AssertAssignable<
+  Exclude<NonNullable<ThreadGoalSnapshotFrame['goal']>['status'], ThreadGoalStatus> extends never
+    ? true
+    : false
+>
+type ProtocolCoversEngineInstructionTypes = AssertAssignable<
+  Exclude<EngineInstructionMemoryType, MemoryInstructionType> extends never ? true : false
+>
+type EngineCoversProtocolInstructionTypes = AssertAssignable<
+  Exclude<MemoryInstructionType, EngineInstructionMemoryType> extends never ? true : false
+>
+type ProtocolCoversAutoMemoryTypes = AssertAssignable<
+  Exclude<
+    AutoMemoryType,
+    NonNullable<MemorySnapshotFrame['memory']['autoMemories'][number]['type']>
+  > extends never
+    ? true
+    : false
+>
+void (null as unknown as ProtocolCoversEngineGoalStatuses)
+void (null as unknown as EngineCoversProtocolGoalStatuses)
+void (null as unknown as ProtocolCoversEngineInstructionTypes)
+void (null as unknown as EngineCoversProtocolInstructionTypes)
+void (null as unknown as ProtocolCoversAutoMemoryTypes)
 
 test('builds a thread goal display snapshot with the engine summary text', () => {
   const snapshot = threadGoalSnapshot({
@@ -40,6 +81,37 @@ test('builds a thread goal display snapshot with the engine summary text', () =>
     goal: snapshot,
   }
   expect(scanForSecrets(frame).ok).toBe(true)
+})
+
+test('covers every engine thread-goal status in snapshot and summary formatting', () => {
+  // ThreadGoalStatus: src/utils/threadGoal.ts:4-9. Expected labels are HARDCODED
+  // literals mirroring STATUS_LABELS (src/utils/threadGoal.ts:77-82) so an engine
+  // label-wording change fails this test loudly — deriving the expected string via
+  // formatThreadGoalStatus() would move both sides together and catch no drift.
+  const cases = [
+    { status: 'active', label: 'active' },
+    { status: 'paused', label: 'paused' },
+    { status: 'budget_limited', label: 'limited by budget' },
+    { status: 'complete', label: 'complete' },
+  ] as const satisfies readonly { status: ThreadGoalStatus; label: string }[]
+
+  for (const { status, label } of cases) {
+    // Tripwire: the engine's own formatter must still produce the pinned label.
+    expect(formatThreadGoalStatus(status)).toBe(label)
+    const snapshot = threadGoalSnapshot({
+      threadId: `thread-${status}`,
+      goalId: `goal-${status}`,
+      objective: `Goal status ${status}`,
+      status,
+      ...(status === 'budget_limited' ? { tokenBudget: 100 } : {}),
+      tokensUsed: status === 'budget_limited' ? 100 : 1,
+      timeUsedSeconds: 2,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    })
+    expect(snapshot?.status).toBe(status)
+    expect(snapshot?.summary).toContain(`Goal: ${label}`)
+  }
 })
 
 test('builds a memory metadata snapshot without exposing file contents', () => {
@@ -99,4 +171,50 @@ test('builds a memory metadata snapshot without exposing file contents', () => {
     memory: snapshot,
   }
   expect(scanForSecrets(frame).ok).toBe(true)
+})
+
+test('covers every instruction-file and auto-memory type from the engine scanners', () => {
+  // Instruction MemoryType: src/utils/memory/types.ts:3-10.
+  const instructionTypes = [
+    'User',
+    'Project',
+    'Local',
+    'Managed',
+    'AutoMem',
+    'TeamMem',
+  ] as const satisfies readonly MemoryInstructionType[]
+
+  const snapshot = buildMemorySnapshot({
+    autoMemoryEnabled: true,
+    autoMemoryDir: '/config/memory/',
+    autoMemoryEntrypoint: '/config/memory/MEMORY.md',
+    instructionFiles: instructionTypes.map(type => ({
+      path: `/memory/${type}.md`,
+      type,
+      content: `${type} body withheld`,
+      ...(type === 'Project' ? { parent: '/repo/CLAUDE.md' } : {}),
+      ...(type === 'Local' ? { globs: ['app/**'] } : {}),
+      contentDiffersFromDisk: type === 'AutoMem',
+    })),
+    // Auto-memory frontmatter MemoryType: src/memdir/memoryTypes.ts:14-21.
+    autoMemories: MEMORY_TYPES.map(type => ({
+      filename: `${type}.md`,
+      filePath: `/config/memory/${type}.md`,
+      mtimeMs: 10,
+      description: `${type} description`,
+      type,
+    })),
+  })
+
+  expect(snapshot.instructionFiles.map(file => file.type)).toEqual([...instructionTypes])
+  expect(snapshot.autoMemories.map(memory => memory.type)).toEqual([...MEMORY_TYPES])
+  expect(snapshot.instructionFiles.find(file => file.type === 'Project')).toMatchObject({
+    parent: '/repo/CLAUDE.md',
+  })
+  expect(snapshot.instructionFiles.find(file => file.type === 'Local')).toMatchObject({
+    globs: ['app/**'],
+  })
+  expect(snapshot.instructionFiles.find(file => file.type === 'AutoMem')).toMatchObject({
+    contentDiffersFromDisk: true,
+  })
 })
