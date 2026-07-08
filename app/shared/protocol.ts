@@ -316,6 +316,158 @@ export type SettingsSnapshotFrame = {
   settings: SettingsSnapshot
 }
 
+/* ------------------------------------------------------------------------- *
+ * Agent config read-seam (P4-7) — read-only definition snapshot
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Agent definition sources. This is a wider taxonomy than settings sources:
+ * built-ins and plugin agents participate alongside settings-backed user/project/
+ * local/flag/policy definitions (`AgentDefinition.source` in
+ * `src/tools/AgentTool/loadAgentsDir.ts`).
+ */
+export type AgentConfigSourceId =
+  | 'built-in'
+  | 'plugin'
+  | SettingSourceId
+
+export type AgentConfigTools =
+  | { mode: 'all' }
+  | { mode: 'none' }
+  | { mode: 'list'; names: string[] }
+
+export type AgentConfigDefinition = {
+  id: string
+  agentType: string
+  source: AgentConfigSourceId
+  baseDir?: string
+  filename?: string
+  filePath?: string
+  plugin?: string
+  whenToUse: string
+  tools: AgentConfigTools
+  disallowedTools?: string[]
+  skills?: string[]
+  model?: string
+  /** Provider is resolved by runtime model routing; it is not an agent definition field. */
+  provider: 'runtime'
+  effort?: string | number
+  permissionMode?: string
+  maxTurns?: number
+  color?: string
+  background: boolean
+  memory?: string
+  isolation?: string
+  hasInitialPrompt: boolean
+  hasHooks: boolean
+  hasMcpServers: boolean
+  mcpServerRefs: string[]
+  inlineMcpServerNames: string[]
+  requiredMcpServers: string[]
+  missingMcpServers: string[]
+  active: boolean
+  overriddenBy?: AgentConfigSourceId
+  available: boolean
+  editable: boolean
+  readOnlyReason?: string
+  systemPrompt: {
+    available: boolean
+    withheldReason: 'secret-boundary'
+  }
+}
+
+export type AgentConfigSnapshot = {
+  definitions: AgentConfigDefinition[]
+  failedFiles: Array<{ path: string; error: string }>
+  availableMcpServers: string[]
+  notes: string[]
+}
+
+/**
+ * P4-7 outbound frame. Emitted on attach, read-only. The snapshot intentionally
+ * excludes system-prompt bodies, hooks payloads, and inline MCP config objects:
+ * those are real definition fields but may carry secrets or credential-adjacent
+ * material, so the renderer receives presence/count/name metadata only.
+ */
+export type AgentConfigSnapshotFrame = {
+  kind: 'agent-config.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  agents: AgentConfigSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
+ * Goals + memory read-seams (P4-10) — read-only snapshots
+ * ------------------------------------------------------------------------- */
+
+export type ThreadGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'budget_limited'
+  | 'complete'
+
+export type ThreadGoalSnapshot = {
+  threadId: string
+  goalId: string
+  objective: string
+  status: ThreadGoalStatus
+  tokenBudget?: number
+  tokensUsed: number
+  timeUsedSeconds: number
+  createdAtMs: number
+  updatedAtMs: number
+  summary: string
+}
+
+export type ThreadGoalSnapshotFrame = {
+  kind: 'thread-goal.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  goal: ThreadGoalSnapshot | null
+}
+
+export type MemoryInstructionType =
+  | 'Managed'
+  | 'User'
+  | 'Project'
+  | 'Local'
+  | 'AutoMem'
+  | 'TeamMem'
+
+export type AutoMemoryType = 'user' | 'feedback' | 'project' | 'reference'
+
+export type MemoryInstructionFile = {
+  path: string
+  type: MemoryInstructionType
+  parent?: string
+  globs?: string[]
+  contentDiffersFromDisk: boolean
+}
+
+export type AutoMemoryHeader = {
+  filename: string
+  filePath: string
+  mtimeMs: number
+  description: string | null
+  type?: AutoMemoryType
+}
+
+export type MemorySnapshot = {
+  autoMemoryEnabled: boolean
+  autoMemoryDir: string
+  autoMemoryEntrypoint: string
+  instructionFiles: MemoryInstructionFile[]
+  autoMemories: AutoMemoryHeader[]
+  notes: string[]
+}
+
+export type MemorySnapshotFrame = {
+  kind: 'memory.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  memory: MemorySnapshot
+}
+
 /**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
@@ -339,6 +491,9 @@ export type ServerFrame =
   | LifecycleFrame
   | PermissionContextFrame
   | SettingsSnapshotFrame
+  | AgentConfigSnapshotFrame
+  | ThreadGoalSnapshotFrame
+  | MemorySnapshotFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)

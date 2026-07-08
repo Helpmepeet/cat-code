@@ -12,9 +12,9 @@
  * recency) are rendered — no cost/model/tags fixtures (C3).
  *
  * §0 fidelity flags (divergences from the prototype, by design):
- *  - Nav destinations Sessions/Goals/Accounts/Settings are rendered DISABLED
- *    (visual grammar only); their pages are unbuilt (P4-6/P4-10/P4-5/P4-3+P4-12).
- *    Only Chat is wired. None are mocked (honesty: disabled, flagged, not faked).
+ *  - Nav destinations Sessions/Accounts are rendered DISABLED (visual
+ *    grammar only); their pages are unbuilt (P4-6/P4-5). Chat, Goals, and Settings
+ *    are wired. None are mocked (honesty: disabled, flagged, not faked).
  *  - The prototype's per-row actions menu (rename/branch/rewind/export/delete) is
  *    omitted — those verbs are P4-6 (`SessionActions.jsx`); the restore-offer is
  *    the only row action here.
@@ -37,7 +37,7 @@ const HOVER_DELAY = 120
 const HIDE_DELAY = 200
 
 type NavItem = {
-  id: string
+  id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -45,24 +45,30 @@ type NavItem = {
 }
 
 // The prototype's destination rail (Chat/Sessions/Goals/Accounts/Settings — its
-// own comments already dropped Tasks/Agents from the rail). Only Chat has a
-// built page today; the rest are disabled placeholders (see §0).
+// own comments already dropped Tasks/Agents from the rail). Chat and Settings are
+// built; the rest are disabled placeholders (see §0).
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: false, icon: <SessionsIcon /> },
-  { id: 'goals', label: 'Goals', enabled: false, icon: <GoalsIcon /> },
+  { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: false, icon: <AccountsIcon /> },
-  { id: 'settings', label: 'Settings', enabled: false, icon: <SettingsIcon /> },
+  { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
+
+type SidebarView = 'chat' | 'goals' | 'settings'
 
 export function Sidebar({
   rows,
   activeSessionId,
+  activeView,
+  onSelectView,
   onSelectLive,
   onRestore,
 }: {
   rows: SidebarRow[]
   activeSessionId: SessionId | null
+  activeView: SidebarView
+  onSelectView: (view: SidebarView) => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
 }) {
@@ -213,7 +219,12 @@ export function Sidebar({
               className="shrink-0 border-t border-shell-seam px-2 pb-3 pt-2"
             >
               {NAV.map(item => (
-                <NavItemExpanded key={item.id} item={item} />
+                <NavItemExpanded
+                  activeView={activeView}
+                  item={item}
+                  key={item.id}
+                  onSelectView={onSelectView}
+                />
               ))}
             </nav>
           </>
@@ -224,7 +235,12 @@ export function Sidebar({
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
           >
             {NAV.map(item => (
-              <NavItemRail key={item.id} item={item} />
+              <NavItemRail
+                activeView={activeView}
+                item={item}
+                key={item.id}
+                onSelectView={onSelectView}
+              />
             ))}
           </nav>
         )}
@@ -414,9 +430,16 @@ function SidebarRowItem({
   )
 }
 
-function NavItemExpanded({ item }: { item: NavItem }) {
-  // Chat is the only built view — active + no-op (the app is always "chat").
-  const active = item.enabled && item.id === 'chat'
+function NavItemExpanded({
+  item,
+  activeView,
+  onSelectView,
+}: {
+  item: NavItem
+  activeView: SidebarView
+  onSelectView: (view: SidebarView) => void
+}) {
+  const active = item.enabled && item.id === activeView
   if (!item.enabled) {
     return (
       <button
@@ -437,6 +460,11 @@ function NavItemExpanded({ item }: { item: NavItem }) {
     <button
       type="button"
       aria-current={active ? 'page' : undefined}
+      onClick={() => {
+	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'settings') {
+	          onSelectView(item.id)
+	        }
+      }}
       className={
         'flex w-full items-center gap-1 rounded-md py-1.5 ' +
         (active
@@ -454,8 +482,16 @@ function NavItemExpanded({ item }: { item: NavItem }) {
   )
 }
 
-function NavItemRail({ item }: { item: NavItem }) {
-  const active = item.enabled && item.id === 'chat'
+function NavItemRail({
+  item,
+  activeView,
+  onSelectView,
+}: {
+  item: NavItem
+  activeView: SidebarView
+  onSelectView: (view: SidebarView) => void
+}) {
+  const active = item.enabled && item.id === activeView
   if (!item.enabled) {
     return (
       <button
@@ -476,6 +512,11 @@ function NavItemRail({ item }: { item: NavItem }) {
       aria-current={active ? 'page' : undefined}
       aria-label={item.label}
       title={item.label}
+      onClick={() => {
+	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'settings') {
+	          onSelectView(item.id)
+	        }
+      }}
       className={
         'flex h-8 w-8 items-center justify-center rounded-md ' +
         (active

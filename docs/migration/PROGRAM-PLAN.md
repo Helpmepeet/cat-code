@@ -355,7 +355,10 @@ agent). A **migration** session-unit matches that grain:
 - **Tagged** when behavior must be confirmed first (`❓ spec-first`) — the three faked
   behaviors (streaming, permissions, multi-session) and anything ambiguous.
 - **Bounded to one sitting.** Per your rule: one agent, one session, one chunk — long
-  tasks crammed into one run degrade quality. Heavy units get split and labeled.
+  tasks crammed into one run degrade quality. Heavy units get split and labeled. **The
+  `PARITY-LEDGER.md` per-surface row/❓ count is the concrete size signal: when a surface's
+  in-scope rows exceed one sitting, split it into sub-sessions UP FRONT (the P4-18 →
+  18a/18b/18c precedent) — never dispatch a whole oversized surface as one session.**
 - **GUI/browser verification is the operator's job — bake it into every prompt.** Any session
   whose DONE-WHEN needs a click, a keystroke in the running app, launching/screenshotting the
   Electron app, or browser interaction must instruct the worker to **STOP and print exact operator
@@ -404,6 +407,13 @@ workstream) is the **next planning session's** deliverable, not this one.
 - **When a phase's sessions are all ✅ (gate cleared), generate the NEXT phase's backlog** from
   the relevant `INVENTORY.md` rows (its workstream slice) — in dependency order, one
   surface/capability per session, at the §6 grain.
+- **Scope each session from its `PARITY-LEDGER.md` Part A section — and split by its counts.**
+  The ledger's per-surface section is the pre-enumerated element checklist + visual-acceptance bar:
+  generate the prompt FROM it (not just the INVENTORY row), carry its **ledger anchor** (Part A §N)
+  and its **❓-to-clear count** INTO the prompt, and use the **row/❓ counts as the size signal** —
+  when a surface exceeds one sitting, split it into sub-sessions up front (P4-18 → 18a/18b/18c) so
+  the work doesn't pile into one overloaded session; name which slice each sub-session owns. The
+  `Ledger anchors` table in each phase backlog maps session → Part A §.
 - **Enumerate the joins** (2026-07-05 postmortem, rec 1): while generating a phase's backlog,
   list the cross-session contracts (who produces X, who consumes it) and assign each join
   *by name* to a session or to that layer's integration review. Every Critical/High so far

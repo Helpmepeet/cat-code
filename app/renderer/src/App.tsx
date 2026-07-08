@@ -86,6 +86,24 @@ import {
   selectConnection,
   type ConnectionSnapshot,
 } from './connectionState.js'
+import {
+  createSettingsState,
+  reduceSettingsState,
+  selectSettingsSnapshot,
+} from './settingsState.js'
+import {
+  createAgentConfigState,
+  reduceAgentConfigState,
+  selectAgentConfigSnapshot,
+} from './agentConfigState.js'
+import {
+  createGoalMemoryState,
+  reduceGoalMemoryState,
+  selectMemorySnapshot,
+  selectThreadGoalSnapshot,
+} from './goalMemoryState.js'
+import { GoalsPage } from './GoalsPage.js'
+import { SettingsShell } from './SettingsShell.js'
 import type {
   CatCodeBridge,
   PermissionResponseInput,
@@ -141,6 +159,24 @@ export function App() {
     undefined,
     createConnectionState,
   )
+  const [settings, dispatchSettings] = useReducer(
+    reduceSettingsState,
+    undefined,
+    createSettingsState,
+  )
+  const [agentConfig, dispatchAgentConfig] = useReducer(
+    reduceAgentConfigState,
+    undefined,
+    createAgentConfigState,
+  )
+  const [goalMemory, dispatchGoalMemory] = useReducer(
+    reduceGoalMemoryState,
+    undefined,
+    createGoalMemoryState,
+  )
+  const [activeView, setActiveView] = useState<'chat' | 'goals' | 'settings'>(
+    'chat',
+  )
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
   // listSessions() below, then kept live off subscribeHost.
@@ -180,6 +216,9 @@ export function App() {
       dispatch(frame)
       dispatchPermission({ type: 'frame', frame })
       dispatchConnection(frame)
+      dispatchSettings({ type: 'frame', frame })
+      dispatchAgentConfig({ type: 'frame', frame })
+      dispatchGoalMemory({ type: 'frame', frame })
       dispatchSessionEvent(frame)
     })
     bridge.rendererReady()
@@ -360,6 +399,7 @@ export function App() {
       const result = await bridge.createSession({ cwdToken: token })
       if (result.ok) {
         setActiveSessionId(result.value.appSessionId)
+        setActiveView('chat')
         setShellError(null)
       } else {
         setShellError(hostErrorMessage(result.error))
@@ -393,6 +433,7 @@ export function App() {
     setWorkspaceLayoutState(result.state)
     setLayoutNotice(null)
     setActiveSessionId(sessionId)
+    setActiveView('chat')
   }, [workspaceLayout])
 
   const focusWorkspacePanelSession = useCallback(
@@ -525,6 +566,7 @@ export function App() {
       const result = await bridge.restoreSession(sessionId)
       if (result.ok) {
         setActiveSessionId(result.value.appSessionId)
+        setActiveView('chat')
         setShellError(null)
       } else {
         setShellError(hostErrorMessage(result.error))
@@ -814,6 +856,8 @@ export function App() {
       <Sidebar
         rows={sidebarRows}
         activeSessionId={activeSessionId}
+        activeView={activeView}
+        onSelectView={view => setActiveView(view)}
         onSelectLive={selectTab}
         onRestore={restoreSession}
       />
@@ -841,7 +885,23 @@ export function App() {
         {/* The workspace panels are renderer-owned layout over the P3-4
          * session-keyed stores. Each panel reads its own session slice, so visible
          * background sessions keep rendering without becoming the active tab. */}
-	        {workspacePanels.length === 0 || !activeSessionId ? (
+        {activeView === 'settings' ? (
+          <SettingsShell
+            agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
+            initialCategory="agents"
+            memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
+            snapshot={selectSettingsSnapshot(settings, activeSessionId)}
+          />
+        ) : activeView === 'goals' ? (
+          <GoalsPage
+            sessionLabel={
+              activeSessionId
+                ? tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId
+                : undefined
+            }
+            snapshot={selectThreadGoalSnapshot(goalMemory, activeSessionId)}
+          />
+        ) : workspacePanels.length === 0 || !activeSessionId ? (
           <EmptyShell onNewTab={newSession} />
         ) : (
 	          <WorkspaceLayout

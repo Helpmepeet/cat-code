@@ -30,6 +30,7 @@ import {
   createSidecarPermissionDomain,
   type SidecarPermissionDomain,
 } from './permissionDomain.js'
+import { createSidecarGoalDomain, type SidecarGoalDomain } from './goalDomain.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 
@@ -106,12 +107,14 @@ let servers: SidecarServer[] = []
 function makeServer(
   controller: AppSessionController,
   permissions?: SidecarPermissionDomain,
+  goals?: SidecarGoalDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
     controller,
     ...(permissions ? { permissions } : {}),
+    ...(goals ? { goals } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -213,6 +216,56 @@ test('T4 — rejects a submit whose goalSnapshot is not a valid ThreadGoal', () 
   )
   const err = received.find(f => f.kind === 'error' && f.message.includes('goalSnapshot'))
   expect(err).toBeDefined()
+})
+
+test('P4-10 — emits the live thread goal snapshot on attach and store change', () => {
+  const store = makePermissionStore()
+  store.setState(prev => ({
+    ...prev,
+    threadGoal: {
+      threadId: 'thread-1',
+      goalId: 'goal-1',
+      objective: 'Ship goals panel',
+      status: 'active',
+      tokenBudget: 10_000,
+      tokensUsed: 123,
+      timeUsedSeconds: 7,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    },
+  }))
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    createSidecarGoalDomain(store),
+  )
+  const { socket, received } = makeSocket()
+
+  server.addConnection(socket)
+
+  const attachSnapshot = received.find(
+    (frame): frame is Extract<ServerFrame, { kind: 'thread-goal.snapshot' }> =>
+      frame.kind === 'thread-goal.snapshot',
+  )
+  expect(attachSnapshot?.kind).toBe('thread-goal.snapshot')
+  expect(attachSnapshot?.goal?.objective).toBe('Ship goals panel')
+  expect(attachSnapshot?.goal?.summary).toContain('Token budget: 10,000')
+
+  store.setState(prev => ({
+    ...prev,
+    threadGoal: prev.threadGoal
+      ? { ...prev.threadGoal, status: 'paused', updatedAtMs: 3 }
+      : null,
+  }))
+
+  const latest = received
+    .filter(
+      (frame): frame is Extract<ServerFrame, { kind: 'thread-goal.snapshot' }> =>
+        frame.kind === 'thread-goal.snapshot',
+    )
+    .at(-1)
+  expect(latest?.kind).toBe('thread-goal.snapshot')
+  expect(latest?.goal?.status).toBe('paused')
 })
 
 test('T5a — permission.response for an unknown requestId is rejected', () => {

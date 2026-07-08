@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { clearCommandMemoizationCaches } from '../../src/commands.js'
+import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
@@ -88,25 +89,72 @@ test('normal startup roots the engine config at the caller-supplied cwd (P1_1_CW
   expect(queryEngineConfig.cwd).toBe(cwd)
 })
 
+test('normal startup passes real active agents into runtime config and the snapshot', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'catcode-p4-7-agents-'))
+  mkdirSync(join(cwd, '.cat-code', 'agents'), { recursive: true })
+  writeFileSync(
+    join(cwd, '.cat-code', 'agents', 'p4-reviewer.md'),
+    `---
+name: p4-reviewer
+description: "Review P4 changes"
+tools: Read, Grep
+---
+
+Review P4 changes.
+`,
+  )
+  try {
+    clearAgentDefinitionsCache()
+    const { queryEngineConfig, agentDefinitions } =
+      await createNormalSidecarQueryEngineConfig(cwd)
+
+    expect(
+      queryEngineConfig.agents.some(agent => agent.agentType === 'p4-reviewer'),
+    ).toBe(true)
+    expect(
+      agentDefinitions.activeAgents.some(agent => agent.agentType === 'p4-reviewer'),
+    ).toBe(true)
+
+    const session = await createSidecarSessionController({ probe: false, cwd })
+    const snapshot = session.agentConfig?.getSnapshot()
+    expect(
+      snapshot?.definitions.some(
+        definition => definition.agentType === 'p4-reviewer' && definition.active,
+      ),
+    ).toBe(true)
+  } finally {
+    clearAgentDefinitionsCache()
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
 test('normal startup constructs a real runtime-backed controller without starting a turn', async () => {
-  const { controller, permissions } = await createSidecarSessionController({
+  const { controller, permissions, goals, memory } =
+    await createSidecarSessionController({
     probe: false,
     cwd: process.cwd(),
   })
 
   expect(controller).toBeInstanceOf(AppSessionController)
   expect(permissions).not.toBeNull()
+  expect(goals?.getSnapshot()).toBeNull()
+  expect(memory).not.toBeNull()
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
 })
 
-test('probe startup has no permission domain (no engine app-state store)', async () => {
-  const { permissions } = await createSidecarSessionController({
+test('probe startup has no read domains (no engine app-state store)', async () => {
+  const { permissions, settings, agentConfig, goals, memory } =
+    await createSidecarSessionController({
     probe: true,
     cwd: process.cwd(),
   })
   expect(permissions).toBeNull()
+  expect(settings).toBeNull()
+  expect(agentConfig).toBeNull()
+  expect(goals).toBeNull()
+  expect(memory).toBeNull()
 })
 
 test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually load', async () => {

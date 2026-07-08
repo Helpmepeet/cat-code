@@ -1,0 +1,231 @@
+import type { MemorySnapshot } from '../../shared/protocol.js'
+import {
+  selectInstructionFilesByType,
+  selectMemoryInstructionCounts,
+} from './goalMemoryState.js'
+
+export function MemoryPage({
+  embedded = false,
+  snapshot,
+}: {
+  embedded?: boolean
+  snapshot: MemorySnapshot | null
+}) {
+  const body = (
+    <>
+      {!snapshot ? (
+        <WaitingState />
+      ) : (
+        <>
+          <MemorySummary snapshot={snapshot} />
+          <InstructionFiles snapshot={snapshot} />
+          <AutoMemories snapshot={snapshot} />
+          <Notes snapshot={snapshot} />
+        </>
+      )}
+    </>
+  )
+
+  if (embedded) return body
+
+  return (
+    <main className="flex min-h-0 flex-1 overflow-auto px-8 py-7">
+      <div className="mx-auto w-full max-w-[760px]">
+        <MemoryHeader />
+        {body}
+      </div>
+    </main>
+  )
+}
+
+function MemoryHeader() {
+  return (
+    <header className="mb-5 flex items-start justify-between gap-4">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight text-text-primary">
+          Memory
+        </h1>
+        <p className="mt-1 text-[13px] text-text-subtle">
+          Real CLAUDE.md instruction files and auto-memory metadata.
+        </p>
+      </div>
+      <span className="rounded-full border border-shell-seam bg-shell-hover px-2.5 py-1 text-[11px] font-medium text-text-subtle">
+        Read-only snapshot
+      </span>
+    </header>
+  )
+}
+
+function WaitingState() {
+  return (
+    <section className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center">
+      <div className="text-sm font-semibold text-text-muted">
+        Waiting for the engine's memory snapshot…
+      </div>
+      <p className="mx-auto mt-2 max-w-[420px] text-[12.5px] leading-relaxed text-text-subtle">
+        This panel does not use prototype fixtures. It fills once the sidecar
+        sends real memory metadata for the selected session.
+      </p>
+    </section>
+  )
+}
+
+function MemorySummary({ snapshot }: { snapshot: MemorySnapshot }) {
+  const counts = selectMemoryInstructionCounts(snapshot)
+  return (
+    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">
+            Memory sources
+          </h3>
+          <p className="mt-0.5 text-[12px] text-text-subtle">
+            Auto-memory is {snapshot.autoMemoryEnabled ? 'enabled' : 'disabled'}.
+          </p>
+        </div>
+        <div className="rounded-lg border border-shell-seam bg-shell-hover px-3 py-2 text-right">
+          <div className="font-mono text-[14px] text-text-muted">
+            {counts.total}
+          </div>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-text-subtle">
+            instruction files
+          </div>
+        </div>
+      </div>
+      <div className="grid gap-2 text-[12px] sm:grid-cols-3">
+        <Count label="Managed" value={counts.managed} />
+        <Count label="User" value={counts.user} />
+        <Count label="Project" value={counts.project} />
+        <Count label="Local" value={counts.local} />
+        <Count label="AutoMem" value={counts.autoMem} />
+        <Count label="TeamMem" value={counts.teamMem} />
+      </div>
+      <div className="mt-3 space-y-1 font-mono text-[11px] text-text-subtle">
+        <div className="truncate">dir: {snapshot.autoMemoryDir}</div>
+        <div className="truncate">entrypoint: {snapshot.autoMemoryEntrypoint}</div>
+      </div>
+    </section>
+  )
+}
+
+function Count({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-shell-seam bg-shell-hover/35 px-2.5 py-2">
+      <span className="text-text-subtle">{label}</span>
+      <span className="float-right font-mono text-text-muted">{value}</span>
+    </div>
+  )
+}
+
+function InstructionFiles({ snapshot }: { snapshot: MemorySnapshot }) {
+  const groups = selectInstructionFilesByType(snapshot)
+  return (
+    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+      <h3 className="mb-3 text-sm font-semibold text-text-primary">
+        Instruction files
+      </h3>
+      {groups.length === 0 ? (
+        <p className="text-[12.5px] text-text-subtle">
+          No CLAUDE.md or instruction-rule files were loaded.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(group => (
+            <div key={group.type}>
+              <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+                {group.type}
+              </div>
+              <div className="space-y-1.5">
+                {group.files.map(file => (
+                  <div
+                    className="rounded-lg border border-shell-seam bg-shell-hover/30 px-3 py-2"
+                    key={`${file.type}:${file.path}`}
+                  >
+                    <div className="truncate font-mono text-[11px] text-text-muted">
+                      {file.path}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1.5 text-[10.5px] text-text-subtle">
+                      {file.parent ? <Pill label="included" /> : <Pill label="direct" />}
+                      {file.globs?.length ? (
+                        <Pill label={`${file.globs.length} path rule${file.globs.length === 1 ? '' : 's'}`} />
+                      ) : null}
+                      {file.contentDiffersFromDisk ? <Pill label="truncated" /> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
+  return (
+    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-text-primary">
+          Auto memories
+        </h3>
+        <span className="font-mono text-[11px] text-text-subtle">
+          {snapshot.autoMemories.length} rows
+        </span>
+      </div>
+      {snapshot.autoMemories.length === 0 ? (
+        <p className="text-[12.5px] text-text-subtle">
+          No typed auto-memory files were found in the real memdir scan.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {snapshot.autoMemories.map(memory => (
+            <div
+              className="rounded-lg border border-shell-seam bg-shell-hover/30 px-3 py-2"
+              key={memory.filePath}
+            >
+              <div className="flex items-center gap-2">
+                {memory.type ? <Pill label={memory.type} /> : <Pill label="untyped" />}
+                <span className="truncate font-mono text-[11px] text-text-muted">
+                  {memory.filename}
+                </span>
+              </div>
+              {memory.description ? (
+                <p className="mt-1 text-[12px] leading-relaxed text-text-subtle">
+                  {memory.description}
+                </p>
+              ) : null}
+              <div className="mt-1 font-mono text-[10.5px] text-text-subtle">
+                {new Date(memory.mtimeMs).toISOString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function Notes({ snapshot }: { snapshot: MemorySnapshot }) {
+  if (snapshot.notes.length === 0) return null
+  return (
+    <section className="rounded-lg border border-shell-seam bg-shell-hover/40 px-4 py-3">
+      <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+        Scope
+      </div>
+      <ul className="list-disc space-y-1 pl-4 text-[12px] leading-relaxed text-text-subtle">
+        {snapshot.notes.map(note => (
+          <li key={note}>{note}</li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function Pill({ label }: { label: string }) {
+  return (
+    <span className="rounded-full border border-shell-seam bg-shell-hover px-1.5 py-0.5 text-[10px] font-medium text-text-subtle">
+      {label}
+    </span>
+  )
+}

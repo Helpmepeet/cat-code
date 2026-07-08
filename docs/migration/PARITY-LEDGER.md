@@ -62,6 +62,14 @@ These are not bugs to fix here — they are **ownership decisions to force**: as
 session (a new transcript-rendering session and a settings-editors session are the two obvious ones)
 or waive it explicitly.
 
+**Ownership resolution (2026-07-07 — 126 ❓ → 0 silently unowned).** The two clusters got new owners:
+**§5 Messages + §6 Chat activity (64) → P4-18**; **§11 Settings + FLOW-8 + §8 toggles (45) → P4-19**
+(both drafted in `backlog/phase4.md` Tranche E). Of the scattered rest: **3 → P4-0** (composer attach
++ slash-picker footer chrome), **1 → CC-2** (restore-reorder), **5 waived** (mock/cosmetic: palette
+mock-recents, per-agent-memory invention, match-type label), and **8 → recommended P4-20** — the
+AskUserQuestion renderer, a real reachable tool that today degrades to a raw JSON dump; **not yet
+drafted, operator greenlight**. Per-cluster map: the Part C ownership table.
+
 ## How this ledger is maintained (done-criterion + gate)
 
 - **Every surface/flow session's DONE-WHEN now includes updating its ledger rows here** (add/flip
@@ -310,6 +318,8 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Panel/divider/dropedge/selector aria-labels (identity + state) | real-added | ➕ real-added | `app/renderer/src/WorkspacePanels.tsx:156,292,314,358,391` + `:407-424` | Honesty-rule labeling (P3-6/P4-4); prototype had no aria. |
 
 ### 05. Messages.jsx — Scrolling transcript: bubbles, prose/markdown, per-family tool cards, diffs, thinking, boundary/lifecycle seams, and the TUI-tag-derived row zoo
+
+> **⛳ OWNER (assigned 2026-07-07): P4-18 — Transcript rendering** (`backlog/phase4.md` Tranche E). The 49 ❓ rows below are P4-18's build scope, not silent gaps — P2-0..P2-3 built the projector/data; nothing renders it beyond assistant-text + tool-use. They stay ❓ here until P4-18 flips them ✅.
 
 **Migration target:** `app/renderer/src/TranscriptView.tsx` + `transcriptProjector.ts` (+ `ToolInspector.tsx`, `sdkMessageFixtures.ts`) · **Overall:** 🔁 adapted — PARTIAL (data layer thorough; view renders 2 of ~14 projected kinds, remainder unowned) · **Prototype:** `~/catcode_prototype/cat-app/Messages.jsx` (2175 lines) · **INVENTORY:** W3 transcript rows / tool-cards / boundaries / errors (adapt)
 
@@ -709,6 +719,8 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Escape dismiss-latch that re-opens on next keystroke | ux-state | ➕ real-added | `App.tsx:993-996` useEffect keyed on `slashQuery` resets `slashDismissed=false` when the draft text changes | Real-added UX: Escape stays dismissed until the query changes; no equivalent in the stateless prototype. |
 
 ### 11. Settings.jsx — two-pane settings shell (category rail + source-badge field system over the real settings.snapshot seam)
+
+> **⛳ OWNER (assigned 2026-07-07): P4-19 — Settings core value-editors** (`backlog/phase4.md` Tranche E). The 40 ❓ rows below are the value editors P4-3 stubbed (P4-12 is extensions-only); P4-19's scope. ❓ here until P4-19 flips them ✅.
 
 **Migration target:** `app/renderer/src/SettingsShell.tsx` · `SettingsField.tsx` · `settingsState.ts` · `app/shared/protocol.ts` — mounted `App.tsx:888` · **Overall:** 🔁 adapted (shell/primitives built, mounted & live over real snapshot; core value-editor bodies unowned) · **Prototype:** `~/catcode_prototype/cat-app/Settings.jsx` (758 lines) · **INVENTORY:** W4-Settings shell + Field/SourceBadge/ManagedBadge adapt (S7)
 
@@ -2254,6 +2266,25 @@ drops with no owner.
 Every prototype element/step that is **neither built, nor owned by a backlog session, nor
 cut**. This is CC-1's load-bearing output: each item needs an **owner assignment or an
 explicit waiver** before the Phase-4 gate. Full evidence for each lives in its Part A/B row.
+
+**Ownership (assigned 2026-07-07 — every ❓ now has an owner or a waiver; 0 silently unowned):**
+
+| Cluster (Part A/B §) | ❓ | Owner |
+|---|--:|---|
+| Messages transcript render (§5) | 49 | **P4-18** (Tranche E) |
+| Chat activity / scroll / stop (§6) | 14 | **P4-18** |
+| Permission "reject-all" / stop (FLOW-3) | 1 | **P4-18** |
+| Settings core value-editors (§11) | 40 | **P4-19** (Tranche E) |
+| Settings-edit interaction (FLOW-8) | 3 | **P4-19** |
+| PermissionRules classifier + managed-rules-only toggles (§8) | 2 | **P4-19** |
+| Composer attach + slash-picker footer chrome (§6 · §10) | 3 | **P4-0** |
+| Restore/open row-reorder (FLOW-7) | 1 | **CC-2** (parked bug) |
+| Palette mock-recents · per-agent-memory · match-type label (§9 · §23 · §8) | 5 | ✂️ **waived** (mock/cosmetic) |
+| AskUserQuestion renderer (§7 + FLOW-3) | 8 | **P4-20** (recommended — not yet drafted, operator greenlight) |
+| **Total** | **126** | **0 silently unowned** |
+
+The point-in-time danger rows (dispositions as-built at ledger time) follow; ownership above supersedes
+the "no owner" note in each:
 
 | Surface / flow | Element / step | Why it has no owner |
 |---|---|---|

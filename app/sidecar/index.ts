@@ -114,7 +114,7 @@ async function main(): Promise<void> {
     ? `probe:${args.sessionId}`
     : getSessionId()
 
-  const { controller, permissions, settings } = await createSidecarSessionController({
+  const { controller, permissions, settings, agentConfig, goals, memory } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: args.cwd,
     ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
@@ -135,6 +135,9 @@ async function main(): Promise<void> {
     controller,
     ...(permissions ? { permissions } : {}),
     ...(settings ? { settings } : {}),
+    ...(agentConfig ? { agentConfig } : {}),
+    ...(goals ? { goals } : {}),
+    ...(memory ? { memory } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
   })
 

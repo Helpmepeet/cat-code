@@ -5,6 +5,10 @@ import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRu
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { getTools } from '../../src/tools.js'
 import { getCommands, type Command } from '../../src/commands.js'
+import {
+  getAgentDefinitionsWithOverrides,
+  type AgentDefinitionsResult,
+} from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { createStore } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
 import {
@@ -27,6 +31,18 @@ import {
   createSidecarSettingsDomain,
   type SidecarSettingsDomain,
 } from './settingsDomain.js'
+import {
+  createSidecarAgentConfigDomain,
+  type SidecarAgentConfigDomain,
+} from './agentConfigDomain.js'
+import {
+  createSidecarGoalDomain,
+  type SidecarGoalDomain,
+} from './goalDomain.js'
+import {
+  createSidecarMemoryDomain,
+  type SidecarMemoryDomain,
+} from './memoryDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -99,6 +115,27 @@ async function loadCommandCatalog(cwd: string): Promise<Command[]> {
   }
 }
 
+/**
+ * Load the real agent definitions for this desktop session. This is runtime
+ * setup, not the P4-7 snapshot read path: the returned active definitions are
+ * passed into QueryEngine and the same result is mirrored to the read-only UI
+ * snapshot, so the page never claims agents that the session did not configure.
+ */
+async function loadAgentDefinitionsForRuntime(
+  cwd: string,
+): Promise<AgentDefinitionsResult> {
+  try {
+    return await getAgentDefinitionsWithOverrides(cwd)
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] agent definition load failed (session runs without custom agents): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return { activeAgents: [], allAgents: [] }
+  }
+}
+
 export async function createNormalSidecarQueryEngineConfig(
   cwd: string,
   initialMessages?: readonly Message[],
@@ -131,9 +168,14 @@ export async function createNormalSidecarQueryEngineConfig(
   // crashing session construction. `getCommands` is already internally fail-soft
   // for skill/plugin loads; this guards the remaining eager built-in factories.
   const commands = await loadCommandCatalog(cwd)
+  const agentDefinitions = await loadAgentDefinitionsForRuntime(cwd)
+  const mcpClients: [] = []
+  const availableMcpServers: string[] = []
 
   return {
     appStateStore,
+    agentDefinitions,
+    availableMcpServers,
     queryEngineConfig: {
       ...createQueryEngineAppSessionConfigFromSetup({
         cwd,
@@ -141,9 +183,9 @@ export async function createNormalSidecarQueryEngineConfig(
         commands,
         mcpTools: [],
         mcpCommands: [],
-        mcpClients: [],
+        mcpClients,
         mcpResources: {},
-        agents: [],
+        agents: agentDefinitions.activeAgents,
         getAppState: appStateStore.getState,
         setAppState: appStateStore.setState,
         readFileCache: createFileStateCacheWithSizeLimit(
@@ -178,6 +220,21 @@ export type SidecarSession = {
    * cwd-configured engine, so a disk read would be meaningless).
    */
   settings: SidecarSettingsDomain | null
+  /**
+   * Agents config read-seam (P4-7) — the real agent definition snapshot rooted at
+   * this session's cwd. Read-only; null in probe mode.
+   */
+  agentConfig: SidecarAgentConfigDomain | null
+  /**
+   * Goals read-seam (P4-10) — live threadGoal state from the same app-state store
+   * the runtime mutates. Read-only; null in probe mode.
+   */
+  goals: SidecarGoalDomain | null
+  /**
+   * Memory read-seam (P4-10) — metadata over the real CLAUDE.md hierarchy and
+   * auto-memory memdir. Read-only; null in probe mode.
+   */
+  memory: SidecarMemoryDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -212,6 +269,9 @@ export async function createSidecarSessionController({
       }),
       permissions: null,
       settings: null,
+      agentConfig: null,
+      goals: null,
+      memory: null,
     }
   }
 
@@ -220,12 +280,18 @@ export async function createSidecarSessionController({
   // so what the model sees and what canUseTool allows never diverge. P1-2
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
-  const { appStateStore, queryEngineConfig } =
+  const { appStateStore, agentDefinitions, availableMcpServers, queryEngineConfig } =
     await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
     permissions: createSidecarPermissionDomain(appStateStore),
     settings: createSidecarSettingsDomain(),
+    agentConfig: createSidecarAgentConfigDomain({
+      agentDefinitions,
+      availableMcpServers,
+    }),
+    goals: createSidecarGoalDomain(appStateStore),
+    memory: createSidecarMemoryDomain(),
   }
 }

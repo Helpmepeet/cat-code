@@ -66,6 +66,9 @@ import {
 } from '../shared/protocol.js'
 import type { SidecarPermissionDomain } from './permissionDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
+import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
+import type { SidecarGoalDomain } from './goalDomain.js'
+import type { SidecarMemoryDomain } from './memoryDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -96,6 +99,21 @@ export type SidecarServerOptions = {
    */
   settings?: SidecarSettingsDomain
   /**
+   * Agent config read-seam (P4-7). Optional because the P1-0 probe fixture has no
+   * cwd-configured engine; when absent, no `agent-config.snapshot` frame is emitted.
+   */
+  agentConfig?: SidecarAgentConfigDomain
+  /**
+   * Goals read-seam (P4-10). Optional because the P1-0 probe fixture has no engine
+   * app-state store; when absent, no `thread-goal.snapshot` frame is emitted.
+   */
+  goals?: SidecarGoalDomain
+  /**
+   * Memory read-seam (P4-10). Optional because the P1-0 probe fixture has no
+   * cwd-configured engine; when absent, no `memory.snapshot` frame is emitted.
+   */
+  memory?: SidecarMemoryDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -121,11 +139,16 @@ export class SidecarServer {
   private readonly controller: AppSessionController
   private readonly permissions: SidecarPermissionDomain | null
   private readonly settings: SidecarSettingsDomain | null
+  private readonly agentConfig: SidecarAgentConfigDomain | null
+  private readonly goals: SidecarGoalDomain | null
+  private readonly memory: SidecarMemoryDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribePermissionContext: (() => void) | null = null
+  private unsubscribeGoalSnapshot: (() => void) | null = null
+  private unsubscribeMemorySnapshot: (() => void) | null = null
   private activeTurn = false
 
   constructor(options: SidecarServerOptions) {
@@ -134,6 +157,9 @@ export class SidecarServer {
     this.controller = options.controller
     this.permissions = options.permissions ?? null
     this.settings = options.settings ?? null
+    this.agentConfig = options.agentConfig ?? null
+    this.goals = options.goals ?? null
+    this.memory = options.memory ?? null
     this.history = options.history ?? []
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
@@ -154,6 +180,16 @@ export class SidecarServer {
         this.permissions.subscribeToolPermissionContext(context => {
           this.broadcastPermissionContext(context)
         })
+    }
+    if (this.goals) {
+      this.unsubscribeGoalSnapshot = this.goals.subscribe(() => {
+        this.broadcastThreadGoalSnapshot()
+      })
+    }
+    if (this.memory) {
+      this.unsubscribeMemorySnapshot = this.memory.subscribe(() => {
+        this.broadcastMemorySnapshot()
+      })
     }
   }
 
@@ -198,6 +234,12 @@ export class SidecarServer {
     // P4-3 — the settings source/precedence snapshot, after C3 (read-only,
     // point-in-time on attach; source/editable/managed model only, no values).
     this.sendSettingsSnapshot(connection)
+    // P4-7 — agent definition config snapshot, after settings and before replay.
+    this.sendAgentConfigSnapshot(connection)
+    // P4-10 — read-only goals + memory snapshots, before replay and with no new
+    // inbound vocabulary or renderer-authored state.
+    this.sendThreadGoalSnapshot(connection)
+    this.sendMemorySnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -311,6 +353,10 @@ export class SidecarServer {
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
     this.unsubscribePermissionContext = null
+    this.unsubscribeGoalSnapshot?.()
+    this.unsubscribeGoalSnapshot = null
+    this.unsubscribeMemorySnapshot?.()
+    this.unsubscribeMemorySnapshot = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -873,6 +919,119 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         })`,
       )
+    }
+  }
+
+  /**
+   * P4-7 — build + send the agent config snapshot to a single connection (attach).
+   * The domain withholds prompt bodies, hook payloads, and inline MCP config values,
+   * so this frame carries definition/status metadata without credential material.
+   */
+  private sendAgentConfigSnapshot(connection: Connection): void {
+    if (!this.agentConfig) {
+      return
+    }
+    try {
+      const raw = this.agentConfig.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'agent-config.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'agent-config.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        agents: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] agent-config.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  /**
+   * P4-10 — current thread-goal snapshot from the runtime's live app-state store.
+   * Writes stay on the engine's slash/action path; the desktop receives display
+   * state only.
+   */
+  private sendThreadGoalSnapshot(connection: Connection): void {
+    if (!this.goals) {
+      return
+    }
+    try {
+      const raw = this.goals.getSnapshot()
+      const snapshot = this.prepareOutboundPayload(raw, 'thread-goal.snapshot')
+      if (snapshot === null && raw !== null) {
+        return
+      }
+      this.send(connection, {
+        kind: 'thread-goal.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        goal: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] thread-goal.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastThreadGoalSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendThreadGoalSnapshot(connection)
+    }
+  }
+
+  /**
+   * P4-10 — read-only memory metadata snapshot. The domain excludes memory bodies;
+   * this shared path still applies clone/JSON checks, secretGuard, and size caps.
+   */
+  private sendMemorySnapshot(connection: Connection): void {
+    if (!this.memory) {
+      return
+    }
+    try {
+      const raw = this.memory.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'memory.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'memory.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        memory: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] memory.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastMemorySnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendMemorySnapshot(connection)
     }
   }
 

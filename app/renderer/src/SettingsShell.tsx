@@ -14,7 +14,13 @@
 
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { SettingsSnapshot } from '../../shared/protocol.js'
+import type {
+  AgentConfigSnapshot,
+  MemorySnapshot,
+  SettingsSnapshot,
+} from '../../shared/protocol.js'
+import { AgentsPage } from './AgentsPage.js'
+import { MemoryPage } from './MemoryPage.js'
 import {
   Field,
   LockIcon,
@@ -121,9 +127,13 @@ const CAT_OWNER: Record<string, string> = {
 
 export function SettingsShell({
   snapshot,
+  agentsSnapshot,
+  memorySnapshot,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
+  agentsSnapshot?: AgentConfigSnapshot | null
+  memorySnapshot?: MemorySnapshot | null
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -205,7 +215,12 @@ export function SettingsShell({
             </h2>
             <p className="text-[13px] text-text-subtle">{CAT_DESC[active]}</p>
           </header>
-          <CategoryBody category={active} snapshot={snapshot} />
+          <CategoryBody
+            agentsSnapshot={agentsSnapshot ?? null}
+            category={active}
+            memorySnapshot={memorySnapshot ?? null}
+            snapshot={snapshot}
+          />
         </div>
       </div>
     </div>
@@ -213,12 +228,22 @@ export function SettingsShell({
 }
 
 function CategoryBody({
+  agentsSnapshot,
   category,
+  memorySnapshot,
   snapshot,
 }: {
+  agentsSnapshot: AgentConfigSnapshot | null
   category: string
+  memorySnapshot: MemorySnapshot | null
   snapshot: SettingsSnapshot | null
 }) {
+  if (category === 'agents') {
+    return <AgentsPage embedded snapshot={agentsSnapshot} />
+  }
+  if (category === 'memory') {
+    return <MemoryPage embedded snapshot={memorySnapshot} />
+  }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />
   }
