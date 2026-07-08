@@ -75,8 +75,12 @@ test('the active session pane renders the P2 transcript spine + prompt unchanged
   expect(html).toContain('Copy for LLM')
   expect(html).toContain('Permissions')
   expect(html).toContain('Transcript (projected)')
-  expect(html).toContain('<pre')
+  // Raw debug view is now behind a collapsed <details> (perf F3, 2026-07-08):
+  // the label is present, but its multi-MB <pre> body is NOT rendered until the
+  // operator opens it — so a default pane paints no raw <pre>.
   expect(html).toContain('Raw SDKMessage events')
+  expect(html).toContain('<details')
+  expect(html).not.toContain('<pre')
   // The pane surfaces the active session's cwd in its header.
   expect(html).toContain('/tmp/project')
 })

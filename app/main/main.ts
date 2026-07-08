@@ -115,12 +115,20 @@ let latestRendererSnapshot: DebugRendererSnapshot | null = null
  */
 const attachmentGate = new AttachmentGate()
 
+// Perf (2026-07-08, F3): send the whole batch as ONE `webContents.send`, not one
+// send per frame. A restore replays its history as a single `frames[]` from the
+// gate (`onRendererReady` → buffer snapshot); one send ⇒ one renderer IPC task ⇒
+// the preload fans out to `subscribe` synchronously ⇒ React batches all folds
+// into ~1 render, instead of 95–400 separate tasks each committing a full render.
+// The channel payload and the preload's `subscribe(listener)` contract are now
+// `ServerFrame[]` (was a single `ServerFrame`). Outbound-only: no new channel or
+// bridge method, and the on-wire `ServerFrame`/`PROTOCOL_VERSION` are unchanged —
+// a batch is just the delivery envelope, so no protocol version bump.
 function deliver(frames: ServerFrame[]): void {
   const contents = mainWindow?.webContents
   if (!contents) return
-  for (const frame of frames) {
-    contents.send(CH_SERVER_FRAME, frame satisfies ServerFrame)
-  }
+  if (frames.length === 0) return
+  contents.send(CH_SERVER_FRAME, frames satisfies ServerFrame[])
 }
 
 /** The sidecar entry path — also the registry's orphan-identity marker (§9-A3). */

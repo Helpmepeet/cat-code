@@ -87,7 +87,10 @@ function watchForLiveSession(window: BrowserWindow): void {
   const originalSend = contents.send.bind(contents)
   contents.send = ((channel: string, ...args: unknown[]) => {
     if (liveSessionId === null && channel === CH_SERVER_FRAME) {
-      const frame = args[0] as { sessionId?: unknown } | undefined
+      // Production main batches a delivery as one ServerFrame[] (perf F3); sniff
+      // the session id from the first frame of the batch.
+      const batch = args[0] as Array<{ sessionId?: unknown }> | undefined
+      const frame = Array.isArray(batch) ? batch[0] : undefined
       if (frame && typeof frame.sessionId === 'string') {
         liveSessionId = frame.sessionId
       }
@@ -137,7 +140,9 @@ async function runProductionHardeningSmoke(
     await new Promise(resolve => setTimeout(resolve, 100))
     const activeSessionId = await resolveActiveSessionId(window)
     for (const frame of frames) {
-      window.webContents.send(CH_SERVER_FRAME, { ...frame, sessionId: activeSessionId })
+      // Deliver on the same batched contract production main uses (one
+      // ServerFrame[] per send); the preload fans it out to `subscribe`.
+      window.webContents.send(CH_SERVER_FRAME, [{ ...frame, sessionId: activeSessionId }])
     }
 
     const deadline = Date.now() + 5_000

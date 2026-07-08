@@ -20,6 +20,7 @@
  * slices; their cases slot into this same switch.
  */
 
+import { memo } from 'react'
 import Markdown from 'react-markdown'
 import type { SessionId } from '../../shared/protocol.js'
 import {
@@ -31,7 +32,12 @@ import {
   type UserImageSource,
 } from './transcriptProjector.js'
 
-export function TranscriptView({
+// Perf (2026-07-08, F3): memoized so an App re-render that did NOT change this
+// session's transcript slice (a keystroke in the composer, another session's
+// frame) skips the whole subtree. `state`/`activeSessionId` are referentially
+// stable across those, and `selectNestedTranscriptRows` is slice-cached, so the
+// `rows` handed to TranscriptRowsView keep identity when nothing changed.
+export const TranscriptView = memo(function TranscriptView({
   state,
   activeSessionId,
 }: {
@@ -43,9 +49,13 @@ export function TranscriptView({
       rows={selectNestedTranscriptRows(state, activeSessionId)}
     />
   )
-}
+})
 
-export function TranscriptRowsView({ rows }: { rows: NestedTranscriptRow[] }) {
+export const TranscriptRowsView = memo(function TranscriptRowsView({
+  rows,
+}: {
+  rows: NestedTranscriptRow[]
+}) {
   if (rows.length === 0) {
     return (
       <div className="text-sm text-text-subtle">No transcript rows yet.</div>
@@ -59,9 +69,15 @@ export function TranscriptRowsView({ rows }: { rows: NestedTranscriptRow[] }) {
       ))}
     </div>
   )
-}
+})
 
-function TranscriptRowView({ row }: { row: NestedTranscriptRow }) {
+// Memoized per row: a slice-cached read reuses unchanged row objects, so only
+// the rows that actually changed re-render (markdown re-parses once per body).
+const TranscriptRowView = memo(function TranscriptRowView({
+  row,
+}: {
+  row: NestedTranscriptRow
+}) {
   // Captured before the switch narrows `row` to `never` in the default branch,
   // so the tolerant fallback can name the drifted kind without an `as` cast.
   const rowKind: string = row.kind
@@ -156,7 +172,7 @@ function TranscriptRowView({ row }: { row: NestedTranscriptRow }) {
       )
     }
   }
-}
+})
 
 /**
  * P2-2 tool card (generic family + name + status + input + result + nested

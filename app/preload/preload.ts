@@ -99,8 +99,12 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_RESTART, payload)
   },
-  subscribe(listener: (frame: ServerFrame) => void): () => void {
-    const handler = (_event: unknown, frame: ServerFrame) => listener(frame)
+  subscribe(listener: (frames: ServerFrame[]) => void): () => void {
+    // Main batches a delivery as one `ServerFrame[]` message (perf F3); hand the
+    // whole batch to the renderer so it folds each store in one dispatch. A live
+    // single frame arrives as a one-element array. Outbound-only; no inbound
+    // surface or validation change.
+    const handler = (_event: unknown, frames: ServerFrame[]) => listener(frames)
     ipcRenderer.on(CH_SERVER_FRAME, handler)
     return () => {
       ipcRenderer.removeListener(CH_SERVER_FRAME, handler)

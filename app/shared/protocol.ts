@@ -767,8 +767,12 @@ export type CatCodeBridge = {
   ping(sessionId: SessionId, nonce: string): void
   /** Restart the addressed sidecar process while retaining renderer attachment. */
   restart(sessionId: SessionId): void
-  /** Subscribe to all server frames. Returns an unsubscribe function. */
-  subscribe(listener: (frame: ServerFrame) => void): () => void
+  /**
+   * Subscribe to server frames. Main delivers them in batches (one `ServerFrame[]`
+   * per IPC message, perf F3); a single live frame arrives as a one-element array.
+   * Returns an unsubscribe function.
+   */
+  subscribe(listener: (frames: ServerFrame[]) => void): () => void
   /**
    * Signal that the renderer has mounted and registered `subscribe`, so main can
    * replay any frames buffered before this point (F2). Must be called AFTER

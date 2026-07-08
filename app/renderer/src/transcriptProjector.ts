@@ -341,10 +341,25 @@ export type NestedTranscriptRow = TranscriptRow & {
   children: NestedTranscriptRow[]
 }
 
+// Perf (2026-07-08, F3): the nested-row tree is a pure function of ONE session
+// slice, and `projectServerFrame` replaces that slice object only when its rows
+// actually change (`if (projected === session) return state`). So caching the
+// result on the slice reference makes repeated reads (unrelated App re-renders —
+// keystrokes, another session's frame) return an IDENTICAL array, which lets the
+// `React.memo`'d TranscriptView/rows skip re-rendering. A new slice (real change)
+// misses the cache and recomputes. WeakMap ⇒ evicts with the slice, no leak.
+const nestedRowsCache = new WeakMap<TranscriptSessionState, NestedTranscriptRow[]>()
+const EMPTY_NESTED_ROWS: NestedTranscriptRow[] = []
+
 export function selectNestedTranscriptRows(
   state: TranscriptState,
   sessionId: SessionId | null,
 ): NestedTranscriptRow[] {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  if (!session) return EMPTY_NESTED_ROWS
+  const cached = nestedRowsCache.get(session)
+  if (cached) return cached
+
   const rows = selectTranscriptRows(state, sessionId)
   const byToolUseId = new Map<string, TranscriptRow>()
   for (const row of rows) {
@@ -371,7 +386,9 @@ export function selectNestedTranscriptRows(
       row.kind === 'tool-use' ? (childrenByParentId.get(row.toolUseId) ?? []) : []
     ).map(attachChildren),
   })
-  return topLevel.map(attachChildren)
+  const result = topLevel.map(attachChildren)
+  nestedRowsCache.set(session, result)
+  return result
 }
 
 /** Reducer over addressed server frames; unknown sessions are rejected. */

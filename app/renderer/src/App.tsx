@@ -43,6 +43,7 @@ import {
   createResumeUiState,
   reduceResumeUiState,
 } from './resumeDialogState.js'
+import { applyServerFrameBatch, withBatch } from './serverFrameBatch.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -159,19 +160,33 @@ import type {
   SessionDescriptor,
 } from '../../shared/hostApi.js'
 
+// Perf F3 (2026-07-08): batch-folding reducer variants, defined at module scope
+// so their identity is stable across renders. A batched server-frame delivery is
+// folded into each store in ONE dispatch (`applyServerFrameBatch`); single
+// actions still pass straight through, so every other dispatch site is unchanged.
+const reduceServerFrameBatched = withBatch(reduceServerFrame)
+const projectServerFrameBatched = withBatch(projectServerFrame)
+const reducePermissionStateBatched = withBatch(reducePermissionState)
+const reduceConnectionStateBatched = withBatch(reduceConnectionState)
+const reduceSettingsStateBatched = withBatch(reduceSettingsState)
+const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
+const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
+const reduceAccountsStateBatched = withBatch(reduceAccountsState)
+const reduceResumeUiStateBatched = withBatch(reduceResumeUiState)
+
 export function App() {
   const [state, dispatch] = useReducer(
-    reduceServerFrame,
+    reduceServerFrameBatched,
     undefined,
     createRawMessageLogState,
   )
   const [transcript, dispatchSessionEvent] = useReducer(
-    projectServerFrame,
+    projectServerFrameBatched,
     undefined,
     createTranscriptState,
   )
   const [permissions, dispatchPermission] = useReducer(
-    reducePermissionState,
+    reducePermissionStateBatched,
     undefined,
     createPermissionState,
   )
@@ -204,27 +219,27 @@ export function App() {
       return saved && saved.panels.length > 1 ? saved : null
     })
   const [connection, dispatchConnection] = useReducer(
-    reduceConnectionState,
+    reduceConnectionStateBatched,
     undefined,
     createConnectionState,
   )
   const [settings, dispatchSettings] = useReducer(
-    reduceSettingsState,
+    reduceSettingsStateBatched,
     undefined,
     createSettingsState,
   )
   const [agentConfig, dispatchAgentConfig] = useReducer(
-    reduceAgentConfigState,
+    reduceAgentConfigStateBatched,
     undefined,
     createAgentConfigState,
   )
   const [goalMemory, dispatchGoalMemory] = useReducer(
-    reduceGoalMemoryState,
+    reduceGoalMemoryStateBatched,
     undefined,
     createGoalMemoryState,
   )
   const [accounts, dispatchAccounts] = useReducer(
-    reduceAccountsState,
+    reduceAccountsStateBatched,
     undefined,
     createAccountsState,
   )
@@ -232,7 +247,7 @@ export function App() {
   // `bridge.restoreSession` call `performRestore` below already makes; see
   // resumeDialogState.ts.
   const [resumeUi, dispatchResumeUi] = useReducer(
-    reduceResumeUiState,
+    reduceResumeUiStateBatched,
     undefined,
     createResumeUiState,
   )
@@ -258,36 +273,25 @@ export function App() {
 
   useEffect(() => {
     const bridge = getBridge()
-    const unsubscribe = bridge.subscribe(frame => {
-      // Active selection is renderer-owned UI state. A background frame can
-      // create/update its addressed slice, but never steals focus from another
-      // LIVE tab. Two cases DO take the pane: nothing is active yet, or the
-      // frame belongs to a session that has no host row (a frame leading its own
-      // session-added) while the current active session ALSO has no row —
-      // whichever session is actually streaming is the one worth showing. Once
-      // both sessions have rows, focus only moves by user action.
-      setActiveSessionId(current => {
-        if (current === null) return frame.sessionId
-        if (current === frame.sessionId) return current
-        const roster = shellRef.current.byId
-        const currentHasRow = Boolean(roster[current])
-        const frameHasRow = Boolean(roster[frame.sessionId])
-        if (!currentHasRow && !frameHasRow) return frame.sessionId
-        return current
+    // Main delivers a batch of frames per IPC message (perf F3). Fold the whole
+    // batch into every store with ONE dispatch each — so a restore replay is 9
+    // dispatches, not 9 per frame. Focus/resume semantics are unchanged: a
+    // background frame never steals focus from another live tab; ready/replay
+    // still drive the resume overlay. See serverFrameBatch.ts.
+    const unsubscribe = bridge.subscribe(frames => {
+      applyServerFrameBatch(frames, {
+        getRosterById: () => shellRef.current.byId,
+        setActiveSessionId,
+        dispatchRawLog: dispatch,
+        dispatchPermission,
+        dispatchConnection,
+        dispatchSettings,
+        dispatchAgentConfig,
+        dispatchGoalMemory,
+        dispatchAccounts,
+        dispatchTranscript: dispatchSessionEvent,
+        dispatchResumeUi,
       })
-      dispatch(frame)
-      dispatchPermission({ type: 'frame', frame })
-      dispatchConnection(frame)
-      dispatchSettings({ type: 'frame', frame })
-      dispatchAgentConfig({ type: 'frame', frame })
-      dispatchGoalMemory({ type: 'frame', frame })
-      dispatchAccounts({ type: 'frame', frame })
-      dispatchSessionEvent(frame)
-      if (frame.kind === 'ready') {
-        dispatchResumeUi({ type: 'attached', sessionId: frame.sessionId })
-      } else if (frame.kind === 'event' && frame.replay === true) {
-        dispatchResumeUi({ type: 'replayed', sessionId: frame.sessionId })
-      }
     })
     bridge.rendererReady()
     return unsubscribe
@@ -1216,6 +1220,11 @@ export function SessionPane({
   // capability is added to the renderer.
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
+  // P1-2 raw-frame debug view (F2, 2026-07-08): collapsed by default and its
+  // body rendered ONLY when opened. Stringifying + wrapping the whole retained
+  // log (up to 8 MiB) was the dominant DOM reflow on every switch/frame/keystroke;
+  // gated + capped to the last 20 messages, it costs nothing until asked for.
+  const [rawDebugOpen, setRawDebugOpen] = useState(false)
   const slashCommands = selectSlashCommands(transcript, activeSessionId)
   const slashQuery = parseSlashDraft(prompt)
   const slashMatches =
@@ -1548,10 +1557,20 @@ export function SessionPane({
       </section>
 
       <section className="flex min-h-0 flex-1 flex-col">
-        <h1 className="mb-2 text-sm text-text-muted">Raw SDKMessage events</h1>
-        <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded border border-text-subtle p-4 font-mono text-xs">
-          {JSON.stringify(activeLog.messages, null, 2)}
-        </pre>
+        <details
+          className="min-h-0 flex-1 overflow-auto"
+          onToggle={e => setRawDebugOpen(e.currentTarget.open)}
+        >
+          <summary className="cursor-pointer text-sm text-text-muted">
+            Raw SDKMessage events{' '}
+            <span className="text-text-subtle">(last 20)</span>
+          </summary>
+          {rawDebugOpen ? (
+            <pre className="mt-2 overflow-auto whitespace-pre-wrap rounded border border-text-subtle p-4 font-mono text-xs">
+              {JSON.stringify(activeLog.messages.slice(-20), null, 2)}
+            </pre>
+          ) : null}
+        </details>
       </section>
     </main>
   )

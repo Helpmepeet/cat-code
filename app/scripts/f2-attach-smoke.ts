@@ -50,7 +50,10 @@ let mainWindow: BrowserWindow | null = null
 function deliver(frames: ServerFrame[]): void {
   const contents = mainWindow?.webContents
   if (!contents) return
-  for (const frame of frames) contents.send(CH_SERVER_FRAME, frame satisfies ServerFrame)
+  // Match production main: one batched ServerFrame[] send (perf F3); the real
+  // preload (loaded here) fans it out to `subscribe`.
+  if (frames.length === 0) return
+  contents.send(CH_SERVER_FRAME, frames satisfies ServerFrame[])
 }
 
 // A minimal renderer that subscribes, then after a DELAY announces readiness
@@ -59,7 +62,9 @@ function deliver(frames: ServerFrame[]): void {
 const RENDERER_HTML = `<!doctype html>
 <html><head></head><body><script>
   window.__frames = [];
-  window.catcode.subscribe(function (frame) { window.__frames.push(frame); });
+  window.catcode.subscribe(function (frames) {
+    for (var i = 0; i < frames.length; i++) window.__frames.push(frames[i]);
+  });
   setTimeout(function () {
     window.catcode.rendererReady();
     window.catcode.rendererReady(); // StrictMode double-signal
