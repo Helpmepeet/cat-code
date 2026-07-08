@@ -85,6 +85,54 @@ test('the active session pane renders the P2 transcript spine + prompt unchanged
   expect(html).toContain('/tmp/project')
 })
 
+test('composer form owns the ↑/↓ history key scope', () => {
+  const html = renderToStaticMarkup(
+    <SessionPane
+      activeConnection={{ status: 'ready', inputEnabled: true }}
+      activeDescriptor={{
+        appSessionId: 'session-1',
+        engineSessionId: 'engine-1',
+        cwd: '/tmp/project',
+        title: null,
+        status: 'ready',
+        restorable: false,
+        createdAt: 0,
+        lastAttachedAt: 0,
+      }}
+      activeLog={{
+        inputEnabled: true,
+        messages: [],
+        retainedBytes: 0,
+        truncated: false,
+        error: null,
+        messageBytes: [],
+      }}
+      activeSessionId="session-1"
+      allowPermission={() => {}}
+      copyForLlm={() => {}}
+      denyPermission={() => {}}
+      history={['first prompt', 'second prompt']}
+      mentionItems={[]}
+      onPaste={() => {}}
+      onRemovePaste={() => {}}
+      partialCount={0}
+      pastes={[]}
+      permissionContext={null}
+      permissionQueue={[]}
+      prompt=""
+      restorePermission={() => {}}
+      setPermissionMode={() => {}}
+      setPrompt={() => {}}
+      submit={() => {}}
+      transcript={createTranscriptState()}
+      transportError={null}
+    />,
+  )
+
+  expect(html).toContain('aria-label="Composer"')
+  expect(html).toContain('aria-keyshortcuts="ArrowUp ArrowDown"')
+})
+
 test('debug export explicitly marks lossy raw-message retention', () => {
   const text = buildDebugExport([], {
     inputEnabled: true,

@@ -1300,9 +1300,7 @@ export function SessionPane({
     onPaste(text)
   }
 
-  const onComposerKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-  ): void => {
+  const onComposerKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>): void => {
     if (slashOpen) {
       switch (event.key) {
         case 'ArrowDown':
@@ -1438,7 +1436,13 @@ export function SessionPane({
         </div>
       ) : null}
 
-      <form className="flex gap-3" onSubmit={submit}>
+      <form
+        aria-keyshortcuts="ArrowUp ArrowDown"
+        aria-label="Composer"
+        className="flex gap-3"
+        onKeyDown={onComposerKeyDown}
+        onSubmit={submit}
+      >
         <div className="relative min-w-0 flex-1">
           <SlashCommandPicker
             open={slashOpen}
@@ -1469,7 +1473,6 @@ export function SessionPane({
               setHistoryNav(EMPTY_HISTORY_NAV)
               setPrompt(event.target.value)
             }}
-            onKeyDown={onComposerKeyDown}
             onPaste={handlePaste}
             placeholder="Send a prompt to the live engine"
             value={prompt}

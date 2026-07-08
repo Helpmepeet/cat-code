@@ -231,6 +231,41 @@ describe('input history recall', () => {
     expect(down3!.nav).toEqual(EMPTY_HISTORY_NAV)
   })
 
+  test('after two submitted prompts, first ↑ recalls newest, then older, and ↓ restores the empty draft', () => {
+    let state = createHistoryState()
+    state = reduceHistoryPushed(state, S1, 'first submitted prompt')
+    state = reduceHistoryPushed(state, S1, 'second submitted prompt')
+    state = reduceHistoryPushed(state, S2, 'other session prompt')
+
+    const history = selectHistory(state, S1)
+    let nav = EMPTY_HISTORY_NAV
+
+    const newest = navigateHistory(history, nav, 'up', '')
+    expect(newest).not.toBeNull()
+    expect(newest!.value).toBe('second submitted prompt')
+    nav = newest!.nav
+
+    const older = navigateHistory(history, nav, 'up', '')
+    expect(older).not.toBeNull()
+    expect(older!.value).toBe('first submitted prompt')
+    nav = older!.nav
+
+    const backToNewest = navigateHistory(history, nav, 'down', '')
+    expect(backToNewest).not.toBeNull()
+    expect(backToNewest!.value).toBe('second submitted prompt')
+
+    const restoredDraft = navigateHistory(
+      history,
+      backToNewest!.nav,
+      'down',
+      '',
+    )
+    expect(restoredDraft).not.toBeNull()
+    expect(restoredDraft!.value).toBe('')
+    expect(restoredDraft!.nav).toEqual(EMPTY_HISTORY_NAV)
+    expect(selectHistory(state, S2)).toEqual(['other session prompt'])
+  })
+
   test('↓ while already editing the draft is a no-op', () => {
     expect(navigateHistory(['a'], EMPTY_HISTORY_NAV, 'down', 'x')).toBeNull()
   })
