@@ -37,6 +37,11 @@ import { Sidebar } from './Sidebar.js'
 import { selectSidebarRows } from './sidebarState.js'
 import { CommandPalette } from './CommandPalette.js'
 import { buildPaletteItems, type PaletteItem } from './commandPaletteModel.js'
+import { HydrationOverlay, ResumeConfirmDialog } from './ResumeDialog.js'
+import {
+  createResumeUiState,
+  reduceResumeUiState,
+} from './resumeDialogState.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -177,6 +182,14 @@ export function App() {
   const [activeView, setActiveView] = useState<'chat' | 'goals' | 'settings'>(
     'chat',
   )
+  // Resume confirm/hydration UI (P4-16) — presentation state around the SAME
+  // `bridge.restoreSession` call `performRestore` below already makes; see
+  // resumeDialogState.ts.
+  const [resumeUi, dispatchResumeUi] = useReducer(
+    reduceResumeUiState,
+    undefined,
+    createResumeUiState,
+  )
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
   // listSessions() below, then kept live off subscribeHost.
@@ -220,6 +233,11 @@ export function App() {
       dispatchAgentConfig({ type: 'frame', frame })
       dispatchGoalMemory({ type: 'frame', frame })
       dispatchSessionEvent(frame)
+      if (frame.kind === 'ready') {
+        dispatchResumeUi({ type: 'attached', sessionId: frame.sessionId })
+      } else if (frame.kind === 'event' && frame.replay === true) {
+        dispatchResumeUi({ type: 'replayed', sessionId: frame.sessionId })
+      }
     })
     bridge.rendererReady()
     return unsubscribe
@@ -555,7 +573,12 @@ export function App() {
     }
   }, [])
 
-  const restoreSession = useCallback(async (sessionId: SessionId) => {
+  // The ONE real restore call (host.restoreSession via the bridge) — the
+  // confirm dialog's "Resume here"/"Retry" (via confirmResume below) is the
+  // only caller; Sidebar/palette entry points go through requestResume first
+  // so this never fires without the P4-16 confirm step. resumeUi dispatches
+  // only drive which presentation (confirm/hydrating/failed) is on screen.
+  const performRestore = useCallback(async (sessionId: SessionId) => {
     // The Sidebar restore-offer (REGISTRY §4.4): re-spawn the engine for a
     // restorable row via the HC3 host method. The row becomes a live tab off
     // the resulting session-added/status HostEvents (not an optimistic local
@@ -569,12 +592,50 @@ export function App() {
         setActiveView('chat')
         setShellError(null)
       } else {
-        setShellError(hostErrorMessage(result.error))
+        const message = hostErrorMessage(result.error)
+        setShellError(message)
+        dispatchResumeUi({ type: 'failed', message })
       }
     } catch (error) {
-      setShellError(errorMessage(error))
+      const message = errorMessage(error)
+      setShellError(message)
+      dispatchResumeUi({ type: 'failed', message })
     }
   }, [])
+
+  // Picking a restorable row (Sidebar restore-offer / palette) opens the
+  // confirm dialog instead of restoring immediately — P4-16 adapts
+  // CrossProjectResumeDialog into this confirm step.
+  const requestResume = useCallback((sessionId: SessionId) => {
+    dispatchResumeUi({ type: 'requested', sessionId })
+  }, [])
+
+  const confirmResume = useCallback(
+    (sessionId: SessionId) => {
+      dispatchResumeUi({ type: 'confirmed' })
+      void performRestore(sessionId)
+    },
+    [performRestore],
+  )
+
+  const cancelResume = useCallback(() => {
+    dispatchResumeUi({ type: 'cancelled' })
+  }, [])
+
+  const dismissResume = useCallback(() => {
+    dispatchResumeUi({ type: 'dismissed' })
+  }, [])
+
+  useEffect(() => {
+    if (resumeUi.kind !== 'hydrating' || !resumeUi.attached) return
+    const timer = window.setTimeout(() => {
+      dispatchResumeUi({
+        type: 'replaySettled',
+        sessionId: resumeUi.sessionId,
+      })
+    }, 200)
+    return () => window.clearTimeout(timer)
+  }, [resumeUi])
 
   function submitSession(
     sessionId: SessionId,
@@ -844,10 +905,29 @@ export function App() {
           closeCurrentPanel: () =>
             closeWorkspacePanelAt(workspaceLayout.activeIndex),
           selectLiveSession: selectTab,
-          restoreSession,
+          restoreSession: requestResume,
         },
       })
     : EMPTY_PALETTE_ITEMS
+
+  // The row the confirm/hydrating/failed resume UI is about — looked up from
+  // the SAME live∪restorable roster the Sidebar/palette read (no second data
+  // source). Falls back to the bare id if the row already dropped off the
+  // roster (e.g. a live-race between the dialog and a host event).
+  const resumeTargetId = resumeUi.kind === 'idle' ? null : resumeUi.sessionId
+  const resumeTargetRow = resumeTargetId
+    ? sidebarRows.find(row => row.descriptor.appSessionId === resumeTargetId) ??
+      null
+    : null
+  const resumeTargetTitle = resumeTargetRow
+    ? tabLabel(resumeTargetRow.descriptor)
+    : (resumeTargetId ?? 'session')
+  // The active tab's cwd — the only "current project" the real one-cwd-per-
+  // session model has (D1); the confirm dialog's from→to badges only render
+  // when the picked row's own cwd genuinely differs from this.
+  const activeCwd = activeSessionId
+    ? tabDescriptorsById.get(activeSessionId)?.cwd
+    : undefined
 
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
@@ -859,10 +939,10 @@ export function App() {
         activeView={activeView}
         onSelectView={view => setActiveView(view)}
         onSelectLive={selectTab}
-        onRestore={restoreSession}
+        onRestore={requestResume}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
         <TabBar
           tabs={tabs}
           activeSessionId={activeSessionId}
@@ -916,6 +996,19 @@ export function App() {
 	            onWidthsChange={updateWorkspaceWidths}
           />
         )}
+
+        {/* Hydration overlay (P4-16): visualizes the real replay-on-attach
+         * restore (RESTORE-HISTORY.md F1/F2) until the restored session's real
+         * ready/replay frames arrive, over THIS pane only. */}
+        {resumeUi.kind === 'hydrating' || resumeUi.kind === 'failed' ? (
+          <HydrationOverlay
+            message={resumeUi.kind === 'failed' ? resumeUi.message : undefined}
+            onDismiss={dismissResume}
+            onRetry={() => confirmResume(resumeUi.sessionId)}
+            sessionTitle={resumeTargetTitle}
+            state={resumeUi.kind}
+          />
+        ) : null}
       </div>
 
       {/* ⌘K command palette (P3-7): a fixed overlay above the whole shell. */}
@@ -924,6 +1017,19 @@ export function App() {
         onClose={() => setPaletteOpen(false)}
         items={paletteItems}
       />
+
+      {/* Resume confirm dialog (P4-16, adapted CrossProjectResumeDialog): the
+       * picker step reached from a restorable Sidebar/palette row, before the
+       * real restore (performRestore) is invoked. */}
+      {resumeUi.kind === 'confirm' ? (
+        <ResumeConfirmDialog
+          currentCwd={activeCwd}
+          cwd={resumeTargetRow?.descriptor.cwd ?? ''}
+          onClose={cancelResume}
+          onConfirm={() => confirmResume(resumeUi.sessionId)}
+          title={resumeTargetTitle}
+        />
+      ) : null}
     </div>
   )
 }
