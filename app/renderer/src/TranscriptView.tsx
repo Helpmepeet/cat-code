@@ -114,16 +114,6 @@ const TranscriptRowView = memo(function TranscriptRowView({
     case 'redacted-thinking':
       return <RedactedThinkingBlock />
 
-    case 'session-init':
-      return (
-        <SessionInitBanner
-          cwd={row.cwd}
-          model={row.model}
-          tools={row.tools}
-          permissionMode={row.permissionMode}
-        />
-      )
-
     case 'system-notice':
       return (
         <SystemNoticeBox noticeType={row.noticeType} content={row.content} />
@@ -342,52 +332,6 @@ function RedactedThinkingBlock() {
         redacted by the model provider
       </span>
     </div>
-  )
-}
-
-/**
- * SessionInitRow: the ✦ session-start banner — cwd, model, tool count, and
- * permission mode from the real `system/init` frame.
- */
-function SessionInitBanner({
-  cwd,
-  model,
-  tools,
-  permissionMode,
-}: {
-  cwd: string
-  model: string
-  tools: string[]
-  permissionMode: string
-}) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-2">
-      <span className="text-[13px] leading-none text-text-subtle" aria-hidden>
-        ✦
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-[11px] font-bold uppercase tracking-[0.07em] text-text-subtle">
-          Session started
-        </div>
-        <div className="truncate font-mono text-[11.5px] text-text-muted">
-          {cwd}
-        </div>
-        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-          <MetaPair label="model" value={model} />
-          <MetaPair label="tools" value={String(tools.length)} />
-          <MetaPair label="mode" value={permissionMode} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function MetaPair({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="text-[10px] text-text-subtle/70">{label}</span>
-      <span className="font-mono text-[11px] text-text-muted">{value}</span>
-    </span>
   )
 }
 

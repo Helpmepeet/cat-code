@@ -244,22 +244,10 @@ test('P4-18a: a redacted-thinking row renders a redacted placeholder', () => {
   expect(html).not.toContain('ENCRYPTED')
 })
 
-test('P4-18a: a session-init row renders the started banner with cwd/model/mode', () => {
-  const html = render({
-    ...frameSource,
-    id: 's:f:session-init',
-    kind: 'session-init',
-    cwd: '/Users/pt/cat-code',
-    model: 'claude-opus-4-8',
-    tools: ['Bash', 'Read', 'Edit'],
-    permissionMode: 'default',
-  })
-
-  expect(html).toContain('Session started')
-  expect(html).toContain('/Users/pt/cat-code')
-  expect(html).toContain('claude-opus-4-8')
-  expect(html).toContain('default')
-})
+// P4-23 (operator, 2026-07-09): the ✦ "Session started" banner row was removed.
+// The init frame still runs (it captures the P3-7 slash catalog — see
+// transcriptProjector.test.ts) but emits no transcript row, so there is no
+// SessionInitBanner render case to test here anymore.
 
 test('P4-18a: a completed result row renders a Completed seam with duration', () => {
   const html = render({
