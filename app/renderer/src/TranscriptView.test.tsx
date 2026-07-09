@@ -54,6 +54,49 @@ test('renders an assistant text row as markdown, not raw source', () => {
   expect(html).not.toContain('**package.json**')
 })
 
+test('P4-18c: a fenced code block renders framed with a per-block copy button', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:code',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: 'Here:\n\n```ts\nconst x = 1\n```\n',
+  })
+
+  expect(html).toContain('const x = 1')
+  expect(html).toContain('copy') // per-block copy control
+  expect(html).toContain('ts') // language label
+})
+
+test('P4-18c: a streaming assistant row renders a caret', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:stream',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: 'partial answer',
+    isStreaming: true,
+  })
+
+  expect(html).toContain('partial answer')
+  expect(html).toContain('animate-pulse') // the blinking streaming caret
+})
+
+test('P4-18c: a >60-line assistant body collapses behind a Show-more control', () => {
+  const long = Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:long',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: long,
+  })
+
+  expect(html).toContain('Show 20 more lines')
+  expect(html).toContain('line 0')
+  expect(html).not.toContain('line 79') // tail hidden while collapsed
+})
+
 // P4-18b tool-card family helper: builds a tool-use nested row. Cards collapse
 // by default (prototype FrameEShell), so header assertions (family WORD + target
 // + state) are the per-family proof; bodies are asserted where they render

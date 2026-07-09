@@ -20,7 +20,13 @@
  * slices; their cases slot into this same switch.
  */
 
-import { memo, useState, type ReactNode } from 'react'
+import {
+  Component,
+  memo,
+  useState,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+} from 'react'
 import Markdown from 'react-markdown'
 import type { SessionId } from '../../shared/protocol.js'
 import {
@@ -84,13 +90,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
   const rowKind: string = row.kind
   switch (row.kind) {
     case 'assistant-text':
-      // Prose/markdown depth (GFM tables, code highlighting, streaming caret,
-      // copy chip) is 18c; 18a keeps the bare react-markdown body.
-      return (
-        <div className="font-sans text-sm leading-relaxed [&>*+*]:mt-2 [&_code]:font-mono [&_a]:text-accent [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5">
-          <Markdown>{row.content}</Markdown>
-        </div>
-      )
+      return <AssistantProse content={row.content} streaming={row.isStreaming} />
 
     case 'user-text':
       return <UserBubble content={row.content} />
@@ -164,6 +164,149 @@ const TranscriptRowView = memo(function TranscriptRowView({
     }
   }
 })
+
+/**
+ * P4-18c assistant prose. react-markdown for the core GFM-less set (headings,
+ * bold/italic, inline code, lists, links, hr, blockquote) wrapped in a
+ * render-error boundary (a throw degrades to the plain source, never a React
+ * crash — display = degrade gracefully). Fenced code blocks render in a framed
+ * panel with a per-block copy button. Long bodies (>60 lines) collapse behind a
+ * "Show N more lines" control. A streaming body carries a blinking caret.
+ *
+ * §5 deferrals (need a new dep, gated on operator approval — CLAUDE.md §7 "no
+ * new deps without asking"): GFM pipe TABLES (`remark-gfm`) and fenced-code
+ * SYNTAX-TOKEN highlighting (a highlighter). Code renders framed + copyable but
+ * un-colorized; tables render as raw text until the deps are approved.
+ */
+const PROSE_COLLAPSE_LINES = 60
+
+function AssistantProse({
+  content,
+  streaming,
+}: {
+  content: string
+  streaming?: true
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const totalLines = content.split('\n').length
+  const collapsible = totalLines > PROSE_COLLAPSE_LINES
+  const shown =
+    collapsible && !expanded
+      ? content.split('\n').slice(0, PROSE_COLLAPSE_LINES).join('\n')
+      : content
+  return (
+    <div>
+      <MarkdownErrorBoundary fallback={content}>
+        <div className="font-sans text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
+          <Markdown components={MARKDOWN_COMPONENTS}>{shown}</Markdown>
+        </div>
+      </MarkdownErrorBoundary>
+      {streaming ? (
+        <span
+          className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom"
+          aria-hidden
+        />
+      ) : null}
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(value => !value)}
+          className="mt-1 font-mono text-[11px] text-accent hover:underline"
+        >
+          {expanded
+            ? 'Collapse'
+            : `Show ${totalLines - PROSE_COLLAPSE_LINES} more lines`}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Render-error boundary (client runtime): a react-markdown throw degrades to the
+ * plain markdown source instead of crashing the transcript subtree.
+ */
+class MarkdownErrorBoundary extends Component<
+  { fallback: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  render(): ReactNode {
+    if (this.state.failed) {
+      return (
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs text-text-muted">
+          {this.props.fallback}
+        </pre>
+      )
+    }
+    return this.props.children
+  }
+}
+
+/** Flatten react-markdown code children (string, or node array) to raw text. */
+function childrenToText(children: ReactNode): string {
+  if (typeof children === 'string') return children
+  if (Array.isArray(children)) return children.map(childrenToText).join('')
+  if (typeof children === 'number') return String(children)
+  return ''
+}
+
+const MARKDOWN_COMPONENTS = {
+  // react-markdown wraps a fenced block in <pre><code>; unwrap the <pre> and let
+  // the <code> renderer own the framed CodeBlock (avoids a nested <pre>).
+  pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
+  code: ({ className, children }: ComponentPropsWithoutRef<'code'>) => {
+    const match = /language-(\w+)/.exec(className ?? '')
+    const text = childrenToText(children)
+    if (!match && !text.includes('\n')) {
+      return <code className={className}>{children}</code>
+    }
+    return <CodeBlock lang={match?.[1] ?? ''} code={text.replace(/\n$/, '')} />
+  },
+}
+
+/**
+ * Fenced code block: framed panel + language label + per-block copy button.
+ * Syntax-token highlighting is a §5 dep-gated deferral (no highlighter in
+ * `app/`) — the code renders plain but framed and copyable.
+ */
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) return
+    void clipboard
+      .writeText(code)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+      })
+      .catch(() => {})
+  }
+  return (
+    <div className="my-2 overflow-hidden rounded-md border border-shell-seam bg-black/30">
+      <div className="flex items-center justify-between border-b border-shell-seam px-3 py-1">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-text-subtle">
+          {lang || 'code'}
+        </span>
+        <button
+          type="button"
+          onClick={copy}
+          className="font-mono text-[10px] text-text-subtle transition-colors hover:text-text-primary"
+        >
+          {copied ? 'copied' : 'copy'}
+        </button>
+      </div>
+      <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
+        <code>{code}</code>
+      </pre>
+    </div>
+  )
+}
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
