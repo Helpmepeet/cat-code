@@ -96,6 +96,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     dispatchConnection: count('connection') as never,
     dispatchSettings: count('settings') as never,
     dispatchAgentConfig: count('agentConfig') as never,
+    dispatchExtensions: count('extensions') as never,
     dispatchGoalMemory: count('goalMemory') as never,
     dispatchAccounts: count('accounts') as never,
     dispatchTranscript: action => {
@@ -114,6 +115,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'connection',
     'settings',
     'agentConfig',
+    'extensions',
     'goalMemory',
     'accounts',
     'transcript',
@@ -137,6 +139,7 @@ test('an empty delivery dispatches nothing', () => {
     dispatchConnection: mark as never,
     dispatchSettings: mark as never,
     dispatchAgentConfig: mark as never,
+    dispatchExtensions: mark as never,
     dispatchGoalMemory: mark as never,
     dispatchAccounts: mark as never,
     dispatchTranscript: mark as never,

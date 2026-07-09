@@ -47,6 +47,11 @@ import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
+import {
+  createSidecarExtensionsDomain,
+  loadExtensionsSnapshot,
+  type SidecarExtensionsDomain,
+} from './extensionsDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -176,10 +181,21 @@ export async function createNormalSidecarQueryEngineConfig(
   const mcpClients: [] = []
   const availableMcpServers: string[] = []
 
+  // P4-12 settings-extensions read-seam: build the spawn-time MCP/plugins/skills/
+  // hooks snapshot from the SAME loaded catalogs the runtime uses (skills ⊂
+  // `commands`, plugin provides ⊂ `agentDefinitions`) plus the live app-state
+  // (hooks). Never throws — a per-slice failure degrades to null inside the loader.
+  const extensionsSnapshot = await loadExtensionsSnapshot({
+    commands,
+    agentDefinitions: agentDefinitions.allAgents,
+    appState: appStateStore.getState(),
+  })
+
   return {
     appStateStore,
     agentDefinitions,
     availableMcpServers,
+    extensionsSnapshot,
     queryEngineConfig: {
       ...createQueryEngineAppSessionConfigFromSetup({
         cwd,
@@ -246,6 +262,11 @@ export type SidecarSession = {
    * null in probe mode (no engine). Read-seam is secretGuard-clean by construction.
    */
   accounts: SidecarAccountsDomain | null
+  /**
+   * Settings extensions read-seam (P4-12) — the spawn-time MCP/plugins/skills/
+   * hooks config snapshot. Read-only; null in probe mode (no cwd-configured engine).
+   */
+  extensions: SidecarExtensionsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -284,6 +305,7 @@ export async function createSidecarSessionController({
       goals: null,
       memory: null,
       accounts: null,
+      extensions: null,
     }
   }
 
@@ -292,8 +314,13 @@ export async function createSidecarSessionController({
   // so what the model sees and what canUseTool allows never diverge. P1-2
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
-  const { appStateStore, agentDefinitions, availableMcpServers, queryEngineConfig } =
-    await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
+  const {
+    appStateStore,
+    agentDefinitions,
+    availableMcpServers,
+    extensionsSnapshot,
+    queryEngineConfig,
+  } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
@@ -306,5 +333,6 @@ export async function createSidecarSessionController({
     goals: createSidecarGoalDomain(appStateStore),
     memory: createSidecarMemoryDomain(),
     accounts: createSidecarAccountsDomain(),
+    extensions: createSidecarExtensionsDomain(extensionsSnapshot),
   }
 }

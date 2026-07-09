@@ -16,11 +16,18 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   AgentConfigSnapshot,
+  ExtensionsSnapshot,
   MemorySnapshot,
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import { AgentsPage } from './AgentsPage.js'
 import { MemoryPage } from './MemoryPage.js'
+import {
+  HooksPanel,
+  McpPanel,
+  PluginsPanel,
+  SkillsPanel,
+} from './SettingsExtensions.js'
 import {
   Field,
   LockIcon,
@@ -129,11 +136,13 @@ export function SettingsShell({
   snapshot,
   agentsSnapshot,
   memorySnapshot,
+  extensionsSnapshot,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
   agentsSnapshot?: AgentConfigSnapshot | null
   memorySnapshot?: MemorySnapshot | null
+  extensionsSnapshot?: ExtensionsSnapshot | null
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -218,6 +227,7 @@ export function SettingsShell({
           <CategoryBody
             agentsSnapshot={agentsSnapshot ?? null}
             category={active}
+            extensionsSnapshot={extensionsSnapshot ?? null}
             memorySnapshot={memorySnapshot ?? null}
             snapshot={snapshot}
           />
@@ -230,11 +240,13 @@ export function SettingsShell({
 function CategoryBody({
   agentsSnapshot,
   category,
+  extensionsSnapshot,
   memorySnapshot,
   snapshot,
 }: {
   agentsSnapshot: AgentConfigSnapshot | null
   category: string
+  extensionsSnapshot: ExtensionsSnapshot | null
   memorySnapshot: MemorySnapshot | null
   snapshot: SettingsSnapshot | null
 }) {
@@ -243,6 +255,18 @@ function CategoryBody({
   }
   if (category === 'memory') {
     return <MemoryPage embedded snapshot={memorySnapshot} />
+  }
+  if (category === 'mcp') {
+    return <McpPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'plugins') {
+    return <PluginsPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'skills') {
+    return <SkillsPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'hooks') {
+    return <HooksPanel snapshot={extensionsSnapshot} />
   }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />

@@ -72,6 +72,7 @@ import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
+import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -123,6 +124,11 @@ export type SidecarServerOptions = {
    */
   accounts?: SidecarAccountsDomain
   /**
+   * Settings extensions read-seam (P4-12). Optional because the P1-0 probe fixture
+   * has no cwd-configured engine; when absent, no `extensions.snapshot` is emitted.
+   */
+  extensions?: SidecarExtensionsDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -171,6 +177,7 @@ export class SidecarServer {
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
   private readonly accounts: SidecarAccountsDomain | null
+  private readonly extensions: SidecarExtensionsDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
@@ -194,6 +201,7 @@ export class SidecarServer {
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
     this.accounts = options.accounts ?? null
+    this.extensions = options.extensions ?? null
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
@@ -322,6 +330,9 @@ export class SidecarServer {
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
+    // P4-12 — read-only settings extensions (MCP/plugins/skills/hooks) config
+    // snapshot, after the other snapshots and before replay. No inbound vocabulary.
+    this.sendExtensionsSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -1129,6 +1140,41 @@ export class SidecarServer {
     } catch (error) {
       this.log(
         `[sidecar] agent-config.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  /**
+   * P4-12 — build + send the settings extensions (MCP/plugins/skills/hooks)
+   * config snapshot to a single connection (attach). The domain carries config
+   * metadata only (no values, no env/headers, no hook/skill bodies), so this
+   * frame is secretGuard-clean by construction. Wrapped so a snapshot failure
+   * can never strand the connection or skip the subsequent history replay.
+   */
+  private sendExtensionsSnapshot(connection: Connection): void {
+    if (!this.extensions) {
+      return
+    }
+    try {
+      const raw = this.extensions.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'extensions.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'extensions.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        extensions: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] extensions.snapshot send skipped (${
           error instanceof Error ? error.message : String(error)
         })`,
       )

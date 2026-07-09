@@ -693,6 +693,187 @@ export type AccountResultFrame = {
   }>
 }
 
+/* ------------------------------------------------------------------------- *
+ * Settings extensions read-seam (P4-12) — read-only config snapshots
+ * ------------------------------------------------------------------------- *
+ *
+ * The MCP / Plugins / Skills / Hooks settings sub-panels. All four are
+ * spawn-time reads of the engine's real config (like `settings.snapshot`, not a
+ * live subscription), consolidated into ONE outbound frame because they are one
+ * session's scope and all freeze at spawn. Each slice is independently nullable:
+ * a failed read for one domain does not blank the others (the reader logs and
+ * that slice arrives `null`).
+ *
+ * Secret posture (secretGuard-clean by construction): the snapshot carries
+ * config METADATA only — no setting VALUES, no MCP `env`/`headers`, no hook
+ * `command`/`prompt` BODIES beyond a display line, no plugin option values, no
+ * skill prompt bodies. Proven in `extensionsDomain.test.ts`.
+ *
+ * Deliberate deferrals (P4-12 §0 flags — render truth, defer the rest):
+ *  - **MCP live runtime is EMPTY in the desktop session today** (the
+ *    `sessionController.ts` empty-mcpClients stub, flagged for an
+ *    `app-runtime` extract, NOT a sidecar hand-wire — §8.1). So MCP entries are
+ *    CONFIGURED servers only: connection status / tool+resource counts /
+ *    reconnect+auth+enable+remove actions are unavailable until that runtime is
+ *    wired, and are omitted here rather than mocked.
+ *  - All WRITES (add/remove/enable-toggle/update/install) are deferred to the
+ *    `SettingsUpdater`-under-lock write-seam (P3-5a/DR-2), a later session.
+ *  - Plugin marketplace BROWSING is deferred (real domain exists — the
+ *    `marketplaceManager` — but it refreshes remotes and its install path is a
+ *    write; out of a read-only session's scope).
+ *  - Hook last-run OUTCOME/timing is NOT persisted by the engine (a transient
+ *    per-invocation `HookResult`, `src/utils/hooks.ts:338`); it is dropped here,
+ *    not reconstructed/mocked.
+ */
+
+/** MCP transport, as configured (`McpServerConfig.type`, `src/services/mcp/types.ts`). */
+export type McpConfigTransport =
+  | 'stdio'
+  | 'sse'
+  | 'sse-ide'
+  | 'ws'
+  | 'ws-ide'
+  | 'http'
+  | 'sdk'
+  | 'claudeai-proxy'
+
+/**
+ * The real MCP config scope (`ConfigScope`, `src/services/mcp/types.ts`). Wider
+ * than the settings-source taxonomy — carried RAW so the panel can render the
+ * true scope and flag the display collapse rather than pre-flatten it.
+ */
+export type McpConfigScope =
+  | 'local'
+  | 'user'
+  | 'project'
+  | 'dynamic'
+  | 'enterprise'
+  | 'claudeai'
+  | 'managed'
+
+/** One CONFIGURED MCP server (no live connection state — see the header deferral). */
+export type McpConfigEntry = {
+  name: string
+  transport: McpConfigTransport
+  scope: McpConfigScope
+  /** Remote transports carry a url; stdio carries a command + arg count. */
+  url?: string
+  command?: string
+  argCount?: number
+  /** Set when the server is contributed by a plugin (`ScopedMcpServerConfig.pluginSource`). */
+  pluginSource?: string
+}
+
+/** Per-plugin contribution counts, DERIVED from the plugin's component paths/records. */
+export type PluginProvides = {
+  commands: number
+  agents: number
+  skills: number
+  hooks: number
+  mcpServers: number
+  lsp: number
+}
+
+/** One installed plugin (`LoadedPlugin`, `src/types/plugin.ts:48`). */
+export type PluginEntry = {
+  /** `plugin@marketplace`-style source string — the stable id. */
+  id: string
+  name: string
+  version?: string
+  /** The origin source string (`LoadedPlugin.source`, e.g. `x@builtin`/`x@inline`). */
+  source: string
+  enabled: boolean
+  builtin: boolean
+  provides: PluginProvides
+  /** Whether the plugin declares user-config options (`manifest.userConfig`). */
+  hasOptions: boolean
+  /** A correlated load error (`AppState.plugins.errors`), display string only. */
+  error?: string
+  /**
+   * A STAGED auto-update awaiting restart (`getPendingUpdatesDetails`,
+   * `installedPluginsManager.ts:656`) — the only real "newVersion" signal. This
+   * is NOT an upstream "update available" check (that engine API does not exist).
+   */
+  pendingUpdate?: { oldVersion: string; newVersion: string }
+}
+
+/** A skill's config source (`PromptCommand.source`, `src/types/command.ts:32`). */
+export type SkillConfigSource =
+  | SettingSourceId
+  | 'plugin'
+  | 'mcp'
+  | 'builtin'
+  | 'bundled'
+
+/** One skill (a `type:'prompt'` `Command`), metadata only — no prompt body. */
+export type SkillEntry = {
+  name: string
+  source: SkillConfigSource
+  context: 'inline' | 'fork'
+  /** Sub-agent name for a `context:'fork'` skill. */
+  agent?: string
+  /** Providing plugin display name (`pluginInfo.pluginManifest.name`). */
+  pluginName?: string
+  disableModelInvocation: boolean
+  userInvocable: boolean
+  description: string
+  whenToUse?: string
+}
+
+/** A hook's config source (`HookSource`, `src/utils/hooks/hooksSettings.ts:15`). */
+export type HookConfigSource =
+  | SettingSourceId
+  | 'pluginHook'
+  | 'sessionHook'
+  | 'builtinHook'
+
+/** Configured-hook type (`HookCommand` discriminant; `http` is the real "webhook"). */
+export type HookConfigType =
+  | 'command'
+  | 'prompt'
+  | 'http'
+  | 'agent'
+  | 'callback'
+  | 'function'
+
+/** One configured hook (`IndividualHookConfig`), metadata + a display line only. */
+export type HookEntry = {
+  /** Canonical hook event name (`HOOK_EVENTS`, `coreTypes.ts:25`). */
+  event: string
+  type: HookConfigType
+  matcher?: string
+  source: HookConfigSource
+  pluginName?: string
+  async: boolean
+  /** `getHookDisplayText` output — the command / url / prompt line (no secrets). */
+  displayLine: string
+}
+
+export type ExtensionsSnapshot = {
+  /** CONFIGURED MCP servers (null if the config read failed). */
+  mcp: McpConfigEntry[] | null
+  /** Installed plugins (null if the plugin load failed). */
+  plugins: PluginEntry[] | null
+  /** Skills the session loaded, metadata only (null if unavailable). */
+  skills: SkillEntry[] | null
+  /** Configured hooks in canonical event order (null if the read failed). */
+  hooks: HookEntry[] | null
+  /** Human-readable deferral / flag notes surfaced in the UI. */
+  notes: string[]
+}
+
+/**
+ * P4-12 outbound frame. Emitted on attach (after the agent-config snapshot,
+ * before history replay). Read-only; writes go through the engine's own config
+ * managers under the `SettingsUpdater`-under-lock write-seam, a later session.
+ */
+export type ExtensionsSnapshotFrame = {
+  kind: 'extensions.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  extensions: ExtensionsSnapshot
+}
+
 /**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
@@ -721,6 +902,7 @@ export type ServerFrame =
   | MemorySnapshotFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
+  | ExtensionsSnapshotFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
