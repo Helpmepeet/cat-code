@@ -25,6 +25,7 @@ const SNAPSHOT: SettingsSnapshot = {
     { key: 'theme', source: 'localSettings', editable: true, managed: false },
   ],
   policyOrigin: 'file',
+  editableValues: [],
 }
 
 function snapshotFrame(
@@ -51,7 +52,12 @@ test('settings.snapshot frame stores the snapshot per session', () => {
 test('snapshots are isolated across sessions', () => {
   let state = createSettingsState()
   state = reduceSettingsState(state, { type: 'frame', frame: snapshotFrame('a', SNAPSHOT) })
-  const other: SettingsSnapshot = { layers: [], resolved: [], policyOrigin: null }
+  const other: SettingsSnapshot = {
+    layers: [],
+    resolved: [],
+    policyOrigin: null,
+    editableValues: [],
+  }
   state = reduceSettingsState(state, { type: 'frame', frame: snapshotFrame('b', other) })
   expect(selectSettingsSnapshot(state, 'a')).toEqual(SNAPSHOT)
   expect(selectSettingsSnapshot(state, 'b')).toEqual(other)

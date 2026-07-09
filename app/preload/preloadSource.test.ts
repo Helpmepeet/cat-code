@@ -22,13 +22,18 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void',
   )
-  // 9 frame-plane senders (incl. P4-5 accountVerb + P4-13 remoteSettingsVerb) +
-  // 5 payload-bearing control-plane senders + the DEV-only debug-state sender
-  // (compiled out of packaged preload.cjs). (pickDirectory/createSession/
-  // restoreSession/closeSession/listSessions). subscribe / subscribeHost
-  // register a listener and send no payload, so they do NOT (and must not)
-  // call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(15)
+  // P4-19 — settings write verb sender rides its own fixed channel (HC3).
+  expect(source).toContain("const CH_SETTINGS_VERB = 'catcode:settings-verb'")
+  expect(source).toContain(
+    'settingsVerb(sessionId: SessionId, verb: SettingsVerbMessage): void',
+  )
+  // 10 frame-plane senders (incl. P4-5 accountVerb + P4-13 remoteSettingsVerb +
+  // P4-19 settingsVerb) + 5 payload-bearing control-plane senders + the DEV-only
+  // debug-state sender (compiled out of packaged preload.cjs). (pickDirectory/
+  // createSession/restoreSession/closeSession/listSessions). subscribe /
+  // subscribeHost register a listener and send no payload, so they do NOT (and
+  // must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(16)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')

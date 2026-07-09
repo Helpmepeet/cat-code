@@ -66,7 +66,12 @@ import {
   type RemoteVerbMessage,
   type ServerFrame,
   type SessionId,
+  type SettingsVerbMessage,
 } from '../shared/protocol.js'
+import {
+  EDITABLE_SETTING_SOURCES,
+  validateEditableSettingValue,
+} from '../shared/settingsEditable.js'
 import type { SidecarPermissionDomain } from './permissionDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
@@ -637,6 +642,15 @@ export class SidecarServer {
       return
     }
 
+    // P4-19 — the settings WRITE verb is app-owned vocabulary (like C2 and the
+    // account/RemoteSettings verbs), validated by a sidecar-LOCAL schema + the
+    // closed EDITABLE_SETTINGS allowlist and applied through the engine's
+    // SettingsUpdater-under-lock form. NOT part of the engine's shared schema.
+    if (typeof messageType === 'string' && messageType.startsWith('settings.')) {
+      this.handleSettingsVerb(connection, frame.message)
+      return
+    }
+
     // The message payload MUST pass the existing allowlist schema. Anything
     // else is dropped at the boundary (SECURITY-MINIMUM §2, R2 — validate at
     // the trust boundary, never trust the preload).
@@ -997,6 +1011,83 @@ export class SidecarServer {
           false,
         )
       })
+  }
+
+  /**
+   * P4-19 — the FIRST renderer→engine settings write. Fail-closed order:
+   * sidecar-LOCAL Zod schema (shape + editable-source enum + bounded key/value)
+   * → per-key value-type check against the closed EDITABLE_SETTINGS allowlist →
+   * domain presence → domain.runVerb (which applies the engine's
+   * SettingsUpdater-under-lock write) → `settings.result` frame → re-broadcast a
+   * fresh `settings.snapshot` when the write landed. The renderer never authors
+   * an engine object: it names a `{ source, key, value }`, and every one is
+   * re-validated here at the trust boundary before disk is touched.
+   */
+  private handleSettingsVerb(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = settingsVerbMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid settings verb',
+        false,
+      )
+      return
+    }
+    const verb = parsed.data as SettingsVerbMessage
+
+    // Per-key value-type gate (the strict-key allowlist for the VALUE): a
+    // boolean key rejects a string, an enum key rejects an out-of-set value, an
+    // int key rejects a non-integer/out-of-range number. Rejected at the
+    // boundary, never written.
+    const valueCheck = validateEditableSettingValue(verb.key, verb.value)
+    if (!valueCheck.ok) {
+      this.sendError(connection, verb.requestId, 'bad_request', valueCheck.error, false)
+      return
+    }
+
+    if (!this.settings) {
+      this.sendError(
+        connection,
+        verb.requestId,
+        'internal_error',
+        'settings domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    let result: { ok: boolean; message: string; changed: boolean }
+    try {
+      result = this.settings.runVerb(verb)
+    } catch (error) {
+      this.sendError(
+        connection,
+        verb.requestId,
+        'internal_error',
+        error instanceof Error ? error.message : String(error),
+        false,
+      )
+      return
+    }
+
+    this.send(connection, {
+      kind: 'settings.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: verb.requestId,
+      verb: verb.type,
+      ok: result.ok,
+      message: result.message,
+    })
+    if (result.changed) {
+      this.broadcastSettingsSnapshot()
+    }
   }
 
   private handlePermissionResponse(
@@ -1699,6 +1790,20 @@ export class SidecarServer {
     }
   }
 
+  /**
+   * P4-19 — re-emit the (now-refreshed) settings snapshot to every attached
+   * connection after a write lands, so the value editors and provenance badges
+   * reflect the persisted change without a reconnect.
+   */
+  private broadcastSettingsSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendSettingsSnapshot(connection)
+    }
+  }
+
   private send(connection: Connection, frame: ServerFrame): void {
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
@@ -1821,6 +1926,9 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
+    // P4-19 settings write verb (app-owned; see SETTINGS_VERB_TYPES). The exact
+    // renderer-facing contract; any other key is rejected before the Zod parse.
+    ['settings.setValue', new Set(['type', 'requestId', 'source', 'key', 'value'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
@@ -1961,6 +2069,33 @@ const remoteVerbMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('remoteSettings.directConnect'),
     requestId: remoteRequestIdSchema,
     serverUrl: remoteServerUrlSchema,
+  }),
+])
+
+/**
+ * P4-19 — sidecar-LOCAL schema for the settings write verb (protocol.ts:
+ * SETTINGS_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + editable-source enum + bounded key/value. The
+ * per-KEY value-type match (boolean vs enum vs int) is enforced separately by
+ * `validateEditableSettingValue` at the boundary (handleSettingsVerb), and the
+ * domain re-checks all three as the last gate before disk. `source` is the
+ * closed editable-layer enum — policy/flag can never be named here.
+ */
+const settingsRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const settingsKeySchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const settingsValueSchema = z.union([
+  z.boolean(),
+  z.string().max(MAX_TEXT_FIELD_CHARS),
+  z.number(),
+])
+
+const settingsVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('settings.setValue'),
+    requestId: settingsRequestIdSchema,
+    source: z.enum([...EDITABLE_SETTING_SOURCES]),
+    key: settingsKeySchema,
+    value: settingsValueSchema,
   }),
 ])
 

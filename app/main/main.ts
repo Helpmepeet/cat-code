@@ -60,6 +60,7 @@ import {
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
   REMOTE_VERB_TYPES,
+  SETTINGS_VERB_TYPES,
   type AccountVerbMessage,
   type AccountVerbType,
   type PermissionSetModeMode,
@@ -67,6 +68,8 @@ import {
   type RemoteVerbType,
   type ServerFrame,
   type SessionId,
+  type SettingsVerbMessage,
+  type SettingsVerbType,
   type SidecarClientMessage,
 } from '../shared/protocol.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -78,6 +81,7 @@ const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
+const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -482,6 +486,26 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as RemoteVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_SETTINGS_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-19 — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (Zod schema + EDITABLE_SETTINGS allowlist + per-key
+      // value-type check + SettingsUpdater-under-lock write). Drop any frame
+      // whose `type` is not a settings verb fail-closed, rather than forwarding a
+      // message guaranteed to be rejected.
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !SETTINGS_VERB_TYPES.includes(verb.type as SettingsVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as SettingsVerbMessage)
     },
   )
 

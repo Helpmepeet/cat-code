@@ -50,6 +50,10 @@ import type {
   SessionDescriptor,
 } from './hostApi.js'
 import type { DebugRendererSnapshot } from './debugState.js'
+import type {
+  EditableSettingSource,
+  EditableSettingValue,
+} from './settingsEditable.js'
 
 /** Protocol wire version. Bump only on a breaking frame-shape change. */
 export const PROTOCOL_VERSION = 1 as const
@@ -263,15 +267,44 @@ export type RemoteVerbMessage =
   | RemoteDirectConnectMessage
 
 /**
+ * P4-19 — the FIRST renderer→engine settings WRITE verb. App-owned vocabulary
+ * (like the C2 / account / RemoteSettings verbs): validated by a sidecar-LOCAL
+ * Zod schema + the closed `EDITABLE_SETTINGS` allowlist, then applied through the
+ * engine's `SettingsUpdater`-under-lock form (`settings.ts:480`, the P3-5a/DR-2
+ * single-writer fix). The renderer NAMES a key + a scalar value + an editable
+ * source; the sidecar re-validates all three (key ∈ allowlist, value matches the
+ * key's control type, source ∈ editable layers) and never trusts the frame. A
+ * new provenance-carrying `settings.snapshot` is re-emitted when the write lands.
+ */
+export const SETTINGS_VERB_TYPES = ['settings.setValue'] as const
+
+export type SettingsVerbType = (typeof SETTINGS_VERB_TYPES)[number]
+
+/** Write one editable core setting to one editable layer. */
+export type SettingsSetValueMessage = {
+  type: 'settings.setValue'
+  requestId: string
+  /** One of the three editable layers (policy/flag are read-only, rejected). */
+  source: EditableSettingSource
+  /** A key in the closed `EDITABLE_SETTINGS` allowlist (re-checked at sidecar). */
+  key: string
+  /** A non-secret scalar matching the key's control type (re-checked at sidecar). */
+  value: EditableSettingValue
+}
+
+export type SettingsVerbMessage = SettingsSetValueMessage
+
+/**
  * Everything a client may send toward a sidecar: the engine's allowlisted
- * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, and the
- * P4-13 RemoteSettings verbs.
+ * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, the P4-13
+ * RemoteSettings verbs, and the P4-19 settings write verb.
  */
 export type SidecarClientMessage =
   | AppClientMessage
   | PermissionSetModeMessage
   | AccountVerbMessage
   | RemoteVerbMessage
+  | SettingsVerbMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -469,16 +502,42 @@ export type SettingsSnapshot = {
   }>
   /** The active policy layer's origin, or null when nothing is managed. */
   policyOrigin: PolicySettingsOrigin | null
+  /**
+   * P4-19 — the current effective VALUE of each key in the closed
+   * `EDITABLE_SETTINGS` allowlist that is set at some layer, so the value
+   * editors can reflect real state (a key ABSENT here is unset everywhere → its
+   * built-in default in `EDITABLE_SETTINGS` applies). Deliberately NOT the whole
+   * settings object: every key here is a non-secret scalar (booleans / small
+   * enums / one bounded int), so no credential rides this frame — `secretGuard`
+   * still scans it as defense-in-depth. An ARRAY (the setting name rides as the
+   * `key` string VALUE, never as an object key the secret guard would inspect),
+   * carrying the winning (highest-precedence) layer's value.
+   */
+  editableValues: Array<{
+    key: string
+    value: EditableSettingValue
+    source: SettingSourceId
+  }>
 }
+
+// Compile-time guard: an editable source must be a real settings layer.
+type _EditableSourceIsSettingSource = EditableSettingSource extends SettingSourceId
+  ? true
+  : never
+const _editableSourceCheck: _EditableSourceIsSettingSource = true
+void _editableSourceCheck
 
 /**
  * P4-3 outbound frame. Emitted on attach (after `ready` + the C3
- * `permission.context`, before history replay). Read-only; the renderer never
- * writes settings across this seam — writes go through the engine's
- * `SettingsUpdater`-under-lock form (P3-5a, `settings.ts:480`), a later decided
- * action. Live re-emit on change is deferred: general settings require a restart
- * in the engine today (the session settings cache, `settings.ts:944`), and
- * permission-rule mutations already flow via the C3 snapshot.
+ * `permission.context`, before history replay), and RE-EMITTED after a P4-19
+ * `settings.setValue` write lands (so the value editors and provenance badges
+ * reflect the change without a restart). Writes never cross this READ frame —
+ * they go through the app-owned `settings.setValue` verb, applied via the
+ * engine's `SettingsUpdater`-under-lock form (P3-5a, `settings.ts:480`). The
+ * re-read reflects the persisted file (source/precedence/editableValues);
+ * whether a given key takes effect in the running engine mid-session without a
+ * restart remains per-key engine behavior (the session settings cache,
+ * `settings.ts:944`).
  */
 export type SettingsSnapshotFrame = {
   kind: 'settings.snapshot'
@@ -1148,6 +1207,22 @@ export type RemoteSettingsResultFrame = {
 }
 
 /**
+ * P4-19 — the outcome of one settings write verb (echoes the renderer-minted
+ * `requestId`). On `ok`, an updated `settings.snapshot` follows. `message` is a
+ * human-readable outcome (e.g. the validation error on a rejected value); it
+ * NEVER carries a setting value or credential material.
+ */
+export type SettingsResultFrame = {
+  kind: 'settings.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: SettingsVerbType
+  ok: boolean
+  message: string
+}
+
+/**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
  */
@@ -1324,6 +1399,7 @@ export type ServerFrame =
   | RemoteSettingsSnapshotFrame
   | RemoteSettingsResultFrame
   | SessionsCatalogSnapshotFrame
+  | SettingsResultFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
@@ -1373,6 +1449,15 @@ export type CatCodeBridge = {
    * `remoteSettings.snapshot` when the bridge flag changed.
    */
   remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void
+  /**
+   * P4-19 — write one editable core setting on the addressed session's sidecar.
+   * The renderer names a `{ source, key, value }`; the sidecar re-validates all
+   * three against the closed `EDITABLE_SETTINGS` allowlist and applies the write
+   * through the engine's `SettingsUpdater`-under-lock form. The outcome arrives
+   * as a `settings.result` frame echoing `requestId`, followed by an updated
+   * `settings.snapshot` when the write landed.
+   */
+  settingsVerb(sessionId: SessionId, verb: SettingsVerbMessage): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
   /** Restart the addressed sidecar process while retaining renderer attachment. */

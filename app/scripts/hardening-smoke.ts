@@ -186,6 +186,7 @@ async function runProductionHardeningSmoke(
       'respondPermission',
       'restart',
       'setPermissionMode',
+      'settingsVerb',
       'submit',
       'subscribe',
       // Control plane (P3-3 — HC3 fixed per-method senders).

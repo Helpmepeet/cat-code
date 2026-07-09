@@ -1,14 +1,22 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import {
   getSourceDisplayName,
   SETTING_SOURCES,
   type EditableSettingSource,
   type SettingSource,
 } from '../../src/utils/settings/constants.js'
+import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { SOURCE_LABEL } from '../renderer/src/SettingsField.js'
 import { SETTING_SOURCE_PRECEDENCE } from '../renderer/src/settingsState.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { SettingSourceId, SettingsSnapshotFrame } from '../shared/protocol.js'
+import type {
+  SettingsSnapshotFrame,
+  SettingSourceId,
+  SettingsVerbMessage,
+} from '../shared/protocol.js'
 import {
   buildSettingsSnapshot,
   createSidecarSettingsDomain,
@@ -187,4 +195,170 @@ test('carries no secret material even when a source holds tokens (redaction proo
   // The `apiKey` key name is still surfaced (as data), just not as a secret.
   const keys = frame.settings.resolved.map(r => r.key)
   expect(keys).toContain('apiKey')
+})
+
+/* ── P4-19 editableValues (bounded, non-secret) ─────────────────────────────── */
+
+test('editableValues carries the winning value ONLY for the closed allowlist', () => {
+  const layers: SettingsSourceLayer[] = [
+    {
+      source: 'userSettings',
+      origin: '/home/u/.cat-code/settings.json',
+      // includeCoAuthoredBy (editable) + a NON-editable key + a secret key.
+      settings: {
+        includeCoAuthoredBy: false,
+        effortLevel: 'low',
+        apiKey: 'sk-live-DEADBEEF',
+        model: 'opus',
+      },
+    },
+    {
+      source: 'projectSettings',
+      origin: '/repo/.cat-code/settings.json',
+      // effortLevel set higher-precedence than user → project wins.
+      settings: { effortLevel: 'high' },
+    },
+  ]
+  const snapshot = buildSettingsSnapshot(layers, null)
+  const byKey = new Map(snapshot.editableValues.map(e => [e.key, e]))
+
+  // Editable keys ride with their winning value + source.
+  expect(byKey.get('includeCoAuthoredBy')).toEqual({
+    key: 'includeCoAuthoredBy',
+    value: false,
+    source: 'userSettings',
+  })
+  expect(byKey.get('effortLevel')).toEqual({
+    key: 'effortLevel',
+    value: 'high',
+    source: 'projectSettings',
+  })
+  // NON-editable / secret keys are NEVER in editableValues (only the allowlist).
+  expect(byKey.has('model')).toBe(false)
+  expect(byKey.has('apiKey')).toBe(false)
+  // And no secret value serializes anywhere on the frame.
+  expect(JSON.stringify(snapshot)).not.toContain('sk-live')
+})
+
+test('editableValues drops a mistyped on-disk value (never emits a bad shape)', () => {
+  const layers: SettingsSourceLayer[] = [
+    {
+      source: 'userSettings',
+      origin: '/home/u/.cat-code/settings.json',
+      // A boolean key hand-edited to a string, and an int key set out of range.
+      settings: { includeCoAuthoredBy: 'yes', cleanupPeriodDays: -5 },
+    },
+  ]
+  const snapshot = buildSettingsSnapshot(layers, null)
+  expect(snapshot.editableValues).toEqual([])
+})
+
+/* ── P4-19 the write path (SettingsUpdater-under-lock) ──────────────────────── */
+
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+let scratch: string | null = null
+
+afterEach(() => {
+  if (originalConfigDir === undefined) {
+    delete process.env.CLAUDE_CONFIG_DIR
+  } else {
+    process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  }
+  resetSettingsCache()
+  if (scratch) {
+    rmSync(scratch, { recursive: true, force: true })
+    scratch = null
+  }
+})
+
+/** Point userSettings at an isolated temp config home for a write test. */
+function useTempConfigHome(): string {
+  scratch = mkdtempSync(join(tmpdir(), 'p4-19-settings-'))
+  process.env.CLAUDE_CONFIG_DIR = scratch
+  resetSettingsCache()
+  return join(scratch, 'settings.json')
+}
+
+const write = (
+  source: EditableSettingSource,
+  key: string,
+  value: boolean | string | number,
+): SettingsVerbMessage => ({
+  type: 'settings.setValue',
+  requestId: 'r-1',
+  source,
+  key,
+  value,
+})
+
+test('runVerb persists an editable write and the re-read reflects value + provenance', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  const result = domain.runVerb(write('userSettings', 'includeCoAuthoredBy', false))
+  expect(result).toEqual({ ok: true, message: 'Updated includeCoAuthoredBy.', changed: true })
+
+  // Persisted verbatim on disk.
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect(onDisk.includeCoAuthoredBy).toBe(false)
+
+  // The domain's re-read snapshot reflects the value + userSettings provenance.
+  const snapshot = domain.getSnapshot()
+  const value = snapshot?.editableValues.find(e => e.key === 'includeCoAuthoredBy')
+  expect(value).toEqual({
+    key: 'includeCoAuthoredBy',
+    value: false,
+    source: 'userSettings',
+  })
+  const resolution = snapshot?.resolved.find(r => r.key === 'includeCoAuthoredBy')
+  expect(resolution).toMatchObject({ source: 'userSettings', editable: true, managed: false })
+})
+
+test('two sequential writes read-modify-write under lock — no lost update', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  expect(domain.runVerb(write('userSettings', 'includeCoAuthoredBy', false)).ok).toBe(true)
+  // The second write recomputes from the FRESH on-disk read (SettingsUpdater
+  // form) — the first write's key must survive, not be clobbered.
+  expect(domain.runVerb(write('userSettings', 'fastMode', true)).ok).toBe(true)
+
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect(onDisk.includeCoAuthoredBy).toBe(false)
+  expect(onDisk.fastMode).toBe(true)
+})
+
+test('runVerb validates enum + int values and rejects out-of-set / out-of-range', () => {
+  useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  expect(domain.runVerb(write('userSettings', 'effortLevel', 'high')).ok).toBe(true)
+  expect(domain.runVerb(write('userSettings', 'effortLevel', 'ludicrous')).ok).toBe(false)
+  expect(domain.runVerb(write('userSettings', 'cleanupPeriodDays', 30)).ok).toBe(true)
+  expect(domain.runVerb(write('userSettings', 'cleanupPeriodDays', -1)).ok).toBe(false)
+  expect(domain.runVerb(write('userSettings', 'cleanupPeriodDays', 1.5)).ok).toBe(false)
+})
+
+test('runVerb rejects a non-editable key, a mistyped value, and a non-editable source', () => {
+  useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  // Not in the allowlist.
+  const unknown = domain.runVerb(write('userSettings', 'apiKey', 'sk-live-X'))
+  expect(unknown.ok).toBe(false)
+  expect(unknown.changed).toBe(false)
+
+  // Boolean key, string value.
+  expect(domain.runVerb(write('userSettings', 'fastMode', 'on')).ok).toBe(false)
+
+  // Non-editable source (policy) is refused before any disk touch.
+  const managed = domain.runVerb({
+    type: 'settings.setValue',
+    requestId: 'r',
+    source: 'policySettings' as EditableSettingSource,
+    key: 'fastMode',
+    value: true,
+  })
+  expect(managed.ok).toBe(false)
+  expect(managed.changed).toBe(false)
 })

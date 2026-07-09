@@ -30,6 +30,7 @@ import {
   type ClientFrame,
   type PermissionContextFrame,
   type ServerFrame,
+  type SettingsVerbMessage,
 } from '../shared/protocol.js'
 import {
   createSidecarPermissionDomain,
@@ -66,6 +67,7 @@ import {
   createSidecarExtensionsDomain,
   type SidecarExtensionsDomain,
 } from './extensionsDomain.js'
+import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 
 const SESSION = 'test-session'
@@ -149,6 +151,7 @@ function makeServer(
   tasks?: SidecarTasksDomain,
   extensions?: SidecarExtensionsDomain,
   agentMode?: SidecarAgentModeDomain,
+  settings?: SidecarSettingsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -163,10 +166,32 @@ function makeServer(
     ...(tasks ? { tasks } : {}),
     ...(extensions ? { extensions } : {}),
     ...(agentMode ? { agentMode } : {}),
+    ...(settings ? { settings } : {}),
     log: () => {},
   })
   servers.push(server)
   return server
+}
+
+/** A fake settings domain — exercises the SERVER boundary (schema + allowlist +
+ * dispatch + result frame + re-broadcast) without a real disk write (that round
+ * trip is proven in settingsDomain.test.ts). */
+function fakeSettingsDomain(
+  runVerb: SidecarSettingsDomain['runVerb'] = () => ({
+    ok: true,
+    message: 'Updated.',
+    changed: true,
+  }),
+): SidecarSettingsDomain {
+  return {
+    getSnapshot: () => ({
+      layers: [],
+      resolved: [],
+      policyOrigin: null,
+      editableValues: [],
+    }),
+    runVerb,
+  }
 }
 
 /** Real engine app-state store seeded with an (optionally customized) context. */
@@ -1974,6 +1999,176 @@ test('P4-13 — a remoteSettings verb with no remoteSettings domain fails closed
       protocolVersion: PROTOCOL_VERSION,
       sessionId: SESSION,
       message: { type: 'remoteSettings.bridgeToggle', requestId: 'r', enable: true } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-19 — the settings WRITE verb (the FIRST renderer→engine settings write).
+ * These exercise the SIDECAR boundary (schema + EDITABLE_SETTINGS allowlist +
+ * per-key value gate + dispatch + result frame + re-broadcast); the real
+ * SettingsUpdater-under-lock disk round-trip is proven in settingsDomain.test.ts.
+ * ------------------------------------------------------------------------- */
+
+/** makeServer with only a (fake) settings domain wired. */
+function makeSettingsServer(runVerb?: SidecarSettingsDomain['runVerb']): SidecarServer {
+  return makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    fakeSettingsDomain(runVerb),
+  )
+}
+
+test('P4-19 — a valid settings.setValue produces an ok result and re-broadcasts the snapshot', () => {
+  let seen: SettingsVerbMessage | null = null
+  const server = makeSettingsServer(verb => {
+    seen = verb
+    return { ok: true, message: `Updated ${verb.key}.`, changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'settings.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'w1',
+        source: 'userSettings',
+        key: 'includeCoAuthoredBy',
+        value: false,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  const result = received.find(f => f.kind === 'settings.result')
+  expect(result && result.kind === 'settings.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'settings.result' && result.requestId).toBe('w1')
+  expect(result && result.kind === 'settings.result' && result.verb).toBe('settings.setValue')
+  // The domain received exactly the validated verb.
+  expect(seen).toMatchObject({ source: 'userSettings', key: 'includeCoAuthoredBy', value: false })
+  // A fresh snapshot was re-broadcast after the write landed.
+  expect(received.filter(f => f.kind === 'settings.snapshot').length).toBeGreaterThan(before)
+})
+
+test('P4-19 — rejects a settings verb carrying an unexpected key (checkStrictKeys)', () => {
+  const server = makeSettingsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'w',
+        source: 'userSettings',
+        key: 'includeCoAuthoredBy',
+        value: false,
+        updatedPermissions: [],
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  // The forged frame never reached a result.
+  expect(received.some(f => f.kind === 'settings.result')).toBe(false)
+})
+
+test('P4-19 — rejects a non-editable source (policy) at the schema boundary', () => {
+  let called = false
+  const server = makeSettingsServer(() => {
+    called = true
+    return { ok: true, message: 'Updated.', changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'w',
+        source: 'policySettings',
+        key: 'includeCoAuthoredBy',
+        value: false,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  // Rejected before the domain — no disk touch attempted.
+  expect(called).toBe(false)
+})
+
+test('P4-19 — rejects a mistyped value and a non-allowlisted key at the value gate', () => {
+  const server = makeSettingsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // fastMode is boolean → a string value is rejected.
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'w1',
+        source: 'userSettings',
+        key: 'fastMode',
+        value: 'on',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  // apiKey is NOT in the editable allowlist → rejected (never written).
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'w2',
+        source: 'userSettings',
+        key: 'apiKey',
+        value: 'sk-live-X',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBe(2)
+  expect(received.some(f => f.kind === 'settings.result')).toBe(false)
+})
+
+test('P4-19 — a settings verb with no settings domain fails closed (internal_error)', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'w',
+        source: 'userSettings',
+        key: 'includeCoAuthoredBy',
+        value: false,
+      } as unknown as ClientFrame['message'],
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
