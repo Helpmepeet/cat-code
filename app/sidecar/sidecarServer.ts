@@ -72,6 +72,8 @@ import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
+import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
+import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -123,6 +125,18 @@ export type SidecarServerOptions = {
    */
   accounts?: SidecarAccountsDomain
   /**
+   * Workspace-trust read-seam (P4-14). Optional because the P1-0 probe fixture
+   * has no cwd-configured engine; when absent, no `workspace-trust.snapshot`
+   * frame is emitted.
+   */
+  workspaceTrust?: SidecarWorkspaceTrustDomain
+  /**
+   * Diagnostics read-seam (P4-14). Optional because the P1-0 probe fixture has
+   * no cwd-configured engine; when absent, no `diagnostics.snapshot` frame is
+   * emitted.
+   */
+  diagnostics?: SidecarDiagnosticsDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -171,6 +185,8 @@ export class SidecarServer {
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
   private readonly accounts: SidecarAccountsDomain | null
+  private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
+  private readonly diagnostics: SidecarDiagnosticsDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
@@ -194,6 +210,8 @@ export class SidecarServer {
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
     this.accounts = options.accounts ?? null
+    this.workspaceTrust = options.workspaceTrust ?? null
+    this.diagnostics = options.diagnostics ?? null
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
@@ -322,6 +340,11 @@ export class SidecarServer {
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
+    // P4-14 — read-only workspace-trust + diagnostics snapshots, after the
+    // other snapshots and before replay. Both spawn-time-frozen (no new
+    // inbound vocabulary, no renderer-authored state).
+    this.sendWorkspaceTrustSnapshot(connection)
+    this.sendDiagnosticsSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -1256,6 +1279,72 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.sendAccountsSnapshot(connection)
+    }
+  }
+
+  /**
+   * P4-14 — build + send the workspace-trust snapshot to one connection.
+   * Spawn-time-frozen like settings: `getSnapshot()` is a pure read, no live
+   * re-broadcast (a workspace switch spawns a new sidecar at the new cwd).
+   */
+  private sendWorkspaceTrustSnapshot(connection: Connection): void {
+    if (!this.workspaceTrust) {
+      return
+    }
+    try {
+      const raw = this.workspaceTrust.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'workspace-trust.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'workspace-trust.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        workspaceTrust: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] workspace-trust.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  /**
+   * P4-14 — build + send the diagnostics snapshot to one connection.
+   * Spawn-time-frozen like settings: `getSnapshot()` is a pure read, no live
+   * re-broadcast (the doctor/install checks run once at spawn).
+   */
+  private sendDiagnosticsSnapshot(connection: Connection): void {
+    if (!this.diagnostics) {
+      return
+    }
+    try {
+      const raw = this.diagnostics.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'diagnostics.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'diagnostics.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        diagnostics: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] diagnostics.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
     }
   }
 

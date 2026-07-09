@@ -16,10 +16,14 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   AgentConfigSnapshot,
+  DiagnosticsSnapshot,
   MemorySnapshot,
+  PermissionContextSnapshot,
   SettingsSnapshot,
+  WorkspaceTrustSnapshot,
 } from '../../shared/protocol.js'
 import { AgentsPage } from './AgentsPage.js'
+import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
 import {
   Field,
@@ -33,6 +37,7 @@ import {
   selectManagedFields,
   SETTING_SOURCE_PRECEDENCE,
 } from './settingsState.js'
+import { WorkspaceTrustSection } from './WorkspaceTrustSection.js'
 
 type NavItem = { id: string; label: string; locked?: boolean }
 type NavGroup = { group: string; items: NavItem[] }
@@ -101,7 +106,7 @@ const CAT_DESC: Record<string, string> = {
   hooks: 'Event hooks by event, with recent run results',
   ide: 'Editor connection and language servers',
   remote: 'Remote Control bridge and connect transports',
-  diagnostics: 'Doctor, status, stats, and connection',
+  diagnostics: 'Doctor and status checks',
   managed: 'Settings enforced by organization policy',
 }
 
@@ -110,7 +115,6 @@ const CAT_OWNER: Record<string, string> = {
   general: 'a later Phase-4 settings session',
   model: 'a later Phase-4 settings session',
   permissions: 'the Permissions domain (P2-4 — rules editor)',
-  workspace: 'Diagnostics + Workspace Trust (P4-14)',
   memory: 'Goals + Memory (P4-10)',
   privacy: 'a later Phase-4 settings session',
   keybindings: 'a later Phase-4 settings session',
@@ -122,18 +126,27 @@ const CAT_OWNER: Record<string, string> = {
   hooks: 'Settings extensions (P4-12)',
   ide: 'a later Phase-4 settings session',
   remote: 'RemoteSettings (P4-13)',
-  diagnostics: 'Diagnostics + Workspace Trust (P4-14)',
 }
 
 export function SettingsShell({
   snapshot,
+  additionalWorkingDirectories,
   agentsSnapshot,
+  cwd,
+  diagnosticsSnapshot,
   memorySnapshot,
+  workspaceTrustSnapshot,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
+  /** C3 — reused from `permission.context`, not a second seam (§10). */
+  additionalWorkingDirectories?: PermissionContextSnapshot['additionalWorkingDirectories']
   agentsSnapshot?: AgentConfigSnapshot | null
+  /** The active session's cwd (already known via the host roster; not re-plumbed). */
+  cwd?: string | null
+  diagnosticsSnapshot?: DiagnosticsSnapshot | null
   memorySnapshot?: MemorySnapshot | null
+  workspaceTrustSnapshot?: WorkspaceTrustSnapshot | null
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -216,10 +229,14 @@ export function SettingsShell({
             <p className="text-[13px] text-text-subtle">{CAT_DESC[active]}</p>
           </header>
           <CategoryBody
+            additionalWorkingDirectories={additionalWorkingDirectories ?? []}
             agentsSnapshot={agentsSnapshot ?? null}
             category={active}
+            cwd={cwd ?? null}
+            diagnosticsSnapshot={diagnosticsSnapshot ?? null}
             memorySnapshot={memorySnapshot ?? null}
             snapshot={snapshot}
+            workspaceTrustSnapshot={workspaceTrustSnapshot ?? null}
           />
         </div>
       </div>
@@ -228,15 +245,23 @@ export function SettingsShell({
 }
 
 function CategoryBody({
+  additionalWorkingDirectories,
   agentsSnapshot,
   category,
+  cwd,
+  diagnosticsSnapshot,
   memorySnapshot,
   snapshot,
+  workspaceTrustSnapshot,
 }: {
+  additionalWorkingDirectories: PermissionContextSnapshot['additionalWorkingDirectories']
   agentsSnapshot: AgentConfigSnapshot | null
   category: string
+  cwd: string | null
+  diagnosticsSnapshot: DiagnosticsSnapshot | null
   memorySnapshot: MemorySnapshot | null
   snapshot: SettingsSnapshot | null
+  workspaceTrustSnapshot: WorkspaceTrustSnapshot | null
 }) {
   if (category === 'agents') {
     return <AgentsPage embedded snapshot={agentsSnapshot} />
@@ -246,6 +271,18 @@ function CategoryBody({
   }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />
+  }
+  if (category === 'workspace') {
+    return (
+      <WorkspaceTrustSection
+        additionalWorkingDirectories={additionalWorkingDirectories}
+        cwd={cwd}
+        snapshot={workspaceTrustSnapshot}
+      />
+    )
+  }
+  if (category === 'diagnostics') {
+    return <DiagnosticsSection settingsSnapshot={snapshot} snapshot={diagnosticsSnapshot} />
   }
   if (category === 'general') {
     // The default view: real read-seam data (layer summary + resolution legend)

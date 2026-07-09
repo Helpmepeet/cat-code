@@ -799,7 +799,7 @@ Report back: the three real primitives wired (src:line), confirmation the device
 ```
 ─── PASTE ───
 
-## P4-14 · 🟢 — Diagnostics + WorkspaceTrust sections
+## P4-14 · 🟡 — Diagnostics + WorkspaceTrust sections
 
 ─── PASTE ───
 ```

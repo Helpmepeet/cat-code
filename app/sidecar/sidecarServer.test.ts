@@ -48,6 +48,8 @@ import {
 } from '../../src/services/api/codexAccountPool.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
+import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
+import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -124,6 +126,8 @@ function makeServer(
   permissions?: SidecarPermissionDomain,
   goals?: SidecarGoalDomain,
   accounts?: SidecarAccountsDomain,
+  workspaceTrust?: SidecarWorkspaceTrustDomain,
+  diagnostics?: SidecarDiagnosticsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -132,6 +136,8 @@ function makeServer(
     ...(permissions ? { permissions } : {}),
     ...(goals ? { goals } : {}),
     ...(accounts ? { accounts } : {}),
+    ...(workspaceTrust ? { workspaceTrust } : {}),
+    ...(diagnostics ? { diagnostics } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -1643,4 +1649,120 @@ test('CC-3 — an open connection cancels the idle timer; closing it re-arms the
   server.removeConnection(conn)
   await Bun.sleep(120)
   expect(idleCount).toBe(1)
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-14 — workspace-trust + diagnostics read-seams
+ * ------------------------------------------------------------------------- */
+
+function fakeWorkspaceTrust(
+  snapshot: ReturnType<SidecarWorkspaceTrustDomain['getSnapshot']>,
+): SidecarWorkspaceTrustDomain {
+  return { getSnapshot: () => snapshot }
+}
+
+function fakeDiagnostics(
+  snapshot: ReturnType<SidecarDiagnosticsDomain['getSnapshot']>,
+): SidecarDiagnosticsDomain {
+  return { getSnapshot: () => snapshot }
+}
+
+test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read', () => {
+  const workspaceTrust = fakeWorkspaceTrust({ trusted: true, detectedRepo: 'acme/cat-code' })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    workspaceTrust,
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const snap = received.find(f => f.kind === 'workspace-trust.snapshot')
+  expect(snap).toEqual({
+    kind: 'workspace-trust.snapshot',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    workspaceTrust: { trusted: true, detectedRepo: 'acme/cat-code' },
+  })
+})
+
+test('P4-14 — a null workspace-trust read degrades to no frame, never strands the connection', () => {
+  const workspaceTrust = fakeWorkspaceTrust(null)
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    workspaceTrust,
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'workspace-trust.snapshot')).toBe(false)
+  // The rest of the attach sequence still ran (ready always fires first).
+  expect(received[0]?.kind).toBe('ready')
+})
+
+test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', () => {
+  const diagnostics = fakeDiagnostics({
+    version: '2.1.87-dev',
+    mainLoopModel: null,
+    sandboxEnabled: true,
+    installationWarnings: [],
+    healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],
+    memoryWarnings: [],
+  })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    diagnostics,
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const snap = received.find(f => f.kind === 'diagnostics.snapshot')
+  expect(snap).toEqual({
+    kind: 'diagnostics.snapshot',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    diagnostics: {
+      version: '2.1.87-dev',
+      mainLoopModel: null,
+      sandboxEnabled: true,
+      installationWarnings: [],
+      healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],
+      memoryWarnings: [],
+    },
+  })
+})
+
+test('P4-14 — a null diagnostics read degrades to no frame, never strands the connection', () => {
+  const diagnostics = fakeDiagnostics(null)
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    diagnostics,
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'diagnostics.snapshot')).toBe(false)
+  expect(received[0]?.kind).toBe('ready')
+})
+
+test('P4-14 — absent domains (probe mode) emit neither snapshot, without throwing', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'workspace-trust.snapshot')).toBe(false)
+  expect(received.some(f => f.kind === 'diagnostics.snapshot')).toBe(false)
 })
