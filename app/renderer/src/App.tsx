@@ -139,6 +139,11 @@ import {
   reduceAccountsState,
   selectAccountsSnapshot,
 } from './accountsState.js'
+import {
+  createRemoteSettingsState,
+  reduceRemoteSettingsState,
+  selectRemoteSettingsSnapshot,
+} from './remoteSettingsState.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import { SettingsShell } from './SettingsShell.js'
@@ -147,6 +152,7 @@ import type {
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
+  RemoteVerbMessage,
   SessionId,
 } from '../../shared/protocol.js'
 import type {
@@ -167,6 +173,7 @@ const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
+const reduceRemoteSettingsStateBatched = withBatch(reduceRemoteSettingsState)
 
 export function App() {
   const [state, dispatch] = useReducer(
@@ -237,6 +244,11 @@ export function App() {
     undefined,
     createAccountsState,
   )
+  const [remoteSettings, dispatchRemoteSettings] = useReducer(
+    reduceRemoteSettingsStateBatched,
+    undefined,
+    createRemoteSettingsState,
+  )
   const [activeView, setActiveView] = useState<
     'chat' | 'goals' | 'accounts' | 'settings'
   >('chat')
@@ -274,6 +286,7 @@ export function App() {
         dispatchAgentConfig,
         dispatchGoalMemory,
         dispatchAccounts,
+        dispatchRemoteSettings,
         dispatchTranscript: dispatchSessionEvent,
       })
     })
@@ -500,6 +513,17 @@ export function App() {
     (verb: AccountVerbMessage) => {
       if (!activeSessionId) return
       getBridge().accountVerb(activeSessionId, verb)
+    },
+    [activeSessionId],
+  )
+
+  // P4-13 — dispatch a RemoteSettings verb (bridge toggle / direct-connect) to
+  // the active session's sidecar. The outcome returns as a
+  // `remoteSettings.result` frame (→ remoteSettings.lastResult).
+  const sendRemoteSettingsVerb = useCallback(
+    (verb: RemoteVerbMessage) => {
+      if (!activeSessionId) return
+      getBridge().remoteSettingsVerb(activeSessionId, verb)
     },
     [activeSessionId],
   )
@@ -1021,6 +1045,9 @@ export function App() {
             agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
             initialCategory="agents"
             memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
+            onRemoteVerb={sendRemoteSettingsVerb}
+            remoteLastResult={remoteSettings.lastResult}
+            remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
             snapshot={selectSettingsSnapshot(settings, activeSessionId)}
           />
         ) : activeView === 'goals' ? (

@@ -63,6 +63,7 @@ import {
   type AccountVerbMessage,
   type ClientFrame,
   type PermissionContextSnapshot,
+  type RemoteVerbMessage,
   type ServerFrame,
   type SessionId,
 } from '../shared/protocol.js'
@@ -72,6 +73,7 @@ import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
+import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -123,6 +125,13 @@ export type SidecarServerOptions = {
    */
   accounts?: SidecarAccountsDomain
   /**
+   * RemoteSettings read-seam + verbs (P4-13, D3 cut scope). Optional because the
+   * P1-0 probe fixture has no engine app-state store or cwd-configured command
+   * catalog; when absent, no `remoteSettings.snapshot` frame is emitted and
+   * RemoteSettings verbs fail closed.
+   */
+  remoteSettings?: SidecarRemoteSettingsDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -171,6 +180,7 @@ export class SidecarServer {
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
   private readonly accounts: SidecarAccountsDomain | null
+  private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
@@ -194,6 +204,7 @@ export class SidecarServer {
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
     this.accounts = options.accounts ?? null
+    this.remoteSettings = options.remoteSettings ?? null
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
@@ -322,6 +333,10 @@ export class SidecarServer {
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
+    // P4-13 — RemoteSettings read-seam (bridge status + command-filter truth),
+    // after accounts and before replay. Read-only; re-broadcast after a
+    // mutating `remoteSettings.*` verb.
+    this.sendRemoteSettingsSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -519,6 +534,17 @@ export class SidecarServer {
       ?.type
     if (typeof messageType === 'string' && messageType.startsWith('account.')) {
       this.handleAccountVerb(connection, frame.message)
+      return
+    }
+
+    // P4-13 — RemoteSettings verbs are app-owned vocabulary (like C2 and the
+    // P4-5 account verbs), validated by a sidecar-LOCAL schema and dispatched
+    // to the engine's own bridge/direct-connect primitives.
+    if (
+      typeof messageType === 'string' &&
+      messageType.startsWith('remoteSettings.')
+    ) {
+      this.handleRemoteSettingsVerb(connection, frame.message)
       return
     }
 
@@ -806,6 +832,71 @@ export class SidecarServer {
         })
         if (poolChanged) {
           this.broadcastAccountsSnapshot()
+        }
+      })
+      .catch(error => {
+        this.sendError(
+          connection,
+          verb.requestId,
+          'internal_error',
+          error instanceof Error ? error.message : String(error),
+          false,
+        )
+      })
+  }
+
+  /**
+   * P4-13 — RemoteSettings verbs (protocol.ts: the decision rationale lives on
+   * `REMOTE_VERB_TYPES`). Same fail-closed order as `handleAccountVerb`:
+   * sidecar-LOCAL structural schema → domain presence → dispatch (the domain
+   * re-checks the live bridge flag before mutating) → `remoteSettings.result`
+   * frame → re-broadcast the snapshot when the bridge flag changed.
+   */
+  private handleRemoteSettingsVerb(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = remoteVerbMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid remote settings verb',
+        false,
+      )
+      return
+    }
+    if (!this.remoteSettings) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'remote settings domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    const verb = parsed.data as RemoteVerbMessage
+    void this.remoteSettings
+      .runVerb(verb)
+      .then(({ verb: verbType, result, flagChanged }) => {
+        this.send(connection, {
+          kind: 'remoteSettings.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbType,
+          ok: result.ok,
+          message: result.message,
+          ...(result.directConnect !== undefined
+            ? { directConnect: result.directConnect }
+            : {}),
+        })
+        if (flagChanged) {
+          this.broadcastRemoteSettingsSnapshot()
         }
       })
       .catch(error => {
@@ -1259,6 +1350,49 @@ export class SidecarServer {
     }
   }
 
+  /**
+   * P4-13 — build + send the RemoteSettings snapshot (bridge status + real
+   * command-filter truth) to one connection. Same idiom as the other read-seams:
+   * `getSnapshot()` is a pure, throw-free read; the shared `send` path applies
+   * clone/JSON checks, the outbound secret guard, and the size cap.
+   */
+  private sendRemoteSettingsSnapshot(connection: Connection): void {
+    if (!this.remoteSettings) {
+      return
+    }
+    try {
+      const raw = this.remoteSettings.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'remoteSettings.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'remoteSettings.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        remoteSettings: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] remoteSettings.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastRemoteSettingsSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendRemoteSettingsSnapshot(connection)
+    }
+  }
+
   private send(connection: Connection, frame: ServerFrame): void {
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
@@ -1378,6 +1512,9 @@ function checkStrictKeys(message: unknown): string | null {
     ['account.logout', new Set(['type', 'requestId'])],
     ['account.touchAll', new Set(['type', 'requestId'])],
     ['account.login', new Set(['type', 'requestId'])],
+    // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
+    ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
+    ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
@@ -1495,6 +1632,29 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('account.login'),
     requestId: accountRequestIdSchema,
+  }),
+])
+
+/**
+ * P4-13 — sidecar-LOCAL schemas for the RemoteSettings verbs (protocol.ts:
+ * REMOTE_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + bounds. `serverUrl` is length-bounded like every
+ * other renderer-controlled string; the domain re-derives everything else
+ * (the real bridge flag, the real cwd) rather than trusting the frame.
+ */
+const remoteRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const remoteServerUrlSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+
+const remoteVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('remoteSettings.bridgeToggle'),
+    requestId: remoteRequestIdSchema,
+    enable: z.boolean(),
+  }),
+  z.object({
+    type: z.literal('remoteSettings.directConnect'),
+    requestId: remoteRequestIdSchema,
+    serverUrl: remoteServerUrlSchema,
   }),
 ])
 

@@ -46,6 +46,11 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
+import {
+  createSidecarRemoteSettingsDomain,
+  type RemoteSettingsCommandExecutor,
+  type SidecarRemoteSettingsDomain,
+} from './remoteSettingsDomain.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 
@@ -124,6 +129,7 @@ function makeServer(
   permissions?: SidecarPermissionDomain,
   goals?: SidecarGoalDomain,
   accounts?: SidecarAccountsDomain,
+  remoteSettings?: SidecarRemoteSettingsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -132,6 +138,7 @@ function makeServer(
     ...(permissions ? { permissions } : {}),
     ...(goals ? { goals } : {}),
     ...(accounts ? { accounts } : {}),
+    ...(remoteSettings ? { remoteSettings } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -1593,6 +1600,180 @@ test('P4-5 — an account verb with no accounts domain fails closed (internal_er
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
+  expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-13 — RemoteSettings verbs (D3 cut scope)
+ * ------------------------------------------------------------------------- */
+
+function fakeRemoteExecutor(
+  over: Partial<RemoteSettingsCommandExecutor> = {},
+): RemoteSettingsCommandExecutor {
+  return {
+    checkBridgePrerequisites: async () => null,
+    directConnect: async (serverUrl, cwd) => ({ sessionId: `s-${cwd}`, wsUrl: `ws://${serverUrl}` }),
+    ...over,
+  }
+}
+
+test('P4-13 — attach emits a remoteSettings.snapshot', () => {
+  const remoteSettings = createSidecarRemoteSettingsDomain({
+    appStateStore: makePermissionStore(),
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeRemoteExecutor(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, remoteSettings)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const snap = received.find(f => f.kind === 'remoteSettings.snapshot')
+  expect(snap?.kind).toBe('remoteSettings.snapshot')
+})
+
+test('P4-13 — a valid bridgeToggle produces an ok result and re-broadcasts the snapshot', async () => {
+  const remoteSettings = createSidecarRemoteSettingsDomain({
+    appStateStore: makePermissionStore(),
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeRemoteExecutor(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, remoteSettings)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'remoteSettings.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'remoteSettings.bridgeToggle', requestId: 'r1', enable: true } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'remoteSettings.result')
+  expect(result?.kind).toBe('remoteSettings.result')
+  expect(result && result.kind === 'remoteSettings.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'remoteSettings.result' && result.requestId).toBe('r1')
+  expect(received.filter(f => f.kind === 'remoteSettings.snapshot').length).toBeGreaterThan(before)
+})
+
+test('P4-13 — a rejected bridgeToggle prerequisite produces an ok:false result and no re-broadcast', async () => {
+  const remoteSettings = createSidecarRemoteSettingsDomain({
+    appStateStore: makePermissionStore(),
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeRemoteExecutor({ checkBridgePrerequisites: async () => 'blocked by policy' }),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, remoteSettings)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'remoteSettings.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'remoteSettings.bridgeToggle', requestId: 'r2', enable: true } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'remoteSettings.result')
+  expect(result && result.kind === 'remoteSettings.result' && result.ok).toBe(false)
+  expect(received.filter(f => f.kind === 'remoteSettings.snapshot').length).toBe(before)
+})
+
+test('P4-13 — a valid directConnect never carries token material and echoes requestId', async () => {
+  const remoteSettings = createSidecarRemoteSettingsDomain({
+    appStateStore: makePermissionStore(),
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeRemoteExecutor(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, remoteSettings)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'remoteSettings.directConnect', requestId: 'r3', serverUrl: 'cc://host:8200' } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'remoteSettings.result')
+  expect(result && result.kind === 'remoteSettings.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'remoteSettings.result' && result.requestId).toBe('r3')
+  expect(JSON.stringify(result)).not.toContain('token')
+})
+
+test('P4-13 — rejects a remoteSettings verb carrying an unexpected key (checkStrictKeys)', () => {
+  const remoteSettings = createSidecarRemoteSettingsDomain({
+    appStateStore: makePermissionStore(),
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeRemoteExecutor(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, remoteSettings)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'remoteSettings.bridgeToggle',
+        requestId: 'r',
+        enable: true,
+        updatedPermissions: [],
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('P4-13 — rejects directConnect with a missing serverUrl (schema)', () => {
+  const remoteSettings = createSidecarRemoteSettingsDomain({
+    appStateStore: makePermissionStore(),
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeRemoteExecutor(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, remoteSettings)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'remoteSettings.directConnect', requestId: 'r' } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('P4-13 — a remoteSettings verb with no remoteSettings domain fails closed (internal_error)', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'remoteSettings.bridgeToggle', requestId: 'r', enable: true } as unknown as ClientFrame['message'],
+    }),
+  )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })
 

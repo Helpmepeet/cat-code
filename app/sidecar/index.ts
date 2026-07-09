@@ -142,7 +142,7 @@ async function main(): Promise<void> {
     ? `probe:${args.sessionId}`
     : getSessionId()
 
-  const { controller, permissions, settings, agentConfig, goals, memory, accounts } = await createSidecarSessionController({
+  const { controller, permissions, settings, agentConfig, goals, memory, accounts, remoteSettings } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: args.cwd,
     ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
@@ -169,6 +169,7 @@ async function main(): Promise<void> {
     ...(goals ? { goals } : {}),
     ...(memory ? { memory } : {}),
     ...(accounts ? { accounts } : {}),
+    ...(remoteSettings ? { remoteSettings } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     idleTtlMs,
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,

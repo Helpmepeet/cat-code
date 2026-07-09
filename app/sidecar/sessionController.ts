@@ -47,6 +47,10 @@ import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
+import {
+  createSidecarRemoteSettingsDomain,
+  type SidecarRemoteSettingsDomain,
+} from './remoteSettingsDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -180,6 +184,13 @@ export async function createNormalSidecarQueryEngineConfig(
     appStateStore,
     agentDefinitions,
     availableMcpServers,
+    /**
+     * The real command catalog for this cwd (same array wired into the query
+     * engine above) — returned so the RemoteSettings domain (P4-13) can derive
+     * its command-filter truth from THIS session's actual commands, never a
+     * second `getCommands()` call or a copied array.
+     */
+    commands,
     queryEngineConfig: {
       ...createQueryEngineAppSessionConfigFromSetup({
         cwd,
@@ -246,6 +257,13 @@ export type SidecarSession = {
    * null in probe mode (no engine). Read-seam is secretGuard-clean by construction.
    */
   accounts: SidecarAccountsDomain | null
+  /**
+   * RemoteSettings domain (P4-13, D3 cut scope) — bridge toggle/status +
+   * command-filter truth + direct-connect verb over the engine's own bridge
+   * flag and command catalog. Null in probe mode (no engine app-state store,
+   * no cwd-configured command catalog).
+   */
+  remoteSettings: SidecarRemoteSettingsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -284,6 +302,7 @@ export async function createSidecarSessionController({
       goals: null,
       memory: null,
       accounts: null,
+      remoteSettings: null,
     }
   }
 
@@ -292,7 +311,7 @@ export async function createSidecarSessionController({
   // so what the model sees and what canUseTool allows never diverge. P1-2
   // shipped `tools: []`, which made every live turn text-only — the model
   // could not emit a tool_use at all (found in P1-3).
-  const { appStateStore, agentDefinitions, availableMcpServers, queryEngineConfig } =
+  const { appStateStore, agentDefinitions, availableMcpServers, commands, queryEngineConfig } =
     await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
   return {
@@ -306,5 +325,6 @@ export async function createSidecarSessionController({
     goals: createSidecarGoalDomain(appStateStore),
     memory: createSidecarMemoryDomain(),
     accounts: createSidecarAccountsDomain(),
+    remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
   }
 }

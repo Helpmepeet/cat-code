@@ -54,6 +54,7 @@ export type ServerFrameBatchHandlers = {
   dispatchAgentConfig: (action: BatchAction<FrameReducerAction>) => void
   dispatchGoalMemory: (action: BatchAction<FrameReducerAction>) => void
   dispatchAccounts: (action: BatchAction<FrameReducerAction>) => void
+  dispatchRemoteSettings: (action: BatchAction<FrameReducerAction>) => void
 }
 
 /**
@@ -89,5 +90,6 @@ export function applyServerFrameBatch(
   h.dispatchAgentConfig(batch(frameActions))
   h.dispatchGoalMemory(batch(frameActions))
   h.dispatchAccounts(batch(frameActions))
+  h.dispatchRemoteSettings(batch(frameActions))
   h.dispatchTranscript(batch(frames))
 }

@@ -17,10 +17,14 @@ import type { ReactNode } from 'react'
 import type {
   AgentConfigSnapshot,
   MemorySnapshot,
+  RemoteSettingsResultFrame,
+  RemoteSettingsSnapshot,
+  RemoteVerbMessage,
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import { AgentsPage } from './AgentsPage.js'
 import { MemoryPage } from './MemoryPage.js'
+import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import {
   Field,
   LockIcon,
@@ -121,7 +125,6 @@ const CAT_OWNER: Record<string, string> = {
   skills: 'Settings extensions (P4-12)',
   hooks: 'Settings extensions (P4-12)',
   ide: 'a later Phase-4 settings session',
-  remote: 'RemoteSettings (P4-13)',
   diagnostics: 'Diagnostics + Workspace Trust (P4-14)',
 }
 
@@ -129,11 +132,17 @@ export function SettingsShell({
   snapshot,
   agentsSnapshot,
   memorySnapshot,
+  remoteSnapshot,
+  remoteLastResult,
+  onRemoteVerb,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
   agentsSnapshot?: AgentConfigSnapshot | null
   memorySnapshot?: MemorySnapshot | null
+  remoteSnapshot?: RemoteSettingsSnapshot | null
+  remoteLastResult?: RemoteSettingsResultFrame | null
+  onRemoteVerb?: (verb: RemoteVerbMessage) => void
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -219,6 +228,9 @@ export function SettingsShell({
             agentsSnapshot={agentsSnapshot ?? null}
             category={active}
             memorySnapshot={memorySnapshot ?? null}
+            onRemoteVerb={onRemoteVerb ?? (() => {})}
+            remoteLastResult={remoteLastResult ?? null}
+            remoteSnapshot={remoteSnapshot ?? null}
             snapshot={snapshot}
           />
         </div>
@@ -231,11 +243,17 @@ function CategoryBody({
   agentsSnapshot,
   category,
   memorySnapshot,
+  onRemoteVerb,
+  remoteLastResult,
+  remoteSnapshot,
   snapshot,
 }: {
   agentsSnapshot: AgentConfigSnapshot | null
   category: string
   memorySnapshot: MemorySnapshot | null
+  onRemoteVerb: (verb: RemoteVerbMessage) => void
+  remoteLastResult: RemoteSettingsResultFrame | null
+  remoteSnapshot: RemoteSettingsSnapshot | null
   snapshot: SettingsSnapshot | null
 }) {
   if (category === 'agents') {
@@ -243,6 +261,16 @@ function CategoryBody({
   }
   if (category === 'memory') {
     return <MemoryPage embedded snapshot={memorySnapshot} />
+  }
+  if (category === 'remote') {
+    return (
+      <RemoteSettingsPage
+        embedded
+        lastResult={remoteLastResult}
+        onVerb={onRemoteVerb}
+        snapshot={remoteSnapshot}
+      />
+    )
   }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />
