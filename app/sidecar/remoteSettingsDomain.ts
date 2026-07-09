@@ -147,6 +147,33 @@ export function buildBridgeStatusSnapshot(state: {
  * Real executor — wires the engine's own bridge/direct-connect primitives
  * ------------------------------------------------------------------------- */
 
+/**
+ * App-side bound on a direct-connect attempt (review fix 2026-07-09). A
+ * black-hole host would otherwise leave `createDirectConnectSession`'s bare
+ * `fetch` (no signal, `src/server/createDirectConnectSession.ts`) pending
+ * forever, stranding the renderer form on "Connecting…". A true AbortSignal
+ * that cancels the underlying request would require a `src/` signature change,
+ * so this races the promise against a timeout to surface a real error instead
+ * of hanging; the fetch itself is abandoned (accepted for this LOW fix).
+ */
+const DIRECT_CONNECT_TIMEOUT_MS = 15_000
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DirectConnectError(message)), timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export function createRealRemoteSettingsExecutor(): RemoteSettingsCommandExecutor {
   return {
     async checkBridgePrerequisites() {
@@ -176,7 +203,11 @@ export function createRealRemoteSettingsExecutor(): RemoteSettingsCommandExecuto
       return null
     },
     async directConnect(serverUrl, cwd) {
-      const { config } = await createDirectConnectSession({ serverUrl, cwd })
+      const { config } = await withTimeout(
+        createDirectConnectSession({ serverUrl, cwd }),
+        DIRECT_CONNECT_TIMEOUT_MS,
+        `Timed out connecting to ${serverUrl} after ${DIRECT_CONNECT_TIMEOUT_MS / 1000}s.`,
+      )
       return { sessionId: config.sessionId, wsUrl: config.wsUrl }
     },
   }
@@ -262,7 +293,9 @@ async function runBridgeToggle(
     }))
     return {
       verb: 'remoteSettings.bridgeToggle',
-      result: { ok: true, message: 'Remote Control bridge enabled.' },
+      // Honesty (review fix 2026-07-09): only the flag is set — no worker
+      // serves the session in the desktop path (see the §0 module header).
+      result: { ok: true, message: 'Remote Control enabled (flag set; not yet serving clients).' },
       flagChanged: true,
     }
   }

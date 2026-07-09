@@ -66,9 +66,13 @@ async function readDiagnosticsSnapshotOnce(
       version: MACRO.VERSION,
       mainLoopModel: appStateStore.getState().mainLoopModel,
       sandboxEnabled: SandboxManager.isSandboxingEnabled(),
-      installationWarnings,
-      healthWarnings,
-      memoryWarnings,
+      // The engine builders are typed `Diagnostic[]` (`ReactNode`); today they
+      // yield plain strings, but a future JSX-emitting variant would be silently
+      // dropped by `checkJsonSafe` on the outbound frame. Coerce explicitly so
+      // the wire stays `string[]` by construction, not by luck.
+      installationWarnings: installationWarnings.map(String),
+      healthWarnings: healthWarnings.map(String),
+      memoryWarnings: memoryWarnings.map(String),
     }
   } catch (error) {
     process.stderr.write(

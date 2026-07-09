@@ -68,7 +68,6 @@ const EXTENSIONS: ExtensionsSnapshot = {
       enabled: true,
       builtin: false,
       provides: { commands: 1, agents: 0, skills: 0, hooks: 0, mcpServers: 0, lsp: 0 },
-      hasOptions: false,
     },
   ],
   skills: [

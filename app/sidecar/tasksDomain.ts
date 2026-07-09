@@ -115,11 +115,11 @@ function toTaskSnapshotItem(task: TaskState): TaskSnapshotItem {
         label: task.description,
       }
     // local_workflow/monitor_mcp are ant-gated features (WORKFLOW_SCRIPTS/
-    // MONITOR_TOOL) whose state modules aren't present in this checkout
-    // (src/tasks.ts:9-14), which also stops the switch above from
-    // typechecking as exhaustive — fall back to the shared TaskStateBase
-    // description (display = degrade gracefully) rather than importing
-    // fields this build can't resolve.
+    // MONITOR_TOOL) not compiled into any current `scripts/build.ts` feature
+    // list, so their state modules never load here (src/tasks.ts:9-14) — which
+    // also stops the switch above from typechecking as exhaustive. Fall back to
+    // the shared TaskStateBase description (display = degrade gracefully)
+    // rather than importing fields this build can't resolve.
     default:
       return {
         ...base,

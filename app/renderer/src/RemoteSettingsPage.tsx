@@ -80,44 +80,27 @@ function WaitingState() {
   )
 }
 
-/* ── viewer/control role label — survives ONLY as a session-level label ────
+/* ── control role label — survives ONLY as a session-level label ───────────
  * (`decisions/PAIRED-DEVICES.md` §3/§6): no per-device backing, so it is never
- * a per-row control here — just a label on a live remote connection. */
-export function RemoteRolePill({ role }: { role: 'control' | 'viewer' }) {
-  const isControl = role === 'control'
+ * a per-row control here — just a label on a live remote connection. Only the
+ * `control` role is ever instantiated (a successful direct-connect); the
+ * prototype's `viewer` variant has no backing state and is cut (YAGNI). */
+export function RemoteRolePill() {
   return (
     <Chip
       icon={
-        isControl ? (
-          <svg
-            aria-hidden="true"
-            className="h-2.5 w-2.5"
-            fill="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path d="M5 3l14 9-14 9V3z" />
-          </svg>
-        ) : (
-          <svg
-            aria-hidden="true"
-            className="h-2.5 w-2.5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            viewBox="0 0 24 24"
-          >
-            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        )
+        <svg
+          aria-hidden="true"
+          className="h-2.5 w-2.5"
+          fill="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path d="M5 3l14 9-14 9V3z" />
+        </svg>
       }
-      label={isControl ? 'Control' : 'Viewer'}
-      title={
-        isControl
-          ? 'Can drive this session (send input, approve permissions)'
-          : 'Read-only viewer'
-      }
-      tone={isControl ? 'accent' : 'info'}
+      label="Control"
+      title="Can drive this session (send input, approve permissions)"
+      tone="accent"
     />
   )
 }
@@ -171,12 +154,17 @@ function BridgePanel({
             <span className="text-[14px] font-semibold text-text-primary">
               Remote Control bridge
             </span>
-            <Chip label={bridge.enabled ? 'Publishing' : 'Offline'} tone={bridge.enabled ? 'good' : 'default'} />
+            {/* Honesty (review fix 2026-07-09): the desktop path only SETS the
+             * `replBridgeEnabled` flag — no worker actually serves the session
+             * (the `initReplBridge` loop is Ink-REPL-only). "Enabled" ≠
+             * "Publishing"; the flag is on, but nothing is being served yet. */}
+            <Chip label={bridge.enabled ? 'Enabled' : 'Offline'} tone={bridge.enabled ? 'good' : 'default'} />
           </div>
           <p className="max-w-[420px] text-[12px] leading-relaxed text-text-subtle">
-            Publishes this session as a worker a web or mobile client can drive.
-            Toggled in-session with{' '}
-            <code className="font-mono text-text-muted">/remote-control</code>.
+            Sets the Remote Control flag for this session (the same flag{' '}
+            <code className="font-mono text-text-muted">/remote-control</code>{' '}
+            sets). A live web or mobile connection is not served from the
+            desktop app yet.
           </p>
           {bridge.enabled ? (
             <div className="mt-3 flex flex-wrap items-center gap-3 text-[11.5px] text-text-subtle">
@@ -317,7 +305,7 @@ function DirectConnectSection({
           <span className="text-[12px] text-text-subtle">
             Connect to a cat-code server over WebSocket
           </span>
-          {connected ? <RemoteRolePill role="control" /> : null}
+          {connected ? <RemoteRolePill /> : null}
         </div>
         <label className="mb-1 block text-[11px] text-text-subtle" htmlFor="remote-server-url">
           Server URL

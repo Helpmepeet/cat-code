@@ -13,6 +13,7 @@ import type {
   HookConfigSource,
   HookConfigType,
   McpConfigScope,
+  McpConfigTransport,
   SkillConfigSource,
 } from '../shared/protocol.js'
 import {
@@ -39,10 +40,20 @@ type SkillSourceCoversEngine = AssertAssignable<
 type HookTypeCoversEngine = AssertAssignable<
   Exclude<HookCommand['type'], HookConfigType> extends never ? true : false
 >
+// `buildMcpEntry` casts `config.type ?? 'stdio'` to `McpConfigTransport`; the
+// wire union must stay a superset of every engine `McpServerConfig.type`
+// literal (`src/services/mcp/types.ts` transport variants) or a new server
+// kind would be cast to a wire value the renderer can't render.
+type McpTransportCoversEngine = AssertAssignable<
+  Exclude<NonNullable<ScopedMcpServerConfig['type']>, McpConfigTransport> extends never
+    ? true
+    : false
+>
 void (null as unknown as McpScopeCoversEngine)
 void (null as unknown as HookSourceCoversEngine)
 void (null as unknown as SkillSourceCoversEngine)
 void (null as unknown as HookTypeCoversEngine)
+void (null as unknown as McpTransportCoversEngine)
 
 /* ------------------------------ helpers ------------------------------- */
 

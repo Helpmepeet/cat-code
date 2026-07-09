@@ -30,10 +30,11 @@ function WarningList({ items }: { items: string[] }) {
   }
   return (
     <div className="flex flex-col gap-1.5">
-      {items.map(item => (
+      {items.map((item, index) => (
         <div
           className="rounded-lg border border-tone-warn/20 bg-tone-warn/5 px-2.5 py-1.5 text-[11.5px] text-tone-warn"
-          key={item}
+          // Warning strings are not guaranteed unique — pair with the index.
+          key={`${index}:${item}`}
         >
           {item}
         </div>

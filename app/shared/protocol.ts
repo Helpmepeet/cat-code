@@ -917,8 +917,6 @@ export type PluginEntry = {
   enabled: boolean
   builtin: boolean
   provides: PluginProvides
-  /** Whether the plugin declares user-config options (`manifest.userConfig`). */
-  hasOptions: boolean
   /** A correlated load error (`AppState.plugins.errors`), display string only. */
   error?: string
   /**

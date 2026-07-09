@@ -58,6 +58,11 @@ import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
+import {
+  createSidecarExtensionsDomain,
+  type SidecarExtensionsDomain,
+} from './extensionsDomain.js'
+import { scanForSecrets } from '../shared/secretGuard.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -138,6 +143,7 @@ function makeServer(
   diagnostics?: SidecarDiagnosticsDomain,
   remoteSettings?: SidecarRemoteSettingsDomain,
   tasks?: SidecarTasksDomain,
+  extensions?: SidecarExtensionsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -150,6 +156,7 @@ function makeServer(
     ...(diagnostics ? { diagnostics } : {}),
     ...(remoteSettings ? { remoteSettings } : {}),
     ...(tasks ? { tasks } : {}),
+    ...(extensions ? { extensions } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -380,6 +387,60 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
     .at(-1)
   expect(latest?.kind).toBe('thread-goal.snapshot')
   expect(latest?.goal?.status).toBe('paused')
+})
+
+test('P4-12 — attach emits an extensions.snapshot after the goal snapshot, secretGuard-clean through send()', () => {
+  const store = createStore(getDefaultAppState())
+  const goals = createSidecarGoalDomain(store)
+  // A snapshot carrying only config METADATA (the domain's secret posture) —
+  // if a secret-KEYED field ever leaked in, send()'s secretGuard would drop the
+  // whole frame, so its arrival is itself the proof.
+  const extensions = createSidecarExtensionsDomain({
+    mcp: [{ name: 'linear', transport: 'http', scope: 'user', url: 'https://mcp.linear/rpc' }],
+    plugins: [],
+    skills: [
+      {
+        name: 'deep-research',
+        source: 'userSettings',
+        context: 'inline',
+        disableModelInvocation: false,
+        userInvocable: true,
+        description: 'research a topic',
+      },
+    ],
+    hooks: [],
+    notes: ['Read-only config snapshot.'],
+  })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    goals,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    extensions,
+  )
+  const { socket, received } = makeSocket()
+
+  server.addConnection(socket)
+
+  const readyIdx = received.findIndex(f => f.kind === 'ready')
+  const goalIdx = received.findIndex(f => f.kind === 'thread-goal.snapshot')
+  const extIdx = received.findIndex(f => f.kind === 'extensions.snapshot')
+  // Attach order: ready → … → thread-goal.snapshot → … → extensions.snapshot.
+  expect(readyIdx).toBe(0)
+  expect(goalIdx).toBeGreaterThan(readyIdx)
+  expect(extIdx).toBeGreaterThan(goalIdx)
+
+  const snap = received.find(
+    (frame): frame is Extract<ServerFrame, { kind: 'extensions.snapshot' }> =>
+      frame.kind === 'extensions.snapshot',
+  )
+  expect(snap?.extensions.mcp?.[0]?.name).toBe('linear')
+  expect(snap?.extensions.skills?.[0]?.name).toBe('deep-research')
+  expect(snap && scanForSecrets(snap).ok).toBe(true)
 })
 
 test('P4-9 — emits the live tasks snapshot on attach and store change', () => {

@@ -331,8 +331,11 @@ export function SkillsPanel({
                 {group.skills.length}
               </span>
             </div>
-            {group.skills.map(skill => (
-              <SkillRow key={`${skill.name}:${skill.source}`} skill={skill} />
+            {group.skills.map((skill, index) => (
+              // name+source is not unique — two plugins can each contribute a
+              // same-named skill (both `source:'plugin'`); the group index
+              // disambiguates (mirrors HookRow's `:${index}` key).
+              <SkillRow key={`${skill.name}:${skill.source}:${index}`} skill={skill} />
             ))}
           </div>
         ))

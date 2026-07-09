@@ -254,7 +254,6 @@ export function buildPluginEntries({
       enabled,
       builtin: plugin.isBuiltin === true,
       provides,
-      hasOptions: pluginHasOptions(plugin),
     }
     if (typeof plugin.manifest.version === 'string') {
       entry.version = plugin.manifest.version
@@ -322,11 +321,6 @@ function countHookConfigs(plugin: LoadedPlugin): number {
     }
   }
   return total
-}
-
-function pluginHasOptions(plugin: LoadedPlugin): boolean {
-  const userConfig = plugin.manifest.userConfig
-  return Boolean(userConfig && Object.keys(userConfig).length > 0)
 }
 
 function correlatePluginError(
