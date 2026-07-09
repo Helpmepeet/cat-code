@@ -1467,54 +1467,55 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 ### 21. TasksPage.jsx — background-task manager modal (BgTasksDialog): active/completed list, per-type rows, scope toggle, keyboard select/open/stop
 
-**Migration target:** deferred → P4-9 (`app/renderer/src` BgTasksDialog+TasksPanel, not yet built; adapt from `src/components/tasks/BackgroundTasksDialog.tsx`) · **Overall:** ⬜ deferred · **Prototype:** `~/catcode_prototype/cat-app/TasksPage.jsx` (242 lines) · **INVENTORY:** W4 Tasks BgTasksDialog/TasksPanel adapt (S5)
+**Migration target:** `app/renderer/src/TasksDialog.tsx` + `tasksState.ts` + `app/sidecar/tasksDomain.ts` (P4-9, read-only v1; adapted from `src/components/tasks/BackgroundTasksDialog.tsx`) · **Overall:** 🔁 adapted (read-only v1; kill/inspect/detail deferred) · **Prototype:** `~/catcode_prototype/cat-app/TasksPage.jsx` (242 lines) · **INVENTORY:** W4 Tasks BgTasksDialog/TasksPanel adapt (S5)
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| Overlay backdrop (inset:0, blur, click-to-close, z-50) | chrome / UX-state | ⬜ deferred | `phase4.md:551` P4-9 | Not built; real dialog is Ink overlay, P4-9 adapts to Electron modal. |
-| Dialog panel container (640px, maxHeight 74vh, rounded, toast-in anim) | chrome | ⬜ deferred | `phase4.md:551` P4-9 | Fixed 640px is a prototype visual choice; adapt sizing to real content. |
-| Header block (flex row, bottom border) | chrome | ⬜ deferred | `phase4.md:551` P4-9 | Not built. |
-| Header title "Tasks" | chrome | ⬜ deferred | `phase4.md:551` P4-9 | Real title from `BackgroundTasksDialog.tsx` header. |
-| Header subtitle count "{active} active · {done} completed" | data-binding | ⬜ deferred | `src/tasks.ts:22` `getAllTasks` | Bind to real active/terminal partition (`src/Task.ts:27` `isTerminalTaskStatus`). |
-| Scope toggle segmented (This session / All sessions) | control | ⬜ deferred | `phase4.md:551` P4-9 | FLAG: real dialog has NO session-scope toggle; "all"=one-instance roster — P4-9 confirms reachability in N-process app or cuts. |
-| "This session" toggle + disabled when no activeSessionId | control / UX-state | ⬜ deferred | `phase4.md:551` P4-9 | Disabled styling (`#3f3f46`, default cursor) when no active session. |
-| "All sessions" toggle + active pink styling | control | ⬜ deferred | `phase4.md:551` P4-9 | Active pink accent `rgba(244,114,182,.12)`/`#f9a8d4`. |
-| Close button (×, title "Close (Esc)", hover bg/color) | control | ⬜ deferred | `phase4.md:551` P4-9 | Esc also closes (keyboard row). |
-| Body scroll area (no-scrollbar, overflowY auto) | chrome | ⬜ deferred | `phase4.md:551` P4-9 | Not built. |
-| Empty state — scope-dependent title | UX-state | ⬜ deferred | `TasksPage.jsx:211` | "No tasks in this session" / "No background tasks"; branches on scope. |
-| Empty state — subtitle "Run a background bash, agent, or dream…" | UX-state | ⬜ deferred | `TasksPage.jsx:213` | Not built. |
-| Active/Completed two-section grouping | chrome / data-binding | ⬜ deferred | `phase4.md:551` P4-9 | FLAG: real dialog groups by TASK TYPE (`BackgroundTasksDialog.tsx`), not Active/Completed — P4-9 records the divergence. |
-| Group component — header label | chrome | ⬜ deferred | `TasksPage.jsx:167` | Uppercase section label; hidden when empty. |
-| Group component — divider line + item count | chrome | ⬜ deferred | `TasksPage.jsx:168` | Trailing count of items in group. |
-| Row — selection highlight (click/hover) | UX-state | ⬜ deferred | `TasksPage.jsx:143` | Selected index drives bg `rgba(255,255,255,.04)`. |
-| Row — terminal-task opacity dimming (0.72) | UX-state | ⬜ deferred | `src/Task.ts:27` isTerminal | Done/stopped/failed rows dimmed. |
-| Row status marker — spinner ring (working, no phase) | UX-state | ⬜ deferred | `src/Task.ts:15` running/pending | Neutral spinning ring; no green (deliberate quiet design). |
-| Row status marker — amber dot (needs input / phase set) | UX-state | ⬜ deferred | `TasksPage.jsx:128` | phase is agent-enrichment (not on `TaskStateBase`) — P4-9 sources real teammate/agent state or drops. |
-| Row status marker — red dot (failed) | UX-state | ⬜ deferred | `src/Task.ts:15` failed | Not built. |
-| Row status marker — grey dot (done/stopped) | UX-state | ⬜ deferred | `src/Task.ts:15` completed/killed | "Stopped" label === killed status. |
-| Row — kind badge (label + per-type accent + border) | chrome / data-binding | ⬜ deferred | `src/Task.ts:6` TaskType | TP_KINDS 7 types match real TaskType; oklch accents are visual tokens — reuse P4-2 AgentIdentity vocabulary. |
-| Row — "gated" badge (dashed, tooltip "Feature-gated: {gate}") | chrome | ⬜ deferred | `phase4.md:551` P4-9 | FLAG: gate labels are a prototype concept; `getAllTasks()` doesn't gate by type — map to real feature-gate or drop. |
-| Row — title/description text (mono for bash/workflow/monitor) | data-binding | 🔁 adapted | `src/Task.ts:49` description | ADAPT/FLAG: prototype uses `t.title\|\|t.description`; real tasks only have `description` (no title field). Command kinds render mono. |
-| Row — tail text (phase > lastActivity > tool·token counts) | data-binding | 🔁 adapted | `src/Task.ts:43-56` (no progress) | ADAPT/FLAG: mock progress-enrichment fields; P4-9 sources real per-type progress (`renderToolActivity.tsx`) or drops the tail. |
-| Footer keyboard-hints strip (↑↓ select · ↵ open · K stop · esc close) | chrome | ⬜ deferred | `TasksPage.jsx:224` | Mono hint bar mirroring keyboard handlers. |
-| Keyboard: Escape → close | shortcut | ⬜ deferred | `TasksPage.jsx:105` | Not built. |
-| Keyboard: ArrowDown/ArrowUp → move selection (clamped) | shortcut | ⬜ deferred | `TasksPage.jsx:106` | Selection order is running-first flat list. |
-| Keyboard: Enter → open/inspect selected | shortcut | ⬜ deferred | `TasksPage.jsx:108` | Prototype toasts "demo"; real action opens per-type detail view. |
-| Keyboard: K → stop selected (non-terminal only) | shortcut | ⬜ deferred | `src/Task.ts:71`-style kill | Guarded to non-terminal; real kill via `Task.kill`. |
-| Interaction: row click → inspect; mouseEnter → select | control | ⬜ deferred | `TasksPage.jsx:141` | Hover-to-select mirrors keyboard selection. |
-| Toast on stop/inspect (auto-dismiss 2s) | UX-state | 🔁 adapted | `TasksPage.jsx:94` demo copy | ADAPT: demo toast strings are placeholders; real inspect opens detail dialog, stop invokes kill. Reuse P4-1 ToastHost. |
-| Running-first sort / flat selection order | data-binding | ⬜ deferred | `BackgroundTasksDialog.tsx` (running-first then newest) | Real dialog sorts running-first then newest — P4-9 reuses. |
-| tpElapsed helper (end/now − start − totalPausedMs) | data-binding | ⬜ deferred | `src/Task.ts:51-53` startTime/endTime/totalPausedMs | Grounded — real fields present; defined but not rendered in this prototype. |
-| tpTokens helper (token count → "1.2k") | data-binding | 🔁 adapted | `src/Task.ts:43-56` (no tokenCount) | ADAPT/FLAG: formats a mock enrichment field; keep formatter, source real tokens or drop. |
-| TP_IC icon set (clock/tool/token/stop/inspect SVGs) | chrome | ⬜ deferred | `TasksPage.jsx:56` | Defined but largely unused in THIS render (rows use dots+text); P4-9 decides real icon set. |
-| sessTitle lookup (session id → title) | data-binding | ✂️ cut | `TasksPage.jsx:79` (dead helper) | Never rendered in component; session-title display belongs to Sidebar/Sessions, not this dialog. |
-| window.MOCK_TASKS fixture feed | data-binding | ✂️ cut | `INVENTORY.md:79` S5 (source-wins) | Mock roster is not a parity target; P4-9 wires real `getAllTasks()` (`src/tasks.ts:22`). |
-| window.MOCK_TASKS_NOW fixture (frozen clock) | data-binding | ✂️ cut | `INVENTORY.md:79` S5 | Scripted timer not a parity target; real app uses live `Date.now()`. |
-| TP_PHASE map (needs_input / plan_ready / awaiting_plan_approval) | data-binding | ⬜ deferred | `src/Task.ts:43-56` (phase not on base) | P4-9 sources phase from real teammate/agent state (P4-8 read-seam) or drops needs-input marker. |
-| Per-type detail dialogs (Shell/Dream/Teammate/RemoteSession/AsyncAgent) | sub-component | ➕ real-added | `src/components/tasks/ShellDetailDialog.tsx` +4 siblings | Real capability the prototype lacks (it only toasts "inspect demo"); P4-9 preserves detail views. |
-| List/detail view modes + auto-skip-to-detail for 1 task | UX-state | ➕ real-added | `src/components/tasks/BackgroundTasksDialog.tsx` | Prototype has no detail mode; P4-9 preserves real two-mode navigation. |
-| ctrl+x ctrl+k kill-agents shortcut | shortcut | ➕ real-added | `src/components/tasks/BackgroundTasksDialog.tsx` (killAgents) | Real bulk-kill affordance absent from prototype; P4-9 carries over. |
-| Foregrounded-task exclusion from background list | data-binding | ➕ real-added | `src/components/tasks/BackgroundTasksDialog.tsx` (foregroundedTaskId) | Real correctness rule; prototype's mock roster has no such concept. |
+| Overlay backdrop (inset:0, blur, click-to-close, z-50) | chrome / UX-state | ✅ built | `app/renderer/src/TasksDialog.tsx:74` | `fixed inset-0` backdrop + `onMouseDown` close, matches CommandPalette's overlay idiom. |
+| Dialog panel container (640px, maxHeight 74vh, rounded, toast-in anim) | chrome | ✅ built | `app/renderer/src/TasksDialog.tsx:81` | Kept 640px/74vh sizing; `animate-toast-in` reused from `theme.css`. |
+| Header block (flex row, bottom border) | chrome | ✅ built | `app/renderer/src/TasksDialog.tsx:89` | |
+| Header title "Tasks" | chrome | ✅ built | `app/renderer/src/TasksDialog.tsx:92` | |
+| Header subtitle count "{active} active · {done} completed" | data-binding | ✅ built | `app/renderer/src/tasksState.ts:83` `groupTaskItems` | Real active/terminal partition (`isTerminalTaskStatus`, `tasksState.ts:57`), sourced from `getSelectableBackgroundTasks`-equivalent filtering (`app/sidecar/tasksDomain.ts:41`). |
+| Scope toggle segmented (This session / All sessions) | control | ✂️ cut | `app/sidecar/tasksDomain.ts:19` | CUT (owner: future session): each sidecar is one N-process session (`decisions/`), so "All sessions" needs a cross-session aggregation read this domain doesn't have — the real dialog's "all"=one-instance roster has no N-process analog yet. |
+| "This session" toggle + disabled when no activeSessionId | control / UX-state | ✂️ cut | — | Same reason — no scope toggle in v1; dialog is always session-scoped, empty-state text covers the no-active-session case instead. |
+| "All sessions" toggle + active pink styling | control | ✂️ cut | — | Same reason. |
+| Close button (×, title "Close (Esc)", hover bg/color) | control | ✅ built | `app/renderer/src/TasksDialog.tsx:96` | |
+| Body scroll area (no-scrollbar, overflowY auto) | chrome | ✅ built | `app/renderer/src/TasksDialog.tsx:106` | |
+| Empty state — scope-dependent title | UX-state | ✅ built | `app/renderer/src/TasksDialog.tsx:109` | Branches on `hasActiveSession` (the real toggle-scope concept, without the cut toggle control). |
+| Empty state — subtitle "Run a background bash, agent, or dream…" | UX-state | ✅ built | `app/renderer/src/TasksDialog.tsx:112` | |
+| Active/Completed two-section grouping | chrome / data-binding | 🔁 adapted | `app/renderer/src/tasksState.ts:76-90` `groupTaskItems` | ADAPT (parity default kept, divergence recorded): real Ink dialog groups by TASK TYPE; this port keeps the prototype's Active/Completed split per the parity-default rule. |
+| Group component — header label | chrome | ✅ built | `app/renderer/src/TasksDialog.tsx:144` | |
+| Group component — divider line + item count | chrome | ✅ built | `app/renderer/src/TasksDialog.tsx:146-148` | |
+| Row — selection highlight (click/hover) | UX-state | 🔁 adapted | `app/renderer/src/TasksDialog.tsx:181` | Keyboard-only selection built (↑↓ drives `bg-shell-active`); click-to-select/hover-to-select deferred (owner: the detail-view session below — selecting only matters once a row opens something). |
+| Row — terminal-task opacity dimming (0.72) | UX-state | ✅ built | `app/renderer/src/TasksDialog.tsx:179` `opacity-70` | |
+| Row status marker — spinner ring (working, no phase) | UX-state | ✅ built | `app/renderer/src/TasksDialog.tsx:220-229` `StatusMarker` | |
+| Row status marker — amber dot (needs input / phase set) | UX-state | ✅ built | `app/renderer/src/tasksState.ts:132` `taskDisplayState` | Sourced from REAL per-type fields — `handoffStatus`/`awaitingPlanApproval`/`ultraplanPhase` (`app/shared/protocol.ts:599-629`, `app/sidecar/tasksDomain.ts:69-107`) via P4-2's `deriveTaskAgentState` — not fixture-derived, supersedes the prior "sources real state or drops" open question. |
+| Row status marker — red dot (failed) | UX-state | ✅ built | `app/renderer/src/TasksDialog.tsx:196-217`, `agentStateMeta('failed')` | |
+| Row status marker — grey dot (done/stopped) | UX-state | ✅ built | same | "Stopped" = `killed` status, matches `tasksState.ts:143-159`. |
+| Row — kind badge (label + per-type accent + border) | chrome / data-binding | 🔁 adapted | `app/renderer/src/tasksState.ts:163-176` `TASK_KIND_META` | ADAPT: 7 labels match real `TaskType` 1:1; colors are new P0-2-era picks (not the prototype's literal oklch values), rendered as arbitrary-value Tailwind classes (`WorkspacePanels.tsx:283` precedent), not inline `style`. |
+| Row — "gated" badge (dashed, tooltip "Feature-gated: {gate}") | chrome | ✂️ cut | `app/sidecar/tasksDomain.ts:108-119` | CUT (owner: future session): `getAllTasks()` doesn't gate by type at the row level, and `local_workflow`/`monitor_mcp`'s real state modules aren't present in this checkout (`src/tasks.ts:9-14`) to map a real gate label from. |
+| Row — title/description text (mono for bash/workflow/monitor) | data-binding | ✅ built | `app/renderer/src/TasksDialog.tsx:170-172,198-201` | Real tasks have no `title` field (matches the ledger's prior ADAPT note); label is per-type (`app/sidecar/tasksDomain.ts:69-119`), mono for bash/workflow/monitor. |
+| Row — tail text (phase > lastActivity > tool·token counts) | data-binding | 🔁 adapted | `app/renderer/src/TasksDialog.tsx:204-210` | ADAPT: mock progress-enrichment fields (lastActivity/tool·token counts) dropped; tail now shows the REAL derived state label (`taskDisplayState`) instead — real elapsed time (`startTime`/`endTime`/`totalPausedMs`, all carried in the snapshot) is not yet rendered, deferred. |
+| Footer keyboard-hints strip (↑↓ select · ↵ open · K stop · esc close) | chrome | 🔁 adapted | `app/renderer/src/TasksDialog.tsx:131-138` | ADAPT: only ↑↓ select and esc close are real actions in v1; ↵ open and K stop are dropped from the hint strip (not wired to nothing — CommandPalette's "no dead rows" rule). |
+| Keyboard: Escape → close | shortcut | ✅ built | `app/renderer/src/TasksDialog.tsx:54-57` | |
+| Keyboard: ArrowDown/ArrowUp → move selection (clamped) | shortcut | ✅ built | `app/renderer/src/TasksDialog.tsx:58-66` | |
+| Keyboard: Enter → open/inspect selected | shortcut | ⬜ deferred | — | Deferred with the detail-view (owner: future write/detail-view session, P4-10 precedent). |
+| Keyboard: K → stop selected (non-terminal only) | shortcut | ⬜ deferred | — | Deferred — no kill verb in this read-only v1 (no new inbound vocabulary added). |
+| Interaction: row click → inspect; mouseEnter → select | control | ⬜ deferred | — | Same reason as the two rows above. |
+| Toast on stop/inspect (auto-dismiss 2s) | UX-state | ✂️ cut | — | Correctly not built — no real stop/inspect verb exists yet to toast about (no demo/dead toasts). |
+| Running-first sort / flat selection order | data-binding | ✅ built | `app/renderer/src/tasksState.ts:63-65` `sortTaskItems` | |
+| tpElapsed helper (end/now − start − totalPausedMs) | data-binding | ⬜ deferred | `app/shared/protocol.ts:609-611` (`startTime`/`endTime`/`totalPausedMs` carried) | Fields ARE in the snapshot (`app/sidecar/tasksDomain.ts:64-68`); rendering an elapsed-time helper is deferred, not the field itself. |
+| tpTokens helper (token count → "1.2k") | data-binding | ✂️ cut | — | No real token-count field exists on `TaskSnapshotItem`; correctly dropped per the ledger's own prior note. |
+| TP_IC icon set (clock/tool/token/stop/inspect SVGs) | chrome | ✂️ cut | `app/renderer/src/TasksDialog.tsx:220-260` | Decided: dots+text only (no icon set), matching the prototype's OWN render choice (icons defined but unused in `BgTasksDialog`'s actual row render). |
+| sessTitle lookup (session id → title) | data-binding | ✂️ cut | — | Confirmed dead in the prototype; correctly never built. |
+| window.MOCK_TASKS fixture feed | data-binding | ✂️ cut | `app/sidecar/tasksDomain.ts:41-52` `tasksSnapshot` | Replaced by the real read-seam over `AppState.tasks` (`src/state/AppStateStore.ts:164`). |
+| window.MOCK_TASKS_NOW fixture (frozen clock) | data-binding | ✂️ cut | — | No clock mocking; real app uses live time throughout. |
+| TP_PHASE map (needs_input / plan_ready / awaiting_plan_approval) | data-binding | ✅ built | `app/renderer/src/tasksState.ts:132-150` | Sourced from REAL fields without needing P4-8 (`handoffStatus`/`awaitingPlanApproval`/`ultraplanPhase` already live on the per-type task state, `app/sidecar/tasksDomain.ts:69-107`) — supersedes the prior "P4-8 read-seam or drops" note; `awaiting_plan_approval` (prototype-only phase label) has no real analog and isn't modeled separately (folds into `needs-you`/`paused` via `deriveTaskAgentState`). |
+| Per-type detail dialogs (Shell/Dream/Teammate/RemoteSession/AsyncAgent) | sub-component | ⬜ deferred | `src/components/tasks/ShellDetailDialog.tsx` +4 siblings | Real capability the prototype lacks; still owned by a future write/detail-view session (not built this session — read-only list v1). |
+| List/detail view modes + auto-skip-to-detail for 1 task | UX-state | ⬜ deferred | `src/components/tasks/BackgroundTasksDialog.tsx` | Same — deferred with the detail dialogs above. |
+| ctrl+x ctrl+k kill-agents shortcut | shortcut | ⬜ deferred | `src/components/tasks/BackgroundTasksDialog.tsx` (killAgents) | Deferred — no kill verb in this read-only v1. |
+| Foregrounded-task exclusion from background list | data-binding | ✅ built | `app/sidecar/tasksDomain.ts:41-52` | Filters `task.id !== foregroundedTaskId` for `local_agent`, matching `BackgroundTasksDialog.tsx:122-130`. |
+| In-session "TasksPanel" strip (⌘K → Tasks / footer pill) | control | 🔁 adapted | `app/renderer/src/App.tsx:1111` `TasksStrip` | FLAG: the prototype's `TasksPanel` (`OrchestratorMode.jsx:713`) is unanchored GUI (⚓0, INVENTORY §W4) — it's actually P4-8's unbuilt orchestrator worker/lease roster, not a background-tasks entry point. Built instead: a grounded analog of the real footer summary pill (`src/components/tasks/BackgroundTaskStatus.tsx`), scoped to the active session, opening this same dialog; wired into ⌘K as "Background tasks" (`commandPaletteModel.ts:125`, mirrors the real `/tasks` command). |
 
 ### 22. GoalsPage.jsx — cross-session goal roster, shipped as a read-only per-thread goal snapshot panel
 
@@ -2448,7 +2449,7 @@ the fraction of in-scope prototype elements already built or adapted. Phase-4 ga
 | 18 | MetadataInspector | 0 | 0 | 0 | 61 | 1 | 0 | 62 | 0% |
 | 19 | AgentsPage | 32 | 5 | 8 | 0 | 4 | 0 | 49 | 100% |
 | 20 | OrchestratorMode | 0 | 3 | 0 | 54 | 11 | 0 | 68 | 5% |
-| 21 | TasksPage | 0 | 4 | 4 | 33 | 3 | 0 | 44 | 11% |
+| 21 | TasksPage | 22 | 6 | 0 | 7 | 10 | 0 | 45 | 80% |
 | 22 | GoalsPage | 11 | 21 | 6 | 26 | 4 | 0 | 68 | 55% |
 | 23 | MemoryPage | 9 | 11 | 7 | 5 | 7 | 2 | 41 | 74% |
 | 24 | PlanPanel | 0 | 0 | 1 | 57 | 0 | 0 | 58 | 0% |
@@ -2476,10 +2477,10 @@ the fraction of in-scope prototype elements already built or adapted. Phase-4 ga
 
 | Scope | ✅ built | 🔁 adapted | ➕ real-added | ⬜ deferred | ✂️ cut | ❓ missing | Rows | In-scope | Realized% |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| Surfaces (30) | 290 | 217 | 86 | 845 | 166 | 120 | 1724 | 1472 | 34% |
+| Surfaces (30) | 312 | 219 | 82 | 819 | 173 | 120 | 1725 | 1470 | 36% |
 | Flows (8) | 38 | 26 | 31 | 51 | 18 | 6 | 170 | 121 | 53% |
-| **Total** | **328** | **243** | **117** | **896** | **184** | **126** | **1894** | **1593** | **36%** |
+| **Total** | **350** | **245** | **113** | **870** | **191** | **126** | **1895** | **1591** | **37%** |
 
-_Realized% is low by design: 845 in-scope surface elements are ⬜ deferred to unbuilt Phase-4
-sessions (P4-5…P4-17). The gate rises as those land; the 126 ❓ must first be given owners or
-waived so the denominator is honest._
+_Realized% is low by design: 819 in-scope surface elements are ⬜ deferred to unbuilt Phase-4
+sessions (P4-6…P4-17, P4-9's own deferrals). The gate rises as those land; the 126 ❓ must first
+be given owners or waived so the denominator is honest._
