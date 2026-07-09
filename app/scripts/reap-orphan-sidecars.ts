@@ -136,7 +136,7 @@ function truncate(text: string, max = 100): string {
 
 function main(): void {
   const argv = process.argv.slice(2)
-  const confirm = argv.includes('--confirm') || argv.includes('--kill')
+  const confirm = argv.includes('--confirm')
   const markerIdx = argv.indexOf('--marker')
   const marker = markerIdx >= 0 && argv[markerIdx + 1] ? argv[markerIdx + 1]! : DEFAULT_MARKER
 
