@@ -169,34 +169,49 @@ export function applyPostCodexAccountSwitchRefresh(): void {
 }
 
 /**
+ * Read-only bootstrap: populate the pool inventory (accounts + activeIndex +
+ * initialized) from the vault + config sources, WITHOUT any refresh/probe/usage
+ * side-effects. This is the read-half of initAccountPool, extracted so
+ * observation-only callers (e.g. the `codex status` subcommand) can load the
+ * pool without triggering token refresh, quarantine probes, or usage polls.
+ *
+ * Disk reads only — never makes an outbound network request. `initAccountPool`
+ * calls this first and then performs its live side-effects, so this refactor
+ * changes no `initAccountPool` behavior.
+ */
+export async function loadPoolForObservation(): Promise<void> {
+  const vaultPath = readVaultPath()
+  const vaultAccounts = vaultPath ? loadVaultAccounts(vaultPath) : []
+  const configAccount = vaultAccounts.length === 0 ? loadConfigAccount() : null
+
+  pool.accounts = mergePoolAccounts(vaultAccounts, configAccount)
+
+  const savedActiveAccountId = getGlobalConfig().activeCodexAccountId
+  if (savedActiveAccountId) {
+    const idx = pool.accounts.findIndex(
+      (a) => a.accountId === savedActiveAccountId && a.status === 'healthy',
+    )
+    pool.activeIndex = idx >= 0 ? idx : pool.accounts.findIndex((a) => a.status === 'healthy')
+  } else {
+    pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
+  }
+
+  pool.initialized = true
+
+  const healthy = pool.accounts.filter((a) => a.status === 'healthy').length
+  const dead = pool.accounts.filter((a) => a.status === 'dead').length
+  logForDebugging(
+    `[codex-pool] Loaded ${pool.accounts.length} accounts (${healthy} healthy, ${dead} dead)`,
+  )
+}
+
+/**
  * Initialize the account pool from vault + config sources.
  * Fire-and-forget — safe to call with `void initAccountPool()`.
  */
 export async function initAccountPool(): Promise<void> {
   try {
-    const vaultPath = readVaultPath()
-    const vaultAccounts = vaultPath ? loadVaultAccounts(vaultPath) : []
-    const configAccount = vaultAccounts.length === 0 ? loadConfigAccount() : null
-
-    pool.accounts = mergePoolAccounts(vaultAccounts, configAccount)
-
-    const savedActiveAccountId = getGlobalConfig().activeCodexAccountId
-    if (savedActiveAccountId) {
-      const idx = pool.accounts.findIndex(
-        (a) => a.accountId === savedActiveAccountId && a.status === 'healthy',
-      )
-      pool.activeIndex = idx >= 0 ? idx : pool.accounts.findIndex((a) => a.status === 'healthy')
-    } else {
-      pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
-    }
-
-    pool.initialized = true
-
-    const healthy = pool.accounts.filter((a) => a.status === 'healthy').length
-    const dead = pool.accounts.filter((a) => a.status === 'dead').length
-    logForDebugging(
-      `[codex-pool] Loaded ${pool.accounts.length} accounts (${healthy} healthy, ${dead} dead)`,
-    )
+    await loadPoolForObservation()
 
     // Start periodic token refresh if vault accounts exist, and eagerly
     // refresh now so wham/usage and Codex API calls don't hit a stale

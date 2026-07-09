@@ -4244,6 +4244,19 @@ async function run(): Promise<CommanderCommand> {
     await authLogout();
   });
 
+  // cat-code codex — read-only advisory observation of the Codex account pool
+
+  const codex = program.command('codex').description('Inspect the Codex (ChatGPT/OpenAI) account pool').configureHelp(createSortedHelpConfig());
+  codex.command('status').description('Emit a read-only, advisory JSON observation of the Codex credential pool').option('--json', 'Output as JSON (default)').addOption(new Option('--refresh <mode>', 'Usage refresh: "auto" (cached refresh-free GET, default) or "never" (no network)').choices(['auto', 'never']).default('auto')).action(async (opts: {
+    json?: boolean;
+    refresh?: string;
+  }) => {
+    const {
+      codexStatus
+    } = await import('./cli/handlers/codexStatus.js');
+    await codexStatus(opts);
+  });
+
   /**
    * Helper function to handle marketplace command errors consistently.
    * Logs the error and exits the process with status 1.
