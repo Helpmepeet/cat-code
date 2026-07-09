@@ -640,6 +640,73 @@ export type MemorySnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Tasks read-seam (P4-9) — read-only background-task snapshot
+ * ------------------------------------------------------------------------- *
+ *
+ * Mirrors `getAllTasks()` (`src/tasks.ts:22`) / `AppState.tasks`
+ * (`src/state/AppStateStore.ts:164`) — the SAME live task records
+ * `BackgroundTasksDialog.tsx` renders (`/tasks` command,
+ * `src/commands/tasks/tasks.tsx`). Read-only: kill/stop/inspect verbs are
+ * deferred (no new inbound vocabulary here) — see `tasksDomain.ts` header.
+ */
+
+export type TaskType =
+  | 'local_bash'
+  | 'local_agent'
+  | 'remote_agent'
+  | 'in_process_teammate'
+  | 'local_workflow'
+  | 'monitor_mcp'
+  | 'dream'
+
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'killed'
+
+export type TaskSnapshotItem = {
+  id: string
+  type: TaskType
+  status: TaskStatus
+  /** Per-type display text — command/description/title (`toListItem`, `BackgroundTasksDialog.tsx:496-555`). */
+  label: string
+  startTime: number
+  endTime?: number
+  totalPausedMs?: number
+  /** local_bash only — 'monitor' renders description + a distinct pill (`guards.ts` `BashTaskKind`). */
+  kind?: 'bash' | 'monitor'
+  /** local_bash/local_agent — backgrounded vs foreground-running. */
+  isBackgrounded?: boolean
+  /** local_agent — handoff gate; 'blocked' is the real "needs input" state (not a fixture field). */
+  handoffStatus?: 'done' | 'blocked'
+  /** local_agent — last resume timestamp after a terminal-state resume. */
+  resumedAt?: number
+  /** in_process_teammate — plan-mode approval gate. */
+  awaitingPlanApproval?: boolean
+  /** in_process_teammate — user-requested shutdown in flight. */
+  shutdownRequested?: boolean
+  /** in_process_teammate — idle between turns while UI-retained. */
+  isIdle?: boolean
+  /** remote_agent — ultraplan flow flag + phase (`UltraplanPhase`, excludes 'running'). */
+  isUltraplan?: boolean
+  ultraplanPhase?: 'needs_input' | 'plan_ready'
+  /** local_agent (agentName) / in_process_teammate (identity.agentName) — display handle. */
+  agentName?: string
+  /** local_agent only — subagent type for the P4-2 AgentIdentity type badge. */
+  agentType?: string
+}
+
+export type TasksSnapshot = {
+  items: TaskSnapshotItem[]
+  /** Task id currently foregrounded (viewed in the main pane); already excluded from `items`. */
+  foregroundedTaskId?: string
+}
+
+export type TasksSnapshotFrame = {
+  kind: 'tasks.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  tasks: TasksSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
  * Accounts read-seam (P4-5) — the CANONICAL domain read-seam recipe
  * ------------------------------------------------------------------------- *
  *
@@ -1097,6 +1164,7 @@ export type ServerFrame =
   | AgentConfigSnapshotFrame
   | ThreadGoalSnapshotFrame
   | MemorySnapshotFrame
+  | TasksSnapshotFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
   | WorkspaceTrustSnapshotFrame

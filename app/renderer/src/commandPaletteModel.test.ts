@@ -45,6 +45,7 @@ function noopHandlers(): PaletteHandlers {
     closeCurrentPanel: () => {},
     selectLiveSession: () => {},
     restoreSession: () => {},
+    openTasks: () => {},
   }
 }
 
@@ -63,6 +64,7 @@ test('buildPaletteItems surfaces active-session + panel actions only when availa
   expect(ids).toContain('action:restart-active')
   expect(ids).toContain('action:copy-active')
   expect(ids).toContain('action:close-panel')
+  expect(ids).toContain('action:open-tasks')
   expect(ids).toContain('session:a')
 
   // No active session → the active-scoped actions and the panel action vanish
@@ -79,6 +81,9 @@ test('buildPaletteItems surfaces active-session + panel actions only when availa
   expect(minimalIds).not.toContain('action:restart-active')
   expect(minimalIds).not.toContain('action:copy-active')
   expect(minimalIds).not.toContain('action:close-panel')
+  // Background tasks is a global action (the real `/tasks` command works with
+  // zero sessions too) — never gated on activeSessionId/hasPanels.
+  expect(minimalIds).toContain('action:open-tasks')
 })
 
 test('session rows carry an identity+state aria-label and correct run wiring', () => {

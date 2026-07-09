@@ -36,6 +36,9 @@ import {
   type SidecarPermissionDomain,
 } from './permissionDomain.js'
 import { createSidecarGoalDomain, type SidecarGoalDomain } from './goalDomain.js'
+import { createSidecarTasksDomain, type SidecarTasksDomain } from './tasksDomain.js'
+import { createTaskStateBase } from '../../src/Task.js'
+import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.js'
 import {
   createSidecarAccountsDomain,
   type AccountsCommandExecutor,
@@ -134,6 +137,7 @@ function makeServer(
   workspaceTrust?: SidecarWorkspaceTrustDomain,
   diagnostics?: SidecarDiagnosticsDomain,
   remoteSettings?: SidecarRemoteSettingsDomain,
+  tasks?: SidecarTasksDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -145,6 +149,7 @@ function makeServer(
     ...(workspaceTrust ? { workspaceTrust } : {}),
     ...(diagnostics ? { diagnostics } : {}),
     ...(remoteSettings ? { remoteSettings } : {}),
+    ...(tasks ? { tasks } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -375,6 +380,65 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
     .at(-1)
   expect(latest?.kind).toBe('thread-goal.snapshot')
   expect(latest?.goal?.status).toBe('paused')
+})
+
+test('P4-9 — emits the live tasks snapshot on attach and store change', () => {
+  const store = makePermissionStore()
+  const runningBash: LocalShellTaskState = {
+    ...createTaskStateBase('b1', 'local_bash', 'echo hi'),
+    type: 'local_bash',
+    status: 'running',
+    command: 'echo hi',
+    completionStatusSentInAttachment: false,
+    shellCommand: null,
+    lastReportedTotalLines: 0,
+    isBackgrounded: true,
+  }
+  store.setState(prev => ({ ...prev, tasks: { b1: runningBash } }))
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    createSidecarTasksDomain(store),
+  )
+  const { socket, received } = makeSocket()
+
+  server.addConnection(socket)
+
+  const attachSnapshot = received.find(
+    (frame): frame is Extract<ServerFrame, { kind: 'tasks.snapshot' }> =>
+      frame.kind === 'tasks.snapshot',
+  )
+  expect(attachSnapshot?.kind).toBe('tasks.snapshot')
+  expect(attachSnapshot?.tasks.items).toHaveLength(1)
+  expect(attachSnapshot?.tasks.items[0]).toMatchObject({
+    id: 'b1',
+    type: 'local_bash',
+    status: 'running',
+    label: 'echo hi',
+  })
+
+  store.setState(prev => ({
+    ...prev,
+    tasks: { b1: { ...runningBash, status: 'completed', isBackgrounded: true } },
+  }))
+
+  const latest = received
+    .filter(
+      (frame): frame is Extract<ServerFrame, { kind: 'tasks.snapshot' }> =>
+        frame.kind === 'tasks.snapshot',
+    )
+    .at(-1)
+  expect(latest?.kind).toBe('tasks.snapshot')
+  // A completed local_bash task isn't the terminal-backgrounded-local_agent
+  // carve-out, so it drops out of isVisibleBackgroundTask on the re-broadcast
+  // — proving the store-driven re-emit carries fresh filtered state, not a
+  // stale copy of the attach-time snapshot.
+  expect(latest?.tasks.items).toHaveLength(0)
 })
 
 test('T5a — permission.response for an unknown requestId is rejected', () => {
