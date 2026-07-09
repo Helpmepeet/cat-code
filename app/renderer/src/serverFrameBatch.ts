@@ -59,6 +59,7 @@ export type ServerFrameBatchHandlers = {
   dispatchWorkspaceTrust: (action: BatchAction<FrameReducerAction>) => void
   dispatchDiagnostics: (action: BatchAction<FrameReducerAction>) => void
   dispatchRemoteSettings: (action: BatchAction<FrameReducerAction>) => void
+  dispatchSessionsCatalog: (action: BatchAction<FrameReducerAction>) => void
 }
 
 /**
@@ -99,5 +100,6 @@ export function applyServerFrameBatch(
   h.dispatchWorkspaceTrust(batch(frameActions))
   h.dispatchDiagnostics(batch(frameActions))
   h.dispatchRemoteSettings(batch(frameActions))
+  h.dispatchSessionsCatalog(batch(frameActions))
   h.dispatchTranscript(batch(frames))
 }

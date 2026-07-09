@@ -12,12 +12,11 @@
  * recency) are rendered — no cost/model/tags fixtures (C3).
  *
  * §0 fidelity flags (divergences from the prototype, by design):
- *  - Nav destination Sessions is rendered DISABLED (visual grammar only); its
- *    page is unbuilt (P4-6). Chat, Goals, Accounts (P4-5), and Settings are wired.
- *    None are mocked (honesty: disabled, flagged, not faked).
+ *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
+ *    Accounts (P4-5), and Settings. None are mocked.
  *  - The prototype's per-row actions menu (rename/branch/rewind/export/delete) is
- *    omitted — those verbs are P4-6 (`SessionActions.jsx`); the restore-offer is
- *    the only row action here.
+ *    omitted — those verbs are the P4-6b `SessionActionsMenu`; the restore-offer
+ *    is the only row action here (the Sessions page is where the catalog lives).
  *  - The prototype's per-workspace "+" (new session in this workspace) is omitted:
  *    HC1 forbids the renderer authoring a cwd, so new sessions go through the
  *    native picker (⌘T / TabBar "+"), never a renderer-chosen workspace path.
@@ -45,17 +44,16 @@ type NavItem = {
 }
 
 // The prototype's destination rail (Chat/Sessions/Goals/Accounts/Settings — its
-// own comments already dropped Tasks/Agents from the rail). Chat/Goals/Accounts/
-// Settings are built; Sessions is a disabled placeholder (P4-6) — see §0.
+// own comments already dropped Tasks/Agents from the rail). All five are built.
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
-  { id: 'sessions', label: 'Sessions', enabled: false, icon: <SessionsIcon /> },
+  { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'chat' | 'goals' | 'accounts' | 'settings'
+type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
 
 export function Sidebar({
   rows,

@@ -174,9 +174,16 @@ import {
   reduceTasksState,
   selectTasksSnapshot,
 } from './tasksState.js'
+import {
+  createSessionsCatalogState,
+  reduceSessionsCatalogState,
+  selectMergedSessionRows,
+  selectSessionsCatalog,
+} from './sessionsCatalogState.js'
 import { TasksDialog } from './TasksDialog.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
+import { SessionsPage } from './SessionsPage.js'
 import { SettingsShell } from './SettingsShell.js'
 import type {
   AccountVerbMessage,
@@ -209,6 +216,7 @@ const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
 const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
 const reduceRemoteSettingsStateBatched = withBatch(reduceRemoteSettingsState)
+const reduceSessionsCatalogStateBatched = withBatch(reduceSessionsCatalogState)
 
 export function App() {
   const [state, dispatch] = useReducer(
@@ -305,9 +313,14 @@ export function App() {
     undefined,
     createTasksState,
   )
+  const [sessionsCatalog, dispatchSessionsCatalog] = useReducer(
+    reduceSessionsCatalogStateBatched,
+    undefined,
+    createSessionsCatalogState,
+  )
   const [tasksOpen, setTasksOpen] = useState(false)
   const [activeView, setActiveView] = useState<
-    'chat' | 'goals' | 'accounts' | 'settings'
+    'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   >('chat')
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
@@ -348,6 +361,7 @@ export function App() {
         dispatchWorkspaceTrust,
         dispatchDiagnostics,
         dispatchRemoteSettings,
+        dispatchSessionsCatalog,
         dispatchTranscript: dispatchSessionEvent,
       })
     })
@@ -469,6 +483,19 @@ export function App() {
   // HostEvent-driven `shell` state the TabBar reads (App seeded it once from
   // listSessions, then keeps it live off subscribeHost).
   const sidebarRows = useMemo(() => selectSidebarRows(shell), [shell])
+
+  // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
+  // the sidecar engine-history snapshot (rich metadata), via the shared
+  // selector (reused by P4-17 Welcome recents, D5).
+  const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog, activeSessionId)
+  const sessionCatalogRows = useMemo(
+    () =>
+      selectMergedSessionRows(
+        sidebarRows.map(row => row.descriptor),
+        sessionCatalogSnapshot,
+      ),
+    [sidebarRows, sessionCatalogSnapshot],
+  )
 
   useEffect(() => {
     if (!hostSnapshotReady && liveSessionIds.length === 0) return
@@ -1182,6 +1209,23 @@ export function App() {
             snapshot={selectAccountsSnapshot(accounts, activeSessionId)}
             lastResult={accounts.lastResult}
             onVerb={sendAccountVerb}
+          />
+        ) : activeView === 'sessions' ? (
+          <SessionsPage
+            rows={sessionCatalogRows}
+            activeCwd={
+              activeSessionId
+                ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null
+                : null
+            }
+            truncated={sessionCatalogSnapshot?.truncated ?? false}
+            catalogLoaded={sessionCatalogSnapshot !== null}
+            onOpenRow={row => {
+              if (row.appSessionId == null) return
+              if (row.live) selectTab(row.appSessionId)
+              else void performRestore(row.appSessionId)
+            }}
+            onNewSession={() => void newSession()}
           />
         ) : workspacePanels.length === 0 || !activeSessionId ? (
           <EmptyShell onNewTab={newSession} />
