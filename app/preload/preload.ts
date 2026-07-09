@@ -20,6 +20,7 @@ import type {
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
+  RemoteVerbMessage,
   ServerFrame,
   SessionId,
   SubmitOptions,
@@ -41,6 +42,7 @@ const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
+const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -88,6 +90,15 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
+  },
+  remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void {
+    // P4-13 — HC3 fixed sender. Same posture as `accountVerb`: the renderer
+    // supplies only a decided verb payload; main light-coerces the type and the
+    // sidecar is the trust boundary (schema + live-state re-validation). No
+    // token ever crosses in either direction.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_REMOTE_SETTINGS_VERB, payload)
   },
   ping(sessionId: SessionId, nonce: string): void {
     const payload = { sessionId, nonce }

@@ -153,6 +153,7 @@ async function main(): Promise<void> {
     workspaceTrust,
     diagnostics,
     extensions,
+    remoteSettings,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: args.cwd,
@@ -183,6 +184,7 @@ async function main(): Promise<void> {
     ...(workspaceTrust ? { workspaceTrust } : {}),
     ...(diagnostics ? { diagnostics } : {}),
     ...(extensions ? { extensions } : {}),
+    ...(remoteSettings ? { remoteSettings } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     idleTtlMs,
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,

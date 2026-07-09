@@ -59,9 +59,12 @@ import {
   ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
+  REMOTE_VERB_TYPES,
   type AccountVerbMessage,
   type AccountVerbType,
   type PermissionSetModeMode,
+  type RemoteVerbMessage,
+  type RemoteVerbType,
   type ServerFrame,
   type SessionId,
   type SidecarClientMessage,
@@ -74,6 +77,7 @@ const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
+const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -459,6 +463,25 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as AccountVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_REMOTE_SETTINGS_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-13 — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (schema + live-state re-derivation). Drop any frame
+      // whose `type` is not a RemoteSettings verb fail-closed, rather than
+      // forwarding a message guaranteed to be rejected.
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !REMOTE_VERB_TYPES.includes(verb.type as RemoteVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as RemoteVerbMessage)
     },
   )
 

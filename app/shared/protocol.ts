@@ -199,14 +199,79 @@ export type AccountVerbMessage =
   | AccountTouchAllMessage
   | AccountLoginMessage
 
+/* ------------------------------------------------------------------------- *
+ * P4-13 — RemoteSettings verbs (app-owned inbound; sidecar-LOCAL schema)
+ * ------------------------------------------------------------------------- *
+ *
+ * D3 (`decisions/PAIRED-DEVICES.md` §4) ruled RemoteSettings CUT to the real
+ * surface: bridge toggle/status + read-only command-filter truth + a
+ * direct-connect form. No paired-device identity/authz model. Like the P4-5
+ * account verbs, these are app-owned vocabulary the engine's shared
+ * `appClientMessageSchema` does NOT carry, validated by a sidecar-LOCAL Zod
+ * schema and dispatched to the engine's OWN bridge/direct-connect primitives —
+ * never a re-implementation.
+ *
+ *  - **`remoteSettings.bridgeToggle`** flips the engine's real
+ *    `AppState.replBridgeEnabled` flag (`src/state/AppStateStore.ts:138`) —
+ *    the SAME field `/remote-control` sets (`src/commands/bridge/bridge.tsx`)
+ *    and `useReplBridge` (`src/hooks/useReplBridge.tsx`) watches. Enabling
+ *    re-runs the real prerequisite gate (policy / disabled-reason / min-version
+ *    / OAuth-presence) before flipping the flag, so the UI never claims
+ *    "Publishing" over a bridge that cannot actually authenticate. It does NOT
+ *    itself establish the live WS/poll connection — that effect loop is
+ *    mounted only in the Ink REPL (`src/screens/REPL.tsx:4208`), not in this
+ *    Electron sidecar; flagged as a follow-up in the P4-13 report (the
+ *    `account.login` precedent for a verb that is real but partial).
+ *  - **`remoteSettings.directConnect`** calls the engine's real
+ *    `createDirectConnectSession` (`src/server/createDirectConnectSession.ts:26`)
+ *    with the renderer-supplied `serverUrl` and the session's OWN cwd (never a
+ *    renderer-authored cwd, HC1). It proves the target session is reachable;
+ *    it does not re-point this Electron session's live transport at the
+ *    remote server (that would touch the locked transport decision — flagged,
+ *    not attempted).
+ *  - **Secret-owner invariant untouched.** No verb carries or returns a token.
+ *    `directConnect` never forwards an `authToken` (the cut-scope form has no
+ *    such field).
+ *  - **T5a-analog** — every verb carries a renderer-minted `requestId` echoed
+ *    on the resulting `remoteSettings.result` frame.
+ *  - **T7** — the existing inbound size/rate caps apply unchanged;
+ *    `serverUrl` is length-bounded like every other renderer-controlled string.
+ */
+export const REMOTE_VERB_TYPES = [
+  'remoteSettings.bridgeToggle',
+  'remoteSettings.directConnect',
+] as const
+
+export type RemoteVerbType = (typeof REMOTE_VERB_TYPES)[number]
+
+/** Enable/disable the Remote Control bridge (`replBridgeEnabled`). */
+export type RemoteBridgeToggleMessage = {
+  type: 'remoteSettings.bridgeToggle'
+  requestId: string
+  enable: boolean
+}
+
+/** Create a session on another cat-code server over the direct-connect primitive. */
+export type RemoteDirectConnectMessage = {
+  type: 'remoteSettings.directConnect'
+  requestId: string
+  serverUrl: string
+}
+
+export type RemoteVerbMessage =
+  | RemoteBridgeToggleMessage
+  | RemoteDirectConnectMessage
+
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
- * vocabulary plus the app-owned C2 frame and the P4-5 account verbs.
+ * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, and the
+ * P4-13 RemoteSettings verbs.
  */
 export type SidecarClientMessage =
   | AppClientMessage
   | PermissionSetModeMessage
   | AccountVerbMessage
+  | RemoteVerbMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -874,6 +939,68 @@ export type ExtensionsSnapshotFrame = {
   extensions: ExtensionsSnapshot
 }
 
+/* ------------------------------------------------------------------------- *
+ * RemoteSettings read-seam (P4-13, D3 cut scope) — conforms to the P4-5 recipe
+ * ------------------------------------------------------------------------- *
+ *
+ * Bridge status is read directly from the session's own `AppStateStore` (the
+ * SAME store `permissionDomain.ts`/`goalDomain.ts` read; `replBridgeEnabled` /
+ * `replBridgeError`, `src/state/AppStateStore.ts:138,157`) — read-at-call, not
+ * a poll. The command-filter truth is derived from THIS session's real command
+ * catalog (`getCommands(cwd)`, the same array the runtime parses slash commands
+ * from) filtered through the engine's own `isBridgeSafeCommand`
+ * (`src/commands.ts:697`) — never a copied array. Re-broadcast after a
+ * mutating `remoteSettings.*` verb, matching the accounts seam's action-driven
+ * re-emit (no reactive store to subscribe to on the bridge flag either).
+ */
+
+export type RemoteSettingsSnapshot = {
+  bridge: {
+    /** `AppState.replBridgeEnabled` — the real flag `/remote-control` sets. */
+    enabled: boolean
+    /** `AppState.replBridgeError`, or null. */
+    error: string | null
+    /** `isEnvLessBridgeEnabled()` branch — which bridge transport would be used. */
+    transport: 'v1' | 'v2'
+  }
+  commandFilter: {
+    /** `type === 'prompt'` commands from THIS session's real catalog — safe by type. */
+    skillSafe: string[]
+    /** `BRIDGE_SAFE_COMMANDS` members present in THIS session's real catalog. */
+    optIn: string[]
+    /** `type === 'local-jsx'` commands from THIS session's real catalog — always blocked. */
+    blocked: string[]
+  }
+}
+
+/**
+ * P4-13 outbound frame. Emitted on attach (after the accounts snapshot, before
+ * history replay) and re-broadcast after a mutating `remoteSettings.*` verb.
+ */
+export type RemoteSettingsSnapshotFrame = {
+  kind: 'remoteSettings.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  remoteSettings: RemoteSettingsSnapshot
+}
+
+/** The outcome of one RemoteSettings verb (echoes the renderer-minted `requestId`). */
+export type RemoteSettingsResultFrame = {
+  kind: 'remoteSettings.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: RemoteVerbType
+  ok: boolean
+  /** Human-readable outcome; NEVER carries token material. */
+  message: string
+  /** `remoteSettings.directConnect` only — the reachable target, no token. */
+  directConnect?: {
+    sessionId: string
+    wsUrl: string
+  }
+}
+
 /**
  * Supervisor-owned process/transport state. Unlike controller events, this
  * remains observable even when the sidecar has died or its socket is unusable.
@@ -975,6 +1102,8 @@ export type ServerFrame =
   | WorkspaceTrustSnapshotFrame
   | DiagnosticsSnapshotFrame
   | ExtensionsSnapshotFrame
+  | RemoteSettingsSnapshotFrame
+  | RemoteSettingsResultFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
@@ -1017,6 +1146,13 @@ export type CatCodeBridge = {
    * `accounts.snapshot` when the pool changed.
    */
   accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void
+  /**
+   * P4-13 — request a RemoteSettings verb (bridge toggle or direct-connect) on
+   * the addressed session's sidecar. The outcome arrives as a
+   * `remoteSettings.result` frame echoing `requestId`, followed by an updated
+   * `remoteSettings.snapshot` when the bridge flag changed.
+   */
+  remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
   /** Restart the addressed sidecar process while retaining renderer attachment. */

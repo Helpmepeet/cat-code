@@ -60,6 +60,10 @@ import {
   loadExtensionsSnapshot,
   type SidecarExtensionsDomain,
 } from './extensionsDomain.js'
+import {
+  createSidecarRemoteSettingsDomain,
+  type SidecarRemoteSettingsDomain,
+} from './remoteSettingsDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -204,6 +208,13 @@ export async function createNormalSidecarQueryEngineConfig(
     agentDefinitions,
     availableMcpServers,
     extensionsSnapshot,
+    /**
+     * The real command catalog for this cwd (same array wired into the query
+     * engine above) — returned so the RemoteSettings domain (P4-13) can derive
+     * its command-filter truth from THIS session's actual commands, never a
+     * second `getCommands()` call or a copied array.
+     */
+    commands,
     queryEngineConfig: {
       ...createQueryEngineAppSessionConfigFromSetup({
         cwd,
@@ -285,6 +296,13 @@ export type SidecarSession = {
    * hooks config snapshot. Read-only; null in probe mode (no cwd-configured engine).
    */
   extensions: SidecarExtensionsDomain | null
+  /**
+   * RemoteSettings domain (P4-13, D3 cut scope) — bridge toggle/status +
+   * command-filter truth + direct-connect verb over the engine's own bridge
+   * flag and command catalog. Null in probe mode (no engine app-state store,
+   * no cwd-configured command catalog).
+   */
+  remoteSettings: SidecarRemoteSettingsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -326,6 +344,7 @@ export async function createSidecarSessionController({
       workspaceTrust: null,
       diagnostics: null,
       extensions: null,
+      remoteSettings: null,
     }
   }
 
@@ -339,6 +358,7 @@ export async function createSidecarSessionController({
     agentDefinitions,
     availableMcpServers,
     extensionsSnapshot,
+    commands,
     queryEngineConfig,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
@@ -356,5 +376,6 @@ export async function createSidecarSessionController({
     workspaceTrust: await createSidecarWorkspaceTrustDomain(cwd),
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
+    remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
   }
 }

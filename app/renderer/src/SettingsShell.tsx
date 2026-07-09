@@ -20,12 +20,16 @@ import type {
   ExtensionsSnapshot,
   MemorySnapshot,
   PermissionContextSnapshot,
+  RemoteSettingsResultFrame,
+  RemoteSettingsSnapshot,
+  RemoteVerbMessage,
   SettingsSnapshot,
   WorkspaceTrustSnapshot,
 } from '../../shared/protocol.js'
 import { AgentsPage } from './AgentsPage.js'
 import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
+import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import {
   HooksPanel,
   McpPanel,
@@ -132,7 +136,6 @@ const CAT_OWNER: Record<string, string> = {
   skills: 'Settings extensions (P4-12)',
   hooks: 'Settings extensions (P4-12)',
   ide: 'a later Phase-4 settings session',
-  remote: 'RemoteSettings (P4-13)',
 }
 
 export function SettingsShell({
@@ -144,6 +147,9 @@ export function SettingsShell({
   memorySnapshot,
   workspaceTrustSnapshot,
   extensionsSnapshot,
+  remoteSnapshot,
+  remoteLastResult,
+  onRemoteVerb,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
@@ -156,6 +162,9 @@ export function SettingsShell({
   memorySnapshot?: MemorySnapshot | null
   workspaceTrustSnapshot?: WorkspaceTrustSnapshot | null
   extensionsSnapshot?: ExtensionsSnapshot | null
+  remoteSnapshot?: RemoteSettingsSnapshot | null
+  remoteLastResult?: RemoteSettingsResultFrame | null
+  onRemoteVerb?: (verb: RemoteVerbMessage) => void
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -245,6 +254,9 @@ export function SettingsShell({
             diagnosticsSnapshot={diagnosticsSnapshot ?? null}
             extensionsSnapshot={extensionsSnapshot ?? null}
             memorySnapshot={memorySnapshot ?? null}
+            onRemoteVerb={onRemoteVerb ?? (() => {})}
+            remoteLastResult={remoteLastResult ?? null}
+            remoteSnapshot={remoteSnapshot ?? null}
             snapshot={snapshot}
             workspaceTrustSnapshot={workspaceTrustSnapshot ?? null}
           />
@@ -262,6 +274,9 @@ function CategoryBody({
   diagnosticsSnapshot,
   extensionsSnapshot,
   memorySnapshot,
+  onRemoteVerb,
+  remoteLastResult,
+  remoteSnapshot,
   snapshot,
   workspaceTrustSnapshot,
 }: {
@@ -272,6 +287,9 @@ function CategoryBody({
   diagnosticsSnapshot: DiagnosticsSnapshot | null
   extensionsSnapshot: ExtensionsSnapshot | null
   memorySnapshot: MemorySnapshot | null
+  onRemoteVerb: (verb: RemoteVerbMessage) => void
+  remoteLastResult: RemoteSettingsResultFrame | null
+  remoteSnapshot: RemoteSettingsSnapshot | null
   snapshot: SettingsSnapshot | null
   workspaceTrustSnapshot: WorkspaceTrustSnapshot | null
 }) {
@@ -292,6 +310,16 @@ function CategoryBody({
   }
   if (category === 'hooks') {
     return <HooksPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'remote') {
+    return (
+      <RemoteSettingsPage
+        embedded
+        lastResult={remoteLastResult}
+        onVerb={onRemoteVerb}
+        snapshot={remoteSnapshot}
+      />
+    )
   }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />

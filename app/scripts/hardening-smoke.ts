@@ -181,6 +181,7 @@ async function runProductionHardeningSmoke(
       'abort',
       'accountVerb',
       'ping',
+      'remoteSettingsVerb',
       'rendererReady',
       'respondPermission',
       'restart',
