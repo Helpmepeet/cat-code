@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { getOauthConfig } from '../../constants/oauth.js'
 import {
+  checkAndRefreshOAuthTokenIfNeeded,
   getClaudeAIOAuthTokens,
   hasProfileScope,
   isClaudeAISubscriber,
@@ -35,10 +36,19 @@ export async function fetchUtilization(): Promise<Utilization | null> {
     return {}
   }
 
-  // Skip API call if OAuth token is expired to avoid 401 errors
+  // The token can lapse after a long stretch of non-Anthropic requests (e.g.
+  // routing everything through gpt-*/Codex), because the Claude-token refresh
+  // normally piggybacks on the Anthropic request path. Refresh through the same
+  // entry point every other authenticated surface uses (mcp/client,
+  // teamMemorySync, policyLimits, voiceStreamSTT) instead of bailing, so /usage
+  // self-heals rather than hanging on a stale token.
   const tokens = getClaudeAIOAuthTokens()
   if (tokens && isOAuthTokenExpired(tokens.expiresAt)) {
-    return null
+    await checkAndRefreshOAuthTokenIfNeeded()
+    const refreshed = getClaudeAIOAuthTokens()
+    if (!refreshed || isOAuthTokenExpired(refreshed.expiresAt)) {
+      return null
+    }
   }
 
   const authResult = getAuthHeaders()

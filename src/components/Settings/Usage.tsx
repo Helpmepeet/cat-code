@@ -188,7 +188,14 @@ export function Usage(): React.ReactNode {
     setError(null);
     try {
       const data = await fetchUtilization();
-      setUtilization(data);
+      if (data === null) {
+        // A resolved null means usage is unavailable (e.g. token refresh could
+        // not produce a usable token) — NOT "still loading". Surface it through
+        // the error+retry UI instead of hanging on "Loading usage data…".
+        setError('Usage data is temporarily unavailable. Retry in a moment.');
+      } else {
+        setUtilization(data);
+      }
     } catch (err) {
       logError(err as Error);
       const axiosError = err as {
