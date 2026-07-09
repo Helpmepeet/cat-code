@@ -294,3 +294,29 @@ Rules (extend §2's R-rules; all enforced in main/host, never in the preload):
 The sidecar trust boundary (§2) is unchanged: the control plane never adds an inbound frame
 type to the socket protocol; its only contact with a sidecar is the spawn environment
 (`CATCODE_SIDECAR_SESSION_ID`, cwd, resume id), which is main-owned input, not renderer input.
+
+---
+
+## Scope note — `secretGuard` is a KEY-NAME guard, not a value scanner (ON RECORD, accepted)
+
+*Added 2026-07-09 during the Phase-4 10-lane review, so a future reader does not mistake
+`secretGuard` for a value-channel secret scanner.*
+
+`secretGuard`/`scanForSecrets` (`app/shared/secretGuard.ts`) rejects an outbound frame when a
+**property KEY** looks credential-shaped (`token`, `apiKey`, `authorization`, …). It does **not**
+inspect string VALUES. A user-inlined secret carried inside an ordinary value-channel string is
+therefore **not** caught. Concretely on record:
+
+- `directConnect.wsUrl` / the direct-connect server URL a user types (P4-13) — a secret embedded
+  in the URL rides through as a value.
+- `HookEntry.displayLine` (P4-12 — `getHookDisplayText`, e.g. a hook command line) and
+  `McpConfigEntry.url` (P4-12 — a configured MCP server URL) — a credential a user wrote into the
+  command/URL is a value, not a key.
+
+**Severity: LOW, accepted — not a new guard requirement.** The transport is a same-machine
+Electron socket the user already controls; every one of these fields is **user-authored** config
+the user typed themselves; and each mirrors what the engine's own display functions
+(`getHookDisplayText`, the CLI's bridge/`/status` panes) already surface to the same user. The
+exposure is "a user can see a secret they themselves inlined into their own config," which is not
+a boundary escalation. If a value-channel scan is ever wanted it is a NEW decision; `secretGuard`
+stays a key-name guard.
