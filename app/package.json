@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "cd .. && bun test app/",
     "typecheck:sidecar": "bun run scripts/sidecar-typecheck.ts",
-    "test:hardening": "bun run scripts/run-hardening-smoke.ts"
+    "test:hardening": "bun run scripts/run-hardening-smoke.ts",
+    "reap:orphans": "bun run scripts/reap-orphan-sidecars.ts"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.2.2",

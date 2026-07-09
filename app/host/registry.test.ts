@@ -465,6 +465,83 @@ test('spawn over the bound reaps a terminal row, never the new LIVE row', async 
   expect(doc.sessions.some(r => r.appSessionId === 'app-t-0')).toBe(false)
 })
 
+test('evict-reap SIGTERMs a matching over-bound orphan and SPARES a recycled-pid impostor (CC-3)', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  const marker = `catcode-sidecar-${Math.random().toString(36).slice(2)}`
+
+  // Two REAL live processes: one whose cmdline carries the sidecar marker (a
+  // genuine orphan that the eviction would otherwise leave unreachable — the O1
+  // leak), and one whose cmdline does NOT (a recycled pid — innocent).
+  const matchPid = spawnDummy(marker)
+  const impostorPid = spawnDummy('some-unrelated-process')
+
+  // Both need an existing socket file for identity signal 1 (§9-A3).
+  const matchSocket = join(storageDir, 'match.sock')
+  const impostorSocket = join(storageDir, 'impostor.sock')
+  writeFileSync(matchSocket, '')
+  writeFileSync(impostorSocket, '')
+
+  const rows: RegistrySession[] = []
+  // The two live-pid orphans are the OLDEST terminal rows, so the bound evicts
+  // exactly them. Seeded `crashed` (terminal) so the liveness sweep skips them —
+  // isolating the EVICT-reap path, not the launch sweep.
+  writeTranscript(storageDir, 'engine-match')
+  rows.push(
+    baseRow({
+      appSessionId: 'app-match',
+      engineSessionId: 'engine-match',
+      shutdown: 'crashed',
+      enginePid: matchPid,
+      socketPath: matchSocket,
+      lastAttachedAt: 1,
+    }),
+  )
+  writeTranscript(storageDir, 'engine-impostor')
+  rows.push(
+    baseRow({
+      appSessionId: 'app-impostor',
+      engineSessionId: 'engine-impostor',
+      shutdown: 'crashed',
+      enginePid: impostorPid,
+      socketPath: impostorSocket,
+      lastAttachedAt: 2,
+    }),
+  )
+  // Fill to MAX+2 with newer clean rows so exactly the 2 oldest are doomed.
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
+    writeTranscript(storageDir, `engine-keep-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-keep-${i}`,
+        engineSessionId: `engine-keep-${i}`,
+        shutdown: 'clean',
+        lastAttachedAt: 1_000 + i,
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const killed: number[] = []
+  const { registry } = makeRegistry({
+    storageDir,
+    sidecarCommandMarker: marker,
+    killProcess: p => {
+      killed.push(p)
+    },
+  })
+  const restorable = await registry.launch()
+
+  // The matching orphan was SIGTERM'd before eviction; the impostor (identity
+  // mismatch) was spared — never kill on pid-match alone.
+  expect(killed).toEqual([matchPid])
+  // Both over-bound rows were evicted regardless of whether they were killed.
+  const ids = new Set(restorable.map(r => r.appSessionId))
+  expect(ids.has('app-match')).toBe(false)
+  expect(ids.has('app-impostor')).toBe(false)
+  expect(restorable.length).toBe(MAX_REGISTRY_SESSIONS)
+})
+
 /* ------------------------------------------------------------------------- *
  * (4) restore-offer ordering
  * ------------------------------------------------------------------------- */

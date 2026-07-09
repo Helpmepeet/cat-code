@@ -131,6 +131,25 @@ export type SidecarServerOptions = {
    * Absent for fresh sessions.
    */
   history?: readonly SDKMessage[]
+  /**
+   * Idle self-exit TTL in ms (CC-3, docs O1 / SESSION-LIFETIME §2). When no
+   * supervisor connection has been active for this long, `onIdle` fires so the
+   * process can self-terminate — bounding the lifetime of a host-crash orphan,
+   * which otherwise has no reaper until the next app launch (and none at all if
+   * its registry row is evicted first). This is an ADDITIVE time-based self-exit,
+   * NOT parent-binding (SESSION-LIFETIME L2): the sidecar decides on elapsed idle,
+   * never on a parent channel — die-with-window stays supervisor behavior. A live
+   * connection cancels the timer; the first disconnect (or construction with zero
+   * connections) starts it. `undefined`/`<= 0` disables the timer.
+   */
+  idleTtlMs?: number
+  /**
+   * Fires when `idleTtlMs` elapses with zero active connections. `index.ts`
+   * passes cleanup()+`process.exit(0)`; tests pass a spy. Never called while a
+   * connection is open (a live connection clears the timer). Absent ⇒ the timer
+   * is never armed regardless of `idleTtlMs`.
+   */
+  onIdle?: () => void
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -153,6 +172,8 @@ export class SidecarServer {
   private readonly memory: SidecarMemoryDomain | null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly history: readonly SDKMessage[]
+  private readonly idleTtlMs: number
+  private readonly onIdle: (() => void) | null
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
@@ -160,6 +181,8 @@ export class SidecarServer {
   private unsubscribeGoalSnapshot: (() => void) | null = null
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private activeTurn = false
+  /** Armed while zero connections are open; cleared on connect/close (CC-3). */
+  private idleTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
@@ -172,6 +195,8 @@ export class SidecarServer {
     this.memory = options.memory ?? null
     this.accounts = options.accounts ?? null
     this.history = options.history ?? []
+    this.idleTtlMs = options.idleTtlMs ?? 0
+    this.onIdle = options.onIdle ?? null
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
     // Subscribe once; broadcast every event to all connected clients as a raw
@@ -202,10 +227,52 @@ export class SidecarServer {
         this.broadcastMemorySnapshot()
       })
     }
+
+    // CC-3: the server starts with zero connections. A sidecar that is spawned
+    // but never attached (a dev-harness spawn, or a supervisor that dies before
+    // connecting) must not linger forever — arm the idle timer now. A real
+    // supervisor attach cancels it well within the (generous) TTL.
+    this.armIdleTimer()
+  }
+
+  /* --------------------------------------------------------------------- *
+   * CC-3 — idle self-exit timer (SESSION-LIFETIME §2 janitor; L2-additive).
+   * --------------------------------------------------------------------- */
+
+  /**
+   * Arm the idle timer iff enabled AND currently idle. Fires `onIdle` after
+   * `idleTtlMs` of continuous zero-connection time. Re-checks the connection
+   * count at fire time (belt-and-suspenders against a race between a late
+   * connect and the timer callback).
+   */
+  private armIdleTimer(): void {
+    if (this.idleTtlMs <= 0 || !this.onIdle) return
+    if (this.idleTimer) return // already counting down
+    if (this.connections.size > 0) return // a live connection: never TTL
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null
+      if (this.connections.size === 0) {
+        this.log(
+          `[sidecar] idle for ${this.idleTtlMs}ms with no supervisor connection — self-exiting (CC-3)`,
+        )
+        this.onIdle?.()
+      }
+    }, this.idleTtlMs)
+  }
+
+  /** Cancel the idle timer (a connection is open, or the server is closing). */
+  private clearIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer)
+      this.idleTimer = null
+    }
   }
 
   /** Register a new client connection (called by the transport on connect). */
   addConnection(socket: SidecarSocketLike): Connection {
+    // A live connection means this sidecar is attached — never idle-exit while
+    // one is open (CC-3).
+    this.clearIdleTimer()
     const connection: Connection = {
       socket,
       decoder: new FrameDecoder(MAX_FRAME_BYTES),
@@ -333,6 +400,12 @@ export class SidecarServer {
 
   removeConnection(connection: Connection): void {
     this.connections.delete(connection)
+    // CC-3: the last supervisor connection just dropped (e.g. a host crash left
+    // this sidecar orphaned). Start the idle countdown; a reconnect within the
+    // TTL cancels it again.
+    if (this.connections.size === 0) {
+      this.armIdleTimer()
+    }
   }
 
   /** Feed a raw socket chunk for a given connection. */
@@ -364,6 +437,7 @@ export class SidecarServer {
 
   /** Tear down the controller + permission-context subscriptions. */
   close(): void {
+    this.clearIdleTimer()
     this.unsubscribe?.()
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()

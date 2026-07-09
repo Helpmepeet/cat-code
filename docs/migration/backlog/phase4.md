@@ -102,6 +102,15 @@ self-contained. Respect the dependency note. When done, flip the session's row i
   read-modify-write file without single-writer + lockfile + atomic-write (P3-5a fixed
   `updateSettingsForSource` this way — settings-touching sessions must preserve the
   `SettingsUpdater`-under-lock form, `src/utils/settings/settings.ts`).
+- **Kill what you spawn (the CC-3 orphan-leak lesson).** Any session or harness that launches
+  the app or spawns engine sidecars MUST verify it left none running before finishing:
+  `ps -axo pid,command | grep "sidecar/index.ts"` count unchanged from before your work (or
+  explicitly reconciled). Sidecars deliberately survive parent death (die-with-window is
+  supervisor behavior, not welding — `decisions/SESSION-LIFETIME.md`), so a killed dev/GUI
+  harness leaks a ~60 MB orphan that no relaunch can reap once its registry row is evicted. If
+  the count grew, run `bun run --cwd app reap:orphans` (dry run) then `--confirm`. The sidecar's
+  idle-TTL (`CATCODE_SIDECAR_IDLE_TTL_MS`, default 15 min) is a backstop, not a licence to skip
+  the check.
 
 🧠 **Per-session tag** = `Model: CLAUDE (visual-design|system-architecture) | ANY · Difficulty:
 N/10`, `· 🖐 GUI` appended only when the operator must drive a live GUI step. CLAUDE only where

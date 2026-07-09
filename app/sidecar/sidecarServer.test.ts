@@ -1595,3 +1595,52 @@ test('P4-5 — an account verb with no accounts domain fails closed (internal_er
   server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })
+
+/* ------------------------------------------------------------------------- *
+ * CC-3 — idle self-exit timer (deterministic unit companion to
+ * idleTtl.probe.test.ts). Proves the arm/clear/re-arm state machine directly.
+ * ------------------------------------------------------------------------- */
+
+test('CC-3 — onIdle fires after the TTL when no connection ever attaches', async () => {
+  let idleCount = 0
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    idleTtlMs: 40,
+    onIdle: () => {
+      idleCount++
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  // Constructed with zero connections → the timer is already counting down.
+  await Bun.sleep(120)
+  expect(idleCount).toBe(1)
+})
+
+test('CC-3 — an open connection cancels the idle timer; closing it re-arms the countdown', async () => {
+  let idleCount = 0
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    idleTtlMs: 40,
+    onIdle: () => {
+      idleCount++
+    },
+    log: () => {},
+  })
+  servers.push(server)
+
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+  // A live connection must never idle-exit, no matter how long it stays quiet.
+  await Bun.sleep(120)
+  expect(idleCount).toBe(0)
+
+  // Dropping the last connection re-arms the countdown (the crash-orphan path).
+  server.removeConnection(conn)
+  await Bun.sleep(120)
+  expect(idleCount).toBe(1)
+})

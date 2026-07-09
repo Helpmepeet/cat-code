@@ -31,6 +31,33 @@ import { createBackpressuredSocket } from './backpressuredSocket.js'
 /** Dedicated non-zero exit for an unresumable engine session id. */
 const RESUME_FAILED_EXIT_CODE = 4
 
+/**
+ * CC-3 — idle self-exit TTL (docs O1 / SESSION-LIFETIME §2). A sidecar whose
+ * supervisor died (host crash) is orphaned: the socket outlives the parent and
+ * nothing reaps it until the next app launch — and never, if its registry row is
+ * evicted first. This bounds that lifetime: with no active supervisor connection
+ * for this long, the sidecar exits cleanly (unlinks its socket, exit 0). Generous
+ * by default so a live, merely-quiet session is never reaped; a live connection
+ * cancels the timer regardless of idle time. Overridable via
+ * `CATCODE_SIDECAR_IDLE_TTL_MS` (tests shrink it). This is additive time-based
+ * self-exit, NOT parent-binding — die-with-window (SESSION-LIFETIME L2) remains
+ * supervisor behavior; crash-restore is unaffected (it re-spawns through
+ * `host.restoreSession` → `sessionResume.ts`, never attaching to an orphan).
+ */
+const DEFAULT_SIDECAR_IDLE_TTL_MS = 15 * 60 * 1000
+
+/**
+ * Parse `CATCODE_SIDECAR_IDLE_TTL_MS`. A non-negative finite integer overrides
+ * the default; `0` disables the timer; a missing/malformed value falls back to
+ * the default (fail-safe: a typo never silently disables the janitor).
+ */
+function parseIdleTtlMs(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return DEFAULT_SIDECAR_IDLE_TTL_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_SIDECAR_IDLE_TTL_MS
+  return Math.floor(parsed)
+}
+
 type SidecarArgs = {
   socketPath: string
   sessionId: string
@@ -130,6 +157,8 @@ async function main(): Promise<void> {
     ? toSDKMessages(resumedMessages)
     : undefined
 
+  const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
+
   const server = new SidecarServer({
     sessionId: args.sessionId,
     engineSessionId,
@@ -141,6 +170,16 @@ async function main(): Promise<void> {
     ...(memory ? { memory } : {}),
     ...(accounts ? { accounts } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
+    idleTtlMs,
+    // CC-3 — the idle janitor: clean up the socket like the signal handlers do,
+    // then exit 0 (a clean, expected shutdown — not a crash). `cleanup` is the
+    // same closure the SIGTERM/SIGINT handlers use; it is defined just below and
+    // only invoked here asynchronously by the timer, so it is initialized by the
+    // time this fires.
+    onIdle: () => {
+      cleanup()
+      process.exit(0)
+    },
   })
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a

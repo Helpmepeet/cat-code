@@ -540,8 +540,31 @@ export class SessionRegistry {
       .filter(r => r.shutdown !== null)
       .sort((a, b) => a.lastAttachedAt - b.lastAttachedAt)
     const removeCount = this.doc.sessions.length - MAX_REGISTRY_SESSIONS
-    const doomed = new Set(terminal.slice(0, removeCount).map(r => r.appSessionId))
+    const doomedRows = terminal.slice(0, removeCount)
+    const doomed = new Set(doomedRows.map(r => r.appSessionId))
     if (doomed.size > 0) {
+      // CC-3 (docs O1) — evict-reap. Dropping a terminal row makes its orphan
+      // permanently unreachable: no future launch sweep can see a pid whose row
+      // no longer exists. So, before the row disappears, SIGTERM its sidecar iff
+      // pid liveness AND identity both hold — the SAME §9-A3 check the orphan
+      // sweep uses (never kill on pid-match alone; a recycled pid or a cleanly
+      // shut-down session's dead pid is spared). A clean row's sidecar was already
+      // killed at close, so its pid fails the liveness check and nothing happens.
+      for (const row of doomedRows) {
+        const pid = row.enginePid
+        if (typeof pid === 'number' && this.matchesSidecarIdentity(row)) {
+          try {
+            this.killProcess(pid)
+            this.log(
+              `[registry] evict-reaped orphaned sidecar pid=${pid} for over-bound row ${row.appSessionId}`,
+            )
+          } catch (error) {
+            this.log(
+              `[registry] failed to SIGTERM evicted orphan pid=${pid}: ${errText(error)}`,
+            )
+          }
+        }
+      }
       this.doc.sessions = this.doc.sessions.filter(r => !doomed.has(r.appSessionId))
       this.log(`[registry] reaped ${doomed.size} over-bound terminal row(s)`)
     }
