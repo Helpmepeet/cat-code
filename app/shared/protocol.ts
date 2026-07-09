@@ -707,6 +707,87 @@ export type TasksSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Agent-mode / Orchestrator read-seam (P4-8, D2 `decisions/AGENT-CHROME.md`)
+ * ------------------------------------------------------------------------- *
+ *
+ * The orchestrator surfaces the real worker roster/state. Per D2 §4 there are two
+ * real engine feeds, joined at the sidecar trust boundary and served as ONE
+ * redacted display snapshot (never a mock worker object — D2 C5):
+ *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state
+ *      (`<transcript>.agent-mode-state.json`, `src/agent-mode/sessionState.ts:68`),
+ *      read through the engine's OWN `readSessionStateWithContinuity` entry point
+ *      (`sessionState.ts:691`) — objective, run phase, and continuity workers
+ *      (prior-session `resumable`/`stale`) + synthesis lifecycle.
+ *   2. Live plane — the `local_agent` workers the current session delegated via the
+ *      Agent tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads),
+ *      carrying the real handoff gate: `handoffStatus:'blocked'` is the "waiting on
+ *      orchestrator" state (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:184`), not
+ *      a fixture field — plus its `blockReason` and verification `verdict`.
+ * Outbound-only, read-only, no new inbound vocabulary. secretGuard-clean by
+ * construction: identity/role/status/description text only, never a token.
+ */
+
+/** Run phase mirrored from the engine's `AgentModeRunPhase` (`sessionState.ts:7`). */
+export type AgentModeRunPhase =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'executing'
+  | 'verifying'
+  | 'completed'
+  | 'blocked'
+  | 'cancelled'
+
+export type AgentModeWorkerItem = {
+  /** Stable worker id — persisted `AgentModeWorkerSession.agentId`, else the live task id. */
+  agentId: string
+  /** Display handle (persisted `handle` / live task `agentName`); null when unnamed. */
+  handle: string | null
+  /** Role / subagent type (persisted `role` / live task `agentType`); null when unknown. */
+  role: string | null
+  /** Lifecycle status. Live task `pending` folds to `running` (in-flight). */
+  status: 'running' | 'completed' | 'failed' | 'killed'
+  /** Delegated task/prompt text (persisted `description` / live task `label`); null when absent. */
+  description: string | null
+  /** Persisted synthesis gate (result-ready / reviewed) — agent-mode session plane only. */
+  synthesisStatus?: 'pending' | 'synthesized'
+  /** `current` = this session; `prior` = a continuity worker from a prior session. */
+  origin?: 'current' | 'prior'
+  /** Persisted resumability (meaningful for `prior`-origin workers). */
+  resumable?: boolean
+  /**
+   * Live `local_agent` handoff gate. `blocked` is the real "waiting on orchestrator"
+   * state (orchestrator-owned, neutral) — the source of the `waiting` display state.
+   */
+  handoffStatus?: 'done' | 'blocked'
+  /** Live `local_agent` block reason (only present when `handoffStatus === 'blocked'`). */
+  blockReason?: string
+  /** Live `local_agent` verification verdict, when the worker is a verifier. */
+  verdict?: 'PASS' | 'FAIL' | 'PARTIAL'
+  /** Live `local_agent` backgrounded flag. */
+  isBackgrounded?: boolean
+  /** Persisted agent output summary (agent-mode session plane), when present. */
+  outputSummary?: string
+}
+
+export type AgentModeSnapshot = {
+  /** Process-level agent-mode flag (`isAgentMode()`); false = a normal delegating session. */
+  active: boolean
+  /** Objective from the persisted agent-mode ledger; '' when none. */
+  objective: string
+  /** Derived run phase from the persisted state; 'planning' when none. */
+  phase: AgentModeRunPhase
+  /** Unified worker list: live `local_agent` workers ∪ persisted continuity workers. */
+  workers: AgentModeWorkerItem[]
+}
+
+export type AgentModeSnapshotFrame = {
+  kind: 'agent-mode.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  agentMode: AgentModeSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
  * Accounts read-seam (P4-5) — the CANONICAL domain read-seam recipe
  * ------------------------------------------------------------------------- *
  *
@@ -1163,6 +1244,7 @@ export type ServerFrame =
   | ThreadGoalSnapshotFrame
   | MemorySnapshotFrame
   | TasksSnapshotFrame
+  | AgentModeSnapshotFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
   | WorkspaceTrustSnapshotFrame

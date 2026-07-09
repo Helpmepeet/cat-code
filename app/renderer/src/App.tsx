@@ -175,6 +175,12 @@ import {
   selectTasksSnapshot,
 } from './tasksState.js'
 import { TasksDialog } from './TasksDialog.js'
+import {
+  createOrchestratorState,
+  reduceOrchestratorState,
+  selectAgentModeSnapshot,
+} from './orchestratorState.js'
+import { OrchestratorPage } from './OrchestratorPage.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import { SettingsShell } from './SettingsShell.js'
@@ -205,6 +211,7 @@ const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
 const reduceExtensionsStateBatched = withBatch(reduceExtensionsState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceTasksStateBatched = withBatch(reduceTasksState)
+const reduceOrchestratorStateBatched = withBatch(reduceOrchestratorState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
 const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
@@ -305,9 +312,14 @@ export function App() {
     undefined,
     createTasksState,
   )
+  const [orchestrator, dispatchOrchestrator] = useReducer(
+    reduceOrchestratorStateBatched,
+    undefined,
+    createOrchestratorState,
+  )
   const [tasksOpen, setTasksOpen] = useState(false)
   const [activeView, setActiveView] = useState<
-    'chat' | 'goals' | 'accounts' | 'settings'
+    'chat' | 'orchestrator' | 'goals' | 'accounts' | 'settings'
   >('chat')
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
@@ -344,6 +356,7 @@ export function App() {
         dispatchExtensions,
         dispatchGoalMemory,
         dispatchTasks,
+        dispatchOrchestrator,
         dispatchAccounts,
         dispatchWorkspaceTrust,
         dispatchDiagnostics,
@@ -1182,6 +1195,10 @@ export function App() {
             snapshot={selectAccountsSnapshot(accounts, activeSessionId)}
             lastResult={accounts.lastResult}
             onVerb={sendAccountVerb}
+          />
+        ) : activeView === 'orchestrator' ? (
+          <OrchestratorPage
+            snapshot={selectAgentModeSnapshot(orchestrator, activeSessionId)}
           />
         ) : workspacePanels.length === 0 || !activeSessionId ? (
           <EmptyShell onNewTab={newSession} />

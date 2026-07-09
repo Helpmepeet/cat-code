@@ -73,6 +73,7 @@ import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
+import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
 import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
@@ -127,6 +128,12 @@ export type SidecarServerOptions = {
    * app-state store; when absent, no `tasks.snapshot` frame is emitted.
    */
   tasks?: SidecarTasksDomain
+  /**
+   * Agent-mode / Orchestrator read-seam (P4-8). When present, an
+   * `agent-mode.snapshot` frame is emitted on attach and re-broadcast on store
+   * change; when absent, no orchestrator frame is emitted.
+   */
+  agentMode?: SidecarAgentModeDomain
   /**
    * Accounts read-seam + lifecycle verbs (P4-5). Optional because the P1-0 probe
    * fixture has no engine; when absent, no `accounts.snapshot` frame is emitted
@@ -206,6 +213,7 @@ export class SidecarServer {
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
+  private readonly agentMode: SidecarAgentModeDomain | null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
@@ -221,6 +229,7 @@ export class SidecarServer {
   private unsubscribeGoalSnapshot: (() => void) | null = null
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
+  private unsubscribeAgentModeSnapshot: (() => void) | null = null
   private activeTurn = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
@@ -235,6 +244,7 @@ export class SidecarServer {
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
+    this.agentMode = options.agentMode ?? null
     this.accounts = options.accounts ?? null
     this.workspaceTrust = options.workspaceTrust ?? null
     this.diagnostics = options.diagnostics ?? null
@@ -276,6 +286,11 @@ export class SidecarServer {
     if (this.tasks) {
       this.unsubscribeTasksSnapshot = this.tasks.subscribe(() => {
         this.broadcastTasksSnapshot()
+      })
+    }
+    if (this.agentMode) {
+      this.unsubscribeAgentModeSnapshot = this.agentMode.subscribe(() => {
+        void this.broadcastAgentModeSnapshot()
       })
     }
 
@@ -373,6 +388,11 @@ export class SidecarServer {
     // snapshots and before replay; no new inbound vocabulary or renderer-
     // authored task state.
     this.sendTasksSnapshot(connection)
+    // P4-8 — read-only orchestrator worker snapshot (persisted agent-mode state ∪
+    // live local_agent workers), alongside the P4-9 tasks snapshot. Async + best-
+    // effort (a non-agent-mode session degrades to an empty roster); fire-and-forget
+    // since a read-only snapshot has no ordering dependency on history replay.
+    void this.sendAgentModeSnapshot(connection)
     // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
@@ -515,6 +535,8 @@ export class SidecarServer {
     this.unsubscribeMemorySnapshot = null
     this.unsubscribeTasksSnapshot?.()
     this.unsubscribeTasksSnapshot = null
+    this.unsubscribeAgentModeSnapshot?.()
+    this.unsubscribeAgentModeSnapshot = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -1431,6 +1453,46 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.sendTasksSnapshot(connection)
+    }
+  }
+
+  /**
+   * P4-8 — read-only orchestrator worker snapshot (D2 `decisions/AGENT-CHROME.md`).
+   * Async because the session plane is a file-backed engine read
+   * (`readSessionStateWithContinuity`); the shared send path still applies
+   * clone/JSON checks, secretGuard, and size caps.
+   */
+  private async sendAgentModeSnapshot(connection: Connection): Promise<void> {
+    if (!this.agentMode) {
+      return
+    }
+    try {
+      const raw = await this.agentMode.getSnapshot()
+      const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'agent-mode.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        agentMode: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] agent-mode.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private async broadcastAgentModeSnapshot(): Promise<void> {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      await this.sendAgentModeSnapshot(connection)
     }
   }
 

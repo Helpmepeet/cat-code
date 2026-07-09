@@ -115,11 +115,14 @@ test('taskDisplayState reuses P4-2 deriveTaskAgentState for local_agent/teammate
     taskDisplayState(item({ type: 'local_agent', status: 'running', handoffStatus: 'blocked' })),
   ).toBe('needs-you')
   expect(
+    // P4-8: orchestrator-owned blocked is the neutral 'waiting' ("Waiting on
+    // orchestrator"), not 'blocked' (deriveTaskAgentState wiring of the `waiting`
+    // state). P4-9's dialog never passes blockedOwner, so its rendering is unchanged.
     taskDisplayState(
       item({ type: 'local_agent', status: 'running', handoffStatus: 'blocked' }),
       { blockedOwner: 'orchestrator' },
     ),
-  ).toBe('blocked')
+  ).toBe('waiting')
   expect(
     taskDisplayState(item({ type: 'local_agent', status: 'running', isBackgrounded: true })),
   ).toBe('background')

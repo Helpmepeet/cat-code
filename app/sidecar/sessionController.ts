@@ -48,6 +48,10 @@ import {
   type SidecarTasksDomain,
 } from './tasksDomain.js'
 import {
+  createSidecarAgentModeDomain,
+  type SidecarAgentModeDomain,
+} from './agentModeDomain.js'
+import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
@@ -312,6 +316,12 @@ export type SidecarSession = {
    * no cwd-configured command catalog).
    */
   remoteSettings: SidecarRemoteSettingsDomain | null
+  /**
+   * Agent-mode / Orchestrator read-seam (P4-8, D2) — the joined worker snapshot
+   * (persisted agent-mode state ∪ live `local_agent` workers) for this session.
+   * Read-only; null in probe mode (no engine app-state store).
+   */
+  agentMode: SidecarAgentModeDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -355,6 +365,7 @@ export async function createSidecarSessionController({
       diagnostics: null,
       extensions: null,
       remoteSettings: null,
+      agentMode: null,
     }
   }
 
@@ -388,5 +399,6 @@ export async function createSidecarSessionController({
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
+    agentMode: createSidecarAgentModeDomain(appStateStore),
   }
 }
