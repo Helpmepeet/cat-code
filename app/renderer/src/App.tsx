@@ -26,6 +26,14 @@ import {
   selectVisiblePermission,
 } from './permissionState.js'
 import {
+  selectNonPlanPermissionQueue,
+  selectPlanReview,
+  type PlanApprovalMode,
+  type PlanReview,
+} from './planState.js'
+import { PlanBar, PlanPanel } from './PlanPanel.js'
+import { useToast } from './ToastHost.js'
+import {
   activeAfterLiveChange,
   createShellState,
   reduceShellState,
@@ -218,6 +226,7 @@ export function App() {
     undefined,
     createPermissionState,
   )
+  const toast = useToast()
   const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>({})
   // P4-0 composer state, per-session-keyed exactly like `promptDrafts` so a
   // background session's collapsed pastes and input history survive a focus
@@ -942,6 +951,17 @@ export function App() {
 	        sessionConnection.status === 'ready'
 	          ? selectPermissionQueue(permissions, sessionId)
 	          : []
+	      // P4-11: PlanBar/PlanPanel own the ExitPlanMode request exclusively
+	      // (TUI parity — it has its own dedicated renderer, not the generic
+	      // per-tool card); the generic queue below is shown minus that request.
+	      const sessionPlanReview =
+	        sessionConnection.status === 'ready'
+	          ? selectPlanReview(permissions, sessionId)
+	          : null
+	      const sessionDisplayQueue =
+	        sessionConnection.status === 'ready'
+	          ? selectNonPlanPermissionQueue(permissions, sessionId)
+	          : []
 	      const descriptor = tabDescriptorsById.get(sessionId)
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
@@ -975,9 +995,43 @@ export function App() {
 	                buildDenyResponse(message),
 	              )
 	            }
+	            onApprovePlan={mode => {
+	              if (!sessionPlanReview) return
+	              try {
+	                getBridge().setPermissionMode(sessionId, mode)
+	                setTransportError(null)
+	              } catch (error) {
+	                setTransportError(errorMessage(error))
+	                return
+	              }
+	              const requestId = sessionPlanReview.request.requestId
+	              const item = sessionPermissionQueue.find(
+	                candidate => candidate.request.requestId === requestId,
+	              )
+	              if (!item) return
+	              respondToPermission(
+	                sessionId,
+	                requestId,
+	                buildAllowResponse(item.request, []),
+	              )
+	              toast(
+	                `Plan approved · ${mode === 'acceptEdits' ? 'auto-accept edits' : 'ask per edit'}`,
+	                { tone: 'success' },
+	              )
+	            }}
+	            onRevisePlan={message => {
+	              if (!sessionPlanReview) return
+	              respondToPermission(
+	                sessionId,
+	                sessionPlanReview.request.requestId,
+	                buildDenyResponse(message),
+	              )
+	              toast('Sent. The agent will revise the plan.', { tone: 'info' })
+	            }}
 	            partialCount={panelPartialCount}
 	            permissionContext={selectPermissionContext(permissions, sessionId)}
-	            permissionQueue={sessionPermissionQueue}
+	            permissionQueue={sessionDisplayQueue}
+	            planReview={sessionPlanReview}
 	            prompt={selectPromptDraft(promptDrafts, sessionId)}
 	            restorePermission={requestId => {
 	              dispatchPermission({
@@ -1236,12 +1290,15 @@ export function SessionPane({
   denyPermission,
   history,
   mentionItems,
+  onApprovePlan,
   onPaste,
   onRemovePaste,
+  onRevisePlan,
   partialCount,
   pastes,
   permissionContext,
   permissionQueue,
+  planReview,
   prompt,
   restorePermission,
   setPermissionMode,
@@ -1323,6 +1380,17 @@ export function SessionPane({
   useEffect(() => {
     setHistoryNav(EMPTY_HISTORY_NAV)
   }, [activeSessionId])
+
+  // PlanPanel open/close (P4-11): renderer-local, resets when the pane
+  // rebinds to a different session and when the review resolves (approve or
+  // deny removes the ExitPlanMode request — there is nothing left to show).
+  const [planPanelOpen, setPlanPanelOpen] = useState(false)
+  useEffect(() => {
+    setPlanPanelOpen(false)
+  }, [activeSessionId])
+  useEffect(() => {
+    if (!planReview) setPlanPanelOpen(false)
+  }, [planReview])
 
   // A large paste collapses to a chip (App holds the full text aside and inserts
   // the `[Pasted text #N]` token); a small paste falls through to the browser's
@@ -1472,6 +1540,17 @@ export function SessionPane({
           ))}
         </div>
       ) : null}
+
+      {planPanelOpen ? null : (
+        <PlanBar onOpen={() => setPlanPanelOpen(true)} review={planReview} />
+      )}
+      <PlanPanel
+        onApprove={onApprovePlan}
+        onClose={() => setPlanPanelOpen(false)}
+        onRevise={onRevisePlan}
+        open={planPanelOpen}
+        review={planReview}
+      />
 
       <form
         aria-keyshortcuts="ArrowUp ArrowDown"
@@ -1771,6 +1850,12 @@ type SessionPaneProps = {
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   permissionQueue: ReturnType<typeof selectPermissionQueue>
+  /** P4-11 — the pending ExitPlanMode review, or `null`; drives PlanBar/PlanPanel. */
+  planReview: PlanReview | null
+  /** Composes `setPermissionMode` + a C1 allow on the plan-review request. */
+  onApprovePlan: (mode: PlanApprovalMode) => void
+  /** Denies the plan-review request with feedback (real "keep planning"). */
+  onRevisePlan: (message: string) => void
   prompt: string
   restorePermission: (requestId: string) => void
   setPermissionMode: (mode: PermissionSetModeMode) => void
