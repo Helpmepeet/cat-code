@@ -1,7 +1,13 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TranscriptRowsView } from './TranscriptView.js'
-import type { NestedTranscriptRow } from './transcriptProjector.js'
+import type {
+  NestedTranscriptRow,
+  ToolCardStatus,
+  ToolDiffProjection,
+  ToolFamily,
+  ToolResultProjection,
+} from './transcriptProjector.js'
 
 // P4-18a helpers: the two producer-id shapes rows carry. `content`-block rows
 // (user/thinking/…) carry messageId/blockIndex/parentToolUseId; frame rows
@@ -48,33 +54,45 @@ test('renders an assistant text row as markdown, not raw source', () => {
   expect(html).not.toContain('**package.json**')
 })
 
-test('renders a tool_use row as a card with tool name and structured input', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView
-      rows={[
-        {
-          id: 's:m:1:toolu_p13_1',
-          sessionId: 's',
-          messageId: 'm',
-          frameId: 'f',
-          blockIndex: 1,
-          parentToolUseId: null,
-          kind: 'tool-use',
-          toolUseId: 'toolu_p13_1',
-          toolName: 'Read',
-          toolFamily: 'read',
-          input: { file_path: '/etc/hosts' },
-          status: 'pending',
-          result: null,
-          children: [],
-        },
-      ]}
-    />,
+// P4-18b tool-card family helper: builds a tool-use nested row. Cards collapse
+// by default (prototype FrameEShell), so header assertions (family WORD + target
+// + state) are the per-family proof; bodies are asserted where they render
+// (errored/imagegen cards expand; a bash card shows a collapsed tail-peek).
+function toolRow(fields: {
+  toolName: string
+  toolFamily: ToolFamily
+  input?: Record<string, unknown>
+  status?: ToolCardStatus
+  result?: ToolResultProjection | null
+  children?: NestedTranscriptRow[]
+}): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: `s:m:0:${fields.toolName}`,
+    kind: 'tool-use',
+    toolUseId: `toolu_${fields.toolName}`,
+    toolName: fields.toolName,
+    toolFamily: fields.toolFamily,
+    input: fields.input ?? {},
+    status: fields.status ?? 'pending',
+    result: fields.result ?? null,
+    children: fields.children ?? [],
+  }
+}
+
+test('P4-18b: a tool card renders the family word, real target, and running state', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Read',
+      toolFamily: 'read',
+      input: { file_path: '/etc/hosts' },
+      status: 'pending',
+    }),
   )
 
-  expect(html).toContain('Read')
-  expect(html).toContain('file_path')
-  expect(html).toContain('/etc/hosts')
+  expect(html).toContain('Read') // family word
+  expect(html).toContain('/etc/hosts') // real target from input.file_path
+  expect(html).toContain('running') // pending → running state word
 })
 
 test('renders an empty-state hint when no rows are projected yet', () => {
@@ -83,77 +101,136 @@ test('renders an empty-state hint when no rows are projected yet', () => {
   expect(html).toContain('No transcript rows yet.')
 })
 
-test('renders a resolved tool card with success status and result content', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView
-      rows={[
-        {
-          id: 's:m:1:toolu_res_1',
-          sessionId: 's',
-          messageId: 'm',
-          frameId: 'f',
-          blockIndex: 1,
-          parentToolUseId: null,
-          kind: 'tool-use',
-          toolUseId: 'toolu_res_1',
-          toolName: 'Bash',
-          toolFamily: 'bash',
-          input: { command: 'echo hi' },
-          status: 'success',
-          result: { isError: false, content: 'hi\n', diff: null },
-          children: [],
-        },
-      ]}
-    />,
+test('P4-18b: a resolved bash card shows the collapsed tail-peek output and done state', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'echo hi' },
+      status: 'success',
+      result: { isError: false, content: 'hi\n', diff: null },
+    }),
   )
 
-  expect(html).toContain('success')
-  expect(html).toContain('hi')
+  expect(html).toContain('done') // success → done state word
+  expect(html).toContain('hi') // tail-peek surfaces output even collapsed
+})
+
+test('P4-18b: a bash card tints an error line and expands failed results', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'run tests' },
+      status: 'error',
+      result: { isError: true, content: 'ERROR: boom\nline two', diff: null },
+    }),
+  )
+
+  expect(html).toContain('failed')
+  expect(html).toContain('ERROR: boom') // errored card is expanded by default
+  expect(html).toContain('text-tone-danger')
+})
+
+test('P4-18b: an edit card renders a dual-gutter diff with +adds/−dels counts', () => {
+  const diff: ToolDiffProjection = {
+    filePath: '/repo/app.ts',
+    hunks: [
+      {
+        oldStart: 10,
+        oldLines: 2,
+        newStart: 10,
+        newLines: 2,
+        lines: [' const a = 1', '-const b = 2', '+const b = 3'],
+      },
+    ],
+  }
+  const html = render(
+    toolRow({
+      toolName: 'Edit',
+      toolFamily: 'edit',
+      input: { file_path: '/repo/app.ts' },
+      status: 'error', // expand so the diff body renders
+      result: { isError: true, content: '', diff },
+    }),
+  )
+
+  expect(html).toContain('/repo/app.ts')
+  expect(html).toContain('+1') // one addition
+  expect(html).toContain('−1') // one deletion
+  expect(html).toContain('const b = 3')
+})
+
+test('P4-18b: an MCP card frames the target as server › tool', () => {
+  const html = render(
+    toolRow({
+      toolName: 'mcp__gpt-agent__spawn',
+      toolFamily: 'mcp',
+      input: {},
+      status: 'pending',
+    }),
+  )
+
+  expect(html).toContain('MCP') // family word
+  expect(html).toContain('gpt-agent › spawn') // server › tool framing
+})
+
+test('P4-18b: each tool family renders its own glyph + word header', () => {
+  const families: Array<{ family: ToolFamily; word: string }> = [
+    { family: 'read', word: 'Read' },
+    { family: 'write', word: 'Write' },
+    { family: 'grep', word: 'Search' },
+    { family: 'web', word: 'Web' },
+    { family: 'notebook', word: 'Notebook' },
+    { family: 'lsp', word: 'LSP' },
+    { family: 'skill', word: 'Skill' },
+    { family: 'imagegen', word: 'Image' },
+    { family: 'other', word: 'Tool' },
+  ]
+  for (const { family, word } of families) {
+    const html = render(
+      toolRow({ toolName: `T_${family}`, toolFamily: family, status: 'pending' }),
+    )
+    expect(html).toContain(word)
+  }
+})
+
+test('P4-18b: a GenerateImage card flags the missing inline-image seam, never mocks a tile', () => {
+  const html = render(
+    toolRow({
+      toolName: 'GenerateImage',
+      toolFamily: 'imagegen',
+      input: { prompt: 'a cat' },
+      status: 'success',
+      result: { isError: false, content: 'saved to /tmp/cat.png', diff: null },
+    }),
+  )
+
+  expect(html).toContain('saved to /tmp/cat.png') // real result text
+  expect(html).toContain('inline image tile pending') // flagged, not mocked
 })
 
 test('D2/C4: renders a subagent tool card NESTED inside its owning agent card, not as a sibling', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView
-      rows={[
-        {
-          id: 's:m:0:toolu_agent_1',
-          sessionId: 's',
-          messageId: 'm',
-          frameId: 'f',
-          blockIndex: 0,
-          parentToolUseId: null,
-          kind: 'tool-use',
-          toolUseId: 'toolu_agent_1',
-          toolName: 'Agent',
-          toolFamily: 'agent',
-          input: { prompt: 'investigate' },
+  const html = render(
+    toolRow({
+      toolName: 'Agent',
+      toolFamily: 'agent',
+      input: { prompt: 'investigate' },
+      status: 'pending',
+      children: [
+        toolRow({
+          toolName: 'Grep',
+          toolFamily: 'grep',
+          input: { pattern: 'foo' },
           status: 'pending',
-          result: null,
-          children: [
-            {
-              id: 's:m:1:toolu_sub_1',
-              sessionId: 's',
-              messageId: 'm2',
-              frameId: 'f2',
-              blockIndex: 0,
-              parentToolUseId: 'toolu_agent_1',
-              kind: 'tool-use',
-              toolUseId: 'toolu_sub_1',
-              toolName: 'Grep',
-              toolFamily: 'grep',
-              input: { pattern: 'foo' },
-              status: 'pending',
-              result: null,
-              children: [],
-            },
-          ],
-        },
-      ]}
-    />,
+        }),
+      ],
+    }),
   )
 
-  expect(html).toContain('Agent')
-  expect(html).toContain('Grep')
+  expect(html).toContain('Agent') // parent family word
+  expect(html).toContain('Search') // nested grep family word
+  expect(html).toContain('foo') // nested target
 })
 
 // ── P4-18a: user turns + core/boundary rows (the functional fix) ────────────
