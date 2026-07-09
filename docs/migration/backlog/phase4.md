@@ -671,7 +671,7 @@ Report back: the real goal + memory shapes (src:line) and read/write scope.
 ```
 ─── PASTE ───
 
-## P4-11 · 🟢 — PlanBar / PlanPanel
+## P4-11 · 🟡 — PlanBar / PlanPanel
 
 ─── PASTE ───
 ```

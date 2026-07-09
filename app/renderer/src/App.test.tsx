@@ -55,12 +55,15 @@ test('the active session pane renders the P2 transcript spine + prompt unchanged
       denyPermission={() => {}}
       history={[]}
       mentionItems={[]}
+      onApprovePlan={() => {}}
       onPaste={() => {}}
       onRemovePaste={() => {}}
+      onRevisePlan={() => {}}
       partialCount={0}
       pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
+      planReview={null}
       prompt=""
       restorePermission={() => {}}
       setPermissionMode={() => {}}
@@ -113,12 +116,15 @@ test('composer form owns the ↑/↓ history key scope', () => {
       denyPermission={() => {}}
       history={['first prompt', 'second prompt']}
       mentionItems={[]}
+      onApprovePlan={() => {}}
       onPaste={() => {}}
       onRemovePaste={() => {}}
+      onRevisePlan={() => {}}
       partialCount={0}
       pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
+      planReview={null}
       prompt=""
       restorePermission={() => {}}
       setPermissionMode={() => {}}

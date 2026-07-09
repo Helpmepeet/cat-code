@@ -1641,68 +1641,68 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 ### 24. PlanPanel.jsx — reopenable plan-mode review drawer (PlanBar + PlanPanel) with file path, editable/checklist steps, requested permissions, and mode-based approve/revise
 
-**Migration target:** deferred → `P4-11` (no `PlanPanel`/`PlanBar` exists in `app/renderer/src`, grep empty) · **Overall:** ⬜ deferred · **Prototype:** `~/catcode_prototype/cat-app/PlanPanel.jsx` (327 lines) · **INVENTORY:** W4 PlanBar/PlanPanel adapt/build-new (S6)
+**Migration target:** `P4-11` — headless-built 2026-07-09 · **Overall:** 🟡 headless (GUI acceptance pending) · **Prototype:** `~/catcode_prototype/cat-app/PlanPanel.jsx` (327 lines) · **INVENTORY:** W4 PlanBar/PlanPanel adapt/build-new (S6). Real "plan" = a pending `ExitPlanMode` permission request (`app/renderer/src/planState.ts` `selectPlanReview`); it disappears the instant it resolves, which is why every row below tagged "no engine backing" is CUT rather than deferred — there is nowhere to derive it from, not merely a not-yet-built read.
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| PlanBar container — blue-tinted bar above composer (reopen affordance) | chrome | ⬜ deferred | `phase4.md P4-11:617` | Source-backed shell: shows only in plan mode; reuse P2-4 permission-mode context. |
-| PlanBar checklist icon (SVG) | chrome | ⬜ deferred | `phase4.md P4-11:617` | Decorative; carries over as-is. |
-| PlanBar title `Plan mode` / `Plan mode · executing` | chrome | ⬜ deferred | `phase4.md P4-11:617` | planning vs executing sub-state is GUI progress framing — flag per `phase4.md:636`. |
-| PlanBar subtitle `N-step plan ready` / `N of M steps done` | chrome | ⬜ deferred | `phase4.md P4-11:617` | Step count from plan file is real; `N of M done` progress is GUI-invented — flag. |
-| PlanBar `View plan` button (opens panel) + hover | control | ⬜ deferred | `phase4.md P4-11:617` | Reopenable-drawer affordance is a GUI addition over the one-shot approve modal. |
-| PlanBar visibility rule (hidden while panel open; hidden if no plan) | ux-state | ⬜ deferred | `PlanPanel.jsx:306` | `open[sessionId]` toggle in demo store; back with real per-session plan-mode state. |
-| Modal overlay backdrop (dim + blur) + click-outside-to-close | chrome | ⬜ deferred | `PlanPanel.jsx:202` | Prototype note: mirrors `/tasks` panel docking; match `WorkspacePanels` right-drawer grammar. |
-| Panel card container (520w drawer, blue-tinted border) | chrome | ⬜ deferred | `phase4.md P4-11:617` | No inline `style={{}}` allowed — port to tokens/CSS. |
-| Scrollable steps body (`no-scrollbar` overflow-y region) | chrome | ⬜ deferred | `PlanPanel.jsx:232` | Hidden-scrollbar scroll container between header and footer. |
-| Header checklist icon (SVG) | chrome | ⬜ deferred | `phase4.md P4-11:617` | Decorative. |
-| Header `Plan` title | chrome | ⬜ deferred | `phase4.md P4-11:617` | Static label. |
-| Header status pill `planning` / `executing · N/M` | chrome | ⬜ deferred | `attachments.ts` mode==='plan' gate | planning/executing source-backed via permission mode; `· N/M` progress fragment invented — flag. |
-| Header close (×) button + hover, title `Close (Esc)` | control | ⬜ deferred | `PlanPanel.jsx:216` | Standard dismiss. |
-| `plan.file` path (green mono code) | data-binding | ⬜ deferred | `src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts` (planFilePath) | SOURCE-BACKED — plan is a real file injected on plan exit. Build faithfully. |
-| Edit / `Done editing` toggle (planning only) | control | ⬜ deferred | `PlanPanel.jsx:222` | GUI-INVENTED: upstream you revise by telling the agent to rewrite the FILE. Flag; P4-11 adapts vs drops. |
-| `plan.objective` summary line (optional) | data-binding | ⬜ deferred | `PlanPanel.jsx:228` | Derivable from plan file content, not a discrete engine field — flag if fabricated. |
-| Body section label `N steps` / `Steps` | chrome | ⬜ deferred | `phase4.md P4-11:617` | Step count derived from plan-file parse. |
-| StepRow read/checklist row (per-step) | subcomponent | ⬜ deferred | `PlanPanel.jsx:99` | Steps parsed from plan file are real; per-step live state is invented (StepDot rows). |
-| StepDot — pending (hollow ring) | ux-state | ⬜ deferred | `PlanPanel.jsx:54` | MOCK per-step execution state; `phase4.md:636` says flag, don't fabricate progress. |
-| StepDot — running (pulse dot) | ux-state | ⬜ deferred | `PlanPanel.jsx:52` | GUI-INVENTED live-execution state — flag. |
-| StepDot — done (green check, strikethrough) | ux-state | ⬜ deferred | `PlanPanel.jsx:53` | GUI-INVENTED progress state — flag. |
-| StepDot — blocked (amber dot) | ux-state | ⬜ deferred | `PlanPanel.jsx:47` | GUI-INVENTED progress state — flag. |
-| Step text (strikethrough when done) | data-binding | ⬜ deferred | `PlanPanel.jsx:121` | Text real (from file); strikethrough depends on invented done state — flag styling trigger. |
-| Per-step files chips (`step.files`) | data-binding | ⬜ deferred | `PlanPanel.jsx:124` | MOCK field — engine has no per-step file mapping. Flag; P4-11 may derive from allowedPrompts. |
-| `view diff →` button per step | control | ⬜ deferred | `PlanPanel.jsx:125` (toast-stub) | GUI-INVENTED, toast-only; real diff view is out of this surface's scope. |
-| Per-step state label (running/done/blocked, right-aligned) | chrome | ⬜ deferred | `PlanPanel.jsx:129` | GUI-INVENTED progress label — flag. |
-| StepRow EDITING — auto-growing textarea | control | ⬜ deferred | `PlanPanel.jsx:104` | GUI-INVENTED inline step editing (no engine structured-edit write-path) — flag. |
-| Step `Move up` ▲ (disabled when isFirst) | control | ⬜ deferred | `PlanPanel.jsx:108` | GUI-INVENTED reorder — flag. |
-| Step `Move down` ▼ (disabled when isLast) | control | ⬜ deferred | `PlanPanel.jsx:109` | GUI-INVENTED reorder — flag. |
-| Step `Remove` × (red) | control | ⬜ deferred | `PlanPanel.jsx:111` | GUI-INVENTED step deletion — flag. |
-| Step number `n.` (mono, blue) | chrome | ⬜ deferred | `PlanPanel.jsx:103` | Ordinal shown only in edit mode. |
-| `+ Add step` button (editing, planning only) | control | ⬜ deferred | `PlanPanel.jsx:243` | GUI-INVENTED — no engine append-step path. Flag. |
-| allowedPrompts header `Plan requests permission to` | chrome | ⬜ deferred | `ExitPlanModeV2Tool.ts` (allowedPrompts) | SOURCE-BACKED section; `prompt.ts` marks it Ant-only in the external stub — confirm availability in build. |
-| allowedPrompts chips (tool + prompt pairs) | data-binding | ⬜ deferred | `ExitPlanModeV2Tool.ts` (allowedPrompts) | SOURCE-BACKED — render the real requested permissions; ties into P2-4 permission context. |
-| Footer EXECUTING — pulse dot + `Executing: N of M steps done` | ux-state | ⬜ deferred | `PlanPanel.jsx:268` | GUI-INVENTED progress line — the exact chrome `phase4.md:636` says flag, don't fabricate. |
-| Footer EXECUTING — approvalMode label (right-aligned) | data-binding | ⬜ deferred | `ExitPlanModeV2Tool.ts` (approval modes) | SOURCE-BACKED — chosen approval mode is a real permission-mode transition. |
-| Footer REVISING — revision textarea (`Tell the agent what to change…`) | control | ⬜ deferred | `PlanPanel.jsx:273` (toast-stub) | GUI-INVENTED structured-revise (real revise = type in chat). Flag; P4-11 routes-to-composer vs drops. |
-| Footer REVISING — `Send revision` (disabled when empty) | control | ⬜ deferred | `PlanPanel.jsx:277` (stub) | Part of invented revise flow — flag. |
-| Footer REVISING — `Cancel` | control | ⬜ deferred | `PlanPanel.jsx:278` | Dismisses revise box. |
-| Footer REVISING — `⌘↵ send · esc cancel` hint + keybinds | shortcut | ⬜ deferred | `PlanPanel.jsx:274` | Cmd/Ctrl+Enter sends, Esc cancels; port with revise flow. |
-| Footer PLANNING — `Approve plan` button + caret rotate | control | ⬜ deferred | `PlanPanel.jsx:287` | SOURCE-BACKED action (ExitPlanMode approval). Opens the mode menu. |
-| ApproveMenu popover (mode picker) | subcomponent | ⬜ deferred | `ExitPlanModeV2Tool.ts` (mode set) | SOURCE-BACKED — reuse P2-4 permission-mode transition, don't invent a parallel one. |
-| ApproveMenu option — `Approve & auto-accept edits` (acceptEdits) | control | ⬜ deferred | `getNextPermissionMode` acceptEdits | SOURCE-BACKED. |
-| ApproveMenu option — `Approve & bypass permissions` (bypassPermissions) | control | ⬜ deferred | `getNextPermissionMode` bypassPermissions | SOURCE-BACKED; P2-4 rejected bypass at the permission boundary — P4-11 must reconcile offering it here. |
-| ApproveMenu option — `Approve & ask per edit` (default) | control | ⬜ deferred | `ExitPlanModeV2Tool.ts` (restore prePlanMode/default) | SOURCE-BACKED. |
-| ApproveMenu — MISSING `keep-planning` option | correctness | ➕ real-added | `src/components/permissions/ExitPlanModePermissionRequest/ExitPlanModePermissionRequest.tsx` ("No, keep planning") | Real approval set has a 4th keep-planning/reject outcome the prototype's 3-item menu drops; P4-11 should add it. |
-| ApproveMenu — number badges 1/2/3 + cursor highlight | chrome | ⬜ deferred | `PlanPanel.jsx:87` | Selected-state styling for the digit/arrow-driveable menu. |
-| ApproveMenu — keyboard nav (↑/↓, Enter, 1-3, Esc, outside-click) | shortcut | ⬜ deferred | `PlanPanel.jsx:69` | Arrow+Enter driveable, digits pick a mode, Esc/outside-click close. |
-| Footer PLANNING — `Revise…` button | control | ⬜ deferred | `PlanPanel.jsx:291` | Opens invented revise box — flag with the revise flow. |
-| Footer PLANNING — `read-only until you approve` hint | chrome | ⬜ deferred | `PlanPanel.jsx:294` | Communicates plan-mode read-only gating — source-backed (mode==='plan' blocks edits). |
-| Approve toast `Plan approved · <mode>` | ux-state | ⬜ deferred | `ToastHost.tsx` (P4-1) | Success feedback; wire to real ToastHost + real mode transition result. |
-| Revision toast `Sent. The agent will revise the plan.` | ux-state | ⬜ deferred | `PlanPanel.jsx:198` (stub) | Part of invented revise flow — flag. |
-| Session-keyed plan store (per-session scoping, no cross-session leak) | data-binding | ⬜ deferred | `PlanPanel.jsx:24` (window.PLAN_DEMO) | Back with real per-session plan file + permissionMode; scope to owning session. |
-| Focus lifecycle — focus into panel on open, restore on close | ux-state | ⬜ deferred | `PlanPanel.jsx:151` | Accessibility; carry over. |
-| Esc closes panel (unless sub-surface owns it) | shortcut | ⬜ deferred | `PlanPanel.jsx:162` | Esc guarded so approve menu / revise box own it first. |
-| Tab focus-trap within panel | shortcut | ⬜ deferred | `PlanPanel.jsx:163` | Cyclic Tab/Shift-Tab within the modal. |
-| Empty state — no plan / panel closed → renders null | ux-state | ⬜ deferred | `PlanPanel.jsx:175` | Both PlanBar and PlanPanel hide entirely when there is no plan. |
-| Status transition planning → executing (on approve) | ux-state | ⬜ deferred | `ExitPlanModeV2Tool.ts` (plan exit restores prePlanMode) | SOURCE-BACKED transition; the persistent executing drawer afterward is GUI progress framing — flag. |
+| PlanBar container — blue-tinted bar above composer (reopen affordance) | chrome | ✅ adapted | `app/renderer/src/PlanPanel.tsx:51-73` | Built with `info` tone tokens (P0-2 accent, not a literal blue) instead of the prototype's hard-coded hex; shows only while a plan review is pending. |
+| PlanBar checklist icon (SVG) | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:19-33,56` | `PlanIcon`, shared with the panel header. |
+| PlanBar title `Plan mode` / `Plan mode · executing` | chrome | ✅ adapted / ✂️ cut | `app/renderer/src/PlanPanel.tsx:58` | Only `Plan mode` built; the `· executing` sub-state is CUT — no engine per-step/execution state exists once the request resolves (phase4.md:636). |
+| PlanBar subtitle `N-step plan ready` / `N of M steps done` | chrome | ✅ adapted / ✂️ cut | `app/renderer/src/PlanPanel.tsx:59-63`, `planState.ts:116-124` (`parsePlanSteps`) | `N-step plan ready for review` built from a REAL markdown-list parse of the plan text; `N of M steps done` CUT — no per-step done state. |
+| PlanBar `View plan` button (opens panel) + hover | control | ✅ built | `app/renderer/src/PlanPanel.tsx:65-71` | Hover via the shared `hoverTint` tone class (Tailwind), no inline style. |
+| PlanBar visibility rule (hidden while panel open; hidden if no plan) | ux-state | ✅ built | `app/renderer/src/App.tsx:1405-1407` | `sessionPlanReview` gates render; App conditionally omits `<PlanBar>` while `planPanelOpen`. |
+| Modal overlay backdrop (dim + blur) + click-outside-to-close | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:142-146` | `bg-black/60 backdrop-blur-sm`, `onClick={onClose}` with `stopPropagation` on the inner card. |
+| Panel card container (520w drawer, blue-tinted border) | chrome | ✅ adapted | `app/renderer/src/PlanPanel.tsx:147-154` | `w-[520px]`; border uses `info` tone token, not a literal blue hex. |
+| Scrollable steps body (`no-scrollbar` overflow-y region) | chrome | ✅ adapted | `app/renderer/src/PlanPanel.tsx:181` | `overflow-y-auto` built; the prototype's hidden-scrollbar utility class has no equivalent in this codebase's CSS — minor, non-blocking divergence. |
+| Header checklist icon (SVG) | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:157` | |
+| Header `Plan` title | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:158` | |
+| Header status pill `planning` / `executing · N/M` | chrome | ✅ adapted / ✂️ cut | `app/renderer/src/PlanPanel.tsx:159-163` | Only `planning` built (source-backed: the request is pending); `executing · N/M` CUT — no post-resolve state to read. |
+| Header close (×) button + hover, title `Close (Esc)` | control | ✅ built | `app/renderer/src/PlanPanel.tsx:164-172` | |
+| `plan.file` path (green mono code) | data-binding | ✅ built | `app/renderer/src/PlanPanel.tsx:174-178`, `planState.ts:41,68` (`planFilePath`) | SOURCE-BACKED — `ExitPlanModeV2Tool.ts` `_sdkInputSchema` `planFilePath` (:103-106), narrowed with zero `as`-cast leakage. |
+| Edit / `Done editing` toggle (planning only) | control | ✂️ cut | — | GUI-INVENTED: upstream you revise by telling the agent to rewrite the FILE (no engine structured-edit write-path). The real revise path is built instead (see Footer REVISING rows below), wired to a real deny+feedback action. |
+| `plan.objective` summary line (optional) | data-binding | ✂️ cut | — | Not a discrete engine field; deriving one from free-text would be an unreliable heuristic, not a faithful read. |
+| Body section label `N steps` / `Steps` | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:182-186` | Real derived count via `parsePlanSteps` (`planState.ts:116-124`); falls back to the plain label `Plan` when the text has no list markers. |
+| StepRow read/checklist row (per-step) | subcomponent | ✅ adapted | `app/renderer/src/PlanPanel.tsx:187-202` | Real step text rendered read-only, ordinal-numbered; no per-row live state (no `StepDot`). |
+| StepDot — pending (hollow ring) | ux-state | ✂️ cut | — | No per-step engine state exists to back any StepDot variant. |
+| StepDot — running (pulse dot) | ux-state | ✂️ cut | — | Same as above. |
+| StepDot — done (green check, strikethrough) | ux-state | ✂️ cut | — | Same as above. |
+| StepDot — blocked (amber dot) | ux-state | ✂️ cut | — | Same as above. |
+| Step text (strikethrough when done) | data-binding | ✅ adapted | `app/renderer/src/PlanPanel.tsx:199` | Text is real (plain, no strikethrough — no done-state to trigger it). |
+| Per-step files chips (`step.files`) | data-binding | ✂️ cut | — | Mock field in the prototype; the engine has no per-step file mapping. |
+| `view diff →` button per step | control | ✂️ cut | — | Toast-stub only in the prototype; no real diff-view backing, out of this surface's scope. |
+| Per-step state label (running/done/blocked, right-aligned) | chrome | ✂️ cut | — | Tied to per-step state, which is cut. |
+| StepRow EDITING — auto-growing textarea | control | ✂️ cut | — | No engine structured-edit write-path. |
+| Step `Move up` ▲ (disabled when isFirst) | control | ✂️ cut | — | Same — no reorder write-path. |
+| Step `Move down` ▼ (disabled when isLast) | control | ✂️ cut | — | Same. |
+| Step `Remove` × (red) | control | ✂️ cut | — | Same — no delete-step write-path. |
+| Step number `n.` (mono, blue) | chrome | ➕ real-added | `app/renderer/src/PlanPanel.tsx:196-198` | Shown in the (read-only) row always, not gated behind an edit mode that doesn't exist here — a harmless superset of the prototype's edit-only numbering. |
+| `+ Add step` button (editing, planning only) | control | ✂️ cut | — | No engine append-step path. |
+| allowedPrompts header `Plan requests permission to` | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:209-213` | |
+| allowedPrompts chips (tool + prompt pairs) | data-binding | ✅ built | `app/renderer/src/PlanPanel.tsx:214-226`, `planState.ts:56-70` (`narrowAllowedPrompt`) | SOURCE-BACKED — `ExitPlanModeV2Tool.ts` `inputSchema` `allowedPrompts` (:81-86), runtime-narrowed (malformed entries dropped, never crash), ties into the same request P2-4's permission context reads. |
+| Footer EXECUTING — pulse dot + `Executing: N of M steps done` | ux-state | ✂️ cut | — | GUI-invented progress line, phase4.md:636 says flag not fabricate; no engine backing once the request resolves. |
+| Footer EXECUTING — approvalMode label (right-aligned) | data-binding | ✂️ cut | — | Tied to the cut executing sub-state — the resolved request (and its chosen mode) is gone from the queue by the time this would render. |
+| Footer REVISING — revision textarea (`Tell the agent what to change…`) | control | ✅ real-backed | `app/renderer/src/PlanPanel.tsx:234-251` | Upgraded from the prototype's toast-stub: wired to a REAL action (see next rows) — not GUI-invented once implemented this way. |
+| Footer REVISING — `Send revision` (disabled when empty) | control | ✅ real-backed | `app/renderer/src/PlanPanel.tsx:134-140,253-260`, `App.tsx:946-953` | `sendRevision()` → `onRevise(message)` → `denyPermission(requestId, message)` — the TUI's real "No" + feedback path (mode stays `plan`; this **is** the real "keep planning" outcome). |
+| Footer REVISING — `Cancel` | control | ✅ built | `app/renderer/src/PlanPanel.tsx:261-270` | |
+| Footer REVISING — `⌘↵ send · esc cancel` hint + keybinds | shortcut | ✅ built | `app/renderer/src/PlanPanel.tsx:238-247,271-273` | Cmd/Ctrl+Enter sends, Esc cancels the revise box (Esc does not also close the panel while revising). |
+| Footer PLANNING — `Approve plan` button + caret rotate | control | ✅ built | `app/renderer/src/PlanPanel.tsx:281-291` | SOURCE-BACKED action (ExitPlanMode approval); opens `ApproveMenu`. |
+| ApproveMenu popover (mode picker) | subcomponent | ✅ adapted | `app/renderer/src/PlanPanel.tsx:310-391` | Reuses P2-4's permission-mode transition (`app/renderer/src/App.tsx:922-944` composes `getBridge().setPermissionMode` + a C1 allow per decisions/PERMISSION-BOUNDARY.md §3), no parallel mechanism invented. |
+| ApproveMenu option — `Approve & auto-accept edits` (acceptEdits) | control | ✅ built | `app/renderer/src/planState.ts:141-149` (`PLAN_APPROVE_OPTIONS`) | SOURCE-BACKED, wire-representable per C2. |
+| ApproveMenu option — `Approve & bypass permissions` (bypassPermissions) | control | ✂️ cut | `decisions/PERMISSION-BOUNDARY.md` §3 C2 | REJECTED at the sidecar always (escalates beyond T5b) — deliberately NOT offered as a dead affordance, per the reconciliation the ledger note asked for. If bypass is ever wanted, it needs a trusted-surface grant (a separate future decision), not this menu. |
+| ApproveMenu option — `Approve & ask per edit` (default) | control | ✅ built | `app/renderer/src/planState.ts:141-149` | SOURCE-BACKED. |
+| ApproveMenu — MISSING `keep-planning` option | correctness | ➕ real-added | `app/renderer/src/PlanPanel.tsx:292-298` (Revise…) → `App.tsx:946-953` (deny+feedback) | The real 4th keep-planning/reject outcome is the `Revise…` footer button, now wired to a real deny (not a separate 4th ApproveMenu entry — folded into the existing Revise affordance since both resolve to the same real action). |
+| ApproveMenu — number badges 1/2/3 + cursor highlight | chrome | ✅ adapted | `app/renderer/src/PlanPanel.tsx:361-380` | Only 1/2 badges (two real options, no bypass badge 3). |
+| ApproveMenu — keyboard nav (↑/↓, Enter, 1-3, Esc, outside-click) | shortcut | ✅ adapted | `app/renderer/src/PlanPanel.tsx:320-352` | ↑/↓/Enter/Esc/outside-click built; digit range is `1-2` (two real options, not 1-3). |
+| Footer PLANNING — `Revise…` button | control | ✅ real-backed | `app/renderer/src/PlanPanel.tsx:292-298` | Opens the revision box wired to the real deny+feedback action (see above) — not an invented dead-end. |
+| Footer PLANNING — `read-only until you approve` hint | chrome | ✅ built | `app/renderer/src/PlanPanel.tsx:299-301` | Source-backed (mode `plan` blocks edits). |
+| Approve toast `Plan approved · <mode>` | ux-state | ✅ built | `app/renderer/src/App.tsx:938-941` | Real `ToastHost` (P4-1) `useToast()`, fired after the real allow+setMode composition succeeds. |
+| Revision toast `Sent. The agent will revise the plan.` | ux-state | ✅ built | `app/renderer/src/App.tsx:952` | Real `ToastHost`, fired after the real deny dispatch. |
+| Session-keyed plan store (per-session scoping, no cross-session leak) | data-binding | ✅ built | `app/renderer/src/planState.ts:80-95` (`selectPlanReview`), `App.tsx:874-884` | No store at all — derived per-session, per-render from the SAME session-keyed `permissionState.ts` the P2-4 domain already scopes; there is no cross-session state to leak. |
+| Focus lifecycle — focus into panel on open, restore on close | ux-state | ✅ built | `app/renderer/src/PlanPanel.tsx:99-110` | Focuses the card on open, restores the previously-focused element on close/unmount. |
+| Esc closes panel (unless sub-surface owns it) | shortcut | ✅ built | `app/renderer/src/PlanPanel.tsx:112-122` | Guarded so the ApproveMenu / revise box own Esc first. |
+| Tab focus-trap within panel | shortcut | ⬜ deferred(owner: next GUI-driven pass) | — | Not built — no DOM-interaction test harness exists in this suite to verify a hand-rolled cyclic trap blind; the modal backdrop + Esc-close cover the common case. Flagged rather than shipped untested. |
+| Empty state — no plan / panel closed → renders null | ux-state | ✅ built | `app/renderer/src/PlanPanel.tsx:47,124` | `PlanBar`/`PlanPanel` both return `null` with no review or when closed. |
+| Status transition planning → executing (on approve) | ux-state | ✅ adapted / ✂️ cut | `app/renderer/src/App.tsx:922-944` | The real mode transition fires (setMode + allow); the persistent post-approval "executing" drawer itself is CUT (see PlanBar/header/footer executing rows above) — the component simply closes once the request resolves. |
 
 ### 25. SettingsExtensions.jsx — Settings → Extensions: MCP / Plugins / Skills / Hooks panels + the MCP ElicitationDialog modal
 
@@ -2451,7 +2451,7 @@ the fraction of in-scope prototype elements already built or adapted. Phase-4 ga
 | 21 | TasksPage | 0 | 4 | 4 | 33 | 3 | 0 | 44 | 11% |
 | 22 | GoalsPage | 11 | 21 | 6 | 26 | 4 | 0 | 68 | 55% |
 | 23 | MemoryPage | 9 | 11 | 7 | 5 | 7 | 2 | 41 | 74% |
-| 24 | PlanPanel | 0 | 0 | 1 | 57 | 0 | 0 | 58 | 0% |
+| 24 | PlanPanel | 22 | 16 | 2 | 1 | 17 | 0 | 58 | 98% |
 | 25 | SettingsExtensions | 0 | 0 | 0 | 76 | 2 | 0 | 78 | 0% |
 | 26 | RemoteSettings | 0 | 4 | 0 | 26 | 14 | 0 | 44 | 13% |
 | 27 | Startup | 0 | 2 | 1 | 41 | 12 | 0 | 56 | 5% |
