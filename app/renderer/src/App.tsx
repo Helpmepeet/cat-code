@@ -178,6 +178,7 @@ import { TasksDialog } from './TasksDialog.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import { SettingsShell } from './SettingsShell.js'
+import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
   AccountVerbMessage,
   CatCodeBridge,
@@ -585,6 +586,23 @@ export function App() {
     (verb: RemoteVerbMessage) => {
       if (!activeSessionId) return
       getBridge().remoteSettingsVerb(activeSessionId, verb)
+    },
+    [activeSessionId],
+  )
+
+  const sendSettingWrite = useCallback(
+    (input: SettingWriteInput) => {
+      if (!activeSessionId) return
+      // P4-19 — the renderer names {source,key,value}; the sidecar re-validates
+      // and applies it under the cross-process settings lock. requestId is a
+      // UX correlation field only (the sidecar bounds it structurally).
+      getBridge().settingsVerb(activeSessionId, {
+        type: 'settings.setValue',
+        requestId: crypto.randomUUID(),
+        source: input.source,
+        key: input.key,
+        value: input.value,
+      })
     },
     [activeSessionId],
   )
@@ -1160,6 +1178,7 @@ export function App() {
             initialCategory="agents"
             memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
             onRemoteVerb={sendRemoteSettingsVerb}
+            onSettingWrite={sendSettingWrite}
             remoteLastResult={remoteSettings.lastResult}
             remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
             snapshot={selectSettingsSnapshot(settings, activeSessionId)}

@@ -30,6 +30,8 @@ import { AgentsPage } from './AgentsPage.js'
 import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
+import { SettingsPane } from './SettingsEditors.js'
+import type { SettingWriteInput } from './SettingsEditors.js'
 import {
   HooksPanel,
   McpPanel,
@@ -150,6 +152,7 @@ export function SettingsShell({
   remoteSnapshot,
   remoteLastResult,
   onRemoteVerb,
+  onSettingWrite,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
@@ -165,6 +168,8 @@ export function SettingsShell({
   remoteSnapshot?: RemoteSettingsSnapshot | null
   remoteLastResult?: RemoteSettingsResultFrame | null
   onRemoteVerb?: (verb: RemoteVerbMessage) => void
+  /** P4-19 — send one editable-setting write to the sidecar. */
+  onSettingWrite?: (input: SettingWriteInput) => void
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -255,6 +260,7 @@ export function SettingsShell({
             extensionsSnapshot={extensionsSnapshot ?? null}
             memorySnapshot={memorySnapshot ?? null}
             onRemoteVerb={onRemoteVerb ?? (() => {})}
+            onSettingWrite={onSettingWrite ?? (() => {})}
             remoteLastResult={remoteLastResult ?? null}
             remoteSnapshot={remoteSnapshot ?? null}
             snapshot={snapshot}
@@ -275,6 +281,7 @@ function CategoryBody({
   extensionsSnapshot,
   memorySnapshot,
   onRemoteVerb,
+  onSettingWrite,
   remoteLastResult,
   remoteSnapshot,
   snapshot,
@@ -288,6 +295,7 @@ function CategoryBody({
   extensionsSnapshot: ExtensionsSnapshot | null
   memorySnapshot: MemorySnapshot | null
   onRemoteVerb: (verb: RemoteVerbMessage) => void
+  onSettingWrite: (input: SettingWriteInput) => void
   remoteLastResult: RemoteSettingsResultFrame | null
   remoteSnapshot: RemoteSettingsSnapshot | null
   snapshot: SettingsSnapshot | null
@@ -337,15 +345,59 @@ function CategoryBody({
     return <DiagnosticsSection settingsSnapshot={snapshot} snapshot={diagnosticsSnapshot} />
   }
   if (category === 'general') {
-    // The default view: real read-seam data (layer summary + resolution legend)
-    // above the honest stub for the value editors this session doesn't ship.
+    // Real read-seam data (layer summary + resolution legend) above the live
+    // General value-editors (P4-19).
     return (
       <>
         <PaneSection title="Configuration sources">
           <LayerSummary snapshot={snapshot} />
           <ResolutionOrderLegend />
         </PaneSection>
-        <CategoryStub category={category} />
+        <SettingsPane
+          onWrite={onSettingWrite}
+          pane="general"
+          snapshot={snapshot}
+          title="General"
+        />
+      </>
+    )
+  }
+  if (category === 'model') {
+    return (
+      <>
+        <SettingsPane
+          onWrite={onSettingWrite}
+          pane="model"
+          snapshot={snapshot}
+          title="Model & inference"
+        />
+        <DeferredEditorsNote note="Default-model select is deferred (needs the model-list read-seam)." />
+      </>
+    )
+  }
+  if (category === 'privacy') {
+    return (
+      <>
+        <SettingsPane
+          onWrite={onSettingWrite}
+          pane="privacy"
+          snapshot={snapshot}
+          title="Privacy"
+        />
+        <DeferredEditorsNote note="Share-session-data and crash-reporting have no engine setting today; deferred." />
+      </>
+    )
+  }
+  if (category === 'theme') {
+    return (
+      <>
+        <SettingsPane
+          onWrite={onSettingWrite}
+          pane="theme"
+          snapshot={snapshot}
+          title="Theme & output"
+        />
+        <DeferredEditorsNote note="Accent swatch, code theme/font, and output-style select are deferred (need theming / available-styles seams)." />
       </>
     )
   }
@@ -432,6 +484,13 @@ function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
         )}
       </PaneSection>
     </>
+  )
+}
+
+/** An honest footnote naming the value-editors still deferred for a pane. */
+function DeferredEditorsNote({ note }: { note: string }) {
+  return (
+    <p className="mt-4 text-[11.5px] leading-relaxed text-text-subtle">{note}</p>
   )
 }
 

@@ -17,6 +17,7 @@ import type {
   SettingsSnapshot,
   SessionId,
 } from '../../shared/protocol.js'
+import type { EditableSettingValue } from '../../shared/settingsEditable.js'
 
 export type SettingsState = {
   /** Latest snapshot per session; null once seen-then-reset (lifecycle). */
@@ -78,6 +79,26 @@ export function selectSettingField(
 ): SettingResolution | null {
   if (!snapshot) return null
   return snapshot.resolved.find(resolution => resolution.key === key) ?? null
+}
+
+/**
+ * P4-19 — the current effective VALUE of an editable key from the snapshot's
+ * bounded `editableValues` allowlist, or null when the key is unset at every
+ * layer (the value editor then falls back to the built-in default in
+ * `EDITABLE_SETTINGS`). Only the closed non-secret allowlist ever carries a
+ * value; every other key stays values-free.
+ */
+export function selectEditableValue(
+  snapshot: SettingsSnapshot | null,
+  key: string,
+): EditableSettingValue | null {
+  if (!snapshot) return null
+  // Tolerant of a snapshot that predates / omits the field (display = degrade
+  // gracefully): fall back to no value rather than throwing.
+  return (
+    (snapshot.editableValues ?? []).find(entry => entry.key === key)?.value ??
+    null
+  )
 }
 
 /**

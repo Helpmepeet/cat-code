@@ -46,16 +46,45 @@ import {
   getPolicySettingsOrigin,
   getSettingsFilePathForSource,
   getSettingsForSource,
+  updateSettingsForSource,
 } from '../../src/utils/settings/settings.js'
-import type { SettingSourceId, SettingsSnapshot } from '../shared/protocol.js'
+import type { EditableSettingSource } from '../shared/settingsEditable.js'
+import {
+  EDITABLE_SETTING_KEYS,
+  isEditableSettingSource,
+  validateEditableSettingValue,
+} from '../shared/settingsEditable.js'
+import type {
+  SettingSourceId,
+  SettingsSnapshot,
+  SettingsVerbMessage,
+} from '../shared/protocol.js'
+
+/** The outcome of one settings write verb. `changed` tells the server whether
+ * to re-broadcast the (now-updated) snapshot. */
+export type SettingsWriteResult = {
+  ok: boolean
+  message: string
+  changed: boolean
+}
 
 export type SidecarSettingsDomain = {
   /**
-   * The spawn-time settings source/precedence model — a pure read of the value
-   * captured at construction (no disk I/O on the attach path). null if the
+   * The current settings source/precedence + editable-values model — a pure read
+   * of the captured value (no disk I/O on the attach path). Initialized at spawn
+   * and refreshed in place after a successful `runVerb` write. null if the
    * spawn-time read failed.
    */
   getSnapshot(): SettingsSnapshot | null
+  /**
+   * Apply one editable-setting write through the engine's
+   * `SettingsUpdater`-under-lock form and refresh the cached snapshot. This is
+   * the LAST line before disk — it re-validates the (already sidecar-validated)
+   * verb against the same allowlist as defense-in-depth, and never touches a
+   * non-editable source. The engine writer is the cross-process single writer
+   * (lockfile + fresh under-lock read), so this cannot lose a concurrent update.
+   */
+  runVerb(verb: SettingsVerbMessage): SettingsWriteResult
 }
 
 /**
@@ -98,6 +127,10 @@ export function buildSettingsSnapshot(
   }))
 
   const resolved: SettingsSnapshot['resolved'] = []
+  // editableValues carries VALUES — but ONLY for the closed non-secret allowlist
+  // (EDITABLE_SETTING_KEYS); every other key stays values-free. The winning
+  // (highest-precedence) layer's value is captured in the same high→low walk.
+  const editableValues: SettingsSnapshot['editableValues'] = []
   const seen = new Set<string>()
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i]!
@@ -110,11 +143,22 @@ export function buildSettingsSnapshot(
         managed: layer.source === 'policySettings',
         editable: !READ_ONLY_SOURCES.has(layer.source),
       })
+      if (EDITABLE_SETTING_KEYS.has(key)) {
+        // Only emit a value that matches the key's declared scalar control —
+        // never an unexpected shape (belt-and-suspenders against a hand-edited
+        // file; the read already schema-validated it, and this keeps the frame
+        // JSON-safe + secretGuard-clean by construction).
+        const validation = validateEditableSettingValue(key, layer.settings[key])
+        if (validation.ok) {
+          editableValues.push({ key, value: validation.value, source: layer.source })
+        }
+      }
     }
   }
   resolved.sort((a, b) => a.key.localeCompare(b.key))
+  editableValues.sort((a, b) => a.key.localeCompare(b.key))
 
-  return { layers: snapshotLayers, resolved, policyOrigin }
+  return { layers: snapshotLayers, resolved, policyOrigin, editableValues }
 }
 
 /**
@@ -135,13 +179,57 @@ export function createSidecarSettingsDomain(): SidecarSettingsDomain {
   // Read ONCE at spawn (see the module header for why: the attach path must do no
   // disk I/O and must not reset the engine's global settings cache). getSnapshot()
   // then just returns the captured value — a pure read that cannot throw or
-  // strand an attaching connection (review MED#1 + MED#2).
-  const snapshot = readSettingsSnapshotOnce()
+  // strand an attaching connection (review MED#1 + MED#2). A successful runVerb()
+  // write refreshes this in place (the engine writer already reset the cache, so
+  // the re-read reflects the just-written file).
+  let snapshot = readSettingsSnapshotOnce()
   return {
     getSnapshot() {
       return snapshot
     },
+    runVerb(verb: SettingsVerbMessage): SettingsWriteResult {
+      const result = applySettingsVerb(verb)
+      if (result.changed) {
+        snapshot = readSettingsSnapshotOnce()
+      }
+      return result
+    },
   }
+}
+
+/**
+ * Defense-in-depth re-validation + the engine write. The sidecar SERVER is the
+ * primary trust boundary (schema + strict-key allowlist + per-key validator);
+ * this repeats the source/key/value checks as the last gate before disk, so the
+ * engine-touching path can never write a non-editable source, an unknown key, or
+ * a mistyped value even if the boundary were bypassed.
+ */
+function applySettingsVerb(verb: SettingsVerbMessage): SettingsWriteResult {
+  if (!isEditableSettingSource(verb.source)) {
+    return { ok: false, message: `not an editable settings source`, changed: false }
+  }
+  if (!EDITABLE_SETTING_KEYS.has(verb.key)) {
+    return { ok: false, message: `not an editable setting: ${verb.key}`, changed: false }
+  }
+  const validation = validateEditableSettingValue(verb.key, verb.value)
+  if (!validation.ok) {
+    return { ok: false, message: validation.error, changed: false }
+  }
+  const value = validation.value
+  const source: EditableSettingSource = verb.source
+  // The SettingsUpdater FUNCTION form (settings.ts:461/480): the engine invokes
+  // this under the cross-process lock with the FRESH on-disk settings, and writes
+  // the return VERBATIM (no merge). Computing `{ ...current, [key]: value }` from
+  // that under-lock `current` is the exact P3-5a/DR-2 no-lost-update fix — a value
+  // computed from a pre-lock read would clobber a concurrent write.
+  const { error } = updateSettingsForSource(source, current => ({
+    ...(current ?? {}),
+    [verb.key]: value,
+  }))
+  if (error) {
+    return { ok: false, message: error.message, changed: false }
+  }
+  return { ok: true, message: `Updated ${verb.key}.`, changed: true }
 }
 
 /**

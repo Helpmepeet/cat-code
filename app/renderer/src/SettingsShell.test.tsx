@@ -15,6 +15,7 @@ const SNAPSHOT: SettingsSnapshot = {
     { key: 'theme', source: 'userSettings', editable: true, managed: false },
   ],
   policyOrigin: 'file',
+  editableValues: [],
 }
 
 test('shell renders the two-pane frame with the ported category rail', () => {
@@ -52,10 +53,24 @@ test('the Managed panel renders real policy-locked keys as managed Fields', () =
   expect(html).not.toContain('>theme<')
 })
 
-test('value-editor categories are honest stubs, not mocked controls', () => {
-  // Privacy stays a stub (its value editors land in a later Phase-4 session).
-  const html = renderToStaticMarkup(<SettingsShell initialCategory="privacy" snapshot={SNAPSHOT} />)
-  expect(html).toContain('coming soon')
+test('core value-editor categories render real editors (P4-19), deferred ones stay stubs', () => {
+  // Privacy now ships real value editors over the write-seam (P4-19), no stub.
+  const privacy = renderToStaticMarkup(
+    <SettingsShell initialCategory="privacy" snapshot={SNAPSHOT} />,
+  )
+  expect(privacy).not.toContain('coming soon')
+  expect(privacy).toContain('Transcript retention (days)') // a real editor
+  // Model + Theme likewise ship real editors.
+  const model = renderToStaticMarkup(
+    <SettingsShell initialCategory="model" snapshot={SNAPSHOT} />,
+  )
+  expect(model).toContain('Always-on thinking')
+  expect(model).toContain('Reasoning effort')
+  // Keybindings + IDE/LSP remain honest stubs (deferred — need their own seams).
+  const keybindings = renderToStaticMarkup(
+    <SettingsShell initialCategory="keybindings" snapshot={SNAPSHOT} />,
+  )
+  expect(keybindings).toContain('coming soon')
 })
 
 const EXTENSIONS: ExtensionsSnapshot = {
