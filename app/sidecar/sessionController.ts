@@ -44,6 +44,10 @@ import {
   type SidecarMemoryDomain,
 } from './memoryDomain.js'
 import {
+  createSidecarTasksDomain,
+  type SidecarTasksDomain,
+} from './tasksDomain.js'
+import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
@@ -240,6 +244,11 @@ export type SidecarSession = {
    */
   memory: SidecarMemoryDomain | null
   /**
+   * Tasks read-seam (P4-9) — live background-task state from the same
+   * app-state store the runtime mutates. Read-only; null in probe mode.
+   */
+  tasks: SidecarTasksDomain | null
+  /**
    * Accounts domain (P4-5) — the redacted Codex pool read-seam + lifecycle verbs
    * over the engine's own account machinery. The pool is a process-global
    * singleton (not per-session), so this shares one live pool with the engine;
@@ -283,6 +292,7 @@ export async function createSidecarSessionController({
       agentConfig: null,
       goals: null,
       memory: null,
+      tasks: null,
       accounts: null,
     }
   }
@@ -305,6 +315,7 @@ export async function createSidecarSessionController({
     }),
     goals: createSidecarGoalDomain(appStateStore),
     memory: createSidecarMemoryDomain(),
+    tasks: createSidecarTasksDomain(appStateStore),
     accounts: createSidecarAccountsDomain(),
   }
 }

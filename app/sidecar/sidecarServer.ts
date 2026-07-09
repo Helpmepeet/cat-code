@@ -71,6 +71,7 @@ import type { SidecarSettingsDomain } from './settingsDomain.js'
 import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
+import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
 
 export type SidecarSocketLike = {
@@ -116,6 +117,11 @@ export type SidecarServerOptions = {
    * cwd-configured engine; when absent, no `memory.snapshot` frame is emitted.
    */
   memory?: SidecarMemoryDomain
+  /**
+   * Tasks read-seam (P4-9). Optional because the P1-0 probe fixture has no engine
+   * app-state store; when absent, no `tasks.snapshot` frame is emitted.
+   */
+  tasks?: SidecarTasksDomain
   /**
    * Accounts read-seam + lifecycle verbs (P4-5). Optional because the P1-0 probe
    * fixture has no engine; when absent, no `accounts.snapshot` frame is emitted
@@ -170,6 +176,7 @@ export class SidecarServer {
   private readonly agentConfig: SidecarAgentConfigDomain | null
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
+  private readonly tasks: SidecarTasksDomain | null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
@@ -180,6 +187,7 @@ export class SidecarServer {
   private unsubscribePermissionContext: (() => void) | null = null
   private unsubscribeGoalSnapshot: (() => void) | null = null
   private unsubscribeMemorySnapshot: (() => void) | null = null
+  private unsubscribeTasksSnapshot: (() => void) | null = null
   private activeTurn = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
@@ -193,6 +201,7 @@ export class SidecarServer {
     this.agentConfig = options.agentConfig ?? null
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
+    this.tasks = options.tasks ?? null
     this.accounts = options.accounts ?? null
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
@@ -225,6 +234,11 @@ export class SidecarServer {
     if (this.memory) {
       this.unsubscribeMemorySnapshot = this.memory.subscribe(() => {
         this.broadcastMemorySnapshot()
+      })
+    }
+    if (this.tasks) {
+      this.unsubscribeTasksSnapshot = this.tasks.subscribe(() => {
+        this.broadcastTasksSnapshot()
       })
     }
 
@@ -318,6 +332,10 @@ export class SidecarServer {
     // inbound vocabulary or renderer-authored state.
     this.sendThreadGoalSnapshot(connection)
     this.sendMemorySnapshot(connection)
+    // P4-9 — read-only background-task snapshot, alongside the other P4-10
+    // snapshots and before replay; no new inbound vocabulary or renderer-
+    // authored task state.
+    this.sendTasksSnapshot(connection)
     // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
@@ -446,6 +464,8 @@ export class SidecarServer {
     this.unsubscribeGoalSnapshot = null
     this.unsubscribeMemorySnapshot?.()
     this.unsubscribeMemorySnapshot = null
+    this.unsubscribeTasksSnapshot?.()
+    this.unsubscribeTasksSnapshot = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -1212,6 +1232,45 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.sendMemorySnapshot(connection)
+    }
+  }
+
+  /**
+   * P4-9 — read-only background-task snapshot from the runtime's live
+   * app-state store (`AppState.tasks`). Kill/stop/inspect stay engine-side;
+   * the desktop receives display state only.
+   */
+  private sendTasksSnapshot(connection: Connection): void {
+    if (!this.tasks) {
+      return
+    }
+    try {
+      const raw = this.tasks.getSnapshot()
+      const snapshot = this.prepareOutboundPayload(raw, 'tasks.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'tasks.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        tasks: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] tasks.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastTasksSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendTasksSnapshot(connection)
     }
   }
 

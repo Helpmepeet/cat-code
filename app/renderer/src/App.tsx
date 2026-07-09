@@ -139,6 +139,13 @@ import {
   reduceAccountsState,
   selectAccountsSnapshot,
 } from './accountsState.js'
+import {
+  createTasksState,
+  groupTaskItems,
+  reduceTasksState,
+  selectTasksSnapshot,
+} from './tasksState.js'
+import { TasksDialog } from './TasksDialog.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import { SettingsShell } from './SettingsShell.js'
@@ -166,6 +173,7 @@ const reduceConnectionStateBatched = withBatch(reduceConnectionState)
 const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
+const reduceTasksStateBatched = withBatch(reduceTasksState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 
 export function App() {
@@ -237,6 +245,12 @@ export function App() {
     undefined,
     createAccountsState,
   )
+  const [tasks, dispatchTasks] = useReducer(
+    reduceTasksStateBatched,
+    undefined,
+    createTasksState,
+  )
+  const [tasksOpen, setTasksOpen] = useState(false)
   const [activeView, setActiveView] = useState<
     'chat' | 'goals' | 'accounts' | 'settings'
   >('chat')
@@ -273,6 +287,7 @@ export function App() {
         dispatchSettings,
         dispatchAgentConfig,
         dispatchGoalMemory,
+        dispatchTasks,
         dispatchAccounts,
         dispatchTranscript: dispatchSessionEvent,
       })
@@ -976,6 +991,7 @@ export function App() {
             closeWorkspacePanelAt(workspaceLayout.activeIndex),
           selectLiveSession: selectTab,
           restoreSession: sessionId => void performRestore(sessionId),
+          openTasks: () => setTasksOpen(true),
         },
       })
     : EMPTY_PALETTE_ITEMS
@@ -1053,6 +1069,19 @@ export function App() {
 	            onWidthsChange={updateWorkspaceWidths}
           />
         )}
+
+        {/* In-session background-task strip (P4-9). The prototype's `TasksPanel`
+         * (OrchestratorMode.jsx) is unanchored GUI (⚓0, INVENTORY §W4) — it's
+         * really P4-8's unbuilt orchestrator worker/lease roster, not this
+         * dialog's entry point. This pill is the grounded analog: the real
+         * footer summary pill (`BackgroundTaskStatus.tsx`, `getPillLabel`),
+         * scoped to the active session, opening the same TasksDialog ⌘K does. */}
+        {activeView === 'chat' && activeSessionId ? (
+          <TasksStrip
+            snapshot={selectTasksSnapshot(tasks, activeSessionId)}
+            onOpen={() => setTasksOpen(true)}
+          />
+        ) : null}
       </div>
 
       {/* ⌘K command palette (P3-7): a fixed overlay above the whole shell. */}
@@ -1061,7 +1090,42 @@ export function App() {
         onClose={() => setPaletteOpen(false)}
         items={paletteItems}
       />
+
+      {/* Background tasks dialog (P4-9): ⌘K → "Background tasks" or the strip pill. */}
+      <TasksDialog
+        open={tasksOpen}
+        onClose={() => setTasksOpen(false)}
+        snapshot={selectTasksSnapshot(tasks, activeSessionId)}
+        hasActiveSession={activeSessionId !== null}
+      />
     </div>
+  )
+}
+
+/**
+ * The real `BackgroundTaskStatus.tsx` footer pill, adapted: a compact count of
+ * active background tasks for the current session, opening `TasksDialog` on
+ * click. Renders nothing when there are no active tasks (same as the source
+ * component returning `null`, `BackgroundTaskStatus.tsx:195-197`).
+ */
+function TasksStrip({
+  snapshot,
+  onOpen,
+}: {
+  snapshot: ReturnType<typeof selectTasksSnapshot>
+  onOpen: () => void
+}) {
+  const active = groupTaskItems(snapshot).active
+  if (active.length === 0) return null
+  return (
+    <button
+      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[0_10px_30px_rgba(0,0,0,0.5)] hover:text-text-primary"
+      onClick={onOpen}
+      type="button"
+    >
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden="true" />
+      {active.length} background {active.length === 1 ? 'task' : 'tasks'}
+    </button>
   )
 }
 

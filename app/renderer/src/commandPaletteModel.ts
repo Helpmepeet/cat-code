@@ -46,6 +46,7 @@ export type PaletteHandlers = {
   closeCurrentPanel: () => void
   selectLiveSession: (sessionId: SessionId) => void
   restoreSession: (sessionId: SessionId) => void
+  openTasks: () => void
 }
 
 export type PaletteInput = {
@@ -119,6 +120,16 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
       run: handlers.closeCurrentPanel,
     })
   }
+
+  items.push({
+    id: 'action:open-tasks',
+    kind: 'action',
+    group: 'Actions',
+    label: 'Background tasks',
+    ariaLabel: 'Background tasks',
+    keywords: 'tasks background bash agent dream teammate workflow monitor /tasks',
+    run: handlers.openTasks,
+  })
 
   for (const row of rows) {
     const { descriptor, visual } = row

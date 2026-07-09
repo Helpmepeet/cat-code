@@ -129,7 +129,7 @@ Review P4 changes.
 })
 
 test('normal startup constructs a real runtime-backed controller without starting a turn', async () => {
-  const { controller, permissions, goals, memory } =
+  const { controller, permissions, goals, memory, tasks } =
     await createSidecarSessionController({
     probe: false,
     cwd: process.cwd(),
@@ -139,13 +139,14 @@ test('normal startup constructs a real runtime-backed controller without startin
   expect(permissions).not.toBeNull()
   expect(goals?.getSnapshot()).toBeNull()
   expect(memory).not.toBeNull()
+  expect(tasks?.getSnapshot()).toEqual({ items: [] })
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
 })
 
 test('probe startup has no read domains (no engine app-state store)', async () => {
-  const { permissions, settings, agentConfig, goals, memory } =
+  const { permissions, settings, agentConfig, goals, memory, tasks } =
     await createSidecarSessionController({
     probe: true,
     cwd: process.cwd(),
@@ -155,6 +156,7 @@ test('probe startup has no read domains (no engine app-state store)', async () =
   expect(agentConfig).toBeNull()
   expect(goals).toBeNull()
   expect(memory).toBeNull()
+  expect(tasks).toBeNull()
 })
 
 test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually load', async () => {
