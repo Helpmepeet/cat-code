@@ -1124,7 +1124,7 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 ### 16. SessionsPage.jsx — the cross-workspace Sessions MANAGER (browse/search/filter/sort, multi-select bulk ops, per-row actions), distinct from the sidebar switcher
 
-**Migration target:** deferred → P4-6 (`SessionsPage` + `SessionActionsMenu` + Branch/Export/Rewind dialogs + `MetadataInspector`; `SessionActions.jsx`/`MetadataInspector.jsx` same owner; shared catalog selector w/ P4-17) · **Overall:** ⬜ deferred · **Prototype:** `~/catcode_prototype/cat-app/SessionsPage.jsx` (670 lines) · **INVENTORY:** W4 SessionsPage adapt (S4)
+**Migration target:** deferred → P4-6 (`SessionsPage` + `SessionActionsMenu` + Branch/Export/Rewind dialogs + `MetadataInspector`; `SessionActions.jsx`/`MetadataInspector.jsx` same owner; shared catalog selector w/ P4-17) · **Overall:** 🟡 **P4-6a partial (2026-07-10)** — the read-only browse surface + catalog + real-title surfacing LANDED (`app/renderer/src/SessionsPage.tsx` + `app/renderer/src/sessionsCatalogState.ts` `selectMergedSessionRows`/browse selectors, over the sidecar `sessions.snapshot` read-seam `app/sidecar/sessionsCatalogDomain.ts`): page container, header + real count subtitle, New-session (real create), search, sort menu (recent/active/name), All-workspaces toggle, tag-filter tabs, workspace + date grouping, session rows w/ real meta chips (path/last-activity/branch/msg-count/agent/PR/tag), empty/loading states, row-click→open (`selectTab`/`performRestore`). **DEFERRED → P4-6b** (each = a mutating engine verb → inbound frame): row ⋯-menu + right-click context menu, inline rename, tag popover / +tag, checkbox multi-select + floating bulk bar, Branch/Rewind/Export dialog invocation, Remote filter (capability unowned, D3/D6). `messageCount`/`mode` chips render truth (0/absent — the bounded catalog doesn't populate them; C3). · **Prototype:** `~/catcode_prototype/cat-app/SessionsPage.jsx` (670 lines) · **INVENTORY:** W4 SessionsPage adapt (S4)
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
@@ -1154,7 +1154,7 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Row right-click → context (actions) menu at cursor | control | ⬜ deferred | `phase4.md:443` SessionActions.jsx | Opens same menu as ⋯, anchored to cursor (`:254`). |
 | Row leading icon/checkbox — msg / bot(agent) / blank(hover) / check(selected) | chrome | ⬜ deferred | `sessionStorage.ts:1113` mode | 4-way icon swap; click toggles selection (`:266`). |
 | Row checkbox select toggle | control | ⬜ deferred | `phase4.md:427` P4-6 | stopPropagation; feeds multi-select Set (`:267`). |
-| Row title text (ellipsis, nowrap) | data-binding | ⬜ deferred | `hostApi.ts:73` + `sessionTitle.ts:89` | FLAG (P4-6 rider `STATUS.md:222`): desktop sessions have NO populated title today → falls back to cwd basename; P4-6 must wire AI-title/rename. `:304` |
+| Row title text (ellipsis, nowrap) | data-binding | ✅ built (surface half) | `app/renderer/src/SessionsPage.tsx` `displayLabel` + `sessionsCatalogState.ts` `resolveSessionLabel` | Rider SURFACE half done: shows the real winning JSONL title (custom-title>ai-title via `LogOption.customTitle`, carried on `sessions.snapshot`), else cwd basename — mirrors `TabBar.tsx:352` `tabLabel`. GENERATE half (app sessions auto-titling + registry backfill for sidebar/tabs) → P4-6b (`STATUS.md` P4-6 row). |
 | Inline rename input (autofocus, Enter commit / Escape cancel / blur commit) | control | ⬜ deferred | `phase4.md:439` P4-6 rename | Adapt: rename must persist via real registry-title / saveAiGeneratedTitle, not renderer-local titleOverrides Set (`:293`). |
 | 'orchestrating' badge (agent-mode rows) | chrome | ⬜ deferred | `sessionStorage.ts:1113` mode==='agent' | Pink uppercase pill (`:308`). |
 | 'cross-project' badge (session outside current workspace, flat view) | chrome | ⬜ deferred | `phase4.md:427` P4-6 | Adapt: real = session cwd ≠ active cwd; shown only when NOT grouped (`:311`). |
@@ -1189,11 +1189,11 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | RewindDialog invocation | sub-component | ⬜ deferred | `phase4.md:439` P4-6 rewind | Separate surface; real rewind/checkpoint (`:664`). |
 | ExportDialog invocation | sub-component | ⬜ deferred | `phase4.md:439` P4-6 export | Separate surface; real export verb (`:665`). |
 | Copy-as-Markdown / Copy-as-text row actions (saToMarkdown/saToText) | control | ⬜ deferred | `phase4.md:439` P4-6 copy | Prototype uses window.sa* globals over mock messages; real = shared selector + transcript (`:123`). |
-| MOCK_SESSIONS_EXTENDED data source | data-binding | ⬜ deferred | `phase4.md:441` catalog selector | Source-wins: replace whole mock fixture with real D1 registry ∪ transcript-history selector (shared w/ P4-17) (`:107`). |
+| MOCK_SESSIONS_EXTENDED data source | data-binding | ✅ built | `app/renderer/src/sessionsCatalogState.ts` `selectMergedSessionRows` + `app/sidecar/sessionsCatalogDomain.ts` | Whole mock fixture replaced by the real registry ∪ engine-history merge selector (shared w/ P4-17, D5); history from `sessions.snapshot` read-seam. |
 
 ### 17. SessionActions.jsx — per-session actions menu + Branch/Rewind/Export dialogs shared by Sessions-page and Chat-header entry points
 
-**Migration target:** deferred → P4-6 · **Overall:** ⬜ deferred · **Prototype:** `~/catcode_prototype/cat-app/SessionActions.jsx` (389 lines) · **INVENTORY:** W4 SessionActionsMenu + Branch/Export/Rewind dialogs adapt (S4)
+**Migration target:** deferred → **P4-6b** · **Overall:** ⬜ deferred → **P4-6b** (whole section — the P4-6a split shipped read-only browse only; NOTHING in this section built yet). Recon done (P4-6a report): every verb maps to a mutating current-session engine op needing an inbound frame — branch `src/commands/branch/branch.ts:61` (forks whole conversation at HEAD, no from-message-N), rewind `src/screens/REPL.tsx:4034` (in-memory truncation + `fileHistoryRewind` working-tree revert), rename `src/commands/rename/rename.ts:21` + tag `src/commands/tag/tag.tsx` (append to current JSONL), export `src/utils/exportRenderer.tsx:91` `renderMessagesToPlainText` (TEXT-only — no clean md/json), **delete/archive have NO local engine verb** (archive is remote-claude.ai only) → net-new. · **Prototype:** `~/catcode_prototype/cat-app/SessionActions.jsx` (389 lines) · **INVENTORY:** W4 SessionActionsMenu + Branch/Export/Rewind dialogs adapt (S4)
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
@@ -1267,7 +1267,7 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 ### 18. MetadataInspector.jsx — read-only right drawer exposing raw metadata for a transcript message + its session
 
-**Migration target:** deferred → P4-6 (`SessionsPage`/`SessionActions`/`MetadataInspector`) · **Overall:** ⬜ deferred · **Prototype:** `~/catcode_prototype/cat-app/MetadataInspector.jsx` (191 lines) · **INVENTORY:** W4 MetadataInspector adapt (S4)
+**Migration target:** deferred → **P4-6b** · **Overall:** ⬜ deferred → **P4-6b** (whole section — not built in the P4-6a read-only split). The inspector is per-MESSAGE (opened from a transcript row, `MetadataInspector.jsx:52`) and needs a transcript-by-id / per-message read-seam that P4-6a did not build (the `sessions.snapshot` catalog is session-level metadata only). Real field anchors already verified in the ledger rows below (`src/types/logs.ts`). · **Prototype:** `~/catcode_prototype/cat-app/MetadataInspector.jsx` (191 lines) · **INVENTORY:** W4 MetadataInspector adapt (S4)
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|

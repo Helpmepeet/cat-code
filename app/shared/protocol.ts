@@ -1151,6 +1151,77 @@ export type DiagnosticsSnapshotFrame = {
   diagnostics: DiagnosticsSnapshot
 }
 
+/* ------------------------------------------------------------------------- *
+ * Sessions catalog read-seam (P4-6a) — read-only cross-workspace history
+ * ------------------------------------------------------------------------- *
+ *
+ * The Sessions page (`SessionsPage`) browses a catalog RICHER than the host
+ * registry: the registry (`hostApi.ts` `SessionDescriptor`) knows only the
+ * app's own live∪restorable rows (title/cwd/status/recency), while the engine's
+ * on-disk transcript history (`src/utils/sessionStorage.ts` — `LogOption`,
+ * `src/types/logs.ts:20`) carries the real per-session title, tag, git branch,
+ * mode, agent setting, PR number and message count for EVERY session ever run
+ * (TUI + desktop), across every workspace.
+ *
+ * This is the sidecar-owned engine-history half of the catalog (the host plane
+ * is deliberately engine-free — `registry.ts:19` — so it cannot enumerate
+ * transcripts). The renderer MERGES it with the registry rows via a shared
+ * selector (`sessionsCatalogState.ts` — reused by P4-17 Welcome recents, D5).
+ *
+ * Read-only + spawn-frozen (a point-in-time filesystem enumeration, capped at
+ * `SESSIONS_CATALOG_LIMIT`), matching the other domain snapshots' posture. It
+ * carries display metadata only — no message bodies, no credentials — so it is
+ * `secretGuard`-clean by construction. It ALSO carries the winning display
+ * title (custom-title > ai-title) so the catalog/sidebar can show real session
+ * names instead of the cwd-basename fallback (the P4-6 title rider, surface
+ * half; title GENERATION for fresh app sessions is deferred — see STATUS).
+ */
+export type SessionCatalogEntry = {
+  /** The transcript session id (matches a live row's `engineSessionId`). */
+  sessionId: string
+  /** Session root (the transcript's project path). */
+  cwd: string
+  /** Winning display title (custom-title > ai-title), else null (→ fallback). */
+  title: string | null
+  /** Transcript file mtime (recency sort + date buckets). */
+  modifiedAtMs: number
+  /** Session creation time. */
+  createdAtMs: number
+  /** Non-sidechain message count (the "most active" sort + msg-count chip). */
+  messageCount: number
+  /** git branch recorded on the session, else null. */
+  gitBranch: string | null
+  /** The single searchable tag on the session, else null. */
+  tag: string | null
+  /** Session mode (agent/coordinator/normal), else null. */
+  mode: 'agent' | 'coordinator' | 'normal' | null
+  /** The `--agents` setting string, else null. */
+  agentSetting: string | null
+  /** PR number + repository (owner/repo#N chip), else null. */
+  prNumber: number | null
+  prRepository: string | null
+}
+
+export type SessionsCatalogSnapshot = {
+  entries: SessionCatalogEntry[]
+  /** True when the enumeration hit `SESSIONS_CATALOG_LIMIT` (older rows dropped). */
+  truncated: boolean
+  notes: string[]
+}
+
+/**
+ * P4-6a outbound frame. Emitted on attach (after the other snapshots, before
+ * history replay), point-in-time (the transcript enumeration runs once at
+ * spawn). Every session's sidecar carries the SAME global catalog; the renderer
+ * keys it by `sessionId` and merges it with the host registry rows.
+ */
+export type SessionsCatalogSnapshotFrame = {
+  kind: 'sessions.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  catalog: SessionsCatalogSnapshot
+}
+
 export type ServerFrame =
   | ReadyFrame
   | EventFrame
@@ -1170,6 +1241,7 @@ export type ServerFrame =
   | ExtensionsSnapshotFrame
   | RemoteSettingsSnapshotFrame
   | RemoteSettingsResultFrame
+  | SessionsCatalogSnapshotFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)

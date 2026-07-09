@@ -68,6 +68,10 @@ import {
   createSidecarRemoteSettingsDomain,
   type SidecarRemoteSettingsDomain,
 } from './remoteSettingsDomain.js'
+import {
+  createSidecarSessionsCatalogDomain,
+  type SidecarSessionsCatalogDomain,
+} from './sessionsCatalogDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -312,6 +316,13 @@ export type SidecarSession = {
    * no cwd-configured command catalog).
    */
   remoteSettings: SidecarRemoteSettingsDomain | null
+  /**
+   * Sessions catalog read-seam (P4-6a) — a spawn-frozen, cross-workspace
+   * enumeration of the engine's transcript history (title/tag/branch/PR), the
+   * engine-side half of the Sessions page catalog. Read-only; null in probe
+   * mode (no config home to enumerate).
+   */
+  sessionsCatalog: SidecarSessionsCatalogDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -355,6 +366,7 @@ export async function createSidecarSessionController({
       diagnostics: null,
       extensions: null,
       remoteSettings: null,
+      sessionsCatalog: null,
     }
   }
 
@@ -388,5 +400,6 @@ export async function createSidecarSessionController({
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
+    sessionsCatalog: await createSidecarSessionsCatalogDomain(),
   }
 }

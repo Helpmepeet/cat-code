@@ -78,6 +78,7 @@ import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
+import type { SidecarSessionsCatalogDomain } from './sessionsCatalogDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -158,6 +159,12 @@ export type SidecarServerOptions = {
    */
   remoteSettings?: SidecarRemoteSettingsDomain
   /**
+   * Sessions catalog read-seam (P4-6a). Optional because the P1-0 probe fixture
+   * has no config home to enumerate; when absent, no `sessions.snapshot` frame
+   * is emitted.
+   */
+  sessionsCatalog?: SidecarSessionsCatalogDomain
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -211,6 +218,7 @@ export class SidecarServer {
   private readonly diagnostics: SidecarDiagnosticsDomain | null
   private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
+  private readonly sessionsCatalog: SidecarSessionsCatalogDomain | null
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
@@ -240,6 +248,7 @@ export class SidecarServer {
     this.diagnostics = options.diagnostics ?? null
     this.extensions = options.extensions ?? null
     this.remoteSettings = options.remoteSettings ?? null
+    this.sessionsCatalog = options.sessionsCatalog ?? null
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
@@ -389,6 +398,10 @@ export class SidecarServer {
     // after accounts and before replay. Read-only; re-broadcast after a
     // mutating `remoteSettings.*` verb.
     this.sendRemoteSettingsSnapshot(connection)
+    // P4-6a — read-only cross-workspace sessions catalog (engine transcript
+    // history), after the other snapshots and before replay. Spawn-frozen,
+    // secretGuard-clean by construction (display metadata only).
+    this.sendSessionsSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -1309,6 +1322,43 @@ export class SidecarServer {
     } catch (error) {
       this.log(
         `[sidecar] extensions.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  /**
+   * P4-6a — build + send the read-only sessions catalog (engine transcript
+   * history) to a single connection (attach). Display metadata only (titles/
+   * tags/branches/PRs — no message bodies, no credentials), so the frame is
+   * secretGuard-clean by construction; a stray secret in a session title would
+   * only cause `prepareOutboundPayload` to drop the WHOLE frame (fail-closed,
+   * never a leak). Wrapped so a snapshot failure can never strand the connection
+   * or skip the subsequent history replay.
+   */
+  private sendSessionsSnapshot(connection: Connection): void {
+    if (!this.sessionsCatalog) {
+      return
+    }
+    try {
+      const raw = this.sessionsCatalog.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const catalog = this.prepareOutboundPayload(raw, 'sessions.snapshot')
+      if (!catalog) {
+        return
+      }
+      this.send(connection, {
+        kind: 'sessions.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        catalog,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] sessions.snapshot send skipped (${
           error instanceof Error ? error.message : String(error)
         })`,
       )
