@@ -708,6 +708,76 @@ export type LifecycleFrame = {
   }
 }
 
+/* ------------------------------------------------------------------------- *
+ * Workspace-trust read-seam (P4-14) — read-only VIEW over the real trust store
+ * ------------------------------------------------------------------------- *
+ *
+ * The Settings → Workspace section's "Additional trusted directories" list is
+ * NOT duplicated here — it already crosses the wire on `PermissionContextSnapshot
+ * .additionalWorkingDirectories` (C3, above) and the renderer selects it from
+ * there (§10 — reuse the real entry point instead of re-plumbing the same
+ * data). This frame carries only the two facts that seam does not: whether the
+ * session's cwd is itself trusted, and the detected git remote. Read-only; the
+ * Untrust/Trust mutate action is P4-15's session-create trust gate, not this
+ * frame.
+ */
+export type WorkspaceTrustSnapshot = {
+  /** `isPathTrusted(cwd)` (config.ts:790) for THIS session's cwd. */
+  trusted: boolean
+  /** `owner/repo` parsed from the git remote origin, or null (no remote / not a repo). */
+  detectedRepo: string | null
+}
+
+/**
+ * P4-14 outbound frame. Emitted on attach (after the other snapshots, before
+ * history replay), point-in-time — trust/repo do not change within a session's
+ * lifetime (a workspace switch spawns a new sidecar at the new cwd).
+ */
+export type WorkspaceTrustSnapshotFrame = {
+  kind: 'workspace-trust.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  workspaceTrust: WorkspaceTrustSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
+ * Diagnostics read-seam (P4-14) — read-only snapshot mirroring /doctor + /status
+ * ------------------------------------------------------------------------- *
+ *
+ * Mirrors the TUI's `/doctor` + `/status` panes (`src/utils/status.tsx`,
+ * `src/utils/doctorDiagnostic.ts`) with their Ink-coupled formatting stripped —
+ * plain data only, rendered by the desktop's own presentation. Fields the
+ * renderer can already derive from an EXISTING snapshot (setting sources from
+ * `settings.snapshot`, active account from `accounts.snapshot`) are
+ * deliberately NOT duplicated here (§10).
+ */
+export type DiagnosticsSnapshot = {
+  /** `MACRO.VERSION` — the running build's version string. */
+  version: string
+  /** The engine's raw model override string (`--model`/setting), or null = default. */
+  mainLoopModel: string | null
+  /** Whether the Bash sandbox is enabled for this session (`SandboxManager.isSandboxingEnabled()`). */
+  sandboxEnabled: boolean
+  /** `checkInstall()` warnings — install-path/PATH/symlink issues. */
+  installationWarnings: string[]
+  /** `getDoctorDiagnostic()` health warnings + missing-update-permission note. */
+  healthWarnings: string[]
+  /** Oversized CLAUDE.md / auto-memory file warnings. */
+  memoryWarnings: string[]
+}
+
+/**
+ * P4-14 outbound frame. Emitted on attach (after the other snapshots, before
+ * history replay), point-in-time — the doctor/install checks run once at spawn,
+ * matching the settings seam's spawn-frozen posture (no live re-poll).
+ */
+export type DiagnosticsSnapshotFrame = {
+  kind: 'diagnostics.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  diagnostics: DiagnosticsSnapshot
+}
+
 export type ServerFrame =
   | ReadyFrame
   | EventFrame
@@ -721,6 +791,8 @@ export type ServerFrame =
   | MemorySnapshotFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
+  | WorkspaceTrustSnapshotFrame
+  | DiagnosticsSnapshotFrame
 
 /* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)

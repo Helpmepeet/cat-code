@@ -47,6 +47,14 @@ import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
+import {
+  createSidecarWorkspaceTrustDomain,
+  type SidecarWorkspaceTrustDomain,
+} from './workspaceTrustDomain.js'
+import {
+  createSidecarDiagnosticsDomain,
+  type SidecarDiagnosticsDomain,
+} from './diagnosticsDomain.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -246,6 +254,16 @@ export type SidecarSession = {
    * null in probe mode (no engine). Read-seam is secretGuard-clean by construction.
    */
   accounts: SidecarAccountsDomain | null
+  /**
+   * Workspace-trust read-seam (P4-14) — trust state + detected repo for this
+   * session's cwd. Read-only; null in probe mode (no cwd-configured engine).
+   */
+  workspaceTrust: SidecarWorkspaceTrustDomain | null
+  /**
+   * Diagnostics read-seam (P4-14) — /doctor + /status facts for this session.
+   * Read-only; null in probe mode (no cwd-configured engine).
+   */
+  diagnostics: SidecarDiagnosticsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -284,6 +302,8 @@ export async function createSidecarSessionController({
       goals: null,
       memory: null,
       accounts: null,
+      workspaceTrust: null,
+      diagnostics: null,
     }
   }
 
@@ -306,5 +326,7 @@ export async function createSidecarSessionController({
     goals: createSidecarGoalDomain(appStateStore),
     memory: createSidecarMemoryDomain(),
     accounts: createSidecarAccountsDomain(),
+    workspaceTrust: await createSidecarWorkspaceTrustDomain(cwd),
+    diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
   }
 }

@@ -268,6 +268,21 @@ export function selectPermissionContext(
 }
 
 /**
+ * C3 — the directories tools may access beyond the session's cwd
+ * (`ToolPermissionContext.additionalWorkingDirectories`, `--add-dir` +
+ * `permissions.additionalDirectories`). P4-14's WorkspaceTrust section reads
+ * this SAME context the permission rules editor already renders (§10 — no
+ * second seam for the same data). `[]` before the first `permission.context`
+ * frame.
+ */
+export function selectAdditionalWorkingDirectories(
+  state: PermissionState,
+  sessionId: SessionId | null,
+): PermissionContextSnapshot['additionalWorkingDirectories'] {
+  return selectPermissionContext(state, sessionId)?.additionalWorkingDirectories ?? []
+}
+
+/**
  * Build an allow response. `applySuggestions` is the C1 "always allow"
  * affordance: indices into THIS request's engine-minted
  * `permission_suggestions`. The renderer only ever SELECTS — the sidecar

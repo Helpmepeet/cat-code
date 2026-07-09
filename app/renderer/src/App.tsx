@@ -19,6 +19,7 @@ import {
   buildDenyResponse,
   createPermissionState,
   reducePermissionState,
+  selectAdditionalWorkingDirectories,
   selectPendingPermissionCount,
   selectPermissionContext,
   selectPermissionQueue,
@@ -139,6 +140,16 @@ import {
   reduceAccountsState,
   selectAccountsSnapshot,
 } from './accountsState.js'
+import {
+  createWorkspaceTrustState,
+  reduceWorkspaceTrustState,
+  selectWorkspaceTrustSnapshot,
+} from './workspaceTrustState.js'
+import {
+  createDiagnosticsState,
+  reduceDiagnosticsState,
+  selectDiagnosticsSnapshot,
+} from './diagnosticsState.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import { SettingsShell } from './SettingsShell.js'
@@ -167,6 +178,8 @@ const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
+const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
+const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
 
 export function App() {
   const [state, dispatch] = useReducer(
@@ -237,6 +250,16 @@ export function App() {
     undefined,
     createAccountsState,
   )
+  const [workspaceTrust, dispatchWorkspaceTrust] = useReducer(
+    reduceWorkspaceTrustStateBatched,
+    undefined,
+    createWorkspaceTrustState,
+  )
+  const [diagnostics, dispatchDiagnostics] = useReducer(
+    reduceDiagnosticsStateBatched,
+    undefined,
+    createDiagnosticsState,
+  )
   const [activeView, setActiveView] = useState<
     'chat' | 'goals' | 'accounts' | 'settings'
   >('chat')
@@ -274,6 +297,8 @@ export function App() {
         dispatchAgentConfig,
         dispatchGoalMemory,
         dispatchAccounts,
+        dispatchWorkspaceTrust,
+        dispatchDiagnostics,
         dispatchTranscript: dispatchSessionEvent,
       })
     })
@@ -1018,10 +1043,20 @@ export function App() {
          * background sessions keep rendering without becoming the active tab. */}
         {activeView === 'settings' ? (
           <SettingsShell
+            additionalWorkingDirectories={selectAdditionalWorkingDirectories(
+              permissions,
+              activeSessionId,
+            )}
             agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
+            cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
+            diagnosticsSnapshot={selectDiagnosticsSnapshot(diagnostics, activeSessionId)}
             initialCategory="agents"
             memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
             snapshot={selectSettingsSnapshot(settings, activeSessionId)}
+            workspaceTrustSnapshot={selectWorkspaceTrustSnapshot(
+              workspaceTrust,
+              activeSessionId,
+            )}
           />
         ) : activeView === 'goals' ? (
           <GoalsPage
