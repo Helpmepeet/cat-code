@@ -1168,3 +1168,66 @@ Report back: per-family fixture location + the engine anchor (`src/…:line`) it
 any already-drifted vocabulary the fixtures exposed. No PARITY-LEDGER changes (adds no surface).
 ```
 ─── PASTE ───
+
+## P4-23 · ⬜ — Remove the ✦ "Session started" transcript banner (prototype port, unwanted)
+
+Operator ruled (2026-07-09, during the P4 GUI-acceptance pass) that the `✦ Session started`
+card is unwanted — a straight port of the prototype's session-start banner. Delete it. Same
+class as P4-22 (remove a prototype-ported artifact per operator), renderer-only.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 2/10
+
+You are running P4-23 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+No dependency, but you MUST NOT regress P3-7's slash-command catalog. Echo the header line above
+back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+The transcript renders a `✦ Session started` banner at the top of every session — cwd, model,
+tool count, and permission mode. The operator ruled it unwanted (2026-07-09 GUI-acceptance pass):
+it was a straight port of the prototype's session-start card, and Claude/ChatGPT show no such
+banner. Remove it. This is a REMOVAL, same class as P4-22 (frictionless-restore) — renderer-only,
+zero wire/preload/security/engine surface.
+
+Owner files (verify each in source before editing):
+- `app/renderer/src/TranscriptView.tsx` — `SessionInitBanner` component (~:352) + the
+  `case 'session-init'` render arm (~:117).
+- `app/renderer/src/transcriptProjector.ts` — `SessionInitRow` type (~:197), its membership in the
+  `TranscriptRow` closed union (~:234), and the row it emits from `case 'init'` (~:714-730).
+
+=== ⚠ THE ONE TRAP — do NOT drop catalog capture ===
+The `init` frame does DOUBLE DUTY: besides the visible banner row, it captures the P3-7
+slash-command catalog (`slash_commands` → `selectSlashCommands`, same `case 'init'`). The
+`case 'init'` must STILL run and STILL capture the catalog — you are deleting only the visible
+`session-init` ROW it pushes, not the frame handler. If you delete the whole `case 'init'`, the
+slash picker silently goes empty (a P3-7 regression that headless tests for the banner won't
+catch). Prove the catalog survives with a test.
+
+=== BUILD ===
+- Delete `SessionInitBanner` and its `case 'session-init'` arm in `TranscriptView.tsx`.
+- Stop emitting the `session-init` row in the projector's `case 'init'`; keep the catalog capture.
+- Remove `SessionInitRow` from the `TranscriptRow` union and its type decl. Because the union is a
+  closed exhaustiveness-tripwire union (CLAUDE.md §7), removing a member means fixing BOTH switch
+  `default: never` arms (projector + TranscriptView) AND `app/renderer/src/sdkMessageFixtures.ts`
+  so `bunx tsc -p app/tsconfig.json` stays clean — verify by confirming no `never`-assignment error.
+- Drop/adjust the banner assertions in `TranscriptView.test.tsx` and `transcriptProjector.test.ts`.
+- ADD a projector test: an `init` frame now yields NO `session-init` row BUT `selectSlashCommands`
+  still returns the frame's catalog (proves P3-7 intact).
+- Re-tag the session-init banner rows in `docs/migration/PARITY-LEDGER.md` from their current
+  disposition to ✂️ CUT (operator, 2026-07-09) — mirror how P4-22 re-tagged `ResumeStates.jsx`.
+
+=== GROUND RULES ===
+Locked decisions + security baseline untouched (renderer-only; no inbound/outbound frame change,
+no preload change). Known-red sidecar tsc baseline: zero NEW owned diagnostics. No new deps.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (banner tests removed, new catalog-survives test passing) · `bunx tsc
+--noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` no new owned · `bun
+run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` clean. Report: the exact
+lines deleted per file, the catalog-survives test location, the PARITY-LEDGER rows re-tagged, and
+a one-line confirmation that `case 'init'` still captures `slash_commands`. Kill any sidecar you
+spawn (`ps -axo pid,command | grep sidecar/index.ts` count unchanged). Update this session's
+STATUS row (⬜→✅ + date + note) as the last step.
+```
+─── PASTE ───
