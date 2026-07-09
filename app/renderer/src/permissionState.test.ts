@@ -12,7 +12,7 @@ import {
   type PermissionRequest,
 } from './permissionState.js'
 
-const REQUEST = {
+const REQUEST: PermissionRequest = {
   requestId: 'perm-1',
   request: {
     subtype: 'can_use_tool' as const,
@@ -145,6 +145,36 @@ test('a synchronous bridge failure restores a submitted permission for retry', (
   })
 
   expect(selectVisiblePermission(state, 'session-1')).toEqual(REQUEST)
+})
+
+const PLAN_REQUEST: PermissionRequest = {
+  requestId: 'perm-plan-1',
+  request: {
+    subtype: 'can_use_tool' as const,
+    tool_name: 'ExitPlanMode',
+    input: { plan: '1. do the thing' },
+    tool_use_id: 'toolu-plan-1',
+  },
+}
+
+test('selectVisiblePermission never returns a plan request — the keyboard allow cannot resolve it (P4-11 Enter-bypass)', () => {
+  // A pending ExitPlanMode alone: the generic keyboard/action path must see
+  // nothing to act on (only PlanPanel's two-step setPermissionMode+allow may
+  // resolve it, or the session strands in `plan` mode).
+  const planOnly = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([PLAN_REQUEST]),
+  })
+  expect(planOnly.sessions['session-1']?.pending).toEqual([PLAN_REQUEST])
+  expect(selectVisiblePermission(planOnly, 'session-1')).toBeNull()
+
+  // With a generic request queued AFTER the plan, the visible card skips the
+  // plan and lands on the generic one — the plan is never the keyboard target.
+  const both = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([PLAN_REQUEST, REQUEST]),
+  })
+  expect(selectVisiblePermission(both, 'session-1')).toEqual(REQUEST)
 })
 
 test('terminal lifecycle clears permissions owned by the dead sidecar', () => {

@@ -173,3 +173,48 @@ export const TASK_KIND_META: Record<TaskSnapshotItem['type'], TaskKindMeta> = {
 export function taskKindMeta(type: TaskSnapshotItem['type']): TaskKindMeta {
   return TASK_KIND_META[type]
 }
+
+export type TaskColorClass = {
+  /** `text-*` foreground utility. */
+  text: string
+  /** `border-*` utility (35% alpha, for the kind-badge outline). */
+  border: string
+  /** `bg-*` utility (for the status dot). */
+  dot: string
+}
+
+/**
+ * STATIC hex→fixed-class map — the `AGENT_DOT_CLASS` idiom
+ * (`AgentsPage.tsx:58`). Tailwind v4 only emits class LITERALS it can see at
+ * build time, so a dynamic `text-[${kind.color}]` / `bg-[${state.color}]` is
+ * scanned as an incomplete token and NEVER generated (the P4-9 colorless-badge
+ * bug). Routing every `TASK_KIND_META.color` / `AGENT_STATE_META.color` through
+ * this map guarantees only complete literal classes reach the DOM. The nearest
+ * Tailwind palette token stands in for each token-era hex pick (exact enough —
+ * the prototype's literal oklch values were already adapted, `tasksState.ts`
+ * TASK_KIND_META header).
+ */
+export const TASK_COLOR_CLASS: Record<string, TaskColorClass> = {
+  '#5eead4': { text: 'text-teal-300', border: 'border-teal-300/35', dot: 'bg-teal-300' },
+  '#c084fc': { text: 'text-purple-400', border: 'border-purple-400/35', dot: 'bg-purple-400' },
+  '#60a5fa': { text: 'text-blue-400', border: 'border-blue-400/35', dot: 'bg-blue-400' },
+  '#c4b5fd': { text: 'text-violet-300', border: 'border-violet-300/35', dot: 'bg-violet-300' },
+  '#fbbf24': { text: 'text-amber-400', border: 'border-amber-400/35', dot: 'bg-amber-400' },
+  '#4ade80': { text: 'text-green-400', border: 'border-green-400/35', dot: 'bg-green-400' },
+  '#a1a1aa': { text: 'text-zinc-400', border: 'border-zinc-400/35', dot: 'bg-zinc-400' },
+  '#f87171': { text: 'text-red-400', border: 'border-red-400/35', dot: 'bg-red-400' },
+  '#a8a29e': { text: 'text-stone-400', border: 'border-stone-400/35', dot: 'bg-stone-400' },
+  '#71717a': { text: 'text-zinc-500', border: 'border-zinc-500/35', dot: 'bg-zinc-500' },
+  '#fca5a5': { text: 'text-red-300', border: 'border-red-300/35', dot: 'bg-red-300' },
+}
+
+/** Muted fallback (never an arbitrary-value class) for an unmapped color. */
+export const FALLBACK_TASK_COLOR_CLASS: TaskColorClass = {
+  text: 'text-text-subtle',
+  border: 'border-shell-seam',
+  dot: 'bg-text-subtle',
+}
+
+export function taskColorClass(color: string): TaskColorClass {
+  return TASK_COLOR_CLASS[color] ?? FALLBACK_TASK_COLOR_CLASS
+}

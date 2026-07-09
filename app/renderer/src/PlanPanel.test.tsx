@@ -66,7 +66,10 @@ test('PlanPanel renders the real plan file, parsed steps, and allowedPrompts', (
   expect(html).toContain('/config/plans/kind-otter.md')
   expect(html).toContain('Write the tests')
   expect(html).toContain('Wire the domain')
-  expect(html).toContain('Plan requests permission to')
+  // Honesty copy (review fix 2026-07-09): the header no longer implies an
+  // automatic grant; the chips are listed for context, still gated per use.
+  expect(html).toContain('Tools this plan expects to use')
+  expect(html).toContain('still confirmed when it runs')
   expect(html).toContain('run the test suite')
   expect(html).toContain('Approve plan')
   expect(html).toContain('Revise')

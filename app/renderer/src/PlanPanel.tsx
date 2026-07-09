@@ -208,8 +208,16 @@ export function PlanPanel({
 
           {review.data.allowedPrompts.length > 0 ? (
             <div className="mt-4 border-t border-shell-seam pt-3">
-              <div className="mb-1.5 text-[9px] font-bold uppercase tracking-wide text-text-subtle">
-                Plan requests permission to
+              <div className="mb-1 text-[9px] font-bold uppercase tracking-wide text-text-subtle">
+                Tools this plan expects to use
+              </div>
+              {/* Honesty: `allowedPrompts` are the tools the plan LISTS, not an
+               * auto-grant. The engine's `addRules` path is Ant-gated and the
+               * security baseline forbids renderer-authored rules, so approving
+               * here does NOT pre-authorize them — each still prompts per use
+               * (deviation flagged: PARITY-LEDGER.md §24). */}
+              <div className="mb-1.5 text-[10px] text-text-subtle/70">
+                Listed for context — each is still confirmed when it runs.
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {review.data.allowedPrompts.map((prompt, index) => (

@@ -25,15 +25,16 @@ import type {
   PermissionRequest,
   PermissionState,
 } from './permissionState.js'
-import { selectPermissionQueue } from './permissionState.js'
+import {
+  isPlanPermissionRequest,
+  selectPermissionQueue,
+} from './permissionState.js'
 import type { SessionId } from '../../shared/protocol.js'
 
-/**
- * `src/tools/ExitPlanModeTool/constants.ts:2`. A literal, not an import — the
- * renderer stays out of the engine runtime graph (P0-3 isolation); this is
- * app-owned display logic reading a well-known tool name off the wire.
- */
-export const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode'
+// Re-exported for parity: the plan-request predicate + tool-name literal are
+// owned by `permissionState.ts` (single source of truth for the ACTION and
+// RENDER paths), and consumers of the plan domain still read them from here.
+export { EXIT_PLAN_MODE_TOOL_NAME } from './permissionState.js'
 
 export type PlanReviewData = {
   /** SOURCE-BACKED: `ExitPlanModeV2Tool.ts` `_sdkInputSchema` `plan` (:99-102). */
@@ -81,8 +82,8 @@ export function selectPlanReview(
   state: PermissionState,
   sessionId: SessionId | null,
 ): PlanReview | null {
-  const item = selectPermissionQueue(state, sessionId).find(
-    candidate => candidate.request.request.tool_name === EXIT_PLAN_MODE_TOOL_NAME,
+  const item = selectPermissionQueue(state, sessionId).find(candidate =>
+    isPlanPermissionRequest(candidate.request),
   )
   if (!item) return null
   return {
@@ -102,7 +103,7 @@ export function selectNonPlanPermissionQueue(
   sessionId: SessionId | null,
 ): PermissionQueueItem[] {
   return selectPermissionQueue(state, sessionId).filter(
-    item => item.request.request.tool_name !== EXIT_PLAN_MODE_TOOL_NAME,
+    item => !isPlanPermissionRequest(item.request),
   )
 }
 

@@ -224,7 +224,30 @@ export function selectPermissionQueue(
   }))
 }
 
-/** The card keyboard shortcuts act on: first un-answered, un-snoozed pending. */
+/**
+ * The engine tool whose permission request IS a plan review
+ * (`src/tools/ExitPlanModeTool/constants.ts:2`). A literal, not an engine
+ * import — the renderer stays out of the engine runtime graph (P0-3). Owned
+ * HERE (not `planState.ts`) so the ACTION path (`selectVisiblePermission` /
+ * keyboard) and the RENDER path (`planState.selectNonPlanPermissionQueue`)
+ * share ONE predicate.
+ */
+export const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode'
+
+/** Single source of truth for "is this pending request a plan review". */
+export function isPlanPermissionRequest(request: PermissionRequest): boolean {
+  return request.request.tool_name === EXIT_PLAN_MODE_TOOL_NAME
+}
+
+/**
+ * The card keyboard shortcuts act on: first un-answered, un-snoozed pending.
+ * Plan requests are EXCLUDED — the same predicate `selectNonPlanPermissionQueue`
+ * uses to keep `ExitPlanMode` out of the render queue. A plan can only be
+ * resolved through `PlanPanel`'s two-step `setPermissionMode`-then-allow
+ * compose; a bare keyboard `allow` here would send a plain
+ * `buildAllowResponse(request, [])`, skipping the mode switch and stranding the
+ * session in `plan` mode (decisions/PERMISSION-BOUNDARY.md §3).
+ */
 export function selectVisiblePermission(
   state: PermissionState,
   sessionId: SessionId | null,
@@ -234,6 +257,7 @@ export function selectVisiblePermission(
   return (
     session.pending.find(
       request =>
+        !isPlanPermissionRequest(request) &&
         !session.dismissedRequestIds.includes(request.requestId) &&
         !session.submittedRequestIds.includes(request.requestId),
     ) ?? null

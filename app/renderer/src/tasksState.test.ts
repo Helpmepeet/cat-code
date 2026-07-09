@@ -6,9 +6,42 @@ import {
   reduceTasksState,
   selectTasksSnapshot,
   sortTaskItems,
+  TASK_COLOR_CLASS,
+  TASK_KIND_META,
+  taskColorClass,
   taskDisplayState,
   taskKindMeta,
 } from './tasksState.js'
+import { AGENT_STATE_META } from './agentIdentity.js'
+
+test('every task/state color resolves to STATIC Tailwind classes (Tailwind v4 emits no interpolated arbitrary values)', () => {
+  // Both color vocabularies the TasksDialog renders must have an explicit map
+  // entry — a hex with no entry would silently fall back to muted, and (worse,
+  // pre-fix) a dynamic `text-[${color}]` never renders at all.
+  const kindColors = Object.values(TASK_KIND_META).map(meta => meta.color)
+  const stateColors = Object.values(AGENT_STATE_META).map(meta => meta.color)
+  for (const color of [...kindColors, ...stateColors]) {
+    expect(TASK_COLOR_CLASS[color]).toBeDefined()
+  }
+
+  // No resolved class may carry an interpolation or an arbitrary-value token —
+  // every class string is a complete literal Tailwind can scan.
+  const allClasses = Object.values(TASK_COLOR_CLASS).flatMap(entry => [
+    entry.text,
+    entry.border,
+    entry.dot,
+  ])
+  for (const cls of allClasses) {
+    expect(cls).not.toContain('[#')
+    expect(cls).not.toContain('${')
+    expect(cls).not.toContain('var(')
+  }
+
+  // The resolver degrades to a muted static fallback, never undefined.
+  const fallback = taskColorClass('#not-a-known-color')
+  expect(fallback.text).toBe('text-text-subtle')
+  expect(fallback.dot).not.toContain('[#')
+})
 
 function item(over: Partial<TaskSnapshotItem> = {}): TaskSnapshotItem {
   return {

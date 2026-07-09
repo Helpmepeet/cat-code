@@ -15,6 +15,7 @@ import { agentStateMeta } from './agentIdentity.js'
 import {
   groupTaskItems,
   isTerminalTaskStatus,
+  taskColorClass,
   taskDisplayState,
   taskKindMeta,
 } from './tasksState.js'
@@ -167,9 +168,18 @@ function TaskGroup({
 
 function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boolean }) {
   const kind = taskKindMeta(item.type)
+  const kindColor = taskColorClass(kind.color)
   const state = agentStateMeta(taskDisplayState(item))
   const terminal = isTerminalTaskStatus(item.status)
   const isMonoLabel = item.type === 'local_bash' || item.type === 'local_workflow' || item.type === 'monitor_mcp'
+  // Status label color: attention → the state's own tone; a failed terminal
+  // task → soft red; otherwise the muted subtle tone. All resolve to STATIC
+  // Tailwind classes (never an interpolated arbitrary value).
+  const statusTextClass = state.attention
+    ? taskColorClass(state.color).text
+    : terminal && item.status === 'failed'
+      ? 'text-red-300'
+      : 'text-text-subtle'
 
   return (
     <div
@@ -183,7 +193,7 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
         <StatusMarker terminal={terminal} attention={state.attention} color={state.color} />
       </span>
       <span
-        className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.04em] text-[${kind.color}] border-[${kind.color}]/35`}
+        className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.04em] ${kindColor.text} ${kindColor.border}`}
       >
         {kind.label}
       </span>
@@ -196,9 +206,7 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
         {item.label}
       </span>
       <span
-        className={`shrink-0 max-w-[220px] truncate font-mono text-[11px] text-[${
-          state.attention ? state.color : terminal && item.status === 'failed' ? '#fca5a5' : 'var(--color-text-subtle)'
-        }]`}
+        className={`shrink-0 max-w-[220px] truncate font-mono text-[11px] ${statusTextClass}`}
       >
         {state.label}
       </span>
@@ -215,18 +223,10 @@ function StatusMarker({
   attention: boolean
   color: string
 }) {
-  if (terminal) {
+  if (terminal || attention) {
     return (
       <span
-        className={`inline-block h-2 w-2 shrink-0 rounded-full bg-[${color}]`}
-        aria-hidden="true"
-      />
-    )
-  }
-  if (attention) {
-    return (
-      <span
-        className={`inline-block h-2 w-2 shrink-0 rounded-full bg-[${color}]`}
+        className={`inline-block h-2 w-2 shrink-0 rounded-full ${taskColorClass(color).dot}`}
         aria-hidden="true"
       />
     )
