@@ -197,10 +197,13 @@ test('maps local agent blocked handoff to user or orchestrator ownership explici
     handoffStatus: 'blocked' as const,
   }
 
+  // Solo case (no orchestrator to pick up the handoff) escalates to the amber
+  // 'needs-you'; orchestrator-owned is the NEUTRAL 'waiting' ("Waiting on
+  // orchestrator") — the P4-8 wiring of the previously unreachable `waiting` state.
   expect(deriveTaskAgentState(blockedTask)).toBe('needs-you')
   expect(
     deriveTaskAgentState(blockedTask, { blockedOwner: 'orchestrator' }),
-  ).toBe('blocked')
+  ).toBe('waiting')
 })
 
 test('maps real task lifecycle and attention fields without prototype activity fixtures', () => {

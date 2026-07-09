@@ -36,7 +36,7 @@ const HOVER_DELAY = 120
 const HIDE_DELAY = 200
 
 type NavItem = {
-  id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+  id: 'chat' | 'orchestrator' | 'sessions' | 'goals' | 'accounts' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -47,13 +47,14 @@ type NavItem = {
 // own comments already dropped Tasks/Agents from the rail). All five are built.
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
+  { id: 'orchestrator', label: 'Orchestrator', enabled: true, icon: <OrchestratorIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+type SidebarView = 'chat' | 'orchestrator' | 'sessions' | 'goals' | 'accounts' | 'settings'
 
 export function Sidebar({
   rows,
@@ -459,7 +460,7 @@ function NavItemExpanded({
       type="button"
       aria-current={active ? 'page' : undefined}
       onClick={() => {
-	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
+	        if (item.id === 'chat' || item.id === 'orchestrator' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
 	          onSelectView(item.id)
 	        }
       }}
@@ -511,7 +512,7 @@ function NavItemRail({
       aria-label={item.label}
       title={item.label}
       onClick={() => {
-	        if (item.id === 'chat' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
+	        if (item.id === 'chat' || item.id === 'orchestrator' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
 	          onSelectView(item.id)
 	        }
       }}
@@ -682,6 +683,27 @@ function AccountsIcon() {
     >
       <rect x="2" y="3" width="20" height="14" rx="2" />
       <path d="M8 21h8M12 17v4" />
+    </svg>
+  )
+}
+
+// Git-branch / delegation glyph (matches the prototype's OrchestratorBadge svg).
+function OrchestratorIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="6" y1="3" x2="6" y2="15" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
     </svg>
   )
 }

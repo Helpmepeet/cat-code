@@ -156,6 +156,7 @@ async function main(): Promise<void> {
     extensions,
     remoteSettings,
     sessionsCatalog,
+    agentMode,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: args.cwd,
@@ -189,6 +190,7 @@ async function main(): Promise<void> {
     ...(extensions ? { extensions } : {}),
     ...(remoteSettings ? { remoteSettings } : {}),
     ...(sessionsCatalog ? { sessionsCatalog } : {}),
+    ...(agentMode ? { agentMode } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     idleTtlMs,
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,

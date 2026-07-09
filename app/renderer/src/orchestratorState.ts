@@ -1,0 +1,206 @@
+/**
+ * Orchestrator state (P4-8, D2 `decisions/AGENT-CHROME.md`) — per-session
+ * `agent-mode.snapshot` frames from the read-seam, plus the two-axis worker
+ * derivation (lifecycle × attention owner) ported from the prototype's
+ * `deriveWorker`/`summarizeWorkers`/`bgTaskPill` (OrchestratorMode.jsx) but
+ * computed at READ time over the REAL `AgentModeWorkerItem` shape and the shared
+ * P4-2 `agentIdentity` vocabulary — never stored, never a mock worker.
+ *
+ * The two axes are independent (D2 §1): a worker has a LIFECYCLE state (what it is
+ * doing) AND an attention OWNER (who must act next). A blocked worker is neutral
+ * ("Waiting on orchestrator") while an orchestrator is active — only the solo case
+ * (no orchestrator to pick up the handoff) escalates to the amber "needs you".
+ */
+import {
+  deriveAgentModeWorkerState,
+  type AgentStateKey,
+} from './agentIdentity.js'
+import type {
+  AgentModeSnapshot,
+  AgentModeWorkerItem,
+  ServerFrame,
+  SessionId,
+} from '../../shared/protocol.js'
+
+export type OrchestratorState = {
+  bySession: Record<SessionId, AgentModeSnapshot | undefined>
+}
+
+export type OrchestratorAction = { type: 'frame'; frame: ServerFrame }
+
+export function createOrchestratorState(): OrchestratorState {
+  return { bySession: {} }
+}
+
+export function reduceOrchestratorState(
+  state: OrchestratorState,
+  action: OrchestratorAction,
+): OrchestratorState {
+  const { frame } = action
+
+  if (frame.kind === 'agent-mode.snapshot') {
+    return {
+      bySession: { ...state.bySession, [frame.sessionId]: frame.agentMode },
+    }
+  }
+
+  if (frame.kind === 'lifecycle') {
+    return {
+      bySession: { ...state.bySession, [frame.sessionId]: undefined },
+    }
+  }
+
+  return state
+}
+
+export function selectAgentModeSnapshot(
+  state: OrchestratorState,
+  sessionId: SessionId | null,
+): AgentModeSnapshot | null {
+  const snapshot = sessionId ? state.bySession[sessionId] : undefined
+  return snapshot ?? null
+}
+
+/* ── two-axis worker model (read-time derivation over real shapes) ─────────── */
+
+/** Who must act next on a worker. `user` = the reserved solo case (no orchestrator). */
+export type WorkerOwner = 'none' | 'orchestrator' | 'user'
+
+/**
+ * Lifecycle display state (`AgentStateKey`) for one worker. The handoff gate is
+ * overlaid on the shared agent-mode lifecycle derivation:
+ *   - blocked (handoffStatus) → 'waiting' when an orchestrator owns it (active),
+ *     else the solo 'needs-you' (the P4-8 wiring of the `waiting` state).
+ *   - otherwise the persisted lifecycle via `deriveAgentModeWorkerState`
+ *     (resumable/stale/result-ready/reviewed/attention/completed/running).
+ */
+export function orchestratorWorkerState(
+  worker: AgentModeWorkerItem,
+  active: boolean,
+): AgentStateKey {
+  if (worker.handoffStatus === 'blocked') {
+    return active ? 'waiting' : 'needs-you'
+  }
+  return deriveAgentModeWorkerState({
+    status: worker.status,
+    synthesisStatus: worker.synthesisStatus,
+    origin: worker.origin,
+    resumable: worker.resumable,
+    role: worker.role ?? '',
+    description: worker.description ?? '',
+  })
+}
+
+/**
+ * Attention owner (the baton). Blocked workers are orchestrator-owned while an
+ * orchestrator is active (they fed a question back via AskOrchestratorTool to the
+ * orchestrator's queue — `AskOrchestratorTool.ts:83`), user-owned only in the solo
+ * case. A pending-synthesis result and a failed/killed worker also await the
+ * orchestrator. Everything else needs nobody.
+ */
+export function deriveWorkerOwner(
+  worker: AgentModeWorkerItem,
+  active: boolean,
+): WorkerOwner {
+  if (worker.handoffStatus === 'blocked') {
+    return active ? 'orchestrator' : 'user'
+  }
+  const state = orchestratorWorkerState(worker, active)
+  if (state === 'result-ready' || state === 'attention') return 'orchestrator'
+  return 'none'
+}
+
+export type OrchestratorWorkerSummary = {
+  /** Actively running, nobody owns the next action. */
+  working: number
+  /** Awaiting the orchestrator (blocked/result-ready/failed under an active orchestrator). */
+  orchestrator: number
+  /** Awaiting the human (the solo blocked case). */
+  user: number
+  /** Reviewed / settled — no news. */
+  done: number
+}
+
+export function summarizeOrchestratorWorkers(
+  workers: readonly AgentModeWorkerItem[],
+  active: boolean,
+): OrchestratorWorkerSummary {
+  const summary: OrchestratorWorkerSummary = {
+    working: 0,
+    orchestrator: 0,
+    user: 0,
+    done: 0,
+  }
+  for (const worker of workers) {
+    const owner = deriveWorkerOwner(worker, active)
+    if (owner === 'user') summary.user += 1
+    else if (owner === 'orchestrator') summary.orchestrator += 1
+    else if (orchestratorWorkerState(worker, active) === 'running') summary.working += 1
+    else summary.done += 1
+  }
+  return summary
+}
+
+export type WorkerPill = {
+  label: string
+  /** neutral accent (subagents active) vs amber attention (a worker needs YOU). */
+  attention: boolean
+} | null
+
+/**
+ * Footer/summary pill. Amber ONLY when the human owns the next action (the solo
+ * escalation). Workers waiting on the orchestrator do NOT alert (D2 C2).
+ */
+export function orchestratorPill(
+  workers: readonly AgentModeWorkerItem[],
+  active: boolean,
+): WorkerPill {
+  if (workers.length === 0) return null
+  const summary = summarizeOrchestratorWorkers(workers, active)
+  if (summary.user > 0) {
+    return { label: `${summary.user} needs you`, attention: true }
+  }
+  const busy = summary.working + summary.orchestrator
+  if (busy > 0) {
+    return { label: `${busy} subagent${busy > 1 ? 's' : ''} active`, attention: false }
+  }
+  return null
+}
+
+/**
+ * News priority for the roster one-liner (the "whisper" model): a solo escalation
+ * (3) outranks a failure (2), which outranks a ready result (1). Working /
+ * needs-input / reviewed carry no news (0) — they stay a neutral count.
+ */
+export function workerEventPriority(
+  worker: AgentModeWorkerItem,
+  active: boolean,
+): number {
+  const owner = deriveWorkerOwner(worker, active)
+  if (owner === 'user') return 3
+  const state = orchestratorWorkerState(worker, active)
+  if (state === 'attention') return 2
+  if (state === 'result-ready') return 1
+  return 0
+}
+
+/** The single worker promoted to the roster one-liner, or null when the swarm is quiet. */
+export function selectPromotedWorker(
+  workers: readonly AgentModeWorkerItem[],
+  active: boolean,
+): { worker: AgentModeWorkerItem; priority: number } | null {
+  let lead: { worker: AgentModeWorkerItem; priority: number } | null = null
+  for (const worker of workers) {
+    const priority = workerEventPriority(worker, active)
+    if (priority > 0 && (!lead || priority > lead.priority)) {
+      lead = { worker, priority }
+    }
+  }
+  return lead
+}
+
+/** Strip a leading `@` from a handle for display; null-safe. */
+export function displayHandle(handle: string | null): string | null {
+  if (!handle) return null
+  return handle.replace(/^@/, '')
+}

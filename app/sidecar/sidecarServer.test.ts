@@ -37,6 +37,10 @@ import {
 } from './permissionDomain.js'
 import { createSidecarGoalDomain, type SidecarGoalDomain } from './goalDomain.js'
 import { createSidecarTasksDomain, type SidecarTasksDomain } from './tasksDomain.js'
+import {
+  createSidecarAgentModeDomain,
+  type SidecarAgentModeDomain,
+} from './agentModeDomain.js'
 import { createTaskStateBase } from '../../src/Task.js'
 import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.js'
 import {
@@ -144,6 +148,7 @@ function makeServer(
   remoteSettings?: SidecarRemoteSettingsDomain,
   tasks?: SidecarTasksDomain,
   extensions?: SidecarExtensionsDomain,
+  agentMode?: SidecarAgentModeDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -157,6 +162,7 @@ function makeServer(
     ...(remoteSettings ? { remoteSettings } : {}),
     ...(tasks ? { tasks } : {}),
     ...(extensions ? { extensions } : {}),
+    ...(agentMode ? { agentMode } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -500,6 +506,71 @@ test('P4-9 — emits the live tasks snapshot on attach and store change', () => 
   // — proving the store-driven re-emit carries fresh filtered state, not a
   // stale copy of the attach-time snapshot.
   expect(latest?.tasks.items).toHaveLength(0)
+})
+
+test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-clean', async () => {
+  const store = makePermissionStore()
+  const blockedWorker = {
+    ...createTaskStateBase('a1', 'local_agent', 'Wire the auth flow'),
+    type: 'local_agent' as const,
+    status: 'completed' as const,
+    agentId: 'w-blocked',
+    prompt: 'Wire the auth flow',
+    agentType: 'implementor',
+    agentName: 'Turing',
+    retrieved: false,
+    lastReportedToolCount: 0,
+    lastReportedTokenCount: 0,
+    isBackgrounded: true,
+    pendingMessages: [],
+    retain: false,
+    diskLoaded: false,
+    handoffStatus: 'blocked' as const,
+    blockReason: 'Which auth strategy should I use?',
+  }
+  store.setState(prev => ({ ...prev, tasks: { a1: blockedWorker } }))
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    createSidecarAgentModeDomain(store),
+  )
+  const { socket, received } = makeSocket()
+
+  server.addConnection(socket)
+
+  // sendAgentModeSnapshot is async (the session plane is a file-backed engine
+  // read), fired-and-forgotten on attach — poll for the emitted frame.
+  const findFrame = () =>
+    received.find(
+      (frame): frame is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
+        frame.kind === 'agent-mode.snapshot',
+    )
+  for (let i = 0; i < 100 && !findFrame(); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+
+  const snapshot = findFrame()
+  expect(snapshot?.kind).toBe('agent-mode.snapshot')
+  // Assert MY live worker is present rather than an exact count: `getSessionId()`
+  // is a process global shared across tests in this harness, so the persisted
+  // plane may add foreign continuity workers here (a real sidecar owns one
+  // session, so this is a test-harness artifact, not a production shape).
+  const liveWorker = snapshot?.agentMode.workers.find(worker => worker.agentId === 'w-blocked')
+  expect(liveWorker).toMatchObject({
+    handle: 'Turing',
+    role: 'implementor',
+    status: 'completed',
+    handoffStatus: 'blocked',
+    blockReason: 'Which auth strategy should I use?',
+  })
+  expect(snapshot && scanForSecrets(snapshot).ok).toBe(true)
 })
 
 test('T5a — permission.response for an unknown requestId is rejected', () => {

@@ -321,7 +321,17 @@ export function deriveTaskAgentState(
 ): AgentStateKey {
   if (task.type === 'local_agent') {
     if (task.handoffStatus === 'blocked') {
-      return options.blockedOwner === 'orchestrator' ? 'blocked' : 'needs-you'
+      // Two-axis handoff (D2 `decisions/AGENT-CHROME.md`, prototype
+      // OrchestratorMode.jsx `workerStateKey`:163): an orchestrator-owned blocked
+      // worker is NEUTRAL — it fed a question back to the orchestrator's queue via
+      // AskOrchestratorTool (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:184`,
+      // `AskOrchestratorTool.ts:83`), not to the human → 'waiting' ("Waiting on
+      // orchestrator"). Only the solo case (no orchestrator to pick it up) escalates
+      // to the amber 'needs-you'. This is the P4-8 wiring of the previously
+      // unreachable `waiting` state (the AgentIdentity two-strikes rider); the gray
+      // `blocked` meta survives as the transcript-card's own render remap
+      // (`waiting`→`blocked`, AgentIdentity.jsx:170, deferred P4-8c).
+      return options.blockedOwner === 'orchestrator' ? 'waiting' : 'needs-you'
     }
     if (task.status === 'running' && task.isBackgrounded === true) {
       return 'background'
