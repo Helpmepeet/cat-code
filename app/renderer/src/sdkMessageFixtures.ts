@@ -884,10 +884,14 @@ export const SDK_MESSAGE_FIXTURE: {
    * + the runtime schema's required fields (coreSchemas.ts per-subtype). */
   system: [
     {
+      // P4-23 (operator, 2026-07-09): the init frame emits NO transcript row now
+      // (the ✦ "Session started" banner was removed). It still runs `case 'init'`
+      // to capture the P3-7 slash-command catalog — proven in the projector's
+      // "captures the init frame slash_commands catalog" test — but adds 0 rows.
       name: 'system: init (first frame of first turn)',
       anchor: 'src/utils/messages/systemInit.ts:57-97',
       reach: 'app-seam',
-      expectRows: 1,
+      expectRows: 0,
       message: {
         type: 'system',
         subtype: 'init',

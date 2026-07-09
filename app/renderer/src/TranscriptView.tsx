@@ -20,7 +20,13 @@
  * slices; their cases slot into this same switch.
  */
 
-import { memo } from 'react'
+import {
+  Component,
+  memo,
+  useState,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+} from 'react'
 import Markdown from 'react-markdown'
 import type { SessionId } from '../../shared/protocol.js'
 import {
@@ -29,6 +35,7 @@ import {
   type TranscriptState,
   type ToolCardStatus,
   type ToolDiffProjection,
+  type ToolFamily,
   type UserImageSource,
 } from './transcriptProjector.js'
 
@@ -83,13 +90,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
   const rowKind: string = row.kind
   switch (row.kind) {
     case 'assistant-text':
-      // Prose/markdown depth (GFM tables, code highlighting, streaming caret,
-      // copy chip) is 18c; 18a keeps the bare react-markdown body.
-      return (
-        <div className="font-sans text-sm leading-relaxed [&>*+*]:mt-2 [&_code]:font-mono [&_a]:text-accent [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5">
-          <Markdown>{row.content}</Markdown>
-        </div>
-      )
+      return <AssistantProse content={row.content} streaming={row.isStreaming} />
 
     case 'user-text':
       return <UserBubble content={row.content} />
@@ -113,16 +114,6 @@ const TranscriptRowView = memo(function TranscriptRowView({
 
     case 'redacted-thinking':
       return <RedactedThinkingBlock />
-
-    case 'session-init':
-      return (
-        <SessionInitBanner
-          cwd={row.cwd}
-          model={row.model}
-          tools={row.tools}
-          permissionMode={row.permissionMode}
-        />
-      )
 
     case 'system-notice':
       return (
@@ -175,43 +166,352 @@ const TranscriptRowView = memo(function TranscriptRowView({
 })
 
 /**
- * P2-2 tool card (generic family + name + status + input + result + nested
- * subagent children). Per-family VISUALS (Bash tail-peek, FileRead numbering,
- * Grep results, image tiles, agent activity chrome) are 18b — they replace
- * this generic body; 18a leaves it untouched and only preserves D2/C4 nesting.
+ * P4-18c assistant prose. react-markdown for the core GFM-less set (headings,
+ * bold/italic, inline code, lists, links, hr, blockquote) wrapped in a
+ * render-error boundary (a throw degrades to the plain source, never a React
+ * crash — display = degrade gracefully). Fenced code blocks render in a framed
+ * panel with a per-block copy button. Long bodies (>60 lines) collapse behind a
+ * "Show N more lines" control. A streaming body carries a blinking caret.
+ *
+ * §5 deferrals (need a new dep, gated on operator approval — CLAUDE.md §7 "no
+ * new deps without asking"): GFM pipe TABLES (`remark-gfm`) and fenced-code
+ * SYNTAX-TOKEN highlighting (a highlighter). Code renders framed + copyable but
+ * un-colorized; tables render as raw text until the deps are approved.
  */
-function ToolCard({
-  row,
+const PROSE_COLLAPSE_LINES = 60
+
+function AssistantProse({
+  content,
+  streaming,
 }: {
-  row: Extract<NestedTranscriptRow, { kind: 'tool-use' }>
+  content: string
+  streaming?: true
 }) {
+  const [expanded, setExpanded] = useState(false)
+  const totalLines = content.split('\n').length
+  const collapsible = totalLines > PROSE_COLLAPSE_LINES
+  const shown =
+    collapsible && !expanded
+      ? content.split('\n').slice(0, PROSE_COLLAPSE_LINES).join('\n')
+      : content
   return (
-    <div className="rounded border border-accent/40 bg-app-bg p-3">
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-xs uppercase tracking-wide text-accent">
-          {row.toolFamily}
-        </span>
-        <span className="font-mono text-xs text-text-primary">{row.toolName}</span>
-        <ToolStatusBadge status={row.status} />
-      </div>
-      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-text-muted">
-        {JSON.stringify(row.input, null, 2)}
-      </pre>
-      {row.result ? (
-        <div
-          className={
-            row.result.isError
-              ? 'mt-2 whitespace-pre-wrap rounded border border-tone-danger/40 bg-app-bg p-2 font-mono text-xs text-tone-danger'
-              : 'mt-2 whitespace-pre-wrap rounded border border-text-subtle/40 bg-app-bg p-2 font-mono text-xs text-text-muted'
-          }
+    <div>
+      <MarkdownErrorBoundary fallback={content}>
+        <div className="font-sans text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
+          <Markdown components={MARKDOWN_COMPONENTS}>{shown}</Markdown>
+        </div>
+      </MarkdownErrorBoundary>
+      {streaming ? (
+        <span
+          className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom"
+          aria-hidden
+        />
+      ) : null}
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(value => !value)}
+          className="mt-1 font-mono text-[11px] text-accent hover:underline"
         >
-          {row.result.diff ? (
-            <DiffView diff={row.result.diff} />
-          ) : (
-            row.result.content
-          )}
+          {expanded
+            ? 'Collapse'
+            : `Show ${totalLines - PROSE_COLLAPSE_LINES} more lines`}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Render-error boundary (client runtime): a react-markdown throw degrades to the
+ * plain markdown source instead of crashing the transcript subtree.
+ */
+class MarkdownErrorBoundary extends Component<
+  { fallback: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  render(): ReactNode {
+    if (this.state.failed) {
+      return (
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs text-text-muted">
+          {this.props.fallback}
+        </pre>
+      )
+    }
+    return this.props.children
+  }
+}
+
+/** Flatten react-markdown code children (string, or node array) to raw text. */
+function childrenToText(children: ReactNode): string {
+  if (typeof children === 'string') return children
+  if (Array.isArray(children)) return children.map(childrenToText).join('')
+  if (typeof children === 'number') return String(children)
+  return ''
+}
+
+const MARKDOWN_COMPONENTS = {
+  // react-markdown wraps a fenced block in <pre><code>; unwrap the <pre> and let
+  // the <code> renderer own the framed CodeBlock (avoids a nested <pre>).
+  pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
+  code: ({ className, children }: ComponentPropsWithoutRef<'code'>) => {
+    const match = /language-(\w+)/.exec(className ?? '')
+    const text = childrenToText(children)
+    if (!match && !text.includes('\n')) {
+      return <code className={className}>{children}</code>
+    }
+    return <CodeBlock lang={match?.[1] ?? ''} code={text.replace(/\n$/, '')} />
+  },
+}
+
+/**
+ * Fenced code block: framed panel + language label + per-block copy button.
+ * Syntax-token highlighting is a §5 dep-gated deferral (no highlighter in
+ * `app/`) — the code renders plain but framed and copyable.
+ */
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) return
+    void clipboard
+      .writeText(code)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+      })
+      .catch(() => {})
+  }
+  return (
+    <div className="my-2 overflow-hidden rounded-md border border-shell-seam bg-black/30">
+      <div className="flex items-center justify-between border-b border-shell-seam px-3 py-1">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-text-subtle">
+          {lang || 'code'}
+        </span>
+        <button
+          type="button"
+          onClick={copy}
+          className="font-mono text-[10px] text-text-subtle transition-colors hover:text-text-primary"
+        >
+          {copied ? 'copied' : 'copy'}
+        </button>
+      </div>
+      <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
+        <code>{code}</code>
+      </pre>
+    </div>
+  )
+}
+
+type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
+
+/**
+ * P4-18b tool-card FAMILY grammar (`Messages.jsx` FrameEShell). Each family's
+ * identity is its glyph + uppercase word + accent, applied to the mark/word
+ * ONLY (never rails or washes). These are STATIC class strings — Tailwind's
+ * scanner never sees an interpolated `text-[${hex}]` (the dynamic-class trap),
+ * so the family hues live as literal arbitrary-value classes in this map. The
+ * hues match the prototype's family palette; tokenized ones (edit/agent pink,
+ * `other` muted) reuse theme tokens.
+ */
+const FAMILY_STYLE: Record<
+  ToolFamily,
+  { mark: string; word: string; color: string }
+> = {
+  bash: { mark: '$', word: 'Bash', color: 'text-[#a3e635]' },
+  read: { mark: '≡', word: 'Read', color: 'text-[#60a5fa]' },
+  write: { mark: '+', word: 'Write', color: 'text-[#fb923c]' },
+  edit: { mark: '±', word: 'Edit', color: 'text-accent' },
+  grep: { mark: '⌕', word: 'Search', color: 'text-[#fbbf24]' },
+  web: { mark: '↗', word: 'Web', color: 'text-[#22d3ee]' },
+  mcp: { mark: '⧉', word: 'MCP', color: 'text-[#c084fc]' },
+  notebook: { mark: '▣', word: 'Notebook', color: 'text-[#f97316]' },
+  lsp: { mark: '◈', word: 'LSP', color: 'text-[#f87171]' },
+  skill: { mark: '✦', word: 'Skill', color: 'text-[#5eead4]' },
+  agent: { mark: '◆', word: 'Agent', color: 'text-accent' },
+  imagegen: { mark: '◰', word: 'Image', color: 'text-[#e879f9]' },
+  other: { mark: '•', word: 'Tool', color: 'text-text-muted' },
+}
+
+/**
+ * The projector derives only THREE statuses (pending/success/error) — the
+ * prototype's richer vocab (queued/needs-permission/cancelled/denied/truncated)
+ * has no correlated seam signal, so this maps the real three to running/done/
+ * failed (§5 ledger: "adapted to 3 states"). `pending` pulses like the
+ * prototype's running dot.
+ */
+const STATE_STYLE: Record<
+  ToolCardStatus,
+  { word: string; color: string; dot: string; pulse: boolean }
+> = {
+  pending: { word: 'running', color: 'text-accent', dot: 'bg-accent', pulse: true },
+  success: {
+    word: 'done',
+    color: 'text-tone-success',
+    dot: 'bg-tone-success',
+    pulse: false,
+  },
+  error: {
+    word: 'failed',
+    color: 'text-tone-danger',
+    dot: 'bg-tone-danger',
+    pulse: false,
+  },
+}
+
+/** Family-specific one-line target framing derived from the REAL tool input. */
+function deriveTarget(row: ToolUseNestedRow): string {
+  const input = row.input
+  const str = (key: string): string | null => {
+    const value = input[key]
+    return typeof value === 'string' && value.length > 0 ? value : null
+  }
+  switch (row.toolFamily) {
+    case 'bash':
+      return str('command') ?? row.toolName
+    case 'read':
+    case 'write':
+      return str('file_path') ?? row.toolName
+    case 'edit':
+      return str('file_path') ?? row.result?.diff?.filePath ?? row.toolName
+    case 'grep':
+      return str('pattern') ?? str('path') ?? row.toolName
+    case 'web':
+      return str('url') ?? str('query') ?? row.toolName
+    case 'notebook':
+      return str('notebook_path') ?? str('path') ?? row.toolName
+    case 'mcp':
+      return mcpServerTool(row.toolName)
+    case 'skill':
+      return str('command') ?? str('skill') ?? row.toolName
+    case 'imagegen':
+      return str('prompt') ?? row.toolName
+    default:
+      return row.toolName
+  }
+}
+
+/** `mcp__server__tool` → `server › tool` (the prototype's MCP framing). */
+function mcpServerTool(toolName: string): string {
+  if (!toolName.startsWith('mcp__')) return toolName
+  const [, server, ...rest] = toolName.split('__')
+  if (!server) return toolName
+  return rest.length > 0 ? `${server} › ${rest.join('__')}` : server
+}
+
+/** Uppercase micro-label under the header, real data only (byte/line counts
+ * the prototype shows are not projected — §5 flag, not mocked). */
+function deriveSub(row: ToolUseNestedRow): string | undefined {
+  if (row.result?.diff) {
+    const { adds, dels } = countDiff(row.result.diff)
+    return `${row.result.diff.filePath} · +${adds} −${dels}`
+  }
+  if (row.toolFamily === 'mcp') return row.toolName
+  return undefined
+}
+
+/**
+ * Shared quiet-panel card shell (FrameEShell): mark · WORD · target ·
+ * state-dot+word header, click-to-collapse body. Family identity colors the
+ * mark/word only; the state cluster carries running/done/failed tone.
+ */
+function ToolCardShell({
+  family,
+  target,
+  status,
+  sub,
+  collapsedExtra,
+  defaultExpanded,
+  children,
+}: {
+  family: ToolFamily
+  target: string
+  status: ToolCardStatus
+  sub?: string
+  collapsedExtra?: ReactNode
+  defaultExpanded?: boolean
+  children?: ReactNode
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded ?? false)
+  const fam = FAMILY_STYLE[family]
+  const st = STATE_STYLE[status]
+  const hasBody = children !== undefined && children !== null
+  return (
+    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+      <button
+        type="button"
+        onClick={() => setExpanded(value => !value)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
+      >
+        <span className={`w-4 shrink-0 text-center text-[13px] ${fam.color}`} aria-hidden>
+          {fam.mark}
+        </span>
+        <span
+          className={`shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] ${fam.color}`}
+        >
+          {fam.word}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
+          {target}
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+            aria-hidden
+          />
+          <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
+        </span>
+      </button>
+      {!expanded && collapsedExtra ? collapsedExtra : null}
+      {expanded && hasBody ? (
+        <div className="border-t border-shell-seam bg-black/[0.28]">
+          {sub ? (
+            <div className="truncate px-3 pt-1.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.07em] text-text-subtle">
+              {sub}
+            </div>
+          ) : null}
+          <div className="px-3 pb-2.5 pt-1">{children}</div>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * P4-18b tool card: dispatches the shared shell (family mark/word/target/
+ * state-dot/collapse) with a per-family body rendered from the REAL projected
+ * row (`input` + correlated `result.content`/`result.diff`, zero casts). Sub-
+ * features that need data the projector never surfaces (stdout/stderr split,
+ * line/byte counts, real diagnostic severity, the GenerateImage inline tile,
+ * WebFetch content-type/size, word-level intra-line diff) render truth or a
+ * flagged note — they are §5 ledger deferrals needing a projector data-contract
+ * change, NOT the P2-locked render layer, and are never mocked.
+ */
+function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  const content = row.result?.content ?? ''
+  const isImageDone = row.toolFamily === 'imagegen' && row.status === 'success'
+  return (
+    <div className="w-full">
+      <ToolCardShell
+        family={row.toolFamily}
+        target={deriveTarget(row)}
+        status={row.status}
+        sub={deriveSub(row)}
+        defaultExpanded={row.status === 'error' || isImageDone}
+        collapsedExtra={
+          row.toolFamily === 'bash' && content.length > 0 ? (
+            <BashTailPeek content={content} />
+          ) : null
+        }
+      >
+        <ToolCardBody row={row} content={content} />
+      </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2 border-l border-accent/20 pl-3">
           {row.children.map(child => (
@@ -219,6 +519,194 @@ function ToolCard({
           ))}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/** Per-family body from real data. */
+function ToolCardBody({
+  row,
+  content,
+}: {
+  row: ToolUseNestedRow
+  content: string
+}) {
+  if (row.result?.diff) return <DiffView diff={row.result.diff} />
+
+  const errorTone = row.result?.isError === true
+  if (!row.result) {
+    // No correlated result yet: show the real input so a running/queued tool is
+    // legible rather than blank.
+    return (
+      <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-text-subtle">
+        {stringifyInput(row.input)}
+      </pre>
+    )
+  }
+  if (content.length === 0) {
+    return (
+      <div className="font-mono text-[11.5px] italic text-text-subtle">
+        {errorTone ? 'Failed with no output.' : 'No output.'}
+      </div>
+    )
+  }
+
+  switch (row.toolFamily) {
+    case 'bash':
+      return <BashBody content={content} isError={errorTone} />
+    case 'read':
+      return <NumberedBody content={content} />
+    case 'write':
+      return <AdditionsBody content={content} />
+    case 'imagegen':
+      return <ImageResultBody content={content} isError={errorTone} />
+    default:
+      return <PlainLinesBody content={content} isError={errorTone} />
+  }
+}
+
+function stringifyInput(input: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(input, null, 2)
+  } catch {
+    return '[uninspectable input]'
+  }
+}
+
+/** Semantic bash line tint (prototype `logLineColor`), mapped to tone tokens. */
+function bashLineClass(line: string): string {
+  if (/(\bFAIL\b|\bERROR\b|\berror\b|npm ERR!|✕|✘|UnhandledPromise|failed)/.test(line)) {
+    return 'text-tone-danger'
+  }
+  if (/(\bWARN(ING)?\b|exceed|collision)/i.test(line)) return 'text-tone-warn'
+  if (/(\bPASS\b|✓|compiled|succeeded|\bpassed\b)/.test(line)) {
+    return 'text-tone-success'
+  }
+  if (/^\s*(>|@ |at )/.test(line)) return 'text-text-subtle'
+  return 'text-text-muted'
+}
+
+const MAX_INLINE_TOOL_LINES = 400
+
+function BashBody({ content, isError }: { content: string; isError: boolean }) {
+  const lines = content.split('\n')
+  const shown = lines.slice(0, MAX_INLINE_TOOL_LINES)
+  return (
+    <div>
+      <pre className="max-h-[340px] overflow-auto whitespace-pre font-mono text-[11.5px] leading-relaxed">
+        {shown.map((line, index) => (
+          <div key={index} className={isError ? 'text-tone-danger' : bashLineClass(line)}>
+            {line || ' '}
+          </div>
+        ))}
+      </pre>
+      <ToolOverflowNote total={lines.length} shown={shown.length} unit="lines" />
+    </div>
+  )
+}
+
+/** Collapsed tail-peek: the last few output lines, faded (prototype bash peek). */
+function BashTailPeek({ content }: { content: string }) {
+  const lines = content.split('\n').filter(line => line.length > 0)
+  if (lines.length === 0) return null
+  const tail = lines.slice(-3)
+  return (
+    <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
+      <pre className="overflow-hidden whitespace-pre font-mono text-[11px] leading-relaxed text-text-subtle/80">
+        {tail.map((line, index) => (
+          <div key={index}>{line}</div>
+        ))}
+      </pre>
+    </div>
+  )
+}
+
+function NumberedBody({ content }: { content: string }) {
+  const lines = content.split('\n').slice(0, MAX_INLINE_TOOL_LINES)
+  return (
+    <pre className="max-h-[340px] overflow-auto whitespace-pre font-mono text-[11.5px] leading-relaxed text-text-muted">
+      {lines.map((line, index) => (
+        <div key={index} className="flex">
+          <span className="mr-3 w-8 shrink-0 select-none text-right tabular-nums text-text-subtle/60">
+            {index + 1}
+          </span>
+          <span className="min-w-0">{line || ' '}</span>
+        </div>
+      ))}
+    </pre>
+  )
+}
+
+/** File-write additions view: every line prefixed with a green `+`. */
+function AdditionsBody({ content }: { content: string }) {
+  const lines = content.split('\n').slice(0, MAX_INLINE_TOOL_LINES)
+  return (
+    <pre className="max-h-[340px] overflow-auto whitespace-pre font-mono text-[11.5px] leading-relaxed text-tone-success">
+      {lines.map((line, index) => (
+        <div key={index} className="flex">
+          <span className="mr-2 w-3 shrink-0 select-none text-right">+</span>
+          <span className="min-w-0">{line || ' '}</span>
+        </div>
+      ))}
+    </pre>
+  )
+}
+
+function PlainLinesBody({ content, isError }: { content: string; isError: boolean }) {
+  const lines = content.split('\n')
+  const shown = lines.slice(0, MAX_INLINE_TOOL_LINES).join('\n')
+  return (
+    <div>
+      <pre
+        className={`max-h-[340px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
+          isError ? 'text-tone-danger' : 'text-text-muted'
+        }`}
+      >
+        {shown}
+      </pre>
+      <ToolOverflowNote total={lines.length} shown={lines.slice(0, MAX_INLINE_TOOL_LINES).length} unit="lines" />
+    </div>
+  )
+}
+
+/**
+ * GenerateImage result. The projector carries only the flattened result text,
+ * NOT the inline image bytes/path structure — the prototype's inline image
+ * tile + Open/Copy actions need a projector data-contract change (§5 flag),
+ * so this renders the real result text with a note instead of an invented tile.
+ */
+function ImageResultBody({ content, isError }: { content: string; isError: boolean }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <pre
+        className={`overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
+          isError ? 'text-tone-danger' : 'text-text-muted'
+        }`}
+      >
+        {content}
+      </pre>
+      {!isError ? (
+        <span className="font-mono text-[10px] italic text-text-subtle/70">
+          inline image tile pending a projector image-payload seam
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function ToolOverflowNote({
+  total,
+  shown,
+  unit,
+}: {
+  total: number
+  shown: number
+  unit: string
+}) {
+  if (total <= shown) return null
+  return (
+    <div className="mt-1 border-t border-shell-seam pt-1 font-mono text-[10px] text-text-subtle/70">
+      {total - shown} more {unit} — open the full-output inspector to view all
     </div>
   )
 }
@@ -342,52 +830,6 @@ function RedactedThinkingBlock() {
         redacted by the model provider
       </span>
     </div>
-  )
-}
-
-/**
- * SessionInitRow: the ✦ session-start banner — cwd, model, tool count, and
- * permission mode from the real `system/init` frame.
- */
-function SessionInitBanner({
-  cwd,
-  model,
-  tools,
-  permissionMode,
-}: {
-  cwd: string
-  model: string
-  tools: string[]
-  permissionMode: string
-}) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-2">
-      <span className="text-[13px] leading-none text-text-subtle" aria-hidden>
-        ✦
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-[11px] font-bold uppercase tracking-[0.07em] text-text-subtle">
-          Session started
-        </div>
-        <div className="truncate font-mono text-[11.5px] text-text-muted">
-          {cwd}
-        </div>
-        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-          <MetaPair label="model" value={model} />
-          <MetaPair label="tools" value={String(tools.length)} />
-          <MetaPair label="mode" value={permissionMode} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function MetaPair({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="text-[10px] text-text-subtle/70">{label}</span>
-      <span className="font-mono text-[11px] text-text-muted">{value}</span>
-    </span>
   )
 }
 
@@ -551,53 +993,86 @@ function Seam({
   )
 }
 
-function ToolStatusBadge({ status }: { status: ToolCardStatus }) {
-  const label = status === 'pending' ? 'running' : status
-  // `--tone-warn` is deliberately left unset (theme.css P1-0 TODO: no
-  // source-approved color yet) — `pending` uses the accent token instead of
-  // an undefined class that would silently no-op.
-  const tone =
-    status === 'error'
-      ? 'text-tone-danger'
-      : status === 'pending'
-        ? 'text-accent'
-        : 'text-tone-success'
-  return <span className={`font-mono text-xs ${tone}`}>{label}</span>
+/** +adds / −dels across every hunk (from the `+`/`-` line prefixes). */
+function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
+  let adds = 0
+  let dels = 0
+  for (const hunk of diff.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) adds++
+      else if (line.startsWith('-')) dels++
+    }
+  }
+  return { adds, dels }
+}
+
+type DiffLineKind = 'add' | 'del' | 'ctx'
+
+const DIFF_ROW_CLASS: Record<DiffLineKind, string> = {
+  add: 'bg-tone-success/10 text-tone-success',
+  del: 'bg-tone-danger/10 text-tone-danger',
+  ctx: 'text-text-subtle',
+}
+
+const DIFF_SIGN_CLASS: Record<DiffLineKind, string> = {
+  add: 'text-tone-success',
+  del: 'text-tone-danger',
+  ctx: 'text-text-subtle/50',
 }
 
 /**
- * `DiffView`/`MultiDiffCard` (INVENTORY W3 ⚓2): one file's hunks. Multiple
- * hunks in the SAME file (`FileEditTool`'s own multi-edit input) render as
- * successive hunk blocks under one file header — there is no seam shape for
- * a single result spanning many separate files (`ToolDiffProjection` doc).
+ * `DiffView`/`MultiDiffCard` (INVENTORY W3 ⚓2): one file's hunks, dual old/new
+ * line-number gutters + a +adds/−dels file-header count (P4-18b). Multiple hunks
+ * in the SAME file (`FileEditTool`'s own multi-edit input) render as successive
+ * blocks under one header — there is no seam shape for one result spanning many
+ * separate files (`ToolDiffProjection` doc). Gutter numbers walk each hunk from
+ * its `oldStart`/`newStart`. Word-level intra-line highlight (`Diff.diffWords`)
+ * is a §5 deferral — it needs a diff-tokenizer dep not in `app/`.
  */
 function DiffView({ diff }: { diff: ToolDiffProjection }) {
+  const { adds, dels } = countDiff(diff)
   return (
-    <div>
-      <div className="mb-1 font-mono text-xs text-text-primary">
-        {diff.filePath}
+    <div className="font-mono text-xs leading-[1.65]">
+      <div className="flex items-center gap-2.5 border-b border-shell-seam pb-1.5 text-[11.5px] text-text-muted">
+        <span className="min-w-0 flex-1 truncate">{diff.filePath}</span>
+        {adds > 0 ? <span className="shrink-0 text-tone-success">+{adds}</span> : null}
+        {dels > 0 ? <span className="shrink-0 text-tone-danger">−{dels}</span> : null}
       </div>
-      {diff.hunks.map((hunk, index) => (
-        <pre
-          key={`${hunk.oldStart}:${hunk.newStart}:${index}`}
-          className="overflow-x-auto whitespace-pre font-mono text-xs"
-        >
-          {hunk.lines.map((line, lineIndex) => (
-            <div
-              key={lineIndex}
-              className={
-                line.startsWith('+')
-                  ? 'text-tone-success'
-                  : line.startsWith('-')
-                    ? 'text-tone-danger'
-                    : 'text-text-muted'
-              }
-            >
-              {line}
-            </div>
-          ))}
-        </pre>
-      ))}
+      <div className="overflow-x-auto">
+        {diff.hunks.map((hunk, hunkIndex) => {
+          let oldNo = hunk.oldStart
+          let newNo = hunk.newStart
+          return hunk.lines.map((line, lineIndex) => {
+            const kind: DiffLineKind = line.startsWith('+')
+              ? 'add'
+              : line.startsWith('-')
+                ? 'del'
+                : 'ctx'
+            const body = kind === 'ctx' ? line : line.slice(1)
+            const oldLabel = kind === 'add' ? '' : String(oldNo)
+            const newLabel = kind === 'del' ? '' : String(newNo)
+            if (kind !== 'add') oldNo++
+            if (kind !== 'del') newNo++
+            const sign = kind === 'add' ? '+' : kind === 'del' ? '−' : ' '
+            return (
+              <div
+                key={`${hunkIndex}:${lineIndex}`}
+                className={`flex whitespace-pre ${DIFF_ROW_CLASS[kind]}`}
+              >
+                <span className="w-8 shrink-0 select-none pr-2 text-right tabular-nums text-text-subtle/50">
+                  {oldLabel}
+                </span>
+                <span className="w-8 shrink-0 select-none pr-2 text-right tabular-nums text-text-subtle/50">
+                  {newLabel}
+                </span>
+                <span className="min-w-0 flex-1 border-l border-shell-seam pl-2.5">
+                  <span className={DIFF_SIGN_CLASS[kind]}>{sign}</span> {body}
+                </span>
+              </div>
+            )
+          })
+        })}
+      </div>
     </div>
   )
 }

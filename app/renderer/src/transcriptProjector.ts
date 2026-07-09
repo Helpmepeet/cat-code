@@ -194,14 +194,6 @@ export type SystemNoticeRow = FrameRowSource & {
   content: string
 }
 
-export type SessionInitRow = FrameRowSource & {
-  kind: 'session-init'
-  cwd: string
-  model: string
-  tools: string[]
-  permissionMode: string
-}
-
 export type ResultRow = FrameRowSource & {
   kind: 'result'
   subtype: string
@@ -231,7 +223,6 @@ export type TranscriptRow =
   | CommandEchoRow
   | UserImageRow
   | SystemNoticeRow
-  | SessionInitRow
   | ResultRow
   | CompactBoundaryRow
   | SnipBoundaryRow
@@ -717,27 +708,24 @@ function projectSystemFrame(
       const tools = stringArray(message.tools)
       const permissionMode = nonEmptyString(message.permissionMode)
       if (!cwd || !model || !tools || !permissionMode) return state
+      // P4-23 (operator, 2026-07-09): the visible ✦ "Session started" banner row
+      // was removed — Claude/ChatGPT show no such banner. The `case 'init'` still
+      // runs and STILL captures the P3-7 slash-command catalog (this frame does
+      // double duty); it just emits NO transcript row now.
+      //
       // The slash catalog rides the SAME init frame (no new wire vocabulary):
       // `slash_commands` is the user-invocable command names the sidecar's real
       // catalog produced (P3-7). Tolerate its absence — a session whose sidecar
-      // catalog degraded to `[]` still projects a valid session-init row.
+      // catalog degraded to `[]` still captures a valid (empty) catalog.
       const slashCommands = stringArray(message.slash_commands) ?? []
-      const next = appendFrameRows(state, frameId, [
-        {
-          id: frameRowId(sessionId, frameId, 'session-init'),
-          sessionId,
-          frameId,
-          kind: 'session-init',
-          cwd,
-          model,
-          tools,
-          permissionMode,
-        },
-      ])
-      // Store the catalog as session metadata (read by the SlashCommandPicker),
-      // separate from the row list. `appendFrameRows` returns a fresh state when
-      // the row lands, so this write never mutates the prior snapshot.
-      return next === state ? state : { ...next, slashCommands }
+      // Mark the frame seen so a replayed init is idempotent (the row list is no
+      // longer written, so `appendFrameRows` is not the dedupe path anymore), and
+      // store the catalog as session metadata read by the SlashCommandPicker.
+      return {
+        ...state,
+        seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
+        slashCommands,
+      }
     }
 
     case 'compact_boundary': {

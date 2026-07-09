@@ -57,8 +57,10 @@ import {
 import {
   createTranscriptState,
   projectServerFrame,
+  selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptRows,
+  type NestedTranscriptRow,
   type TranscriptRow,
   type TranscriptState,
 } from './transcriptProjector.js'
@@ -1472,6 +1474,81 @@ export function SessionPane({
     if (!planReview) setPlanPanelOpen(false)
   }, [planReview])
 
+  // P4-18c transcript scroll + live activity. `generating` is the honest
+  // turn-active signal: a ready session whose input is disabled is mid-turn
+  // (the same gate the composer uses). `paused` = a pending permission request.
+  const transcriptScrollRef = useRef<HTMLDivElement>(null)
+  const [atBottom, setAtBottom] = useState(true)
+  const [stopError, setStopError] = useState<string | null>(null)
+  const generating =
+    !!activeSessionId &&
+    activeConnection.status === 'ready' &&
+    !activeConnection.inputEnabled
+  const paused = permissionQueue.length > 0
+  const activity = deriveActivity(
+    selectNestedTranscriptRows(transcript, activeSessionId),
+  )
+
+  // Elapsed clock: reset and tick once per second while a turn runs.
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const turnStartRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!generating) {
+      turnStartRef.current = null
+      setElapsedMs(0)
+      return
+    }
+    turnStartRef.current = Date.now()
+    setElapsedMs(0)
+    const id = setInterval(() => {
+      if (turnStartRef.current !== null) {
+        setElapsedMs(Date.now() - turnStartRef.current)
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [generating, activeSessionId])
+
+  // Stop → the real `app.abort` boundary. The requestId is a message envelope
+  // (the sidecar aborts the current turn regardless — `sidecarServer.ts:642`),
+  // so a fresh id is correct; no engine-minted turn id is needed.
+  const stopTurn = (): void => {
+    if (!activeSessionId) return
+    try {
+      getBridge().abort(activeSessionId, `abort-${Date.now()}`, 'user-stop')
+      setStopError(null)
+    } catch (error) {
+      setStopError(errorMessage(error))
+    }
+  }
+
+  // Instant jump to bottom when the pane binds to a session (prototype: no slow
+  // crawl on open); live-turn content then follows the bottom while stuck.
+  useEffect(() => {
+    const el = transcriptScrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    setAtBottom(true)
+  }, [activeSessionId])
+  const contentSignature = `${activeLog.messages.length}:${partialCount}`
+  useEffect(() => {
+    const el = transcriptScrollRef.current
+    if (!el || !atBottom) return
+    el.scrollTop = el.scrollHeight
+  }, [contentSignature, atBottom])
+
+  const onTranscriptScroll = (): void => {
+    const el = transcriptScrollRef.current
+    if (!el) return
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+    setAtBottom(gap < 120)
+  }
+  const jumpToBottom = (): void => {
+    const el = transcriptScrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    setAtBottom(true)
+  }
+
   // A large paste collapses to a chip (App holds the full text aside and inserts
   // the `[Pasted text #N]` token); a small paste falls through to the browser's
   // default plain-text insert. Adapted for the single-line `<input>`: the token
@@ -1543,7 +1620,14 @@ export function SessionPane({
           return
       }
     }
-    // No typeahead open — ↑/↓ walk the submitted-prompt history for this session.
+    // No typeahead open — Escape interrupts an in-flight turn (the keybinding
+    // for the Stop control; mirrors the TUI Ctrl+C/Esc cancel).
+    if (event.key === 'Escape' && generating) {
+      event.preventDefault()
+      stopTurn()
+      return
+    }
+    // ↑/↓ walk the submitted-prompt history for this session.
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       const result = navigateHistory(
         history,
@@ -1561,7 +1645,7 @@ export function SessionPane({
   }
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-8">
+    <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-8">
       <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
         <span>
           {activeDescriptor ? (
@@ -1631,6 +1715,17 @@ export function SessionPane({
         open={planPanelOpen}
         review={planReview}
       />
+
+      {generating ? (
+        <ActivityIndicator
+          verb={activity.verb}
+          target={activity.target}
+          elapsedMs={elapsedMs}
+          paused={paused}
+          onStop={stopTurn}
+          stopError={stopError}
+        />
+      ) : null}
 
       <form
         aria-keyshortcuts="ArrowUp ArrowDown"
@@ -1745,19 +1840,61 @@ export function SessionPane({
         </div>
       ) : null}
 
-      <section className="flex min-h-0 flex-1 flex-col">
-        <h1 className="mb-2 text-sm text-text-muted">Transcript (projected)</h1>
-        <div className="min-h-0 flex-1 overflow-auto rounded border border-text-subtle p-4">
+      {/* P4-18c scroll fix: `<main>` is now `overflow-hidden` (a bounded flex
+       * viewport) and THIS transcript region is the sole `flex-1` scroller, so
+       * its inner `overflow-auto` finally engages under the flex-height chain
+       * (the raw-events panel below is demoted to natural height). The scroll
+       * div tracks stick-to-bottom + drives the jump-to-bottom control. */}
+      <section className="relative flex min-h-0 flex-1 flex-col">
+        <h1 className="mb-2 text-sm text-text-muted">Transcript</h1>
+        <div
+          ref={transcriptScrollRef}
+          onScroll={onTranscriptScroll}
+          className="min-h-0 flex-1 overflow-auto rounded border border-text-subtle p-4"
+        >
           <TranscriptView
             activeSessionId={activeSessionId}
             state={transcript}
           />
         </div>
+        {!atBottom ? (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur ${
+              generating
+                ? paused
+                  ? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'
+                  : 'border-accent/50 bg-shell-chrome/90 text-accent'
+                : 'border-shell-seam bg-shell-chrome/90 text-text-muted'
+            }`}
+          >
+            {generating ? (
+              <>
+                <span
+                  className={`h-1.5 w-1.5 animate-pulse rounded-full ${
+                    paused ? 'bg-tone-warn' : 'bg-accent'
+                  }`}
+                  aria-hidden
+                />
+                <span className="font-semibold">
+                  {paused ? 'Waiting for approval' : activity.verb}
+                </span>
+                <span className="font-mono tabular-nums text-text-subtle">
+                  {fmtElapsed(elapsedMs)}
+                </span>
+                <span aria-hidden>↓</span>
+              </>
+            ) : (
+              <span>↓ Latest</span>
+            )}
+          </button>
+        ) : null}
       </section>
 
-      <section className="flex min-h-0 flex-1 flex-col">
+      <section className="flex shrink-0 flex-col">
         <details
-          className="min-h-0 flex-1 overflow-auto"
+          className="max-h-64 overflow-auto"
           onToggle={e => setRawDebugOpen(e.currentTarget.open)}
         >
           <summary className="cursor-pointer text-sm text-text-muted">
@@ -1772,6 +1909,102 @@ export function SessionPane({
         </details>
       </section>
     </main>
+  )
+}
+
+/**
+ * P4-18c live activity verb, derived from the transcript tail (real frames, no
+ * new seam vocabulary). SpinnerMode phases themselves do NOT cross the app
+ * seam, so this approximates the current phase from the last arrival-ordered
+ * row: a pending tool card ⇒ "Running <tool>", a thinking block ⇒ "Thinking",
+ * a streaming assistant body ⇒ "Responding", otherwise "Working".
+ */
+export function deriveActivity(rows: NestedTranscriptRow[]): {
+  verb: string
+  target: string | null
+} {
+  const last = rows[rows.length - 1]
+  if (!last) return { verb: 'Working', target: null }
+  if (last.kind === 'tool-use' && last.status === 'pending') {
+    return { verb: 'Running', target: last.toolName }
+  }
+  if (last.kind === 'thinking') return { verb: 'Thinking', target: null }
+  if (last.kind === 'assistant-text' && last.isStreaming === true) {
+    return { verb: 'Responding', target: null }
+  }
+  return { verb: 'Working', target: null }
+}
+
+export function fmtElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return minutes > 0
+    ? `${minutes}m ${String(seconds).padStart(2, '0')}s`
+    : `${seconds}s`
+}
+
+/**
+ * P4-18c activity indicator (`Chat.jsx` SpinnerWithVerb): pulse dots + verb +
+ * active target + elapsed clock + a Stop control wired to the real `app.abort`.
+ * Paused (a pending permission request) tints amber and reads "Waiting for
+ * approval". The per-turn TOKEN byline is a §6 deferral — no live per-turn token
+ * count crosses the app seam, so only the elapsed clock is shown (never mocked).
+ */
+function ActivityIndicator({
+  verb,
+  target,
+  elapsedMs,
+  paused,
+  onStop,
+  stopError,
+}: {
+  verb: string
+  target: string | null
+  elapsedMs: number
+  paused: boolean
+  onStop: () => void
+  stopError: string | null
+}) {
+  const tone = paused ? 'text-tone-warn' : 'text-accent'
+  const dot = paused ? 'bg-tone-warn' : 'bg-accent'
+  return (
+    <div className="flex items-center gap-2.5 border-b border-shell-seam px-1 py-1.5 text-xs">
+      <span className="flex items-center gap-1" aria-hidden>
+        <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${dot}`} />
+        <span
+          className={`h-1.5 w-1.5 animate-pulse rounded-full ${dot} [animation-delay:150ms]`}
+        />
+        <span
+          className={`h-1.5 w-1.5 animate-pulse rounded-full ${dot} [animation-delay:300ms]`}
+        />
+      </span>
+      <span className={`font-semibold ${tone}`}>
+        {paused ? 'Waiting for approval' : verb}
+      </span>
+      {target ? (
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-subtle">
+          {target}
+        </span>
+      ) : (
+        <span className="flex-1" />
+      )}
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle">
+        {fmtElapsed(elapsedMs)}
+      </span>
+      <button
+        type="button"
+        onClick={onStop}
+        aria-keyshortcuts="Escape"
+        title="Stop the turn (Esc)"
+        className="shrink-0 rounded border border-tone-danger/40 px-2 py-0.5 text-[11px] font-semibold text-tone-danger transition-colors hover:bg-tone-danger/10"
+      >
+        ■ Stop
+      </button>
+      {stopError ? (
+        <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
+      ) : null}
+    </div>
   )
 }
 

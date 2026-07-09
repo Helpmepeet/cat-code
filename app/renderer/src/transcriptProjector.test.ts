@@ -790,6 +790,12 @@ test('captures the init frame slash_commands catalog per session (P3-7)', () => 
   ])
   expect(selectSlashCommands(state, 'session-2')).toEqual(['model'])
 
+  // P4-23: the init frame captures the catalog but emits NO visible transcript
+  // row (the ✦ "Session started" banner was removed, operator 2026-07-09). The
+  // catalog survival above proves `case 'init'` still runs.
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+  expect(selectTranscriptRows(state, 'session-2')).toEqual([])
+
   // A later turn's init frame refreshes the catalog for that session only.
   state = projectServerFrame(
     state,
@@ -812,9 +818,9 @@ test('captures the init frame slash_commands catalog per session (P3-7)', () => 
     ),
   )
   expect(selectSlashCommands(degraded, 'session-3')).toEqual([])
-  expect(selectTranscriptRows(degraded, 'session-3').map(row => row.kind)).toEqual([
-    'session-init',
-  ])
+  // P4-23: a degraded (non-array slash_commands) init still captures `[]` and
+  // emits no row — the frame handler runs, the banner row is gone.
+  expect(selectTranscriptRows(degraded, 'session-3')).toEqual([])
 })
 
 test('projects user-visible system notices and emits boundary rows once', () => {
@@ -861,14 +867,13 @@ test('projects user-visible system notices and emits boundary rows once', () => 
     state = projectServerFrame(state, messageFrame('session-1', message))
   }
 
+  // P4-23: the init frame no longer emits a 'session-init' row (banner removed).
   expect(selectTranscriptRows(state, 'session-1').map(row => row.kind)).toEqual([
-    'session-init',
     'compact-boundary',
     'system-notice',
     'result',
   ])
   expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
-    { cwd: '/Users/pt/cat-code', model: 'claude-sonnet-5' },
     { trigger: 'auto', preTokens: 1234 },
     { noticeType: 'api_retry', content: 'Overloaded' },
     {
@@ -1016,8 +1021,9 @@ test('replays the full S1 turn grammar end-to-end into a correct transcript', ()
   play(resultSuccess.message)
 
   const rows = selectTranscriptRows(state, 'session-1')
+  // P4-23: the leading 'session-init' row is gone (banner removed); the init
+  // frame still runs (catalog capture) but emits no row.
   expect(rows.map(row => row.kind)).toEqual([
-    'session-init',
     'assistant-text',
     'tool-use',
     'assistant-text',
@@ -1030,7 +1036,7 @@ test('replays the full S1 turn grammar end-to-end into a correct transcript', ()
     'msg_S2',
   ])
   expect(contentRows.map(row => row.blockIndex)).toEqual([0, 1, 0])
-  expect(new Set(rows.map(row => row.id)).size).toBe(5)
+  expect(new Set(rows.map(row => row.id)).size).toBe(4)
 
   // Duplicate delivery of an already-seen frame (uuid dedupe) is a no-op —
   // replay-buffer double-delivery must not duplicate rows.
