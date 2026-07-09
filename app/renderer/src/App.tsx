@@ -130,6 +130,11 @@ import {
   selectAgentConfigSnapshot,
 } from './agentConfigState.js'
 import {
+  createExtensionsState,
+  reduceExtensionsState,
+  selectExtensionsSnapshot,
+} from './extensionsState.js'
+import {
   createGoalMemoryState,
   reduceGoalMemoryState,
   selectMemorySnapshot,
@@ -176,6 +181,7 @@ const reducePermissionStateBatched = withBatch(reducePermissionState)
 const reduceConnectionStateBatched = withBatch(reduceConnectionState)
 const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
+const reduceExtensionsStateBatched = withBatch(reduceExtensionsState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
@@ -240,6 +246,11 @@ export function App() {
     undefined,
     createAgentConfigState,
   )
+  const [extensions, dispatchExtensions] = useReducer(
+    reduceExtensionsStateBatched,
+    undefined,
+    createExtensionsState,
+  )
   const [goalMemory, dispatchGoalMemory] = useReducer(
     reduceGoalMemoryStateBatched,
     undefined,
@@ -295,6 +306,7 @@ export function App() {
         dispatchConnection,
         dispatchSettings,
         dispatchAgentConfig,
+        dispatchExtensions,
         dispatchGoalMemory,
         dispatchAccounts,
         dispatchWorkspaceTrust,
@@ -1050,6 +1062,7 @@ export function App() {
             agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
             cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
             diagnosticsSnapshot={selectDiagnosticsSnapshot(diagnostics, activeSessionId)}
+            extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
             initialCategory="agents"
             memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
             snapshot={selectSettingsSnapshot(settings, activeSessionId)}

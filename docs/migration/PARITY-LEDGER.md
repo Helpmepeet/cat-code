@@ -1706,88 +1706,66 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 ### 25. SettingsExtensions.jsx — Settings → Extensions: MCP / Plugins / Skills / Hooks panels + the MCP ElicitationDialog modal
 
-**Migration target:** deferred → P4-12 (`phase4.md:649`; dep P4-3 ✅) · **Overall:** ⬜ deferred · **Prototype:** `~/catcode_prototype/cat-app/SettingsExtensions.jsx` (507 lines) · **INVENTORY:** W4-Settings MCP/Plugins/Skills/Hooks/Elicitation adapt (S7)
+**Migration target:** P4-12 (`phase4.md:708`; dep P4-3 ✅) · **Overall:** 🟡 built HEADLESS 2026-07-09 — MCP-config/Plugins/Skills/Hooks panels over the real `extensions.snapshot` read-seam; MCP-live-runtime + all writes + marketplace-browse + ElicitationDialog deferred with owner tags · **Prototype:** `~/catcode_prototype/cat-app/SettingsExtensions.jsx` (507 lines) · **INVENTORY:** W4-Settings MCP/Plugins/Skills/Hooks/Elicitation adapt (S7) · **Read-seam:** `app/sidecar/extensionsDomain.ts`, `app/shared/protocol.ts` `ExtensionsSnapshotFrame`, `app/renderer/src/extensionsState.ts`
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| `StatusPill` — tone-driven status dot + label (good/danger/warn/info/muted/accent) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Shared status primitive reused by all 4 panels; tones map to `tone.ts` semantics. |
-| `StatusPill` pulse animation (`pulse-dot` for pending/connecting) | state | ⬜ deferred | `phase4.md:649` P4-12 | Connecting UX-state; used for MCP `pending`. |
-| `RowBtn` — compact secondary row-action button + hover in/out | control | ⬜ deferred | `phase4.md:649` P4-12 | Tone variants default/danger/accent/good; P4-12 must use no inline style. |
-| `KeyHint` — monospace keycap chip (`Esc` / `⌘↵` / `↵`) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Keycap on RowBtn + elicitation dialog buttons. |
-| `ExtCard` — generic list-row card shell + `dim`/opacity variant | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Uniform 1px border, no status-color left bar (deliberate); `dim` for disabled/off rows. |
-| MCP summary bar — connected / tools / resources counts | data-binding | ⬜ deferred | `phase4.md:649` P4-12; real `src/services/mcp/config.ts` | tools/resources are per-server MOCK counts — render from real MCP state or flag. |
-| "Form elicitation" trigger button | control | ✂️ cut | prototype `SettingsExtensions.jsx:8,97` `// DEMO-ONLY` | Demo scaffolding; real dialog is triggered by an actual MCP request, not a settings button. |
+| `StatusPill` — tone-driven status dot + label | chrome | ✅ built | `SettingsExtensions.tsx:49` | Rebuilt on `tone.ts` tokens (dot+label), no inline style. |
+| `StatusPill` pulse animation (`pulse-dot` for pending/connecting) | state | ⬜ deferred (MCP runtime) | `SettingsExtensions.tsx:49` | No connecting UX-state today — MCP live runtime is empty in desktop; no pulse needed until runtime wired. |
+| `RowBtn` — compact secondary row-action button | control | ⬜ deferred (write-seam) | — | Every action it powered (add/reconnect/enable/remove/update/install) is a write or a runtime action, all deferred; no action buttons built. |
+| `KeyHint` — monospace keycap chip | chrome | ⬜ deferred (elicitation) | — | Only consumers were the deferred ElicitationDialog + row buttons. |
+| `ExtCard` — generic list-row card shell + `dim` variant | chrome | ✅ built | `SettingsExtensions.tsx:88` | Uniform 1px border; `dim` for disabled plugins, no status left-bar. |
+| MCP summary bar — connected / tools / resources counts | data-binding | ⬜ deferred (MCP runtime) | `extensionsDomain.ts` `readMcpSlice` | Counts require the live MCP client set (empty in desktop) — deferred, not mocked. |
+| "Form elicitation" trigger button | control | ✂️ cut | prototype `SettingsExtensions.jsx:8,97` `// DEMO-ONLY` | Demo scaffolding; real dialog is server-triggered, not a settings button. |
 | "URL elicitation" trigger button | control | ✂️ cut | prototype `SettingsExtensions.jsx:8,97` `// DEMO-ONLY` | Demo scaffolding, same as Form trigger. |
-| `McpAddMenu` — "+ Add server" button + popover | control | ⬜ deferred | `phase4.md:649` P4-12 | Actions are toast stubs; P4-12 wires add via SettingsUpdater-under-lock (writes deferred). |
-| `McpAddMenu` overlay — fixed inset click-catcher dismiss | state | ⬜ deferred | `phase4.md:649` P4-12 | Popover-open UX-state; click-outside closes (`SettingsExtensions.jsx:164`). |
-| `McpAddMenu` options — stdio / sse / http / json entries | subcomponent | ⬜ deferred | `phase4.md:649` P4-12 | Transports source-anchored (`utils.ts:313-323`); `json` is a paste-config affordance. |
-| MCP server card — server name (mono) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Per-server row identity. |
-| MCP server status pill — connected/failed/needs-auth/pending/disabled | state | ⬜ deferred | `phase4.md:649` P4-12 | Five states from `MCPServerConnection.type`; render real connection status. |
-| MCP transport badge (uppercase) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Transport label per server. |
-| MCP `SourceBadge` (scope → source via `scopeToSource`) | data-binding | ⬜ deferred | `phase4.md:649` P4-12; consumes P4-3 `SettingsField.tsx` | FLAG: `scopeToSource` (`:153`) flattens `ConfigScope` (`types.ts:10-18`) into 5 sources — render real scope, flag the collapse. |
-| MCP `pluginSource` "via X" tag | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Shown when server is plugin-contributed. |
-| MCP command/url subtitle line (ellipsized) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | url for remote, command+args for stdio. |
-| MCP connected detail — toolCount · resourceCount · serverInfo name/version | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | MOCK values — render from real MCP client capabilities or flag unavailable. |
-| MCP failed-state error message | state | ⬜ deferred | `phase4.md:649` P4-12 | Error UX-state for failed servers. |
-| MCP pending-state reconnect line (attempt N/M) | state | ⬜ deferred | `phase4.md:649` P4-12 | `reconnectAttempt`/`maxReconnectAttempts` MOCK — render real or flag. |
-| MCP "Authenticate" button (needs-auth) | control | ⬜ deferred | `phase4.md:649` P4-12; real `src/services/mcp/auth.ts` | Prototype opens url elicitation; P4-12 wires real MCP OAuth. |
-| MCP "Reconnect" button | control | ⬜ deferred | `phase4.md:649` P4-12 | Toast stub in prototype. |
-| MCP "Enable" button (disabled-server) | control | ⬜ deferred | `phase4.md:649` P4-12 | Write action — deferred to write path. |
-| MCP "Remove" button (danger) | control | ⬜ deferred | `phase4.md:649` P4-12 | Destructive write action — deferred to write path. |
-| `ElicitationDialog` — modal overlay + card (backdrop blur, click-out dismiss) | subcomponent | ⬜ deferred | `phase4.md:649` P4-12; real `src/components/mcp/ElicitationDialog.tsx` | Maps to control request/response flow (`elicitationHandler.ts:49-51`) — permission-round-trip rigor. |
-| `ElicitationDialog` header — "MCP request" + serverName + req# id | chrome | ⬜ deferred | `phase4.md:649` P4-12 | requestId binds to a real minted request id in the live flow. |
-| `ElicitationDialog` message body | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Server-provided prompt message. |
-| `ElicitationDialog` form variant — per-property field (label + required marker) | subcomponent | ⬜ deferred | `phase4.md:649` P4-12 | Renders `requestedSchema.properties`; required fields marked `*`. |
-| `ElicitationDialog` boolean field — toggle switch | control | ⬜ deferred | `phase4.md:649` P4-12 | Schema type=boolean control. |
-| `ElicitationDialog` enum field — select dropdown | control | ⬜ deferred | `phase4.md:649` P4-12 | Schema enum control with "Select…" placeholder. |
-| `ElicitationDialog` text/number field — input | control | ⬜ deferred | `phase4.md:649` P4-12 | type=number for numeric schema, text otherwise. |
-| `ElicitationDialog` url variant — "Opens in browser" + url block | subcomponent | ⬜ deferred | `phase4.md:649` P4-12 | `getElicitationMode` picks variant (`elicitationHandler.ts:49-51`). |
-| `ElicitationDialog` Cancel button + Esc hint | control | ⬜ deferred | `phase4.md:649` P4-12 | Sends decline/cancel response in real flow. |
-| `ElicitationDialog` Submit button — "Send response"/"Open browser" + disabled state + ⌘↵/↵ hint | control | ⬜ deferred | `phase4.md:649` P4-12 | Label + hint switch by variant; disabled until required fields filled (form). |
-| `ElicitationDialog` keyboard handling — Esc closes, Enter (url)/⌘Enter (form) submits | keyboard | ⬜ deferred | `phase4.md:649` P4-12 | Keyboard-first modal per house rules (`:212`). |
-| `ElicitationDialog` required-field validation (missing → canSubmit gating) | state | ⬜ deferred | `phase4.md:649` P4-12 | `missing` = required minus filled; gates submit for form variant (`:202`). |
-| Plugins panel tabs — "Installed · N" / "Marketplace" | control | ⬜ deferred | `phase4.md:649` P4-12 | Tab switcher with active underline. |
-| Installed plugin card — plugin name | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Plugin identity. |
-| Plugin version label (vX.Y.Z) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Version string. |
-| Plugin `SourceBadge` (scope) | data-binding | ⬜ deferred | `phase4.md:649` P4-12; consumes P4-3 SourceBadge | Same scope-flattening flag as MCP (`scopeToSource`). |
-| Plugin update-available pill ("Update → vX") | state | ⬜ deferred | `phase4.md:649` P4-12 | `newVersion` MOCK — render from real update-check or flag. |
-| Plugin load-error pill | state | ⬜ deferred | `phase4.md:649` P4-12 | Error UX-state. |
-| Plugin id · source line | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Plugin id + origin source string. |
-| Plugin provides-summary (N cmds · N agents · N skills · N hooks · N MCP) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | `provideSummary` helper (`:362`) over `plugin.provides` counts. |
-| Plugin error message line | state | ⬜ deferred | `phase4.md:649` P4-12 | Load-error detail. |
-| `PluginToggle` — enable/disable switch | control | ⬜ deferred | `phase4.md:649` P4-12 | Write action — deferred to write path (`:366`). |
-| Plugin "Update" button | control | ⬜ deferred | `phase4.md:649` P4-12 | Toast stub in prototype. |
-| Plugin "Options" button | control | ⬜ deferred | `phase4.md:649` P4-12 | Shown when plugin has no `provides.options`; toast stub. |
-| Marketplace search input | control | ⬜ deferred | `phase4.md:649` P4-12 | Filters list by name/description/tags. |
-| Marketplace card — name | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | FLAG: P4-12 must verify a real marketplace domain backs this tab; if none → adapt/cut with flag. |
-| Marketplace sourceType badge | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Source-type label; marketplace-domain-verification flag applies. |
-| Marketplace tags (#tag) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Tag chips; marketplace-domain flag applies. |
-| Marketplace description | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Marketplace-domain flag applies. |
-| Marketplace "Installed" pill / "Install" button | control | ⬜ deferred | `phase4.md:649` P4-12 | Install = toast stub; write deferred; marketplace-domain flag applies. |
-| Skills panel summary line (N skills across M sources + flag explanation) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Explains user-invocable / disable-model-invocation flags. |
-| Skills source group header + label (Policy/User/Project/Local/Flag/Plugin/MCP) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | `SKILL_GROUPS` order (`:379`) source-anchored; re-verify real skills registry. |
-| Skills group `SourceBadge` | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | `SKILL_SOURCE_BADGE` maps settings sources → P4-3 SourceBadge; plugin/mcp have no badge. |
-| Skills group count | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Per-group item count. |
-| Skill card — /name (mono) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Slash-command name. |
-| Skill fork badge ("fork · agent") | chrome | ⬜ deferred | `phase4.md:649` P4-12 | `context==='fork'` with optional agent name. |
-| Skill `pluginName` "via X" tag | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Shown for plugin-provided skills. |
-| Skill "Manual only" pill (disableModelInvocation) | state | ⬜ deferred | `phase4.md:649` P4-12 | Real skill flag. |
-| Skill "Not user-invocable" pill (userInvocable===false) | state | ⬜ deferred | `phase4.md:649` P4-12 | Real skill flag. |
-| Skill description | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Skill description text. |
-| Skill whenToUse line | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | "When:" hint line. |
-| `SkillToggle` — enable/disable switch | control | ⬜ deferred | `phase4.md:649` P4-12 | Write action — deferred to write path (`:432`). |
-| Skill gated lock-note (plugin/mcp: "toggled via MCP server"/"plugin") | state | ⬜ deferred | `phase4.md:649` P4-12 | Plugin/MCP skills gated by provider, not individually toggleable. |
-| Hooks panel summary line (N hooks across M events + no-persist note) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | States cat-code does not persist per-hook history (`:467`) — anchors the reconstructed-lastRun flag. |
-| Hooks event group header (grouped by event, canonical order) | chrome | ⬜ deferred | `phase4.md:649` P4-12 | Ordered by canonical HOOK_EVENTS order. |
-| Hook card — `config.type` badge | chrome | ⬜ deferred | `phase4.md:649` P4-12; real `src/utils/hooks.ts` | command/webhook/prompt type. |
-| Hook matcher tag | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Tool/event matcher pattern. |
-| Hook `SourceBadge` | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Uses `SKILL_SOURCE_BADGE` map, fallback "user". |
-| Hook `pluginName` "via X" tag | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Plugin-provided hooks. |
-| Hook async tag | chrome | ⬜ deferred | `phase4.md:649` P4-12 | `config.async` flag. |
-| Hook command/url/prompt line | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | Whichever of command/url/prompt the config carries. |
-| Hook last-run outcome pill (OK/Blocked/Error(non-blocking)/Cancelled) | state | ⬜ deferred | `phase4.md:649` P4-12; `src/utils/hooks.ts:338-357` | FLAG: outcomes reconstructed from in-memory events, NOT persisted (`:467`) — render real HookResult or drop column, flag the fake. |
-| Hook last-run metadata (at · exit N · Nms) | data-binding | ⬜ deferred | `phase4.md:649` P4-12 | MOCK timings — reconstructed-not-persisted; same flag as outcome pill. |
-| Hook "Not yet run" pill (no lastRun) | state | ⬜ deferred | `phase4.md:649` P4-12 | Empty/never-run UX-state for a configured hook. |
+| `McpAddMenu` — "+ Add server" button + popover / overlay / options | control | ⬜ deferred (write-seam) | — | Add is a `SettingsUpdater`-under-lock write; deferred with the other writes. |
+| MCP server card — server name (mono) | data-binding | ✅ built | `SettingsExtensions.tsx:170` | Per-server row identity from `getClaudeCodeMcpConfigs` (`extensionsDomain.ts` `buildMcpEntry`). |
+| MCP server status pill — connected/failed/needs-auth/pending/disabled | state | 🔁 adapted | `SettingsExtensions.tsx:173` | Renders "Configured" only; the 5 live-connection states need the MCP runtime (deferred). |
+| MCP transport badge (uppercase) | chrome | ✅ built | `SettingsExtensions.tsx:174` | Real `McpServerConfig.type`. |
+| MCP `SourceBadge` (scope → source) | data-binding | ✅ built | `SettingsExtensions.tsx:112,177` | Carries the REAL `ConfigScope` (7 values) in a chip AND maps to P4-3 `SourceBadge` where it corresponds to a settings layer; scope-collapse flagged (claudeai/dynamic have no settings badge). |
+| MCP `pluginSource` "via X" tag | data-binding | ✅ built | `SettingsExtensions.tsx:182` | From `ScopedMcpServerConfig.pluginSource`. |
+| MCP command/url subtitle line | data-binding | ✅ built | `SettingsExtensions.tsx:185` | url for remote, command (+N args) for stdio. |
+| MCP connected detail — toolCount · resourceCount · serverInfo | data-binding | ⬜ deferred (MCP runtime) | `extensionsDomain.ts` `buildMcpEntry` | Not on the config object; needs live client capabilities (deferred, not mocked). |
+| MCP failed-state error message | state | ⬜ deferred (MCP runtime) | — | Failed-connection state needs the runtime. |
+| MCP pending-state reconnect line (attempt N/M) | state | ⬜ deferred (MCP runtime) | — | `reconnectAttempt`/`max` only exist mid-reconnect on a live connection. |
+| MCP Authenticate / Reconnect / Enable / Remove buttons | control | ⬜ deferred (MCP runtime + write-seam) | — | Auth+reconnect need the runtime; enable/remove are writes. |
+| `ElicitationDialog` (all 12 rows: modal/header/message/form+url variants/fields/keyboard/validation) | subcomponent | ⬜ deferred (owner: elicitation round-trip session) | recon `src/components/mcp/ElicitationDialog.tsx`, `src/services/mcp/elicitationHandler.ts:29-51` | BLOCKED: elicitation is a control request/response round-trip NOT reachable in the desktop path today (`AppSessionEvent` has no elicitation event; sidecar has no `elicitation.response` handler; MCP runtime empty). Live wiring needs a NEW engine event pair + inbound frame w/ T5a-style id-match + `handleElicitation` in the desktop QueryEngine config + MCP runtime — a dedicated decision, not a settings-panel session. Presentational build withheld (anti-Potemkin: no reachable trigger). |
+| Plugins panel tabs — "Installed · N" / "Marketplace" | control | ✅ built | `SettingsExtensions.tsx:196` | Tab switcher + active underline; Marketplace tab renders a deferred note. |
+| Installed plugin card — plugin name | data-binding | ✅ built | `SettingsExtensions.tsx:239` | From `loadAllPlugins()` (`extensionsDomain.ts` `buildPluginEntries`). |
+| Plugin version label (vX.Y.Z) | data-binding | ✅ built | `SettingsExtensions.tsx:243` | `manifest.version`. |
+| Plugin `SourceBadge` (scope) | data-binding | 🔁 adapted | `SettingsExtensions.tsx:257` | Shows the real `LoadedPlugin.source` string; the settings SCOPE badge is deferred (scope is per-installation in `installed_plugins.json`, not on `LoadedPlugin`) — flagged. |
+| Plugin update-available pill ("Update → vX") | state | 🔁 adapted | `SettingsExtensions.tsx:249` | Shows only STAGED updates awaiting restart (`getPendingUpdatesDetails`); a true upstream update-check does not exist in the engine (flagged). |
+| Plugin load-error pill | state | ✅ built | `SettingsExtensions.tsx:254` | Correlated from `AppState.plugins.errors` by source/name. |
+| Plugin id · source line | data-binding | ✅ built | `SettingsExtensions.tsx:257` | `LoadedPlugin.source` string. |
+| Plugin provides-summary (N cmds · agents · skills · hooks · MCP · LSP) | data-binding | ✅ built | `SettingsExtensions.tsx:279`; `extensionsDomain.ts` `derivePluginProvides` | Counts DERIVED from real loaded catalogs (commands/skills by manifest name, agents by `plugin` id) + `LoadedPlugin` hooks/mcp/lsp — no `provides` object exists in the engine (flagged: dir-declared-but-unloaded components are not counted). |
+| Plugin error message line | state | ✅ built | `SettingsExtensions.tsx:262` | `getPluginErrorMessage`. |
+| `PluginToggle` — enable/disable switch | control | 🔁 adapted | `SettingsExtensions.tsx:246` | Read-only Enabled/Disabled pill (toggle is a write, deferred). |
+| Plugin "Update" / "Options" buttons | control | ⬜ deferred (write-seam) | — | Both are writes/actions. |
+| Marketplace search / card / sourceType / tags / description / Install | control/data | ⬜ deferred (marketplace browse) | `SettingsExtensions.tsx:213`; recon real domain `src/utils/plugins/marketplaceManager.ts` | Real marketplace domain CONFIRMED, but browsing refreshes remotes and Install is a write — tab renders a deferred note (parity: chrome present, content deferred + flagged). |
+| Skills panel summary line (N skills across M sources) | chrome | ✅ built | `SettingsExtensions.tsx:311` | Counts + the read-only-flags explanation. |
+| Skills source group header + label | chrome | ✅ built | `SettingsExtensions.tsx:326`; `extensionsState.ts` `SKILL_SOURCE_GROUPS` | Canonical group order; `builtin`/`bundled` now get trailing groups (prototype dropped them — a parity gain). |
+| Skills group `SourceBadge` | data-binding | ✅ built | `SettingsExtensions.tsx:80,333` | `SourceChip`: P4-3 `SourceBadge` for settings sources, plain chip for plugin/mcp/builtin/bundled. |
+| Skills group count | data-binding | ✅ built | `SettingsExtensions.tsx:336` | Per-group count. |
+| Skill card — /name (mono) | data-binding | ✅ built | `SettingsExtensions.tsx:347` | From the loaded command catalog (`buildSkillEntries`). |
+| Skill fork badge ("fork · agent") | chrome | ✅ built | `SettingsExtensions.tsx:350` | Real `context==='fork'` + `agent`. |
+| Skill `pluginName` "via X" tag | data-binding | ✅ built | `SettingsExtensions.tsx:355` | From `pluginInfo.pluginManifest.name`. |
+| Skill "Manual only" pill (disableModelInvocation) | state | ✅ built | `SettingsExtensions.tsx:357` | Real flag. |
+| Skill "Not user-invocable" pill (userInvocable===false) | state | ✅ built | `SettingsExtensions.tsx:360` | Real flag. |
+| Skill description | data-binding | ✅ built | `SettingsExtensions.tsx:365` | Real description. |
+| Skill whenToUse line | data-binding | ✅ built | `SettingsExtensions.tsx:368` | "When:" hint. |
+| `SkillToggle` — enable/disable switch | control | 🔁 adapted | `SettingsExtensions.tsx:357-361` | Flags rendered read-only (toggle is a write, deferred). |
+| Skill gated lock-note (plugin/mcp: "toggled via …") | state | ✂️ cut | — | Moot with all-read-only flags; no per-skill toggle rendered, so no gated-toggle note. |
+| Hooks panel summary line (N hooks across M events + no-persist note) | chrome | ✅ built | `SettingsExtensions.tsx:406` | States cat-code does not persist per-hook history (anchors the dropped-lastRun decision). |
+| Hooks event group header (grouped by event, canonical order) | chrome | ✅ built | `SettingsExtensions.tsx:419`; `extensionsDomain.ts` `HOOK_EVENT_ORDER` | Ordered by `HOOK_EVENTS` (`coreTypes.ts:25`). |
+| Hook card — `config.type` badge | chrome | ✅ built | `SettingsExtensions.tsx:432` | Real `HookCommand` type (`http` is the real "webhook"). |
+| Hook matcher tag | data-binding | ✅ built | `SettingsExtensions.tsx:434` | Real matcher. |
+| Hook `SourceBadge` | data-binding | ✅ built | `SettingsExtensions.tsx:439` | `SourceChip` over the real `HookSource`. |
+| Hook `pluginName` "via X" tag | data-binding | ✅ built | `SettingsExtensions.tsx:442` | Real plugin-hook `pluginName`. |
+| Hook async tag | chrome | ✅ built | `SettingsExtensions.tsx:444` | `config.async` (command hooks only). |
+| Hook command/url/prompt line | data-binding | ✅ built | `SettingsExtensions.tsx:447`; `getHookDisplayText` | Real display line per type. |
+| Hook last-run outcome pill (OK/Blocked/Error/Cancelled) | state | ✂️ cut | recon `src/utils/hooks.ts:338-357` | DROPPED: `HookResult` outcome is a transient per-invocation value — cat-code does NOT persist per-hook history (verified). Flagged in the summary line. |
+| Hook last-run metadata (at · exit N · Nms) | data-binding | ✂️ cut | recon `src/utils/hooks.ts` | DROPPED with the outcome pill — not persisted, not available at rest. |
+| Hook "Not yet run" pill (no lastRun) | state | ✂️ cut | — | No last-run column exists, so no never-run state. |
 
 ### 26. RemoteSettings.jsx — Settings → Remote: bridge toggle/status, inbound command-filter, and remote-session connect paths
 

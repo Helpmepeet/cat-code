@@ -17,6 +17,7 @@ import type { ReactNode } from 'react'
 import type {
   AgentConfigSnapshot,
   DiagnosticsSnapshot,
+  ExtensionsSnapshot,
   MemorySnapshot,
   PermissionContextSnapshot,
   SettingsSnapshot,
@@ -25,6 +26,12 @@ import type {
 import { AgentsPage } from './AgentsPage.js'
 import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
+import {
+  HooksPanel,
+  McpPanel,
+  PluginsPanel,
+  SkillsPanel,
+} from './SettingsExtensions.js'
 import {
   Field,
   LockIcon,
@@ -136,6 +143,7 @@ export function SettingsShell({
   diagnosticsSnapshot,
   memorySnapshot,
   workspaceTrustSnapshot,
+  extensionsSnapshot,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
@@ -147,6 +155,7 @@ export function SettingsShell({
   diagnosticsSnapshot?: DiagnosticsSnapshot | null
   memorySnapshot?: MemorySnapshot | null
   workspaceTrustSnapshot?: WorkspaceTrustSnapshot | null
+  extensionsSnapshot?: ExtensionsSnapshot | null
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
@@ -234,6 +243,7 @@ export function SettingsShell({
             category={active}
             cwd={cwd ?? null}
             diagnosticsSnapshot={diagnosticsSnapshot ?? null}
+            extensionsSnapshot={extensionsSnapshot ?? null}
             memorySnapshot={memorySnapshot ?? null}
             snapshot={snapshot}
             workspaceTrustSnapshot={workspaceTrustSnapshot ?? null}
@@ -250,6 +260,7 @@ function CategoryBody({
   category,
   cwd,
   diagnosticsSnapshot,
+  extensionsSnapshot,
   memorySnapshot,
   snapshot,
   workspaceTrustSnapshot,
@@ -259,6 +270,7 @@ function CategoryBody({
   category: string
   cwd: string | null
   diagnosticsSnapshot: DiagnosticsSnapshot | null
+  extensionsSnapshot: ExtensionsSnapshot | null
   memorySnapshot: MemorySnapshot | null
   snapshot: SettingsSnapshot | null
   workspaceTrustSnapshot: WorkspaceTrustSnapshot | null
@@ -268,6 +280,18 @@ function CategoryBody({
   }
   if (category === 'memory') {
     return <MemoryPage embedded snapshot={memorySnapshot} />
+  }
+  if (category === 'mcp') {
+    return <McpPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'plugins') {
+    return <PluginsPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'skills') {
+    return <SkillsPanel snapshot={extensionsSnapshot} />
+  }
+  if (category === 'hooks') {
+    return <HooksPanel snapshot={extensionsSnapshot} />
   }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />

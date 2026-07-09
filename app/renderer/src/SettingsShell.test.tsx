@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { SettingsSnapshot } from '../../shared/protocol.js'
+import type { ExtensionsSnapshot, SettingsSnapshot } from '../../shared/protocol.js'
 import { SettingsShell } from './SettingsShell.js'
 
 const SNAPSHOT: SettingsSnapshot = {
@@ -53,9 +53,64 @@ test('the Managed panel renders real policy-locked keys as managed Fields', () =
 })
 
 test('value-editor categories are honest stubs, not mocked controls', () => {
-  const html = renderToStaticMarkup(<SettingsShell initialCategory="mcp" snapshot={SNAPSHOT} />)
+  // Privacy stays a stub (its value editors land in a later Phase-4 session).
+  const html = renderToStaticMarkup(<SettingsShell initialCategory="privacy" snapshot={SNAPSHOT} />)
   expect(html).toContain('coming soon')
-  expect(html).toContain('P4-12')
+})
+
+const EXTENSIONS: ExtensionsSnapshot = {
+  mcp: [{ name: 'linear', transport: 'http', scope: 'user', url: 'https://mcp.linear/rpc' }],
+  plugins: [
+    {
+      id: 'fmt@tools',
+      name: 'formatter',
+      source: 'fmt@tools',
+      enabled: true,
+      builtin: false,
+      provides: { commands: 1, agents: 0, skills: 0, hooks: 0, mcpServers: 0, lsp: 0 },
+      hasOptions: false,
+    },
+  ],
+  skills: [
+    {
+      name: 'deep-research',
+      source: 'userSettings',
+      context: 'inline',
+      disableModelInvocation: false,
+      userInvocable: true,
+      description: 'research a topic',
+    },
+  ],
+  hooks: [
+    {
+      event: 'PreToolUse',
+      type: 'command',
+      source: 'userSettings',
+      async: false,
+      displayLine: 'run-check',
+    },
+  ],
+  notes: [],
+}
+
+test('extension categories render the P4-12 panels over the real snapshot, not stubs', () => {
+  const mcp = renderToStaticMarkup(
+    <SettingsShell initialCategory="mcp" snapshot={SNAPSHOT} extensionsSnapshot={EXTENSIONS} />,
+  )
+  expect(mcp).not.toContain('coming soon')
+  expect(mcp).toContain('linear')
+  expect(mcp).toContain('Configured')
+
+  const skills = renderToStaticMarkup(
+    <SettingsShell initialCategory="skills" snapshot={SNAPSHOT} extensionsSnapshot={EXTENSIONS} />,
+  )
+  expect(skills).toContain('/deep-research')
+
+  const hooks = renderToStaticMarkup(
+    <SettingsShell initialCategory="hooks" snapshot={SNAPSHOT} extensionsSnapshot={EXTENSIONS} />,
+  )
+  expect(hooks).toContain('PreToolUse')
+  expect(hooks).toContain('run-check')
 })
 
 test('renders without a snapshot (waiting state)', () => {
