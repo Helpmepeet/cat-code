@@ -182,7 +182,7 @@ describe('LocalAgentTask foreground cleanup', () => {
         agentId: 'sync-agent-5',
         agentType: 'implementor',
         agentName: 'Curie',
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         content: [
           {
             type: 'text',

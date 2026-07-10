@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-07-01 against the current source tree.
+Last refreshed: 2026-07-10 against the current source tree.
 
 ## Purpose
 
@@ -65,6 +65,7 @@ The live tool system is assembled in layers:
 | Interactive permission prompts | `src/hooks/useCanUseTool.tsx` | `src/hooks/toolPermission/`, `src/components/permissions/PermissionRequest.tsx` | This is the main UI-side approval path. It handles config allows, config denies, coordinator waits, swarm-worker behavior, classifier shortcuts, and interactive prompt display. |
 | Bridge-mediated approvals | `src/hooks/useCanUseTool.tsx` | `src/bridge/mergeBridgePermissionCallbacks.ts`, `src/hooks/usePtcloveBridge.ts`, `src/hooks/useReplBridge.tsx` | Approval prompts can be mirrored to both REPL bridge and ptclove bridge callbacks before the local dialog resolves. |
 | Rule-based permission engine | `src/utils/permissions/permissions.ts` | `src/utils/permissions/PermissionRule.ts`, `src/utils/permissions/PermissionResult.ts`, `src/utils/permissions/permissionRuleParser.ts` | Use this when changing rule precedence, bypass behavior, ask/deny matching, or auto-mode classifier routing. |
+| Auto-mode classifier model fallback | `src/utils/permissions/yoloClassifier.ts` | `src/utils/permissions/enableAutoModeFlag.test.ts`, `src/utils/model/model.ts`, `src/services/api/client.ts` | `getClassifierFallbackModel()` owns transient same-account model fallback for classifier side queries. It only handles retryable/cap-safe errors; Codex account caps/auth failures must propagate so pool diagnostics stay meaningful. |
 | Permission-context construction | `src/utils/permissions/permissionSetup.ts` | `src/utils/permissions/permissionsLoader.ts`, `src/utils/settings/settings.ts`, `src/commands/add-dir/validation.ts` | This is where session mode, additional working dirs, auto-mode safety stripping, and on-disk rule loading are assembled into `ToolPermissionContext`. |
 | File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.cat-code` plus legacy `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
 | Sandbox integration | `src/utils/permissions/pathValidation.ts` | `src/utils/sandbox/sandbox-adapter.ts`, `src/tools/BashTool/shouldUseSandbox.ts`, `src/utils/permissions/permissions.ts` | The path validator treats sandbox write allowlists as an extra write scope for out-of-working-dir paths. Bash sandbox auto-allow is decided higher up in permissions. |
@@ -74,7 +75,6 @@ The live tool system is assembled in layers:
 | MCP config layering | `src/services/mcp/config.ts` | `src/utils/config.ts`, `src/utils/plugins/mcpPluginIntegration.ts`, `src/utils/settings/types.ts` | Config layering spans global, project, managed, plugin, and connector sources. Deduplication is content-based, not just by server name. |
 | MCP tool exposure | `src/services/mcp/client.ts` | `src/tools/MCPTool/MCPTool.ts`, `src/services/mcp/mcpStringUtils.ts`, `src/services/mcp/utils.ts` | Connected MCP tools are wrapped into normal `Tool` objects. `mcpInfo` preserves original server/tool identity even when display names are unprefixed. |
 | MCP resources and auth tools | `src/services/mcp/client.ts` | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/`, `src/tools/McpAuthTool/` | Resource listing and auth surfaces are first-class tools, separate from normal MCP server tools. |
-| Standalone MCP helper servers | `scripts/mcp/` | Helper-specific tests and any CLI/transcript files the helper spawns or reads | Scripts such as `scripts/mcp/gpt-agent.ts` are external stdio MCP servers, not part of the in-process MCP client. Route their protocol, job persistence, and result shaping through the script first. |
 | Tool search and deferred loading | `src/utils/toolSearch.ts` | `src/tools/ToolSearchTool/ToolSearchTool.ts`, `src/tools/ToolSearchTool/prompt.ts`, `src/services/api/claude.ts` | Tool search decides whether deferred tools are omitted from the inline tool list and discovered later through tool references. |
 | Tool input validation | `src/services/tools/toolExecution.ts` | `src/Tool.ts`, specific tool `inputSchema`, tool `validateInput()` implementation | The execution layer owns schema parsing and calls `validateInput()` before permission checks. Tool implementations own domain-specific validation details. |
 | Shell-specific validation | `src/tools/BashTool/bashPermissions.ts` | `src/tools/BashTool/pathValidation.ts`, `src/tools/BashTool/readOnlyValidation.ts`, `src/tools/BashTool/shouldUseSandbox.ts` | Bash has deeper subcommand classification, redirection checks, path validation, sandbox routing, and classifier integration than most tools. |
@@ -150,7 +150,9 @@ Inspect these surfaces when a tool is unexpectedly allowed, denied, or asking:
 5. Safety-check asks from filesystem/path policy
    These are bypass-immune.
 6. Auto-mode classifier path in `permissions.ts`
-   Can convert an ask into allow or deny, subject to mode and feature gates.
+   Can convert an ask into allow or deny, subject to mode and feature gates. For
+   Codex/OpenAI classifier side queries, transient model-route failures can fall
+   back across the GPT cascade in `yoloClassifier.ts`.
 7. `src/hooks/useCanUseTool.tsx`
    Final interactive, coordinator, or worker approval UI behavior.
 
@@ -227,10 +229,10 @@ Use focused checks first, then the documented build:
 | Area | Focused tests or checks |
 |---|---|
 | Permission suggestions and filesystem safety | `bun test src/utils/permissions/filesystemSuggestions.test.ts` and nearby permission tests |
+| Auto-mode classifier fallback | `bun test src/utils/permissions/enableAutoModeFlag.test.ts` |
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
 | Tool search behavior | `bun test` for `src/tools/ToolSearchTool/` and `src/utils/toolSearch.ts` if present in current snapshot |
 | MCP configuration and client behavior | MCP-related tests under `src/services/mcp/` and integration checks through connected server flows |
-| Standalone MCP helper scripts | `bun test scripts/mcp/gpt-agent.test.ts` for `scripts/mcp/gpt-agent.ts`; this script spawns the Cat Code CLI, stores named GPT/background-job state under `.cat-code/mcp`, and summarizes background usage by scanning session transcript `codex_send_path`, `codex_stream_surface`, and `prompt_cache_break` system entries. |
 | Build-level validation | `bun run build:dev:full` |
 
 ## Traps And Stale Assumptions

@@ -23,10 +23,16 @@ afterEach(() => {
 })
 
 describe('getSmallFastModelForProvider', () => {
-  test('returns the GPT mini on the Codex fork', async () => {
+  test('uses GPT-5.6 Terra as the Codex main-loop default', async () => {
+    codexSubscriber = true
+    const { getDefaultMainLoopModelSetting } = await import('./model.js')
+    expect(getDefaultMainLoopModelSetting()).toBe('gpt-5.6-terra')
+  })
+
+  test('returns GPT-5.6 Luna on the Codex fork', async () => {
     codexSubscriber = true
     const { getSmallFastModelForProvider } = await import('./model.js')
-    expect(getSmallFastModelForProvider()).toBe('gpt-5.4-mini')
+    expect(getSmallFastModelForProvider()).toBe('gpt-5.6-luna')
   })
 
   test('falls back to the Anthropic Haiku default off the Codex fork', async () => {
@@ -48,6 +54,6 @@ describe('getSmallFastModelForProvider', () => {
     codexSubscriber = true
     process.env.ANTHROPIC_SMALL_FAST_MODEL = 'claude-custom-small'
     const { getSmallFastModelForProvider } = await import('./model.js')
-    expect(getSmallFastModelForProvider()).toBe('gpt-5.4-mini')
+    expect(getSmallFastModelForProvider()).toBe('gpt-5.6-luna')
   })
 })

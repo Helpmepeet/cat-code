@@ -162,7 +162,7 @@ function createToolUseContext() {
       agentDefinitions: { activeAgents: [] },
       tools: [],
       mcpClients: [],
-      mainLoopModel: 'gpt-5.3-codex',
+      mainLoopModel: 'gpt-5.6-luna',
       customSystemPrompt: undefined,
       appendSystemPrompt: undefined,
     },

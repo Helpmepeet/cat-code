@@ -95,36 +95,28 @@ export const CLAUDE_SONNET_4_6_CONFIG = {
 } as const satisfies ModelConfig
 
 // OpenAI Codex models
-export const GPT_5_5_CONFIG = {
-  firstParty: 'gpt-5.5',
-  bedrock: 'gpt-5.5',
-  vertex: 'gpt-5.5',
-  foundry: 'gpt-5.5',
-  openai: 'gpt-5.5',
+export const GPT_5_6_SOL_CONFIG = {
+  firstParty: 'gpt-5.6-sol',
+  bedrock: 'gpt-5.6-sol',
+  vertex: 'gpt-5.6-sol',
+  foundry: 'gpt-5.6-sol',
+  openai: 'gpt-5.6-sol',
 } as const satisfies ModelConfig
 
-export const GPT_5_4_CONFIG = {
-  firstParty: 'gpt-5.4',
-  bedrock: 'gpt-5.4',
-  vertex: 'gpt-5.4',
-  foundry: 'gpt-5.4',
-  openai: 'gpt-5.4',
+export const GPT_5_6_TERRA_CONFIG = {
+  firstParty: 'gpt-5.6-terra',
+  bedrock: 'gpt-5.6-terra',
+  vertex: 'gpt-5.6-terra',
+  foundry: 'gpt-5.6-terra',
+  openai: 'gpt-5.6-terra',
 } as const satisfies ModelConfig
 
-export const GPT_5_3_CODEX_CONFIG = {
-  firstParty: 'gpt-5.3-codex',
-  bedrock: 'gpt-5.3-codex',
-  vertex: 'gpt-5.3-codex',
-  foundry: 'gpt-5.3-codex',
-  openai: 'gpt-5.3-codex',
-} as const satisfies ModelConfig
-
-export const GPT_5_4_MINI_CONFIG = {
-  firstParty: 'gpt-5.4-mini',
-  bedrock: 'gpt-5.4-mini',
-  vertex: 'gpt-5.4-mini',
-  foundry: 'gpt-5.4-mini',
-  openai: 'gpt-5.4-mini',
+export const GPT_5_6_LUNA_CONFIG = {
+  firstParty: 'gpt-5.6-luna',
+  bedrock: 'gpt-5.6-luna',
+  vertex: 'gpt-5.6-luna',
+  foundry: 'gpt-5.6-luna',
+  openai: 'gpt-5.6-luna',
 } as const satisfies ModelConfig
 
 // @[MODEL LAUNCH]: Register the new config here.
@@ -141,10 +133,9 @@ export const ALL_MODEL_CONFIGS = {
   opus45: CLAUDE_OPUS_4_5_CONFIG,
   opus46: CLAUDE_OPUS_4_6_CONFIG,
   // OpenAI Codex models
-  gpt55: GPT_5_5_CONFIG,
-  gpt54: GPT_5_4_CONFIG,
-  gpt53codex: GPT_5_3_CODEX_CONFIG,
-  gpt54mini: GPT_5_4_MINI_CONFIG,
+  gpt56sol: GPT_5_6_SOL_CONFIG,
+  gpt56terra: GPT_5_6_TERRA_CONFIG,
+  gpt56luna: GPT_5_6_LUNA_CONFIG,
 } as const satisfies Record<string, ModelConfig>
 
 export type ModelKey = keyof typeof ALL_MODEL_CONFIGS

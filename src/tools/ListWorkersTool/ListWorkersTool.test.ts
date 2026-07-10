@@ -83,7 +83,7 @@ describe('ListWorkersTool', () => {
             id: `msg-${assistantUuid}`,
             type: 'message',
             role: 'assistant',
-            model: 'gpt-5.3-codex',
+            model: 'gpt-5.6-luna',
             content: [{ type: 'text', text: 'prior result' }],
             stop_reason: 'end_turn',
             stop_sequence: null,

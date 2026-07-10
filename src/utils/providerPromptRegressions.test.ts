@@ -52,7 +52,7 @@ describe('provider and prompt regressions', () => {
 
     const openaiSchema = await toolToAPISchema(GrepTool, {
       ...commonOptions,
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-luna',
     })
     const firstPartySchema = await toolToAPISchema(GrepTool, {
       ...commonOptions,
@@ -130,7 +130,7 @@ describe('provider and prompt regressions', () => {
       getToolPermissionContext: async () => getEmptyToolPermissionContext(),
       tools: [FilePatchTool],
       agents: [],
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-luna',
     })
 
     expect(schema).toMatchObject({
@@ -258,7 +258,7 @@ describe('provider and prompt regressions', () => {
           id: 'msg_openai_reasoning',
           type: 'message',
           role: 'assistant',
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           stop_reason: 'tool_use',
           stop_sequence: null,
           usage: {

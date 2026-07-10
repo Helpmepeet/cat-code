@@ -12,7 +12,7 @@ import {
 import { getModelStrings } from './modelStrings.js'
 import { getAPIProvider, resolveRequestProvider, type APIProvider } from './providers.js'
 
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'inherit'] as const
+export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 
 export type AgentModelOption = {
@@ -127,9 +127,9 @@ function getFamilyTier(
 ): { family: 'gpt' | 'claude'; rank: number } | undefined {
   const canonical = getCanonicalName(model).toLowerCase()
   if (canonical.startsWith('gpt-')) {
-    if (canonical === 'gpt-5.5') return { family: 'gpt', rank: 3 }
-    if (canonical === 'gpt-5.4') return { family: 'gpt', rank: 2 }
-    if (canonical === 'gpt-5.4-mini') return { family: 'gpt', rank: 1 }
+    if (canonical === 'gpt-5.6-sol') return { family: 'gpt', rank: 4 }
+    if (canonical === 'gpt-5.6-terra') return { family: 'gpt', rank: 3 }
+    if (canonical === 'gpt-5.6-luna') return { family: 'gpt', rank: 2 }
     return undefined
   }
   if (canonical.includes('opus')) return { family: 'claude', rank: 3 }
@@ -140,8 +140,8 @@ function getFamilyTier(
 
 /**
  * The Agent tool's per-call `model` arg is model-generated, and models
- * habitually pin a stale id from their own family (e.g. a GPT-5.5 parent
- * passing model:"gpt-5.4"), silently downgrading every subagent despite
+ * habitually pin a lower-tier id from their own family, silently downgrading
+ * every subagent despite
  * the param description saying to omit it. Ignore the arg when it would
  * downgrade the subagent below the parent's tier within the same family.
  * Deliberate upgrades and cross-family choices are still honored, and
@@ -205,19 +205,19 @@ export function getAgentModelOptions(): AgentModelOption[] {
       description: 'Most capable for complex reasoning tasks',
     },
     {
-      value: 'gpt-5.5',
-      label: 'GPT-5.5',
-      description: 'Most capable GPT option for OpenAI-backed agents',
+      value: 'gpt-5.6-sol',
+      label: 'GPT-5.6 Sol',
+      description: 'Frontier GPT-5.6 option for complex professional work',
     },
     {
-      value: 'gpt-5.4',
-      label: 'GPT-5.4',
-      description: 'Previous frontier GPT option for OpenAI-backed agents',
+      value: 'gpt-5.6-terra',
+      label: 'GPT-5.6 Terra',
+      description: 'Balanced GPT-5.6 option for everyday agentic coding (preview)',
     },
     {
-      value: 'gpt-5.4-mini',
-      label: 'GPT-5.4 Mini',
-      description: 'Fast and efficient GPT option for OpenAI-backed agents',
+      value: 'gpt-5.6-luna',
+      label: 'GPT-5.6 Luna',
+      description: 'Fast GPT-5.6 option for agentic coding (preview)',
     },
     {
       value: 'inherit',

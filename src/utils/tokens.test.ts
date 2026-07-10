@@ -35,7 +35,7 @@ function createThinkingMessage({
     uuid: `thinking-${signature.length}-${thinking.length}`,
     message: {
       id: `msg-thinking-${signature.length}-${thinking.length}`,
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-luna',
       role: 'assistant',
       content: [
         {
@@ -56,7 +56,7 @@ function createAssistantUsageMessage(overrides?: {
     uuid: 'assistant-usage',
     message: {
       id: 'msg-usage',
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-luna',
       role: 'assistant',
       content: [
         {
@@ -246,7 +246,7 @@ describe('reasoning-aware token accounting', () => {
       uuid: 'assistant-zero-seed',
       message: {
         id: 'msg-codex-toolcall',
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         role: 'assistant',
         content: [{ type: 'text', text: 'tool call split' }],
         usage: { input_tokens: 0, output_tokens: 0 },
@@ -273,7 +273,7 @@ describe('post-compaction preserved-segment skip', () => {
       uuid,
       message: {
         id: `msg-${uuid}`,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         role: 'assistant',
         content: [{ type: 'text', text: 'pre-compact reply' }],
         usage: {
@@ -356,11 +356,11 @@ describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
   const conversation = (): Message[] => [
     createUserMessage('question'),
     bigUserToolResult(), // ~50k tokens of real transcript, PRE-anchor
-    createAssistantUsageMessage(), // model gpt-5.4, usage total 130 (truncated)
+    createAssistantUsageMessage(), // model gpt-5.6-luna, usage total 130 (truncated)
   ]
 
   test('current model still openai: trusts the anchor (no invalidation)', () => {
-    const withGpt = tokenCountWithEstimation(conversation(), 'gpt-5.5')
+    const withGpt = tokenCountWithEstimation(conversation(), 'gpt-5.6-terra')
     const withNothing = tokenCountWithEstimation(conversation())
     expect(withGpt).toBe(withNothing)
     // Anchor total 130, trailing content is empty → tiny count.
@@ -368,7 +368,7 @@ describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
   })
 
   test('switch to a claude model: invalidates the gpt anchor, full re-estimate', () => {
-    const anchored = tokenCountWithEstimation(conversation(), 'gpt-5.5')
+    const anchored = tokenCountWithEstimation(conversation(), 'gpt-5.6-terra')
     const reestimated = tokenCountWithEstimation(
       conversation(),
       'claude-sonnet-4-6',
@@ -398,8 +398,8 @@ describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
       },
     } as Message
     const msgs = [createUserMessage('q'), bigUserToolResult(), claudeAnchor]
-    // currentModel gpt-5.5 must NOT invalidate a claude-produced anchor.
-    const onGpt = tokenCountWithEstimation(msgs, 'gpt-5.5')
+    // currentModel gpt-5.6-terra must NOT invalidate a claude-produced anchor.
+    const onGpt = tokenCountWithEstimation(msgs, 'gpt-5.6-terra')
     const noModel = tokenCountWithEstimation(msgs)
     expect(onGpt).toBe(noModel)
     // Anchor trusted → the pre-anchor big result is NOT re-counted.

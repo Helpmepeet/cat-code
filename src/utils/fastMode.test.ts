@@ -23,16 +23,17 @@ describe('fast mode', () => {
   })
 
   test('supports Codex GPT models', () => {
-    expect(isFastModeSupportedByModel('gpt-5.5')).toBe(true)
-    expect(isFastModeSupportedByModel('gpt-5.4')).toBe(true)
-    expect(isFastModeSupportedByModel('gpt-5.4-mini')).toBe(false)
+    expect(isFastModeSupportedByModel('gpt-5.6-sol')).toBe(true)
+    expect(isFastModeSupportedByModel('gpt-5.6-terra')).toBe(true)
+    expect(isFastModeSupportedByModel('gpt-5.6-luna')).toBe(true)
+    expect(isFastModeSupportedByModel('gpt-5.2')).toBe(false)
   })
 
   test('uses a Codex fast model for Codex/OpenAI provider sessions', () => {
     setSessionProvider('openai')
 
-    expect(getFastModeModel()).toBe('gpt-5.5')
-    expect(getFastModeModelDisplay()).toBe('GPT-5.5')
+    expect(getFastModeModel()).toBe('gpt-5.6-terra')
+    expect(getFastModeModelDisplay()).toBe('supported GPT models')
   })
 
   test('is available for Codex/OpenAI provider sessions', () => {

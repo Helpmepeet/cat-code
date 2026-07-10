@@ -147,14 +147,14 @@ export const FAST_MODE_MODEL_DISPLAY = 'Opus 4.6'
 
 export function getFastModeModelDisplay(): string {
   if (getAPIProvider() === 'openai') {
-    return 'GPT-5.5'
+    return 'supported GPT models'
   }
   return FAST_MODE_MODEL_DISPLAY
 }
 
 export function getFastModeModel(): string {
   if (getAPIProvider() === 'openai') {
-    return 'gpt-5.5'
+    return 'gpt-5.6-terra'
   }
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
 }
@@ -183,8 +183,9 @@ export function isFastModeSupportedByModel(
   const normalizedModel = parsedModel.toLowerCase()
   return (
     normalizedModel.includes('opus-4-6') ||
-    normalizedModel === 'gpt-5.5' ||
-    normalizedModel === 'gpt-5.4'
+    normalizedModel === 'gpt-5.6-sol' ||
+    normalizedModel === 'gpt-5.6-terra' ||
+    normalizedModel === 'gpt-5.6-luna'
   )
 }
 

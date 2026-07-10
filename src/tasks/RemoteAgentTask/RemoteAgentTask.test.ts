@@ -19,7 +19,7 @@ function assistantToolUseMessage(
       id: `msg-${callId}`,
       type: 'message',
       role: 'assistant',
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.6-luna',
       stop_reason: 'tool_use',
       stop_sequence: null,
       usage: {

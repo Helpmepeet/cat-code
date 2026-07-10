@@ -135,7 +135,7 @@ permission-prompt turn to fire so the surrounding app behavior can be
 observed. Defaulting to a frontier model at high effort for that wastes real
 usage/quota for no benefit.
 
-- **Model:** GPT-5.4 Mini (`gpt-5.4-mini`), selected via `/model`.
+- **Model:** GPT-5.6 Luna (`gpt-5.6-luna`), selected via `/model`.
 - **Effort:** low, via `/effort low`.
 - **Account:** whichever Codex account is currently healthy — do not hardcode
   a specific account as policy. Check `/accounts` first; if the pool's active

@@ -10,9 +10,9 @@
     "provider": "openai",
     "recoverable": true,
     "pool": "codex#1 alias=[redacted-alias:4ee5ef9756] email=[redacted-email:542d240129]",
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "openai",
-    "resolved_model": "gpt-5.4",
+    "resolved_model": "gpt-5.6-luna",
     "counts": {
       "healthy": 1,
       "capped": 2,
@@ -80,9 +80,9 @@
     "provider": "openai",
     "recoverable": true,
     "pool": "codex",
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "openai",
-    "resolved_model": "gpt-5.4",
+    "resolved_model": "gpt-5.6-luna",
     "counts": {
       "healthy": 2,
       "dead": 1,
@@ -103,9 +103,9 @@
     "provider": "openai",
     "recoverable": true,
     "pool": "codex",
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "openai",
-    "resolved_model": "gpt-5.4",
+    "resolved_model": "gpt-5.6-luna",
     "account_ref": "[redacted-account-ref:b6a428b420]",
     "reason": "manual switch succeeded"
   },
@@ -211,9 +211,9 @@
     "provider": "openai",
     "recoverable": false,
     "pool": "codex",
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "openai",
-    "resolved_model": "gpt-5.4",
+    "resolved_model": "gpt-5.6-luna",
     "counts": {
       "healthy": 3,
       "total": 3
@@ -232,9 +232,9 @@
     "provider": "openai",
     "recoverable": false,
     "pool": "codex alias=[redacted-alias:4ee5ef9756]",
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "openai",
-    "resolved_model": "gpt-5.4",
+    "resolved_model": "gpt-5.6-luna",
     "counts": {
       "dead": 2,
       "total": 2
@@ -252,9 +252,9 @@
     "provider": "openai",
     "recoverable": false,
     "pool": "codex",
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "openai",
-    "resolved_model": "gpt-5.4",
+    "resolved_model": "gpt-5.6-luna",
     "counts": {
       "capped": 4,
       "total": 4
@@ -288,7 +288,7 @@
     "severity": "warning",
     "provider": "anthropic",
     "recoverable": true,
-    "requested_model": "gpt-5.4",
+    "requested_model": "gpt-5.6-luna",
     "resolved_provider": "anthropic",
     "resolved_model": "claude-sonnet-4-6",
     "reason": "request provider resolved to anthropic using api_key=[redacted-api-key:1f38c62fa7]"

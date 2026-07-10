@@ -25,7 +25,7 @@ const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
 const OPENAI_IMAGES_GENERATIONS_URL = 'https://api.openai.com/v1/images/generations'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
-const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.5'
+const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.6-terra'
 const CODEX_IMAGE_GENERATION_INSTRUCTIONS =
   'Generate the requested image using the image_generation tool.'
 const TERMINAL_PREVIEW_WIDTH_COLUMNS = 48

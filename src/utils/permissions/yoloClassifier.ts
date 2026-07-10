@@ -623,22 +623,27 @@ export function getClassifierFallbackModel(
   model: string,
   error: unknown,
 ): string | undefined {
-  if (model.toLowerCase() !== 'gpt-5.5') return undefined
+  if (!isClassifierFallbackError(error)) return undefined
 
-  if (isClassifierFallbackError(error)) return 'gpt-5.4'
+  switch (model.toLowerCase()) {
+    case 'gpt-5.6-sol':
+      return 'gpt-5.6-terra'
+    case 'gpt-5.6-terra':
+      return 'gpt-5.6-luna'
+  }
 
   return undefined
 }
 
 // Transient HTTP statuses that should fall the classifier model back from
-// gpt-5.5 to gpt-5.4. These are the SDK's retryable transient statuses (408
-// plus 5xx), Anthropic's 529 overload, and 429. A 429 is included because the
-// classifier path has no app-level account failover (sideQuery bypasses
-// withRetry), so a non-cap 429 would otherwise fail closed and block the tool;
-// a different-model request may route past a model/route-specific rate limit.
-// True account usage caps are excluded separately below: they surface as
-// CodexAccountCapError (also status 429), where a same-account model swap can't
-// help — those must propagate so the cap signal is preserved.
+// GPT-5.6 Sol → Terra → Luna. These are the SDK's retryable
+// transient statuses (408 plus 5xx), Anthropic's 529 overload, and 429. A 429
+// is included because the classifier path has no app-level account failover
+// (sideQuery bypasses withRetry), so a non-cap 429 would otherwise fail closed
+// and block the tool; a different-model request may route past a model/route-
+// specific rate limit. True account usage caps are excluded separately below:
+// they surface as CodexAccountCapError (also status 429), where a same-account
+// model swap can't help — those must propagate so the cap signal is preserved.
 const CLASSIFIER_FALLBACK_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529])
 
 // Error names for Codex account cap / auth failures. Matched by name rather

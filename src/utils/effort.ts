@@ -65,9 +65,13 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (m.includes('opus-4-6')) {
     return true
   }
-  // OpenAI/Codex: 'max' maps to reasoning.effort='xhigh'. Codex variants
-  // support it, and GPT-5.5/GPT-5.4 also support it.
-  if (m.includes('codex') || m === 'gpt-5.5' || m === 'gpt-5.4') {
+  // OpenAI/Codex: Cat Code's 'max' UI level maps to reasoning.effort='xhigh'.
+  if (
+    m.includes('codex') ||
+    m === 'gpt-5.6-sol' ||
+    m === 'gpt-5.6-terra' ||
+    m === 'gpt-5.6-luna'
+  ) {
     return true
   }
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
@@ -242,7 +246,7 @@ export function getEffortLevelDescription(level: EffortLevel): string {
     case 'high':
       return 'Comprehensive implementation with extensive testing and documentation'
     case 'max':
-      return 'Maximum capability with deepest reasoning (Opus 4.6, GPT-5.5, GPT-5.4, and Codex models that support xhigh)'
+      return 'Maximum capability with deepest reasoning (Opus 4.6, GPT-5.6 Sol/Terra/Luna, and Codex models that support xhigh)'
   }
 }
 
@@ -315,6 +319,16 @@ export function getDefaultEffortForModel(
   // IMPORTANT: Do not change the default effort level without notifying
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
+
+  // Sol and Terra default to medium reasoning. Luna stays low to preserve the
+  // retired GPT-5.4 Mini fast/cost-sensitive slot's low-latency intent.
+  if (
+    model.toLowerCase() === 'gpt-5.6-sol' ||
+    model.toLowerCase() === 'gpt-5.6-terra'
+  ) {
+    return 'medium'
+  }
+  if (model.toLowerCase() === 'gpt-5.6-luna') return 'low'
 
   // Default effort on Opus 4.6 to medium for Pro.
   // Max/Team also get medium when the tengu_grey_step2 config is enabled.

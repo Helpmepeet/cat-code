@@ -43,9 +43,9 @@ describe('autoCompact thresholds', () => {
         MANUAL_COMPACT_BUFFER_TOKENS) -
       getAutoCompactThreshold('claude-sonnet-4-6')
     const gptRecoveryWindow =
-      (getEffectiveContextWindowSize('gpt-5.4') -
+      (getEffectiveContextWindowSize('gpt-5.6-luna') -
         MANUAL_COMPACT_BUFFER_TOKENS) -
-      getAutoCompactThreshold('gpt-5.4')
+      getAutoCompactThreshold('gpt-5.6-luna')
     const sonnet1mRecoveryWindow =
       (getEffectiveContextWindowSize('claude-sonnet-4-6 [1m]') -
         MANUAL_COMPACT_BUFFER_TOKENS) -
@@ -57,7 +57,7 @@ describe('autoCompact thresholds', () => {
 
   test('recovery window uses scaled values with floor and cap', () => {
     expect(getAutoCompactRecoveryWindowTokens('claude-sonnet-4-6')).toBe(14_400)
-    expect(getAutoCompactRecoveryWindowTokens('gpt-5.4')).toBe(20_160)
+    expect(getAutoCompactRecoveryWindowTokens('gpt-5.6-luna')).toBe(28_160)
     expect(getAutoCompactRecoveryWindowTokens('claude-sonnet-4-6 [1m]')).toBe(
       50_000,
     )
@@ -68,8 +68,8 @@ describe('autoCompact thresholds', () => {
       getEffectiveContextWindowSize('claude-sonnet-4-6') -
         MANUAL_COMPACT_BUFFER_TOKENS,
     )
-    expect(getBlockingLimit('gpt-5.4')).toBe(
-      getEffectiveContextWindowSize('gpt-5.4') -
+    expect(getBlockingLimit('gpt-5.6-luna')).toBe(
+      getEffectiveContextWindowSize('gpt-5.6-luna') -
         MANUAL_COMPACT_BUFFER_TOKENS,
     )
     expect(getBlockingLimit('claude-sonnet-4-6 [1m]')).toBe(

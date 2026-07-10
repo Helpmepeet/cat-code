@@ -145,7 +145,7 @@ cat-code
 GPT-family model names also route requests through the OpenAI provider path.
 
 ```bash
-cat-code --model gpt-5.4
+cat-code --model gpt-5.6-luna
 ```
 
 ### AWS Bedrock

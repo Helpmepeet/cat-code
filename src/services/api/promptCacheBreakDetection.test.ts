@@ -72,7 +72,7 @@ async function drivStaleRetryThenBreak(opts: {
     system: [{ type: 'text' as const, text: 'stable system prompt' }],
     toolSchemas: [],
     querySource: opts.querySource,
-    model: 'gpt-5.5',
+    model: 'gpt-5.6-terra',
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
   }
   const noMessages: Message[] = []

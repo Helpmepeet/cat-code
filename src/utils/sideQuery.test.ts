@@ -37,7 +37,7 @@ describe('sideQuery', () => {
     const { sideQuery } = await import('./sideQuery.js')
 
     await sideQuery({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       system: 'Use structured output.',
       messages: [{ role: 'user', content: 'Summarize this.' }],
       skipSystemPromptPrefix: true,

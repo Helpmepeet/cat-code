@@ -138,14 +138,14 @@ describe('codex-fetch-adapter', () => {
   // route Haiku/cheap calls to Codex must build buildProviderInstructionAssembly.
   test('translateToCodexBody throws without an instruction assembly', () => {
     expect(() =>
-      translateToCodexBody({ model: 'gpt-5.4-mini', tools: [] }),
+      translateToCodexBody({ model: 'gpt-5.6-luna', tools: [] }),
     ).toThrow('OpenAI request missing provider-native instruction assembly payload')
   })
 
   // A Claude small-fast model on the OpenAI path is remapped to the GPT mini.
   // This is the route the away-summary / hook / skill-improvement side-calls
   // take (they pass claude-haiku-* and rely on the adapter's remap).
-  test('translateToCodexBody remaps claude-haiku to gpt-5.4-mini', () => {
+  test('translateToCodexBody remaps claude-haiku to gpt-5.6-luna', () => {
     const { codexModel } = translateToCodexBody({
       model: 'claude-haiku-4-5-20251001',
       tools: [],
@@ -154,7 +154,7 @@ describe('codex-fetch-adapter', () => {
         inputMessages: [],
       },
     })
-    expect(codexModel).toBe('gpt-5.4-mini')
+    expect(codexModel).toBe('gpt-5.6-luna')
   })
 
   test('translateToCodexBody sets service_tier="priority" when speed=fast', () => {
@@ -457,16 +457,16 @@ describe('codex-fetch-adapter', () => {
       },
     })
 
-    expect(codexBody.reasoning).toEqual({ effort: 'minimal' })
+    expect(codexBody.reasoning).toEqual({ effort: 'none' })
     expect(codexBody.include).toEqual([
       'reasoning.encrypted_content',
       'web_search_call.action.sources',
     ])
   })
 
-  test('translateToCodexBody maps disabled thinking to none for gpt-5.5', () => {
+  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Terra', () => {
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       thinking: { type: 'disabled' },
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
@@ -477,9 +477,9 @@ describe('codex-fetch-adapter', () => {
     expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('translateToCodexBody maps boolean disabled thinking to none for gpt-5.5', () => {
+  test('translateToCodexBody maps boolean disabled thinking to none for GPT-5.6 Terra', () => {
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       thinking: false,
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
@@ -490,9 +490,9 @@ describe('codex-fetch-adapter', () => {
     expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('translateToCodexBody preserves minimal disabled thinking for gpt-5.4', () => {
+  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Luna', () => {
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-luna',
       thinking: { type: 'disabled' },
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
@@ -500,15 +500,44 @@ describe('codex-fetch-adapter', () => {
       },
     })
 
-    expect(codexBody.reasoning).toEqual({ effort: 'minimal' })
+    expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('mapEffortToCodex maps explicit minimal to none for gpt-5.5', () => {
-    expect(mapEffortToCodex('minimal', 'gpt-5.5')).toBe('none')
+  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Sol', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.6-sol',
+      thinking: { type: 'disabled' },
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('mapEffortToCodex preserves explicit minimal for gpt-5.4', () => {
-    expect(mapEffortToCodex('minimal', 'gpt-5.4')).toBe('minimal')
+  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Terra', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.6-terra',
+      thinking: { type: 'disabled' },
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [],
+      },
+    })
+
+    expect(codexBody.reasoning).toEqual({ effort: 'none' })
+  })
+
+  test('mapEffortToCodex maps explicit minimal to none for GPT-5.6 Terra and Luna', () => {
+    expect(mapEffortToCodex('minimal', 'gpt-5.6-terra')).toBe('none')
+    expect(mapEffortToCodex('minimal', 'gpt-5.6-luna')).toBe('none')
+  })
+
+  test('mapEffortToCodex maps Cat Code max to xhigh for GPT-5.6 models', () => {
+    expect(mapEffortToCodex('max', 'gpt-5.6-sol')).toBe('xhigh')
+    expect(mapEffortToCodex('max', 'gpt-5.6-terra')).toBe('xhigh')
+    expect(mapEffortToCodex('max', 'gpt-5.6-luna')).toBe('xhigh')
   })
 
   test('translateToCodexBody merges web search sources include with reasoning include', () => {
@@ -660,7 +689,7 @@ describe('codex-fetch-adapter', () => {
 
     const anthropicResponse = await translateCodexStreamToAnthropic(
       codexResponse,
-      'gpt-5.4',
+      'gpt-5.6-luna',
     )
     const body = await anthropicResponse.text()
 
@@ -752,7 +781,7 @@ describe('codex-fetch-adapter', () => {
 
     const anthropicResponse = await translateCodexStreamToAnthropic(
       codexResponse,
-      'gpt-5.4',
+      'gpt-5.6-luna',
     )
     const body = await anthropicResponse.text()
 
@@ -799,7 +828,7 @@ describe('codex-fetch-adapter', () => {
     )
 
     const searchOnlyBody = await (
-      await translateCodexStreamToAnthropic(searchOnly, 'gpt-5.4')
+      await translateCodexStreamToAnthropic(searchOnly, 'gpt-5.6-luna')
     ).text()
     expect(searchOnlyBody).toContain('"stop_reason":"end_turn"')
 
@@ -872,7 +901,7 @@ describe('codex-fetch-adapter', () => {
     )
 
     const mixedBody = await (
-      await translateCodexStreamToAnthropic(mixed, 'gpt-5.4')
+      await translateCodexStreamToAnthropic(mixed, 'gpt-5.6-luna')
     ).text()
     expect(mixedBody).toContain('"type":"server_tool_use"')
     expect(mixedBody).toContain('"id":"ws_first"')
@@ -1476,11 +1505,11 @@ describe('codex-fetch-adapter', () => {
         yield { type: 'response.output_text.delta', delta: 'hello' }
         throw new Error('WebSocket closed before response.completed')
       })(),
-      'gpt-5.4',
+      'gpt-5.6-luna',
       {
         accountId: 'acct_test_streaming',
-        model: 'gpt-5.4',
-        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_test_streaming:gpt-5.6-luna',
         conversationId: 'conv_test_streaming',
       },
     )
@@ -1502,11 +1531,11 @@ describe('codex-fetch-adapter', () => {
           },
         }
       })(),
-      'gpt-5.4',
+      'gpt-5.6-luna',
       {
         accountId: 'acct_test_streaming',
-        model: 'gpt-5.4',
-        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_test_streaming:gpt-5.6-luna',
         conversationId: 'conv_visible_response_failed',
       },
     )
@@ -1547,11 +1576,11 @@ describe('codex-fetch-adapter', () => {
 
     const response = await translateCodexStreamToAnthropic(
       codexResponse,
-      'gpt-5.4',
+      'gpt-5.6-luna',
       {
         accountId: 'acct_test_streaming',
-        model: 'gpt-5.4',
-        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_test_streaming:gpt-5.6-luna',
         conversationId: 'conv_non_cap_response_failed',
       },
     )
@@ -1565,11 +1594,11 @@ describe('codex-fetch-adapter', () => {
         yield { type: 'response.output_text.delta', delta: 'hello' }
         throw new CodexWebSocketClosedBeforeCompletedError(1000, 'none')
       })(),
-      'gpt-5.4',
+      'gpt-5.6-luna',
       {
         accountId: 'acct_test_streaming',
-        model: 'gpt-5.4',
-        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_test_streaming:gpt-5.6-luna',
         conversationId: 'conv_partial_visible',
       },
       async () => ({
@@ -2059,11 +2088,11 @@ describe('codex-fetch-adapter', () => {
         yield { type: 'response.created', response: { id: 'resp_ws_turn_1' } }
         throw new CodexWebSocketClosedBeforeCompletedError(1000, 'none')
       })(),
-      'gpt-5.4',
+      'gpt-5.6-luna',
       {
         accountId: 'acct_test_streaming',
-        model: 'gpt-5.4',
-        cacheContextKey: 'acct_test_streaming:gpt-5.4',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_test_streaming:gpt-5.6-luna',
         conversationId: 'conv_http_fallback',
       },
       async () => ({
@@ -2298,7 +2327,7 @@ describe('codex tool-result truncation (Item 2)', () => {
     resultText: string,
   ): Record<string, unknown> {
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
         inputMessages: [
@@ -2371,7 +2400,7 @@ describe('codex tool-result truncation (Item 2)', () => {
     // schema-bearing ToolSearch payload — dropping its middle breaks tool loading).
     const huge = 'O'.repeat(120_000)
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
         inputMessages: [
@@ -2395,7 +2424,7 @@ describe('codex tool-result truncation (Item 2)', () => {
 
   test('image tool_result blocks are never truncated (multimodal array preserved)', () => {
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
         inputMessages: [

@@ -70,7 +70,7 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
       readFileCache,
       customSystemPrompt: 'system prompt',
       appendSystemPrompt: 'append prompt',
-      userSpecifiedModel: 'gpt-5.5',
+      userSpecifiedModel: 'gpt-5.6-terra',
       fallbackModel: 'claude-sonnet-4-5-20250929',
       thinkingConfig: { type: 'enabled', budgetTokens: 1024 },
       verbose: true,
@@ -155,7 +155,7 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     expect(config.readFileCache).toBe(readFileCache)
     expect(config.customSystemPrompt).toBe('system prompt')
     expect(config.appendSystemPrompt).toBe('append prompt')
-    expect(config.userSpecifiedModel).toBe('gpt-5.5')
+    expect(config.userSpecifiedModel).toBe('gpt-5.6-terra')
     expect(config.fallbackModel).toBe('claude-sonnet-4-5-20250929')
     expect(config.thinkingConfig).toEqual({ type: 'enabled', budgetTokens: 1024 })
     expect(config.verbose).toBe(true)

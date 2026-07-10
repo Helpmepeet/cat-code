@@ -88,8 +88,17 @@ export function getContextWindowForModel(
   if (getSonnet1mExpTreatmentEnabled(model)) {
     return 1_000_000
   }
+  const canonicalModel = getCanonicalName(model)
+  // GPT-5.6 Sol, Terra, and Luna have a 372k Codex context window.
+  if (
+    canonicalModel === 'gpt-5.6-sol' ||
+    canonicalModel === 'gpt-5.6-terra' ||
+    canonicalModel === 'gpt-5.6-luna'
+  ) {
+    return 372_000
+  }
   // GPT/Codex models: 272k max input tokens (400k total budget minus 128k output reserve)
-  if (getCanonicalName(model).startsWith('gpt-')) {
+  if (canonicalModel.startsWith('gpt-')) {
     return 272_000
   }
 

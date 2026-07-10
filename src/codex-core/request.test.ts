@@ -11,11 +11,11 @@ describe('codex-core request builder', () => {
     const request = buildCodexCoreRequest(
       {
         accountProfile: 'acct',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-terra',
         input: 'hello',
         systemPrompt: 'Be concise.',
       },
-      'gpt-5.5',
+      'gpt-5.6-terra',
       'conv_123',
     )
 
@@ -25,7 +25,7 @@ describe('codex-core request builder', () => {
       { role: 'user', content: 'hello' },
     ])
     expect(request.requestBody).toMatchObject({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       stream: true,
       _openaiInstructionAssembly: {
         instructions: 'Be concise.',
@@ -38,7 +38,7 @@ describe('codex-core request builder', () => {
     const request = buildCodexCoreRequest(
       {
         accountProfile: 'acct',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-terra',
         messages: [
           { role: 'system', content: 'System A' },
           { role: 'developer', content: 'Developer B' },
@@ -47,7 +47,7 @@ describe('codex-core request builder', () => {
           { role: 'user', content: 'Question 2' },
         ],
       },
-      'gpt-5.5',
+      'gpt-5.6-terra',
       'conv_456',
     )
 
@@ -89,10 +89,10 @@ describe('codex-core request builder', () => {
       buildCodexCoreRequest(
         {
           accountProfile: 'acct',
-          model: 'gpt-5.5',
+          model: 'gpt-5.6-terra',
           messages: [{ role: 'assistant', content: 'answer first' }],
         },
-        'gpt-5.5',
+        'gpt-5.6-terra',
         'conv_bad',
       ),
     ).toThrow('must start with a user message')

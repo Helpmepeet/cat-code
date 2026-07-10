@@ -211,41 +211,33 @@ function getHaikuOption(): ModelOption {
 }
 
 // OpenAI Codex model options
-function getGpt55Option(): ModelOption {
+function getGpt56SolOption(): ModelOption {
   return {
-    value: 'gpt-5.5',
-    label: 'GPT-5.5',
-    description: 'GPT-5.5 · Most capable for complex reasoning and coding',
+    value: 'gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    description: 'GPT-5.6 Sol · Frontier capability for complex professional work',
     descriptionForModel:
-      'GPT-5.5 - most capable GPT model for complex reasoning and coding',
+      'GPT-5.6 Sol - frontier model for complex professional work',
   }
 }
 
-function getGpt54Option(): ModelOption {
+function getGpt56TerraOption(): ModelOption {
   return {
-    value: 'gpt-5.4',
-    label: 'GPT-5.4',
-    description: 'GPT-5.4 · Previous frontier GPT model',
+    value: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    description: 'GPT-5.6 Terra · Balanced agentic coding for everyday work (preview)',
     descriptionForModel:
-      'GPT-5.4 - previous frontier GPT model for reasoning and code generation',
+      'GPT-5.6 Terra - balanced agentic coding model for everyday work (preview)',
   }
 }
 
-function getGpt53CodexOption(): ModelOption {
+function getGpt56LunaOption(): ModelOption {
   return {
-    value: 'gpt-5.3-codex',
-    label: 'GPT-5.3 Codex',
-    description: 'GPT-5.3 Codex · Optimized for code generation and understanding',
-    descriptionForModel: 'GPT-5.3 Codex - specialized for code generation and understanding',
-  }
-}
-
-function getGpt54MiniOption(): ModelOption {
-  return {
-    value: 'gpt-5.4-mini',
-    label: 'GPT-5.4 Mini',
-    description: 'GPT-5.4 Mini · Fast and efficient for simple tasks',
-    descriptionForModel: 'GPT-5.4 Mini - fast and efficient for simple coding tasks',
+    value: 'gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    description: 'GPT-5.6 Luna · Fast and affordable agentic coding (preview)',
+    descriptionForModel:
+      'GPT-5.6 Luna - fast and affordable agentic coding model (preview)',
   }
 }
 
@@ -333,10 +325,9 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (isCodexSubscriber()) {
     const codexOptions: ModelOption[] = [
       getDefaultOptionForUser(),
-      getGpt55Option(),
-      getGpt54Option(),
-      getGpt53CodexOption(),
-      getGpt54MiniOption(),
+      getGpt56SolOption(),
+      getGpt56TerraOption(),
+      getGpt56LunaOption(),
     ]
     if (getTotalInputTokens() === 0 && isClaudeAISubscriber()) {
       codexOptions.push(getSonnet46Option(), getOpus46Option(fastMode), getHaiku45Option())
@@ -523,10 +514,9 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   // lock to the current provider to avoid cache invalidation.
   if (getTotalInputTokens() === 0 && !isCodexSubscriber() && hasCodexTokens()) {
     const gptModels = [
-      getGpt55Option(),
-      getGpt54Option(),
-      getGpt53CodexOption(),
-      getGpt54MiniOption(),
+      getGpt56SolOption(),
+      getGpt56TerraOption(),
+      getGpt56LunaOption(),
     ]
     for (const gpt of gptModels) {
       if (!options.some(existing => existing.value === gpt.value)) {

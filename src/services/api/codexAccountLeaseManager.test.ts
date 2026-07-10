@@ -862,7 +862,7 @@ describe('codexAccountLeaseManager', () => {
         throw new CodexAccountCapError('main-account')
       },
       {
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-exhausted',
       } as Parameters<typeof withRetry>[2],
@@ -882,7 +882,7 @@ describe('codexAccountLeaseManager', () => {
           throw new CodexAccountCapError('main-account')
         },
         {
-          model: 'gpt-5.3-codex',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'subagent-exhausted',
         },
@@ -918,7 +918,7 @@ describe('codexAccountLeaseManager', () => {
         },
         {
           maxRetries: 0,
-          model: 'gpt-5.3-codex',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           isCodexRequest: true,
         } as Parameters<typeof withRetry>[2],
@@ -954,7 +954,7 @@ describe('codexAccountLeaseManager', () => {
         },
         {
           maxRetries: 0,
-          model: 'gpt-5.3-codex',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           isCodexRequest: true,
         } as Parameters<typeof withRetry>[2],
@@ -1068,7 +1068,7 @@ describe('codexAccountLeaseManager', () => {
         return currentLeaseForAttempt?.accountId
       },
       {
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-failing',
       } as Parameters<typeof withRetry>[2],
@@ -1162,7 +1162,7 @@ describe('codexAccountLeaseManager', () => {
         return currentLeaseForAttempt?.accountId
       },
       {
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: getRetryOwnerId({}),
       } as Parameters<typeof withRetry>[2],
@@ -1202,7 +1202,7 @@ describe('codexAccountLeaseManager', () => {
         throw new CodexAccountCapError('main-account')
       },
       {
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-exhausted',
       } as Parameters<typeof withRetry>[2],
@@ -1222,7 +1222,7 @@ describe('codexAccountLeaseManager', () => {
           throw new CodexAccountCapError('main-account')
         },
         {
-          model: 'gpt-5.3-codex',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'subagent-exhausted',
         },
@@ -1283,7 +1283,7 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1328,7 +1328,7 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1357,7 +1357,7 @@ describe('codexAccountLeaseManager', () => {
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+            body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
           },
         ),
       ).rejects.toBeInstanceOf(CodexAccountAuthError)
@@ -1370,7 +1370,7 @@ describe('codexAccountLeaseManager', () => {
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+            body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
           },
         ),
       ).rejects.toBeInstanceOf(CodexAccountCapError)
@@ -1432,21 +1432,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-b', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('lease-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
     } finally {
@@ -1504,14 +1504,14 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('subagent-a', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
 
@@ -1557,21 +1557,21 @@ describe('codexAccountLeaseManager', () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.4', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-terra', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
       await moduleUnderTest.runWithCodexLeaseOwner('main-thread', async () => {
         await codexFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.3-codex', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
+          body: JSON.stringify({ model: 'gpt-5.6-luna', _openaiInstructionAssembly: { instructions: 'test instructions', inputMessages: [] } }),
         })
       })
 
@@ -1629,7 +1629,7 @@ describe('codexAccountLeaseManager', () => {
         return currentLeaseForAttempt?.accountId
       },
       {
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-failing',
       } as Parameters<typeof withRetry>[2],
@@ -1694,7 +1694,7 @@ describe('codexAccountLeaseManager', () => {
         return currentLeaseForAttempt?.accountId
       },
       {
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: getRetryOwnerId({}),
       } as Parameters<typeof withRetry>[2],
@@ -1807,7 +1807,7 @@ describe('codexAccountLeaseManager', () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               stream: true,
-              model: 'gpt-5.4',
+              model: 'gpt-5.6-luna',
               _openaiInstructionAssembly: {
                 instructions: 'test instructions',
                 inputMessages: [],
@@ -1820,7 +1820,7 @@ describe('codexAccountLeaseManager', () => {
         },
         {
           maxRetries: 1,
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'subagent-response-failed',
           isCodexRequest: true,
@@ -1998,7 +1998,7 @@ describe('codexAccountLeaseManager', () => {
       },
       {
         maxRetries: 2,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'main-thread',
         isCodexRequest: true,
@@ -2054,7 +2054,7 @@ describe('codexAccountLeaseManager', () => {
         },
         {
           maxRetries: 2,
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'main-thread',
           isCodexRequest: true,
@@ -2269,7 +2269,7 @@ describe('codexAccountLeaseManager', () => {
         },
         {
           maxRetries: 1,
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'main-thread',
           isCodexRequest: true,
@@ -2320,7 +2320,7 @@ describe('codexAccountLeaseManager', () => {
       },
       {
         maxRetries: 1,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         isCodexRequest: true,
       } as Parameters<typeof withRetry>[2],
@@ -2372,7 +2372,7 @@ describe('codexAccountLeaseManager', () => {
           },
           {
             maxRetries: 2,
-            model: 'gpt-5.4',
+            model: 'gpt-5.6-luna',
             thinkingConfig: { type: 'disabled' },
             ownerId: 'main-thread',
             isCodexRequest: true,

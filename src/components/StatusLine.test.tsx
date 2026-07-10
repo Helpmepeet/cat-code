@@ -93,7 +93,7 @@ describe('StatusLine', () => {
                 command: 'test-statusline',
               },
             },
-            mainLoopModelForSession: 'gpt-5.5',
+            mainLoopModelForSession: 'gpt-5.6-terra',
             effortValue: 'high',
             fastMode: false,
           }}

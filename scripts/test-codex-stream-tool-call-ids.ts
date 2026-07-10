@@ -53,7 +53,7 @@ function expect(condition: unknown, message: string): void {
 
 function makeAnthropicBody(inputMessages: Array<Record<string, unknown>>): Record<string, unknown> {
   return {
-    model: 'gpt-5.3-codex',
+    model: 'gpt-5.6-luna',
     _openaiInstructionAssembly: {
       instructions: 'Return tool results only.',
       inputMessages,
@@ -280,7 +280,7 @@ const parallelToolCallEvents = [
 
 const translated = await translateCodexStreamToAnthropic(
   makeResponse(parallelToolCallEvents),
-  'gpt-5.3-codex',
+  'gpt-5.6-luna',
 )
 const events = await readSSE(translated)
 

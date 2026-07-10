@@ -178,7 +178,7 @@ describe('account recovery diagnostics', () => {
         return getCodexLeaseForOwner('subagent-cap')?.accountId
       },
       {
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-cap',
         isCodexRequest: true,
@@ -221,7 +221,7 @@ describe('account recovery diagnostics', () => {
           throw new CodexAccountCapError('account-one')
         },
         {
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'subagent-exhausted',
           isCodexRequest: true,
@@ -267,7 +267,7 @@ describe('account recovery diagnostics', () => {
         {
           method: 'POST',
           body: JSON.stringify({
-            model: 'gpt-5.4',
+            model: 'gpt-5.6-luna',
             _openaiInstructionAssembly: {
               instructions: 'Be precise.',
               inputMessages: [],
@@ -342,7 +342,7 @@ describe('account recovery diagnostics', () => {
           return getCodexLeaseForOwner('subagent-auth')?.accountId
         },
         {
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'subagent-auth',
           isCodexRequest: true,
@@ -395,7 +395,7 @@ describe('account recovery diagnostics', () => {
       },
       {
         maxRetries: 2,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-transient',
         isCodexRequest: true,
@@ -445,7 +445,7 @@ describe('account recovery diagnostics', () => {
       },
       {
         maxRetries: 2,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-backoff',
         isCodexRequest: true,
@@ -501,7 +501,7 @@ describe('account recovery diagnostics', () => {
         },
         {
           maxRetries: 4,
-          model: 'gpt-5.4',
+          model: 'gpt-5.6-luna',
           thinkingConfig: { type: 'disabled' },
           ownerId: 'subagent-outage',
           isCodexRequest: true,
@@ -562,7 +562,7 @@ describe('account recovery diagnostics', () => {
       },
       {
         maxRetries: 2,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         thinkingConfig: { type: 'disabled' },
         ownerId: 'subagent-ws-rejection',
         isCodexRequest: true,
@@ -714,7 +714,7 @@ describe('account recovery diagnostics', () => {
 
     await getAnthropicClient({
       maxRetries: 1,
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-luna',
       provider: 'firstParty',
     })
 
@@ -744,7 +744,7 @@ describe('account recovery diagnostics', () => {
     try {
       await getAnthropicClient({
         maxRetries: 1,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-luna',
         provider: 'openai',
       })
     } catch (error) {

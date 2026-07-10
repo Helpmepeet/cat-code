@@ -444,7 +444,7 @@ describe('finalizeFailedAgentLaunch', () => {
         description: 'Map workspace for report flow',
         agentId: 'agent-123',
         agentType: 'Explore',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-terra',
         error: new ReferenceError('store is not defined'),
         durationMs: 42,
         spawnedAt: '2026-05-02T10:00:00.000Z',
@@ -501,7 +501,7 @@ describe('finalizeFailedAgentLaunch', () => {
         prompt: 'Investigate the report flow',
         agentId: 'agent-123',
         agentType: 'Explore',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-terra',
         content: [
           {
             type: 'text',
@@ -639,7 +639,7 @@ describe('finalizeFailedAgentLaunch', () => {
         agentId: 'agent-123',
         agentName: 'Ada',
         agentType: 'general-purpose',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-terra',
         content: [{ type: 'text', text: 'finished' }],
         totalToolUseCount: 0,
         totalDurationMs: 42,

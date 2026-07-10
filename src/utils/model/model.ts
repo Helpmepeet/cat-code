@@ -46,8 +46,8 @@ export function getSmallFastModel(): ModelName {
  *
  * On the Codex/OpenAI fork the Anthropic account pool is retired, so the
  * default Haiku model from getSmallFastModel() has no working credentials and
- * every call fails with a connection error. Route those secondary calls to the
- * GPT mini instead, mirroring getDefaultMainLoopModelSetting()'s Codex branch.
+ * every call fails with a connection error. Route those secondary calls to
+ * GPT-5.6 Luna, mirroring getDefaultMainLoopModelSetting()'s Codex branch.
  *
  * Anthropic-billing consumers (token estimation, claudeAiLimits) keep calling
  * getSmallFastModel() directly so the ANTHROPIC_SMALL_FAST_MODEL env var and
@@ -55,7 +55,7 @@ export function getSmallFastModel(): ModelName {
  */
 export function getSmallFastModelForProvider(): ModelName {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt54mini
+    return getModelStrings().gpt56luna
   }
   return getSmallFastModel()
 }
@@ -67,6 +67,23 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus45 ||
     model === getModelStrings().opus46
   )
+}
+
+const RETIRED_GPT_MODEL_REPLACEMENTS: Record<string, ModelName> = {
+  'gpt-5.4': 'gpt-5.6-luna',
+  'gpt-5.3-codex': 'gpt-5.6-luna',
+  'gpt-5.4-mini': 'gpt-5.6-luna',
+  'gpt-5.5': 'gpt-5.6-terra',
+}
+
+/**
+ * Keep explicitly pinned legacy GPT values runnable while the settings
+ * migration rewrites user settings. The GPT-5.6 replacements do not support a
+ * `[1m]` suffix in Cat Code's model-selection syntax.
+ */
+export function remapRetiredGptModel(model: ModelName): ModelName {
+  const base = model.trim().replace(/\[1m\]$/i, '').toLowerCase()
+  return RETIRED_GPT_MODEL_REPLACEMENTS[base] ?? model
 }
 
 /**
@@ -90,6 +107,10 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
   } else {
     const settings = getSettings_DEPRECATED() || {}
     specifiedModel = process.env.ANTHROPIC_MODEL || settings.model || undefined
+  }
+
+  if (typeof specifiedModel === 'string') {
+    specifiedModel = remapRetiredGptModel(specifiedModel)
   }
 
   // Ignore the user-specified model if it's not in the availableModels allowlist.
@@ -200,7 +221,7 @@ export function getRuntimeMainLoopModel(params: {
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt55
+    return getModelStrings().gpt56terra
   }
 
   // Ants default to defaultModel from flag config, or Opus 1M if not configured
@@ -289,17 +310,14 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
     return 'claude-3-haiku'
   }
   // OpenAI GPT models
-  if (name.includes('gpt-5.5')) {
-    return 'gpt-5.5'
+  if (name.includes('gpt-5.6-sol')) {
+    return 'gpt-5.6-sol'
   }
-  if (name.includes('gpt-5.4-mini')) {
-    return 'gpt-5.4-mini'
+  if (name.includes('gpt-5.6-terra')) {
+    return 'gpt-5.6-terra'
   }
-  if (name.includes('gpt-5.4')) {
-    return 'gpt-5.4'
-  }
-  if (name.includes('gpt-5.3-codex')) {
-    return 'gpt-5.3-codex'
+  if (name.includes('gpt-5.6-luna')) {
+    return 'gpt-5.6-luna'
   }
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {
@@ -327,7 +345,7 @@ export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-5.5 · Most capable for complex reasoning and coding'
+    return 'GPT-5.6 Terra · Balanced model for everyday work'
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {
@@ -395,10 +413,9 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.1-codex') return 'Codex 5.1'
     if (model === 'gpt-5.1-codex-mini') return 'Codex 5.1 Mini'
     if (model === 'gpt-5.1-codex-max') return 'Codex 5.1 Max'
-    if (model === 'gpt-5.3-codex') return 'GPT-5.3 Codex'
-    if (model === 'gpt-5.5') return 'GPT 5.5'
-    if (model === 'gpt-5.4') return 'GPT 5.4'
-    if (model === 'gpt-5.4-mini') return 'GPT 5.4 Mini'
+    if (model === 'gpt-5.6-sol') return 'GPT 5.6 Sol'
+    if (model === 'gpt-5.6-terra') return 'GPT 5.6 Terra'
+    if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
     if (model === 'gpt-5.2') return 'GPT 5.2'
     return model
   }
@@ -434,14 +451,12 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Haiku 4.5'
     case getModelStrings().haiku35:
       return 'Haiku 3.5'
-    case getModelStrings().gpt55:
-      return 'GPT-5.5'
-    case getModelStrings().gpt54:
-      return 'GPT-5.4'
-    case getModelStrings().gpt53codex:
-      return 'GPT-5.3 Codex'
-    case getModelStrings().gpt54mini:
-      return 'GPT-5.4 Mini'
+    case getModelStrings().gpt56sol:
+      return 'GPT-5.6 Sol'
+    case getModelStrings().gpt56terra:
+      return 'GPT-5.6 Terra'
+    case getModelStrings().gpt56luna:
+      return 'GPT-5.6 Luna'
     default:
       return null
   }
@@ -513,6 +528,10 @@ export function parseUserSpecifiedModel(
   modelInput: ModelName | ModelAlias,
 ): ModelName {
   const modelInputTrimmed = modelInput.trim()
+  const remappedModel = remapRetiredGptModel(modelInputTrimmed)
+  if (remappedModel !== modelInputTrimmed) {
+    return remappedModel
+  }
   const normalizedModel = modelInputTrimmed.toLowerCase()
 
   const has1mTag = has1mContext(normalizedModel)
@@ -677,19 +696,15 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return 'Claude 3.5 Haiku'
   }
   // OpenAI Codex models
-  if (canonical.includes('gpt-5.4-mini')) {
-    return 'GPT-5.4 Mini'
+  if (canonical.includes('gpt-5.6-sol')) {
+    return 'GPT-5.6 Sol'
   }
-  if (canonical.includes('gpt-5.5')) {
-    return 'GPT-5.5'
+  if (canonical.includes('gpt-5.6-terra')) {
+    return 'GPT-5.6 Terra'
   }
-  if (canonical.includes('gpt-5.4')) {
-    return 'GPT-5.4'
+  if (canonical.includes('gpt-5.6-luna')) {
+    return 'GPT-5.6 Luna'
   }
-  if (canonical.includes('gpt-5.3-codex')) {
-    return 'GPT-5.3 Codex'
-  }
-
   return undefined
 }
 

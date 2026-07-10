@@ -271,11 +271,11 @@ describe('GenerateImageTool', () => {
           output_path: join(tempDir!, 'generated.png'),
         },
         'png',
-        'gpt-5.5',
+        'gpt-5.6-terra',
       )
 
     expect(body).toMatchObject({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       instructions: 'Generate the requested image using the image_generation tool.',
       stream: true,
       input: [
@@ -320,7 +320,7 @@ describe('GenerateImageTool', () => {
           input_fidelity: 'high',
         },
         'webp',
-        'gpt-5.5',
+        'gpt-5.6-terra',
       )
     const tool = body.tools[0] as Record<string, unknown>
 
@@ -337,7 +337,7 @@ describe('GenerateImageTool', () => {
           output_path: join(tempDir!, 'generated.png'),
         },
         'png',
-        'gpt-5.5',
+        'gpt-5.6-terra',
       )
     const tool = body.tools[0] as Record<string, unknown>
 
@@ -353,7 +353,7 @@ describe('GenerateImageTool', () => {
           reference_image_path: join(tempDir!, 'reference.png'),
         },
         'png',
-        'gpt-5.5',
+        'gpt-5.6-terra',
         {
           imageUrl: 'data:image/png;base64,cmVmZXJlbmNl',
         },
@@ -389,7 +389,7 @@ describe('GenerateImageTool', () => {
           reference_image_path: join(tempDir!, 'reference.png'),
         },
         'png',
-        'gpt-5.5',
+        'gpt-5.6-terra',
         {
           imageUrl: 'data:image/png;base64,cmVmZXJlbmNl',
         },
@@ -454,7 +454,7 @@ describe('GenerateImageTool', () => {
       {
         abortController: new AbortController(),
         agentId: 'subagent-123',
-        options: { mainLoopModel: 'gpt-5.5' },
+        options: { mainLoopModel: 'gpt-5.6-terra' },
       } as ToolUseContext,
     )
 
@@ -508,7 +508,7 @@ describe('GenerateImageTool', () => {
       },
       {
         abortController: new AbortController(),
-        options: { mainLoopModel: 'gpt-5.5' },
+        options: { mainLoopModel: 'gpt-5.6-terra' },
       } as ToolUseContext,
     )
 
@@ -627,7 +627,7 @@ describe('GenerateImageTool', () => {
       },
       {
         abortController: new AbortController(),
-        options: { mainLoopModel: 'gpt-5.5' },
+        options: { mainLoopModel: 'gpt-5.6-terra' },
       } as ToolUseContext,
     )
 
@@ -702,7 +702,7 @@ describe('GenerateImageTool', () => {
       },
       {
         abortController: new AbortController(),
-        options: { mainLoopModel: 'gpt-5.5' },
+        options: { mainLoopModel: 'gpt-5.6-terra' },
       } as ToolUseContext,
     )
 
@@ -758,7 +758,7 @@ describe('GenerateImageTool', () => {
       },
       {
         abortController: new AbortController(),
-        options: { mainLoopModel: 'gpt-5.5' },
+        options: { mainLoopModel: 'gpt-5.6-terra' },
       } as ToolUseContext,
     )
 

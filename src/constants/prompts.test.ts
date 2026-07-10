@@ -20,7 +20,7 @@ describe('Agent Mode dynamic prompt guidance', () => {
           { name: 'GetWorkerResult' },
           { name: 'CancelWorker' },
         ] as any,
-        'gpt-5.5',
+        'gpt-5.6-terra',
         [],
         [],
       )

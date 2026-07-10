@@ -198,7 +198,7 @@ function createToolUseContext(initialState?: Record<string, unknown>) {
       verbose: false,
       thinkingConfig: {},
       isNonInteractiveSession: false,
-      mainLoopModel: 'gpt-5.3-codex',
+      mainLoopModel: 'gpt-5.6-luna',
       customSystemPrompt: undefined,
       appendSystemPrompt: undefined,
     },

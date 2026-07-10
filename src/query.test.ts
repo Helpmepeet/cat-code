@@ -13,7 +13,7 @@ function createAssistantMessage(text: string, uuid: string): AssistantMessage {
     timestamp: '2026-05-05T00:00:00.000Z',
     message: {
       id: uuid,
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       role: 'assistant',
       content: [{ type: 'text', text }],
       usage: {
@@ -48,7 +48,7 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
     options: {
       commands: [],
       debug: false,
-      mainLoopModel: 'gpt-5.5',
+      mainLoopModel: 'gpt-5.6-terra',
       mainLoopProvider: 'openai',
       tools: [],
       verbose: false,

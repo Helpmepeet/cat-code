@@ -434,10 +434,9 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
-  { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Latest GPT' },
-  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Previous GPT' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast GPT-5.4 model' },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Optimized Codex coding model' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Frontier model for complex professional work' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'Balanced agentic coding model (preview)' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
   { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Codex coding model' },
   { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
@@ -445,7 +444,7 @@ export const CODEX_MODELS = [
   { id: 'gpt-5.2', label: 'GPT-5.2', description: 'GPT-5.2' },
 ] as const
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.5'
+export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
 
 /**
  * Maps Claude model names to corresponding Codex model names.
@@ -456,9 +455,8 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
   if (isCodexModel(claudeModel)) return claudeModel
   const lower = claudeModel.toLowerCase()
-  if (lower.includes('opus')) return 'gpt-5.5'
-  if (lower.includes('haiku')) return 'gpt-5.4-mini'
-  if (lower.includes('sonnet')) return 'gpt-5.3-codex'
+  if (lower.includes('opus')) return 'gpt-5.6-terra'
+  if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-5.6-luna'
   return DEFAULT_CODEX_MODEL
 }
 
@@ -1286,12 +1284,17 @@ export function mapEffortToCodex(
   const e = effort.toLowerCase()
   if (e === 'low' || e === 'medium' || e === 'high') return e
   if (e === 'minimal') {
-    return codexModel.toLowerCase() === 'gpt-5.5' ? 'none' : 'minimal'
+    const model = codexModel.toLowerCase()
+    // Cat Code's `minimal` means disabled thinking. GPT-5.6 models expose
+    // `none`, which preserves the former GPT-5.4 Mini low-latency path.
+    if (model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna') return 'none'
+    return 'minimal'
   }
   if (e === 'max') {
-    // xhigh is supported by codex variants, GPT-5.5, and GPT-5.4.
+    // Cat Code's max UI level maps to the public Responses API xhigh value.
+    // The Codex-only max/ultra tiers are not sent by this generic adapter.
     const model = codexModel.toLowerCase()
-    return model.includes('codex') || model === 'gpt-5.5' || model === 'gpt-5.4'
+    return model.includes('codex') || model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna'
       ? 'xhigh'
       : 'high'
   }

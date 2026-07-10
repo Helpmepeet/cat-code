@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-07-01
+Last refreshed: 2026-07-10
 
 ## Purpose
 
@@ -74,7 +74,7 @@ src/services/api/client.ts
 | Change context assembly | `src/context.ts` | `src/utils/queryContext.ts`, `src/utils/claudemd.ts`, `src/services/api/instructionAssembly.ts` | `getUserContext()` and `getSystemContext()` are memoized. `fetchSystemPromptParts()` decides when to skip default prompt/system context for custom prompts. |
 | Change effective system prompt precedence | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, [`prompt-system.md`](prompt-system.md) | Branch order is override, Agent Mode, coordinator, main-thread agent, custom, default; `appendSystemPrompt` appends except under override. |
 | Change provider instruction placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`prompt-system.md`](prompt-system.md) | OpenAI receives stable instructions and optional developer context. Claude-style providers receive system-context-appended prompts and user-context-prepended messages. |
-| Change model selection defaults or aliases | `src/utils/model/model.ts` | `src/utils/model/modelStrings.ts`, `src/utils/model/aliases.ts`, `src/utils/model/modelOptions.ts` | Defaults depend on subscription/provider. `parseUserSpecifiedModel()` resolves aliases and `[1m]`; `normalizeModelStringForAPI()` strips context suffixes at API time. |
+| Change model selection defaults, aliases, or catalog options | `src/utils/model/model.ts` | `src/utils/model/modelStrings.ts`, `src/utils/model/aliases.ts`, `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts`, `src/utils/context.ts`, `src/utils/effort.ts` | Defaults depend on subscription/provider. `parseUserSpecifiedModel()` resolves aliases and `[1m]`; `normalizeModelStringForAPI()` strips context suffixes at API time. New model launches need config keys, picker entries, display/canonical names, context-window budgeting, and default effort checked together. |
 | Change provider selection | `src/utils/model/providers.ts` | `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/client.ts` | `getAPIProvider()` reads session provider, env, and startup preference. `resolveRequestProvider()` lets model names override the base provider for GPT-family models. |
 | Change runtime model adjustment | `src/utils/model/model.ts` | `src/query.ts`, `src/utils/context.ts` | `getRuntimeMainLoopModel()` can adjust plan-mode behavior before each API iteration. The request provider is resolved again after this runtime model is chosen. |
 | Change API request shaping | `src/services/api/claude.ts` | `src/utils/api.ts`, `src/utils/messages.ts`, `src/services/api/instructionAssembly.ts` | Despite the filename, this is the shared Anthropic-SDK-shaped request path for all providers, including providers reached through adapters. |
@@ -104,6 +104,7 @@ src/services/api/client.ts
 | Session/env provider | `src/utils/model/providers.ts:getAPIProvider()` | Session provider wins, then Bedrock/Vertex/Foundry/OpenAI env vars, then startup provider preference, then first-party. |
 | Request provider | `src/utils/model/providers.ts:resolveRequestProvider()` | Provider implied by model name wins; GPT-family models route to OpenAI, otherwise the base provider is used. |
 | Default main-loop model | `src/utils/model/model.ts:getDefaultMainLoopModelSetting()` | Codex subscribers default to a GPT model; other defaults depend on ant/user subscription and provider. |
+| Model catalog and picker entries | `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts` | Codex/OpenAI model options are assembled separately from adapter request translation. Keep picker labels/descriptions, `ALL_MODEL_CONFIGS`, and display/canonicalization in `model.ts` aligned. |
 | User-selected model | `src/utils/model/model.ts:getMainLoopModel()` | Session override, startup flag, `ANTHROPIC_MODEL`, settings, then default. Disallowed configured models are ignored. |
 | Runtime model | `src/utils/model/model.ts:getRuntimeMainLoopModel()` | Per-iteration adjustment based on permission mode and token state, notably plan-mode aliases. |
 | API model string | `src/utils/model/model.ts:normalizeModelStringForAPI()` | Removes `[1m]`/`[2m]` suffixes before API dispatch. |
@@ -171,6 +172,7 @@ Use focused checks first, then the documented build for broader confidence:
 | Area | Command |
 |---|---|
 | Query loop behavior | `bun test src/query.test.ts` |
+| Model catalog labels/options/agent downgrades | `bun test src/utils/model/gpt56LunaLabel.test.ts src/utils/model/agent.test.ts` |
 | Provider instruction placement | `bun test src/utils/providerPromptRegressions.test.ts` |
 | Prompt/context behavior | `bun test src/constants/prompts.test.ts src/services/compact/prompt.test.ts` |
 | Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts` |

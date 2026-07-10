@@ -151,7 +151,7 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
       ],
   source: 'built-in',
   baseDir: 'built-in',
-  model: 'gpt-5.4-mini',
+  model: 'gpt-5.6-luna',
   permissionMode: 'dontAsk',
   getSystemPrompt({ toolUseContext }) {
     const commands = toolUseContext.options.commands
@@ -216,7 +216,7 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
 
     // Add the feedback guideline (conditional based on whether user is using 3P services)
     const provider = resolveRequestProvider(
-      'gpt-5.4-mini',
+      'gpt-5.6-luna',
       toolUseContext.options.mainLoopProvider,
     )
     const feedbackGuideline = getFeedbackGuideline()
