@@ -708,6 +708,13 @@ export class CodexWebSocketUsageLimitError extends Error {
   }
 }
 
+export class CodexWebSocketAuthError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CodexWebSocketAuthError'
+  }
+}
+
 export class CodexWebSocketIdleTimeoutError extends Error {
   constructor(
     public readonly timeoutMs: number,
@@ -733,6 +740,21 @@ function isUsageLimitRejection(code: string, message: string): boolean {
   return (
     code.toLowerCase().includes('usage_limit') ||
     message.toLowerCase().includes('usage limit has been reached')
+  )
+}
+
+// Local mirror of the adapter's CODEX_ACCOUNT_AUTH_ERROR_CODES: this module
+// cannot import the adapter (the adapter imports it), so — exactly as
+// isUsageLimitRejection mirrors the adapter's cap detection — the WS `type:error`
+// auth codes are matched here and normalized to CodexAccountAuthError adapter-side.
+// Keep this list in sync with CODEX_ACCOUNT_AUTH_ERROR_CODES.
+function isAuthTokenRejection(code: string): boolean {
+  const normalized = code.toLowerCase()
+  return (
+    normalized === 'token_invalidated' ||
+    normalized === 'token_expired' ||
+    normalized === 'token_revoked' ||
+    normalized === 'invalid_token'
   )
 }
 
@@ -938,6 +960,13 @@ async function* _streamTurnAttempt(
 
       if (isUsageLimitRejection(code, msg)) {
         enqueue({ error: new CodexWebSocketUsageLimitError(msg) })
+        return
+      }
+
+      if (isAuthTokenRejection(code)) {
+        // Revoked/superseded token surfaced over WS. Normalized to
+        // CodexAccountAuthError adapter-side so withRetry runs auth recovery.
+        enqueue({ error: new CodexWebSocketAuthError(msg) })
         return
       }
 

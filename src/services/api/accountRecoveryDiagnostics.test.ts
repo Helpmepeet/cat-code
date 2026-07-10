@@ -368,6 +368,106 @@ describe('account recovery diagnostics', () => {
     expect(codes).not.toContain('quota.exhausted')
   })
 
+  test('binds Codex auth recovery to the request account after the lease has moved off it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-auth-lease-moved-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const staleAccountPath = join(accountsDir, 'account-one.json')
+    writeFileSync(
+      staleAccountPath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: buildCodexToken('account-one'),
+            refresh_token: 'refresh-account-one',
+            account_id: 'account-one',
+          },
+          alias: 'main',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-two',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'account-one',
+          alias: 'main',
+          source: 'vault',
+          vaultFilePath: staleAccountPath,
+          refreshToken: 'refresh-account-one',
+        }),
+        buildPoolAccount({ accountId: 'account-two', alias: 'backup' }),
+      ],
+    })
+    // The owner's lease has already moved to account-two (a concurrent failover)
+    // by the time the delayed 401 from account-one lands. Recovery must condemn
+    // account-one (the request account), NOT the account the lease now holds.
+    seedCodexLeaseForTest({
+      ownerId: 'subagent-lease-moved',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Lease Moved',
+      accountId: 'account-two',
+    })
+
+    // Force the account-one forced refresh to fail so recovery reaches dead-mark.
+    globalThis.fetch = (async () => {
+      return new Response(
+        JSON.stringify({ error: 'invalid_grant' }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    }) as typeof globalThis.fetch
+
+    let attempts = 0
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          attempts += 1
+          if (attempts === 1) {
+            throw new CodexAccountAuthError('account-one', 401)
+          }
+          return getCodexLeaseForOwner('subagent-lease-moved')?.accountId
+        },
+        {
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'subagent-lease-moved',
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // consume retry messages
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+
+    expect(attempts).toBe(2)
+    // The failed request account is condemned...
+    expect(
+      getPoolStatus().accounts.find(account => account.accountId === 'account-one')
+        ?.status,
+    ).toBe('dead')
+    // ...and the account the lease moved to is left untouched (the fix).
+    expect(
+      getPoolStatus().accounts.find(account => account.accountId === 'account-two')
+        ?.status,
+    ).toBe('healthy')
+    // The lease is not failed over again — the retry runs on its current account.
+    expect(getCodexLeaseForOwner('subagent-lease-moved')?.accountId).toBe(
+      'account-two',
+    )
+    const codes = diagnostics.map(diagnostic => diagnostic.code)
+    expect(codes).not.toContain('quota.exhausted')
+    expect(codes).not.toContain('account.failover.succeeded')
+  })
+
   test('recovers from transient Codex connection failover without capping the failed account', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'account-one',

@@ -32,6 +32,7 @@ import {
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
   CodexWebSocketUsageLimitError,
+  CodexWebSocketAuthError,
 } from './codex-websocket-transport.js'
 import { notifyStaleResponseIdRetry } from './promptCacheBreakDetection.js'
 import {
@@ -299,6 +300,20 @@ const CODEX_ACCOUNT_LIMIT_ERROR_CODES = new Set([
   'usage_not_included',
 ])
 
+// Structured auth-failure codes (mirrors CODEX_ACCOUNT_LIMIT_ERROR_CODES for the
+// revoked-auth path). Substring text matching (codexErrorTextIndicatesRevokedAuth)
+// missed `token_invalidated` — the server code emitted when a token is superseded
+// by a re-login — so a 401 bypassed CodexAccountAuthError and all of withRetry's
+// auth recovery. Structured-code match is authoritative; text stays as a fallback.
+// The WS transport keeps its own local mirror (isAuthTokenRejection) because it
+// cannot import this module (the adapter imports the transport). Keep in sync.
+const CODEX_ACCOUNT_AUTH_ERROR_CODES = new Set([
+  'token_invalidated',
+  'token_expired',
+  'token_revoked',
+  'invalid_token',
+])
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -346,6 +361,14 @@ function codexErrorTextIndicatesRevokedAuth(
   )
 }
 
+function codexHttpBodyIndicatesRevokedAuth(body: string): boolean {
+  const parsed = safeParseJSON(body)
+  if (!isRecord(parsed)) {
+    return false
+  }
+  return codexResponseFailureIndicatesRevokedAuth(extractCodexResponseFailure(parsed))
+}
+
 function classifyCodexHttpAccountError(
   status: number,
   body: string,
@@ -353,6 +376,14 @@ function classifyCodexHttpAccountError(
 ): CodexAccountCapError | CodexAccountAuthError | null {
   if (codexErrorTextIndicatesUsageCap(status, body)) {
     return new CodexAccountCapError(accountId)
+  }
+  // Structured error.code match first (authoritative), gated on an auth status;
+  // fall back to the legacy substring heuristics.
+  if (
+    (status === 401 || status === 403) &&
+    codexHttpBodyIndicatesRevokedAuth(body)
+  ) {
+    return new CodexAccountAuthError(accountId, status)
   }
   if (codexErrorTextIndicatesRevokedAuth(status, body)) {
     return new CodexAccountAuthError(accountId, status)
@@ -397,6 +428,12 @@ function codexResponseFailureIndicatesAccountCap(
   return codexFailureTextIndicatesUsageCap(failure.message)
 }
 
+function codexResponseFailureIndicatesRevokedAuth(
+  failure: CodexResponseFailure,
+): boolean {
+  return CODEX_ACCOUNT_AUTH_ERROR_CODES.has(failure.code.toLowerCase())
+}
+
 function createCodexResponseFailedError(
   event: Record<string, unknown>,
   requestCacheMetadata?: CodexRequestCacheMetadata,
@@ -405,9 +442,14 @@ function createCodexResponseFailedError(
   const failure = extractCodexResponseFailure(event)
   const isAccountCap =
     !emittedVisibleOutput && codexResponseFailureIndicatesAccountCap(failure)
+  // A structured revoked-auth response.failed must drive withRetry's auth
+  // recovery just like the HTTP path. Guarded by !emittedVisibleOutput for the
+  // same reason as cap: after visible output the turn cannot be replayed.
+  const isAccountAuth =
+    !emittedVisibleOutput && codexResponseFailureIndicatesRevokedAuth(failure)
   if (requestCacheMetadata) {
-    if (isAccountCap) {
-      // Item 3 rule 4: a cap failure means withRetry fails over to another
+    if (isAccountCap || isAccountAuth) {
+      // Item 3 rule 4: a cap/auth failure means withRetry fails over to another
       // account. `sessions` is keyed by conversationId only, so the preserved
       // baseline was chained under the OLD account — drop it entirely so the
       // new account's first request is a clean full send.
@@ -422,6 +464,9 @@ function createCodexResponseFailedError(
   }
   if (isAccountCap && requestCacheMetadata) {
     return new CodexAccountCapError(requestCacheMetadata.accountId)
+  }
+  if (isAccountAuth && requestCacheMetadata) {
+    return new CodexAccountAuthError(requestCacheMetadata.accountId, 401)
   }
   return new CodexResponseFailedError(failure)
 }
@@ -2801,6 +2846,18 @@ function normalizeCodexStreamError(
     return new CodexAccountCapError(requestCacheMetadata.accountId)
   }
 
+  if (error instanceof CodexWebSocketAuthError && requestCacheMetadata) {
+    // Revoked/superseded token over WS → typed auth class so withRetry runs
+    // forced-refresh + vault-recovery + lease failover (parity with HTTP path).
+    logForDebugging(
+      `[codex-adapter] ws_error_classified class=CodexAccountAuthError ` +
+      `retryable=true account=${requestCacheMetadata.accountId.slice(0, 8)} ` +
+      `original_msg="${error.message}"`,
+      { level: 'warn' },
+    )
+    return new CodexAccountAuthError(requestCacheMetadata.accountId, 401)
+  }
+
   if (error instanceof CodexWebSocketIdleTimeoutError) {
     if (requestCacheMetadata) {
       markStickyHttpFallback(requestCacheMetadata.conversationId, 'idle_timeout')
@@ -2994,6 +3051,16 @@ function normalizeInitialWebSocketError(
       { level: 'warn' },
     )
     return new CodexAccountCapError(accountId)
+  }
+
+  if (error instanceof CodexWebSocketAuthError) {
+    logForDebugging(
+      `[codex-adapter] initial_ws_error_classified class=CodexAccountAuthError ` +
+      `retryable=true account=${accountId.slice(0, 8)} ` +
+      `original_msg="${error.message}"`,
+      { level: 'warn' },
+    )
+    return new CodexAccountAuthError(accountId, 401)
   }
 
   if (error instanceof Error) {
@@ -3304,16 +3371,22 @@ export function createCodexFetch(
           //     committed this turn, so KEEP the baseline. The turn replays over
           //     HTTP now and WS resumes from the preserved baseline after the
           //     sticky window, avoiding an unnecessary full send.
-          if (normalized instanceof CodexAccountCapError) {
+          if (
+            normalized instanceof CodexAccountCapError ||
+            normalized instanceof CodexAccountAuthError
+          ) {
+            // Cap/auth both fail over to another account; the conversationId-keyed
+            // baseline was chained under THIS account, so drop it.
             clearWebSocketSession(conversationId)
           } else {
             closeSocketPreservingState(conversationId)
           }
-          // Explicit upstream response failures must propagate. Cap errors let
-          // withRetry fail over; non-cap failures preserve the upstream error
-          // instead of replaying the turn over HTTP.
+          // Explicit upstream response failures must propagate. Cap/auth errors
+          // let withRetry recover/fail over; non-cap failures preserve the
+          // upstream error instead of replaying the turn over HTTP.
           if (
             normalized instanceof CodexAccountCapError ||
+            normalized instanceof CodexAccountAuthError ||
             normalized instanceof CodexResponseFailedError
           ) {
             throw normalized

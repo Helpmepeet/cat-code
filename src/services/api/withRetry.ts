@@ -592,7 +592,13 @@ export async function* withRetry<T>(
         const currentLease =
           getCurrentCodexLease() ??
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
-        const accountId = currentLease?.accountId ?? error.accountId
+        // Recovery targets the account that actually made the failed request,
+        // NOT the lease's current account. A delayed 401 can arrive after the
+        // owner's lease already moved on (concurrent failover); refreshing or
+        // dead-marking whatever the lease now points at would condemn the wrong
+        // (possibly healthy) account.
+        const accountId = error.accountId
+        const leaseStillOnFailedAccount = currentLease?.accountId === accountId
         const currentAccount = getPoolStatus().accounts.find(
           account => account.accountId === accountId,
         )
@@ -689,7 +695,8 @@ export async function* withRetry<T>(
             model: retryContext.model,
           })
 
-          if (currentLease && canRotateBeforeAuthBlock) {
+          // Fail over the lease ONLY if it still points at the failed account.
+          if (currentLease && leaseStillOnFailedAccount && canRotateBeforeAuthBlock) {
             try {
               assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
               const nextLease = failoverCodexLease(
@@ -728,6 +735,15 @@ export async function* withRetry<T>(
                 accountId,
               )
             }
+          }
+
+          // The lease already moved off the failed account before this delayed
+          // 401 landed. We dead-marked the failed account above; retry on the
+          // lease's current (healthy) account instead of touching it or
+          // declaring exhaustion.
+          if (currentLease && !leaseStillOnFailedAccount) {
+            client = null
+            continue
           }
 
           if (!currentLease && canRotateBeforeAuthBlock) {

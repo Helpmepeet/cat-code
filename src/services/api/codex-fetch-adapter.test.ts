@@ -1588,6 +1588,51 @@ describe('codex-fetch-adapter', () => {
     await expect(response.text()).rejects.toThrow(/invalid_request_error.*bad request/)
   })
 
+  test('translateCodexStreamToAnthropic classifies pre-visible token_invalidated response.failed as CodexAccountAuthError', async () => {
+    const codexResponse = new Response(
+      [
+        'event: response.failed',
+        `data: ${JSON.stringify({
+          type: 'response.failed',
+          response: {
+            error: {
+              type: 'invalid_request_error',
+              code: 'token_invalidated',
+              message:
+                'Your authentication token has been invalidated. Please try signing in again.',
+            },
+          },
+        })}`,
+        '',
+      ].join('\n'),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    )
+
+    const response = await translateCodexStreamToAnthropic(
+      codexResponse,
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_test_streaming',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_test_streaming:gpt-5.6-luna',
+        conversationId: 'conv_token_invalidated_response_failed',
+      },
+    )
+
+    let thrown: unknown
+    try {
+      await response.text()
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(CodexAccountAuthError)
+    expect((thrown as CodexAccountAuthError).accountId).toBe('acct_test_streaming')
+  })
+
   test('translateCodexWsStreamToAnthropic refuses replay after visible output has started', async () => {
     const response = translateCodexWsStreamToAnthropic(
       (async function* () {
@@ -1727,6 +1772,54 @@ describe('codex-fetch-adapter', () => {
       globalThis.fetch = originalFetch
       _setWebSocketFactoryForTest(null)
       clearWebSocketSession('conv_usage_limit')
+      resetCodexCacheContext()
+    }
+  })
+
+  test('createCodexFetch surfaces immediate WS token_invalidated errors as CodexAccountAuthError', async () => {
+    resetCodexCacheContext()
+    const accessToken = createAccessToken('acct_test_streaming')
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+
+    globalThis.fetch = (async () => {
+      throw new Error('HTTP fallback should not run for immediate WS auth errors')
+    }) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [
+        {
+          type: 'error',
+          error: {
+            code: 'token_invalidated',
+            message:
+              'Your authentication token has been invalidated. Please try signing in again.',
+          },
+        },
+      ],
+    ]
+
+    try {
+      await expect(
+        createCodexFetch(accessToken, 'conv_ws_token_invalidated')(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              stream: true,
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          },
+        ),
+      ).rejects.toBeInstanceOf(CodexAccountAuthError)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession('conv_ws_token_invalidated')
       resetCodexCacheContext()
     }
   })
@@ -2010,6 +2103,21 @@ describe('codex-fetch-adapter', () => {
           error: {
             code: 'token_revoked',
             message: 'OAuth token has been revoked.',
+          },
+        }),
+        expected: CodexAccountAuthError,
+      },
+      {
+        // Structured token_invalidated (superseded by a re-login). Its message
+        // matches none of the legacy substring heuristics, so only the
+        // structured error.code match classifies it as an auth error.
+        status: 401,
+        body: JSON.stringify({
+          error: {
+            message:
+              'Your authentication token has been invalidated. Please try signing in again.',
+            type: 'invalid_request_error',
+            code: 'token_invalidated',
           },
         }),
         expected: CodexAccountAuthError,
