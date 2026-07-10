@@ -101,9 +101,13 @@ Git Safety Protocol:
 2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:
   - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to an existing feature, "fix" means a bug fix, etc.).
   - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files
-  - Draft a commit message focused on the "why" rather than the "what", sized to the change: for a single-purpose change, a concise 1-2 sentence summary; for a commit spanning multiple distinct changes, follow the summary line with a short bulleted body, one line per change. Do not pad a simple change with a body it does not need.
-  - Write the message as if the user wrote it — imperative mood, no "Claude did X" or "AI-assisted" framing
-  - Ensure it accurately reflects the changes and their purpose
+  - Treat the commit message as a durable handoff to future developers and agent sessions. A reader with no access to the current conversation must be able to understand what the commit changes, why it was needed, the resulting behavior, and any important implementation decisions from the message itself.
+  - Follow the repository's established commit-message convention. Start with a concise subject that identifies the outcome of the change, uses the imperative mood, and can stand alone in a log.
+  - Add a body for every non-trivial change. A subject-only message is appropriate only when the complete change and its reason are genuinely self-evident (for example, correcting a typo).
+  - In the body, explain the problem or context that motivated the change, what changed at the behavioral or architectural level, and why this approach was chosen. Include material constraints, tradeoffs, compatibility implications, or follow-up consequences. The diff should supply implementation detail, not missing context.
+  - Be concrete and proportionate. Do not merely restate the subject, enumerate filenames, narrate the diff, or pad the message with generic claims. Use paragraphs by default; use bullets when the commit contains distinct changes or the repository consistently prefers them.
+  - Describe all meaningful staged changes, including previously staged work. If the staged changes do not form one coherent commit, tell the user instead of hiding unrelated work behind a vague message.
+  - Write the message as if the user wrote it: no "Claude did X", "AI-assisted", or other model-centered framing. Never invent issue numbers, motivations, test results, or other context not supported by the changes or the user's request.
 3. Run the following commands in parallel:
    - Add relevant untracked files to the staging area.
    - Create the commit with a message${commitAttribution ? ` ending with:\n   ${commitAttribution}` : '.'}
@@ -121,7 +125,10 @@ Important notes:
 - In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:
 <example>
 git commit -m "$(cat <<'EOF'
-   Commit message here.${commitAttribution ? `\n\n   ${commitAttribution}` : ''}
+   Concise imperative subject
+
+   Explain the problem this change addresses and why the chosen behavior is
+   the right solution. Include important consequences or constraints.${commitAttribution ? `\n\n   ${commitAttribution}` : ''}
    EOF
    )"
 </example>

@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 11 Jul 2026
+
+106. Replaced the Bash tool’s short commit-message guidance with a durable handoff standard for future developers and agent sessions. Every non-trivial commit now requires a self-contained body that explains the motivating problem, behavioral or architectural change, rationale, and material constraints or consequences, so a reader without the original conversation can recover the commit’s context; subject-only messages remain limited to genuinely self-explanatory changes. This supersedes entry 96’s 1–2 sentence bias.
+
 ### 10 Jul 2026
 
 104. Added GPT-5.6 Terra (`gpt-5.6-terra`) and Luna (`gpt-5.6-luna`) across Cat Code’s Codex model catalog, picker, display/canonicalization, subagent overrides, request adapter, and 372k context budgeting. Both use medium reasoning by default; Cat Code’s `max` effort maps to the public `xhigh` API value, and disabled thinking safely maps to their lowest supported effort (`low`). Closed follow-on runtime gaps: Fast Mode accepts both models, auto-mode classifier transient fallback cascades Terra → Luna → GPT-5.5 → GPT-5.4, and `/effort` help names the new support. Preview-only Codex `max`/`ultra` delegation behavior remains intentionally unexposed; defaults remain GPT-5.5 because access is separately provisioned. Verified: focused model/adapter/agent/Fast Mode suites 82/0, classifier fallback case 1/0, and `build:dev:full` green; no live request was sent because preview entitlement is account-scoped.
