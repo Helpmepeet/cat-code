@@ -651,6 +651,15 @@ export class SidecarServer {
       return
     }
 
+    // P4-15 — the workspace-trust accept verb is app-owned vocabulary (like C2
+    // and the account/RemoteSettings/settings verbs), validated by a sidecar-
+    // LOCAL schema and dispatched to the engine's OWN trust persistence
+    // (`saveCurrentProjectConfig`). NOT part of the engine's shared schema.
+    if (typeof messageType === 'string' && messageType.startsWith('workspace.')) {
+      this.handleWorkspaceTrustVerb(connection, frame.message)
+      return
+    }
+
     // The message payload MUST pass the existing allowlist schema. Anything
     // else is dropped at the boundary (SECURITY-MINIMUM §2, R2 — validate at
     // the trust boundary, never trust the preload).
@@ -946,6 +955,56 @@ export class SidecarServer {
           false,
         )
       })
+  }
+
+  /**
+   * P4-15 — the workspace-trust accept verb (protocol.ts: WORKSPACE_TRUST_VERB_TYPES;
+   * `decisions/STARTUP-GATES.md §1.1`). Same fail-closed order as `handleAccountVerb`:
+   * sidecar-LOCAL structural schema → domain presence → dispatch to the domain
+   * (which persists via the engine's OWN `saveCurrentProjectConfig` for THIS
+   * session's cwd — HC1, no renderer path) → `workspace.trust.result` frame →
+   * re-broadcast the `workspace-trust.snapshot` when the store changed. No token
+   * crosses either direction (trust is a boolean).
+   */
+  private handleWorkspaceTrustVerb(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = workspaceTrustMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid workspace-trust verb',
+        false,
+      )
+      return
+    }
+    if (!this.workspaceTrust) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'workspace-trust domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    const result = this.workspaceTrust.acceptTrust()
+    this.send(connection, {
+      kind: 'workspace.trust.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: parsed.data.requestId,
+      ok: result.ok,
+      message: result.message,
+    })
+    if (result.changed) {
+      this.broadcastWorkspaceTrustSnapshot()
+    }
   }
 
   /**
@@ -1682,6 +1741,21 @@ export class SidecarServer {
   }
 
   /**
+   * P4-15 — re-broadcast the workspace-trust snapshot after an accept persisted
+   * (`trusted:true`), so every attached connection's gate clears. The read is
+   * otherwise spawn-frozen; this is the ONE mutation path (mirrors the accounts
+   * re-broadcast after a pool-changing verb).
+   */
+  private broadcastWorkspaceTrustSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendWorkspaceTrustSnapshot(connection)
+    }
+  }
+
+  /**
    * P4-14 — build + send the workspace-trust snapshot to one connection.
    * Spawn-time-frozen like settings: `getSnapshot()` is a pure read, no live
    * re-broadcast (a workspace switch spawns a new sidecar at the new cwd).
@@ -1923,6 +1997,9 @@ function checkStrictKeys(message: unknown): string | null {
     ['account.logout', new Set(['type', 'requestId'])],
     ['account.touchAll', new Set(['type', 'requestId'])],
     ['account.login', new Set(['type', 'requestId'])],
+    // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
+    // HC1: no path key — the sidecar trusts only its own spawn cwd.
+    ['workspace.trust', new Set(['type', 'requestId'])],
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
@@ -2048,6 +2125,17 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
     requestId: accountRequestIdSchema,
   }),
 ])
+
+/**
+ * P4-15 — sidecar-LOCAL schema for the workspace-trust accept verb (protocol.ts:
+ * WORKSPACE_TRUST_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + a bounded `requestId`. There is NO path field — HC1:
+ * the sidecar trusts only its OWN spawn cwd, never a renderer-supplied directory.
+ */
+const workspaceTrustMessageSchema = z.object({
+  type: z.literal('workspace.trust'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
 
 /**
  * P4-13 — sidecar-LOCAL schemas for the RemoteSettings verbs (protocol.ts:

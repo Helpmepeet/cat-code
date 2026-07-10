@@ -645,6 +645,19 @@ export function App() {
     sendAccountVerb(loginVerb())
   }, [sendAccountVerb])
 
+  // P4-15 — accept trust for the active session's cwd (the trust-gate's primary
+  // action). The renderer NAMES no path (HC1): the sidecar persists trust for
+  // its OWN spawn cwd via the engine's `saveCurrentProjectConfig` and
+  // re-broadcasts `workspace-trust.snapshot`, which clears the gate. Decline is
+  // NOT a verb — it closes the tab (Q1 TUI parity: no read-only).
+  const sendWorkspaceTrust = useCallback(() => {
+    if (!activeSessionId) return
+    getBridge().workspaceTrustVerb(activeSessionId, {
+      type: 'workspace.trust',
+      requestId: crypto.randomUUID(),
+    })
+  }, [activeSessionId])
+
   // P4-13 — dispatch a RemoteSettings verb (bridge toggle / direct-connect) to
   // the active session's sidecar. The outcome returns as a
   // `remoteSettings.result` frame (→ remoteSettings.lastResult).
@@ -1320,6 +1333,17 @@ export function App() {
           <OrchestratorPage
             snapshot={selectAgentModeSnapshot(orchestrator, activeSessionId)}
           />
+        ) : showTrustGate && activeSessionId ? (
+          // Per-session-create trust gate (D4 §1.1): this session's cwd is
+          // untrusted. Trust persists via the engine's own store + re-broadcast;
+          // decline closes the tab (Q1 TUI parity — no read-only mode).
+          <div className="relative flex min-h-0 flex-1">
+            <WorkspaceTrustGate
+              cwd={tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId}
+              onTrust={sendWorkspaceTrust}
+              onDecline={() => closeTab(activeSessionId)}
+            />
+          </div>
         ) : showFirstRunOAuth ? (
           // First-run: no credentialed Codex account exists. Surface the OAuth
           // flow (begins the engine's real `account.login`; the engine owns the

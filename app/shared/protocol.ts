@@ -303,6 +303,7 @@ export type SidecarClientMessage =
   | AppClientMessage
   | PermissionSetModeMessage
   | AccountVerbMessage
+  | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage
 
@@ -1270,6 +1271,53 @@ export type WorkspaceTrustSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * P4-15 — workspace-trust WRITE verb (the session-create trust gate's accept)
+ * ------------------------------------------------------------------------- *
+ *
+ * The D4 ruling (`decisions/STARTUP-GATES.md §1.1`) makes trust a per-session-
+ * create gate: an untrusted session's `workspace-trust.snapshot` reports
+ * `trusted:false`, the renderer shows the trust dialog, and ACCEPT persists trust
+ * for that session's cwd. Like the P4-5 account verbs and the P4-19 settings
+ * write, this is app-owned inbound vocabulary the engine's shared
+ * `appClientMessageSchema` does NOT carry — it is validated by a sidecar-LOCAL
+ * Zod schema at the trust boundary and dispatched to the engine's OWN trust
+ * persistence (`saveCurrentProjectConfig` with `hasTrustDialogAccepted:true`,
+ * `src/components/TrustDialog/TrustDialog.tsx:177,272`); the sidecar re-reads
+ * `isPathTrusted(cwd)` and re-broadcasts the snapshot. Decline is NOT a verb —
+ * it closes the session's tab in the renderer (Q1 TUI parity: no read-only).
+ *
+ *  - **HC1** — the renderer NEVER authors a path; the sidecar persists trust for
+ *    its OWN spawn cwd, never a renderer-supplied directory. The verb carries no
+ *    path, only a `requestId` for result correlation (T5a-analog).
+ *  - **Secret-owner invariant untouched** — trust is a boolean in the engine's
+ *    config store; no token crosses either direction.
+ *  - **T7** — the existing inbound size/rate caps apply unchanged.
+ */
+export const WORKSPACE_TRUST_VERB_TYPES = ['workspace.trust'] as const
+
+export type WorkspaceTrustVerbType = (typeof WORKSPACE_TRUST_VERB_TYPES)[number]
+
+/** Accept trust for the addressed session's OWN cwd (persist + re-broadcast). */
+export type WorkspaceTrustMessage = {
+  type: 'workspace.trust'
+  requestId: string
+}
+
+/**
+ * P4-15 outbound result echoing the verb's `requestId`, followed by an updated
+ * `workspace-trust.snapshot` (`trusted:true`) when the write changed the store.
+ */
+export type WorkspaceTrustResultFrame = {
+  kind: 'workspace.trust.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries token material. */
+  message: string
+}
+
+/* ------------------------------------------------------------------------- *
  * Diagnostics read-seam (P4-14) — read-only snapshot mirroring /doctor + /status
  * ------------------------------------------------------------------------- *
  *
@@ -1394,6 +1442,7 @@ export type ServerFrame =
   | AccountsSnapshotFrame
   | AccountResultFrame
   | WorkspaceTrustSnapshotFrame
+  | WorkspaceTrustResultFrame
   | DiagnosticsSnapshotFrame
   | ExtensionsSnapshotFrame
   | RemoteSettingsSnapshotFrame
@@ -1442,6 +1491,15 @@ export type CatCodeBridge = {
    * `accounts.snapshot` when the pool changed.
    */
   accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void
+  /**
+   * P4-15 — accept trust for the addressed session's OWN cwd (the session-create
+   * trust gate). The sidecar persists via the engine's `saveCurrentProjectConfig`
+   * and re-broadcasts `workspace-trust.snapshot`; the outcome arrives as a
+   * `workspace.trust.result` frame echoing `requestId`. HC1: no path crosses —
+   * the sidecar trusts only its own spawn cwd. Decline is renderer-side (tab
+   * close), not a verb.
+   */
+  workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void
   /**
    * P4-13 — request a RemoteSettings verb (bridge toggle or direct-connect) on
    * the addressed session's sidecar. The outcome arrives as a

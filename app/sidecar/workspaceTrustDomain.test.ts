@@ -1,5 +1,33 @@
 import { expect, test } from 'bun:test'
-import { createSidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
+import {
+  createSidecarWorkspaceTrustDomain,
+  type WorkspaceTrustExecutor,
+} from './workspaceTrustDomain.js'
+
+/**
+ * A fake trust executor — proves the accept round-trip (persist → re-read)
+ * without writing the real global config (§10, mirrors accountsDomain's fake).
+ * `onPersist` controls whether the persist actually flips the trusted read.
+ */
+function fakeExecutor(
+  initialTrusted: boolean,
+  onPersist: (flip: () => void) => void = flip => flip(),
+): { executor: WorkspaceTrustExecutor; persistCalls: () => number } {
+  let trusted = initialTrusted
+  let persistCalls = 0
+  return {
+    executor: {
+      isTrusted: () => trusted,
+      persistTrust: () => {
+        persistCalls++
+        onPersist(() => {
+          trusted = true
+        })
+      },
+    },
+    persistCalls: () => persistCalls,
+  }
+}
 
 test('the domain reads once at spawn — getSnapshot returns a stable reference', async () => {
   // Real read against this repo's own cwd: trust/repo state varies by machine,
@@ -28,4 +56,58 @@ test('a directory outside the config.projects trust store reports trusted:false'
   const domain = await createSidecarWorkspaceTrustDomain('/tmp')
   const snapshot = domain.getSnapshot()
   expect(snapshot?.trusted).toBe(false)
+})
+
+test('acceptTrust persists, re-reads trusted:true, updates the snapshot, and reports changed', async () => {
+  const fake = fakeExecutor(false)
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', {
+    executor: fake.executor,
+  })
+  expect(domain.getSnapshot()?.trusted).toBe(false)
+
+  const result = domain.acceptTrust()
+  expect(result).toEqual({ ok: true, message: 'Workspace trusted.', changed: true })
+  expect(fake.persistCalls()).toBe(1)
+  // The stored snapshot now reflects the write (so the sidecar re-broadcasts it).
+  expect(domain.getSnapshot()?.trusted).toBe(true)
+})
+
+test('acceptTrust is idempotent — already trusted returns ok+unchanged and never persists', async () => {
+  const fake = fakeExecutor(true)
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', {
+    executor: fake.executor,
+  })
+  const result = domain.acceptTrust()
+  expect(result.ok).toBe(true)
+  expect(result.changed).toBe(false)
+  expect(fake.persistCalls()).toBe(0)
+})
+
+test('acceptTrust reports ok:false+unchanged when the write did not take effect', async () => {
+  // persist runs but does NOT flip the trusted read — the domain re-reads the
+  // real store and refuses to claim success.
+  const fake = fakeExecutor(false, () => {
+    /* swallow the flip */
+  })
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', {
+    executor: fake.executor,
+  })
+  const result = domain.acceptTrust()
+  expect(result.ok).toBe(false)
+  expect(result.changed).toBe(false)
+  expect(domain.getSnapshot()?.trusted).toBe(false)
+})
+
+test('acceptTrust is throw-free — a persist error degrades to ok:false', async () => {
+  const executor: WorkspaceTrustExecutor = {
+    isTrusted: () => false,
+    persistTrust: () => {
+      throw new Error('disk full')
+    },
+  }
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', { executor })
+  const result = domain.acceptTrust()
+  expect(result.ok).toBe(false)
+  expect(result.changed).toBe(false)
+  expect(result.message).toContain('disk full')
 })
