@@ -137,10 +137,13 @@ export function WorkspaceTrustGate({
   cwd,
   onTrust,
   onDecline,
+  errorMessage,
 }: {
   cwd: string
   onTrust: () => void
   onDecline: () => void
+  /** An `ok:false` trust-accept outcome (write didn't persist) — shown inline. */
+  errorMessage?: string | null
 }): ReactNode {
   return (
     <StartupShell step="trust">
@@ -160,6 +163,14 @@ export function WorkspaceTrustGate({
         </div>
         <code className="break-all font-mono text-[13px] text-text-primary">{cwd}</code>
       </div>
+      {errorMessage ? (
+        <div
+          role="alert"
+          className="mb-4 rounded-[9px] border border-tone-danger/25 bg-tone-danger/10 px-3.5 py-2.5 text-[12.5px] text-tone-danger"
+        >
+          {errorMessage}
+        </div>
+      ) : null}
       <div className="flex gap-2">
         <PrimaryButton autoFocus onClick={onTrust}>
           Trust workspace

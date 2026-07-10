@@ -722,6 +722,26 @@ export class SidecarServer {
   }
 
   private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
+    // P4-15 TRUST BOUNDARY (SECURITY-MINIMUM — validate at the sidecar, not the
+    // renderer). A turn runs the engine with tools + HOOKS at the session's cwd.
+    // The renderer's trust gate is UX only: enforce trust HERE so no renderer
+    // path (queued-prompt drain, command palette, a future feature, or a
+    // compromised renderer) can run a turn at an untrusted cwd. Hooks in
+    // particular do NOT self-gate on the non-interactive sidecar path
+    // (`shouldSkipHookDueToTrust()` returns false when
+    // `getIsNonInteractiveSession()` is true), so this block is what makes trust
+    // real. Fail closed with a typed error; degrade gracefully (no crash).
+    if (this.workspaceTrust?.getSnapshot()?.trusted === false) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'unauthorized',
+        'Workspace is not trusted. Accept the trust prompt before running a turn.',
+        false,
+      )
+      return
+    }
+
     // T7 (F4) — prompt cap in UTF-8 BYTES (not JS chars), consistent with the
     // frame byte cap so a multibyte prompt cannot advertise a size the frame
     // cannot carry.

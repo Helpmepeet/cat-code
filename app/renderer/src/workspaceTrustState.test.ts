@@ -3,6 +3,7 @@ import type { ServerFrame, WorkspaceTrustSnapshot } from '../../shared/protocol.
 import {
   createWorkspaceTrustState,
   reduceWorkspaceTrustState,
+  selectWorkspaceTrustError,
   selectWorkspaceTrustSnapshot,
 } from './workspaceTrustState.js'
 
@@ -54,4 +55,41 @@ test('unrelated frame kinds are ignored', () => {
     frame: { kind: 'pong', protocolVersion: 1, sessionId: 'a', nonce: 'x' },
   })
   expect(next).toBe(state)
+})
+
+function trustResultFrame(
+  sessionId: string,
+  ok: boolean,
+  message: string,
+): ServerFrame {
+  return {
+    kind: 'workspace.trust.result',
+    protocolVersion: 1,
+    sessionId,
+    requestId: 'r',
+    ok,
+    message,
+  }
+}
+
+test('workspace.trust.result surfaces an ok:false message for its session only', () => {
+  let state = createWorkspaceTrustState()
+  expect(selectWorkspaceTrustError(state, 'a')).toBeNull()
+
+  state = reduceWorkspaceTrustState(state, {
+    type: 'frame',
+    frame: trustResultFrame('a', false, 'Trust write did not persist.'),
+  })
+  expect(selectWorkspaceTrustError(state, 'a')).toBe('Trust write did not persist.')
+  // Not surfaced for a different session, or a null active session.
+  expect(selectWorkspaceTrustError(state, 'b')).toBeNull()
+  expect(selectWorkspaceTrustError(state, null)).toBeNull()
+})
+
+test('a successful trust result surfaces no error (the snapshot re-broadcast clears the gate)', () => {
+  const state = reduceWorkspaceTrustState(createWorkspaceTrustState(), {
+    type: 'frame',
+    frame: trustResultFrame('a', true, 'Workspace trusted.'),
+  })
+  expect(selectWorkspaceTrustError(state, 'a')).toBeNull()
 })

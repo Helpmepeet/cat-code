@@ -111,18 +111,26 @@ const gateFrames: ServerFrame[] = [
 // real startup session that owns the active pane), so the crafted Markdown can
 // be delivered into it. Wraps webContents.send before any frame flows.
 let liveSessionId: string | null = null
+// P4-15 — the real attach ends its snapshot burst with `workspace-trust.snapshot`
+// (P4-14: sent AFTER the other snapshots, before history replay). Observing it
+// means the real trust/accounts snapshots have all landed, so the gate-clearing
+// override injected afterward is DETERMINISTICALLY last (no re-send race).
+let sawAttachSettled = false
 
 function watchForLiveSession(window: BrowserWindow): void {
   const contents = window.webContents
   const originalSend = contents.send.bind(contents)
   contents.send = ((channel: string, ...args: unknown[]) => {
-    if (liveSessionId === null && channel === CH_SERVER_FRAME) {
+    if (channel === CH_SERVER_FRAME) {
       // Production main batches a delivery as one ServerFrame[] (perf F3); sniff
       // the session id from the first frame of the batch.
-      const batch = args[0] as Array<{ sessionId?: unknown }> | undefined
+      const batch = args[0] as Array<{ sessionId?: unknown; kind?: unknown }> | undefined
       const frame = Array.isArray(batch) ? batch[0] : undefined
-      if (frame && typeof frame.sessionId === 'string') {
+      if (liveSessionId === null && frame && typeof frame.sessionId === 'string') {
         liveSessionId = frame.sessionId
+      }
+      if (Array.isArray(batch) && batch.some(f => f?.kind === 'workspace-trust.snapshot')) {
+        sawAttachSettled = true
       }
     }
     return originalSend(channel, ...args)
@@ -134,9 +142,13 @@ async function resolveActiveSessionId(window: BrowserWindow): Promise<string> {
   while (liveSessionId === null && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 25))
   }
-  // Fall back to the synthetic id if main never delivered a frame (e.g. the
-  // startup sidecar never reached ready); the crafted frame then acts as the
-  // first-ever streaming session and still becomes active.
+  // Wait for the real attach snapshots to settle (workspace-trust is last) so the
+  // injected trusted/non-first-run override post-dates them deterministically. If
+  // no real session ever attaches, fall back to the synthetic id (the crafted
+  // frame then acts as the first-ever streaming session, with no real gate).
+  while (!sawAttachSettled && liveSessionId !== null && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
   return liveSessionId ?? HARDENING_SESSION_ID
 }
 

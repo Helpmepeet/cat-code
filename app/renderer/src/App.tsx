@@ -158,6 +158,7 @@ import {
 import {
   createWorkspaceTrustState,
   reduceWorkspaceTrustState,
+  selectWorkspaceTrustError,
   selectWorkspaceTrustSnapshot,
 } from './workspaceTrustState.js'
 import {
@@ -1229,6 +1230,13 @@ export function App() {
     activeAccountsSnapshot.initialized &&
     activeAccountsSnapshot.poolCount === 0
 
+  // P4-15 — a completed first-run login unmounts the OAuth surface; reset the
+  // phase so a later re-entry (pool emptied) shows the sign-in CTA, not a dead
+  // spinner stranded on 'waiting'.
+  useEffect(() => {
+    if (!showFirstRunOAuth && oauthPhase !== 'ready') setOauthPhase('ready')
+  }, [showFirstRunOAuth, oauthPhase])
+
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
       {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
@@ -1342,6 +1350,7 @@ export function App() {
               cwd={tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId}
               onTrust={sendWorkspaceTrust}
               onDecline={() => closeTab(activeSessionId)}
+              errorMessage={selectWorkspaceTrustError(workspaceTrust, activeSessionId)}
             />
           </div>
         ) : showFirstRunOAuth ? (

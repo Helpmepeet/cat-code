@@ -16,6 +16,26 @@ test('trust gate shows the title, the session cwd, and the two ruled actions', (
   expect(html).toContain('Don&#x27;t open')
 })
 
+test('trust gate surfaces an ok:false accept error inline (not a silent no-op)', () => {
+  const html = renderToStaticMarkup(
+    <WorkspaceTrustGate
+      cwd="/x"
+      onTrust={() => {}}
+      onDecline={() => {}}
+      errorMessage="Trust write did not persist; the workspace is still untrusted."
+    />,
+  )
+  expect(html).toContain('role="alert"')
+  expect(html).toContain('Trust write did not persist')
+})
+
+test('trust gate shows no alert when there is no error', () => {
+  const html = renderToStaticMarkup(
+    <WorkspaceTrustGate cwd="/x" onTrust={() => {}} onDecline={() => {}} />,
+  )
+  expect(html).not.toContain('role="alert"')
+})
+
 test('trust gate has NO read-only affordance (Q1 CUT)', () => {
   const html = renderToStaticMarkup(
     <WorkspaceTrustGate cwd="/x" onTrust={() => {}} onDecline={() => {}} />,

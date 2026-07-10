@@ -2432,6 +2432,61 @@ test('P4-15 — rejects a workspace.trust verb missing requestId at the schema b
   expect(called).toBe(0)
 })
 
+test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no turn runs', async () => {
+  // The renderer trust gate is UX only; the sidecar is the boundary. Any
+  // renderer path that dispatches app.submit while untrusted must be refused
+  // BEFORE the engine runs tools/hooks at the untrusted cwd.
+  let turnRan = false
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turnRan = true
+    },
+  })
+  const server = makeServer(
+    controller,
+    undefined,
+    undefined,
+    undefined,
+    fakeWorkspaceTrust({ trusted: false, detectedRepo: null }),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'u1', prompt: 'do harm' }),
+  )
+  // Give any erroneously-dispatched turn a chance to start.
+  await Bun.sleep(50)
+
+  const err = received.find(f => f.kind === 'error' && f.requestId === 'u1')
+  expect(err && err.kind === 'error' && err.code).toBe('unauthorized')
+  expect(turnRan).toBe(false)
+  // No turn side effects: no live user/assistant event frames were broadcast.
+  expect(received.some(f => f.kind === 'event')).toBe(false)
+})
+
+test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off when trusted)', async () => {
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    fakeWorkspaceTrust({ trusted: true, detectedRepo: null }),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 't1', prompt: 'hello' }),
+  )
+  await waitFor(() => received.some(f => f.kind === 'event'))
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'unauthorized')).toBe(false)
+  expect(received.some(f => f.kind === 'event')).toBe(true)
+})
+
 test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', () => {
   const diagnostics = fakeDiagnostics({
     version: '2.1.87-dev',
