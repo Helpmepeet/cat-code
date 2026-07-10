@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   getCodexAliasPrompt,
+  getInitialLoginState,
   isLoginDialogCancelActive,
 } from './ConsoleOAuthFlow.js'
 
@@ -13,6 +14,24 @@ describe('getCodexAliasPrompt', () => {
         'acct-1',
       ),
     ).toBe('Already saved as yoxrent. Press Enter to keep this name, or type a new name.')
+  })
+})
+
+describe('getInitialLoginState', () => {
+  test('starts OpenAI-only login directly in the Codex flow', () => {
+    expect(getInitialLoginState('login', undefined, true)).toEqual({
+      oauthStatus: { state: 'ready_to_start' },
+      loginWithClaudeAi: false,
+      loginWithCodex: true,
+    })
+  })
+
+  test('keeps the shared login picker for callers without OpenAI-only mode', () => {
+    expect(getInitialLoginState('login', undefined, false)).toEqual({
+      oauthStatus: { state: 'idle' },
+      loginWithClaudeAi: false,
+      loginWithCodex: false,
+    })
   })
 })
 

@@ -12,6 +12,13 @@ await mock.module('../../components/Settings/Settings.js', () => ({
 }))
 
 describe('/usage command', () => {
+  test('is available only for OpenAI sessions', async () => {
+    const command = (await import('./index.js')).default
+
+    expect(command.description).toBe('Show Codex usage limits')
+    expect(command.availability).toEqual(['openai'])
+  })
+
   test('ignores reset arguments and still opens the Settings Usage tab', async () => {
     const { call } = await import('./usage.js')
     const { Settings } = await import('../../components/Settings/Settings.js')

@@ -16,7 +16,6 @@ export function useCanSwitchToExistingSubscription() {
 
 /**
  * Checks if the user has a subscription but is not currently logged into it.
- * This helps inform users they should run /login to access their subscription.
  */
 async function _temp2() {
   if ((getGlobalConfig().subscriptionNoticeCount ?? 0) >= MAX_SHOW_COUNT) {
@@ -30,7 +29,7 @@ async function _temp2() {
   logEvent("tengu_switch_to_subscription_notice_shown", {});
   return {
     key: "switch-to-subscription",
-    jsx: <Text color="suggestion">Use your existing Claude {subscriptionType} plan with Cat Code<Text color="text" dimColor={true}>{" "}· /login to activate</Text></Text>,
+    jsx: <Text color="suggestion">Claude {subscriptionType} plan detected<Text color="text" dimColor={true}>{" "}· Claude login is unavailable through /login</Text></Text>,
     priority: "low"
   };
 }

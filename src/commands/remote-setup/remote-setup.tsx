@@ -95,7 +95,7 @@ function Web({
           logEvent('tengu_remote_setup_result', {
             result: 'not_signed_in' as SafeString
           });
-          onDone('Not signed in to Claude. Run /login first.');
+          onDone('Remote setup requires an existing Claude.ai account; /login adds OpenAI accounts only.');
           return;
         case 'gh_not_installed':
         case 'gh_not_authenticated':

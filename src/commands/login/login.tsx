@@ -1,4 +1,3 @@
-import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import * as React from 'react';
 import { regenerateSessionId, resetCostState } from '../../bootstrap/state.js';
@@ -75,56 +74,43 @@ export function applyPostLoginStateRefresh(
 }
 
 export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXCommandContext): Promise<React.ReactNode> {
-  return <Login onDone={async (success, _mainLoopModel, provider) => {
+  return <Login openAIOnly onDone={async (success, _mainLoopModel, provider) => {
     if (success) {
       applyPostLoginStateRefresh(context);
     }
     onDone(success ? getLoginSuccessMessage(provider) : 'Login interrupted');
   }} />;
 }
-export function Login(props) {
-  const $ = _c(14);
+type LoginProps = {
+  onDone(
+    success: boolean,
+    mainLoopModel: string,
+    provider?: LoginProvider,
+  ): void | Promise<void>
+  startingMessage?: string
+  openAIOnly?: boolean
+}
+
+export function Login(props: LoginProps): React.ReactNode {
   const mainLoopModel = useMainLoopModel();
   const [isDialogCancelActive, setIsDialogCancelActive] = React.useState(true);
-  let t0;
-  if ($[0] !== mainLoopModel || $[1] !== props) {
-    t0 = () => props.onDone(false, mainLoopModel);
-    $[0] = mainLoopModel;
-    $[1] = props;
-    $[2] = t0;
-  } else {
-    t0 = $[2];
-  }
-  let t1;
-  if ($[3] !== mainLoopModel || $[4] !== props) {
-    t1 = (provider?: LoginProvider) => props.onDone(true, mainLoopModel, provider);
-    $[3] = mainLoopModel;
-    $[4] = props;
-    $[5] = t1;
-  } else {
-    t1 = $[5];
-  }
-  let t2;
-  if ($[6] !== props.startingMessage || $[7] !== t1 || $[8] !== setIsDialogCancelActive) {
-    t2 = <ConsoleOAuthFlow onDone={t1} startingMessage={props.startingMessage} onDialogCancelActiveChange={setIsDialogCancelActive} />;
-    $[6] = props.startingMessage;
-    $[7] = t1;
-    $[8] = setIsDialogCancelActive;
-    $[9] = t2;
-  } else {
-    t2 = $[9];
-  }
-  let t3;
-  if ($[10] !== isDialogCancelActive || $[11] !== t0 || $[12] !== t2) {
-    t3 = <Dialog title="Login" onCancel={t0} color="permission" inputGuide={_temp} isCancelActive={isDialogCancelActive}>{t2}</Dialog>;
-    $[10] = isDialogCancelActive;
-    $[11] = t0;
-    $[12] = t2;
-    $[13] = t3;
-  } else {
-    t3 = $[13];
-  }
-  return t3;
+
+  return (
+    <Dialog
+      title="Login"
+      onCancel={() => props.onDone(false, mainLoopModel)}
+      color="permission"
+      inputGuide={_temp}
+      isCancelActive={isDialogCancelActive}
+    >
+      <ConsoleOAuthFlow
+        openAIOnly={props.openAIOnly}
+        onDone={provider => props.onDone(true, mainLoopModel, provider)}
+        startingMessage={props.startingMessage}
+        onDialogCancelActiveChange={setIsDialogCancelActive}
+      />
+    </Dialog>
+  )
 }
 function _temp(exitState) {
   return exitState.pending ? <Text>Press {exitState.keyName} again to exit</Text> : <ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" />;

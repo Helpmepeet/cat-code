@@ -1,26 +1,20 @@
 import { c as _c } from "react/compiler-runtime";
 import * as React from 'react';
 import { useEffect, useState } from 'react';
-import { extraUsage as extraUsageCommand } from 'src/commands/extra-usage/index.js';
-import { formatCost } from 'src/cost-tracker.js';
-import { getSubscriptionType } from 'src/utils/auth.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { Box, Text } from '../../ink.js';
-import { useKeybinding } from '../../keybindings/useKeybinding.js';
-import { type ExtraUsage, fetchUtilization, type RateLimit, type Utilization } from '../../services/api/usage.js';
 import { formatResetText } from '../../utils/format.js';
-import { logError } from '../../utils/log.js';
-import { jsonStringify } from '../../utils/slowOperations.js';
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
-import { Byline } from '../design-system/Byline.js';
 import { ProgressBar } from '../design-system/ProgressBar.js';
-import { isEligibleForOverageCreditGrant, OverageCreditUpsell } from '../LogoV2/OverageCreditUpsell.js';
 import { describeCodexAccountAvailability, hasAnyPoolAccount, getPoolStatus } from '../../services/api/codexAccountPool.js';
 import { getCodexLeaseSnapshot } from '../../services/api/codexAccountLeaseManager.js';
 import { buildPoolUsageDisplayAccounts, fetchPoolUsage, isFreePlan, sortPoolUsageDisplayAccounts, type PoolUsageSnapshot } from '../../services/api/codexUsage.js';
 type LimitBarProps = {
   title: string;
-  limit: RateLimit;
+  limit: {
+    utilization: number;
+    resets_at: string | null;
+  };
   maxWidth: number;
   showTimeInReset?: boolean;
   extraSubtext?: string;
@@ -175,216 +169,20 @@ function LimitBar(t0) {
   }
 }
 export function Usage(): React.ReactNode {
-  const [utilization, setUtilization] = useState<Utilization | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const {
     columns
   } = useTerminalSize();
   const availableWidth = columns - 2; // 2 for screen padding
   const maxWidth = Math.min(availableWidth, 80);
-  const loadUtilization = React.useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await fetchUtilization();
-      if (data === null) {
-        // A resolved null means usage is unavailable (e.g. token refresh could
-        // not produce a usable token) — NOT "still loading". Surface it through
-        // the error+retry UI instead of hanging on "Loading usage data…".
-        setError('Usage data is temporarily unavailable. Retry in a moment.');
-      } else {
-        setUtilization(data);
-      }
-    } catch (err) {
-      logError(err as Error);
-      const axiosError = err as {
-        response?: {
-          data?: unknown;
-        };
-      };
-      const responseBody = axiosError.response?.data ? jsonStringify(axiosError.response.data) : undefined;
-      setError(responseBody ? `Failed to load usage data: ${responseBody}` : 'Failed to load usage data');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-  useEffect(() => {
-    void loadUtilization();
-  }, [loadUtilization]);
-  useKeybinding('settings:retry', () => {
-    void loadUtilization();
-  }, {
-    context: 'Settings',
-    isActive: !!error && !isLoading
-  });
-  if (error) {
-    return <Box flexDirection="column" gap={1}>
-        <Text color="error">Error: {error}</Text>
-        <Text dimColor>
-          <Byline>
-            <ConfigurableShortcutHint action="settings:retry" context="Settings" fallback="r" description="retry" />
-            <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
-          </Byline>
-        </Text>
-      </Box>;
-  }
-  if (!utilization) {
-    return <Box flexDirection="column" gap={1}>
-        <Text dimColor>Loading usage data…</Text>
-        <Text dimColor>
-          <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
-        </Text>
-      </Box>;
-  }
-
-  // Only Max and Team plans have a Sonnet limit that differs from the weekly
-  // limit (see rateLimitMessages.ts). For other plans the bar is redundant.
-  // Show for null (unknown plan) to stay consistent with rateLimitMessages.ts,
-  // which labels it "Sonnet limit" in that case.
-  const subscriptionType = getSubscriptionType();
-  const showSonnetBar = subscriptionType === 'max' || subscriptionType === 'team' || subscriptionType === null;
-  const limits = [{
-    title: 'Current session',
-    limit: utilization.five_hour
-  }, {
-    title: 'Current week (all models)',
-    limit: utilization.seven_day
-  }, ...(showSonnetBar ? [{
-    title: 'Current week (Sonnet only)',
-    limit: utilization.seven_day_sonnet
-  }] : [])];
   return <Box flexDirection="column" gap={1} width="100%">
-      {limits.some(({
-      limit
-    }) => limit) || <Text dimColor>/usage is only available for subscription plans.</Text>}
-
-      {limits.map(({
-      title,
-      limit: limit_0
-    }) => limit_0 && <LimitBar key={title} title={title} limit={limit_0} maxWidth={maxWidth} />)}
-
-      {utilization.extra_usage && <ExtraUsageSection extraUsage={utilization.extra_usage} maxWidth={maxWidth} />}
-
-      {isEligibleForOverageCreditGrant() && <OverageCreditUpsell maxWidth={maxWidth} />}
-
-      {hasAnyPoolAccount() && <CodexPoolUsageSection maxWidth={maxWidth} />}
+      {hasAnyPoolAccount()
+        ? <CodexPoolUsageSection maxWidth={maxWidth} />
+        : <Text dimColor>/usage requires an OpenAI Codex account.</Text>}
 
       <Text dimColor>
         <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
       </Text>
     </Box>;
-}
-type ExtraUsageSectionProps = {
-  extraUsage: ExtraUsage;
-  maxWidth: number;
-};
-const EXTRA_USAGE_SECTION_TITLE = 'Extra usage';
-function ExtraUsageSection(t0) {
-  const $ = _c(20);
-  const {
-    extraUsage,
-    maxWidth
-  } = t0;
-  const subscriptionType = getSubscriptionType();
-  const isProOrMax = subscriptionType === "pro" || subscriptionType === "max";
-  if (!isProOrMax) {
-    return false;
-  }
-  if (!extraUsage.is_enabled) {
-    if (extraUsageCommand.isEnabled()) {
-      let t1;
-      if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-        t1 = <Box flexDirection="column"><Text bold={true}>{EXTRA_USAGE_SECTION_TITLE}</Text><Text dimColor={true}>Extra usage not enabled · /extra-usage to enable</Text></Box>;
-        $[0] = t1;
-      } else {
-        t1 = $[0];
-      }
-      return t1;
-    }
-    return null;
-  }
-  if (extraUsage.monthly_limit === null) {
-    let t1;
-    if ($[1] === Symbol.for("react.memo_cache_sentinel")) {
-      t1 = <Box flexDirection="column"><Text bold={true}>{EXTRA_USAGE_SECTION_TITLE}</Text><Text dimColor={true}>Unlimited</Text></Box>;
-      $[1] = t1;
-    } else {
-      t1 = $[1];
-    }
-    return t1;
-  }
-  if (typeof extraUsage.used_credits !== "number" || typeof extraUsage.utilization !== "number") {
-    return null;
-  }
-  const t1 = extraUsage.used_credits / 100;
-  let t2;
-  if ($[2] !== t1) {
-    t2 = formatCost(t1, 2);
-    $[2] = t1;
-    $[3] = t2;
-  } else {
-    t2 = $[3];
-  }
-  const formattedUsedCredits = t2;
-  const t3 = extraUsage.monthly_limit / 100;
-  let t4;
-  if ($[4] !== t3) {
-    t4 = formatCost(t3, 2);
-    $[4] = t3;
-    $[5] = t4;
-  } else {
-    t4 = $[5];
-  }
-  const formattedMonthlyLimit = t4;
-  let T0;
-  let t5;
-  let t6;
-  let t7;
-  if ($[6] !== extraUsage.utilization) {
-    const now = new Date();
-    const oneMonthReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    T0 = LimitBar;
-    t7 = EXTRA_USAGE_SECTION_TITLE;
-    t5 = extraUsage.utilization;
-    t6 = oneMonthReset.toISOString();
-    $[6] = extraUsage.utilization;
-    $[7] = T0;
-    $[8] = t5;
-    $[9] = t6;
-    $[10] = t7;
-  } else {
-    T0 = $[7];
-    t5 = $[8];
-    t6 = $[9];
-    t7 = $[10];
-  }
-  let t8;
-  if ($[11] !== t5 || $[12] !== t6) {
-    t8 = {
-      utilization: t5,
-      resets_at: t6
-    };
-    $[11] = t5;
-    $[12] = t6;
-    $[13] = t8;
-  } else {
-    t8 = $[13];
-  }
-  const t9 = `${formattedUsedCredits} / ${formattedMonthlyLimit} spent`;
-  let t10;
-  if ($[14] !== T0 || $[15] !== maxWidth || $[16] !== t7 || $[17] !== t8 || $[18] !== t9) {
-    t10 = <T0 title={t7} limit={t8} showTimeInReset={false} extraSubtext={t9} maxWidth={maxWidth} />;
-    $[14] = T0;
-    $[15] = maxWidth;
-    $[16] = t7;
-    $[17] = t8;
-    $[18] = t9;
-    $[19] = t10;
-  } else {
-    t10 = $[19];
-  }
-  return t10;
 }
 
 function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactNode {

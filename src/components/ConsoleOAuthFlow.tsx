@@ -23,6 +23,7 @@ type Props = {
   startingMessage?: string;
   mode?: 'login' | 'setup-token';
   forceLoginMethod?: 'claudeai' | 'console';
+  openAIOnly?: boolean;
   onDialogCancelActiveChange?: (isActive: boolean) => void;
 };
 type OAuthStatus = {
@@ -56,6 +57,29 @@ type OAuthStatus = {
   message: string;
   toRetry?: OAuthStatus;
 };
+export function getInitialLoginState(
+  mode: 'login' | 'setup-token',
+  forceLoginMethod: 'claudeai' | 'console' | undefined,
+  openAIOnly: boolean,
+): {
+  oauthStatus: OAuthStatus
+  loginWithClaudeAi: boolean
+  loginWithCodex: boolean
+} {
+  return {
+    oauthStatus:
+      openAIOnly ||
+      mode === 'setup-token' ||
+      forceLoginMethod === 'claudeai' ||
+      forceLoginMethod === 'console'
+        ? { state: 'ready_to_start' }
+        : { state: 'idle' },
+    loginWithClaudeAi:
+      !openAIOnly &&
+      (mode === 'setup-token' || forceLoginMethod === 'claudeai'),
+    loginWithCodex: openAIOnly,
+  }
+}
 export function isLoginDialogCancelActive(
   oauthStatus: OAuthStatus,
   showPastePrompt: boolean,
@@ -82,39 +106,36 @@ export function ConsoleOAuthFlow({
   startingMessage,
   mode = 'login',
   forceLoginMethod: forceLoginMethodProp,
+  openAIOnly = false,
   onDialogCancelActiveChange,
 }: Props): React.ReactNode {
   const settings = getSettings_DEPRECATED() || {};
-  const forceLoginMethod = forceLoginMethodProp ?? settings.forceLoginMethod;
-  const orgUUID = settings.forceLoginOrgUUID;
+  const forceLoginMethod = openAIOnly
+    ? undefined
+    : forceLoginMethodProp ?? settings.forceLoginMethod;
+  const orgUUID = openAIOnly ? undefined : settings.forceLoginOrgUUID;
   const forcedMethodMessage = forceLoginMethod === 'claudeai' ? 'Login method pre-selected: Subscription Plan (Claude Pro/Max)' : forceLoginMethod === 'console' ? 'Login method pre-selected: API Usage Billing (Anthropic Console)' : null;
   const terminal = useTerminalNotification();
-  const [oauthStatus, setOAuthStatus] = useState<OAuthStatus>(() => {
-    if (mode === 'setup-token') {
-      return {
-        state: 'ready_to_start'
-      };
-    }
-    if (forceLoginMethod === 'claudeai' || forceLoginMethod === 'console') {
-      return {
-        state: 'ready_to_start'
-      };
-    }
-    return {
-      state: 'idle'
-    };
-  });
+  const initialLoginState = getInitialLoginState(
+    mode,
+    forceLoginMethod,
+    openAIOnly,
+  );
+  const [oauthStatus, setOAuthStatus] = useState<OAuthStatus>(
+    initialLoginState.oauthStatus,
+  );
   const [pastedCode, setPastedCode] = useState('');
   const [cursorOffset, setCursorOffset] = useState(0);
   const [aliasInput, setAliasInput] = useState('');
   const [aliasCursorOffset, setAliasCursorOffset] = useState(0);
   const [aliasError, setAliasError] = useState<string | null>(null);
   const [oauthService] = useState(() => new OAuthService());
-  const [loginWithClaudeAi, setLoginWithClaudeAi] = useState(() => {
-    // Use Claude AI auth for setup-token mode to support user:inference scope
-    return mode === 'setup-token' || forceLoginMethod === 'claudeai';
-  });
-  const [loginWithCodex, setLoginWithCodex] = useState(false);
+  const [loginWithClaudeAi, setLoginWithClaudeAi] = useState(
+    initialLoginState.loginWithClaudeAi,
+  );
+  const [loginWithCodex, setLoginWithCodex] = useState(
+    initialLoginState.loginWithCodex,
+  );
   // After a few seconds we suggest the user to copy/paste url if the
   // browser did not open automatically. In this flow we expect the user to
   // copy the code from the browser and paste it in the terminal

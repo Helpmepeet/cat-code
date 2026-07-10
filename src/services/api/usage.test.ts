@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 
 // fetchUtilization used to bail to `null` the moment the Claude OAuth token was
-// expired, without attempting a refresh. The /usage UI renders a resolved
-// `null` as "Loading usage data…" forever, so an expired token (common after a
-// long stretch of gpt-*/Codex requests that never exercise the Anthropic
-// refresh path) hung the screen. These tests pin the fix: expired tokens are
-// refreshed through the shared entry point, and null is only returned if the
-// refresh genuinely fails.
+// expired, without attempting a refresh. These tests pin the service behavior:
+// expired tokens are refreshed through the shared entry point, and null is only
+// returned if the refresh genuinely fails.
 
 const NOW = Date.now()
 const EXPIRED = NOW - 1000

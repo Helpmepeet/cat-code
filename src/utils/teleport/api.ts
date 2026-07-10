@@ -185,7 +185,7 @@ export async function prepareApiRequest(): Promise<{
   const accessToken = getClaudeAIOAuthTokens()?.accessToken
   if (accessToken === undefined) {
     throw new Error(
-      'Cat Code web sessions require authentication with a Claude.ai account. API key authentication is not sufficient. Please run /login to authenticate, or check your authentication status with /status.',
+      'Cat Code web sessions require an existing Claude.ai account. API key authentication is not sufficient. /login adds OpenAI accounts only; check your authentication status with /status.',
     )
   }
 
@@ -314,7 +314,9 @@ export async function fetchSession(
     }
 
     if (response.status === 401) {
-      throw new Error('Session expired. Please run /login to sign in again.')
+      throw new Error(
+        'Claude session authentication expired. /login adds OpenAI accounts only; check /status.',
+      )
     }
 
     throw new Error(

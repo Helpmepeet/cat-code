@@ -22,7 +22,7 @@ Read in this order for most auth/account work:
 |---|---|---|
 | 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Broad map index and adjacent persistence/Codex maps. |
 | 2 | [`../../src/utils/auth.ts`](../../src/utils/auth.ts) | Central auth source selection, token reads, token refresh, secure-storage writes, Codex config token helpers, and user account summary. |
-| 3 | [`../../src/components/ConsoleOAuthFlow.tsx`](../../src/components/ConsoleOAuthFlow.tsx) | Interactive login UI for Anthropic, Console, third-party setup, and OpenAI/Codex. |
+| 3 | [`../../src/components/ConsoleOAuthFlow.tsx`](../../src/components/ConsoleOAuthFlow.tsx) | Shared login UI. `/login` starts it in OpenAI-only mode; onboarding and recovery callers can still select Anthropic, Console, or third-party setup. |
 | 4 | [`../../src/services/oauth/index.ts`](../../src/services/oauth/index.ts) | Anthropic OAuth service: PKCE, localhost callback, manual code entry, token formatting. |
 | 5 | [`../../src/services/oauth/client.ts`](../../src/services/oauth/client.ts) | Anthropic OAuth URLs, token exchange/refresh, profile, roles, Console API-key creation. |
 | 6 | [`../../src/services/oauth/codex-client.ts`](../../src/services/oauth/codex-client.ts) | OpenAI/Codex OAuth client, fixed callback server, token exchange/refresh, account ID extraction. |
@@ -42,7 +42,7 @@ Read in this order for most auth/account work:
 |---|---|---|---|
 | Whether Anthropic OAuth is enabled | `src/utils/auth.ts:isAnthropicAuthEnabled()` | `src/utils/model/providers.ts`, `src/bootstrap/state.ts` | Disabled for bare mode, third-party provider env, or external API/auth-token sources unless in managed OAuth contexts. |
 | Bearer token source | `src/utils/auth.ts:getAuthTokenSource()` | `src/utils/authFileDescriptor.ts`, `src/services/oauth/client.ts` | Order is bare-mode helper, env token, OAuth token FD or CCR fallback, apiKeyHelper, then stored Claude.ai OAuth. |
-| Anthropic API key source | `src/utils/auth.ts:getAnthropicApiKeyWithSource()` | `src/utils/secureStorage/keychainPrefetch.ts`, `src/utils/authPortable.ts` | Order differs for bare/CI/print flows. User-approved env keys, FD keys, apiKeyHelper, and `/login` managed keychain/config keys are separate sources. |
+| Anthropic API key source | `src/utils/auth.ts:getAnthropicApiKeyWithSource()` | `src/utils/secureStorage/keychainPrefetch.ts`, `src/utils/authPortable.ts` | Order differs for bare/CI/print flows. User-approved env keys, FD keys, apiKeyHelper, and managed Console-login keychain/config keys are separate sources. |
 | Provider-specific request routing | `src/services/api/client.ts:getAnthropicClient()` | `src/utils/model/providers.ts`, `src/services/api/codex-fetch-adapter.ts` | OpenAI provider injects Codex fetch with async Codex OAuth token resolution. The adapter gets a resolver callback so every request re-derives lease-aware, refresh-on-use tokens instead of reusing a stale construction-time token. Anthropic/Bedrock/Vertex/Foundry use their own auth branches. |
 | Account summary/status | `src/utils/auth.ts:getAccountInformation()` | `src/cli/handlers/auth.ts:authStatus()` | OpenAI summary reads the legacy Codex config token mirror; pooled display lives in `/accounts`. |
 | Token freshness | `src/utils/auth.ts:checkAndRefreshOAuthTokenIfNeeded()` | `src/services/oauth/client.ts:refreshOAuthToken()`, `src/services/api/claudeAccountPool.ts:updateActiveClaudeAccountTokens()` | Anthropic refresh uses a config-dir lock and writes refreshed tokens back to secure storage and the active Claude vault account. |
@@ -52,13 +52,13 @@ Read in this order for most auth/account work:
 
 | Flow | Entry point | Core route | Persistence route |
 |---|---|---|---|
-| Interactive `/login` | `src/commands/login/login.tsx` | `ConsoleOAuthFlow` | Anthropic: `installOAuthTokens()`; Codex: `ConsoleOAuthFlow.persistCodexLogin()` |
+| Interactive `/login` | `src/commands/login/login.tsx` | `ConsoleOAuthFlow` in OpenAI-only mode, which starts Codex OAuth without a provider picker | `ConsoleOAuthFlow.persistCodexLogin()` |
 | Anthropic Claude.ai login | `ConsoleOAuthFlow.startOAuth()` | `OAuthService.startOAuthFlow()` -> `exchangeCodeForTokens()` -> `fetchProfileInfo()` | `installOAuthTokens()` stores profile, appends Claude vault account, saves `claudeAiOauth`. |
 | Anthropic Console login | `ConsoleOAuthFlow.startOAuth()` with `loginWithClaudeAi=false` | Same OAuth service with Console authorize URL | `installOAuthTokens()` stores profile, creates Console API key through `createAndStoreApiKey()`, and saves managed key. |
 | Anthropic `setup-token` | `ConsoleOAuthFlow` mode `setup-token` | `OAuthService.startOAuthFlow({ inferenceOnly, expiresIn })` | Token is displayed for env use and is not saved to keychain. |
 | OpenAI/Codex login | `ConsoleOAuthFlow.startCodexOAuth()` | `runCodexOAuthFlow()` in `src/services/oauth/codex-client.ts` | Saves the legacy config token mirror via `saveCodexOAuthTokens()`, saves vault profile via `saveCodexTokenToVault()`, and appends active pool account. Vault-backed pool inventory is authoritative once present. |
 | Non-interactive CLI auth | `src/cli/handlers/auth.ts:authLogin()` | `OAuthService.startOAuthFlow()` plus readline manual input or refresh-token env fast path | `installOAuthTokens()` handles shared post-token state. |
-| Forced login constraints | `ConsoleOAuthFlow`, `authLogin()` | `settings.forceLoginMethod`, `settings.forceLoginOrgUUID` | `validateForceLoginOrg()` checks the active OAuth profile after login. |
+| Forced Anthropic login constraints | Shared `ConsoleOAuthFlow` callers, `authLogin()` | `settings.forceLoginMethod`, `settings.forceLoginOrgUUID` | `validateForceLoginOrg()` checks the active OAuth profile after login. OpenAI-only `/login` does not enter this Anthropic flow. |
 
 Anthropic OAuth uses OS-assigned localhost callback ports through
 `AuthCodeListener`. OpenAI/Codex uses a fixed `http://localhost:1455/auth/callback`
@@ -82,7 +82,7 @@ Codex client.
 
 | Command | Owner | Account surfaces touched |
 |---|---|---|
-| `/login` | `src/commands/login/` | Shows `ConsoleOAuthFlow`; post-login refresh clears signature blocks, regenerates session/cost state, refreshes policy/remote settings/GrowthBook, increments `authVersion`. Codex login writes both the config mirror and pool/vault profile. |
+| `/login` | `src/commands/login/` | Starts `ConsoleOAuthFlow` directly in OpenAI/Codex mode; post-login refresh clears signature blocks, regenerates session/cost state, refreshes policy/remote settings/GrowthBook, and increments `authVersion`. Codex login writes both the config mirror and pool/vault profile. |
 | `/logout` | `src/commands/logout/logout.tsx` | With multiple Claude accounts, removes only active Claude account and switches. Otherwise deletes secure storage, clears Codex config token, clears `oauthAccount`, and leaves Codex vault profiles on disk. |
 | `/accounts` | `src/commands/accounts/accounts.ts` | Displays Claude pool, Codex pool, shared Codex availability labels (`Ready`, `Limit reached`, `Connection issue (retrying)`, `Needs re-login`), live usage when available, main lease, subagent strategy, and lease holders. Codex active display is lease-first. |
 | `/switch-account` | `src/commands/switch-account/switch-account.ts` | Matches Claude aliases/email/UUID and Codex aliases/account IDs. No arg rotates within current provider. Codex switch reassigns main lease and resets Codex cache context. Free accounts remain selectable when healthy; revoked refresh tokens render as “needs re-login.” User-facing dead/capped reasons should come from normalized pool availability text, not raw stored refresh-state codes such as `http_401`. |
@@ -147,17 +147,17 @@ Use the closest test first:
 | Full documented build | `bun run build:dev:full` |
 | Docs-only changes | `git diff --check -- docs/maps/auth-accounts-oauth.md docs/maps/codex-core.md` |
 
-There are focused tests for `/switch-account` and `/rename-account`. There are
-also focused tests for `/accounts` and `/delete-account`. There are still no
-focused tests for `/login` or `/logout`; for changes there, pair source
-inspection with a focused manual or integration check.
+There are focused tests for `/login`, `/switch-account`, `/rename-account`,
+`/accounts`, and `/delete-account`. There are still no focused tests for
+`/logout`; for changes there, pair source inspection with a focused manual or
+integration check.
 
 ## Common Failure Routes
 
 | Symptom | Inspect in this order | Why |
 |---|---|---|
 | "Not logged in" for Anthropic despite prior login | `src/utils/auth.ts:getAuthTokenSource()` -> `src/utils/auth.ts:getClaudeAIOAuthTokens()` -> `src/utils/secureStorage/` -> `src/services/api/claudeAccountPool.ts` | Env/FD/bare-mode guards, pool shadowing, keychain cache, and plaintext fallback can each change what token is visible. |
-| Console API key path uses wrong key | `src/utils/auth.ts:getAnthropicApiKeyWithSource()` -> `src/utils/auth.ts:saveApiKey()` -> `src/utils/authPortable.ts` | Env approval, FD keys, apiKeyHelper, and `/login` managed keys have distinct precedence and storage. |
+| Console API key path uses wrong key | `src/utils/auth.ts:getAnthropicApiKeyWithSource()` -> `src/utils/auth.ts:saveApiKey()` -> `src/utils/authPortable.ts` | Env approval, FD keys, apiKeyHelper, and managed Console-login keys have distinct precedence and storage. |
 | OAuth browser callback stalls | Anthropic: `src/services/oauth/auth-code-listener.ts`, `src/services/oauth/index.ts`; Codex: `src/services/oauth/codex-client.ts` | Anthropic uses dynamic localhost ports and manual fallback; Codex requires fixed port 1455 and has its own completion page. |
 | Wrong Anthropic profile after switching | `src/commands/switch-account/switch-account.ts` -> `src/services/api/claudeAccountPool.ts:syncClaudeAccountToStorage()` -> `src/utils/auth.ts:clearOAuthTokenCache()` | Active Claude account must be copied back to keychain/config for legacy consumers. |
 | Wrong Codex account after `/switch-account` | `src/commands/switch-account/switch-account.ts` -> `src/services/api/codexAccountLeaseManager.ts` -> `src/services/api/codex-fetch-adapter.ts` | Pool activeIndex alone is not enough; main lease and Codex cache context must be updated. |
@@ -169,8 +169,9 @@ inspection with a focused manual or integration check.
 
 ## Traps And Stale Assumptions
 
-- Do not assume `/login` is Anthropic-only. `ConsoleOAuthFlow` also owns the
-  OpenAI/Codex login option.
+- `/login` is OpenAI/Codex-only. Do not infer that every `ConsoleOAuthFlow`
+  caller is OpenAI-only: onboarding and recovery callers still use its shared
+  Anthropic, Console, and third-party paths.
 - Do not assume Codex OAuth uses `OAuthService`. It has a separate
   `src/services/oauth/codex-client.ts` implementation and a fixed callback
   port.
