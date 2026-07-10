@@ -25,6 +25,7 @@ import type {
   SessionId,
   SettingsVerbMessage,
   SubmitOptions,
+  WorkspaceTrustMessage,
 } from '../shared/protocol.js'
 import type {
   CreateSessionInput,
@@ -43,6 +44,7 @@ const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
+const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -92,6 +94,15 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
+  },
+  workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void {
+    // P4-15 — HC3 fixed sender for the trust-gate accept. Same posture as
+    // `accountVerb`: the renderer supplies only a decided verb payload; main
+    // light-coerces the type and the sidecar is the trust boundary (schema +
+    // engine trust persist for its OWN cwd). No path, no token crosses.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_WORKSPACE_TRUST_VERB, payload)
   },
   remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void {
     // P4-13 — HC3 fixed sender. Same posture as `accountVerb`: the renderer

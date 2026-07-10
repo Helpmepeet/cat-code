@@ -61,7 +61,10 @@ import {
 } from './remoteSettingsDomain.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
-import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
+import type {
+  SidecarWorkspaceTrustDomain,
+  WorkspaceTrustAcceptResult,
+} from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import {
   createSidecarExtensionsDomain,
@@ -2229,8 +2232,13 @@ test('CC-3 — an open connection cancels the idle timer; closing it re-arms the
 
 function fakeWorkspaceTrust(
   snapshot: ReturnType<SidecarWorkspaceTrustDomain['getSnapshot']>,
+  acceptTrust: () => WorkspaceTrustAcceptResult = () => ({
+    ok: true,
+    message: 'Workspace trusted.',
+    changed: true,
+  }),
 ): SidecarWorkspaceTrustDomain {
-  return { getSnapshot: () => snapshot }
+  return { getSnapshot: () => snapshot, acceptTrust }
 }
 
 function fakeDiagnostics(
@@ -2275,6 +2283,208 @@ test('P4-14 — a null workspace-trust read degrades to no frame, never strands 
   expect(received.some(f => f.kind === 'workspace-trust.snapshot')).toBe(false)
   // The rest of the attach sequence still ran (ready always fires first).
   expect(received[0]?.kind).toBe('ready')
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-15 — workspace-trust ACCEPT verb (the session-create trust gate) boundary
+ * ------------------------------------------------------------------------- */
+
+function makeWorkspaceTrustServer(
+  snapshot: ReturnType<SidecarWorkspaceTrustDomain['getSnapshot']>,
+  acceptTrust?: () => WorkspaceTrustAcceptResult,
+): SidecarServer {
+  return makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    fakeWorkspaceTrust(snapshot, acceptTrust),
+  )
+}
+
+test('P4-15 — a valid workspace.trust accept produces an ok result and re-broadcasts the trust snapshot', () => {
+  let called = 0
+  const server = makeWorkspaceTrustServer(
+    { trusted: false, detectedRepo: 'acme/x' },
+    () => {
+      called++
+      return { ok: true, message: 'Workspace trusted.', changed: true }
+    },
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(
+    f => f.kind === 'workspace-trust.snapshot',
+  ).length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'workspace.trust',
+        requestId: 't1',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  const result = received.find(f => f.kind === 'workspace.trust.result')
+  expect(result && result.kind === 'workspace.trust.result' && result.ok).toBe(true)
+  expect(
+    result && result.kind === 'workspace.trust.result' && result.requestId,
+  ).toBe('t1')
+  expect(called).toBe(1)
+  // A fresh trust snapshot (now trusted:true) was re-broadcast after the write.
+  expect(
+    received.filter(f => f.kind === 'workspace-trust.snapshot').length,
+  ).toBeGreaterThan(before)
+})
+
+test('P4-15 — an already-trusted accept returns ok but does NOT re-broadcast (changed:false)', () => {
+  const server = makeWorkspaceTrustServer(
+    { trusted: true, detectedRepo: null },
+    () => ({ ok: true, message: 'Workspace already trusted.', changed: false }),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(
+    f => f.kind === 'workspace-trust.snapshot',
+  ).length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'workspace.trust',
+        requestId: 't2',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(
+    received.some(f => f.kind === 'workspace.trust.result' && f.ok),
+  ).toBe(true)
+  expect(
+    received.filter(f => f.kind === 'workspace-trust.snapshot').length,
+  ).toBe(before)
+})
+
+test('P4-15 — rejects a workspace.trust verb carrying a renderer-authored path (HC1 / checkStrictKeys)', () => {
+  let called = 0
+  const server = makeWorkspaceTrustServer(
+    { trusted: false, detectedRepo: null },
+    () => {
+      called++
+      return { ok: true, message: 'Workspace trusted.', changed: true }
+    },
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      // A renderer-supplied `path` is exactly what HC1 forbids — rejected before
+      // the verb ever reaches the domain (no path field exists in the contract).
+      message: {
+        type: 'workspace.trust',
+        requestId: 't',
+        path: '/etc',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'workspace.trust.result')).toBe(false)
+  expect(called).toBe(0)
+})
+
+test('P4-15 — rejects a workspace.trust verb missing requestId at the schema boundary', () => {
+  let called = 0
+  const server = makeWorkspaceTrustServer(
+    { trusted: false, detectedRepo: null },
+    () => {
+      called++
+      return { ok: true, message: 'x', changed: true }
+    },
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'workspace.trust',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'workspace.trust.result')).toBe(false)
+  expect(called).toBe(0)
+})
+
+test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no turn runs', async () => {
+  // The renderer trust gate is UX only; the sidecar is the boundary. Any
+  // renderer path that dispatches app.submit while untrusted must be refused
+  // BEFORE the engine runs tools/hooks at the untrusted cwd.
+  let turnRan = false
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turnRan = true
+    },
+  })
+  const server = makeServer(
+    controller,
+    undefined,
+    undefined,
+    undefined,
+    fakeWorkspaceTrust({ trusted: false, detectedRepo: null }),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'u1', prompt: 'do harm' }),
+  )
+  // Give any erroneously-dispatched turn a chance to start.
+  await Bun.sleep(50)
+
+  const err = received.find(f => f.kind === 'error' && f.requestId === 'u1')
+  expect(err && err.kind === 'error' && err.code).toBe('unauthorized')
+  expect(turnRan).toBe(false)
+  // No turn side effects: no live user/assistant event frames were broadcast.
+  expect(received.some(f => f.kind === 'event')).toBe(false)
+})
+
+test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off when trusted)', async () => {
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    fakeWorkspaceTrust({ trusted: true, detectedRepo: null }),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 't1', prompt: 'hello' }),
+  )
+  await waitFor(() => received.some(f => f.kind === 'event'))
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'unauthorized')).toBe(false)
+  expect(received.some(f => f.kind === 'event')).toBe(true)
 })
 
 test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', () => {

@@ -61,6 +61,7 @@ import {
   PROTOCOL_VERSION,
   REMOTE_VERB_TYPES,
   SETTINGS_VERB_TYPES,
+  WORKSPACE_TRUST_VERB_TYPES,
   type AccountVerbMessage,
   type AccountVerbType,
   type PermissionSetModeMode,
@@ -71,6 +72,8 @@ import {
   type SettingsVerbMessage,
   type SettingsVerbType,
   type SidecarClientMessage,
+  type WorkspaceTrustMessage,
+  type WorkspaceTrustVerbType,
 } from '../shared/protocol.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -80,6 +83,7 @@ const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
+const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -467,6 +471,26 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as AccountVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_WORKSPACE_TRUST_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-15 — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (Zod schema + engine trust persist for its OWN cwd).
+      // Drop any frame whose `type` is not the workspace-trust verb fail-closed,
+      // rather than forwarding a message guaranteed to be rejected. HC1: no path
+      // crosses — the verb carries only a `requestId`.
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !WORKSPACE_TRUST_VERB_TYPES.includes(verb.type as WorkspaceTrustVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as WorkspaceTrustMessage)
     },
   )
 

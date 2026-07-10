@@ -158,6 +158,7 @@ import {
 import {
   createWorkspaceTrustState,
   reduceWorkspaceTrustState,
+  selectWorkspaceTrustError,
   selectWorkspaceTrustSnapshot,
 } from './workspaceTrustState.js'
 import {
@@ -190,7 +191,18 @@ import {
 } from './orchestratorState.js'
 import { OrchestratorPage } from './OrchestratorPage.js'
 import { GoalsPage } from './GoalsPage.js'
-import { AccountsPage } from './AccountsPage.js'
+import { AccountsPage, loginVerb } from './AccountsPage.js'
+import { BannerStack } from './BannerStack.js'
+import {
+  REAUTH_ACTION_KEY,
+  selectAuthSubmitBlocked,
+  selectReauthBanners,
+} from './reauthBannerState.js'
+import {
+  StartupOAuth,
+  WorkspaceTrustGate,
+  type StartupOAuthPhase,
+} from './StartupSurfaces.js'
 import { SessionsPage } from './SessionsPage.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
@@ -334,6 +346,9 @@ export function App() {
     createOrchestratorState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
+  // P4-15 first-run OAuth phase (renderer-visible sub-states only; the live
+  // waiting→alias→success transitions are the coordinated operator step, §0).
+  const [oauthPhase, setOauthPhase] = useState<StartupOAuthPhase>('ready')
   const [activeView, setActiveView] = useState<
     'chat' | 'orchestrator' | 'sessions' | 'goals' | 'accounts' | 'settings'
   >('chat')
@@ -621,6 +636,29 @@ export function App() {
     [activeSessionId],
   )
 
+  // P4-15 — the reauth banner's "Re-authenticate" action and the first-run
+  // OAuth surface both begin the SAME engine OAuth flow: the existing P4-5
+  // `account.login` verb (browser handoff; the engine owns the token write). The
+  // re-linked/added account re-appears on the next `accounts.snapshot`, which
+  // clears the banner / unmounts the first-run surface — no renderer token path.
+  const beginOAuth = useCallback(() => {
+    setOauthPhase('waiting')
+    sendAccountVerb(loginVerb())
+  }, [sendAccountVerb])
+
+  // P4-15 — accept trust for the active session's cwd (the trust-gate's primary
+  // action). The renderer NAMES no path (HC1): the sidecar persists trust for
+  // its OWN spawn cwd via the engine's `saveCurrentProjectConfig` and
+  // re-broadcasts `workspace-trust.snapshot`, which clears the gate. Decline is
+  // NOT a verb — it closes the tab (Q1 TUI parity: no read-only).
+  const sendWorkspaceTrust = useCallback(() => {
+    if (!activeSessionId) return
+    getBridge().workspaceTrustVerb(activeSessionId, {
+      type: 'workspace.trust',
+      requestId: crypto.randomUUID(),
+    })
+  }, [activeSessionId])
+
   // P4-13 — dispatch a RemoteSettings verb (bridge toggle / direct-connect) to
   // the active session's sidecar. The outcome returns as a
   // `remoteSettings.result` frame (→ remoteSettings.lastResult).
@@ -804,6 +842,10 @@ export function App() {
     // with `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
     const pasteEntries = selectSessionPasteState(pasteState, sessionId).entries
     const text = expandPasteRefs(sessionPrompt, pasteEntries).trim()
+    // Q2 ruling (`decisions/STARTUP-GATES.md §5-Q2`): a dead account never walls
+    // the window, but with ZERO healthy accounts left every turn would fail —
+    // block submit here so the reauth banner is the only way forward.
+    if (selectAuthSubmitBlocked(selectAccountsSnapshot(accounts, sessionId))) return
     if (
       !sessionLog.inputEnabled ||
       !sessionConnection.inputEnabled ||
@@ -1171,6 +1213,30 @@ export function App() {
       })
     : EMPTY_PALETTE_ITEMS
 
+  // P4-15 — the active session's per-domain startup facts. Trust gate (per
+  // session-create, `workspace-trust.snapshot` P4-14) takes precedence over
+  // first-run OAuth (no credentialed account → pool initialized but empty),
+  // mirroring the engine's trust→auth startup order (`init.ts`).
+  const activeAccountsSnapshot = selectAccountsSnapshot(accounts, activeSessionId)
+  const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
+    workspaceTrust,
+    activeSessionId,
+  )
+  const showTrustGate =
+    !!activeSessionId && activeTrustSnapshot?.trusted === false
+  const showFirstRunOAuth =
+    !showTrustGate &&
+    !!activeAccountsSnapshot &&
+    activeAccountsSnapshot.initialized &&
+    activeAccountsSnapshot.poolCount === 0
+
+  // P4-15 — a completed first-run login unmounts the OAuth surface; reset the
+  // phase so a later re-entry (pool emptied) shows the sign-in CTA, not a dead
+  // spinner stranded on 'waiting'.
+  useEffect(() => {
+    if (!showFirstRunOAuth && oauthPhase !== 'ready') setOauthPhase('ready')
+  }, [showFirstRunOAuth, oauthPhase])
+
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
       {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
@@ -1203,6 +1269,16 @@ export function App() {
             {shellError}
           </div>
         ) : null}
+
+        {/* P4-15 non-blocking reauth banner (Q2): derived from the P4-5 pool
+         * snapshot, never pushed. Renders null when no account is dead. Its
+         * "Re-authenticate" action begins the same engine OAuth flow. */}
+        <BannerStack
+          banners={selectReauthBanners(activeAccountsSnapshot)}
+          onAction={(_banner, action) => {
+            if (action.key === REAUTH_ACTION_KEY) sendAccountVerb(loginVerb())
+          }}
+        />
 
         {/* The workspace panels are renderer-owned layout over the P3-4
          * session-keyed stores. Each panel reads its own session slice, so visible
@@ -1265,6 +1341,29 @@ export function App() {
           <OrchestratorPage
             snapshot={selectAgentModeSnapshot(orchestrator, activeSessionId)}
           />
+        ) : showTrustGate && activeSessionId ? (
+          // Per-session-create trust gate (D4 §1.1): this session's cwd is
+          // untrusted. Trust persists via the engine's own store + re-broadcast;
+          // decline closes the tab (Q1 TUI parity — no read-only mode).
+          <div className="relative flex min-h-0 flex-1">
+            <WorkspaceTrustGate
+              cwd={tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId}
+              onTrust={sendWorkspaceTrust}
+              onDecline={() => closeTab(activeSessionId)}
+              errorMessage={selectWorkspaceTrustError(workspaceTrust, activeSessionId)}
+            />
+          </div>
+        ) : showFirstRunOAuth ? (
+          // First-run: no credentialed Codex account exists. Surface the OAuth
+          // flow (begins the engine's real `account.login`; the engine owns the
+          // token). Unmounts when the pool gains an account on the next snapshot.
+          <div className="relative flex min-h-0 flex-1">
+            <StartupOAuth
+              phase={oauthPhase}
+              onBegin={beginOAuth}
+              onCancel={() => setOauthPhase('ready')}
+            />
+          </div>
         ) : workspacePanels.length === 0 || !activeSessionId ? (
           <EmptyShell onNewTab={newSession} />
         ) : (
