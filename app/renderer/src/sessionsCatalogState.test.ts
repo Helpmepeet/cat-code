@@ -17,6 +17,7 @@ import {
   reduceSessionsCatalogState,
   resolveSessionLabel,
   selectMergedSessionRows,
+  selectRecentWorkspaces,
   selectSessionsCatalog,
   sortSessionRows,
   type MergedSessionRow,
@@ -262,3 +263,59 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     ...partial,
   }
 }
+
+describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
+  // A registry-openable session in /w/one, a history-only session in /w/one,
+  // and a history-only session in /w/two — the shared merge feeds this.
+  const rows = selectMergedSessionRows(
+    [
+      descriptor({
+        appSessionId: 'a',
+        engineSessionId: 'ea',
+        cwd: '/w/one',
+        status: 'ready',
+        restorable: false,
+        lastAttachedAt: 3000,
+      }),
+    ],
+    snapshot([
+      entry({ sessionId: 'ea', cwd: '/w/one', modifiedAtMs: 3000 }),
+      entry({ sessionId: 'eb', cwd: '/w/one', modifiedAtMs: 2500 }),
+      entry({ sessionId: 'ec', cwd: '/w/two', modifiedAtMs: 4000 }),
+    ]),
+  )
+
+  test('collapses sessions by workspace, newest cwd first', () => {
+    const recents = selectRecentWorkspaces(rows, new Map())
+    expect(recents.map(r => r.cwd)).toEqual(['/w/two', '/w/one'])
+    const one = recents.find(r => r.cwd === '/w/one')!
+    expect(one.sessionCount).toBe(2)
+    expect(one.modifiedAtMs).toBe(3000)
+    expect(one.name).toBe('one')
+  })
+
+  test('adopts an openable registry id; history-only stays non-openable', () => {
+    const recents = selectRecentWorkspaces(rows, new Map())
+    const one = recents.find(r => r.cwd === '/w/one')!
+    expect(one.appSessionId).toBe('a')
+    expect(one.live).toBe(true)
+    const two = recents.find(r => r.cwd === '/w/two')!
+    expect(two.appSessionId).toBeNull() // history-only → browse-only (HC1/P4-6b)
+  })
+
+  test('trust flag joins from the cwd map; unknown ⇒ null', () => {
+    const recents = selectRecentWorkspaces(rows, new Map([['/w/one', false]]))
+    expect(recents.find(r => r.cwd === '/w/one')!.trusted).toBe(false)
+    expect(recents.find(r => r.cwd === '/w/two')!.trusted).toBeNull()
+  })
+
+  test('caps to the limit', () => {
+    expect(selectRecentWorkspaces(rows, new Map(), 1).map(r => r.cwd)).toEqual([
+      '/w/two',
+    ])
+  })
+
+  test('empty input ⇒ empty list', () => {
+    expect(selectRecentWorkspaces([], new Map())).toEqual([])
+  })
+})

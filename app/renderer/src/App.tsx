@@ -154,6 +154,7 @@ import {
   createAccountsState,
   reduceAccountsState,
   selectAccountsSnapshot,
+  selectFirstAccountsSnapshot,
 } from './accountsState.js'
 import {
   createWorkspaceTrustState,
@@ -181,8 +182,10 @@ import {
   createSessionsCatalogState,
   reduceSessionsCatalogState,
   selectMergedSessionRows,
+  selectRecentWorkspaces,
   selectSessionsCatalog,
 } from './sessionsCatalogState.js'
+import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
 import {
   createOrchestratorState,
@@ -526,6 +529,29 @@ export function App() {
         sessionCatalogSnapshot,
       ),
     [sidebarRows, sessionCatalogSnapshot],
+  )
+
+  // P4-17 Welcome launcher — derived inputs, read from the SAME domain seams as
+  // the other surfaces (no new feed, D5/WELCOME-LAUNCHER §6). Recents = a
+  // distinct-workspace projection over the shared merged rows; trust = best-
+  // effort per-cwd flags joined from live sessions' `workspace-trust.snapshot`
+  // (only reporting sessions expose trust — a global projects-trust feed is out
+  // of scope). The launcher renders at empty-state (no ACTIVE session), so the
+  // account table reads the first available pool snapshot (the pool is global).
+  const welcomeTrustByCwd = useMemo(() => {
+    const map = new Map<string, boolean>()
+    for (const row of sidebarRows) {
+      const snap = selectWorkspaceTrustSnapshot(
+        workspaceTrust,
+        row.descriptor.appSessionId,
+      )
+      if (snap) map.set(row.descriptor.cwd, snap.trusted)
+    }
+    return map
+  }, [sidebarRows, workspaceTrust])
+  const welcomeRecents = useMemo(
+    () => selectRecentWorkspaces(sessionCatalogRows, welcomeTrustByCwd),
+    [sessionCatalogRows, welcomeTrustByCwd],
   )
 
   useEffect(() => {
@@ -1365,7 +1391,22 @@ export function App() {
             />
           </div>
         ) : workspacePanels.length === 0 || !activeSessionId ? (
-          <EmptyShell onNewTab={newSession} />
+          // P4-17 — the rich launcher replaces the minimal empty shell. Reads
+          // derived recents (D5) + the P4-5 pool + agent-mode, wires open/restore
+          // (HC1 id-only) and the HC1 folder picker (post-spawn trust gate).
+          <WelcomeScreen
+            recents={welcomeRecents}
+            accounts={activeAccountsSnapshot ?? selectFirstAccountsSnapshot(accounts)}
+            orchestratorActive={
+              selectAgentModeSnapshot(orchestrator, activeSessionId)?.active ?? false
+            }
+            onOpenRecent={recent => {
+              if (recent.appSessionId == null) return
+              if (recent.live) selectTab(recent.appSessionId)
+              else void performRestore(recent.appSessionId)
+            }}
+            onOpenFolder={() => void newSession()}
+          />
         ) : (
 	          <WorkspaceLayout
 	            layout={workspaceLayout}
@@ -1436,23 +1477,6 @@ function TasksStrip({
       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden="true" />
       {active.length} background {active.length === 1 ? 'task' : 'tasks'}
     </button>
-  )
-}
-
-/** The shell with no live sessions — invites creating the first one (HC1). */
-function EmptyShell({ onNewTab }: { onNewTab: () => void }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 text-center">
-      <p className="text-sm text-text-muted">No sessions open.</p>
-      <button
-        className="rounded bg-accent px-4 py-2 text-sm text-app-bg"
-        onClick={onNewTab}
-        type="button"
-      >
-        New session
-      </button>
-      <p className="text-xs text-text-subtle">or press ⌘T</p>
-    </div>
   )
 }
 

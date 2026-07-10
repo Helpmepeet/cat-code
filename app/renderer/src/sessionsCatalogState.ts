@@ -321,6 +321,80 @@ export function groupByWorkspace(
     })
 }
 
+/**
+ * One derived "recent project" for the Welcome launcher (P4-17). The launcher's
+ * recents are PROJECTS (distinct cwd), not individual sessions — the D5 ruling
+ * (`decisions/WELCOME-LAUNCHER.md` W6): registry rows ∪ engine history collapsed
+ * by workspace, most-recent-first, trust-badged. This is a projection OVER the
+ * already-merged `selectMergedSessionRows` output (the shared P4-6 selector — no
+ * second merge is built), the same way `groupByWorkspace` is.
+ */
+export type RecentWorkspace = {
+  cwd: string
+  /** basename(cwd) for the label. */
+  name: string
+  /**
+   * The most-recent OPENABLE session in this workspace (a registry row carrying
+   * an app id), or null when every row here is history-only. HC1: only an
+   * `appSessionId` is openable — a bare cwd can never be authored back into a
+   * spawn, so a history-only project is browse-only (the P4-6b gap).
+   */
+  appSessionId: string | null
+  /** True when the openable row is live (select), false ⇒ restore. */
+  live: boolean
+  modifiedAtMs: number
+  /**
+   * Per-path trust from the join of live sessions' `workspace-trust.snapshot`
+   * with their descriptors (App wires it): true/false when a reporting session
+   * exists for this cwd, null when unknown (no live session ⇒ no trust seam;
+   * the launcher grows no new feed — WELCOME-LAUNCHER §6).
+   */
+  trusted: boolean | null
+  sessionCount: number
+}
+
+/**
+ * Collapse merged session rows into distinct-workspace recents, newest-first,
+ * capped to `limit`. Prefers an openable (registry) row's app id + live flag so
+ * a project with any openable session can be reopened; a purely-history project
+ * yields `appSessionId: null`.
+ */
+export function selectRecentWorkspaces(
+  rows: readonly MergedSessionRow[],
+  trustByCwd: ReadonlyMap<string, boolean>,
+  limit = 6,
+): RecentWorkspace[] {
+  const byCwd = new Map<string, RecentWorkspace>()
+  for (const row of rows) {
+    const existing = byCwd.get(row.cwd)
+    if (!existing) {
+      byCwd.set(row.cwd, {
+        cwd: row.cwd,
+        name: basename(row.cwd) || row.cwd,
+        appSessionId: row.appSessionId,
+        live: row.live,
+        modifiedAtMs: row.modifiedAtMs,
+        trusted: trustByCwd.has(row.cwd) ? trustByCwd.get(row.cwd)! : null,
+        sessionCount: 1,
+      })
+      continue
+    }
+    existing.sessionCount += 1
+    if (row.modifiedAtMs > existing.modifiedAtMs) {
+      existing.modifiedAtMs = row.modifiedAtMs
+    }
+    // Adopt the first openable id we see (rows arrive newest-first from the
+    // merge, so the earliest openable is also the most recent openable).
+    if (existing.appSessionId == null && row.appSessionId != null) {
+      existing.appSessionId = row.appSessionId
+      existing.live = row.live
+    }
+  }
+  return [...byCwd.values()]
+    .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs)
+    .slice(0, limit)
+}
+
 export type DateBucket = { label: string; rows: MergedSessionRow[] }
 
 /**

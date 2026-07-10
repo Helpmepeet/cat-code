@@ -17,14 +17,16 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 test('renders the shell frame (TabBar + empty state) before any session exists', () => {
   // SSR runs no effects, so the host list never resolves — the shell mounts
   // with an empty roster. The frame is still whole: the TabBar chrome and a
-  // new-session affordance are present, and the empty state invites the first
-  // session (HC1 — created only via the picker, never a typed path).
+  // new-session affordance are present, and the empty state is the P4-17
+  // WelcomeScreen launcher inviting the first session (HC1 — created only via
+  // the picker, never a typed path).
   const html = renderToStaticMarkup(<App />)
 
   expect(html).toContain('role="tablist"')
   expect(html).toContain('aria-label="Sessions"')
   expect(html).toContain('aria-label="New session"')
-  expect(html).toContain('No sessions open.')
+  expect(html).toContain('Welcome back')
+  expect(html).toContain('Open a project')
   // No active-session pane chrome without a session.
   expect(html).not.toContain('aria-label="Prompt"')
   expect(html).not.toContain('Transcript (projected)')

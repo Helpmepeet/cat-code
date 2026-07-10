@@ -11,6 +11,7 @@ import {
   selectAccountRows,
   selectActiveAccount,
   selectCapAccount,
+  selectFirstAccountsSnapshot,
   selectHasOtherSwitchable,
   selectReadyLabel,
   selectTakenAliases,
@@ -91,6 +92,13 @@ describe('accountsState reducer', () => {
     state = reduceAccountsState(state, { type: 'frame', frame: result })
     expect(state.lastResult?.requestId).toBe('r1')
     expect(state.lastResult?.ok).toBe(true)
+  })
+
+  test('selectFirstAccountsSnapshot returns any available snapshot (P4-17 empty-state)', () => {
+    let state = createAccountsState()
+    expect(selectFirstAccountsSnapshot(state)).toBeNull() // cold start
+    state = reduceAccountsState(state, { type: 'frame', frame: snapFrame('s2', snapshot()) })
+    expect(selectFirstAccountsSnapshot(state)?.poolCount).toBe(2)
   })
 
   test('lifecycle death clears a known session snapshot only', () => {

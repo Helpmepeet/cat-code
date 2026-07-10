@@ -62,6 +62,23 @@ export function selectAccountsSnapshot(
   return snapshot ?? null
 }
 
+/**
+ * The first available pool snapshot across any session (P4-17 Welcome). The
+ * Codex pool is process-GLOBAL, so any reporting session's snapshot represents
+ * it — the same "any session's snapshot is a valid source" precedent the
+ * sessions catalog uses. The launcher renders at empty-state (often no ACTIVE
+ * session), so it reads this rather than the active-only selector, and grows no
+ * new feed. Returns null on a true cold start (no session has reported yet).
+ */
+export function selectFirstAccountsSnapshot(
+  state: AccountsState,
+): AccountsSnapshot | null {
+  for (const snapshot of Object.values(state.sessions)) {
+    if (snapshot) return snapshot
+  }
+  return null
+}
+
 /** The rows in pool order (the active account is flagged via `isDefault`). */
 export function selectAccountRows(snapshot: AccountsSnapshot | null): AccountStatus[] {
   return snapshot?.accounts ?? []
