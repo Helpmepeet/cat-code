@@ -253,27 +253,101 @@ test('P4-18b: a GenerateImage card flags the missing inline-image seam, never mo
   expect(html).toContain('inline image tile pending') // flagged, not mocked
 })
 
-test('D2/C4: renders a subagent tool card NESTED inside its owning agent card, not as a sibling', () => {
+// P4-8c: a top-level Agent tool-use row (the DelegateGroup member / lone card).
+// messageId is shared ('m' via blockSource) so two of these coalesce; distinct
+// ids/toolUseIds keep them separate rows.
+function agentRow(
+  suffix: string,
+  input: Record<string, unknown>,
+  status: ToolCardStatus,
+  children: NestedTranscriptRow[] = [],
+): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: `s:m:0:agent-${suffix}`,
+    kind: 'tool-use',
+    toolUseId: `toolu_agent_${suffix}`,
+    toolName: 'Agent',
+    toolFamily: 'agent',
+    input,
+    status,
+    result: null,
+    children,
+  }
+}
+
+test('P4-8c: an Agent card derives type/state/task from the row input + status (data-path honest)', () => {
   const html = render(
-    toolRow({
-      toolName: 'Agent',
-      toolFamily: 'agent',
-      input: { prompt: 'investigate' },
-      status: 'pending',
-      children: [
-        toolRow({
-          toolName: 'Grep',
-          toolFamily: 'grep',
-          input: { pattern: 'foo' },
-          status: 'pending',
-        }),
-      ],
-    }),
+    agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending'),
   )
 
-  expect(html).toContain('Agent') // parent family word
-  expect(html).toContain('Search') // nested grep family word
-  expect(html).toContain('foo') // nested target
+  expect(html).toContain('Agent') // family word (◆ Agent header)
+  expect(html).toContain('Explore') // worker type from input.subagent_type
+  expect(html).toContain('map the seam') // description line (header target)
+  expect(html).toContain('Running') // derived AgentStateLabel (pending → running)
+})
+
+test('P4-8c: a completed Agent card shows the Completed agent state', () => {
+  const html = render(
+    agentRow('done', { subagent_type: 'Explore', description: 'done task' }, 'success'),
+  )
+
+  expect(html).toContain('Completed') // deriveAgentToolState: success → completed
+})
+
+test('D2/C4: an owning Agent card nests its subagent COLLAPSED by default with a child-count affordance', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate the seam' }, 'pending', [
+      toolRow({
+        toolName: 'Grep',
+        toolFamily: 'grep',
+        input: { pattern: 'foo' },
+        status: 'pending',
+      }),
+    ]),
+  )
+
+  expect(html).toContain('Agent') // parent family word (always-visible header)
+  expect(html).toContain('1 nested') // child-count expand affordance in the header
+  // C4: children are COLLAPSED by default — the nested subagent content is not
+  // rendered until the card is expanded, so it must not leak top-level.
+  expect(html).not.toContain('Search') // nested grep family word hidden
+  expect(html).not.toContain('foo') // nested target hidden
+})
+
+test('D2/§3: two co-spawned Agent rows (same messageId) render as ONE DelegateGroup with both members', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        agentRow('a', { subagent_type: 'Explore', description: 'audit A' }, 'pending'),
+        agentRow('b', { subagent_type: 'Explore', description: 'audit B' }, 'pending'),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('Delegate') // group eyebrow
+  expect(html).toContain('Running 2 Explore agents') // engine-faithful group summary
+  expect(html).toContain('audit A') // member A card
+  expect(html).toContain('audit B') // member B card
+})
+
+test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no interpolated/arbitrary classes)', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        agentRow('a', { subagent_type: 'Explore', description: 'x' }, 'pending'),
+        agentRow('b', { subagent_type: 'Explore', description: 'y' }, 'pending'),
+      ]}
+    />,
+  )
+
+  // Static utilities from the 8a tone maps actually reach the DOM (a dynamic
+  // `text-[${hex}]` would silently never generate — the P4-9 trap).
+  expect(html).toContain('text-blue-400') // running state tone (AGENT_STATE_TONE_CLASS.info)
+  expect(html).toContain('bg-blue-400')
+  expect(html).toContain('text-sky-300') // Explore type tone (AGENT_TYPE_TONE_CLASS.sky)
+  // No template-literal interpolation ever leaks into a className.
+  expect(html).not.toContain('${')
 })
 
 // ── P4-18a: user turns + core/boundary rows (the functional fix) ────────────

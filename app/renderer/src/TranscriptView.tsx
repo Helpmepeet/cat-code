@@ -30,14 +30,28 @@ import {
 import Markdown from 'react-markdown'
 import type { SessionId } from '../../shared/protocol.js'
 import {
+  groupAgentDelegates,
   selectNestedTranscriptRows,
+  type NestedToolUseRow,
   type NestedTranscriptRow,
+  type TranscriptDisplayItem,
   type TranscriptState,
   type ToolCardStatus,
   type ToolDiffProjection,
   type ToolFamily,
   type UserImageSource,
 } from './transcriptProjector.js'
+import {
+  deriveAgentDisplayVocabulary,
+  type AgentToolSource,
+} from './agentIdentity.js'
+import {
+  AgentRoleDot,
+  AgentStateLabel,
+  Baton,
+  AGENT_STATE_TONE_CLASS,
+  AGENT_TYPE_TONE_CLASS,
+} from './AgentChrome.js'
 
 // Perf (2026-07-08, F3): memoized so an App re-render that did NOT change this
 // session's transcript slice (a keystroke in the composer, another session's
@@ -69,11 +83,19 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     )
   }
 
+  // D2/§3 DelegateGroup: coalesce co-spawned parallel agents into ONE grouped
+  // card at read time — a pure derivation over the already-nested rows, never a
+  // new frame or message type (C3). Non-agent rows and lone agents pass through.
+  const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
   return (
     <div className="flex flex-col gap-3">
-      {rows.map(row => (
-        <TranscriptRowView key={row.id} row={row} />
-      ))}
+      {items.map(item =>
+        item.kind === 'agent-group' ? (
+          <DelegateGroup key={item.id} members={item.members} />
+        ) : (
+          <TranscriptRowView key={item.row.id} row={item.row} />
+        ),
+      )}
     </div>
   )
 })
@@ -391,6 +413,10 @@ function deriveTarget(row: ToolUseNestedRow): string {
       return str('command') ?? str('skill') ?? row.toolName
     case 'imagegen':
       return str('prompt') ?? row.toolName
+    case 'agent':
+      // The Agent card's one-line target is the task, from the REAL tool input
+      // (`Agent`/`Task` carry `description`/`prompt` — messageActions.tsx:107-114).
+      return str('description') ?? str('prompt') ?? row.toolName
     default:
       return row.toolName
   }
@@ -425,6 +451,8 @@ function ToolCardShell({
   target,
   status,
   sub,
+  headerBadge,
+  alwaysExtra,
   collapsedExtra,
   defaultExpanded,
   children,
@@ -433,6 +461,10 @@ function ToolCardShell({
   target: string
   status: ToolCardStatus
   sub?: string
+  /** Optional right-cluster chip before the state (C4 child-count for agents). */
+  headerBadge?: ReactNode
+  /** Always-visible sub-header row under the header (Agent identity strip). */
+  alwaysExtra?: ReactNode
   collapsedExtra?: ReactNode
   defaultExpanded?: boolean
   children?: ReactNode
@@ -460,6 +492,7 @@ function ToolCardShell({
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
           {target}
         </span>
+        {headerBadge}
         <span className="flex shrink-0 items-center gap-1.5">
           <span
             className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
@@ -468,6 +501,11 @@ function ToolCardShell({
           <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
         </span>
       </button>
+      {alwaysExtra ? (
+        <div className="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
+          {alwaysExtra}
+        </div>
+      ) : null}
       {!expanded && collapsedExtra ? collapsedExtra : null}
       {expanded && hasBody ? (
         <div className="border-t border-shell-seam bg-black/[0.28]">
@@ -494,6 +532,10 @@ function ToolCardShell({
  * change, NOT the P2-locked render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  // D2/C2: the Agent tool_use is rendered as the Agent member of this same
+  // tool-card family (specialized body + C4 child nesting), not a sibling row.
+  if (row.toolFamily === 'agent') return <AgentToolCard row={row} />
+
   const content = row.result?.content ?? ''
   const isImageDone = row.toolFamily === 'imagegen' && row.status === 'success'
   return (
@@ -519,6 +561,156 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
           ))}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * The transcript-derived Agent source for the P4-2 vocabulary. Every field comes
+ * from THIS row: the `tool_use` `input` (`subagent_type`/`description`/`prompt`/
+ * `run_in_background`, the real Agent-tool input keys — `AgentTool/UI.tsx`) and
+ * the read-time correlated `status`. It NEVER reads the session-plane
+ * `agent-mode.snapshot` (`orchestratorState.ts`) — that cross-plane read is the
+ * D2 §4 sin the decision forbids.
+ */
+function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
+  const input = row.input
+  const str = (key: string): string | undefined => {
+    const value = input[key]
+    return typeof value === 'string' && value.length > 0 ? value : undefined
+  }
+  const subagentType = str('subagent_type')
+  const description = str('description')
+  const prompt = str('prompt')
+  return {
+    toolName: row.toolName === 'Task' ? 'Task' : 'Agent',
+    status: row.status,
+    ...(input.run_in_background === true ? { run_in_background: true } : {}),
+    ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
+    ...(description !== undefined ? { description } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
+  }
+}
+
+/**
+ * The worker's human label: the `subagent_type`, except the generic
+ * `general-purpose`/`worker` types collapse to "Agent" (source: `userFacingName`,
+ * `src/tools/AgentTool/UI.tsx:860-874`).
+ */
+function agentWorkerType(vocab: ReturnType<typeof deriveAgentDisplayVocabulary>): string {
+  const type = vocab.type
+  return type && type.key !== 'general-purpose' && type.key !== 'worker'
+    ? type.label
+    : 'Agent'
+}
+
+/**
+ * D2/C4 inline Agent card — the Agent member of the P2-2 tool-card family
+ * (`decisions/AGENT-CHROME.md` §2). Reuses the 8a chrome primitives
+ * (`AgentRoleDot`/`AgentStateLabel`/`Baton`, `AgentChrome.tsx`) but feeds them
+ * from TRANSCRIPT-derived data only (`agentToolSourceOf`): identity from the
+ * row's `input`, state from its read-time `status` (`deriveAgentToolState`),
+ * activity from its nested child rows.
+ *
+ * C4: subagent child rows NEST inside this card's collapsible body, COLLAPSED by
+ * default, never interleaved at the transcript top level; the header carries the
+ * child count as the expand affordance. Owner/handoff (the Baton) lives on
+ * `LocalAgentTask` (session plane), NOT on this frame — so the Baton is always
+ * `'none'` here (renders nothing); blocked/owner state is never fabricated on the
+ * card (task rule).
+ */
+function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
+  const vocab = deriveAgentDisplayVocabulary(agentToolSourceOf(row))
+  const workerType = agentWorkerType(vocab)
+  const typeTone = vocab.type
+    ? AGENT_TYPE_TONE_CLASS[vocab.type.tone]
+    : AGENT_TYPE_TONE_CLASS.neutral
+  const childCount = row.children.length
+  return (
+    <ToolCardShell
+      family="agent"
+      target={deriveTarget(row)}
+      status={row.status}
+      headerBadge={
+        childCount > 0 ? (
+          <span className="shrink-0 rounded-[5px] border border-shell-seam bg-white/[0.03] px-1.5 py-px font-mono text-[10px] text-text-subtle">
+            {childCount} nested
+          </span>
+        ) : undefined
+      }
+      // The identity strip is ALWAYS visible; only the subagent child rows
+      // collapse (C4). Reuses the 8a chrome primitives, all fed from this row.
+      alwaysExtra={
+        <>
+          <AgentRoleDot role={vocab.identity.type} />
+          <span className={`shrink-0 text-[12.5px] font-semibold ${typeTone.text}`}>
+            {workerType}
+          </span>
+          <AgentStateLabel state={vocab.state.key} />
+          {/* Owner/handoff is a session-plane (`LocalAgentTask`) fact, absent
+              from this frame — never fabricated here (D2/§4). Renders nothing. */}
+          <Baton owner="none" />
+        </>
+      }
+    >
+      {childCount > 0 ? (
+        <div className="flex flex-col gap-2 border-l border-accent/20 pl-3">
+          {row.children.map(child => (
+            <TranscriptRowView key={child.id} row={child} />
+          ))}
+        </div>
+      ) : null}
+    </ToolCardShell>
+  )
+}
+
+/**
+ * D2/§3 DelegateGroup — parallel agents the orchestrator co-spawned in one turn
+ * (same `message.id` — `src/utils/groupToolUses.ts:76`) render as ONE grouped
+ * card instead of N sibling cards. The header mirrors the engine's grouped
+ * summary (`renderGroupedAgentToolUse`, `src/tools/AgentTool/UI.tsx:838-856`):
+ * "Running N agents…" while any member is pending, else "N [type] agents
+ * finished"; the common type shows only when every member shares it. Members
+ * stack as ordinary inline Agent cards (each keeps its own C4 child nesting).
+ * Grouping is a read-time DERIVATION (`groupAgentDelegates`), never a new frame
+ * or message type (C3).
+ */
+function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
+  const anyPending = members.some(member => member.status === 'pending')
+  const anyError = members.some(member => member.status === 'error')
+  const types = members.map(member =>
+    agentWorkerType(deriveAgentDisplayVocabulary(agentToolSourceOf(member))),
+  )
+  const commonType =
+    types.length > 0 && types.every(type => type === types[0]) && types[0] !== 'Agent'
+      ? types[0]
+      : null
+  const noun = commonType ? `${commonType} agents` : 'agents'
+  const label = anyPending
+    ? `Running ${members.length} ${noun}…`
+    : `${members.length} ${noun} finished`
+  const tone = anyPending
+    ? AGENT_STATE_TONE_CLASS.info
+    : anyError
+      ? AGENT_STATE_TONE_CLASS.danger
+      : AGENT_STATE_TONE_CLASS.success
+  return (
+    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.02]">
+      <div className="flex items-center gap-2 border-b border-shell-seam px-3 py-1.5">
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot} ${anyPending ? 'animate-pulse' : ''}`}
+          aria-hidden
+        />
+        <span className="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent">
+          Delegate
+        </span>
+        <span className={`text-[11px] ${tone.text}`}>{label}</span>
+      </div>
+      <div className="flex flex-col gap-2 p-2">
+        {members.map(member => (
+          <AgentToolCard key={member.id} row={member} />
+        ))}
+      </div>
     </div>
   )
 }

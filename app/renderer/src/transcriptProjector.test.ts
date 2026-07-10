@@ -2,14 +2,18 @@ import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
   createTranscriptState,
+  groupAgentDelegates,
   projectServerFrame,
   selectNestedTranscriptRows,
   selectSlashCommands,
+  selectTranscriptDisplayItems,
   selectTranscriptRows,
 } from './transcriptProjector.js'
 import {
+  AGENT_WITH_NESTED_SUBAGENT_TURN,
   allSdkMessageSamples,
   DRIFT_WIRE_SAMPLE_JSON,
+  PARALLEL_AGENTS_TURN,
   S1_STREAMING_TEXT_TURN,
   SDK_MESSAGE_FIXTURE,
 } from './sdkMessageFixtures.js'
@@ -1438,6 +1442,137 @@ test('a child row whose parent never arrived surfaces at top level (degraded pla
   expect(nested).toHaveLength(1)
   expect(nested[0]?.kind).toBe('assistant-text')
   expect(nested[0]?.children).toEqual([])
+})
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * D2/§3/C3 DelegateGroup: parallel agents launched together (same message.id)
+ * coalesce into ONE agent-group display item — a pure read-time derivation
+ * (`groupAgentDelegates`), never a new frame or message type. The grouping key
+ * matches the engine's own second pass (`src/utils/groupToolUses.ts:76`).
+ * ───────────────────────────────────────────────────────────────────────── */
+
+test('DelegateGroup: two parallel Agent tool_uses (same message.id) coalesce into one agent-group item', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  for (const message of PARALLEL_AGENTS_TURN.messages) {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  // Both agents are distinct top-level rows in arrival order (no interleave).
+  const nested = selectNestedTranscriptRows(state, 'session-1')
+  expect(nested.map(r => (r.kind === 'tool-use' ? r.toolUseId : null))).toEqual([
+    PARALLEL_AGENTS_TURN.toolUseIds[0],
+    PARALLEL_AGENTS_TURN.toolUseIds[1],
+  ])
+
+  // The derivation groups them into a single agent-group display item.
+  const items = selectTranscriptDisplayItems(state, 'session-1')
+  expect(items).toHaveLength(1)
+  const group = items[0]
+  if (group?.kind !== 'agent-group') throw new Error('expected an agent-group item')
+  expect(group.groupKey).toBe(`${PARALLEL_AGENTS_TURN.sharedMessageId}:Agent`)
+  expect(group.members.map(m => m.toolUseId)).toEqual([
+    PARALLEL_AGENTS_TURN.toolUseIds[0],
+    PARALLEL_AGENTS_TURN.toolUseIds[1],
+  ])
+})
+
+test('DelegateGroup: a lone Agent tool_use is a single item, never grouped', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_solo_agent',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_solo_agent',
+            name: 'Agent',
+            input: { subagent_type: 'Explore', description: 'look around' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000008cf001',
+    }),
+  )
+
+  const items = selectTranscriptDisplayItems(state, 'session-1')
+  expect(items).toHaveLength(1)
+  expect(items[0]?.kind).toBe('single')
+})
+
+test('C4: an Agent tool_use with a nested subagent stays ONE single display item whose card owns the child', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  for (const message of AGENT_WITH_NESTED_SUBAGENT_TURN.messages) {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  // C4 nesting: the subagent Grep row is a CHILD of the Agent card, not a sibling.
+  const nested = selectNestedTranscriptRows(state, 'session-1')
+  expect(nested).toHaveLength(1)
+  const agentRow = nested[0]
+  if (agentRow?.kind !== 'tool-use') throw new Error('expected agent tool-use row')
+  expect(agentRow.toolFamily).toBe('agent')
+  expect(agentRow.toolUseId).toBe(AGENT_WITH_NESTED_SUBAGENT_TURN.parentToolUseId)
+  expect(agentRow.children).toHaveLength(1)
+  const child = agentRow.children[0]
+  if (child?.kind !== 'tool-use') throw new Error('expected nested child tool-use row')
+  expect(child.toolUseId).toBe(AGENT_WITH_NESTED_SUBAGENT_TURN.childToolUseId)
+  expect(child.parentToolUseId).toBe(AGENT_WITH_NESTED_SUBAGENT_TURN.parentToolUseId)
+  // The nested subagent's own tool_result correlated too (read-time join).
+  expect(child.status).toBe('success')
+
+  // A lone agent (one member) is a single item, NOT a group; its child never
+  // surfaces as a sibling top-level display item.
+  const items = selectTranscriptDisplayItems(state, 'session-1')
+  expect(items).toHaveLength(1)
+  expect(items[0]?.kind).toBe('single')
+})
+
+test('groupAgentDelegates never groups non-agent rows and is a stable passthrough for singles', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  // Two Read tool_uses in one message.id — a groupable-by-position pair, but
+  // Read has no grouped renderer (only AgentTool does), so they stay singles.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_reads',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_read_a', name: 'Read', input: { file_path: '/a' } }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000008cf101',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_reads',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_read_b', name: 'Read', input: { file_path: '/b' } }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000008cf102',
+    }),
+  )
+
+  const rows = selectNestedTranscriptRows(state, 'session-1')
+  const items = groupAgentDelegates(rows)
+  expect(items).toHaveLength(2)
+  expect(items.every(item => item.kind === 'single')).toBe(true)
+  // Slice-stable: same input array → identity-equal output (memo-friendly).
+  expect(groupAgentDelegates(rows)).toBe(items)
 })
 
 /* ─────────────────────────────────────────────────────────────────────────

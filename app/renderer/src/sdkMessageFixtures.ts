@@ -1541,6 +1541,164 @@ export const S1_STREAMING_TEXT_TURN: {
   ],
 }
 
+/**
+ * D2/C4 nested-subagent turn (P4-8c AgentToolCard fixture): a top-level Agent
+ * tool_use (`subagent_type`/`description`/`prompt` — the real Agent-tool input
+ * keys) whose subagent re-emits a full frame UNDER it (non-null
+ * `parent_tool_use_id`, `src/utils/queryHelpers.ts:127-140`) plus that
+ * subagent's own `tool_result`. Feeds the card's identity/state derivation and
+ * the C4 collapsed child nesting.
+ */
+export const AGENT_WITH_NESTED_SUBAGENT_TURN: {
+  readonly name: string
+  readonly parentToolUseId: string
+  readonly childToolUseId: string
+  readonly messages: readonly SDKMessage[]
+} = {
+  name: 'Agent tool_use with a nested subagent tool_use + result (C4)',
+  parentToolUseId: 'toolu_agent8c_parent',
+  childToolUseId: 'toolu_agent8c_child',
+  messages: [
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent8c_1',
+        model: 'claude-sonnet-5',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_agent8c_parent',
+            name: 'Agent',
+            input: {
+              subagent_type: 'Explore',
+              description: 'Map the transcript projector',
+              prompt: 'Find every call site of projectServerFrame and summarize.',
+            },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1400, output_tokens: 22, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-0000008c0001',
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent8c_2',
+        model: 'claude-haiku-4-5-20251001',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_agent8c_child',
+            name: 'Grep',
+            input: { pattern: 'projectServerFrame' },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 300, output_tokens: 8, service_tier: null },
+      },
+      parent_tool_use_id: 'toolu_agent8c_parent',
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-0000008c0002',
+    },
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_agent8c_child',
+            content: [{ type: 'text', text: '3 matches in app/renderer/src/' }],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: 'toolu_agent8c_parent',
+      isSynthetic: true,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-0000008c0003',
+    },
+  ],
+}
+
+/**
+ * D2/§3 DelegateGroup turn (P4-8c grouping fixture): TWO Agent tool_use blocks
+ * the orchestrator launched in parallel. The streaming producer emits one frame
+ * per stopped block, so both carry the SAME `message.id` (`msg_delegate8c`) —
+ * the seam's only "co-spawned" signal (`src/utils/groupToolUses.ts:76`, groups
+ * by `${message.id}:${tool_name}` when 2+). `groupAgentDelegates` coalesces them
+ * into one `agent-group` display item; no new frame or message type is minted.
+ */
+export const PARALLEL_AGENTS_TURN: {
+  readonly name: string
+  readonly sharedMessageId: string
+  readonly toolUseIds: readonly [string, string]
+  readonly messages: readonly SDKMessage[]
+} = {
+  name: 'two parallel Agent tool_uses sharing one message.id (DelegateGroup)',
+  sharedMessageId: 'msg_delegate8c',
+  toolUseIds: ['toolu_delegate8c_a', 'toolu_delegate8c_b'],
+  messages: [
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_delegate8c',
+        model: 'claude-sonnet-5',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_delegate8c_a',
+            name: 'Agent',
+            input: {
+              subagent_type: 'Explore',
+              description: 'Audit the sidecar boundary',
+            },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1500, output_tokens: 20, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-0000008cd001',
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_delegate8c',
+        model: 'claude-sonnet-5',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_delegate8c_b',
+            name: 'Agent',
+            input: {
+              subagent_type: 'Explore',
+              description: 'Audit the renderer projector',
+            },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1500, output_tokens: 20, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-0000008cd002',
+    },
+  ],
+}
+
 /** Flat view over every sample, for coverage-loop tests. */
 export function allSdkMessageSamples(): readonly SdkMessageSample[] {
   return Object.values(SDK_MESSAGE_FIXTURE).flat()

@@ -382,6 +382,116 @@ export function selectNestedTranscriptRows(
   return result
 }
 
+/** A nested tool-use row (the shape an Agent card / DelegateGroup member carries). */
+export type NestedToolUseRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
+
+/**
+ * D2/§3/C3 DelegateGroup: parallel agent tool_use rows launched together render
+ * as ONE grouped card, NOT as a new frame or message type. This models the read
+ * output as a flat list of display items — either a single top-level row, or a
+ * group of ≥2 sibling agent rows the orchestrator co-spawned. Grouping is a pure
+ * read-time DERIVATION over already-correlated rows; nothing is stored, no wire
+ * vocabulary is added (C3: "grouping stays a projector derivation, not a frame").
+ */
+export type TranscriptDisplayItem =
+  | { kind: 'single'; row: NestedTranscriptRow }
+  | {
+      kind: 'agent-group'
+      /** Stable React/derivation identity: `agent-group:<messageId>:<toolName>`. */
+      id: string
+      groupKey: string
+      members: NestedToolUseRow[]
+    }
+
+/**
+ * The "launched together" signal that DOES reach the seam. The engine groups
+ * tool uses by `${message.id}:${tool_name}` and only when 2+ of a tool that
+ * supports grouped rendering appear in the SAME API response
+ * (`src/utils/groupToolUses.ts:49-52,76,91`); the ONLY such tool is AgentTool
+ * (`src/components/messageActions.tsx:121`: "Only AgentTool has
+ * renderGroupedToolUse"). Parallel agents ride ONE assistant message, so they
+ * share `message.id` — preserved here as `ToolUseRow.messageId` — even though
+ * the streaming producer emits one frame per stopped block. No other seam field
+ * expresses "co-spawned", so this is the faithful key, not an invented signal.
+ */
+function agentDelegateGroupKey(row: NestedToolUseRow): string {
+  return `${row.messageId}:${row.toolName}`
+}
+
+function isAgentToolUseRow(row: NestedTranscriptRow): row is NestedToolUseRow {
+  return row.kind === 'tool-use' && row.toolFamily === 'agent'
+}
+
+const displayItemsCache = new WeakMap<
+  readonly NestedTranscriptRow[],
+  TranscriptDisplayItem[]
+>()
+
+/**
+ * DERIVATION over TOP-LEVEL nested rows: coalesces sibling agent tool_use rows
+ * that share a delegate group key (2+) into one `agent-group` item, emitting the
+ * group at the position of its first member (matching the engine's second pass,
+ * `groupToolUses.ts:119-160`). Everything else — including a lone agent row and
+ * every non-agent row — passes through as a `single` item. Only top-level rows
+ * are considered; subagent CHILD rows already nest under their owning card (C4)
+ * and are never grouped as siblings. Pure and slice-stable (cached on the input
+ * array reference, which `selectNestedTranscriptRows` keeps stable per slice), so
+ * memoized consumers keep identity when nothing changed.
+ */
+export function groupAgentDelegates(
+  rows: readonly NestedTranscriptRow[],
+): TranscriptDisplayItem[] {
+  const cached = displayItemsCache.get(rows)
+  if (cached) return cached
+
+  const membersByKey = new Map<string, NestedToolUseRow[]>()
+  for (const row of rows) {
+    if (!isAgentToolUseRow(row)) continue
+    const key = agentDelegateGroupKey(row)
+    const bucket = membersByKey.get(key)
+    if (bucket) bucket.push(row)
+    else membersByKey.set(key, [row])
+  }
+
+  const emitted = new Set<string>()
+  const items: TranscriptDisplayItem[] = []
+  for (const row of rows) {
+    if (isAgentToolUseRow(row)) {
+      const key = agentDelegateGroupKey(row)
+      const members = membersByKey.get(key)
+      if (members && members.length >= 2) {
+        if (!emitted.has(key)) {
+          emitted.add(key)
+          items.push({
+            kind: 'agent-group',
+            id: `agent-group:${key}`,
+            groupKey: key,
+            members,
+          })
+        }
+        continue
+      }
+    }
+    items.push({ kind: 'single', row })
+  }
+
+  displayItemsCache.set(rows, items)
+  return items
+}
+
+/**
+ * Read-time transcript display list: the C4-nested top-level rows with parallel
+ * agents coalesced into DelegateGroups. Session/transcript plane separation
+ * holds — this reads ONLY the transcript slice (via `selectNestedTranscriptRows`),
+ * never the session-plane agent-mode snapshot (D2 §4 keeps-honest rule).
+ */
+export function selectTranscriptDisplayItems(
+  state: TranscriptState,
+  sessionId: SessionId | null,
+): TranscriptDisplayItem[] {
+  return groupAgentDelegates(selectNestedTranscriptRows(state, sessionId))
+}
+
 /** Reducer over addressed server frames; unknown sessions are rejected. */
 export function projectServerFrame(
   state: TranscriptState,
