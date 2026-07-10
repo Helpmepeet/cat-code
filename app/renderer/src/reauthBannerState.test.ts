@@ -81,9 +81,24 @@ describe('selectAuthSubmitBlocked (zero-healthy-blocks-submit threshold)', () =>
     expect(selectAuthSubmitBlocked(snap)).toBe(true)
   })
 
-  test('capped-but-not-dead pool with zero ready → blocked (no healthy remains)', () => {
-    const snap = snapshot([account({ id: 'c', status: 'capped' })])
+  test('zero-ready mix of dead + capped → blocked (a death caused the wall)', () => {
+    const snap = snapshot([
+      account({ id: 'd', status: 'dead', statusReason: 'auth_dead' }),
+      account({ id: 'c', status: 'capped' }),
+    ])
     expect(selectAuthSubmitBlocked(snap)).toBe(true)
+  })
+
+  test('capped/quarantined-only pool with zero ready → NOT blocked (falls through to the engine quota error, not a silent block)', () => {
+    expect(selectAuthSubmitBlocked(snapshot([account({ id: 'c', status: 'capped' })]))).toBe(false)
+    expect(
+      selectAuthSubmitBlocked(
+        snapshot([
+          account({ id: 'c', status: 'capped' }),
+          account({ id: 'q', status: 'quarantined' }),
+        ]),
+      ),
+    ).toBe(false)
   })
 
   test('empty / uninitialized pool → NOT blocked (that is first-run, not reauth)', () => {

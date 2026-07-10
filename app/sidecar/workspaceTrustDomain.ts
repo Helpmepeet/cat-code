@@ -101,27 +101,38 @@ export async function createSidecarWorkspaceTrustDomain(
   options: { executor?: WorkspaceTrustExecutor } = {},
 ): Promise<SidecarWorkspaceTrustDomain> {
   const executor = options.executor ?? createRealWorkspaceTrustExecutor(cwd)
-  let snapshot = await readWorkspaceTrustSnapshotOnce(cwd)
+  // Trust is read through the executor (real: `isPathTrusted(cwd)`) so the spawn
+  // snapshot and `acceptTrust` share ONE truth source — otherwise a fake in
+  // tests, or an out-of-band concurrent trust write, could disagree.
+  let snapshot = await readWorkspaceTrustSnapshotOnce(executor)
   return {
     getSnapshot() {
       return snapshot
     },
     acceptTrust() {
+      // `changed` = whether the RENDERER-VISIBLE snapshot flips false→true, so a
+      // re-broadcast still clears a stale-false gate when trust was persisted
+      // out-of-band after this session's spawn read (N-process, same cwd).
+      const wasTrusted = snapshot?.trusted === true
+      const detectedRepo = snapshot?.detectedRepo ?? null
       try {
-        if (executor.isTrusted()) {
-          snapshot = { trusted: true, detectedRepo: snapshot?.detectedRepo ?? null }
-          return { ok: true, message: 'Workspace already trusted.', changed: false }
+        if (!executor.isTrusted()) {
+          executor.persistTrust()
         }
-        executor.persistTrust()
         const trusted = executor.isTrusted()
-        snapshot = { trusted, detectedRepo: snapshot?.detectedRepo ?? null }
-        return trusted
-          ? { ok: true, message: 'Workspace trusted.', changed: true }
-          : {
-              ok: false,
-              message: 'Trust write did not persist; the workspace is still untrusted.',
-              changed: false,
-            }
+        snapshot = { trusted, detectedRepo }
+        if (!trusted) {
+          return {
+            ok: false,
+            message: 'Trust write did not persist; the workspace is still untrusted.',
+            changed: false,
+          }
+        }
+        return {
+          ok: true,
+          message: wasTrusted ? 'Workspace already trusted.' : 'Workspace trusted.',
+          changed: !wasTrusted,
+        }
       } catch (error) {
         return {
           ok: false,
@@ -136,10 +147,10 @@ export async function createSidecarWorkspaceTrustDomain(
 }
 
 async function readWorkspaceTrustSnapshotOnce(
-  cwd: string,
+  executor: WorkspaceTrustExecutor,
 ): Promise<WorkspaceTrustSnapshot | null> {
   try {
-    const trusted = isPathTrusted(cwd)
+    const trusted = executor.isTrusted()
     const detectedRepo = await getGithubRepo()
     return { trusted, detectedRepo }
   } catch (error) {

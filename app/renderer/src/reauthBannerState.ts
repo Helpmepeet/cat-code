@@ -55,14 +55,20 @@ export function selectDeadAccounts(
 
 /**
  * TRUE only when new turns must be blocked: the pool is initialized, holds at
- * least one account, and none are ready (`readyCount === 0`). Zero-account /
- * uninitialized pools are first-run (OAuth surface), not a reauth block.
+ * least one account, none are ready (`readyCount === 0`), AND at least one
+ * account is auth-DEAD. The block is the death wall (Q2/G5) — the state the
+ * reauth banner explains. A zero-ready pool with only TRANSIENT caps/quarantines
+ * (no dead) is deliberately NOT walled here: it falls through to the engine's
+ * own loud quota-exhausted error + failover (`STARTUP-GATES.md §6`), which is
+ * more informative than a silent renderer block. Zero-account / uninitialized
+ * pools are first-run (OAuth surface), not a reauth block.
  */
 export function selectAuthSubmitBlocked(
   snapshot: AccountsSnapshot | null,
 ): boolean {
   if (!snapshot || !snapshot.initialized) return false
-  return snapshot.poolCount > 0 && snapshot.readyCount === 0
+  if (snapshot.poolCount === 0 || snapshot.readyCount > 0) return false
+  return snapshot.accounts.some(a => a.status === 'dead')
 }
 
 /**

@@ -98,6 +98,33 @@ test('acceptTrust reports ok:false+unchanged when the write did not take effect'
   expect(domain.getSnapshot()?.trusted).toBe(false)
 })
 
+test('acceptTrust re-broadcasts (changed:true, no redundant write) when trust was persisted out-of-band after spawn', async () => {
+  // N-process, same cwd: this session read trusted:false at spawn, then a
+  // concurrent session persisted trust. Clicking Trust must still clear the
+  // stale-false gate — so `changed` reflects the false→true flip, and no
+  // redundant persist runs.
+  let trusted = false
+  let persistCalls = 0
+  const executor: WorkspaceTrustExecutor = {
+    isTrusted: () => trusted,
+    persistTrust: () => {
+      persistCalls++
+      trusted = true
+    },
+  }
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', { executor })
+  expect(domain.getSnapshot()?.trusted).toBe(false)
+
+  trusted = true // out-of-band trust between spawn and accept
+  const result = domain.acceptTrust()
+  // The stored snapshot was false (gate showing) → the accept clears it:
+  // changed:true (re-broadcast), no redundant persist. Message keys off the
+  // stored (false) state, consistently with `changed`.
+  expect(result).toEqual({ ok: true, message: 'Workspace trusted.', changed: true })
+  expect(persistCalls).toBe(0)
+  expect(domain.getSnapshot()?.trusted).toBe(true)
+})
+
 test('acceptTrust is throw-free — a persist error degrades to ok:false', async () => {
   const executor: WorkspaceTrustExecutor = {
     isTrusted: () => false,
