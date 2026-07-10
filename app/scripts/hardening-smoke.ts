@@ -77,6 +77,36 @@ const frames: ServerFrame[] = [
   },
 ]
 
+// P4-15 — put the session under test in the NORMAL state (trusted workspace,
+// accounts not-yet-loaded) so neither the session-create trust gate nor the
+// first-run OAuth surface covers the transcript pane. This harness verifies
+// transcript XSS sanitization, which only occurs in a trusted+opened session;
+// without these the real sidecar's spawn-time `workspace-trust.snapshot`
+// (`trusted:false` for the temp cwd) would show the gate and the crafted
+// Markdown would never render. These are RE-SENT each poll iteration below so
+// they reliably post-date the real attach snapshots (last-write-wins), not race
+// them.
+const gateFrames: ServerFrame[] = [
+  {
+    kind: 'workspace-trust.snapshot',
+    protocolVersion: 1,
+    sessionId: HARDENING_SESSION_ID,
+    workspaceTrust: { trusted: true, detectedRepo: null },
+  },
+  {
+    kind: 'accounts.snapshot',
+    protocolVersion: 1,
+    sessionId: HARDENING_SESSION_ID,
+    accounts: {
+      accounts: [],
+      activeAccountId: null,
+      readyCount: 0,
+      poolCount: 0,
+      initialized: false,
+    },
+  },
+]
+
 // Capture the session id of the FIRST frame main delivers to the renderer (the
 // real startup session that owns the active pane), so the crafted Markdown can
 // be delivered into it. Wraps webContents.send before any frame flows.
@@ -139,6 +169,12 @@ async function runProductionHardeningSmoke(
     // with it so the Markdown lands in the pane under test.
     await new Promise(resolve => setTimeout(resolve, 100))
     const activeSessionId = await resolveActiveSessionId(window)
+    const sendGateFrames = () => {
+      for (const frame of gateFrames) {
+        window.webContents.send(CH_SERVER_FRAME, [{ ...frame, sessionId: activeSessionId }])
+      }
+    }
+    sendGateFrames()
     for (const frame of frames) {
       // Deliver on the same batched contract production main uses (one
       // ServerFrame[] per send); the preload fans it out to `subscribe`.
@@ -147,6 +183,10 @@ async function runProductionHardeningSmoke(
 
     const deadline = Date.now() + 5_000
     while (Date.now() < deadline) {
+      // Re-assert the trusted/non-first-run state each iteration so it reliably
+      // post-dates the real attach snapshots (last-write-wins), clearing the
+      // P4-15 startup gate so the crafted-Markdown transcript can render.
+      sendGateFrames()
       const rendered = await window.webContents.executeJavaScript(
         `document.body.textContent.includes(${JSON.stringify(HARDENING_MARKER)})`,
       )
@@ -181,6 +221,7 @@ async function runProductionHardeningSmoke(
       'abort',
       'accountVerb',
       'ping',
+      'workspaceTrustVerb',
       'remoteSettingsVerb',
       'rendererReady',
       'respondPermission',
