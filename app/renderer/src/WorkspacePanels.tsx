@@ -200,7 +200,12 @@ export function WorkspaceLayout({
                     onDrop={event => splitFromDrop(event, index, 'right')}
                   />
 
-                  <div className="min-h-0 flex-1 overflow-hidden">
+                  {/* Must be a flex column: SessionPane's <main> relies on
+                   * `flex-1 min-h-0` to get a bounded height — in a block
+                   * parent those are inert, <main> grows to content height and
+                   * the transcript scroller can never overflow (the live
+                   * no-scroll bug behind P4-18c). */}
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                     {panel.content}
                   </div>
                 </section>

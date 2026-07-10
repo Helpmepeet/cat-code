@@ -106,6 +106,31 @@ test('drop edges do not capture pointer events until a tab drag is active', () =
   expect(html).not.toContain('pointer-events-auto')
 })
 
+test('panel content wrapper is a bounded flex column so SessionPane can scroll', () => {
+  const alpha = descriptor('session-a', 'Alpha')
+  const html = renderToStaticMarkup(
+    <WorkspaceLayout
+      layout={{ panels: [{ sessionId: 'session-a' }], widths: [100], activeIndex: 0 }}
+      panels={[panel(alpha, <div>Alpha transcript</div>)]}
+      sessions={[alpha]}
+      notice={null}
+      onClosePanel={() => {}}
+      onFocusPanel={() => {}}
+      onSelectSession={() => {}}
+      onSplitPanel={() => {}}
+      onWidthsChange={() => {}}
+    />,
+  )
+
+  // Class tripwire for the live no-scroll bug behind P4-18c: SessionPane's
+  // <main> sizes itself with `flex-1 min-h-0`, which only works when THIS
+  // wrapper is a flex column — as a block parent, <main> grows to content
+  // height and the transcript scroller can never overflow. jsdom has no
+  // layout engine, so this pins the classes; the height chain itself was
+  // verified against live computed layout (2026-07-10).
+  expect(html).toContain('"flex min-h-0 flex-1 flex-col overflow-hidden"')
+})
+
 function descriptor(id: string, title: string): SessionDescriptor {
   return {
     appSessionId: id,
