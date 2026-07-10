@@ -135,7 +135,24 @@ permission-prompt turn to fire so the surrounding app behavior can be
 observed. Defaulting to a frontier model at high effort for that wastes real
 usage/quota for no benefit.
 
-- **Model:** GPT-5.6 Luna (`gpt-5.6-luna`), selected via `/model`.
+- **Model:** GPT-5.6 Luna (`gpt-5.6-luna`). **The app boots into your DEFAULT
+  (frontier) model — nothing auto-selects Luna — so set it BEFORE the first
+  turn, or that turn already burns frontier quota.** Two ways:
+  - **Preferred — set at launch (Luna is live before anything can fire):** prepend
+    `ANTHROPIC_MODEL=gpt-5.6-luna` to the dev command, e.g.
+    `ANTHROPIC_MODEL=gpt-5.6-luna CATCODE_INITIAL_CWD=… CATCODE_DEBUG_STATE=1 bun run --cwd app dev`.
+    Verified path: the supervisor spawns the sidecar with `{...process.env}`
+    (`app/supervisor/supervisor.ts:218`), and with `mainLoopModel` at its null
+    default the engine resolves the model from `ANTHROPIC_MODEL`
+    (`getUserSpecifiedModelSetting`, `src/utils/model/model.ts:109`) — so the
+    session is on Luna from turn one. Confirm via `/model`.
+  - **There is NO in-app way to change the model** in the current desktop build —
+    P4-19 deferred the model picker, and `/model` has no desktop UI (it's a silent
+    no-op, confirmed live 2026-07-10), so the launch env var above is the ONLY
+    method. If you launched without it, quit and relaunch with it. Do NOT try to
+    confirm via Settings → Diagnostics: the Model row shows the explicit
+    `mainLoopModel` *override*, which stays "Default"/null when the model comes
+    from `ANTHROPIC_MODEL`, so it won't reflect Luna even though Luna is running.
 - **Effort:** low, via `/effort low`.
 - **Account:** whichever Codex account is currently healthy — do not hardcode
   a specific account as policy. Check `/accounts` first; if the pool's active
