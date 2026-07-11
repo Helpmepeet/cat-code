@@ -84,6 +84,24 @@ export function AgentRoleDot({ role }: { role: string | null }) {
   return <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
 }
 
+/**
+ * Type/role chip (the prototype's `AgentTypeChip`, AgentIdentity.jsx) — the
+ * worker's agent type as a soft-tinted pill. Renders nothing for an unknown role
+ * (no fabricated label), matching `agentTypeMeta` returning null.
+ */
+export function AgentTypeChip({ role }: { role: string | null }) {
+  const meta = agentTypeMeta(role)
+  if (!meta) return null
+  const tone = AGENT_TYPE_TONE_CLASS[meta.tone]
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-[5px] border px-1.5 py-px text-[10px] font-semibold ${tone.text} ${tone.soft} ${tone.line}`}
+    >
+      {meta.label}
+    </span>
+  )
+}
+
 /** @handle in mono — a web-native mention convention, not a terminal tree row. */
 export function AgentHandle({ name, className }: { name: string; className?: string }) {
   return (

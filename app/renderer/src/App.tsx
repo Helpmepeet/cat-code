@@ -193,8 +193,10 @@ import {
   createOrchestratorState,
   reduceOrchestratorState,
   selectAgentModeSnapshot,
+  selectWorkerById,
 } from './orchestratorState.js'
 import { OrchestratorPage } from './OrchestratorPage.js'
+import { WorkerFocusView } from './WorkerFocusView.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage, loginVerb } from './AccountsPage.js'
 import { BannerStack } from './BannerStack.js'
@@ -351,6 +353,10 @@ export function App() {
     createOrchestratorState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
+  // P4-8b — the App-level worker-focus swap (prototype `enterTeammateView`). When
+  // set (and we're on the orchestrator view), the main column focuses ONE worker
+  // read-only; cleared on Escape/back or when nav leaves the orchestrator.
+  const [focusedWorkerId, setFocusedWorkerId] = useState<string | null>(null)
   // P4-15 first-run OAuth phase (renderer-visible sub-states only; the live
   // waiting→alias→success transitions are the coordinated operator step, §0).
   const [oauthPhase, setOauthPhase] = useState<StartupOAuthPhase>('ready')
@@ -1289,7 +1295,12 @@ export function App() {
         rows={sidebarRows}
         activeSessionId={activeSessionId}
         activeView={activeView}
-        onSelectView={view => setActiveView(view)}
+        onSelectView={view => {
+          // Leaving the orchestrator view exits any worker focus (the swap is
+          // scoped to that view).
+          if (view !== 'orchestrator') setFocusedWorkerId(null)
+          setActiveView(view)
+        }}
         onSelectLive={selectTab}
         onRestore={sessionId => void performRestore(sessionId)}
       />
@@ -1382,9 +1393,27 @@ export function App() {
             onNewSession={() => void newSession()}
           />
         ) : activeView === 'orchestrator' ? (
-          <OrchestratorPage
-            snapshot={selectAgentModeSnapshot(orchestrator, activeSessionId)}
-          />
+          (() => {
+            const agentModeSnapshot = selectAgentModeSnapshot(orchestrator, activeSessionId)
+            // P4-8b main-column focus swap: render one worker read-only when
+            // focused AND still present in the re-broadcast snapshot; otherwise
+            // fall back to the roster (auto-exit a vanished worker).
+            const focused = selectWorkerById(agentModeSnapshot, focusedWorkerId)
+            return focused ? (
+              <WorkerFocusView
+                worker={focused}
+                active={agentModeSnapshot?.active ?? false}
+                onBack={() => setFocusedWorkerId(null)}
+              />
+            ) : (
+              <OrchestratorPage
+                snapshot={agentModeSnapshot}
+                accountsSnapshot={activeAccountsSnapshot}
+                onOpenTasks={() => setTasksOpen(true)}
+                onFocusWorker={setFocusedWorkerId}
+              />
+            )
+          })()
         ) : showTrustGate && activeSessionId ? (
           // Per-session-create trust gate (D4 §1.1): this session's cwd is
           // untrusted. Trust persists via the engine's own store + re-broadcast;

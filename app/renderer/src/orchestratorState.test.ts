@@ -13,6 +13,7 @@ import {
   reduceOrchestratorState,
   selectAgentModeSnapshot,
   selectPromotedWorker,
+  selectWorkerById,
   summarizeOrchestratorWorkers,
   workerEventPriority,
 } from './orchestratorState.js'
@@ -115,4 +116,17 @@ test('roster promotes the news-bearing worker (failure over a ready result over 
   expect(selectPromotedWorker(workers, true)?.worker.agentId).toBe('w-fail')
   // A quiet swarm promotes nobody — the roster shows neutral counts only.
   expect(selectPromotedWorker([worker({ status: 'running' })], true)).toBeNull()
+})
+
+test('selectWorkerById finds a worker or degrades to null (drilldown/focus lookup)', () => {
+  const snap = snapshot([
+    worker({ agentId: 'w-1', handle: 'Turing' }),
+    worker({ agentId: 'w-2', handle: 'Hopper' }),
+  ])
+  expect(selectWorkerById(snap, 'w-2')?.handle).toBe('Hopper')
+  // Gone from the re-broadcast snapshot → null (auto-exit the detail/focus view).
+  expect(selectWorkerById(snap, 'w-missing')).toBeNull()
+  // Null-safe on a cold snapshot / no selection.
+  expect(selectWorkerById(null, 'w-1')).toBeNull()
+  expect(selectWorkerById(snap, null)).toBeNull()
 })

@@ -88,20 +88,26 @@ export function OrchestratorRoster({
   )
 }
 
-/** A single worker row for the role-grouped list (dot · handle · task · state · baton). */
+/**
+ * A single worker row for the role-grouped list (dot · handle · task · state ·
+ * baton). When `onSelect` is provided (P4-8b) the row is a button that opens the
+ * worker-detail drilldown; without it the row is a static div (8a behaviour).
+ */
 export function OrchestratorWorkerRow({
   worker,
   active,
+  onSelect,
 }: {
   worker: AgentModeWorkerItem
   active: boolean
+  onSelect?: () => void
 }) {
-  return (
-    <div className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-shell-hover">
+  const inner = (
+    <>
       <AgentRoleDot role={worker.role} />
       <AgentHandle name={displayHandle(worker.handle) ?? 'worker'} />
       {worker.description ? (
-        <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
+        <span className="min-w-0 flex-1 truncate text-left text-[11.5px] text-text-subtle">
           {worker.description}
         </span>
       ) : (
@@ -109,6 +115,22 @@ export function OrchestratorWorkerRow({
       )}
       <AgentStateLabel state={orchestratorWorkerState(worker, active)} />
       <Baton owner={deriveWorkerOwner(worker, active)} />
+    </>
+  )
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-shell-hover"
+      >
+        {inner}
+      </button>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-shell-hover">
+      {inner}
     </div>
   )
 }

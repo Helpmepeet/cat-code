@@ -204,3 +204,18 @@ export function displayHandle(handle: string | null): string | null {
   if (!handle) return null
   return handle.replace(/^@/, '')
 }
+
+/**
+ * Look up one worker by its stable `agentId` in a snapshot (P4-8b drilldown /
+ * focus swap). Returns null when the snapshot is absent or the worker is gone —
+ * the caller's cue to degrade out of the detail/focus view rather than render a
+ * stale worker (the snapshot re-broadcasts as the swarm changes; a focused
+ * worker that vanishes must fall back to the roster, never a fabricated row).
+ */
+export function selectWorkerById(
+  snapshot: AgentModeSnapshot | null,
+  agentId: string | null,
+): AgentModeWorkerItem | null {
+  if (!snapshot || !agentId) return null
+  return snapshot.workers.find(worker => worker.agentId === agentId) ?? null
+}
