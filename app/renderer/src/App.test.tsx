@@ -32,7 +32,7 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   expect(html).not.toContain('Transcript (projected)')
 })
 
-test('the active session pane renders the P2 transcript spine + prompt unchanged', () => {
+test('P4-24: the active session pane renders the multi-line composer + transcript spine', () => {
   const html = renderToStaticMarkup(
     <SessionPane
       activeConnection={{ status: 'ready', inputEnabled: true }}
@@ -80,15 +80,19 @@ test('the active session pane renders the P2 transcript spine + prompt unchanged
   )
 
   expect(html).toContain('aria-label="Prompt"')
+  // P4-24: the composer is a multi-line auto-resizing <textarea>, not the old
+  // single-line <input>.
+  expect(html).toContain('<textarea')
   expect(html).toContain('Copy for LLM')
   expect(html).toContain('Permissions')
-  expect(html).toContain('Transcript')
+  // P4-24: the scaffold <h1>Transcript</h1> heading is dropped (full-bleed).
+  expect(html).not.toContain('Transcript</h1>')
   // Idle (inputEnabled) session shows no activity indicator / Stop control.
   expect(html).not.toContain('■ Stop')
-  // Raw debug view is now behind a collapsed <details> (perf F3, 2026-07-08):
-  // the label is present, but its multi-MB <pre> body is NOT rendered until the
-  // operator opens it — so a default pane paints no raw <pre>.
-  expect(html).toContain('Raw SDKMessage events')
+  // P4-24: the raw-SDKMessage inspector is now gated behind import.meta.env.DEV
+  // (undefined under `bun test`), so a default/production pane omits it entirely
+  // — no label, no <pre> body. (The Permissions disclosure keeps a <details>.)
+  expect(html).not.toContain('Raw SDKMessage events')
   expect(html).toContain('<details')
   expect(html).not.toContain('<pre')
   // The pane surfaces the active session's cwd in its header.
@@ -248,6 +252,67 @@ test('composer form owns the ↑/↓ history key scope', () => {
 
   expect(html).toContain('aria-label="Composer"')
   expect(html).toContain('aria-keyshortcuts="ArrowUp ArrowDown"')
+})
+
+test('P4-24: collapsed-paste pills render with token label, remove control, and preview body', () => {
+  const html = renderToStaticMarkup(
+    <SessionPane
+      activeConnection={{ status: 'ready', inputEnabled: true }}
+      activeDescriptor={{
+        appSessionId: 'session-1',
+        engineSessionId: 'engine-1',
+        cwd: '/tmp/project',
+        title: null,
+        status: 'ready',
+        restorable: false,
+        createdAt: 0,
+        lastAttachedAt: 0,
+      }}
+      activeLog={{
+        inputEnabled: true,
+        messages: [],
+        retainedBytes: 0,
+        truncated: false,
+        error: null,
+        messageBytes: [],
+      }}
+      activeSessionId="session-1"
+      allowPermission={() => {}}
+      copyForLlm={() => {}}
+      denyPermission={() => {}}
+      history={[]}
+      mentionItems={[]}
+      onApprovePlan={() => {}}
+      onPaste={() => {}}
+      onRemovePaste={() => {}}
+      onRevisePlan={() => {}}
+      partialCount={0}
+      pastes={[{ id: 1, content: 'line A\nline B\nline C', numLines: 2 }]}
+      permissionContext={null}
+      permissionQueue={[]}
+      planReview={null}
+      prompt="see [Pasted text #1 +2 lines]"
+      restorePermission={() => {}}
+      setPermissionMode={() => {}}
+      setPrompt={() => {}}
+      submit={() => {}}
+      transcript={createTranscriptState()}
+      transportError={null}
+    />,
+  )
+
+  // The re-skinned pill strip (replaces the old <details>-beside adaptation).
+  expect(html).toContain('aria-label="Collapsed pastes"')
+  // Pill label = the exact [Pasted text #N +M lines] token.
+  expect(html).toContain('[Pasted text #1 +2 lines]')
+  // Per-pill × remove control, and a hover/keyboard-focus full-text preview.
+  expect(html).toContain('aria-label="Remove paste"')
+  expect(html).toContain('role="tooltip"')
+  expect(html).toContain('line A') // preview body is in the DOM (revealed on hover/focus)
+  expect(html).toContain('line C')
+  // Honest attach affordance: a labelled control, not a silent dead button and
+  // not an invented file picker (no engine attachment capability on the wire).
+  expect(html).toContain('aria-label="Add attachment"')
 })
 
 test('debug export explicitly marks lossy raw-message retention', () => {

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AgentConfigSnapshot } from '../../shared/protocol.js'
 import {
   applyMention,
+  caretAtHistoryEdge,
   countNewlines,
   createHistoryState,
   createPasteState,
@@ -12,6 +13,7 @@ import {
   HISTORY_CAP,
   navigateHistory,
   parseMentionQuery,
+  pasteTokenBeforeCaret,
   PASTE_MAX_LINES,
   PASTE_THRESHOLD,
   reduceHistoryPushed,
@@ -335,5 +337,50 @@ describe('paste survives history navigation (regression)', () => {
     const submitted = expandPasteRefs(draft, entries)
     expect(submitted).toBe(big)
     expect(submitted).not.toContain('[Pasted text #')
+  })
+})
+
+describe('P4-24 multi-line composer helpers', () => {
+  test('caretAtHistoryEdge: single-line draft always recalls (no newlines)', () => {
+    // Preserves the P4-0 single-line behaviour exactly.
+    expect(caretAtHistoryEdge('hello', 0, 'up')).toBe(true)
+    expect(caretAtHistoryEdge('hello', 5, 'up')).toBe(true)
+    expect(caretAtHistoryEdge('hello', 5, 'down')).toBe(true)
+    expect(caretAtHistoryEdge('', 0, 'up')).toBe(true)
+  })
+
+  test('caretAtHistoryEdge: multi-line recalls only at the first/last line', () => {
+    const v = 'line one\nline two\nline three'
+    // Caret on the first line → ArrowUp recalls; caret below → ArrowUp moves.
+    expect(caretAtHistoryEdge(v, 3, 'up')).toBe(true)
+    expect(caretAtHistoryEdge(v, 12, 'up')).toBe(false)
+    // Caret on the last line → ArrowDown recalls; caret above → ArrowDown moves.
+    expect(caretAtHistoryEdge(v, v.length - 2, 'down')).toBe(true)
+    expect(caretAtHistoryEdge(v, 3, 'down')).toBe(false)
+    // Caret exactly on a newline boundary: nothing before it → up recalls.
+    expect(caretAtHistoryEdge(v, 0, 'up')).toBe(true)
+    expect(caretAtHistoryEdge(v, v.length, 'down')).toBe(true)
+  })
+
+  test('pasteTokenBeforeCaret: returns the whole-token range when the caret abuts a token', () => {
+    const token = formatPasteRef(3, 12) // [Pasted text #3 +12 lines]
+    const draft = `look at ${token}`
+    const range = pasteTokenBeforeCaret(draft, draft.length)
+    expect(range).toEqual({ start: draft.length - token.length, end: draft.length })
+    expect(draft.slice(range!.start, range!.end)).toBe(token)
+  })
+
+  test('pasteTokenBeforeCaret: no match when the caret is not right after a token', () => {
+    const draft = `look at ${formatPasteRef(3, 0)} now`
+    expect(pasteTokenBeforeCaret(draft, draft.length)).toBeNull() // caret after " now"
+    expect(pasteTokenBeforeCaret('plain text', 10)).toBeNull()
+    expect(pasteTokenBeforeCaret('', 0)).toBeNull()
+  })
+
+  test('pasteTokenBeforeCaret: single-line token (no "+N lines") also matches', () => {
+    const token = formatPasteRef(7, 0) // [Pasted text #7]
+    const draft = `x${token}`
+    const range = pasteTokenBeforeCaret(draft, draft.length)
+    expect(range).toEqual({ start: 1, end: draft.length })
   })
 })

@@ -36,8 +36,11 @@ import type { AgentConfigSnapshot, SessionId } from '../../shared/protocol.js'
  * token, anchored to the END of the text. A completed mention (`@agent `) ends
  * with a space, so the trailing-token match fails and the picker closes.
  *
- * NB: single-line composer — detection is end-of-draft, not caret-aware. A
- * mention typed mid-text with the caret moved away is not detected (flagged).
+ * NB: detection is anchored to the END of the whole draft, not caret-aware
+ * (unchanged by the P4-24 multi-line composer). A mention typed mid-text with
+ * the caret moved away — or an `@token` that is not the final token in a
+ * multi-line draft — is not detected (flagged §0). Caret-aware detection would
+ * need to read the live textarea selection here, which this pure parser avoids.
  */
 export function parseMentionQuery(draft: string): string | null {
   const match = /(?:^|\s)@([\w/.\-]*)$/.exec(draft)
@@ -241,6 +244,25 @@ export function expandPasteRefs(
   })
 }
 
+/**
+ * P4-24: with a collapsed selection sitting immediately AFTER a paste token,
+ * return the `[start, end)` range of that token so Backspace deletes the WHOLE
+ * pill in one keystroke — the atomic-pill delete the prototype's contentEditable
+ * gets for free (`Chat.jsx:766-777`). Returns `null` when the caret is not right
+ * after a token. Anchored to the caret with `$`, so only the token abutting the
+ * caret matches. The multi-line composer is a plain `<textarea>`, so the token is
+ * literal text; this makes its deletion feel atomic without contentEditable.
+ */
+export function pasteTokenBeforeCaret(
+  value: string,
+  caret: number,
+): { start: number; end: number } | null {
+  const before = value.slice(0, caret)
+  const match = /\[Pasted text #\d+(?: \+\d+ lines)?\]$/.exec(before)
+  if (!match) return null
+  return { start: caret - match[0].length, end: caret }
+}
+
 // ── Input history (↑/↓ recall) ───────────────────────────────────────────────
 
 export const HISTORY_CAP = 50
@@ -311,4 +333,23 @@ export function navigateHistory(
     nav: { index: nextIndex, savedDraft: nav.savedDraft },
     value: history[nextIndex],
   }
+}
+
+/**
+ * P4-24: with a multi-line composer, ↑/↓ must move the caret between lines and
+ * only recall history at the vertical EDGE of the draft — ArrowUp recalls when
+ * no newline precedes the caret (caret on the first visual line), ArrowDown when
+ * no newline follows it (caret on the last line). Otherwise the arrow is a plain
+ * caret move. Parity: `Chat.jsx:745-747`, from `src/hooks/useTextInput.ts:269-315`.
+ * On the old single-line `<input>` there were never newlines, so this always
+ * returned `true` — preserving the P4-0 recall behavior exactly.
+ */
+export function caretAtHistoryEdge(
+  value: string,
+  caret: number,
+  direction: 'up' | 'down',
+): boolean {
+  return direction === 'up'
+    ? !value.slice(0, caret).includes('\n')
+    : !value.slice(caret).includes('\n')
 }

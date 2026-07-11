@@ -79,6 +79,7 @@ import {
 } from './MentionPicker.js'
 import {
   applyMention,
+  caretAtHistoryEdge,
   createHistoryState,
   createPasteState,
   EMPTY_HISTORY_NAV,
@@ -86,6 +87,7 @@ import {
   formatPasteRef,
   navigateHistory,
   parseMentionQuery,
+  pasteTokenBeforeCaret,
   reduceHistoryPushed,
   reducePasteAdded,
   reducePasteRemoved,
@@ -909,14 +911,28 @@ export function App() {
   )
 
   const addSessionPaste = useCallback(
-    (sessionId: SessionId, currentDraft: string, content: string): void => {
+    (
+      sessionId: SessionId,
+      currentDraft: string,
+      content: string,
+      // P4-24: splice the `[Pasted text #N]` token in at the CARET (the textarea
+      // selection the paste replaced), not blindly at the end of the draft (the
+      // old single-line adaptation's §0 flag). Absent selection → append.
+      selectionStart?: number,
+      selectionEnd?: number,
+    ): void => {
       const { state: nextPasteState, token } = reducePasteAdded(
         pasteState,
         sessionId,
         content,
       )
       setPasteState(nextPasteState)
-      setSessionPrompt(sessionId, currentDraft + token)
+      const start = selectionStart ?? currentDraft.length
+      const end = selectionEnd ?? currentDraft.length
+      setSessionPrompt(
+        sessionId,
+        currentDraft.slice(0, start) + token + currentDraft.slice(end),
+      )
     },
     [pasteState, setSessionPrompt],
   )
@@ -1185,11 +1201,13 @@ export function App() {
 	            )}
 	            pastes={selectSessionPasteList(pasteState, sessionId)}
 	            history={selectHistory(historyState, sessionId)}
-	            onPaste={content =>
+	            onPaste={(content, selectionStart, selectionEnd) =>
 	              addSessionPaste(
 	                sessionId,
 	                selectPromptDraft(promptDrafts, sessionId),
 	                content,
+	                selectionStart,
+	                selectionEnd,
 	              )
 	            }
 	            onRemovePaste={entry =>
@@ -1512,6 +1530,7 @@ export function SessionPane({
   transcript,
   transportError,
 }: SessionPaneProps) {
+  const toast = useToast()
   // SlashCommandPicker (P3-7): typeahead over THIS session's real slash catalog
   // (the `slash_commands` the sidecar's `getCommands(cwd)` produced, captured
   // from the init frame). Picking inserts `/name ` into the draft; the user
@@ -1585,6 +1604,26 @@ export function SessionPane({
   useEffect(() => {
     setHistoryNav(EMPTY_HISTORY_NAV)
   }, [activeSessionId])
+
+  // P4-24 multi-line composer. `composerRef` gives the keydown/paste handlers the
+  // live caret (for at-caret paste, whole-token Backspace, and edge-gated ↑/↓
+  // history); `isComposingRef` guards Enter/arrows during IME composition
+  // (parity `Chat.jsx:716`, `src/hooks/useTextInput.ts`).
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const isComposingRef = useRef(false)
+  // Auto-resize the textarea to its content, capped at ~38vh, then let it scroll
+  // (prototype `resizeComposer`, `Chat.jsx:437-441`). Imperative height/overflow
+  // is the only way to size a textarea to its content — it is NOT a JSX inline
+  // `style={{}}` (the static cap `max-h-[38vh]` stays a class). Effects never run
+  // under `renderToStaticMarkup`, so the SSR pane snapshot is unaffected.
+  useEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const max = Math.round(window.innerHeight * 0.38)
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
+  }, [prompt])
 
   // PlanPanel open/close (P4-11): renderer-local, resets when the pane
   // rebinds to a different session and when the review resolves (approve or
@@ -1674,18 +1713,21 @@ export function SessionPane({
 
   // A large paste collapses to a chip (App holds the full text aside and inserts
   // the `[Pasted text #N]` token); a small paste falls through to the browser's
-  // default plain-text insert. Adapted for the single-line `<input>`: the token
-  // is appended at the END of the draft, not the caret (see §0 flag).
+  // default plain-text insert. P4-24: the token is spliced in at the caret (the
+  // selection the paste replaced), not appended at the end.
   const handlePaste = (
-    event: ReactClipboardEvent<HTMLInputElement>,
+    event: ReactClipboardEvent<HTMLTextAreaElement>,
   ): void => {
     const text = event.clipboardData.getData('text')
     if (!text || !shouldCollapsePaste(text)) return
     event.preventDefault()
-    onPaste(text)
+    onPaste(text, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)
   }
 
   const onComposerKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>): void => {
+    // IME guard: a composition-commit Enter/arrow must never submit, recall, or
+    // drive a picker — it belongs to the input method (parity `Chat.jsx:716`).
+    if (isComposingRef.current || event.nativeEvent.isComposing) return
     if (slashOpen) {
       switch (event.key) {
         case 'ArrowDown':
@@ -1750,14 +1792,39 @@ export function SessionPane({
       stopTurn()
       return
     }
-    // ↑/↓ walk the submitted-prompt history for this session.
+    // Enter submits; Shift/Alt/Meta+Enter insert a newline (the multi-line
+    // textarea does NOT submit a form on Enter the way the old `<input>` did, so
+    // submit is driven explicitly via the form's own `requestSubmit`). Parity:
+    // Shift+Enter and Alt/Meta+Enter → newline (`src/hooks/useTextInput.ts:257-264`).
+    if (event.key === 'Enter') {
+      if (event.shiftKey || event.altKey || event.metaKey) return // newline (default)
+      event.preventDefault()
+      event.currentTarget.requestSubmit()
+      return
+    }
+    // Backspace immediately after a `[Pasted text #N]` token deletes the WHOLE
+    // token in one keystroke — the atomic-pill delete a contentEditable would get
+    // for free. A genuine 'edit' write, so the paste entry is pruned with it.
+    if (event.key === 'Backspace') {
+      const el = composerRef.current
+      if (el && el.selectionStart === el.selectionEnd) {
+        const range = pasteTokenBeforeCaret(prompt, el.selectionStart)
+        if (range) {
+          event.preventDefault()
+          setPrompt(prompt.slice(0, range.start) + prompt.slice(range.end))
+          return
+        }
+      }
+    }
+    // ↑/↓ walk the submitted-prompt history for this session — but only at the
+    // vertical edge of the draft; elsewhere the arrow moves the caret between
+    // lines (multi-line composer). `caretAtHistoryEdge` on a newline-free draft
+    // is always true, so single-line recall is unchanged.
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-      const result = navigateHistory(
-        history,
-        historyNav,
-        event.key === 'ArrowUp' ? 'up' : 'down',
-        prompt,
-      )
+      const direction = event.key === 'ArrowUp' ? 'up' : 'down'
+      const caret = composerRef.current?.selectionStart ?? prompt.length
+      if (!caretAtHistoryEdge(prompt, caret, direction)) return
+      const result = navigateHistory(history, historyNav, direction, prompt)
       if (result) {
         event.preventDefault()
         setHistoryNav(result.nav)
@@ -1793,41 +1860,6 @@ export function SessionPane({
         sessionId={activeSessionId}
       />
 
-      {pastes.length > 0 ? (
-        <div className="flex flex-wrap gap-2" aria-label="Collapsed pastes">
-          {pastes.map(entry => (
-            // Collapsed-paste chip: <details> gives the expand affordance (the
-            // full text held aside), the × removes it (strips the token + drops
-            // the stored content). On submit the token expands back inline.
-            <details
-              key={entry.id}
-              className="min-w-0 rounded-md border border-shell-seam bg-surface-raised text-[11px]"
-            >
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-text-muted">
-                <span className="truncate font-mono text-[10.5px]">
-                  {formatPasteRef(entry.id, entry.numLines)}
-                </span>
-                <button
-                  type="button"
-                  aria-label="Remove paste"
-                  title="Remove"
-                  className="shrink-0 text-text-subtle transition-colors hover:text-tone-danger"
-                  onClick={event => {
-                    event.preventDefault()
-                    onRemovePaste(entry)
-                  }}
-                >
-                  ×
-                </button>
-              </summary>
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap border-t border-shell-seam px-2 py-1.5 font-mono text-[10.5px] text-text-subtle">
-                {entry.content}
-              </pre>
-            </details>
-          ))}
-        </div>
-      ) : null}
-
       {planPanelOpen ? null : (
         <PlanBar onOpen={() => setPlanPanelOpen(true)} review={planReview} />
       )}
@@ -1848,6 +1880,45 @@ export function SessionPane({
           onStop={stopTurn}
           stopError={stopError}
         />
+      ) : null}
+
+      {/* P4-24: collapsed-paste PILLS, attached directly above the composer (the
+       * `[Pasted text #N]` token lives inline in the textarea at the caret; the
+       * textarea can't host styled DOM, so the pill re-skin sits here — §0 flag).
+       * Each pill: label + count + × remove, with a hover/keyboard-focus full-text
+       * preview popover (parity `Chat.jsx:1379`). Reuses the exact P4-0 paste
+       * model — expand-on-submit is unchanged; this only re-skins the chip. */}
+      {pastes.length > 0 ? (
+        <div className="flex flex-wrap gap-2" aria-label="Collapsed pastes">
+          {pastes.map(entry => (
+            <span
+              key={entry.id}
+              className="group relative inline-flex min-w-0 items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent"
+            >
+              <span className="truncate font-mono text-[10.5px]">
+                {formatPasteRef(entry.id, entry.numLines)}
+              </span>
+              <button
+                type="button"
+                aria-label="Remove paste"
+                title="Remove"
+                className="shrink-0 rounded text-text-subtle transition-colors hover:text-tone-danger"
+                onClick={() => onRemovePaste(entry)}
+              >
+                ×
+              </button>
+              {/* Full-text preview: revealed on hover OR keyboard focus (the ×
+               * button focusing drives `group-focus-within`). Always in the DOM
+               * (hidden), exactly like the old <details><pre> body. */}
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute bottom-full left-0 z-40 mb-1.5 hidden max-h-[40vh] w-[min(560px,80vw)] overflow-auto whitespace-pre-wrap rounded-md border border-shell-seam bg-surface-raised px-3 py-2 font-mono text-[10.5px] text-text-subtle shadow-lg group-hover:block group-focus-within:block"
+              >
+                {entry.content}
+              </span>
+            </span>
+          ))}
+        </div>
       ) : null}
 
       <form
@@ -1872,9 +1943,17 @@ export function SessionPane({
             activeIndex={mentionIndex}
             onPick={pickMention}
           />
-          <input
+          {/* P4-24: multi-line, auto-resizing composer (was a single-line
+           * `<input>`). Enter submits, Shift/Alt/Meta+Enter insert a newline
+           * (`onComposerKeyDown`); it grows to ~38vh then scrolls (auto-resize
+           * effect). `max-h-[38vh]` is a STATIC arbitrary class (not an
+           * interpolated one) so Tailwind emits it; the content-driven height +
+           * overflow are set imperatively by the effect. */}
+          <textarea
+            ref={composerRef}
             aria-label="Prompt"
-            className="w-full rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
+            rows={1}
+            className="max-h-[38vh] w-full resize-none overflow-hidden rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
             disabled={
               !activeSessionId ||
               !activeLog.inputEnabled ||
@@ -1887,6 +1966,12 @@ export function SessionPane({
               setHistoryNav(EMPTY_HISTORY_NAV)
               setPrompt(event.target.value)
             }}
+            onCompositionStart={() => {
+              isComposingRef.current = true
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false
+            }}
             onPaste={handlePaste}
             placeholder="Send a prompt to the live engine"
             value={prompt}
@@ -1896,7 +1981,8 @@ export function SessionPane({
          * own stub (Chat.jsx:1435 fires a placeholder toast): a real file picker
          * would need an engine attachment capability that is NOT on the wire —
          * inventing one is out of scope (no new vocabulary). The working attach
-         * path today is a large paste, which the title spells out. */}
+         * path today is a large paste, which the toast + title spell out. P4-24:
+         * the click is now an honest toast (was a silent no-op dead button). */}
         <button
           aria-label="Add attachment"
           title="Add attachment — paste a large block to attach it as a collapsed chip"
@@ -1906,7 +1992,11 @@ export function SessionPane({
             !activeLog.inputEnabled ||
             !activeConnection.inputEnabled
           }
-          onClick={() => {}}
+          onClick={() =>
+            toast('Paste a large block to attach it as a collapsed chip.', {
+              tone: 'info',
+            })
+          }
           type="button"
         >
           +
@@ -1966,10 +2056,11 @@ export function SessionPane({
       {/* P4-18c scroll fix: `<main>` is now `overflow-hidden` (a bounded flex
        * viewport) and THIS transcript region is the sole `flex-1` scroller, so
        * its inner `overflow-auto` finally engages under the flex-height chain
-       * (the raw-events panel below is demoted to natural height). The scroll
-       * div tracks stick-to-bottom + drives the jump-to-bottom control. */}
+       * (the DEV-only raw-events panel below is demoted to natural height). The
+       * scroll div tracks stick-to-bottom + drives the jump-to-bottom control.
+       * P4-24: the `<h1>Transcript</h1>` scaffold heading is dropped for a
+       * full-bleed transcript. */}
       <section className="relative flex min-h-0 flex-1 flex-col">
-        <h1 className="mb-2 text-sm text-text-muted">Transcript</h1>
         <div
           ref={transcriptScrollRef}
           onScroll={onTranscriptScroll}
@@ -2015,22 +2106,29 @@ export function SessionPane({
         ) : null}
       </section>
 
-      <section className="flex shrink-0 flex-col">
-        <details
-          className="max-h-64 overflow-auto"
-          onToggle={e => setRawDebugOpen(e.currentTarget.open)}
-        >
-          <summary className="cursor-pointer text-sm text-text-muted">
-            Raw SDKMessage events{' '}
-            <span className="text-text-subtle">(last 20)</span>
-          </summary>
-          {rawDebugOpen ? (
-            <pre className="mt-2 overflow-auto whitespace-pre-wrap rounded border border-text-subtle p-4 font-mono text-xs">
-              {JSON.stringify(activeLog.messages.slice(-20), null, 2)}
-            </pre>
-          ) : null}
-        </details>
-      </section>
+      {/* P4-24: the raw-SDKMessage inspector is a developer tool, not a shipped
+       * surface — gate it behind `import.meta.env.DEV` (mirrors the debug-export
+       * guard at the top of App). Vite replaces this with `false` in the
+       * production `renderer:build`, so the panel is dead-code-eliminated from
+       * the shipped app; it is absent under `bun test` too (DEV is undefined). */}
+      {import.meta.env.DEV ? (
+        <section className="flex shrink-0 flex-col">
+          <details
+            className="max-h-64 overflow-auto"
+            onToggle={e => setRawDebugOpen(e.currentTarget.open)}
+          >
+            <summary className="cursor-pointer text-sm text-text-muted">
+              Raw SDKMessage events{' '}
+              <span className="text-text-subtle">(last 20)</span>
+            </summary>
+            {rawDebugOpen ? (
+              <pre className="mt-2 overflow-auto whitespace-pre-wrap rounded border border-text-subtle p-4 font-mono text-xs">
+                {JSON.stringify(activeLog.messages.slice(-20), null, 2)}
+              </pre>
+            ) : null}
+          </details>
+        </section>
+      ) : null}
     </main>
   )
 }
@@ -2303,8 +2401,13 @@ type SessionPaneProps = {
   pastes: PasteEntry[]
   /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
   history: string[]
-  /** Store a large paste as a collapsed chip and insert its token. */
-  onPaste: (content: string) => void
+  /** Store a large paste as a collapsed chip and splice its token in at the
+   * composer caret (`selectionStart`/`selectionEnd`); absent selection appends. */
+  onPaste: (
+    content: string,
+    selectionStart?: number,
+    selectionEnd?: number,
+  ) => void
   /** Remove a collapsed paste (strip its token + drop the stored content). */
   onRemovePaste: (entry: PasteEntry) => void
   transcript: TranscriptState
