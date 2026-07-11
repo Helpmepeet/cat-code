@@ -444,12 +444,10 @@ async function runClaudeCliTask(
 }
 
 function renderToolUseMessage(input: Partial<Input>): React.ReactNode {
-  const summary = formatPromptSummary(input.prompt)
-  return (
-    <Box flexDirection="row">
-      <Text>Asking Claude CLI: {summary}</Text>
-    </Box>
-  )
+  // Must be Text-safe: AssistantToolUseMessage embeds this inside
+  // <Text>(…)</Text>, so returning a <Box> crashes Ink ("<Box> can't be
+  // nested inside <Text>") and unmounts the REPL.
+  return `Asking Claude CLI: ${formatPromptSummary(input.prompt)}`
 }
 
 function renderToolResultMessage(output: ClaudeCliToolOutput): React.ReactNode {

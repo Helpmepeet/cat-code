@@ -3,7 +3,9 @@ import { EventEmitter } from 'events'
 import { mkdtemp, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import React from 'react'
 import { PassThrough } from 'stream'
+import { Box } from '../../ink.js'
 import type { ToolUseContext } from '../../Tool.js'
 import {
   ClaudeCliTool,
@@ -390,5 +392,28 @@ describe('ClaudeCliTool', () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
+  })
+
+  test('renderToolUseMessage is Text-safe (no <Box>)', () => {
+    // Regression: AssistantToolUseMessage embeds this result inside
+    // <Text>(…)</Text>. Returning a <Box> made Ink throw "<Box> can't be
+    // nested inside <Text>" and unmount the whole REPL whenever a ClaudeCli
+    // tool use rendered (2026-07-11 crash, session 3d89921b).
+    const node = ClaudeCliTool.renderToolUseMessage(
+      { prompt: 'hello world' },
+      { theme: 'dark', verbose: false },
+    )
+
+    const containsBox = (n: React.ReactNode): boolean => {
+      if (n == null || typeof n !== 'object') return false
+      if (Array.isArray(n)) return n.some(containsBox)
+      if (!React.isValidElement(n)) return false
+      if (n.type === Box) return true
+      const children = (n.props as { children?: React.ReactNode }).children
+      return containsBox(children)
+    }
+
+    expect(containsBox(node)).toBe(false)
+    expect(node).toBe('Asking Claude CLI: hello world')
   })
 })
