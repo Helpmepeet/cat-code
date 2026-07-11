@@ -33,7 +33,6 @@ export type AgentStateKey =
   | 'completed'
   | 'failed'
   | 'stopped'
-  | 'blocked'
   | 'waiting'
   | 'needs-you'
   | 'paused'
@@ -158,14 +157,6 @@ export const AGENT_STATE_META = {
     label: 'Stopped',
     tone: 'warning',
     color: '#fbbf24',
-    icon: 'pip-ring',
-    attention: false,
-  },
-  blocked: {
-    key: 'blocked',
-    label: 'Needs input',
-    tone: 'neutral',
-    color: '#a8a29e',
     icon: 'pip-ring',
     attention: false,
   },
@@ -299,10 +290,6 @@ export function resolveAgentIdentity(data: AgentIdentitySource = {}): AgentIdent
   }
 }
 
-export type AgentStateDerivationOptions = {
-  blockedOwner?: 'orchestrator' | 'user'
-}
-
 export function deriveAgentModeWorkerState(
   worker: AgentModeWorkerSource,
 ): AgentStateKey {
@@ -315,23 +302,24 @@ export function deriveAgentModeWorkerState(
   return 'running'
 }
 
-export function deriveTaskAgentState(
-  task: TaskAgentSource,
-  options: AgentStateDerivationOptions = {},
-): AgentStateKey {
+export function deriveTaskAgentState(task: TaskAgentSource): AgentStateKey {
   if (task.type === 'local_agent') {
     if (task.handoffStatus === 'blocked') {
-      // Two-axis handoff (D2 `decisions/AGENT-CHROME.md`, prototype
-      // OrchestratorMode.jsx `workerStateKey`:163): an orchestrator-owned blocked
-      // worker is NEUTRAL — it fed a question back to the orchestrator's queue via
-      // AskOrchestratorTool (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:184`,
-      // `AskOrchestratorTool.ts:83`), not to the human → 'waiting' ("Waiting on
-      // orchestrator"). Only the solo case (no orchestrator to pick it up) escalates
-      // to the amber 'needs-you'. This is the P4-8 wiring of the previously
-      // unreachable `waiting` state (the AgentIdentity two-strikes rider); the gray
-      // `blocked` meta survives as the transcript-card's own render remap
-      // (`waiting`→`blocked`, AgentIdentity.jsx:170, deferred P4-8c).
-      return options.blockedOwner === 'orchestrator' ? 'waiting' : 'needs-you'
+      // A local_agent's blocked handoff (D2 `decisions/AGENT-CHROME.md`,
+      // prototype OrchestratorMode.jsx `workerStateKey`:163) is two-axis:
+      // orchestrator-owned blocked is NEUTRAL ("Waiting on orchestrator"),
+      // solo (no orchestrator to pick it up) escalates to amber 'needs-you'.
+      // This function has no `active`/orchestrator context — its only
+      // production caller (`tasksState.ts` `taskDisplayState` →
+      // `TasksDialog.tsx:172`, the cross-session /tasks dialog) doesn't have
+      // that context either, so it always reads the solo 'needs-you' here.
+      // The orchestrator-owned 'waiting' state IS wired — by
+      // `orchestratorState.ts`'s `orchestratorWorkerState`, which HAS the
+      // `active` flag (the P4-8 roster). B6 (2026-07-12 review) deleted the
+      // `blockedOwner`-gated arm this function used to carry: it required an
+      // option no production caller ever passed, so it was dead — only
+      // `agentIdentity.test.ts` reached it.
+      return 'needs-you'
     }
     if (task.status === 'running' && task.isBackgrounded === true) {
       return 'background'
@@ -365,24 +353,20 @@ export function deriveAgentToolState(tool: AgentToolSource): AgentStateKey {
   return tool.run_in_background === true ? 'background' : 'running'
 }
 
-export function deriveAgentState(
-  source: AgentDisplaySource,
-  options: AgentStateDerivationOptions = {},
-): AgentStateKey {
+export function deriveAgentState(source: AgentDisplaySource): AgentStateKey {
   if (isAgentToolSource(source)) return deriveAgentToolState(source)
-  if (isTaskAgentSource(source)) return deriveTaskAgentState(source, options)
+  if (isTaskAgentSource(source)) return deriveTaskAgentState(source)
   return deriveAgentModeWorkerState(source)
 }
 
 export function deriveAgentDisplayVocabulary(
   source: AgentDisplaySource,
-  options: AgentStateDerivationOptions = {},
 ): AgentDisplayVocabulary {
   const identity = resolveAgentIdentity(source)
   return {
     identity,
     type: agentTypeMeta(identity.type),
-    state: agentStateMeta(deriveAgentState(source, options)),
+    state: agentStateMeta(deriveAgentState(source)),
   }
 }
 

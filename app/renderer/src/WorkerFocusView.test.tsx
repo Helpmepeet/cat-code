@@ -30,7 +30,7 @@ test('focus header names the viewed worker and is read-only (claim reduced, no c
   expect(html).not.toContain('aria-label="Prompt"')
 })
 
-test('a blocked worker shows the waiting-on-orchestrator gate from the real blockReason', () => {
+test('a blocked worker under an active orchestrator shows the waiting-on-orchestrator gate from the real blockReason', () => {
   const html = renderToStaticMarkup(
     <WorkerFocusView
       worker={worker({
@@ -44,6 +44,28 @@ test('a blocked worker shows the waiting-on-orchestrator gate from the real bloc
   )
   expect(html).toContain('Waiting on orchestrator')
   expect(html).toContain('Need the API base URL')
+  expect(html).toContain('The orchestrator resolves this')
+})
+
+test('M1 (2026-07-12 review): a blocked worker with NO active orchestrator (the real desktop case) shows the needs-you gate, never claiming an orchestrator resolves it', () => {
+  const html = renderToStaticMarkup(
+    <WorkerFocusView
+      worker={worker({
+        status: 'completed',
+        handoffStatus: 'blocked',
+        blockReason: 'Need the API base URL',
+      })}
+      active={false}
+      onBack={noop}
+    />,
+  )
+  // Same label the amber badge/baton already show for this worker — no
+  // second gate invented, just reused.
+  expect(html).toContain('Needs you')
+  expect(html).toContain('Need the API base URL')
+  // The active-orchestrator claim must NOT appear when there is no active
+  // orchestrator plane (agentMode.active is always false in the desktop app).
+  expect(html).not.toContain('The orchestrator resolves this')
 })
 
 test('a verifier renders a Verdict card from the real verdict; others render Result', () => {

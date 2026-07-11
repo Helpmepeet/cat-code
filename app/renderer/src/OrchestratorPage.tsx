@@ -137,9 +137,15 @@ function TasksButton({
 
 /**
  * Worker-detail drilldown body (prototype `WorkerDetail`) — real fields only:
- * the delegated prompt, the blocked "waiting on orchestrator" gate, and the
- * result/verdict. Activity timeline + changed files are CUT (D2 §3 fixtures);
- * a Stop control is deferred (needs an inbound write verb). Read-only.
+ * the delegated prompt, the blocked handoff gate, and the result/verdict.
+ * The blocked gate's copy is owner-gated the SAME way the badge/baton are
+ * (M1, 2026-07-12 review): orchestrator-owned reads "Waiting on orchestrator"
+ * (the orchestrator resolves it, you don't act here); solo (the desktop app's
+ * actual case — `active` is always false, nothing sets
+ * `CLAUDE_CODE_AGENT_MODE` here) reads "Needs you" and says so honestly,
+ * never claiming an orchestrator is resolving it. Activity timeline + changed
+ * files are CUT (D2 §3 fixtures); a Stop control is deferred (needs an
+ * inbound write verb). Read-only.
  */
 function WorkerDetail({
   worker,
@@ -199,19 +205,20 @@ function WorkerDetail({
       ) : null}
 
       {worker.handoffStatus === 'blocked' && worker.blockReason ? (
-        <div className="rounded-[10px] border border-purple-400/30 bg-purple-400/10 px-3.5 py-3">
+        <div className={`rounded-[10px] border px-3.5 py-3 ${resultTone.line} ${resultTone.soft}`}>
           <div className="mb-1.5 flex items-center gap-1.5">
-            <span aria-hidden className="text-[11px] text-purple-400">◉</span>
-            <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.1em] text-purple-300">
-              Waiting on orchestrator
+            <span aria-hidden className={`text-[11px] ${resultTone.text}`}>◉</span>
+            <span className={`font-mono text-[9.5px] font-bold uppercase tracking-[0.1em] ${resultTone.text}`}>
+              {agentStateMeta(state).label}
             </span>
           </div>
-          <div className="text-[12.5px] leading-relaxed text-purple-200">
+          <div className="text-[12.5px] leading-relaxed text-text-muted">
             {worker.blockReason}
           </div>
           <div className="mt-1.5 text-[10.5px] text-text-subtle">
-            The orchestrator resolves this or relays a question to you. You
-            don&apos;t act here.
+            {owner === 'orchestrator'
+              ? "The orchestrator resolves this or relays a question to you. You don't act here."
+              : "No orchestrator is active on this thread to relay this — it's on you to resolve."}
           </div>
         </div>
       ) : null}

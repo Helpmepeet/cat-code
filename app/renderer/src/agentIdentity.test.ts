@@ -17,12 +17,6 @@ test('keeps the prototype label, color, and pip vocabulary for known states', ()
     color: '#60a5fa',
     icon: 'pip-pulse',
   })
-  expect(agentStateMeta('blocked')).toMatchObject({
-    label: 'Needs input',
-    color: '#a8a29e',
-    icon: 'pip-ring',
-    attention: false,
-  })
   expect(agentStateMeta('needs-you')).toMatchObject({
     label: 'Needs you',
     color: '#fbbf24',
@@ -184,7 +178,7 @@ test('compresses durable Agent Mode worker sessions using workerUxSummary semant
   expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('attention')
 })
 
-test('maps local agent blocked handoff to user or orchestrator ownership explicitly', () => {
+test('maps a blocked local_agent task to the solo needs-you state (no orchestrator context here)', () => {
   const blockedTask = {
     type: 'local_agent' as const,
     id: 'task-a1',
@@ -197,13 +191,12 @@ test('maps local agent blocked handoff to user or orchestrator ownership explici
     handoffStatus: 'blocked' as const,
   }
 
-  // Solo case (no orchestrator to pick up the handoff) escalates to the amber
-  // 'needs-you'; orchestrator-owned is the NEUTRAL 'waiting' ("Waiting on
-  // orchestrator") — the P4-8 wiring of the previously unreachable `waiting` state.
+  // B6 (2026-07-12 review): this function has no `active`/orchestrator
+  // context, so a blocked local_agent task always reads the solo 'needs-you'.
+  // The orchestrator-owned neutral 'waiting' state is derived separately by
+  // `orchestratorState.ts`'s `orchestratorWorkerState`, which HAS the
+  // `active` flag (see orchestratorState.test.ts).
   expect(deriveTaskAgentState(blockedTask)).toBe('needs-you')
-  expect(
-    deriveTaskAgentState(blockedTask, { blockedOwner: 'orchestrator' }),
-  ).toBe('waiting')
 })
 
 test('maps real task lifecycle and attention fields without prototype activity fixtures', () => {

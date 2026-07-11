@@ -6,7 +6,6 @@
  */
 import {
   deriveTaskAgentState,
-  type AgentStateDerivationOptions,
   type AgentStateKey,
   type TaskAgentSource,
 } from './agentIdentity.js'
@@ -123,18 +122,19 @@ function toTaskAgentSource(item: TaskSnapshotItem): TaskAgentSource | null {
 /**
  * Real per-type state derivation. local_agent/in_process_teammate/remote_agent
  * reuse P4-2's `deriveTaskAgentState` (the same "needs input"/background/
- * resumed logic P4-8's roster will consume) over REAL fields
- * (`handoffStatus`/`awaitingPlanApproval`/`ultraplanPhase` — not fixture
- * enrichment). The other four task types (local_bash/local_workflow/
- * monitor_mcp/dream) have no such per-type state machine — their status IS
- * the whole state, mapped 1:1 onto the same `AgentStateKey` vocabulary.
+ * resumed logic) over REAL fields (`handoffStatus`/`awaitingPlanApproval`/
+ * `ultraplanPhase` — not fixture enrichment). The other four task types
+ * (local_bash/local_workflow/monitor_mcp/dream) have no such per-type state
+ * machine — their status IS the whole state, mapped 1:1 onto the same
+ * `AgentStateKey` vocabulary. NOTE (B6, 2026-07-12 review): the P4-8
+ * orchestrator roster does NOT consume this function — it derives its own
+ * state via `orchestratorState.ts`'s `orchestratorWorkerState` (a different
+ * source shape, `AgentModeWorkerItem` vs `TaskSnapshotItem`, and it carries
+ * the `active` flag this function has no access to).
  */
-export function taskDisplayState(
-  item: TaskSnapshotItem,
-  options?: AgentStateDerivationOptions,
-): AgentStateKey {
+export function taskDisplayState(item: TaskSnapshotItem): AgentStateKey {
   const agentSource = toTaskAgentSource(item)
-  if (agentSource) return deriveTaskAgentState(agentSource, options)
+  if (agentSource) return deriveTaskAgentState(agentSource)
   switch (item.status) {
     case 'completed':
       return 'completed'

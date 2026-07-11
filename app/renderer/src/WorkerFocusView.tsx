@@ -117,19 +117,20 @@ export function WorkerFocusView({
 
         {/* Blocked / waiting gate (real: handoffStatus + blockReason). */}
         {worker.handoffStatus === 'blocked' && worker.blockReason ? (
-          <div className="rounded-[10px] border border-purple-400/30 bg-purple-400/10 px-3.5 py-3">
+          <div className={`rounded-[10px] border px-3.5 py-3 ${resultTone.line} ${resultTone.soft}`}>
             <div className="mb-1.5 flex items-center gap-1.5">
-              <span aria-hidden className="text-[11px] text-purple-400">◉</span>
-              <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.1em] text-purple-300">
-                Waiting on orchestrator
+              <span aria-hidden className={`text-[11px] ${resultTone.text}`}>◉</span>
+              <span className={`font-mono text-[9.5px] font-bold uppercase tracking-[0.1em] ${resultTone.text}`}>
+                {agentStateMeta(state).label}
               </span>
             </div>
-            <div className="text-[12.5px] leading-relaxed text-purple-200">
+            <div className="text-[12.5px] leading-relaxed text-text-muted">
               {worker.blockReason}
             </div>
             <div className="mt-1.5 text-[10.5px] text-text-subtle">
-              The orchestrator resolves this or relays a question to you in the
-              main chat.
+              {owner === 'orchestrator'
+                ? 'The orchestrator resolves this or relays a question to you in the main chat.'
+                : "No orchestrator is active on this thread to relay this — it's on you to resolve outside this read-only view."}
             </div>
           </div>
         ) : null}
