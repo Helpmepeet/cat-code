@@ -27,7 +27,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { basename } from './pathUtils.js'
 import type { SessionId } from '../../shared/protocol.js'
-import type { SidebarRow } from './sidebarState.js'
+import { resolveNavSelection, type SidebarRow } from './sidebarState.js'
 import type { TabTone } from './tabStatus.js'
 import { tabLabel } from './TabBar.js'
 
@@ -44,7 +44,8 @@ type NavItem = {
 }
 
 // The prototype's destination rail (Chat/Sessions/Goals/Accounts/Settings — its
-// own comments already dropped Tasks/Agents from the rail). All five are built.
+// own comments already dropped Tasks/Agents from the rail), plus Orchestrator,
+// which the prototype doesn't have. All six are built.
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
   { id: 'orchestrator', label: 'Orchestrator', enabled: true, icon: <OrchestratorIcon /> },
@@ -460,9 +461,8 @@ function NavItemExpanded({
       type="button"
       aria-current={active ? 'page' : undefined}
       onClick={() => {
-	        if (item.id === 'chat' || item.id === 'orchestrator' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
-	          onSelectView(item.id)
-	        }
+        const view = resolveNavSelection(item)
+        if (view) onSelectView(view)
       }}
       className={
         'flex w-full items-center gap-1 rounded-md py-1.5 ' +
@@ -512,9 +512,8 @@ function NavItemRail({
       aria-label={item.label}
       title={item.label}
       onClick={() => {
-	        if (item.id === 'chat' || item.id === 'orchestrator' || item.id === 'goals' || item.id === 'accounts' || item.id === 'settings') {
-	          onSelectView(item.id)
-	        }
+        const view = resolveNavSelection(item)
+        if (view) onSelectView(view)
       }}
       className={
         'flex h-8 w-8 items-center justify-center rounded-md ' +

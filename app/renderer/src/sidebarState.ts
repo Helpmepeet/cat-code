@@ -61,6 +61,25 @@ export type SidebarRow = {
  * HostEvent stream), so there is no separate poll — same event-driven source
  * as the TabBar.
  */
+/**
+ * Resolve a nav-rail click into the view to switch to, or `null` when the
+ * item is disabled. Pure so `Sidebar.tsx`'s `NavItemExpanded` and
+ * `NavItemRail` can BOTH route every click through the same tested logic
+ * instead of a hand-maintained per-id allowlist in the `onClick` handler —
+ * that allowlist (P4-REVIEW B2) omitted `'sessions'`, so the Sessions nav
+ * item silently did nothing when clicked despite `enabled: true`. Disabled
+ * items already short-circuit to a non-interactive button before `onClick`
+ * is wired (see `Sidebar.tsx`'s `if (!item.enabled)` early return), so this
+ * only needs the `enabled` flag, never a name-by-name gate that can go stale
+ * when a new nav destination is added.
+ */
+export function resolveNavSelection<Id extends string>(item: {
+  id: Id
+  enabled: boolean
+}): Id | null {
+  return item.enabled ? item.id : null
+}
+
 export function selectSidebarRows(state: ShellState): SidebarRow[] {
   return state.order
     .map(id => state.byId[id])

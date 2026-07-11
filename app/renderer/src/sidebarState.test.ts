@@ -3,6 +3,7 @@ import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { createShellState, reduceShellState } from './shellState.js'
 import {
   deriveSidebarRowVisual,
+  resolveNavSelection,
   selectSidebarRows,
 } from './sidebarState.js'
 
@@ -141,4 +142,22 @@ test('the restorable flag drives kind independently of status', () => {
     descriptor('x', { status: 'ready', restorable: true }),
   )
   expect(visual.kind).toBe('restorable')
+})
+
+test('resolveNavSelection routes every enabled Sidebar.tsx NAV id to itself', () => {
+  // Mirrors Sidebar.tsx's NAV list (all six entries are enabled:true) — the
+  // regression this guards is the P4-REVIEW B2 bug: a per-id allowlist in the
+  // onClick handler omitted 'sessions', so clicking it never called
+  // onSelectView even though the item rendered as enabled/clickable. This is
+  // the routing-decision half of the fix; it cannot exercise a live click
+  // (no jsdom in this repo — see module doc), only that the pure decision is
+  // correct for every id BOTH NavItemExpanded and NavItemRail call it with.
+  const ids = ['chat', 'orchestrator', 'sessions', 'goals', 'accounts', 'settings'] as const
+  for (const id of ids) {
+    expect(resolveNavSelection({ id, enabled: true })).toBe(id)
+  }
+})
+
+test('resolveNavSelection returns null for a disabled item, never the id', () => {
+  expect(resolveNavSelection({ id: 'sessions', enabled: false })).toBeNull()
 })
