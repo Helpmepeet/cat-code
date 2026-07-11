@@ -80,7 +80,11 @@ export function createRealWorkspaceTrustExecutor(
 }
 
 export type SidecarWorkspaceTrustDomain = {
-  /** The trust/repo facts for this session's cwd. null if the read failed. */
+  /**
+   * The trust/repo facts for this session's cwd. The real domain never returns
+   * null (a failed read fails CLOSED to `trusted:false` — P4-25); the `| null` in
+   * the type is retained for the injected test fake and defensive consumers.
+   */
   getSnapshot(): WorkspaceTrustSnapshot | null
   /**
    * Accept trust for this session's cwd: persist through the engine, re-read
@@ -148,17 +152,34 @@ export async function createSidecarWorkspaceTrustDomain(
 
 async function readWorkspaceTrustSnapshotOnce(
   executor: WorkspaceTrustExecutor,
-): Promise<WorkspaceTrustSnapshot | null> {
+): Promise<WorkspaceTrustSnapshot> {
+  // SECURITY (P4-25, review B1): fail CLOSED. This snapshot backs the sidecar
+  // submit gate (`sidecarServer.ts` handleSubmit). A `null` snapshot must NEVER
+  // be read as "permit", so a failed read defaults to UNTRUSTED (never null), and
+  // `trusted` is computed INDEPENDENTLY of the cosmetic repo read — a git-spawn
+  // failure must not discard a known trust fact into an open gate.
+  let trusted = false
   try {
-    const trusted = executor.isTrusted()
-    const detectedRepo = await getGithubRepo()
-    return { trusted, detectedRepo }
+    trusted = executor.isTrusted()
   } catch (error) {
     process.stderr.write(
-      `[sidecar] workspace-trust snapshot read failed (session runs without a workspace-trust snapshot): ${
+      `[sidecar] workspace-trust read failed; defaulting to UNTRUSTED (fail-closed): ${
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
-    return null
+    trusted = false
   }
+  // `detectedRepo` is Settings-display only — a failure here must not touch trust.
+  let detectedRepo: string | null = null
+  try {
+    detectedRepo = await getGithubRepo()
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] workspace-trust repo detection failed (display only): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    detectedRepo = null
+  }
+  return { trusted, detectedRepo }
 }

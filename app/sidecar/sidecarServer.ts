@@ -731,7 +731,12 @@ export class SidecarServer {
     // (`shouldSkipHookDueToTrust()` returns false when
     // `getIsNonInteractiveSession()` is true), so this block is what makes trust
     // real. Fail closed with a typed error; degrade gracefully (no crash).
-    if (this.workspaceTrust?.getSnapshot()?.trusted === false) {
+    // Fail CLOSED (P4-25, review B1): block unless EXPLICITLY trusted. `!== true`
+    // treats a null snapshot (spawn read failure) and `false` alike — the old
+    // `=== false` let null through (`undefined === false` is false → gate skipped).
+    // The domain-absent path (no trust domain constructed, e.g. a probe) stays
+    // permissive so it isn't a submit gate on non-session code paths.
+    if (this.workspaceTrust && this.workspaceTrust.getSnapshot()?.trusted !== true) {
       this.sendError(
         connection,
         message.requestId,

@@ -2487,6 +2487,40 @@ test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off 
   expect(received.some(f => f.kind === 'event')).toBe(true)
 })
 
+test('P4-25 — app.submit under a NULL/failed trust snapshot is rejected (fail-closed)', async () => {
+  // review B1: a null snapshot (the spawn trust read failed) must NOT read as
+  // "permit". The old gate `getSnapshot()?.trusted === false` let null through
+  // (`undefined === false` → false → gate skipped → turn ran at an unvetted cwd).
+  // This is the tripwire: it fails against the pre-fix `=== false` consumer.
+  let turnRan = false
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turnRan = true
+    },
+  })
+  const server = makeServer(
+    controller,
+    undefined,
+    undefined,
+    undefined,
+    fakeWorkspaceTrust(null),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'u2', prompt: 'do harm' }),
+  )
+  // Give any erroneously-dispatched turn a chance to start.
+  await Bun.sleep(50)
+
+  const err = received.find(f => f.kind === 'error' && f.requestId === 'u2')
+  expect(err && err.kind === 'error' && err.code).toBe('unauthorized')
+  expect(turnRan).toBe(false)
+  expect(received.some(f => f.kind === 'event')).toBe(false)
+})
+
 test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', () => {
   const diagnostics = fakeDiagnostics({
     version: '2.1.87-dev',
