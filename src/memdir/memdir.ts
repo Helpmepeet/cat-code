@@ -214,6 +214,7 @@ export function buildMemoryLines(
         '- Organize memory semantically by topic, not chronologically',
         '- Update or remove memories that turn out to be wrong or outdated',
         '- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.',
+        '- Before saving changed guidance, compare it with existing memories for conflicts. If it supersedes or narrows an earlier rule, update or remove the old rule in the same save so both cannot remain active; preserve any non-overlapping conditions. If an existing MEMORY.md hook points to a reconciled topic, update or remove that hook too; do not create new hooks in this mode.',
       ]
     : [
         '## How to save memories',
@@ -224,13 +225,14 @@ export function buildMemoryLines(
         '',
         ...MEMORY_FRONTMATTER_EXAMPLE,
         '',
-        `**Step 2** — add a pointer to that file in \`${ENTRYPOINT_NAME}\`. \`${ENTRYPOINT_NAME}\` is an index, not a memory — each entry should be one line, under ~150 characters: \`- [Title](file.md) — one-line hook\`. It has no frontmatter. Never write memory content directly into \`${ENTRYPOINT_NAME}\`.`,
+        `**Step 2** — add a pointer to that file in \`${ENTRYPOINT_NAME}\`. \`${ENTRYPOINT_NAME}\` is an index, not a memory — each entry should be one line, under ~150 characters: \`- [Title](file.md) — one-line hook\`. The hook itself must preserve the complete decision rule, including every trigger qualifier and the resulting guidance, instead of relying on the title, broadening, or shortening it. It has no frontmatter. Never write memory content directly into \`${ENTRYPOINT_NAME}\`.`,
         '',
         `- \`${ENTRYPOINT_NAME}\` is always loaded into your conversation context — lines after ${MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise`,
         '- Keep the name, description, and type fields in memory files up-to-date with the content',
         '- Organize memory semantically by topic, not chronologically',
         '- Update or remove memories that turn out to be wrong or outdated',
         '- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.',
+        '- Before saving changed guidance, compare it with existing memories for conflicts. If it supersedes or narrows an earlier rule, update or remove the old rule and its index hook in the same save so both cannot remain active; preserve any non-overlapping conditions.',
       ]
 
   const lines: string[] = [
