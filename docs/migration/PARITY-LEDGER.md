@@ -38,12 +38,15 @@ capability**. Over-flagging ❓ is safe by design; a false ✅ is the failure mo
 
 ## Headline — parity snapshot
 
-**1,894 rows** (1,724 surface + 170 flow). In-scope prototype-parity elements (built + adapted +
+**1,874 rows** (1,704 surface + 170 flow). In-scope prototype-parity elements (built + adapted +
 deferred + ❓; excludes ✂️ cut and ➕ real-added) currently sit at the realization level computed in
 **Part D**. The Phase-4 gate target is ~80%.
 
-**The ❓ danger list = 126 items** (120 surface + 6 flow). It concentrates in the two layers the
-Phase-4 backlog does **not** reach:
+**The ❓ danger list = 17 items** (14 surface + 3 flow) as of 2026-07-12 (P4-27) — down from 126 at
+the 2026-07-07 landing: P4-18 rendered the transcript (§5/§6), P4-19 wired the settings core, and
+P4-27 reclassified the owned residuals to ⬜ deferred. **The per-layer breakdown below is retained as
+the 2026-07-07 LANDING SNAPSHOT for context — it is NOT current; see Part D for current dispositions.**
+At landing it concentrated in the two layers the Phase-4 backlog did **not** yet reach:
 
 - **Transcript / tool rendering — `Messages.jsx`: 49 ❓.** The projector derives the data but the
   renderer doesn't draw it. Worst: `UserTextRow` is projected (`transcriptProjector.ts:162`) yet
@@ -328,15 +331,15 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Transcript container (rows list, gap-3 flex column) | chrome | ✅ built | `app/renderer/src/TranscriptView.tsx:42-48` | `TranscriptRowsView` maps rows; prototype has no single container component (host renders `MessageRow`), so parity is at row level. |
 | Empty state ("No transcript rows yet.") | ux-state | ➕ real-added | `app/renderer/src/TranscriptView.tsx:36-40` | Explicit empty-transcript state in the real app; prototype is always fixture-loaded. Real-only, recorded. |
 | AssistantBubble — assistant text body | subcomponent | 🔁 adapted | `app/renderer/src/TranscriptView.tsx:52-57` | Body built via react-markdown; adapted — bare markdown div, no bubble shape/framing/eyebrow/copy chip. |
-| AssistantBubble — "Assistant" eyebrow label | chrome | ❓ missing-no-owner | — | Uppercase role label not rendered; no P4/P5 owner for transcript row chrome. |
-| AssistantBubble — hover-reveal copy chip | control | ❓ missing-no-owner | `app/renderer/src/TranscriptView.tsx:52-57` | Icon copy button (hover opacity + copied-check) not built. |
+| AssistantBubble — "Assistant" eyebrow label | chrome | ⬜ deferred (owner P4-18) | — | Uppercase role label not rendered; no P4/P5 owner for transcript row chrome. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| AssistantBubble — hover-reveal copy chip | control | ⬜ deferred (owner P4-18) | `app/renderer/src/TranscriptView.tsx:52-57` | Icon copy button (hover opacity + copied-check) not built. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | Streaming caret on assistant text | ux-state | ✅ built | `app/renderer/src/TranscriptView.tsx` (`AssistantProse`, `streaming` caret) | P4-18c: a blinking accent caret trails a live-streaming assistant body (`row.isStreaming`). |
 | UserBubble — user message (right-aligned bubble) | subcomponent | ✅ built | `app/renderer/src/TranscriptView.tsx:215` (`UserBubble`); dispatched at `:76` | P4-18a functional fix: the pre-18a `if kind!=='tool-use' return null` drop is replaced by an exhaustive switch. User turns render as a right-aligned, accent-tinted, bottom-right-notched bubble. Hover copy chip is 18c polish. |
-| UserBubble — hover-reveal copy chip | control | ❓ missing-no-owner | `app/renderer/src/TranscriptView.tsx:61` | Moot until UserBubble renders; still unowned. |
+| UserBubble — hover-reveal copy chip | control | ⬜ deferred (owner P4-18) | `app/renderer/src/TranscriptView.tsx:61` | Moot until UserBubble renders; still unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | Prose — core markdown (headings/bold/italic/inline-code/lists/links/hr/blockquote) | subcomponent | 🔁 adapted | `app/renderer/src/TranscriptView.tsx:11,54-55` | react-markdown replaces prototype's hand-rolled `renderProse`; basic set via className, blockquote/hr on defaults. |
 | Prose — GFM tables (`ProseTable`, `splitTableRow`) | subcomponent | ⬜ deferred (dep: `remark-gfm`) | `app/renderer/src/TranscriptView.tsx` `AssistantProse` (react-markdown, no gfm plugin) | P4-18c §0 flag: GFM pipe tables need `remark-gfm`; CLAUDE.md §7 forbids adding a dep without operator approval, so tables render as raw text pending that approval. OWNED, not silently dropped. |
 | ProseCode — fenced code block + syntax highlighting (`FELines`/`ProseCode`) | subcomponent | 🔁 adapted (highlighting deferred, dep) | `app/renderer/src/TranscriptView.tsx` `CodeBlock` + `MARKDOWN_COMPONENTS` | P4-18c: fenced code renders in a framed panel with a language label — but SYNTAX-TOKEN highlighting needs a highlighter dep (no shiki/prism in `app/`); deferred pending operator dep approval (CLAUDE.md §7). §0 flag; code is legible+copyable un-colorized. |
-| ProseCode — 5 code themes + Settings-synced picker | data-binding | ❓ missing-no-owner | `app/renderer/src/SettingsShell.tsx` (label only) | `CODE_THEMES` + `catcode.codeTheme` localStorage/sync-event not built; settings label exists, no binding. |
+| ProseCode — 5 code themes + Settings-synced picker | data-binding | ⬜ deferred (owner P4-18) | `app/renderer/src/SettingsShell.tsx` (label only) | `CODE_THEMES` + `catcode.codeTheme` localStorage/sync-event not built; settings label exists, no binding. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | ProseCode — per-block Copy button + language label | control | ✅ built | `app/renderer/src/TranscriptView.tsx` `CodeBlock` (copy button + lang label) | P4-18c: each fenced block frames a language label + a copy button (clipboard write, copied-state). |
 | ProseTextBlock — ```text/```prose block + copy-as-md/text menu | subcomponent | ✂️ cut | `Messages.jsx:1834-1840` (prototype WARNING: not wired to model, mock-only) | Model never emits ```text fences; renderer-only until an upstream system-prompt change. Source wins — correct not to migrate. |
 | Prose — long-content collapse (>60 lines, Show N more/Collapse) | control | ✅ built | `app/renderer/src/TranscriptView.tsx` `AssistantProse` (`PROSE_COLLAPSE_LINES`) | P4-18c: bodies over 60 lines collapse behind a "Show N more lines" / "Collapse" toggle. |
@@ -375,31 +378,31 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | SnipBoundaryRow — ✂ stale-output-snipped seam | subcomponent | ✂️ cut | `transcriptProjector.ts:222` (typed); `STATUS.md:84` P2-1: typed but UNMINTED at SDK seam | No mint site emits `snip_boundary` today → disposition stays cut. P4-18a adds a render-ready ✂ neutral seam (`TranscriptView.tsx:129`) so a future engine seam degrades gracefully instead of hitting the fallback; not flipped ✅ because it never arrives today. |
 | TombstoneRow — message-removed dashed seam | subcomponent | ✂️ cut | `transcriptProjector.ts:223` (typed); `STATUS.md:84` P2-1: typed but UNMINTED | Same as SnipBoundary: no mint site. P4-18a adds a render-ready dashed neutral seam ("message removed", `TranscriptView.tsx:136`); disposition stays cut pending an engine seam. |
 | MicrocompactBoundaryRow — ❉ microcompacted seam | subcomponent | ✂️ cut | `STATUS.md:83` P2-0 (uninhabitable in the type); `INVENTORY.md:58` CUT | The seam can never carry this discriminant (base-subtype intersection collapses it). INVENTORY marks it stale/cut. |
-| TurnDurationRow — ◷ worked-for duration seam | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:696-783` (`turn_duration` falls to default no-op) | `turn_duration` system subtype is neither projected nor rendered — dropped. No owner. |
-| InterruptedRow — "Interrupted · what should Claude do instead?" | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:609` (`isSynthetic` frames dropped) | The synthetic INTERRUPT carrier is suppressed at the projector; no interrupted seam renders. Real interruption identity lost at the seam. Unowned. |
+| TurnDurationRow — ◷ worked-for duration seam | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:696-783` (`turn_duration` falls to default no-op) | `turn_duration` system subtype is neither projected nor rendered — dropped. No owner. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| InterruptedRow — "Interrupted · what should Claude do instead?" | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:609` (`isSynthetic` frames dropped) | The synthetic INTERRUPT carrier is suppressed at the projector; no interrupted seam renders. Real interruption identity lost at the seam. Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | SystemNoticeRow — api_retry / local_command_output / account_diagnostic | subcomponent | ✅ built | `app/renderer/src/TranscriptView.tsx:383` (`SystemNoticeBox`); dispatched at `:105` | P4-18a: notice box with per-type glyph+tone (api_retry ↻ warn · local_command_output › muted · account_diagnostic ! warn) + message body + trailing mono debug tag. Covers the LocalCommandRow render (§5 below) too, though that row's identity degradation is an upstream projector concern. |
-| SystemNoticeRow — other subtypes (memory_saved/agents_killed/bridge_status/scheduled_task_fire/permission_retry/stop_hook_summary/api_error/away_summary) | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:696-783` (none of these subtypes projected) | 8 prototype SystemNotice subtypes neither projected nor rendered; real source subtypes exist but unmapped at the seam. Unowned. |
-| MemorySavedRow — ✦ saved-to-memory row | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:696-783` (`memory_saved` not projected) | Not projected/rendered. Memory PAGE is `phase4.md P4-10` but that owns the page, not this transcript seam — no confirmed owner for the row. |
+| SystemNoticeRow — other subtypes (memory_saved/agents_killed/bridge_status/scheduled_task_fire/permission_retry/stop_hook_summary/api_error/away_summary) | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:696-783` (none of these subtypes projected) | 8 prototype SystemNotice subtypes neither projected nor rendered; real source subtypes exist but unmapped at the seam. Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| MemorySavedRow — ✦ saved-to-memory row | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:696-783` (`memory_saved` not projected) | Not projected/rendered. Memory PAGE is `phase4.md P4-10` but that owns the page, not this transcript seam — no confirmed owner for the row. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | AwaySummaryRow — ※ recap seam | subcomponent | ✂️ cut | `Messages.jsx:1409-1416` (gated behind `feature('AWAY_SUMMARY')` + GrowthBook, default false) | Gated OFF upstream; prototype invented the /recap trigger. Cut pending the flag (source wins). |
 | CommandEchoRow — /command echo (user-side) | subcomponent | ✅ built | `app/renderer/src/TranscriptView.tsx:231` (`CommandEchoBubble`); dispatched at `:80` | P4-18a: user-side mono bubble — accent `/name` + subtle args, or `Skill(name)` for skill-format. Prototype's `❯` prompt glyph deliberately dropped (GUI-native signal). |
-| LocalCommandRow — ! local-command output | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:759-768` (projected as system-notice); `STATUS.md:84` (live identity degraded) | Data partially projected, not rendered; live identity degraded per P2-1. Unowned. |
-| MemoryInputRow — # user-memory-input echo | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:1400-1425` (`parseCommandEcho` handles only `<command-message>`) | Real ungated source tag but `<user-memory-input>` not parsed → degrades to plain user-text (itself unrendered). Unowned. |
-| ResourceUpdateRow — ↻ MCP resource/polling update | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:1400-1425` (only command-message parsed) | `<mcp-resource-update>`/`<mcp-polling-update>` not parsed, not rendered. Niche; unowned. |
+| LocalCommandRow — ! local-command output | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:759-768` (projected as system-notice); `STATUS.md:84` (live identity degraded) | Data partially projected, not rendered; live identity degraded per P2-1. Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| MemoryInputRow — # user-memory-input echo | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:1400-1425` (`parseCommandEcho` handles only `<command-message>`) | Real ungated source tag but `<user-memory-input>` not parsed → degrades to plain user-text (itself unrendered). Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| ResourceUpdateRow — ↻ MCP resource/polling update | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:1400-1425` (only command-message parsed) | `<mcp-resource-update>`/`<mcp-polling-update>` not parsed, not rendered. Niche; unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | ChannelMessageRow — ↳ channel notification | subcomponent | ✂️ cut | `Messages.jsx:1294-1301` (gated behind `feature('KAIROS')`/`KAIROS_CHANNELS`) | Feature-gated upstream; tag not at the app seam. Cut pending flag. |
 | CrossSessionMessageRow — ⇄ cross-session message | subcomponent | ✂️ cut | `Messages.jsx:1315-1321` (gated `feature('UDS_INBOX')`; renderer unverified in source) | Feature-gated + prototype could not verify a source renderer. Cut pending flag; presentation unverifiable. |
 | ForkMessageRow — ⑂ fork directive | subcomponent | ✂️ cut | `Messages.jsx:1335-1342` (gated `feature('FORK_SUBAGENT')`; renderer unverified) | Feature-gated + unverified renderer. Cut pending flag. |
-| AdvisorRow — advisor `server_tool_use` + `advisor_tool_result` (folded) | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:1019-1023` ('advisor'→'other'); `:880-894` (advisor_tool_result not in result-block types) | Degrades to a generic 'other' card with no correlated result; advisor advising/done/redacted/error states missing. Unowned. |
-| TaskAssignRow — ◆ task-notification assignment | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts` `projectUserFrame` (no origin handling) | Not projected/rendered. Tasks is `phase4.md P4-9` but that owns the panel, not this transcript notice row — no confirmed owner for the row. |
-| HookProgressRow — live Hook progress leg | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:448-451` (`tool_progress` documented no-op) | Live ProgressMessage (excluded from persistence upstream); no app-seam projection/render. Would need a live-status seam. Unowned. |
+| AdvisorRow — advisor `server_tool_use` + `advisor_tool_result` (folded) | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:1019-1023` ('advisor'→'other'); `:880-894` (advisor_tool_result not in result-block types) | Degrades to a generic 'other' card with no correlated result; advisor advising/done/redacted/error states missing. Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| TaskAssignRow — ◆ task-notification assignment | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts` `projectUserFrame` (no origin handling) | Not projected/rendered. Tasks is `phase4.md P4-9` but that owns the panel, not this transcript notice row — no confirmed owner for the row. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| HookProgressRow — live Hook progress leg | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:448-451` (`tool_progress` documented no-op) | Live ProgressMessage (excluded from persistence upstream); no app-seam projection/render. Would need a live-status seam. Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | UserImageRow — pasted image content block | subcomponent | ✅ built | `app/renderer/src/TranscriptView.tsx:261` (`UserImageRowView`); dispatched at `:83` | P4-18a: right-aligned user-side tile — `<img>` from the base64 data-URI / url source (max-w 220px). Caption-less by design; empty source degrades to `[Image]`. |
 | ToolResultRow — ⎿ tool_result fed back into conversation | subcomponent | 🔁 adapted | `transcriptProjector.ts:853-869` (`foldToolResultBlocks`); `TranscriptView.tsx:75-89` | Adapted per INVENTORY W3 (status derived, not stored): result folds into its tool card's result region (is_error red) rather than a standalone row. Correct adaptation. |
-| ApiErrorRow — API error banner + Retry + raw-details expand | subcomponent | ❓ missing-no-owner | `transcriptProjector.ts:747-757` (api_retry→system-notice, unrendered); `:464-468` (assistant_error no-op) | Real API-error identity partially reaches the seam but nothing renders it, and there is no Retry affordance. BannerStack (P4-1) not wired to transcript API errors. Unowned. |
+| ApiErrorRow — API error banner + Retry + raw-details expand | subcomponent | ⬜ deferred (owner P4-18) | `transcriptProjector.ts:747-757` (api_retry→system-notice, unrendered); `:464-468` (assistant_error no-op) | Real API-error identity partially reaches the seam but nothing renders it, and there is no Retry affordance. BannerStack (P4-1) not wired to transcript API errors. Unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | RateLimitRow — rate-limited banner + Switch account | subcomponent | ✂️ cut | `transcriptProjector.ts:483-487` (`rate_limit_event` SDK-stdout-only no-op); `INVENTORY.md:59` (standalone RateLimitRow stale) | Source folds rate limiting into API-error/retry handling; no standalone row. Confirmed cut/stale. |
-| SystemMsg — plain centered divider | chrome | ❓ missing-no-owner | — | Minor generic hairline+label divider not built; low value, unowned. |
+| SystemMsg — plain centered divider | chrome | ⬜ deferred (owner P4-18) | — | Minor generic hairline+label divider not built; low value, unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | AgentEventRow — one-line agent lifecycle notice | subcomponent | ✂️ cut | `INVENTORY.md:60` + `decisions/AGENT-CHROME.md` (D2): CUT — no agent-event seam frame | Decision-cut; lifecycle surfaces via the agent tool-card state instead. |
 | AttachmentCard — attachment dispatch (diagnostics/mcp/read) | subcomponent | ✂️ cut | `INVENTORY.md:60` + `decisions/AGENT-CHROME.md` (D2): CUT — engine-internal, never reaches the seam | Decision-cut (extend-engine flag); attachments don't cross the seam as a distinct type. |
 | GroupedToolGroup — grouped read/search message type | subcomponent | ✂️ cut | `INVENTORY.md:60` + `decisions/AGENT-CHROME.md` (D2): message type CUT, grouping kept as projector derivation | Message-type cut per D2. NOTE: the promised grouping-as-projector-derivation is NOT yet implemented (`selectNestedTranscriptRows` does subagent nesting only) and has no named owner — a residual sub-gap. |
-| ReadGroupRow — expand-to-content read row (3rd disclosure level) | control | ❓ missing-no-owner | — (no `FileReadCard`/`ReadGroupRow` in `app/renderer`) | GUI-native 3rd disclosure level beyond source (source Read renders 'Read N lines' only). Unbuilt, unowned. |
+| ReadGroupRow — expand-to-content read row (3rd disclosure level) | control | ⬜ deferred (owner P4-18) | — (no `FileReadCard`/`ReadGroupRow` in `app/renderer`) | GUI-native 3rd disclosure level beyond source (source Read renders 'Read N lines' only). Unbuilt, unowned. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 
 ### 06. Chat.jsx — session transcript pane + composer + live activity/streaming indicator
 
@@ -411,8 +414,8 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Session title display in header ('New chat' / `session.title`) | data-binding | ⬜ deferred | `phase4.md P4-6` · `STATUS.md:220` | Real `SessionDescriptor` has no generated title → cwd basename (`App.tsx:1042`); titles = P4-6 rider. |
 | Inline rename input (autofocus, Enter/Escape/blur commit) | control | ⬜ deferred | `phase4.md P4-6` | Rename verb belongs to `SessionActionsMenu` (P4-6); no rename UI in `SessionPane`. |
 | `OrchestratorBadge` in header | chrome | ⬜ deferred | `phase4.md P4-8` | Orchestrator-mode chrome; `window.OrchestratorBadge` unbuilt. |
-| Transcript-mode 'Hidden' reveal toggle (eye icon, only when meta rows exist) | control | ❓ missing-no-owner | — | Real engine hides `isMeta`/`isVisibleInTranscriptOnly` rows; no reveal toggle built and no P4 owner. DANGER. |
-| Meta-row dimmed rendering when revealed (opacity 0.55) | ux-state | ❓ missing-no-owner | — | Tied to the unowned Hidden toggle; no meta-reveal styling in `TranscriptView.tsx`. DANGER. |
+| Transcript-mode 'Hidden' reveal toggle (eye icon, only when meta rows exist) | control | ⬜ deferred (owner P4-18) | — | Real engine hides `isMeta`/`isVisibleInTranscriptOnly` rows; no reveal toggle built and no P4 owner. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Meta-row dimmed rendering when revealed (opacity 0.55) | ux-state | ⬜ deferred (owner P4-18) | — | Tied to the unowned Hidden toggle; no meta-reveal styling in `TranscriptView.tsx`. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | Session-actions overflow button (⋯) | control | ⬜ deferred | `phase4.md P4-6` | Trigger for the P4-6 actions menu; absent in `SessionPane`. |
 | `SessionActionsMenu` (anchored popover) | dialog | ⬜ deferred | `phase4.md P4-6` | — |
 | `BranchDialog` | dialog | ⬜ deferred | `phase4.md P4-6` | Real branch/export/rewind verbs owned by P4-6. |
@@ -464,15 +467,15 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | `removePaste` + Backspace-deletes-whole-pill | keyboard | 🔁 adapted | `App.tsx:1263` (× remove) · `composerState.ts:176` (`reducePastesPruned`) | × on the chip removes; deleting the token text from the draft prunes the entry. No whole-pill Backspace (no contentEditable). |
 | `expandPasteRefs` on submit (refs → full text inline) | data-binding | ✅ built | `app/renderer/src/composerState.ts:210` (`expandPasteRefs`) · `App.tsx:627` (`submitSession`) | Tokens expand back to full content before `app.submit`; engine receives plain text (parity `src/history.ts:81` / `src/utils/handlePromptSubmit.ts:217`). |
 | Prompt history ↑/↓ recall (per-session, 50-cap, draft preserve) | keyboard | ✅ built | `app/renderer/src/composerState.ts:247,266` (`reduceHistoryPushed`/`navigateHistory`) · `App.tsx:1206` | Per-session (keyed by activeSessionId, P3-4), 50-cap, dedup newest, draft preserved on ↑ and restored on ↓ past newest (parity `src/hooks/useArrowKeyHistory.tsx`). |
-| `SpinnerWithVerb` live activity row (verb + elapsed + token byline above composer) | subcomponent | ❓ missing-no-owner | — | P2-3 (✅, `STATUS.md:86`) shipped streaming DATA only; the activity-VISUAL half of INVENTORY W3 (`INVENTORY.md:62`) was never built or re-owned. DANGER — top of list. |
+| `SpinnerWithVerb` live activity row (verb + elapsed + token byline above composer) | subcomponent | ⬜ deferred (owner P4-18) | — | P2-3 (✅, `STATUS.md:86`) shipped streaming DATA only; the activity-VISUAL half of INVENTORY W3 (`INVENTORY.md:62`) was never built or re-owned. DANGER — top of list. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | `ActivityIndicator` (tail-of-transcript variant) | subcomponent | ✂️ cut | `Chat.jsx:49` (defined, never rendered) | Superseded by `SpinnerWithVerb` (`Chat.jsx:1370`); dead prototype code, not a parity target. |
-| `WaveDots` pulse animation + phase tone colors | chrome | ❓ missing-no-owner | — | Part of the missing activity indicator; tool-color map is cosmetic fixture. DANGER. |
-| Activity phase mapping (connecting/thinking/tool/responding/idle) | ux-state | ❓ missing-no-owner | — | Real `SpinnerMode` phases exist engine-side but no renderer maps them to a visible indicator. DANGER. |
-| Elapsed timer + verb (playful/plain) | data-binding | ❓ missing-no-owner | — | No elapsed timer in renderer; playful verbs are cosmetic fixture, the elapsed indicator is the real gap. DANGER. |
-| Live per-turn token byline '(Ns · ↕ N tokens)' | data-binding | ❓ missing-no-owner | — | Real per-turn output estimate exists engine-side (SOURCE `SpinnerAnimationRow.tsx:160`) but nothing surfaces it. DANGER. |
-| Run tally (files changed / +added / −removed) | data-binding | ❓ missing-no-owner | — | Prototype values are demo; the diff-stat run-tally indicator itself is unowned. DANGER. |
-| Paused-on-permission activity state ('Waiting for your approval') | ux-state | ❓ missing-no-owner | — | Permission round-trip is real (P2-4) but this paused-activity cue is part of the unbuilt spinner. DANGER. |
-| Stop button / interrupt affordance while generating | control | ❓ missing-no-owner | `app/preload/preload.cjs:67` (`abort` exists, unwired) | `bridge.abort`/`app.abort` capability exists at the boundary but NO renderer UI control or keybinding calls it (rg empty in `App.tsx`). Genuine interrupt gap. DANGER. |
+| `WaveDots` pulse animation + phase tone colors | chrome | ⬜ deferred (owner P4-18) | — | Part of the missing activity indicator; tool-color map is cosmetic fixture. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Activity phase mapping (connecting/thinking/tool/responding/idle) | ux-state | ⬜ deferred (owner P4-18) | — | Real `SpinnerMode` phases exist engine-side but no renderer maps them to a visible indicator. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Elapsed timer + verb (playful/plain) | data-binding | ⬜ deferred (owner P4-18) | — | No elapsed timer in renderer; playful verbs are cosmetic fixture, the elapsed indicator is the real gap. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Live per-turn token byline '(Ns · ↕ N tokens)' | data-binding | ⬜ deferred (owner P4-18) | — | Real per-turn output estimate exists engine-side (SOURCE `SpinnerAnimationRow.tsx:160`) but nothing surfaces it. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Run tally (files changed / +added / −removed) | data-binding | ⬜ deferred (owner P4-18) | — | Prototype values are demo; the diff-stat run-tally indicator itself is unowned. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Paused-on-permission activity state ('Waiting for your approval') | ux-state | ⬜ deferred (owner P4-18) | — | Permission round-trip is real (P2-4) but this paused-activity cue is part of the unbuilt spinner. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
+| Stop button / interrupt affordance while generating | control | ⬜ deferred (owner P4-18) | `app/preload/preload.cjs:67` (`abort` exists, unwired) | `bridge.abort`/`app.abort` capability exists at the boundary but NO renderer UI control or keybinding calls it (rg empty in `App.tsx`). Genuine interrupt gap. DANGER. Reclassified 2026-07-12 (M3): P4-18 (Tranche E) owns this residual per Part C ownership table; dep-gated/data-contract deferral, not silently unowned. |
 | `ContextGauge` donut + % pill (inline with composer) | subcomponent | ⬜ deferred | `phase4.md P4-0` · `STATUS.md:217` | Composer ChipStrip scope → P4-0; real `contextTokens`/`contextMax` exist, gauge visual is P4-0. |
 | `ContextGauge` expanded Session-Info popup (context arc + Model/Effort/Profile rows) | subcomponent | ⬜ deferred | `phase4.md P4-0` · `STATUS.md:217` | model/effort color maps are cosmetic fixture (source wins); model/effort/profile are real status fields. |
 | Composer ChipStrip byline (status/perm/account/provider/ide/lsp/tasks chips) | subcomponent | ⬜ deferred | `phase4.md P4-0` · `app/renderer/src/Chip.tsx:11` | P4-1 built a GENERIC ChipStrip container but flags the composer-specific rail → P4-0. |
@@ -1885,51 +1888,53 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Reauth threshold: block submit only when ZERO healthy accounts remain | behavior | ✅ built | `reauthBannerState.ts:61` (`selectAuthSubmitBlocked`) enforced at `App.tsx:847` (`submitSession`) | Death-wall threshold: `initialized && poolCount>0 && readyCount===0 && some(dead)`. One dead among healthy never blocks; a capped/quarantined-only zero-ready pool is NOT walled here (falls through to the engine's loud quota error, §6) so the block is never silent (review fix). |
 | window global exports + `resetStartup` dev helper | behavior | ✂️ cut | `INVENTORY.md:114` (helper, not a migration surface) | Prototype harness plumbing. Not a gap. |
 
-### 28. ResumeStates.jsx — Resume-flow presentation: HydrationOverlay (load/failed) + CrossProjectResumeDialog over the real synchronous restore machinery
+### 28. ResumeStates.jsx — Resume-flow presentation: HydrationOverlay (load/failed) + CrossProjectResumeDialog — **CUT 2026-07-09, commit `407dafd`** (P4-22 "remove resume-confirm + hydration-overlay flow (frictionless restore)")
 
-**Migration target:** `app/renderer/src/ResumeDialog.tsx` + `app/renderer/src/resumeDialogState.ts` wired by `app/renderer/src/App.tsx`; built machinery = `app/host/host.ts`, `app/supervisor/supervisor.ts`, `app/sidecar/sessionResume.ts`, `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` · **Overall:** 🔁 adapted · **Prototype:** `~/catcode_prototype/cat-app/ResumeStates.jsx` (150 lines) · **INVENTORY:** W5 Resume CrossProjectResumeDialog/HydrationOverlay adapt (S6)
+**Migration target:** ~~`app/renderer/src/ResumeDialog.tsx` + `app/renderer/src/resumeDialogState.ts`~~ **deleted by P4-22** (`407dafd`, plus `ResumeDialog.test.tsx`/`resumeDialogState.test.ts`); picking a restorable row now restores immediately — no confirm modal, no hydration overlay, matching Claude/ChatGPT. Surviving machinery (host restore API, restorable catalog, crash/disconnect surfacing) is unaffected by the cut and stays ➕ real-added below. · **Overall:** ✂️ cut (P4-22, 2026-07-09) · **Prototype:** `~/catcode_prototype/cat-app/ResumeStates.jsx` (150 lines) · **INVENTORY:** W5 Resume CrossProjectResumeDialog/HydrationOverlay — superseded by frictionless restore
+
+**Re-tag note (B4, `reviews/2026-07-12-phase4-review.md`):** every row below that previously cited `ResumeDialog.tsx`/`resumeDialogState.ts` is re-tagged ✂️ cut here — both files were deleted whole (307 + 80 lines) by P4-22; `rg ResumeDialog app/` = 0 hits. The 27 rows previously marked ✅ built / 🔁 adapted counted a feature that no longer exists (silent parity inflation, B4); P4-22's STATUS row and P4-23's prompt both asserted this re-tag already happened — it had not, until now. The 9 rows already ✂️ cut pre-P4-22 keep that disposition (citation refreshed only). The 3 `[BUILT MACHINERY]` rows are untouched by the cut — `host.restoreSession` / `registry.restorable()` / sidebar crash-tone still run the real frictionless restore — and keep their original disposition + evidence.
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| HydrationOverlay — overlay backdrop (absolute inset-0, z-30, rgba(9,9,11,0.72) + blur) | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:151` | Pure visualization over the real restore round-trip; no engine hydration enum added. |
-| HydrationOverlay — centered card (bordered #121214, shadow, max-w 340, border reddens on failed) | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:152-157` | Card border keys off the presentation `failed` state only. |
-| State gate / 3-state hydration ENUM (loading \| hydrated \| failed) | ux-state | 🔁 adapted | `app/renderer/src/resumeDialogState.ts:12-32`; `app/renderer/src/App.tsx:235-240,629-638,1003-1010` | GUI-only enum collapsed to `confirm`/`hydrating`/`failed`; overlay clears from real restored-session `ready`/`replay:true` frames, with a post-ready no-replay fallback. |
-| Loading — pulse-dot spinner (spin 0.8s) | ux-state | ✅ built | `app/renderer/src/ResumeDialog.tsx:192-196` | Tailwind spinner equivalent; presentation-only. |
-| Loading — 'Resuming <sessionTitle>…' text | data-binding | ✅ built | `app/renderer/src/ResumeDialog.tsx:197-202`; `app/renderer/src/App.tsx:907-909` | Session title comes from the same live∪restorable registry row projection the Sidebar/palette read. |
-| Loading — 'Hydrating transcript from log' subtext | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:203-205` | Describes RESTORE-HISTORY replay; no separate transcript reader. |
-| Failed — error icon (red circle, alert-circle svg) | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:161-164` | Failed-state visualization only. |
-| Failed — title 'Couldn't resume session' | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:165-168` | Error title retained. |
-| Failed — description 'The transcript log failed to deserialize…' | chrome | 🔁 adapted | `app/renderer/src/ResumeDialog.tsx:169-171`; `app/renderer/src/App.tsx:591-599` | Uses real host/sidecar error text when available; prototype corrupt-log copy remains fallback. |
-| Failed — 'Retry' button (pink), onRetry | control | ✅ built | `app/renderer/src/ResumeDialog.tsx:174-181`; `app/renderer/src/App.tsx:992` | Retry re-invokes the same real restore path for the same session. |
-| Failed — 'Start fresh' button, onDismiss | control | 🔁 adapted | `app/renderer/src/ResumeDialog.tsx:182-188`; `app/renderer/src/App.tsx:621-623` | Dismisses/abandons the failed restore; creating a fresh session remains the existing HC1 native-picker path, not an automatic renderer-authored cwd. |
-| Dialog — Escape key → onClose | shortcut | ✅ built | `app/renderer/src/ResumeDialog.tsx:54-62`; `app/renderer/src/ResumeDialog.test.tsx:59-64` | Keyboard action maps to close. |
-| Dialog — Enter key → onConfirm | shortcut | ✅ built | `app/renderer/src/ResumeDialog.tsx:54-62`; `app/renderer/src/ResumeDialog.test.tsx:59-64` | Keyboard action maps to confirm. |
-| Dialog — backdrop overlay (fixed inset-0, z-90, click → onClose) | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:66-70` | z-index adapted to app shell stack; dismiss-on-scrim preserved. |
-| Dialog — modal container (role=dialog, aria-modal, sa-pop anim) | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:71-76` | Role/aria preserved; animation not separately added. |
-| Header — amber warning triangle icon | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:78-81`; `app/renderer/src/ResumeDialog.tsx:227-243` | Warning glyph retained for confirm. |
-| Header — title 'Resume from a different project?' | chrome | 🔁 adapted | `app/renderer/src/ResumeDialog.tsx:82-85` | Shows the cross-project warning only when the selected row cwd differs from the active tab cwd; otherwise truthful "Resume session?". |
-| Header — body copy w/ session.title + 'started in another directory…' | data-binding | 🔁 adapted | `app/renderer/src/ResumeDialog.tsx:86-90`; `app/renderer/src/App.tsx:907-915` | Binds real registry title/cwd; copy says desktop re-spawns the row in its own project, not current cwd. |
-| from→to — source ProjBadge (warn tone, source name + path) | sub-component | ✅ built | `app/renderer/src/ResumeDialog.tsx:95-99`; `app/renderer/src/ResumeDialog.tsx:214-228` | Source path is the selected registry row cwd; only renders for a real cwd difference. |
-| from→to — arrow icon (source → current) | chrome | ✅ built | `app/renderer/src/ResumeDialog.tsx:97-99`; `app/renderer/src/ResumeDialog.tsx:265-283` | Connector glyph retained. |
-| from→to — current ProjBadge (ok tone, 'cat-code' + current path) | sub-component | 🔁 adapted | `app/renderer/src/App.tsx:910-915`; `app/renderer/src/ResumeDialog.tsx:95-99` | Current side is the active tab cwd, because desktop has per-session cwd rather than one global `getOriginalCwd()` UI context. |
-| 'What will differ' section label | chrome | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:16-20`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut: engine resume computes no MCP/plugin/permission diff; the prototype section is invented enrichment. |
-| Diff row — Working directory (from → to) | data-binding | 🔁 adapted | `app/renderer/src/ResumeDialog.tsx:95-103`; `app/renderer/src/App.tsx:910-915` | Kept as the from→to badge only; no separate diff-list row. |
-| Diff row — MCP servers ('project .mcp.json differs') | data-binding | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:16-17`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut: no source-backed MCP diff exists on resume. |
-| Diff row — Plugins & agents ('.cat-code/agents + plugin set differ') | data-binding | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:16-17`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut: no source-backed plugin/agent diff exists on resume. |
-| Diff row — Permission rules ('project .cat-code/settings.json differs') | data-binding | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:16-17`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut: no source-backed permission-rule diff exists on resume. |
-| Diff row template — bullet dot + label(132px) + note/from→to (mono) | chrome | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:16-17`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut with the invented diff list. |
-| Copy-command button — `cd <sourcePath> && claude --resume <id>` | control | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:18-20`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut: desktop restore is in-app `host.restoreSession`; TUI escape-hatch command is not a desktop control. |
-| Copy-command button — copy icon svg | chrome | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:18-20`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut with the TUI-only copy command. |
-| Copy action — clipboard.writeText + toast 'Copied resume command' | control | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:18-20`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut with the TUI-only copy command; no clipboard/toast action added. |
-| Copy helper text — 'Open it in its own project… cat-code copies this cd … && --resume' | chrome | ✂️ cut | `app/renderer/src/ResumeDialog.tsx:18-20`; `app/renderer/src/ResumeDialog.test.tsx:24-28` | Cut: desktop already restores via the host plane. |
-| Actions — 'Cancel' button (+ 'Esc' hint), onClose | control | ✅ built | `app/renderer/src/ResumeDialog.tsx:107-114`; `app/renderer/src/App.tsx:617-619` | Cancel closes the confirm without attempting restore. |
-| Actions — 'Resume here' button (pink, + '⏎' hint), onConfirm | control | ✅ built | `app/renderer/src/ResumeDialog.tsx:115-121`; `app/renderer/src/App.tsx:609-615` | Confirm invokes `performRestore`, the single real `bridge.restoreSession` caller. |
-| ProjBadge — folder icon svg | sub-component | ✅ built | `app/renderer/src/ResumeDialog.tsx:219-223`; `app/renderer/src/ResumeDialog.tsx:285-302` | Folder glyph retained. |
-| ProjBadge — label (project name, mono, tone-colored) | sub-component | ✅ built | `app/renderer/src/ResumeDialog.tsx:214-224`; `app/renderer/src/pathUtils.ts:7` | Label derives from the real cwd basename. |
-| ProjBadge — path (mono, muted, ellipsized) | sub-component | ✅ built | `app/renderer/src/ResumeDialog.tsx:225-227` | Full real cwd path shown on the second line. |
-| [BUILT MACHINERY] restore host API — bridge.restoreSession re-spawns engine, transcript replays | behavior | ➕ real-added | `app/renderer/src/App.tsx:576-590`; `app/renderer/src/App.tsx:235-240`; `app/preload/preload.ts:122-128`; `app/main/main.ts:528-534`; `app/host/host.ts:240-305`; `app/sidecar/index.ts:96-141`; `app/sidecar/sidecarServer.ts:282-315` | Reused unchanged: host API validates row/cwd, supervisor passes resume id, sidecar seeds engine and replays `replay:true` history; renderer overlay completion is keyed to the real ready/replay frames, not the host promise alone. |
-| [BUILT MACHINERY] restorable-session catalog — registry.restorable() rows the picker draws from | data-binding | ➕ real-added | `app/renderer/src/App.tsx:349-354`; `app/renderer/src/App.tsx:898-909`; `app/renderer/src/sidebarState.ts:64-71` | P4-16 picker reads the same live∪restorable roster as Sidebar/palette; no new read seam. |
-| [BUILT MACHINERY] crash vs disconnect surfacing — restorable row tones already in Sidebar | ux-state | ➕ real-added | `app/renderer/src/sidebarState.ts:85-123`; `app/renderer/src/sidebarState.test.ts:93-128` | Existing restore-offer status remains the entry point into the confirm dialog. |
+| HydrationOverlay — overlay backdrop (absolute inset-0, z-30, rgba(9,9,11,0.72) + blur) | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:151`, pre-deletion); no longer exists. |
+| HydrationOverlay — centered card (bordered #121214, shadow, max-w 340, border reddens on failed) | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:152-157`, pre-deletion). |
+| State gate / 3-state hydration ENUM (loading \| hydrated \| failed) | ux-state | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `resumeDialogState.ts` deleted whole | Was 🔁 adapted (`resumeDialogState.ts:12-32`, pre-deletion); the GUI-only enum no longer exists — restore is now a single frame-driven transition with no confirm/hydrating/failed states. |
+| Loading — pulse-dot spinner (spin 0.8s) | ux-state | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:192-196`, pre-deletion). |
+| Loading — 'Resuming <sessionTitle>…' text | data-binding | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:197-202`, pre-deletion). |
+| Loading — 'Hydrating transcript from log' subtext | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:203-205`, pre-deletion). |
+| Failed — error icon (red circle, alert-circle svg) | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:161-164`, pre-deletion). |
+| Failed — title 'Couldn't resume session' | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:165-168`, pre-deletion). |
+| Failed — description 'The transcript log failed to deserialize…' | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was 🔁 adapted (`ResumeDialog.tsx:169-171`, pre-deletion); restore failures now surface in the existing shell-error banner instead. |
+| Failed — 'Retry' button (pink), onRetry | control | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:174-181`, pre-deletion); a failed restore no longer offers an in-place retry control. |
+| Failed — 'Start fresh' button, onDismiss | control | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was 🔁 adapted (`ResumeDialog.tsx:182-188`, pre-deletion). |
+| Dialog — Escape key → onClose | shortcut | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` + `ResumeDialog.test.tsx` deleted whole | Was ✅ built. |
+| Dialog — Enter key → onConfirm | shortcut | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` + `ResumeDialog.test.tsx` deleted whole | Was ✅ built. |
+| Dialog — backdrop overlay (fixed inset-0, z-90, click → onClose) | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:66-70`, pre-deletion). |
+| Dialog — modal container (role=dialog, aria-modal, sa-pop anim) | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:71-76`, pre-deletion). |
+| Header — amber warning triangle icon | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:78-81,227-243`, pre-deletion). |
+| Header — title 'Resume from a different project?' | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was 🔁 adapted (`ResumeDialog.tsx:82-85`, pre-deletion); no confirm dialog remains to show a title. |
+| Header — body copy w/ session.title + 'started in another directory…' | data-binding | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was 🔁 adapted (`ResumeDialog.tsx:86-90`, pre-deletion). |
+| from→to — source ProjBadge (warn tone, source name + path) | sub-component | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:95-99,214-228`, pre-deletion). |
+| from→to — arrow icon (source → current) | chrome | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:97-99,265-283`, pre-deletion). |
+| from→to — current ProjBadge (ok tone, 'cat-code' + current path) | sub-component | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was 🔁 adapted (`ResumeDialog.tsx:95-99`, pre-deletion). |
+| 'What will differ' section label | chrome | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22 (invented enrichment, no engine diff computed); citation refreshed, disposition unchanged. |
+| Diff row — Working directory (from → to) | data-binding | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was 🔁 adapted (`ResumeDialog.tsx:95-103`, pre-deletion); was kept only as the from→to badge, which is itself now cut. |
+| Diff row — MCP servers ('project .mcp.json differs') | data-binding | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Diff row — Plugins & agents ('.cat-code/agents + plugin set differ') | data-binding | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Diff row — Permission rules ('project .cat-code/settings.json differs') | data-binding | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Diff row template — bullet dot + label(132px) + note/from→to (mono) | chrome | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Copy-command button — `cd <sourcePath> && claude --resume <id>` | control | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Copy-command button — copy icon svg | chrome | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Copy action — clipboard.writeText + toast 'Copied resume command' | control | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Copy helper text — 'Open it in its own project… cat-code copies this cd … && --resume' | chrome | ✂️ cut (pre-existing, reconfirmed P4-22) | `407dafd` — `ResumeDialog.tsx` deleted whole | Already cut before P4-22; citation refreshed, disposition unchanged. |
+| Actions — 'Cancel' button (+ 'Esc' hint), onClose | control | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:107-114`, pre-deletion). |
+| Actions — 'Resume here' button (pink, + '⏎' hint), onConfirm | control | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:115-121`, pre-deletion); confirm-then-restore replaced by immediate restore on row click. |
+| ProjBadge — folder icon svg | sub-component | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:219-223,285-302`, pre-deletion). |
+| ProjBadge — label (project name, mono, tone-colored) | sub-component | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:214-224`, pre-deletion). |
+| ProjBadge — path (mono, muted, ellipsized) | sub-component | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole | Was ✅ built (`ResumeDialog.tsx:225-227`, pre-deletion). |
+| [BUILT MACHINERY] restore host API — bridge.restoreSession re-spawns engine, transcript replays | behavior | ➕ real-added | `app/renderer/src/App.tsx:576-590`; `app/renderer/src/App.tsx:235-240`; `app/preload/preload.ts:122-128`; `app/main/main.ts:528-534`; `app/host/host.ts:240-305`; `app/sidecar/index.ts:96-141`; `app/sidecar/sidecarServer.ts:282-315` | Unaffected by the P4-22 cut: `performRestore` calls this same host API directly on row click now, with no confirm/hydration UI in front of it. |
+| [BUILT MACHINERY] restorable-session catalog — registry.restorable() rows the picker draws from | data-binding | ➕ real-added | `app/renderer/src/App.tsx:349-354`; `app/renderer/src/App.tsx:898-909`; `app/renderer/src/sidebarState.ts:64-71` | Unaffected by the P4-22 cut; still the live∪restorable roster Sidebar/palette read. |
+| [BUILT MACHINERY] crash vs disconnect surfacing — restorable row tones already in Sidebar | ux-state | ➕ real-added | `app/renderer/src/sidebarState.ts:85-123`; `app/renderer/src/sidebarState.test.ts:93-128` | Unaffected by the P4-22 cut; the existing restore-offer status is now the sole entry point — row click restores immediately, no modal. |
 
 ### 29. Welcome.jsx — First-run / empty-session launcher: neon hero + interactive meta strip (Project·Start-in·Branch·Orchestrator) + read-only Codex pool table
 
@@ -2201,9 +2206,9 @@ drops with no owner.
 | Per-path trust gate on untrusted project (Trust / Open read-only / Cancel; ↵/R/Esc) | `Welcome.jsx` TrustProjectPrompt | not built (real primitive engine-side) | ⬜ deferred | `phase4.md:764` P4-15 "Startup + trust gate + first-run OAuth + reauth banner (D4)"; data binding `src/utils/config.ts` `hasTrustDialogAccepted` | Prototype nests it in launcher; real owner is the startup/trust-gate session (P4-15). D4: trust gate adapts per-session-create. |
 | Start-in selector: Locally vs New worktree; Branch chooser | `Welcome.jsx` StartInSeg + BranchValue | local start = P3-1 spawn cwd; worktree/branch not built | ✂️ cut | `decisions/WELCOME-LAUNCHER.md` W3/W4: local=built, worktree=DEFER, branch chooser=CUT; `phase4.md:855` P4-17 | Local start IS the real path. Worktree-at-launch deferred, branch chooser cut — both D5, cited; correct drops, flagged. |
 | Codex account table on welcome (pool status, 5h/weekly bars, CAPPED) | `Welcome.jsx` CodexRow/MiniUsageBar | not built | ⬜ deferred | `phase4.md:406/469` "pool status for … P4-17 (welcome account table)"; feed = P4-5 pool | Real feed is P4-5 accounts pool; prototype's `FILL`/`FRIENDLY` mock rosters are source-drop-correct. Table UI → P4-17. |
-| HydrationOverlay — loading state ("Resuming <title>… / Hydrating transcript from log", spinner) | `ResumeStates.jsx` HydrationOverlay (loading) | overlay chrome built over real ready/replay restore frames | ✅ built | `ResumeDialog.tsx:191-207`; frame gate `App.tsx:235-240,629-638,1003-1010`; replay `app/sidecar/index.ts:129`, `app/shared/protocol.ts:152` `replay?:true` | Animation is pure visualization over a real synchronous replay. Prototype SOURCE: cat-code has NO hydration-state enum. |
-| HydrationOverlay — failed state (error card "Couldn't resume", Retry / Start fresh) | `ResumeStates.jsx` HydrationOverlay (failed) | failed overlay shows real host/sidecar error, with Retry reusing `host.restoreSession` | 🔁 adapted | `ResumeDialog.tsx:160-189`; retry path `App.tsx:613-618,1003-1009`; `app/sidecar/sessionResume.ts:33`; `app/host/host.ts:242-264` | Real posture remains fail-loud (anti-Potemkin, D6) + host pre-validation; UI is a presentation wrapper over those failures. |
-| CrossProjectResumeDialog — "Resume from a different project?" warning + from→to badges | `ResumeStates.jsx` CrossProjectResumeDialog | confirm dialog built; cross-project warning/badges render only for a real cwd difference | 🔁 adapted | `ResumeDialog.tsx:64-103`; invoke path `App.tsx:609-616,1024-1031`; row cwd `registry.ts:80`, host re-validates `host.ts:283` and spawns rooted there | Desktop restores in the row's own cwd (D1 one-cwd-per-session); P4-16 reframes the dialog as a restorable-row confirm step. |
+| HydrationOverlay — loading state ("Resuming <title>… / Hydrating transcript from log", spinner) | `ResumeStates.jsx` HydrationOverlay (loading) | deleted — restore is now instant, no loading overlay | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole; underlying replay frames still real (`app/sidecar/index.ts:129`, `app/shared/protocol.ts:152` `replay?:true`) | Was ✅ built (`ResumeDialog.tsx:191-207`, pre-deletion) — B4. The replay mechanism itself is untouched (still ➕ real-added, row below); only the loading-overlay visualization in front of it is gone. |
+| HydrationOverlay — failed state (error card "Couldn't resume", Retry / Start fresh) | `ResumeStates.jsx` HydrationOverlay (failed) | deleted — restore failures now surface in the existing shell-error banner | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole; failure path still fail-loud at `app/sidecar/sessionResume.ts:33`, `app/host/host.ts:242-264` | Was 🔁 adapted (`ResumeDialog.tsx:160-189`, pre-deletion) — B4. Host/sidecar fail-loud posture (anti-Potemkin, D6) is unaffected; only the dedicated failed-overlay UI + in-place Retry control are gone. |
+| CrossProjectResumeDialog — "Resume from a different project?" warning + from→to badges | `ResumeStates.jsx` CrossProjectResumeDialog | deleted — restoring a row now spawns immediately in its own cwd, no confirm step | ✂️ cut (P4-22, 2026-07-09) | `407dafd` — `ResumeDialog.tsx` deleted whole; cwd-rooted spawn still real (`app/host/registry.ts:80`, `app/host/host.ts:283`) | Was 🔁 adapted (`ResumeDialog.tsx:64-103`, pre-deletion) — B4. D1 one-cwd-per-session already made the cross-project warning moot; P4-22 removed the confirm step entirely (frictionless restore). |
 | CrossProjectResumeDialog — "What will differ" list (working dir / MCP / plugins+agents / permission rules) | `ResumeStates.jsx` diffs[] | none | ✂️ cut | Prototype SOURCE labels it a "GUI-ONLY enrichment"; real check is directory-only (`crossProjectResume.ts`), does not diff plugins/MCP/permissions; `diffs[]` are hardcoded mock notes; absence asserted in `ResumeDialog.test.tsx:24-28` | Correct drop: a fabricated diff list with no real data source. A dropped mock, not a missing element; the P4-16 picker does not resurrect it. |
 | CrossProjectResumeDialog — copy `cd <path> && claude --resume <id>` escape hatch | `ResumeStates.jsx` copyCmd/cmd | none | ✂️ cut | TUI escape hatch (`ResumeConversation.tsx` per surface SOURCE) targets the terminal `--resume` flow; desktop restores in-app via `host.restoreSession` | Terminal-flow affordance, N/A to the desktop restore path; correct to drop, not a gap. |
 | Cross-project amber project pill on workspace panel header | `Welcome`/WorkspaceLayout amber pill | always neutral blue | ⬜ deferred | `app/renderer/src/WorkspacePanels.tsx:277-281` comment: amber deferred, HC1 has no single current workspace to diff → neutral blue; §0 flag `STATUS.md:220` (P4-4) | Deferred with a recorded P4-4 §0 flag, tied to the same D1 constraint that neutralizes the cross-project warning. |
@@ -2401,67 +2406,97 @@ the "no owner" note in each:
 
 ## Part D — Parity metrics
 
-Counts are table rows per disposition. **In-scope** = built + adapted + deferred + ❓ (the
-prototype elements that are parity targets); it **excludes** ✂️ cut (decided not to migrate)
-and ➕ real-added (not a prototype element). **Realized%** = (built + adapted) ÷ in-scope —
-the fraction of in-scope prototype elements already built or adapted. Phase-4 gate target ≈ 80%.
+**Re-derived 2026-07-12 (P4-27, review findings B4/B5/M3, `reviews/2026-07-12-phase4-review.md`).**
+This table was stale in both directions — hand-computed once at ledger landing (2026-07-07) and
+never re-derived even as ~10 sessions since flipped their Part A/B DETAIL rows (proof of
+non-derivation: three different "✅ built" totals coexisted — detail rows 595, the old per-surface
+rollup below 370, the old Totals row 312). It is now **generated from the current DETAIL rows** by
+`scripts/parity-ledger-count.ts` (`bun run scripts/parity-ledger-count.ts docs/migration/PARITY-LEDGER.md`)
+— re-run it after any session edits Part A/B rows, rather than hand-editing this table again. Two
+disposition corrections were applied to the detail rows first (so the recount reflects reality, not
+just re-adds up the old mistake): **§28 ResumeStates + its 3 FLOW-7 dialog rows re-tagged ✂️ cut**
+(the feature was deleted whole by P4-22, commit `407dafd`; B4) and **§5/§6's 27 owned-but-mistagged
+❓ rows re-tagged ⬜ deferred (owner P4-18)** (M3; Part C's ownership table already credited P4-18,
+the Part A rows just never got flipped). Counts are table rows per disposition. **In-scope** = built
++ adapted + deferred + ❓ (the prototype elements that are parity targets); it **excludes** ✂️ cut
+(decided not to migrate) and ➕ real-added (not a prototype element). **Realized%** = (built +
+adapted) ÷ in-scope. Phase-4 gate target ≈ 80%.
 
 ### Per surface
 
 | # | Surface | ✅ | 🔁 | ➕ | ⬜ | ✂️ | ❓ | Rows | Realized% |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| 01 | AppV2 | 16 | 20 | 5 | 21 | 6 | 0 | 68 | 63% |
+| 01 | AppV2 | 19 | 21 | 5 | 17 | 6 | 0 | 68 | 70% |
 | 02 | Sidebar | 23 | 8 | 5 | 10 | 4 | 0 | 50 | 76% |
 | 03 | TabBar | 22 | 13 | 8 | 1 | 0 | 0 | 44 | 97% |
 | 04 | WorkspaceLayout | 17 | 12 | 8 | 3 | 0 | 0 | 40 | 91% |
-| 05 | Messages | 3 | 10 | 1 | 0 | 12 | 49 | 75 | 21% |
-| 06 | Chat | 9 | 9 | 2 | 40 | 6 | 15 | 81 | 25% |
+| 05 | Messages | 20 | 20 | 1 | 21 | 13 | 0 | 75 | 66% |
+| 06 | Chat | 18 | 15 | 2 | 40 | 6 | 0 | 81 | 45% |
 | 07 | Permissions | 12 | 25 | 3 | 6 | 8 | 7 | 61 | 74% |
 | 08 | PermissionRules | 1 | 11 | 4 | 0 | 21 | 3 | 40 | 80% |
 | 09 | CommandPalette | 26 | 19 | 2 | 5 | 6 | 2 | 60 | 87% |
-| 10 | SlashCommandPicker | 20 | 9 | 3 | 6 | 0 | 2 | 40 | 78% |
-| 11 | Settings | 35 | 5 | 3 | 9 | 2 | 40 | 94 | 45% |
+| 10 | SlashCommandPicker | 22 | 9 | 3 | 6 | 0 | 0 | 40 | 84% |
+| 11 | Settings | 44 | 10 | 4 | 35 | 2 | 0 | 95 | 61% |
 | 12 | Surfaces | 29 | 15 | 4 | 33 | 6 | 0 | 87 | 57% |
-| 13 | AgentIdentity | 25 | 5 | 7 | 18 | 4 | 0 | 59 | 62% |
-| 14 | Pages | 0 | 0 | 0 | 66 | 15 | 0 | 81 | 0% |
-| 15 | AccountLifecycle | 0 | 0 | 0 | 44 | 2 | 0 | 46 | 0% |
-| 16 | SessionsPage | 0 | 0 | 0 | 62 | 0 | 0 | 62 | 0% |
+| 13 | AgentIdentity | 25 | 5 | 7 | 18 | 4 | 0 | 59 | 63% |
+| 14 | Pages | 36 | 9 | 0 | 21 | 15 | 0 | 81 | 68% |
+| 15 | AccountLifecycle | 36 | 8 | 0 | 0 | 2 | 0 | 46 | 100% |
+| 16 | SessionsPage | 2 | 0 | 0 | 60 | 0 | 0 | 62 | 3% |
 | 17 | SessionActions | 0 | 0 | 0 | 65 | 2 | 0 | 67 | 0% |
 | 18 | MetadataInspector | 0 | 0 | 0 | 61 | 1 | 0 | 62 | 0% |
 | 19 | AgentsPage | 32 | 5 | 8 | 0 | 4 | 0 | 49 | 100% |
-| 20 | OrchestratorMode | 16 | 8 | 0 | 33 | 11 | 0 | 68 | 51% |
+| 20 | OrchestratorMode | 20 | 8 | 0 | 29 | 11 | 0 | 68 | 49% |
 | 21 | TasksPage | 22 | 6 | 0 | 7 | 10 | 0 | 45 | 80% |
 | 22 | GoalsPage | 11 | 21 | 6 | 26 | 4 | 0 | 68 | 55% |
 | 23 | MemoryPage | 9 | 11 | 7 | 5 | 7 | 2 | 41 | 74% |
-| 24 | PlanPanel | 22 | 16 | 2 | 1 | 17 | 0 | 58 | 98% |
-| 25 | SettingsExtensions | 0 | 0 | 0 | 76 | 2 | 0 | 78 | 0% |
-| 26 | RemoteSettings | 0 | 4 | 0 | 26 | 14 | 0 | 44 | 13% |
-| 27 | Startup | 0 | 2 | 1 | 41 | 12 | 0 | 56 | 5% |
-| 28 | ResumeStates | 20 | 7 | 3 | 0 | 9 | 0 | 39 | 100% |
-| 29 | Welcome | 0 | 6 | 0 | 41 | 5 | 0 | 52 | 13% |
+| 24 | PlanPanel | 37 | 1 | 2 | 1 | 17 | 0 | 58 | 97% |
+| 25 | SettingsExtensions | 33 | 5 | 0 | 12 | 6 | 0 | 56 | 76% |
+| 26 | RemoteSettings | 20 | 7 | 0 | 0 | 17 | 0 | 44 | 100% |
+| 27 | Startup | 22 | 7 | 0 | 15 | 12 | 0 | 56 | 66% |
+| 28 | ResumeStates | 0 | 0 | 3 | 0 | 36 | 0 | 39 | — (cut, B4) |
+| 29 | Welcome | 17 | 19 | 0 | 10 | 6 | 0 | 52 | 78% |
 | 30 | ConnectionDemo | 0 | 0 | 1 | 0 | 9 | 0 | 10 | — |
+
+Cross-checked against review S3's per-surface reference (`reviews/2026-07-12-phase4-review.md`
+"THE PARITY NUMBER"): §14 Pages 68%, §15 AccountLifecycle 100%, §25 SettingsExtensions 76%, §26
+RemoteSettings 100%, §27 Startup 66%, §29 Welcome 78%, §28 ResumeStates → cut — **all seven match
+S3 exactly** (0 surfaces disagree by >5 points).
 
 ### Per flow
 
 | # | Flow | ✅ | 🔁 | ➕ | ⬜ | ✂️ | ❓ | Rows |
 |---|---|--:|--:|--:|--:|--:|--:|--:|
 | 1 | first-run | 0 | 1 | 1 | 16 | 5 | 0 | 23 |
-| 2 | session-lifecycle | 7 | 3 | 12 | 4 | 1 | 0 | 27 |
+| 2 | session-lifecycle | 8 | 4 | 12 | 2 | 1 | 0 | 27 |
 | 3 | permission-roundtrip | 12 | 6 | 3 | 2 | 1 | 2 | 26 |
 | 4 | multi-session | 6 | 10 | 4 | 1 | 0 | 0 | 21 |
-| 5 | orchestrator-nesting | 3 | 2 | 1 | 10 | 5 | 0 | 21 |
+| 5 | orchestrator-nesting | 5 | 1 | 1 | 9 | 5 | 0 | 21 |
 | 6 | accounts-reauth | 3 | 0 | 3 | 8 | 1 | 0 | 15 |
-| 7 | resume-cross-project | 0 | 2 | 5 | 7 | 3 | 1 | 18 |
-| 8 | settings-edit | 7 | 2 | 2 | 3 | 2 | 3 | 19 |
+| 7 | resume-cross-project | 0 | 1 | 5 | 5 | 6 | 1 | 18 |
+| 8 | settings-edit | 11 | 2 | 2 | 2 | 2 | 0 | 19 |
 
 ### Totals
 
 | Scope | ✅ built | 🔁 adapted | ➕ real-added | ⬜ deferred | ✂️ cut | ❓ missing | Rows | In-scope | Realized% |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| Surfaces (30) | 312 | 219 | 82 | 819 | 173 | 120 | 1725 | 1470 | 36% |
-| Flows (8) | 38 | 26 | 31 | 51 | 18 | 6 | 170 | 121 | 53% |
-| **Total** | **350** | **245** | **113** | **870** | **191** | **126** | **1895** | **1591** | **37%** |
+| Surfaces (30) | 575 | 290 | 83 | 507 | 235 | 14 | 1704 | 1386 | 62% |
+| Flows (8) | 45 | 25 | 31 | 45 | 21 | 3 | 170 | 118 | 59% |
+| **Total** | **620** | **315** | **114** | **552** | **256** | **17** | **1874** | **1504** | **62%** |
 
-_Realized% is low by design: 819 in-scope surface elements are ⬜ deferred to unbuilt Phase-4
-sessions (P4-6…P4-17, P4-9's own deferrals). The gate rises as those land; the 126 ❓ must first
-be given owners or waived so the denominator is honest._
+**Realized parity of record: 62%** ((620 built + 315 adapted) ÷ 1,504 in-scope). This is the gate
+metric of record as of 2026-07-12, superseding the stale 36/37% rows above. It matches S3's
+independent estimate (`reviews/2026-07-12-phase4-review.md` "≈62%, CI 60–65%, surfaces ≈62.5%,
+flows ≈60%") almost exactly, which cross-validates both the manual S3 estimate and this generated
+recount. It is **~26 points above the 36% of record** (the phase moved a lot; the number of record
+was grossly stale, B5) and **~18 points below the ~80% gate target** — real remaining build (the
+⬜ deferred rows: P4-6b, P4-20 AskUserQuestion, the P4-18 dep-gated transcript deferrals, the P4-19
+settings split-offs), not a bookkeeping gap. It also still **overstates FIDELITY** parity per
+STATUS's 2026-07-11 honesty banner — low-fidelity adaptations (the P4-0/P4-24 composer) count as
+"built" here same as a pixel-exact port.
+
+_Built-total reconciliation (B5): the three numbers that used to coexist for surfaces' ✅ built —
+**595** (a fresh count of the pre-correction detail rows, reproduced by re-running the script
+against the pre-P4-27 file), **370** (the old, stale per-surface rollup above), **312** (the old,
+stale Totals row) — collapse to **one number: 575** (surfaces ✅ built, post B4/M3 detail-row
+corrections; 620 including flows). The 595→575 drop is exactly the 20 §28 ✅ rows re-tagged ✂️ cut
+by B4; nothing else in the surface detail rows changed between the two counts._
