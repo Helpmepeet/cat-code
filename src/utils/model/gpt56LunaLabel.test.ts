@@ -1,9 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
+import { executeEffort, showCurrentEffort } from '../../commands/effort/effort.js'
+import { cycleEffortLevel } from '../../components/ModelPicker.js'
 import { CODEX_MODELS } from '../../services/api/codex-fetch-adapter.js'
 import { getContextWindowForModel } from '../context.js'
-import { getDefaultEffortForModel, modelSupportsMaxEffort } from '../effort.js'
+import {
+  getDefaultEffortForModel,
+  getEffortLevelLabel,
+  getEffortSuffix,
+  getSupportedEffortLevels,
+  modelSupportsMaxEffort,
+} from '../effort.js'
 import { getAgentModelOptions } from './agent.js'
 import {
   getPublicModelDisplayName,
@@ -52,8 +60,51 @@ describe('GPT-5.6 Sol, Terra, and Luna', () => {
         model === 'gpt-5.6-luna' ? 'low' : 'medium',
       )
       expect(modelSupportsMaxEffort(model)).toBe(true)
+      expect(getSupportedEffortLevels(model)).toEqual(
+        model === 'gpt-5.6-luna'
+          ? ['low', 'medium', 'high', 'xhigh', 'max']
+          : ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      )
     })
   }
+
+  test('uses Codex CLI reasoning labels', () => {
+    expect(getEffortLevelLabel('xhigh')).toBe('Extra high')
+    expect(getEffortLevelLabel('max')).toBe('Max')
+    expect(getEffortLevelLabel('ultra')).toBe('Ultra')
+    expect(getEffortSuffix('gpt-5.6-sol', 'xhigh')).toBe(
+      ' with extra high effort',
+    )
+  })
+
+  test('cycles through each model’s advertised reasoning levels', () => {
+    const solLevels = getSupportedEffortLevels('gpt-5.6-sol')
+    expect(cycleEffortLevel('high', 'right', solLevels)).toBe('xhigh')
+    expect(cycleEffortLevel('xhigh', 'right', solLevels)).toBe('max')
+    expect(cycleEffortLevel('max', 'right', solLevels)).toBe('ultra')
+
+    const lunaLevels = getSupportedEffortLevels('gpt-5.6-luna')
+    expect(cycleEffortLevel('xhigh', 'right', lunaLevels)).toBe('max')
+    expect(cycleEffortLevel('max', 'right', lunaLevels)).toBe('low')
+  })
+
+  test('/effort accepts Codex levels and reports their labels', () => {
+    expect(executeEffort('XHIGH')).toMatchObject({
+      effortUpdate: { value: 'xhigh' },
+      message: expect.stringContaining('Extra high'),
+    })
+    expect(executeEffort('ULTRA')).toMatchObject({
+      effortUpdate: { value: 'ultra' },
+      message: expect.stringContaining('Ultra'),
+    })
+    expect(executeEffort('impossible')).toEqual({
+      message:
+        'Invalid argument: impossible. Valid options are: low, medium, high, xhigh, max, ultra, auto',
+    })
+    expect(showCurrentEffort('xhigh', 'gpt-5.6-sol').message).toContain(
+      'Extra high',
+    )
+  })
 
   test('shows every GPT-5.6 tier in the main picker source', () => {
     const source = readFileSync(new URL('./modelOptions.ts', import.meta.url), 'utf8')

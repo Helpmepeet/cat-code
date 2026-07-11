@@ -14,7 +14,9 @@ export const EFFORT_LEVELS = [
   'low',
   'medium',
   'high',
+  'xhigh',
   'max',
+  'ultra',
 ] as const satisfies readonly EffortLevel[]
 
 export type EffortValue = EffortLevel | number
@@ -54,8 +56,7 @@ export function modelSupportsEffort(model: string): boolean {
   return getAPIProvider() === 'firstParty'
 }
 
-// @[MODEL LAUNCH]: Add the new model to the allowlist if it supports 'max' effort.
-// Per API docs, 'max' is Opus 4.6 only for public models — other models return an error.
+// @[MODEL LAUNCH]: Add models that support the named 'max' effort level.
 export function modelSupportsMaxEffort(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'max_effort')
   if (supported3P !== undefined) {
@@ -65,9 +66,7 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (m.includes('opus-4-6')) {
     return true
   }
-  // OpenAI/Codex: Cat Code's 'max' UI level maps to reasoning.effort='xhigh'.
   if (
-    m.includes('codex') ||
     m === 'gpt-5.6-sol' ||
     m === 'gpt-5.6-terra' ||
     m === 'gpt-5.6-luna'
@@ -78,6 +77,23 @@ export function modelSupportsMaxEffort(model: string): boolean {
     return true
   }
   return false
+}
+
+export function getSupportedEffortLevels(model: string): readonly EffortLevel[] {
+  const m = model.toLowerCase()
+  if (m === 'gpt-5.6-sol' || m === 'gpt-5.6-terra') {
+    return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+  }
+  if (m === 'gpt-5.6-luna') {
+    return ['low', 'medium', 'high', 'xhigh', 'max']
+  }
+  if (m.includes('codex')) {
+    return ['low', 'medium', 'high', 'xhigh']
+  }
+  if (modelSupportsMaxEffort(model)) {
+    return ['low', 'medium', 'high', 'max']
+  }
+  return ['low', 'medium', 'high']
 }
 
 export function isEffortLevel(value: string): value is EffortLevel {
@@ -175,8 +191,10 @@ export function resolveAppliedEffort(
   }
   const resolved =
     envOverride ?? appStateEffortValue ?? getDefaultEffortForModel(model)
-  // API rejects 'max' on non-Opus-4.6 models — downgrade to 'high'.
-  if (resolved === 'max' && !modelSupportsMaxEffort(model)) {
+  if (
+    typeof resolved === 'string' &&
+    !getSupportedEffortLevels(model).includes(resolved)
+  ) {
     return 'high'
   }
   return resolved
@@ -208,7 +226,7 @@ export function getEffortSuffix(
   if (effortValue === undefined) return ''
   const resolved = resolveAppliedEffort(model, effortValue)
   if (resolved === undefined) return ''
-  return ` with ${convertEffortValueToLevel(resolved)} effort`
+  return ` with ${getEffortLevelLabel(convertEffortValueToLevel(resolved)).toLowerCase()} effort`
 }
 
 export function isValidNumericEffort(value: number): boolean {
@@ -245,9 +263,18 @@ export function getEffortLevelDescription(level: EffortLevel): string {
       return 'Balanced approach with standard implementation and testing'
     case 'high':
       return 'Comprehensive implementation with extensive testing and documentation'
+    case 'xhigh':
+      return 'Extra high reasoning depth for complex problems'
     case 'max':
-      return 'Maximum capability with deepest reasoning (Opus 4.6, GPT-5.6 Sol/Terra/Luna, and Codex models that support xhigh)'
+      return 'Maximum reasoning depth for the hardest problems'
+    case 'ultra':
+      return 'Maximum reasoning with automatic task delegation'
   }
+}
+
+export function getEffortLevelLabel(level: EffortLevel): string {
+  if (level === 'xhigh') return 'Extra high'
+  return level[0]!.toUpperCase() + level.slice(1)
 }
 
 /**

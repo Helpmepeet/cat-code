@@ -95,7 +95,7 @@ How to use the statusLine command:
        "id": "string",           // Model ID (e.g., "claude-3-5-sonnet-20241022")
        "display_name": "string"  // Display name (e.g., "Claude 3.5 Sonnet")
      },
-     "effortLevel": "low" | "medium" | "high" | "max", // Current resolved effort level
+     "effortLevel": "low" | "medium" | "high" | "xhigh" | "max" | "ultra", // Current resolved effort level
      "fast_mode_state": "on" | "cooldown" | "off", // Current fast mode state
      "workspace": {
        "current_dir": "string",  // Current working directory path

@@ -534,10 +534,13 @@ describe('codex-fetch-adapter', () => {
     expect(mapEffortToCodex('minimal', 'gpt-5.6-luna')).toBe('none')
   })
 
-  test('mapEffortToCodex maps Cat Code max to xhigh for GPT-5.6 models', () => {
-    expect(mapEffortToCodex('max', 'gpt-5.6-sol')).toBe('xhigh')
-    expect(mapEffortToCodex('max', 'gpt-5.6-terra')).toBe('xhigh')
-    expect(mapEffortToCodex('max', 'gpt-5.6-luna')).toBe('xhigh')
+  test('mapEffortToCodex preserves supported GPT-5.6 reasoning levels', () => {
+    expect(mapEffortToCodex('xhigh', 'gpt-5.6-sol')).toBe('xhigh')
+    expect(mapEffortToCodex('max', 'gpt-5.6-sol')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-5.6-sol')).toBe('ultra')
+    expect(mapEffortToCodex('ultra', 'gpt-5.6-terra')).toBe('ultra')
+    expect(mapEffortToCodex('max', 'gpt-5.6-luna')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-5.6-luna')).toBeUndefined()
   })
 
   test('translateToCodexBody merges web search sources include with reasoning include', () => {

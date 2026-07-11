@@ -5,6 +5,11 @@ import { dirname, join } from 'path'
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const schemasPath = join(repoRoot, 'src/entrypoints/sdk/coreSchemas.ts')
 const generatedPath = join(repoRoot, 'src/entrypoints/sdk/coreTypes.generated.ts')
+const effortSnapshotPaths = [
+  generatedPath,
+  join(repoRoot, 'app/shared/sdk-types.snapshot.d.ts'),
+  join(repoRoot, 'scripts/typecheck/renderer-engine-types/sdk-types.snapshot.d.ts'),
+]
 
 const schemas = readFileSync(schemasPath, 'utf-8')
 const generated = readFileSync(generatedPath, 'utf-8')
@@ -30,14 +35,40 @@ const diagnosticUnion = [
   '',
 ].join('\n')
 
-const nextGenerated = generated.replace(
-  /export type SDKAccountDiagnosticCode =\n(?:  \| '[^']+'\n)+/,
-  diagnosticUnion,
+const effortLevelsMatch = schemas.match(
+  /supportedEffortLevels:\s*z\s*\.array\(z\.enum\(\[([^\]]+)\]\)\)/,
 )
+if (!effortLevelsMatch?.[1]) {
+  throw new Error('Could not find ModelInfoSchema supportedEffortLevels enum values')
+}
+const effortLevels = Array.from(
+  effortLevelsMatch[1].matchAll(/'([^']+)'/g),
+  match => match[1],
+)
+
+const nextGenerated = generated
+  .replace(
+    /export type SDKAccountDiagnosticCode =\n(?:  \| '[^']+'\n)+/,
+    diagnosticUnion,
+  )
 
 if (nextGenerated === generated) {
   console.log('SDK types already up to date.')
 } else {
   writeFileSync(generatedPath, nextGenerated, 'utf-8')
   console.log('Updated src/entrypoints/sdk/coreTypes.generated.ts.')
+}
+
+const supportedEffortLevels =
+  `supportedEffortLevels?: Array<${effortLevels.map(level => `'${level}'`).join(' | ')}>`
+for (const path of effortSnapshotPaths) {
+  const contents = readFileSync(path, 'utf-8')
+  const nextContents = contents.replace(
+    /supportedEffortLevels\?: Array<[^>]+>/,
+    supportedEffortLevels,
+  )
+  if (nextContents !== contents) {
+    writeFileSync(path, nextContents, 'utf-8')
+    console.log(`Updated ${path.slice(repoRoot.length + 1)}.`)
+  }
 }

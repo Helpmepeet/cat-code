@@ -20,12 +20,16 @@ const cases: Case[] = [
   { effort: 'low', model: 'gpt-5.6-terra', expect: 'low', note: 'low on Terra' },
   { effort: 'high', model: 'gpt-5.6-terra', expect: 'high', note: 'high on Terra' },
 
-  // max → xhigh on codex variants and supported base GPT models
-  { effort: 'max', model: 'gpt-5.6-sol', expect: 'xhigh', note: 'max on Sol → xhigh' },
-  { effort: 'max', model: 'gpt-5.6-luna', expect: 'xhigh', note: 'max on Luna → xhigh' },
+  // GPT-5.6 models preserve the reasoning levels advertised by Codex CLI.
+  { effort: 'xhigh', model: 'gpt-5.6-sol', expect: 'xhigh', note: 'xhigh on Sol' },
+  { effort: 'max', model: 'gpt-5.6-sol', expect: 'max', note: 'max on Sol' },
+  { effort: 'ultra', model: 'gpt-5.6-sol', expect: 'ultra', note: 'ultra on Sol' },
+  { effort: 'max', model: 'gpt-5.6-luna', expect: 'max', note: 'max on Luna' },
+  { effort: 'ultra', model: 'gpt-5.6-luna', expect: undefined, note: 'ultra on Luna → omit' },
   { effort: 'max', model: 'gpt-5.2-codex', expect: 'xhigh', note: 'max on codex-variant → xhigh' },
   { effort: 'max', model: 'gpt-5.1-codex-max', expect: 'xhigh', note: 'max on codex-max → xhigh' },
-  { effort: 'max', model: 'gpt-5.6-terra', expect: 'xhigh', note: 'max on Terra → xhigh' },
+  { effort: 'max', model: 'gpt-5.6-terra', expect: 'max', note: 'max on Terra' },
+  { effort: 'ultra', model: 'gpt-5.6-terra', expect: 'ultra', note: 'ultra on Terra' },
   { effort: 'max', model: 'gpt-5.2', expect: 'high', note: 'max on base gpt-5.2 → high' },
 
   // minimal disables thinking and preserves the old fast-slot latency intent.
@@ -41,7 +45,7 @@ const cases: Case[] = [
 
   // case insensitivity
   { effort: 'HIGH', model: 'gpt-5.6-luna', expect: 'high', note: 'uppercase HIGH → high' },
-  { effort: 'Max', model: 'gpt-5.6-luna', expect: 'xhigh', note: 'mixed-case Max → xhigh' },
+  { effort: 'Max', model: 'gpt-5.6-luna', expect: 'max', note: 'mixed-case Max → max' },
 ]
 
 let pass = 0

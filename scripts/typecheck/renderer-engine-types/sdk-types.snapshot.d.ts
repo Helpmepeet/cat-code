@@ -406,7 +406,7 @@ export type ModelInfo = {
   displayName: string
   description: string
   supportsEffort?: boolean
-  supportedEffortLevels?: Array<'low' | 'medium' | 'high' | 'max'>
+  supportedEffortLevels?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'>
   supportsAdaptiveThinking?: boolean
   supportsFastMode?: boolean
   supportsAutoMode?: boolean

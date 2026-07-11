@@ -1,4 +1,11 @@
-export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max'
+export type CodexReasoningEffort =
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+  | 'ultra'
 
 export type CodexCoreMessageRole = 'system' | 'developer' | 'user' | 'assistant'
 

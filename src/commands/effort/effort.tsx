@@ -4,7 +4,7 @@ import { useMainLoopModel } from '../../hooks/useMainLoopModel.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
 import { useAppState, useSetAppState } from '../../state/AppState.js';
 import type { LocalJSXCommandOnDone } from '../../types/command.js';
-import { type EffortValue, getDisplayedEffortLevel, getEffortEnvOverride, getEffortValueDescription, isEffortLevel, toPersistableEffort } from '../../utils/effort.js';
+import { EFFORT_LEVELS, type EffortValue, getDisplayedEffortLevel, getEffortEnvOverride, getEffortLevelLabel, getEffortValueDescription, isEffortLevel, toPersistableEffort } from '../../utils/effort.js';
 import { updateSettingsForSource } from '../../utils/settings/settings.js';
 const COMMON_HELP_ARGS = ['help', '-h', '--help'];
 type EffortCommandResult = {
@@ -51,9 +51,12 @@ function setEffortValue(effortValue: EffortValue): EffortCommandResult {
     };
   }
   const description = getEffortValueDescription(effortValue);
+  const label = typeof effortValue === 'string'
+    ? getEffortLevelLabel(effortValue)
+    : String(effortValue);
   const suffix = persistable !== undefined ? '' : ' (this session only)';
   return {
-    message: `Set effort level to ${effortValue}${suffix}: ${description}`,
+    message: `Set effort level to ${label}${suffix}: ${description}`,
     effortUpdate: {
       value: effortValue
     }
@@ -65,12 +68,15 @@ export function showCurrentEffort(appStateEffort: EffortValue | undefined, model
   if (effectiveValue === undefined) {
     const level = getDisplayedEffortLevel(model, appStateEffort);
     return {
-      message: `Effort level: auto (currently ${level})`
+      message: `Effort level: auto (currently ${getEffortLevelLabel(level)})`
     };
   }
   const description = getEffortValueDescription(effectiveValue);
+  const label = typeof effectiveValue === 'string'
+    ? getEffortLevelLabel(effectiveValue)
+    : String(effectiveValue);
   return {
-    message: `Current effort level: ${effectiveValue} (${description})`
+    message: `Current effort level: ${label} (${description})`
   };
 }
 function unsetEffortLevel(): EffortCommandResult {
@@ -111,7 +117,7 @@ export function executeEffort(args: string): EffortCommandResult {
   }
   if (!isEffortLevel(normalized)) {
     return {
-      message: `Invalid argument: ${args}. Valid options are: low, medium, high, max, auto`
+      message: `Invalid argument: ${args}. Valid options are: ${EFFORT_LEVELS.join(', ')}, auto`
     };
   }
   return setEffortValue(normalized);
@@ -171,7 +177,7 @@ function ApplyEffortAndClose(t0) {
 export async function call(onDone: LocalJSXCommandOnDone, _context: unknown, args?: string): Promise<React.ReactNode> {
   args = args?.trim() || '';
   if (COMMON_HELP_ARGS.includes(args)) {
-    onDone('Usage: /effort [low|medium|high|max|auto]\n\nEffort levels:\n- low: Quick, straightforward implementation\n- medium: Balanced approach with standard testing\n- high: Comprehensive implementation with extensive testing\n- max: Maximum capability with deepest reasoning (Opus 4.6, GPT-5.6 Sol/Terra/Luna, and Codex models that support xhigh)\n- auto: Use the default effort level for your model');
+    onDone('Usage: /effort [low|medium|high|xhigh|max|ultra|auto]\n\nEffort levels:\n- low: Fast responses with lighter reasoning\n- medium: Balances speed and reasoning depth for everyday tasks\n- high: Greater reasoning depth for complex problems\n- xhigh: Extra high reasoning depth for complex problems\n- max: Maximum reasoning depth for the hardest problems\n- ultra: Maximum reasoning with automatic task delegation (GPT-5.6 Sol and Terra)\n- auto: Use the default effort level for your model');
     return;
   }
   if (!args || args === 'current' || args === 'status') {

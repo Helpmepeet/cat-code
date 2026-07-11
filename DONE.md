@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 12 Jul 2026
+
+107. Aligned reasoning-effort selection with the current Codex CLI vocabulary and model capabilities: GPT-5.6 Sol and Terra expose Low, Medium, High, Extra high (`xhigh`), Max, and Ultra; Luna stops at Max; supported values now pass through to Codex without collapsing GPT-5.6 `max` to `xhigh`, while legacy Codex variants and Claude Opus retain their existing mappings. Updated `/effort`, `--effort`, the model picker, SDK schemas/generated snapshots, status-line guidance, verification script, and canonical Codex map. Verified with 69 focused tests, `build:dev:full`, the desktop suite (865/0), sidecar typecheck, hardening (19/19), generated-snapshot typecheck, stale-reference sweep, and an independent PASS review; the standalone effort script remained unexecuted because the harness classified it as potentially consuming live Codex usage.
+
 ### 11 Jul 2026
 
 106. Replaced the Bash tool’s short commit-message guidance with a durable handoff standard for future developers and agent sessions. Every non-trivial commit now requires a self-contained body that explains the motivating problem, behavioral or architectural change, rationale, and material constraints or consequences, so a reader without the original conversation can recover the commit’s context; subject-only messages remain limited to genuinely self-explanatory changes. This supersedes entry 96’s 1–2 sentence bias.

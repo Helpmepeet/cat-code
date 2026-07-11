@@ -1262,11 +1262,11 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
 
   // Translate effort → Codex reasoning.effort.
   // claude.ts:configureEffortParams writes the user's /effort choice into
-  // output_config.effort. Codex accepts low|medium|high|xhigh plus
-  // model-specific none/minimal values on reasoning.effort. Mapping:
-  //   low|medium|high    → pass through
+  // output_config.effort. Codex accepts model-specific reasoning levels.
+  // Mapping:
+  //   low|medium|high|xhigh → pass through
   //   minimal            → model-specific no/low-reasoning value
-  //   max                → xhigh on codex variants, else high
+  //   max|ultra          → pass through for GPT-5.6 models that support them
   //   anything else/undef→ omit (Codex server default kicks in, typically high)
   //
   // Reasoning summaries: ask the server for human-readable summary output.
@@ -1327,7 +1327,7 @@ export function mapEffortToCodex(
 ): string | undefined {
   if (!effort) return undefined
   const e = effort.toLowerCase()
-  if (e === 'low' || e === 'medium' || e === 'high') return e
+  if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
   if (e === 'minimal') {
     const model = codexModel.toLowerCase()
     // Cat Code's `minimal` means disabled thinking. GPT-5.6 models expose
@@ -1336,12 +1336,18 @@ export function mapEffortToCodex(
     return 'minimal'
   }
   if (e === 'max') {
-    // Cat Code's max UI level maps to the public Responses API xhigh value.
-    // The Codex-only max/ultra tiers are not sent by this generic adapter.
     const model = codexModel.toLowerCase()
-    return model.includes('codex') || model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna'
-      ? 'xhigh'
-      : 'high'
+    return model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna'
+      ? 'max'
+      : model.includes('codex')
+        ? 'xhigh'
+        : 'high'
+  }
+  if (e === 'ultra') {
+    const model = codexModel.toLowerCase()
+    return model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra'
+      ? 'ultra'
+      : undefined
   }
   return undefined
 }
