@@ -1231,3 +1231,196 @@ spawn (`ps -axo pid,command | grep sidecar/index.ts` count unchanged). Update th
 STATUS row (⬜→✅ + date + note) as the last step.
 ```
 ─── PASTE ───
+
+## TRANCHE F — P4-REVIEW gate-blocker fixes (generated 2026-07-12)
+
+The whole-phase pre-gate review (`reviews/2026-07-12-phase4-review.md`) found the Phase-4 gate NOT
+met: 2 confirmed code blockers + a parity-ledger that can't serve as the gate instrument until
+corrected. These three sessions clear the must-fix list. (Should-fix items B3/M1/B6 are riders on
+P4-18 / P4-8b, not standalone sessions — see their STATUS rows.) After all three land + the pending
+GUI acceptances, RE-RUN P4-REVIEW to certify the gate.
+
+## P4-25 · ⬜ — Trust-gate fail-closed fix (P4-REVIEW B1, security blocker)
+
+Read `reviews/2026-07-12-phase4-review.md` finding B1 + `decisions/SECURITY-MINIMUM.md` (T8) + the
+P4-15 STATUS row (the original trust fix this bug reopens) before editing.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 4/10
+
+You are running P4-25 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting. This is a SECURITY fix — the
+security baseline is a hard gate; run the hardening suite.
+
+=== CONTEXT (you start cold) ===
+The whole-phase review (`docs/migration/reviews/2026-07-12-phase4-review.md`, finding B1),
+independently reproduced by its security sweep and re-verified at source, found the workspace-trust
+gate FAILS OPEN. The gate exists so no renderer path can run a turn (tools + HOOKS) at an untrusted
+cwd (T8; hooks do NOT self-gate on the non-interactive sidecar path — the `handleSubmit` block is
+what makes trust real). The hole, verified at source:
+- Consumer `app/sidecar/sidecarServer.ts:734`: `if (this.workspaceTrust?.getSnapshot()?.trusted === false)`
+  — blocks ONLY on an explicit `false`. A `null` snapshot yields `undefined === false` = false → the
+  gate is skipped → the turn runs at an unvetted cwd.
+- Producer `app/sidecar/workspaceTrustDomain.ts:152-163` (`readWorkspaceTrustSnapshotOnce`): computes
+  `trusted = executor.isTrusted()` then `await getGithubRepo()` under ONE try/catch, and `return null`
+  on ANY throw. `getGithubRepo()` (`src/utils/git.ts:504`) has no try/catch and throws on a git-spawn
+  failure; `isPathTrusted → getGlobalConfig` can throw on a corrupt `~/.cat-code`. So a purely COSMETIC
+  repo-detection failure discards an already-computed (possibly `false`) trust fact into `null`.
+- Double failure: `sendWorkspaceTrustSnapshot` also skips on a null read, so NO trust prompt is shown
+  either — silent untrusted execution. A single corrupt config or transient git failure disarms trust
+  for EVERY session. `sessionController.ts:410` `await`s the domain but it can't rethrow (read swallowed),
+  so a real session gets a live domain whose `getSnapshot()` is `null`.
+Verify all three anchors in source before changing anything; source wins.
+
+=== BUILD ===
+- **Producer (root cause):** never return a bare `null` when the trust fact is knowable. Compute
+  `trusted` in its OWN try (default `false` on throw — fail closed) and `detectedRepo` in a SEPARATE
+  try (default `null` on throw — cosmetic). Return `{ trusted, detectedRepo }` always. A `getGithubRepo()`
+  failure must NOT null out `trusted`. (This alone also fixes the missing-prompt: a non-null snapshot
+  emits normally, so the renderer shows the trust dialog on a read failure.)
+- **Consumer (defense-in-depth):** invert `handleSubmit`'s gate to fail closed — when
+  `this.workspaceTrust` is present, require `getSnapshot()?.trusted === true` to proceed; a `null`/
+  absent snapshot ⇒ deny with the SAME typed `unauthorized` error. KEEP the domain-absent (probe) path
+  permissive — i.e. gate only when `this.workspaceTrust` exists and its snapshot is not explicitly
+  trusted. Do not block the P1-0 startup self-probe (`index.ts` submit is not renderer-reachable, but
+  keep the domain-absent path open).
+- **Test the exact hole (the review's "missing test"):** add `handleSubmit` boundary tests in
+  `app/sidecar/sidecarServer.test.ts` — a `null` snapshot rejects with `unauthorized` + runs NO turn;
+  an explicit `{trusted:false}` rejects; `{trusted:true}` proceeds. Use `fakeWorkspaceTrust(null)`
+  (the existing helper's null case is only display-tested today). Prove it's a real tripwire: the null
+  test must FAIL against the pre-fix consumer and PASS after.
+
+=== GROUND RULES ===
+Security baseline is a hard gate. No new inbound/outbound vocabulary, no preload change (this is a
+fix to existing seams). Locked decisions untouched. Known-red sidecar tsc: zero NEW owned diagnostics.
+Re-verify every `src/…:line` and `app/…:line` anchor; source wins.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green incl. the new boundary tests (null-denies tripwire proven) · `bunx tsc --noEmit
+-p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` no new owned · `bun run --cwd app
+test:hardening` 19/19. Headless-verifiable — no 🖐 GUI gate (optional operator smoke: open a session
+in an untrusted cwd whose git is broken → the trust prompt still appears and a turn is blocked until
+accepted). Report: the exact producer + consumer change (file:line), the new tests, and a one-line
+confirmation that a null/failed snapshot now DENIES + emits a prompt. Kill any sidecar you spawn.
+Update this session's STATUS row (⬜→✅ + date + note) AND the P4-REVIEW row (mark B1 resolved) as
+the last step.
+```
+─── PASTE ───
+
+## P4-26 · ⬜ — Sessions-nav reachability fix + REAL P4-6a re-acceptance (P4-REVIEW B2)
+
+Read `reviews/2026-07-12-phase4-review.md` finding B2 first. The fix is one line; the value is the
+HONEST GUI re-acceptance (the prior "✅ GUI-VERIFIED 2026-07-10" claim is not reproducible from
+committed source).
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 2/10 · 🖐 GUI
+
+You are running P4-26 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+The whole-phase review (`docs/migration/reviews/2026-07-12-phase4-review.md`, finding B2), git-traced
+by its integration sweep and re-verified at source, found the Sessions page (P4-6a) is UNREACHABLE by
+any committed UI affordance:
+- `app/renderer/src/Sidebar.tsx:51` — the NAV item is `{ id:'sessions', enabled:true }`, so it renders
+  as a normal CLICKABLE button.
+- But BOTH onClick guards — `NavItemExpanded` (`:463`) and `NavItemRail` (`:515`) — wrap
+  `onSelectView(item.id)` in `if (item.id === 'chat' || 'orchestrator' || 'goals' || 'accounts' ||
+  'settings')`, OMITTING `'sessions'`. Clicking Sessions never fires the callback → `activeView` never
+  becomes `'sessions'` → the `SessionsPage` mount (`App.tsx:1378`) never runs. No other path reaches
+  `activeView='sessions'` (the ⌘K palette has no view-switch; every static `setActiveView` is `'chat'`).
+- Git history: `'sessions'` was in the guard at NO commit (f6101d3 P4-6a / 3e34ccf + 5f34fe4 P4-8a) —
+  it NEVER worked from committed source, so STATUS's P4-6a "✅ GUI-VERIFIED 2026-07-10 — 69 sessions"
+  is not reproducible (verified against an uncommitted patch, or overstated).
+Verify the anchors in source before editing; source wins.
+
+=== BUILD ===
+- **Fix (robust):** the per-id allowlist is now a DEAD guard — every NAV item is `enabled:true` and
+  `App.tsx` already forwards `onSelectView` faithfully (`:1298-1303`). DELETE the `if (item.id === …)`
+  guard in BOTH `NavItemExpanded` and `NavItemRail` and call `onSelectView(item.id)` directly (the
+  `!item.enabled` early-return already handles disabled items). This won't recur when the next nav
+  destination is added. (If you prefer minimal, add `'sessions'` to both — but the delete is better.)
+- **Regression test that would have caught this:** add a Sidebar test asserting that for each ENABLED
+  NAV item, activating its rendered button routes `onSelectView` to that id. NOTE the repo has no
+  jsdom/testing-library (documented constraint) — if a true click test isn't possible, assert the
+  structural fact that no per-id allowlist gates `onSelectView` (the guard is gone) and flag the
+  coverage limit honestly. Do not claim a live-click test you didn't run.
+- **Fix the stale comment** `Sidebar.tsx:46-47` ("All five are built" — there are six NAV items and one
+  was inert).
+
+=== GROUND RULES ===
+Renderer-only; ZERO wire/preload/security/engine surface. Locked decisions untouched. Known-red sidecar
+tsc: zero NEW owned diagnostics. No new deps.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green incl. the new nav-routing test (fails before the guard fix, passes
+after) · renderer tsc clean · `bun run --cwd app test:hardening` 19/19 · `renderer:build` clean.
+GUI (operator's — STOP, print exact steps per `process/GUI-VERIFICATION.md`, wait; NO automation):
+click Sessions in BOTH the collapsed rail AND the expanded sidebar → the Sessions catalog page mounts
+and shows real sessions / search / sort / workspace grouping. Then correct the STATUS P4-6a row to the
+honest result (note the prior claim was not reproducible from committed source). Report: the exact
+guard change, the test + its coverage limit, and the GUI re-acceptance result. Update this session's
+STATUS row + the P4-6a row + the P4-REVIEW row (mark B2 resolved) as the last step.
+```
+─── PASTE ───
+
+## P4-27 · ⬜ — Parity-ledger correction + re-measure (P4-REVIEW B4/B5/M3)
+
+Read `reviews/2026-07-12-phase4-review.md` findings B4/B5/M3 + the P2 STATUS-overclaim pattern. This
+makes the ledger + STATUS honest so the gate metric is real. Docs-only (+ optional consistency check).
+This is the parity slice of the paused STATUS-truthfulness audit — coordinate, don't fork it.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 3/10
+
+You are running P4-27 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+The whole-phase review found `docs/migration/PARITY-LEDGER.md` cannot serve as the Phase-4 gate
+instrument until corrected (`reviews/2026-07-12-phase4-review.md`, B4/B5/M3):
+- **B4 §28 ResumeStates:** ~26 rows still tagged ✅ built / 🔁 adapted citing `app/renderer/src/
+  ResumeDialog.tsx:*` / `resumeDialogState.ts:*` — files DELETED by P4-22 (commit 407dafd; `rg
+  ResumeDialog app/` = 0 hits). Both P4-22's STATUS row and P4-23's prompt asserted the re-tag; it
+  never happened. Dead file:line citations count a removed feature as built.
+- **B5 Part D rollup stale in BOTH directions:** the per-surface table + Totals (~:2409-2463) were last
+  hand-computed at ledger landing (36% @ 2026-07-07) and never re-derived, though ~10 sessions since
+  flipped their DETAIL rows. THREE inconsistent "built" totals coexist: detail rows 595, per-surface
+  rollup 370, Totals row 312. The phase gate reads Part D, so it currently reads ~25 points too low.
+- **M3 §5/§6 ❓:** ~41 rows still tagged ❓ missing-no-owner although P4-18 owns §5/§6 (the residuals
+  are legit dep-gated deferrals — remark-gfm / syntax-highlighter / word-diff). Part C requires ❓
+  empty-or-waived, so this would block the gate on a technicality.
+
+=== BUILD (docs) ===
+- **§28 + FLOW-7 resume rows → ✂️ cut.** Delete the dead `ResumeDialog.tsx:line` citations; mirror how
+  P4-23 re-tagged its own removal (`PARITY-LEDGER.md:372`). Cross-ref P4-22 (407dafd).
+- **Re-derive Part D from the DETAIL rows** across all 30 surfaces + 8 flows — every rollup row = the
+  sum of its detail rows; reconcile the 595/370/312 split to ONE number. Publish the realized-parity
+  number (built+adapted ÷ in-scope) as the gate metric of record. The review's recompute put it ≈62%
+  (CI 60–65%) — verify or correct from the detail rows yourself.
+- **Reclassify §5/§6 owned ❓ → ⬜ deferred (owner P4-18).**
+- **Correct the overclaimed STATUS notes the review named** (do NOT rewrite other content in those
+  rows): STATUS.md P4-8 `:271` — "deriveTaskAgentState … now reachable" is FALSE (that arm is dead; the
+  reachable path is the duplicate `orchestratorState.ts` `orchestratorWorkerState`); reword to the truth
+  and note the wire-or-delete is P4-8b/rider scope. STATUS.md P4-6a `:269` — the "GUI-VERIFIED
+  2026-07-10" claim is not reproducible; correct it ONLY once P4-26 has landed a real re-acceptance,
+  else mark it "pending re-verification (P4-26)".
+- **Optional (recommended):** a small Part-D consistency check (a test or script that sums the detail
+  rows and compares to the rollup) so this can't silently rot again — there is no generator today.
+
+=== GROUND RULES ===
+Docs-only (+ optional test). `git diff --check` clean; every cited path must exist; canonical files
+(PARITY-LEDGER, STATUS) updated IN PLACE, never forked. No silent parity edits — every disposition
+change is traceable to a review finding or a source fact. Coordinate with the STATUS-truthfulness audit.
+
+=== DELIVERABLE / DONE WHEN ===
+The corrected ledger (§28 cut, Part D re-derived + the single realized-parity number, §5/§6
+reclassified) + the corrected STATUS notes. Report: the before/after parity number, the three "built"
+totals reconciled to one, and the list of STATUS notes corrected (file:line each). Update this
+session's STATUS row + the P4-REVIEW row (B4/B5/M3 resolved) as the last step.
+```
+─── PASTE ───
