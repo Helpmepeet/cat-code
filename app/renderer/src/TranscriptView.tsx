@@ -442,6 +442,22 @@ function deriveSub(row: ToolUseNestedRow): string | undefined {
 }
 
 /**
+ * P4-REVIEW B3: pure resolution of the card's expanded state. `userExpanded`
+ * is `null` until the user clicks the header (never toggled); while `null`,
+ * `defaultExpanded` wins on EVERY render — so a live pending→error (or
+ * imagegen success) status flip is reflected immediately, not just at first
+ * mount. Once the user toggles, their choice wins over any later
+ * `defaultExpanded` change. Exported so the decision logic is unit-testable
+ * without a DOM (SSR can't exercise a live re-render).
+ */
+export function resolveToolCardExpanded(
+  userExpanded: boolean | null,
+  defaultExpanded: boolean,
+): boolean {
+  return userExpanded ?? defaultExpanded
+}
+
+/**
  * Shared quiet-panel card shell (FrameEShell): mark · WORD · target ·
  * state-dot+word header, click-to-collapse body. Family identity colors the
  * mark/word only; the state cluster carries running/done/failed tone.
@@ -469,7 +485,8 @@ function ToolCardShell({
   defaultExpanded?: boolean
   children?: ReactNode
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? false)
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
+  const expanded = resolveToolCardExpanded(userExpanded, defaultExpanded ?? false)
   const fam = FAMILY_STYLE[family]
   const st = STATE_STYLE[status]
   const hasBody = children !== undefined && children !== null
@@ -477,7 +494,7 @@ function ToolCardShell({
     <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
       <button
         type="button"
-        onClick={() => setExpanded(value => !value)}
+        onClick={() => setUserExpanded(!expanded)}
         aria-expanded={expanded}
         className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
       >

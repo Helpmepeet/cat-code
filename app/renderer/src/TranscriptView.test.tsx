@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { TranscriptRowsView } from './TranscriptView.js'
+import { resolveToolCardExpanded, TranscriptRowsView } from './TranscriptView.js'
 import type {
   NestedTranscriptRow,
   ToolCardStatus,
@@ -526,4 +526,24 @@ test('P4-18a: a schema-drifted unknown kind degrades to a tolerant fallback, not
 
   expect(html).toContain('Unrecognized transcript row')
   expect(html).toContain('future-row-kind')
+})
+
+// P4-REVIEW B3: `resolveToolCardExpanded` is the pure decision logic behind
+// ToolCardShell's collapse state. Before this fix, `expanded` was seeded once
+// from `defaultExpanded` via `useState(defaultExpanded ?? false)`, so a stable
+// row that lived through a live pending→error (or imagegen success) transition
+// never re-read the new `defaultExpanded` — the card stayed collapsed. SSR
+// can't exercise that live re-render (no effects, no re-render), so this
+// helper is unit-tested directly; the live transition itself is covered only
+// by the P4-18 GUI acceptance pass.
+test('P4-REVIEW B3: resolveToolCardExpanded defaults to defaultExpanded until the user overrides it', () => {
+  // The fix: no user toggle yet (null) → defaultExpanded wins every time,
+  // including a fresh pending→error flip on an already-mounted card.
+  expect(resolveToolCardExpanded(null, true)).toBe(true)
+  expect(resolveToolCardExpanded(null, false)).toBe(false)
+})
+
+test('P4-REVIEW B3: resolveToolCardExpanded lets a user override win over either default', () => {
+  expect(resolveToolCardExpanded(true, false)).toBe(true)
+  expect(resolveToolCardExpanded(false, true)).toBe(false)
 })
