@@ -33,9 +33,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { usageTone } from './AccountsPage.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
-import { toneClasses } from './tone.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 /**
@@ -346,6 +344,9 @@ function OrchestratorReflect({ active }: { active: boolean }) {
 
 function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
   const rows = accounts?.accounts ?? []
+  // Prototype header counts status-`healthy` accounts and labels them "healthy"
+  // (`Welcome.jsx:434`), not the stricter ready = healthy-and-not-capped metric.
+  const healthyCount = rows.filter(a => a.status === 'healthy').length
   return (
     <div className="border-t border-shell-seam">
       <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
@@ -365,13 +366,12 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
             </span>
             <span className="text-text-subtle">·</span>
             <span>
-              <span className="text-text-primary">{accounts.readyCount}</span>{' '}
-              ready
+              <span className="text-text-primary">{healthyCount}</span> healthy
             </span>
             <span
               className={
                 'h-2 w-2 rounded-full ' +
-                (accounts.readyCount > 0 ? 'bg-tone-good' : 'bg-tone-warn')
+                (healthyCount > 0 ? 'bg-tone-good' : 'bg-tone-warn')
               }
             />
           </div>
@@ -391,8 +391,10 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 
 function CodexRow({ account }: { account: AccountStatus }) {
   const capped = account.status === 'capped' || account.usageLimitReached
+  const reset =
+    account.usageResetAt != null ? formatResetCompact(account.usageResetAt) : ''
   return (
-    <div className="grid grid-cols-[1.4fr_2fr_2fr] items-center gap-x-3 border-t border-white/[0.04] px-1 py-3.5 text-[13px] sm:grid-cols-[1.4fr_1.6fr_1.6fr_1.4fr]">
+    <div className="grid grid-cols-[1.4fr_1.6fr_0.5fr_0.6fr_1.6fr_0.5fr_0.6fr] items-center gap-x-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
         <Radio on={account.isDefault} />
         <span className="truncate font-medium text-text-primary">
@@ -404,35 +406,60 @@ function CodexRow({ account }: { account: AccountStatus }) {
           </span>
         ) : null}
       </div>
-      <UsageMeter label="5h" pct={account.usagePrimary} />
-      <UsageMeter label="wk" pct={account.usageWeekly} />
-      {/* One reset time — the seam carries a single `usageResetAt`, not per-window. */}
-      <span className="hidden truncate text-right font-mono text-[12px] text-text-subtle sm:block">
-        {account.usageResetAt != null ? `resets ${formatReset(account.usageResetAt)}` : ''}
-      </span>
+      <UsageBar pct={account.usagePrimary} />
+      <UsagePct pct={account.usagePrimary} />
+      <ResetCell value={reset} />
+      <UsageBar pct={account.usageWeekly} />
+      <UsagePct pct={account.usageWeekly} />
+      {/* §0: the seam carries ONE `usageResetAt` (the 5h/primary window), so the
+          weekly reset column stays blank rather than duplicating or fabricating
+          a second value — never a mock. */}
+      <ResetCell value="" />
     </div>
   )
 }
 
-function UsageMeter({ label, pct }: { label: string; pct: number | null }) {
-  const p = pct ?? 0
-  const t = toneClasses(usageTone(pct))
+/**
+ * The prototype `MiniUsageBar` (`Welcome.jsx:121`): ONE flat pink gradient fill
+ * for every account regardless of percentage — NOT the threshold red/green/amber
+ * of the AccountsPage meter. Min 2% fill so a live account is always visible.
+ */
+function UsageBar({ pct }: { pct: number | null }) {
+  const filled = Math.max(2, Math.min(100, pct ?? 0))
   return (
-    <div className="flex items-center gap-2.5">
-      <span className="w-4 shrink-0 text-[10px] tabular-nums text-text-subtle">
-        {label}
-      </span>
-      <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-        {/* §0 EXCEPTION: data-driven percent width Tailwind can't express — the
-            single allowed width-only inline style (P4-5 precedent). */}
-        <div className={`h-full rounded-full ${t.dot}`} style={{ width: `${p}%` }} />
-      </div>
-      <span
-        className={`w-9 shrink-0 text-right text-[11px] font-semibold tabular-nums ${t.text}`}
-      >
-        {p}%
-      </span>
+    <div className="h-[5px] min-w-0 max-w-[220px] overflow-hidden rounded-[3px] bg-white/[0.06]">
+      {/* §0 EXCEPTION: data-driven width Tailwind can't express — the single
+          allowed width-only inline style (P4-5 precedent). */}
+      <div
+        className="h-full rounded-[3px] bg-gradient-to-r from-[#f9a8d4] to-[#ec4899]"
+        style={{ width: `${filled}%` }}
+      />
     </div>
+  )
+}
+
+/** Percent label — pink like the prototype (`pctColor`, `Welcome.jsx:149`),
+ * darker at ≥100%; never the tone-coded green/amber/red. */
+function UsagePct({ pct }: { pct: number | null }) {
+  const p = pct ?? 0
+  return (
+    <span
+      className={
+        'text-right text-[13px] font-semibold tabular-nums ' +
+        (p >= 100 ? 'text-[#ec4899]' : 'text-[#f9a8d4]')
+      }
+    >
+      {p}%
+    </span>
+  )
+}
+
+/** Compact reset countdown, mono + dim (`Welcome.jsx:169`). Blank cell when absent. */
+function ResetCell({ value }: { value: string }) {
+  return (
+    <span className="truncate font-mono text-[12px] tabular-nums text-text-subtle">
+      {value}
+    </span>
   )
 }
 
@@ -450,15 +477,20 @@ function Radio({ on }: { on: boolean }) {
   )
 }
 
-/** Reset countdown label — mirrors AccountsPage's private `formatResetLabel`. */
-function formatReset(sec: number): string {
+/**
+ * Compact reset countdown matching the prototype strings (`4h56m`, `5d21h`,
+ * `22m`, `3d`) — days→`Nd`/`NdNh`, hours→`Nh`/`NhNm`, else `Nm`.
+ */
+function formatResetCompact(sec: number): string {
   const ms = sec * 1000 - Date.now()
   if (ms <= 0) return 'now'
-  const mins = Math.round(ms / 60000)
-  if (mins < 60) return `in ${mins}m`
-  const hrs = Math.floor(mins / 60)
-  const rem = mins % 60
-  return rem ? `in ${hrs}h ${rem}m` : `in ${hrs}h`
+  const totalMin = Math.round(ms / 60000)
+  const days = Math.floor(totalMin / 1440)
+  const hrs = Math.floor((totalMin % 1440) / 60)
+  const mins = totalMin % 60
+  if (days > 0) return hrs > 0 ? `${days}d${hrs}h` : `${days}d`
+  if (hrs > 0) return mins > 0 ? `${hrs}h${mins}m` : `${hrs}h`
+  return `${mins}m`
 }
 
 /* ── icons (stroke, currentColor — shell idiom) ─────────────────────────── */

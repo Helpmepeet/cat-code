@@ -104,12 +104,19 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   )
   expect(html).toContain('Codex')
   expect(html).toContain('>2</span> accounts')
-  expect(html).toContain('ready')
+  // Prototype header: status-`healthy` count labelled "healthy" (main is healthy,
+  // backup is capped → 1).
+  expect(html).toContain('>1</span> healthy')
   expect(html).toContain('main')
   expect(html).toContain('backup')
   expect(html).toContain('capped')
   expect(html).toContain('20%')
   expect(html).toContain('100%')
+  // Prototype grammar: flat pink gradient bars, not tone-coded green/amber/red.
+  expect(html).toContain('from-[#f9a8d4] to-[#ec4899]')
+  // No "5h"/"wk" text labels in the prototype rows.
+  expect(html).not.toContain('>5h<')
+  expect(html).not.toContain('>wk<')
 })
 
 test('the Codex table degrades honestly when no pool snapshot exists', () => {
