@@ -15,6 +15,7 @@ import {
 } from './App.js'
 import { createTranscriptState } from './transcriptProjector.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
+import type { AccountStatus } from '../../shared/protocol.js'
 
 test('renders the shell frame (TabBar + empty state) before any session exists', () => {
   // SSR runs no effects, so the host list never resolves — the shell mounts
@@ -56,8 +57,10 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
         error: null,
         messageBytes: [],
       }}
+      activeAccount={null}
       activeSessionId="session-1"
       allowPermission={() => {}}
+      modelOverride={null}
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
@@ -117,6 +120,71 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   expect(html).toContain('aria-label="Send prompt"')
 })
 
+test('P4-24: the composer bar forwards the REAL active account + model override', () => {
+  // Live-path assertion through the SessionPane boundary: a real account alias
+  // and a real per-session model override reach the ChipStrip bar (not shape-only).
+  const account: AccountStatus = {
+    id: 'acct-1',
+    alias: 'hiby',
+    status: 'healthy',
+    statusReason: null,
+    availability: 'available',
+    availabilityLabel: 'Available',
+    isDefault: true,
+    hasVaultProfile: true,
+    source: 'vault',
+    usagePrimary: 10,
+    usageWeekly: 20,
+    usageLimitReached: false,
+    usageResetAt: null,
+    lastRefreshIso: null,
+    lastError: null,
+    planType: null,
+    switchable: false,
+  }
+  const html = renderToStaticMarkup(
+    <SessionPane
+      activeConnection={{ status: 'ready', inputEnabled: true }}
+      activeDescriptor={undefined}
+      activeLog={{
+        inputEnabled: true,
+        messages: [],
+        retainedBytes: 0,
+        truncated: false,
+        error: null,
+        messageBytes: [],
+      }}
+      activeAccount={account}
+      activeSessionId="session-1"
+      allowPermission={() => {}}
+      modelOverride="gpt-5.6-terra"
+      copyForLlm={() => {}}
+      denyPermission={() => {}}
+      history={[]}
+      mentionItems={[]}
+      onApprovePlan={() => {}}
+      onPaste={() => {}}
+      onRemovePaste={() => {}}
+      onRevisePlan={() => {}}
+      partialCount={0}
+      pastes={[]}
+      permissionContext={null}
+      permissionQueue={[]}
+      planReview={null}
+      prompt=""
+      restorePermission={() => {}}
+      setPermissionMode={() => {}}
+      setPrompt={() => {}}
+      submit={() => {}}
+      transcript={createTranscriptState()}
+      transportError={null}
+    />,
+  )
+  expect(html).toContain('hiby')
+  expect(html).toContain('Active account: hiby')
+  expect(html).toContain('gpt-5.6-terra')
+})
+
 test('P4-18c: a generating session (ready + input disabled) shows the activity indicator + Stop', () => {
   const html = renderToStaticMarkup(
     <SessionPane
@@ -139,8 +207,10 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
         error: null,
         messageBytes: [],
       }}
+      activeAccount={null}
       activeSessionId="session-1"
       allowPermission={() => {}}
+      modelOverride={null}
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
@@ -285,8 +355,10 @@ test('composer form owns the ↑/↓ history key scope', () => {
         error: null,
         messageBytes: [],
       }}
+      activeAccount={null}
       activeSessionId="session-1"
       allowPermission={() => {}}
+      modelOverride={null}
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={['first prompt', 'second prompt']}
@@ -336,8 +408,10 @@ test('P4-24: collapsed-paste pills render with token label, remove control, and 
         error: null,
         messageBytes: [],
       }}
+      activeAccount={null}
       activeSessionId="session-1"
       allowPermission={() => {}}
+      modelOverride={null}
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
