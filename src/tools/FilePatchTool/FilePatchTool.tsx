@@ -446,7 +446,7 @@ export const FilePatchTool = buildTool({
     for (const file of applied.files) {
       const op = file.type === 'add' ? 'write' : file.type === 'update' ? 'edit' : null
       if (op) {
-        logFileOperation({ operation: op, tool: 'FileEditTool', filePath: file.path })
+        logFileOperation({ operation: op, tool: 'FilePatchTool', filePath: file.path })
       }
     }
 
@@ -466,10 +466,24 @@ export const FilePatchTool = buildTool({
   mapToolResultToToolResultBlockParam(output, toolUseID) {
     const count = output.files.length
     const noun = count === 1 ? 'file' : 'files'
+    // Enumerate the resolved path + operation per file so the model can verify
+    // what actually changed — with fuzzy anchor matching a hunk can land at a
+    // slightly different location than intended, and the summary count alone
+    // gave no confirmation of which paths were touched.
+    const lines = output.files.map(file => {
+      const verb =
+        file.type === 'add'
+          ? 'Added'
+          : file.type === 'delete'
+            ? 'Deleted'
+            : 'Updated'
+      return `${verb} ${file.path}`
+    })
+    const detail = lines.length > 0 ? `:\n${lines.join('\n')}` : '.'
     return {
       tool_use_id: toolUseID,
       type: 'tool_result',
-      content: `Applied patch to ${count} ${noun}.`,
+      content: `Applied patch to ${count} ${noun}${detail}`,
     }
   },
 } satisfies ToolDef<ReturnType<typeof inputSchema>, FilePatchToolOutput>)

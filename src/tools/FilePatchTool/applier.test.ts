@@ -768,3 +768,24 @@ describe('FilePatchTool.validateInput move destination', () => {
     expect(readFileSync(dstPath, 'utf8')).toBe('content\nadded\n')
   })
 })
+
+describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
+  test('enumerates each affected file with its operation', () => {
+    const result = FilePatchTool.mapToolResultToToolResultBlockParam(
+      {
+        files: [
+          { path: '/x/a.ts', type: 'update', before: 'a', after: 'b', structuredPatch: [] },
+          { path: '/x/new.ts', type: 'add', before: null, after: 'n', structuredPatch: [] },
+          { path: '/x/gone.ts', type: 'delete', before: 'g', after: null, structuredPatch: [] },
+        ],
+      },
+      'tool-1',
+    )
+
+    const content = result.content as string
+    expect(content).toContain('Applied patch to 3 files')
+    expect(content).toContain('Updated /x/a.ts')
+    expect(content).toContain('Added /x/new.ts')
+    expect(content).toContain('Deleted /x/gone.ts')
+  })
+})
