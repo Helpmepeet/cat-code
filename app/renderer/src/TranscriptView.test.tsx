@@ -8,6 +8,43 @@ import type {
   ToolFamily,
   ToolResultProjection,
 } from './transcriptProjector.js'
+import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+
+// P4-24 empty-state Welcome fixtures — a real `AccountsSnapshot` shape (mirrors
+// reauthBannerState.test.ts / WelcomeScreen.test.ts) so the empty transcript is
+// proven to flow a REAL pool row into the Codex table, not a mock.
+function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
+  return {
+    alias: over.id,
+    status: 'healthy',
+    statusReason: null,
+    availability: 'available',
+    availabilityLabel: 'Ready',
+    isDefault: false,
+    hasVaultProfile: true,
+    source: 'vault',
+    usagePrimary: 0,
+    usageWeekly: 0,
+    usageLimitReached: false,
+    usageResetAt: null,
+    lastRefreshIso: null,
+    lastError: null,
+    planType: 'plus',
+    switchable: false,
+    ...over,
+  }
+}
+
+function pool(accounts: AccountStatus[]): AccountsSnapshot {
+  return {
+    accounts,
+    activeAccountId: accounts.find(a => a.isDefault)?.id ?? null,
+    readyCount: accounts.filter(a => a.status === 'healthy' && !a.usageLimitReached)
+      .length,
+    poolCount: accounts.length,
+    initialized: true,
+  }
+}
 
 // P4-18a helpers: the two producer-id shapes rows carry. `content`-block rows
 // (user/thinking/…) carry messageId/blockIndex/parentToolUseId; frame rows
@@ -138,12 +175,49 @@ test('P4-18b: a tool card renders the family word, real target, and running stat
   expect(html).toContain('running') // pending → running state word
 })
 
-test('renders an empty-state hint when no rows are projected yet', () => {
+test('renders the rich WelcomeScreen (hero + real Codex table + cwd) when no rows are projected yet', () => {
+  // Chat.jsx:1272 renders the SAME WelcomeScreen when the session is empty. The
+  // in-session variant shows the cat|wordmark hero, the read-only cwd, and the
+  // REAL P4-5 Codex pool table — proven by a fixture account alias reaching the
+  // DOM (real data flows, not a shape-only assert). The old bare "How can I
+  // help?" paw is gone.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[]}
+      accounts={pool([
+        account({ id: 'main', alias: 'nightowl', isDefault: true, usagePrimary: 20 }),
+      ])}
+      orchestratorActive
+      cwd="/w/cat-code"
+    />,
+  )
+
+  // Hero + wordmark instead of the bare paw.
+  expect(html).toContain('Welcome back')
+  expect(html).toContain('cat ')
+  expect(html).toContain('code')
+  expect(html).not.toContain('How can I help?')
+  // The REAL Codex pool table with a fixture account alias (real data flows).
+  expect(html).toContain('Codex')
+  expect(html).toContain('nightowl')
+  expect(html).toContain('20%')
+  // HC1 session variant: read-only cwd context, no interactive project picker.
+  expect(html).toContain('/w/cat-code')
+  expect(html).not.toContain('<button')
+  expect(html).not.toContain('Open a project')
+  // Orchestrator reflect is read-only and mirrors the passed active flag.
+  expect(html).toContain('aria-readonly="true"')
+  expect(html).toContain('>On<')
+})
+
+test('the empty state degrades honestly with no pool snapshot and no cwd (no fabrication)', () => {
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
 
-  // P4-24: an empty session shows a clean centered welcome (Chat.jsx WelcomeScreen
-  // spirit), not the "No transcript rows yet." debug placeholder.
-  expect(html).toContain('How can I help?')
+  // Defaults (no accounts/cwd threaded): the hero still renders, the Codex table
+  // says it has no data, and the cwd shows an honest placeholder — never a mock.
+  expect(html).toContain('Welcome back')
+  expect(html).toContain('No Codex account data')
+  expect(html).toContain('This workspace')
 })
 
 test('P4-18b: a resolved bash card shows the collapsed tail-peek output and done state', () => {

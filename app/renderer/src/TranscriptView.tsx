@@ -28,7 +28,8 @@ import {
   type ReactNode,
 } from 'react'
 import Markdown from 'react-markdown'
-import type { SessionId } from '../../shared/protocol.js'
+import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
+import { WelcomeScreen } from './WelcomeScreen.js'
 import {
   groupAgentDelegates,
   selectNestedTranscriptRows,
@@ -61,44 +62,53 @@ import {
 export const TranscriptView = memo(function TranscriptView({
   state,
   activeSessionId,
+  accounts,
+  orchestratorActive,
+  cwd,
 }: {
   state: TranscriptState
   activeSessionId: SessionId | null
+  /** In-session empty-state Welcome context (Chat.jsx:1272) — the real P4-5 Codex
+   * pool snapshot + agent-mode active flag + fixed cwd; all read-only (HC1). */
+  accounts?: AccountsSnapshot | null
+  orchestratorActive?: boolean
+  cwd?: string | null
 }) {
   return (
     <TranscriptRowsView
       rows={selectNestedTranscriptRows(state, activeSessionId)}
+      accounts={accounts ?? null}
+      orchestratorActive={orchestratorActive ?? false}
+      cwd={cwd ?? null}
     />
   )
 })
 
 export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
+  accounts = null,
+  orchestratorActive = false,
+  cwd = null,
 }: {
   rows: NestedTranscriptRow[]
+  accounts?: AccountsSnapshot | null
+  orchestratorActive?: boolean
+  cwd?: string | null
 }) {
   if (rows.length === 0) {
-    // Empty session → a clean centered welcome, not a debug placeholder
-    // (Chat.jsx renders its WelcomeScreen when `isEmpty`). No fabricated recents
-    // or prompt suggestions (no real backing) — just a greeting + the paw mark.
+    // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
+    // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex pool
+    // table (P4-5) + the orchestrator reflect. HC1 session variant — Project is
+    // the read-only cwd (no picker), and no recents launcher/"Open folder…" (you
+    // are already in a project). Real data only: a null pool snapshot degrades to
+    // "No Codex account data for this view yet.", never a mock.
     return (
-      <div className="mx-auto flex min-h-[55vh] w-full max-w-[740px] flex-col items-center justify-center gap-4 px-8 text-center">
-        <span className="text-accent" aria-hidden>
-          <svg width="46" height="46" viewBox="0 0 24 24" fill="currentColor">
-            <ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
-            <ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65" />
-            <ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
-            <ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45" />
-            <path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z" />
-          </svg>
-        </span>
-        <div className="space-y-1.5">
-          <p className="text-lg font-light text-text-primary">How can I help?</p>
-          <p className="text-sm font-light text-text-subtle">
-            Type a message below — Cat Code is connected to this workspace.
-          </p>
-        </div>
-      </div>
+      <WelcomeScreen
+        variant="session"
+        cwd={cwd}
+        accounts={accounts}
+        orchestratorActive={orchestratorActive}
+      />
     )
   }
 

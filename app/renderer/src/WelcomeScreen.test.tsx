@@ -125,6 +125,41 @@ test('the Codex table degrades honestly when no pool snapshot exists', () => {
   expect(html).toContain('No Codex account data')
 })
 
+test("the 'session' variant shows a read-only cwd project (no picker) + the real Codex table", () => {
+  // Chat.jsx:1272 renders the SAME WelcomeScreen when the session is empty. HC1:
+  // the cwd is fixed at session-create, so Project is read-only context, not the
+  // interactive picker, and no recents launcher appears.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      variant="session"
+      cwd="/Users/me/cat-code"
+      accounts={pool([account({ id: 'main', alias: 'main', isDefault: true, usagePrimary: 15 })])}
+      orchestratorActive={false}
+    />,
+  )
+  // Same hero + Codex table body as the launcher (zero duplication).
+  expect(html).toContain('Welcome back')
+  expect(html).toContain('Codex')
+  expect(html).toContain('main')
+  expect(html).toContain('15%')
+  // Project is the read-only session cwd, not the interactive picker.
+  expect(html).toContain('/Users/me/cat-code')
+  // No interactive project picker button and no recents launcher in-session.
+  expect(html).not.toContain('<button')
+  expect(html).not.toContain('Open a project')
+})
+
+test("the 'session' variant reflects orchestrator read-only and degrades a null pool + null cwd honestly", () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen variant="session" cwd={null} accounts={null} orchestratorActive />,
+  )
+  expect(html).toContain('aria-readonly="true"')
+  expect(html).toContain('>On<')
+  // No wire cwd → an honest placeholder, never a fabricated path.
+  expect(html).toContain('This workspace')
+  expect(html).toContain('No Codex account data')
+})
+
 test('the orchestrator toggle is a read-only reflection of agent-mode', () => {
   const on = renderToStaticMarkup(
     <WelcomeScreen recents={[]} accounts={null} orchestratorActive onOpenRecent={noop} onOpenFolder={noop} />,
