@@ -54,6 +54,7 @@ import {
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
+import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
 import { clearCodexOAuthTokens } from '../../src/utils/auth.js'
 import type {
   AccountResultFrame,
@@ -89,6 +90,15 @@ export type AccountsCommandExecutor = {
   touchAll(): Promise<AccountVerbResult>
   /** Begin the engine's real OAuth login flow. */
   login(): AccountVerbResult
+  /**
+   * Fetch soft usage hints (5h/weekly used-percent + reset) for every pool
+   * account from the ChatGPT wham/usage endpoint and apply them to the live
+   * pool — the same call the engine makes at startup (`initAccountPool` →
+   * `fetchPoolUsage`). Read-only (GET, 1-min cached), uses existing tokens, no
+   * token refresh or completion burn. Resolves true when at least one account's
+   * usage landed, so the sidecar re-broadcasts the now-populated snapshot.
+   */
+  refreshUsage(): Promise<boolean>
 }
 
 export type SidecarAccountsDomain = {
@@ -105,6 +115,13 @@ export type SidecarAccountsDomain = {
   runVerb(
     verb: AccountVerbMessage,
   ): Promise<{ verb: AccountVerbType; result: AccountVerbResult; poolChanged: boolean }>
+  /**
+   * Populate the pool's usage hints (see `AccountsCommandExecutor.refreshUsage`).
+   * The snapshot's usage fields are 0/null until this runs — the desktop loads
+   * the pool observation-only, so nothing else fetches wham/usage. Resolves true
+   * when usage changed and the sidecar should re-broadcast the snapshot.
+   */
+  refreshUsage(): Promise<boolean>
 }
 
 /* ------------------------------------------------------------------------- *
@@ -228,6 +245,13 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
           'Sign-in runs through the engine OAuth flow (coordinated with first-run auth, P4-15).',
       }
     },
+    async refreshUsage() {
+      // updateRoutingHints applies the fetched 5h/weekly percents onto the live
+      // pool accounts, which `buildAccountStatus` then reads. A total failure
+      // (offline / stale tokens) returns 0 results and leaves the fields as-is.
+      const snapshot = await fetchPoolUsage({ updateRoutingHints: true })
+      return snapshot.accounts.length > 0
+    },
   }
 }
 
@@ -251,6 +275,10 @@ export function createSidecarAccountsDomain(
       } catch {
         return null
       }
+    },
+
+    refreshUsage() {
+      return executor.refreshUsage()
     },
 
     async runVerb(verb) {

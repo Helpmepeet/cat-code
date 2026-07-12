@@ -134,6 +134,7 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
     logout: () => ok('signed out'),
     touchAll: async () => ({ ok: true, message: 'done', touchAllResults: [] }),
     login: () => ({ ok: false, message: 'deferred' }),
+    refreshUsage: async () => false,
     ...over,
   }
 }
@@ -164,6 +165,29 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(out.result.ok).toBe(false)
     expect(out.poolChanged).toBe(false)
     expect(called).toBe(false)
+  })
+
+  test('refreshUsage delegates to the executor and returns whether usage landed', async () => {
+    // The desktop pool loads observation-only, so the snapshot's usage fields are
+    // 0/null until refreshUsage runs the engine's wham/usage fetch. Prove the
+    // domain forwards to the executor and propagates its "did usage change" bit
+    // (the sidecar re-broadcasts only on true).
+    let calls = 0
+    const domain = createSidecarAccountsDomain({
+      executor: fakeExecutor({
+        refreshUsage: async () => {
+          calls += 1
+          return true
+        },
+      }),
+    })
+    expect(await domain.refreshUsage()).toBe(true)
+    expect(calls).toBe(1)
+
+    const empty = createSidecarAccountsDomain({
+      executor: fakeExecutor({ refreshUsage: async () => false }),
+    })
+    expect(await empty.refreshUsage()).toBe(false)
   })
 
   test('rename rejects a duplicate alias via the engine validator, not a renderer claim', async () => {

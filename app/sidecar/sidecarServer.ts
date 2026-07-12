@@ -244,6 +244,8 @@ export class SidecarServer {
   private unsubscribeTasksSnapshot: (() => void) | null = null
   private unsubscribeAgentModeSnapshot: (() => void) | null = null
   private activeTurn = false
+  /** One-shot guard for the wham/usage populate (accounts snapshot). */
+  private usageRefreshStarted = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -411,6 +413,12 @@ export class SidecarServer {
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
+    // The pool loads observation-only in the sidecar (no engine startup path
+    // runs `initAccountPool`), so the first snapshot's usage hints are 0/null.
+    // Fire the same read-only wham/usage GET the engine runs at startup, ONCE,
+    // then re-broadcast the now-populated snapshot. Best-effort — a failure
+    // (offline / stale tokens) leaves the initial snapshot untouched.
+    this.refreshAccountsUsageOnce()
     // P4-14 — read-only workspace-trust + diagnostics snapshots, after the
     // other snapshots and before replay. Both spawn-time-frozen (no new
     // inbound vocabulary, no renderer-authored state).
@@ -1763,6 +1771,28 @@ export class SidecarServer {
     for (const connection of this.connections) {
       this.sendAccountsSnapshot(connection)
     }
+  }
+
+  /**
+   * One-shot: populate the pool's usage hints (accounts domain `refreshUsage` →
+   * engine `fetchPoolUsage`, read-only) and re-broadcast the snapshot when real
+   * usage lands. Guarded so it runs once per sidecar; the fetch itself is
+   * 1-min-cached engine-side. Fire-and-forget: any failure is swallowed and the
+   * pre-fetch snapshot stands (never blocks attach or history replay).
+   */
+  private refreshAccountsUsageOnce(): void {
+    if (this.usageRefreshStarted || !this.accounts) {
+      return
+    }
+    this.usageRefreshStarted = true
+    void this.accounts
+      .refreshUsage()
+      .then(changed => {
+        if (changed) {
+          this.broadcastAccountsSnapshot()
+        }
+      })
+      .catch(() => {})
   }
 
   /**

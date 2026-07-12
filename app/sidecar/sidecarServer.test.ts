@@ -1705,6 +1705,7 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
     logout: () => ({ ok: true, message: 'signed out' }),
     touchAll: async () => ({ ok: true, message: 'done', touchAllResults: [] }),
     login: () => ({ ok: false, message: 'deferred' }),
+    refreshUsage: async () => false,
     ...over,
   }
 }
