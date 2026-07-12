@@ -217,6 +217,7 @@ import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
   AccountStatus,
+  AccountsSnapshot,
   AccountVerbMessage,
   CatCodeBridge,
   PermissionResponseInput,
@@ -1150,15 +1151,24 @@ export function App() {
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
 	      ).length
+	      // In-session empty-state Welcome context (read-only): THIS session's
+	      // Codex pool snapshot (the pool is process-global, so the first-reported
+	      // snapshot is a valid fallback before this session's own frame lands —
+	      // the launcher precedent) + its agent-mode active flag. Both are the SAME
+	      // domain seams the reauth banner / OrchestratorPage already read.
+	      const panelAccounts =
+	        selectAccountsSnapshot(accounts, sessionId) ??
+	        selectFirstAccountsSnapshot(accounts)
+	      const panelOrchestratorActive =
+	        selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false
 	      return {
 	        sessionId,
 	        descriptor,
 	        connection: sessionConnection,
 	        content: (
 	          <SessionPane
-	            activeAccount={selectActiveAccount(
-	              selectAccountsSnapshot(accounts, sessionId),
-	            )}
+	            accountsSnapshot={panelAccounts}
+	            activeAccount={selectActiveAccount(panelAccounts)}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
@@ -1167,6 +1177,7 @@ export function App() {
 	              selectDiagnosticsSnapshot(diagnostics, sessionId)
 	                ?.mainLoopModel ?? null
 	            }
+	            orchestratorActive={panelOrchestratorActive}
 	            allowPermission={(requestId, applySuggestions = []) => {
 	              const item = sessionPermissionQueue.find(
 	                candidate => candidate.request.requestId === requestId,
@@ -1593,8 +1604,10 @@ function TasksStrip({
  * session id; switching focus never tears down a background session's state.
  */
 export function SessionPane({
+  accountsSnapshot,
   activeAccount,
   activeConnection,
+  activeDescriptor,
   activeLog,
   activeSessionId,
   allowPermission,
@@ -1607,6 +1620,7 @@ export function SessionPane({
   onPaste,
   onRemovePaste,
   onRevisePlan,
+  orchestratorActive,
   partialCount,
   pastes,
   permissionContext,
@@ -1980,7 +1994,10 @@ export function SessionPane({
           className="min-h-0 flex-1 overflow-auto"
         >
           <TranscriptView
+            accounts={accountsSnapshot}
             activeSessionId={activeSessionId}
+            cwd={activeDescriptor?.cwd ?? null}
+            orchestratorActive={orchestratorActive}
             state={transcript}
           />
         </div>
@@ -2566,6 +2583,9 @@ function reduceShell(state: ShellState, action: ShellAction): ShellState {
 }
 
 type SessionPaneProps = {
+  /** In-session empty-state Welcome context: this session's real Codex pool
+   * snapshot (P4-5), read-only (HC1). Null before any pool frame lands. */
+  accountsSnapshot: AccountsSnapshot | null
   /** This session's active pool account (real alias), or null before its snapshot. */
   activeAccount: AccountStatus | null
   activeConnection: ConnectionSnapshot
@@ -2577,6 +2597,9 @@ type SessionPaneProps = {
   modelOverride: string | null
   copyForLlm: () => void
   denyPermission: (requestId: string, message?: string) => void
+  /** This session's agent-mode active flag, reflected read-only in the empty
+   * Welcome (there is no agent-mode write verb — a live toggle would be fake). */
+  orchestratorActive: boolean
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   permissionQueue: ReturnType<typeof selectPermissionQueue>

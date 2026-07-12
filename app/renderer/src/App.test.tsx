@@ -38,6 +38,8 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
 test('P4-24: the active session pane renders the multi-line composer + transcript spine', () => {
   const html = renderToStaticMarkup(
     <SessionPane
+      accountsSnapshot={null}
+      orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -110,10 +112,13 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   expect(html).not.toContain('Raw SDKMessage events')
   expect(html).not.toContain('<details')
   expect(html).not.toContain('<pre')
-  // P4-24 reflow: the pane has NO debug header — the cwd is not surfaced here
-  // (it lives in the TabBar; the prototype ChatView has no header row, and the
-  // "Copy for LLM" dev button is gone from the surface).
-  expect(html).not.toContain('/tmp/project')
+  // P4-24 kept NO debug cwd HEADER on the pane. With an empty transcript the pane
+  // now renders the in-session WelcomeScreen (Chat.jsx:1272 renders the same
+  // WelcomeScreen when `isEmpty`), whose read-only Project column surfaces the
+  // session's fixed cwd as context (HC1 — not an interactive picker). That
+  // Welcome is the sole cwd surface here, not a debug header.
+  expect(html).toContain('Welcome back')
+  expect(html).toContain('/tmp/project')
   // P4-24: the composer is borderless (Chat.jsx:1407) with a pink send-ARROW
   // icon button, not a bordered box with a labelled "Send" button.
   expect(html).toContain('bg-transparent')
@@ -154,10 +159,12 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
         error: null,
         messageBytes: [],
       }}
+      accountsSnapshot={null}
       activeAccount={account}
       activeSessionId="session-1"
       allowPermission={() => {}}
       modelOverride="gpt-5.6-terra"
+      orchestratorActive={false}
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
@@ -188,6 +195,8 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
 test('P4-18c: a generating session (ready + input disabled) shows the activity indicator + Stop', () => {
   const html = renderToStaticMarkup(
     <SessionPane
+      accountsSnapshot={null}
+      orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: false }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -336,6 +345,8 @@ test('P4-18 selectLiveTokenEstimate: current-turn output ÷ 4; prior turns exclu
 test('composer form owns the ↑/↓ history key scope', () => {
   const html = renderToStaticMarkup(
     <SessionPane
+      accountsSnapshot={null}
+      orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -389,6 +400,8 @@ test('composer form owns the ↑/↓ history key scope', () => {
 test('P4-24: collapsed-paste pills render with token label, remove control, and preview body', () => {
   const html = renderToStaticMarkup(
     <SessionPane
+      accountsSnapshot={null}
+      orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',

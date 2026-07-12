@@ -38,21 +38,39 @@ import type { RecentWorkspace } from './sessionsCatalogState.js'
 import { toneClasses } from './tone.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
-export function WelcomeScreen({
-  recents,
-  accounts,
-  orchestratorActive,
-  onOpenRecent,
-  onOpenFolder,
-}: {
-  recents: readonly RecentWorkspace[]
-  accounts: AccountsSnapshot | null
-  orchestratorActive: boolean
-  /** Open/restore a recent project's most-recent openable session (HC1: id-only). */
-  onOpenRecent: (recent: RecentWorkspace) => void
-  /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
-  onOpenFolder: () => void
-}) {
+/**
+ * `WelcomeScreen` serves two surfaces from ONE hero + Codex-table body (zero
+ * duplication):
+ *  - `'launcher'` (default) — the first-run / empty-shell start page, with the
+ *    interactive ProjectPicker (recents + "Open folder…").
+ *  - `'session'` — the in-session EMPTY transcript (Chat.jsx:1272 renders the
+ *    same WelcomeScreen when `isEmpty`). HC1 adaptation: the cwd is FIXED at
+ *    session-create and the renderer authors no path, so Project is READ-ONLY
+ *    context (the session's real cwd), not a picker, and the recents launcher /
+ *    "Open folder…" is absent — you are already in a project. The hero, Codex
+ *    pool table, and orchestrator reflect are identical to the launcher.
+ */
+type WelcomeScreenProps =
+  | {
+      variant?: 'launcher'
+      recents: readonly RecentWorkspace[]
+      accounts: AccountsSnapshot | null
+      orchestratorActive: boolean
+      /** Open/restore a recent project's most-recent openable session (HC1: id-only). */
+      onOpenRecent: (recent: RecentWorkspace) => void
+      /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
+      onOpenFolder: () => void
+    }
+  | {
+      variant: 'session'
+      /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
+      cwd: string | null
+      accounts: AccountsSnapshot | null
+      orchestratorActive: boolean
+    }
+
+export function WelcomeScreen(props: WelcomeScreenProps) {
+  const { accounts, orchestratorActive } = props
   return (
     <div className="flex min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[1180px] px-10 pb-8 pt-10">
@@ -74,11 +92,15 @@ export function WelcomeScreen({
             {/* Meta strip with vertical dividers */}
             <div className="flex items-stretch border-t border-shell-seam pt-5">
               <MetaCol icon={<FolderIcon />} label="Project">
-                <ProjectPicker
-                  recents={recents}
-                  onOpenRecent={onOpenRecent}
-                  onOpenFolder={onOpenFolder}
-                />
+                {props.variant === 'session' ? (
+                  <SessionProject cwd={props.cwd} />
+                ) : (
+                  <ProjectPicker
+                    recents={props.recents}
+                    onOpenRecent={props.onOpenRecent}
+                    onOpenFolder={props.onOpenFolder}
+                  />
+                )}
               </MetaCol>
               <div className="w-px bg-shell-seam" />
               <MetaCol icon={<MonitorIcon />} label="Start in">
@@ -97,6 +119,26 @@ export function WelcomeScreen({
         <CodexTable accounts={accounts} />
       </div>
     </div>
+  )
+}
+
+/**
+ * In-session read-only project context (the `'session'` variant). The cwd is
+ * fixed at session-create (HC1 — the renderer authors no path), so this is plain
+ * text, never the launcher's interactive ProjectPicker. Branch is NOT carried on
+ * the SessionDescriptor wire (`app/shared/hostApi.ts:68` has `cwd`, no branch),
+ * so it is omitted rather than fabricated (§0 deferred).
+ */
+function SessionProject({ cwd }: { cwd: string | null }) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5">
+      <span
+        className="truncate font-mono text-[13px] text-text-muted"
+        title={cwd ?? undefined}
+      >
+        {cwd ?? 'This workspace'}
+      </span>
+    </span>
   )
 }
 
