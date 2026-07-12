@@ -8,6 +8,47 @@ permission plumbing shared with FileEditTool, and the design/eval/audit docs.
 Method: source read + focused test run. No code changed by this review.
 Evidence: `bun test src/tools/FilePatchTool/` → 30 pass / 0 fail (applier + parser suites).
 
+## Update 2026-07-12 — adversarial verification + fixes implemented
+
+A decorrelated ChatGPT verification pass (PR #9) confirmed every finding below
+(none refuted) and surfaced four MISSED defects, the most serious an
+**auto-mode classifier bypass** that F1 also causes. Fixes for F1 and M1–M4
+landed in commit `8cf6d9a` with before/after tests; F2/F3 remain deferred, F5's
+premise is now confirmed fact.
+
+MISSED defects found by the verification pass:
+
+- **M1 (BLOCKER, fixed)**: auto mode reruns `checkPermissions` under a synthetic
+  `acceptEdits` context and skips the classifier on `allow`
+  (`src/utils/permissions/permissions.ts:611-667`; Agent/REPL are the only
+  exclusions). Chained with F1, every Apply_patch in auto mode — to any path —
+  silently bypassed the classifier. Same root cause as F1; the `getPath` fix
+  closes both.
+- **M2 (MAJOR, fixed)**: the `moveTo` destination skipped `validateInput`
+  content checks (secret/deny keyed to the source path only) and was never read
+  at call time, so the applier's target-exists guard was inert and a
+  destination created after validation could be silently overwritten (TOCTOU).
+  Fixed: destination deny + secret scan in `validateInput`, and a call-time
+  destination re-read that trips the guard.
+- **M3 (MEDIUM, fixed)**: `rollbackAppliedFiles` had no per-file error
+  isolation; a rollback failure aborted remaining recovery and propagated out,
+  masking the original write error. Fixed: per-file try/catch, original error
+  always rethrown.
+- **M4 (MINOR, fixed)**: `prepareFileMutation` (mkdir + file-history) ran before
+  the in-memory apply, leaving side effects on an anchor failure. Fixed:
+  deferred until after the apply succeeds.
+
+**F5 resolved**: upstream `openai/codex` ships a real `apply_patch.lark`
+envelope grammar (`type: grammar`, `syntax: lark`), while cat-code sends the
+catch-all `start: /(.|\n)*/`. So constrained decoding IS available upstream and
+is forgone here; the 2026-07-11 instruction-stack audit's "grammar matches
+upstream" claim is doc drift to correct. Adopting it stays a candidate (weigh
+the one-time prompt-cache break), not yet done.
+
+Still deferred: **F2** (session-vs-request provider keying of tool selection),
+**F3** (approval-dialog case, envelope header label, per-file result
+enumeration, `logFileOperation` mislabel).
+
 ## Verdict
 
 The tool is good: the homefield-advantage rationale (give GPT models the
