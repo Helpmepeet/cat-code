@@ -13,9 +13,8 @@ import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
 import { permissionActionForKey } from './PermissionPrompt.js'
 import { PermissionQueue } from './PermissionQueue.js'
-import { ContextGauge } from './ContextGauge.js'
 import { selectContextUsage } from './contextUsage.js'
-import { PermissionModeChip } from './PermissionModeChip.js'
+import { ComposerActionsBar } from './ComposerActionsBar.js'
 import {
   buildAllowResponse,
   buildDenyResponse,
@@ -158,6 +157,7 @@ import {
   createAccountsState,
   reduceAccountsState,
   selectAccountsSnapshot,
+  selectActiveAccount,
   selectFirstAccountsSnapshot,
 } from './accountsState.js'
 import {
@@ -216,6 +216,7 @@ import { SessionsPage } from './SessionsPage.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
+  AccountStatus,
   AccountVerbMessage,
   CatCodeBridge,
   PermissionResponseInput,
@@ -1155,10 +1156,17 @@ export function App() {
 	        connection: sessionConnection,
 	        content: (
 	          <SessionPane
+	            activeAccount={selectActiveAccount(
+	              selectAccountsSnapshot(accounts, sessionId),
+	            )}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
+	            modelOverride={
+	              selectDiagnosticsSnapshot(diagnostics, sessionId)
+	                ?.mainLoopModel ?? null
+	            }
 	            allowPermission={(requestId, applySuggestions = []) => {
 	              const item = sessionPermissionQueue.find(
 	                candidate => candidate.request.requestId === requestId,
@@ -1585,10 +1593,12 @@ function TasksStrip({
  * session id; switching focus never tears down a background session's state.
  */
 export function SessionPane({
+  activeAccount,
   activeConnection,
   activeLog,
   activeSessionId,
   allowPermission,
+  modelOverride,
   copyForLlm,
   denyPermission,
   history,
@@ -2198,51 +2208,26 @@ export function SessionPane({
           className="mt-1 h-0.5 rounded-sm bg-white/[0.08] transition-colors peer-focus-within:bg-gradient-to-r peer-focus-within:from-accent peer-focus-within:to-accent/10"
         />
 
-        {/* Actions row (Chat.jsx:1432): icon-only attach + the context donut. */}
-        <div className="mt-3 flex items-center gap-4">
-          {/* Attach (§10 ❓): parity stub — a real file picker needs an engine
-           * attachment capability that is NOT on the wire; the working attach
-           * path today is a large paste, which the toast + title spell out. */}
-          <button
-            aria-label="Add attachment"
-            title="Add attachment — paste a large block to attach it as a collapsed chip"
-            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle transition-colors hover:text-text-muted disabled:opacity-50"
-            disabled={
-              !activeSessionId ||
-              !activeLog.inputEnabled ||
-              !activeConnection.inputEnabled
-            }
-            onClick={() =>
-              toast('Paste a large block to attach it as a collapsed chip.', {
-                tone: 'info',
-              })
-            }
-            type="button"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-          <span className="flex-1" />
-          {/* Permission-mode chip (Chat.jsx:302 `PermChip`) + context donut. */}
-          <PermissionModeChip
-            context={permissionContext}
-            onSetMode={setPermissionMode}
-          />
-          {/* Context-window donut (Chat.jsx:239) — real usage only, absent until
-           * the first result frame provides it (never a stub). */}
-          {contextUsage ? <ContextGauge usage={contextUsage} /> : null}
-        </div>
+        {/* Actions row (Chat.jsx:1454 / Surfaces.jsx:745 `ChipStrip`): attach ·
+         * model override · permission MODE · —— · active account · context donut.
+         * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
+        <ComposerActionsBar
+          attachDisabled={
+            !activeSessionId ||
+            !activeLog.inputEnabled ||
+            !activeConnection.inputEnabled
+          }
+          onAttach={() =>
+            toast('Paste a large block to attach it as a collapsed chip.', {
+              tone: 'info',
+            })
+          }
+          modelOverride={modelOverride}
+          permissionContext={permissionContext}
+          onSetMode={setPermissionMode}
+          account={activeAccount}
+          contextUsage={contextUsage}
+        />
       </form>
       </div>
 
@@ -2581,11 +2566,15 @@ function reduceShell(state: ShellState, action: ShellAction): ShellState {
 }
 
 type SessionPaneProps = {
+  /** This session's active pool account (real alias), or null before its snapshot. */
+  activeAccount: AccountStatus | null
   activeConnection: ConnectionSnapshot
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
   activeSessionId: SessionId | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
+  /** Real per-session model OVERRIDE (`mainLoopModel`); null = built-in default. */
+  modelOverride: string | null
   copyForLlm: () => void
   denyPermission: (requestId: string, message?: string) => void
   partialCount: number
