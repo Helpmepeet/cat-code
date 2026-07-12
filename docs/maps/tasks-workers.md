@@ -146,7 +146,7 @@ Start with `src/state/selectors.ts`.
 | Agent process cleanup | `src/tools/AgentTool/runAgent.ts` | Kills shell and monitor tasks spawned by the agent so children do not outlive the agent. |
 | Remote kill | `src/tasks/RemoteAgentTask/RemoteAgentTask.tsx` | Marks local task killed/notified and archives the remote session to stop cloud resource use. |
 
-## Tests
+## Tests And Validation
 
 Focused existing tests:
 
@@ -161,7 +161,7 @@ When changing shell task behavior, also search for task output and background sh
 
 When changing task UI, search for component tests first; this snapshot does not show a focused `src/components/tasks/*test*` suite, so pair source review with the relevant task lifecycle tests and manual TUI verification if the change is visual.
 
-## Common Footguns
+## Traps And Stale Assumptions
 
 - Do not update `src/tasks.ts` alone. UI grouping, stop dispatch, task state union, and tests may also need updates.
 - Do not use `isBackgroundTask()` as "all tasks"; it intentionally hides completed tasks and foreground tasks.

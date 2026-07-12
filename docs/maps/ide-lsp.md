@@ -13,7 +13,7 @@ Verify behavior in source before editing. IDE and LSP paths are deliberately
 best-effort: failures usually log, notify, or degrade to no attachment/tool
 rather than blocking the main REPL.
 
-## First Routes
+## First Files To Inspect
 
 | Area | Inspect first | Then inspect |
 |---|---|---|

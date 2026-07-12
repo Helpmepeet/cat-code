@@ -165,7 +165,7 @@ Recovery decisions:
 | Microsoft Foundry | `src/services/api/client.ts` | Uses Foundry SDK client with API key or Azure AD token provider. |
 | OpenAI/Codex adapter | `src/services/api/client.ts` | Uses Anthropic SDK shape plus a custom fetch adapter. Account pool, lease, adapter translation, websocket continuation, and response parsing are routed in [`codex-core.md`](codex-core.md). |
 
-## Validation And Tests
+## Tests And Validation
 
 Use focused checks first, then the documented build for broader confidence:
 
@@ -176,7 +176,7 @@ Use focused checks first, then the documented build for broader confidence:
 | Provider instruction placement | `bun test src/utils/providerPromptRegressions.test.ts` |
 | Prompt/context behavior | `bun test src/constants/prompts.test.ts src/services/compact/prompt.test.ts` |
 | Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts` |
-| Codex/OpenAI adapter/account routing | See [`codex-core.md`](codex-core.md) tests and scripts. |
+| Codex/OpenAI adapter/account routing | See [`codex-core.md`](codex-core.md) § Tests And Validation. |
 | Docs-only map change | `git diff --check -- docs/maps/query-provider-runtime.md` |
 | Full documented build | `bun run build:dev:full` |
 

@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-07-01
+Last refreshed: 2026-07-12
 
 ## Purpose
 
@@ -36,7 +36,7 @@ Read in this order for most prompt or instruction work:
 | Change normal default assistant behavior | `src/constants/prompts.ts` | `src/constants/promptStyles/gpt.ts`, `src/constants/systemPromptSections.ts`, `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | `getSystemPrompt()` builds the default prompt array. GPT-specific safety rules and session guidance live in `promptStyles/gpt.ts`; shared transcript guidance remains in `prompts.ts`. |
 | Change Agent Mode system prompt behavior | `src/constants/prompts.ts` | `src/agent-mode/agentMode.ts`, `src/agent-mode/orchestratorPrompt.ts`, `src/agent-mode/rolePrompts.ts`, `src/utils/systemPrompt.ts` | Agent Mode is active via `CLAUDE_CODE_AGENT_MODE`. It uses dedicated sections from `getAgentModeSystemPromptSections()` when available. |
 | Change runtime prompt precedence | `src/utils/systemPrompt.ts` | `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/query.ts` | Effective branch order is override, Agent Mode, coordinator, main-thread agent, custom, default. `appendSystemPrompt` appends unless override replaces everything. |
-| Change repo/user instruction loading | `src/utils/claudemd.ts` | `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts`, `src/bootstrap/state.ts` | This path controls managed, user, project, local, auto-memory, and team-memory instruction inputs. |
+| Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts` | `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts`, `src/bootstrap/state.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. |
 | Change generated context injection | `src/context.ts` | `src/utils/claudemd.ts`, `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/services/api/instructionAssembly.ts` | User context and system context are separate channels until provider assembly. |
 | Change SDK or custom-system-prompt behavior | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/utils/systemPrompt.ts`, `src/query.ts` | Custom prompts skip default prompt construction and skip `getSystemContext()` in `fetchSystemPromptParts()`. |
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
@@ -93,7 +93,7 @@ src/services/api/claude.ts
 | Output style | `src/constants/prompts.ts` | dynamic system-prompt section | Loaded from built-in, user/project, or plugin output-style sources. |
 | Scratchpad instructions | `src/constants/prompts.ts` | dynamic system-prompt section | Present only when scratchpad support is enabled. |
 
-## Instruction File Discovery
+## Instruction And Recalled-Memory Discovery
 
 `src/utils/claudemd.ts` loads instruction files in reverse priority order so
 later entries have more weight:
@@ -103,7 +103,8 @@ later entries have more weight:
 3. Project `CLAUDE.md`, `.claude/CLAUDE.md`, and `.claude/rules/*.md`, walking from root toward CWD.
 4. Local `CLAUDE.local.md`, also root toward CWD.
 5. Additional directory instructions when `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` is enabled.
-6. Auto-memory and team-memory entrypoints when their features are enabled.
+6. Auto-memory and team-memory entrypoints when their features are enabled;
+   these are recalled background context, not instruction files.
 
 Important details:
 
@@ -112,7 +113,9 @@ Important details:
 - `claudeMdExcludes` can suppress memory files.
 - Nested git worktrees skip duplicate checked-in project files above the worktree.
 - `filterInjectedMemoryFiles()` may omit auto-memory/team-memory index files when feature gates move them to attachments.
-- `getClaudeMds()` wraps loaded content with explicit override language before injection.
+- `getClaudeMds()` gives managed/user/project/local instruction files explicit
+  override language, while AutoMem/TeamMem indexes receive recalled-background
+  framing with a verify-before-acting caveat.
 
 ## Subagent Prompt Notes
 
@@ -128,13 +131,15 @@ Watch these trims before debugging "missing" instructions in a worker:
 - Built-in agents can receive extra Agent Mode prompt injections.
 - Fork children that use exact tools preserve more parent context to maximize cache compatibility.
 
-## Tests And Validation Entry Points
+## Tests And Validation
 
 Use focused checks first, then the documented build:
 
 | Area | Command |
 |---|---|
 | Main prompt and Agent Mode prompt sections | `bun test src/constants/prompts.test.ts` |
+| Instruction and recalled-memory framing | `bun test src/utils/claudemd.test.ts` |
+| Save-side memory evaluator wiring | `bun test scripts/memory-behavior-eval/save-side.test.ts` |
 | Provider instruction placement and prompt regressions | `bun test src/utils/providerPromptRegressions.test.ts` |
 | Main query behavior | `bun test src/query.test.ts` |
 | Agent Mode context and prompt owners | `bun test src/agent-mode/agentMode.test.ts src/agent-mode/orchestratorPrompt.test.ts src/agent-mode/rolePrompts.test.ts` |

@@ -164,7 +164,7 @@ Check these before changing always-on behavior:
 - GrowthBook gates/configs: `tengu_onyx_plover`, `tengu_chomp_inflection`, `tengu_kairos_brief`, `tengu_kairos_brief_config`, `tengu_kairos_cron`, `tengu_kairos_cron_durable`, `tengu_surreal_dali`.
 - Permission gates: tool permission context, plan mode, pending permission/sandbox requests, policy `allow_remote_sessions`, teammate ownership restrictions.
 
-## Validation
+## Tests And Validation
 
 For docs-only refreshes, run:
 

@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-07-11
 
 ## Purpose
 
@@ -14,7 +14,7 @@ entrypoints mostly preserve APIs as inert compatibility stubs, while local
 diagnostics, debug logs, API request logging, cost, status, and stats remain
 active local features.
 
-## First Files
+## First Files To Inspect
 
 | Area | Inspect first | Then inspect | Notes |
 |---|---|---|---|
@@ -28,6 +28,7 @@ active local features.
 | IDE diagnostics tracking | `src/services/diagnosticTracking.ts` | `src/tools/FileEditTool/shared.ts`, `src/tools/FileWriteTool/FileWriteTool.ts`, `src/utils/attachments.ts`, `src/components/DiagnosticsDisplay.tsx` | Captures baseline diagnostics before edits, fetches new IDE diagnostics after changes, and renders them as attachments. |
 | Doctor command | `src/commands/doctor/index.ts`, `src/commands/doctor/doctor.tsx` | `src/screens/Doctor.tsx`, `src/utils/doctorDiagnostic.ts`, `src/utils/doctorContextWarnings.ts` | `/doctor` lazy-loads the Doctor screen; it is disabled only by `DISABLE_DOCTOR_COMMAND`. |
 | Status command/dialog | `src/commands/status/index.ts`, `src/commands/status/status.tsx` | `src/components/Settings/Settings.tsx`, `src/components/Settings/Status.tsx`, `src/utils/status.tsx` | `/status` opens Settings on the Status tab. Status aggregates account, provider, IDE, MCP, settings, install, memory, sandbox, and diagnostics. |
+| Codex pool status JSON | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | `src/main.tsx`, `src/services/api/codexAccountPool.ts`, `src/services/api/codexUsage.ts`, [`codex-core.md`](codex-core.md) | `cat-code codex status --json` is a read-only advisory observation for external delegation/scheduling. It emits opaque profile refs, pool counts, usage freshness, and a decision action without raw account identity or token material. |
 | Debug logging | `src/utils/debug.ts` | `src/utils/debugFilter.ts`, `/debug` command surfaces, call sites using `logForDebugging` | Controls debug mode, file path, stderr/file output, filters, level threshold, runtime enablement, and latest symlink. |
 | Error logging | `src/utils/log.ts` | `src/utils/errorLogSink.ts`, `src/utils/sinks.ts`, MCP log call sites | Owns `logError`, in-memory recent errors, queued sink attachment, and persistent error/MCP logging boundary. |
 | API request logging | `src/services/api/logging.ts` | `src/services/api/claude.ts`, `src/utils/telemetry/sessionTracing.ts`, `src/utils/telemetry/perfettoTracing.ts`, `src/cost-tracker.ts` | Logs API query/success/error metadata, gateway detection, request IDs, OTEL event stubs, beta spans, duration state, and teleport first-message events. |
@@ -102,12 +103,13 @@ active local features.
 | `/status` command | `src/commands/status/` | Opens Settings with `defaultTab="Status"`. |
 | Status tab composition | `src/components/Settings/Status.tsx` | Builds sections from `src/utils/status.tsx` plus async diagnostics. |
 | Status property builders | `src/utils/status.tsx` | Account, provider, proxy/mTLS, IDE, MCP summary, sandbox, memory, installation, settings sources, model label. |
+| `cat-code codex status --json` | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | Emits a single advisory JSON observation and exits. Valid observations exit 0 even for no-account or all-blocked pools; nonzero is reserved for internal command failure. |
 | `/stats` command | `src/commands/stats/stats.tsx` | Lazy-renders `Stats` dialog. |
 | Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files, aggregates sessions/messages/model usage/activity/streaks/speculation time, and uses stats cache helpers. |
 | Stats UI | `src/components/Stats.tsx` | Overview/models tabs, date-range switching, heatmap/charts, screenshot copy, async cache for range loads. |
 | In-session metrics | `src/context/stats.tsx` | `StatsProvider` exposes counters/gauges/timers/sets and persists `lastSessionMetrics` on process exit. |
 
-## Validation Routes
+## Tests And Validation
 
 | Validation target | Inspect first | Then inspect |
 |---|---|---|
@@ -123,7 +125,7 @@ active local features.
 1. Re-read `CLAUDE.md` and `docs/maps/WORKSPACE_MAP.md`.
 2. Check whether telemetry stubs changed in `src/services/analytics/` and `src/utils/telemetry/`.
 3. Re-check GrowthBook enablement, config override paths, and Settings Gates visibility.
-4. Re-check `/doctor`, `/status`, `/stats`, and `/cost` command routing through `src/commands.ts`.
+4. Re-check `/doctor`, `/status`, `/stats`, `/cost`, and `cat-code codex status --json` command routing through `src/commands.ts` or `src/main.tsx`.
 5. Re-check API logging fields in `src/services/api/logging.ts` against `src/services/api/claude.ts`.
 6. Re-check diagnostics call sites from file edit/write tools through attachments and displays.
 7. For docs-only edits, run `git diff --check` and a path/link sanity check.

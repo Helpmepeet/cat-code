@@ -63,7 +63,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Goal continuity | `src/utils/threadGoalActions.ts` | `src/utils/threadGoal.ts`, `src/tools/UpdateGoalTool/UpdateGoalTool.ts`, `src/commands/goal/goal.test.ts` | `/goal` syncs durable Agent Mode objective state and can reset workers. Goal completion is blocked while Agent Mode has unresolved workers. |
 | Worktree doctrine | `src/agent-mode/orchestratorPrompt.ts` | `src/tools/EnterWorktreeTool/prompt.ts`, `src/tools/ExitWorktreeTool/prompt.ts`, `src/tools/AgentTool/` | Worktrees are execution backends owned by the orchestrator, not user-facing task state. Verify current apply/cleanup behavior in tool code before changing docs. |
 
-## Tests And Verification Routes
+## Tests And Validation
 
 | Area | Focused tests |
 |---|---|
@@ -76,7 +76,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Goal integration | `bun test src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/utils/threadGoal.test.ts` |
 | Build-level validation | `bun run build:dev:full` |
 
-## Stale Docs Warnings
+## Traps And Stale Assumptions
 
 Treat these docs as historical planning or operator notes unless current source confirms each claim:
 

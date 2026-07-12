@@ -222,7 +222,7 @@ the explicit active-session swap for commands, agents, hooks, MCP, and LSP.
 New marketplace installs during startup can auto-refresh active plugins; updates
 usually set `needsRefresh` or require restart depending on the path.
 
-## Validation
+## Tests And Validation
 
 | Validation target | Owner | Notes |
 |---|---|---|

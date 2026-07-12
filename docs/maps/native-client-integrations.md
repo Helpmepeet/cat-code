@@ -13,7 +13,7 @@ exposure, rendering, or validation. It is a routing layer, not the behavioral
 source of truth. Verify current code before editing because several paths are
 feature-gated, platform-gated, or package-backed.
 
-## First Reads
+## First Files To Inspect
 
 | Need | Inspect first | Then inspect |
 |---|---|---|
@@ -130,7 +130,7 @@ Routing note: `src/commands.ts` conditionally registers `/voice` behind
   this repo is currently the `/mobile` command plus remote/mobile-safe message
   handling elsewhere.
 
-## Validation Routes
+## Tests And Validation
 
 For docs-only refreshes:
 

@@ -36,22 +36,16 @@ Read in this order for most bridge or remote-control work:
 | Order | File | Why first |
 |---|---|---|
 | 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Current map index and broad subsystem routing. |
-| 2 | [`../../src/commands.ts`](../../src/commands.ts) | Feature-gated bridge command import plus remote/bridge command allowlists. |
-| 3 | [`../../src/commands/bridge/index.ts`](../../src/commands/bridge/index.ts) | `/remote-control` command registration, aliases, feature gate, and hidden state. |
-| 4 | [`../../src/commands/bridge/bridge.tsx`](../../src/commands/bridge/bridge.tsx) | Slash-command UI toggle, preflight policy/version/auth checks, and disconnect dialog. |
-| 5 | [`../../src/bridge/initReplBridge.ts`](../../src/bridge/initReplBridge.ts) | Shared REPL bridge gate, auth/policy checks, title derivation, and v1/v2 branch point. |
-| 6 | [`../../src/bridge/remoteBridgeCore.ts`](../../src/bridge/remoteBridgeCore.ts) | Env-less REPL bridge: create code session, call `/bridge`, build v2 transport, refresh JWT, teardown. |
-| 7 | [`../../src/bridge/replBridge.ts`](../../src/bridge/replBridge.ts) | Env-based in-process REPL bridge over environment poll/ack/heartbeat. |
-| 8 | [`../../src/bridge/bridgeMain.ts`](../../src/bridge/bridgeMain.ts) | Standalone `cat-code remote-control`: arg parsing, multi-session spawn, resume, work polling. |
-| 9 | [`../../src/bridge/sessionRunner.ts`](../../src/bridge/sessionRunner.ts) | Spawned child CLI command, env vars, stdout parsing, permission request detection, token refresh injection. |
-| 10 | [`../../src/cli/structuredIO.ts`](../../src/cli/structuredIO.ts) | Stream-json parsing, control request/response lifecycle, permission prompt protocol, sandbox asks. |
-| 11 | [`../../src/cli/remoteIO.ts`](../../src/cli/remoteIO.ts) | `--sdk-url` transport wrapper, CCR v2 client setup, session keepalive, internal event hooks. |
-| 12 | [`../../src/cli/transports/transportUtils.ts`](../../src/cli/transports/transportUtils.ts) | Transport selection between SSE, hybrid, and WebSocket. |
-| 13 | [`../../src/hooks/usePtcloveBridge.ts`](../../src/hooks/usePtcloveBridge.ts) | Local ptclove socket bridge setup, hello/auth flow, permission relay, and status broadcast hookup. |
-| 14 | [`../../src/bridge/ptcloveBridgeProtocol.ts`](../../src/bridge/ptcloveBridgeProtocol.ts) | Local bridge message schema, approval surfacing rules, and status text shaping. |
-| 15 | [`../../src/remote/RemoteSessionManager.ts`](../../src/remote/RemoteSessionManager.ts) | Local TUI client for CCR remote sessions: subscribe, send message, permissions, interrupt. |
-| 16 | [`../../src/server/createDirectConnectSession.ts`](../../src/server/createDirectConnectSession.ts) | Direct-connect session creation and response validation. |
-| 17 | [`../../src/upstreamproxy/upstreamproxy.ts`](../../src/upstreamproxy/upstreamproxy.ts) | CCR container proxy bootstrap, CA fetch, relay startup, env injection. |
+| 2 | [`../../src/bridge/initReplBridge.ts`](../../src/bridge/initReplBridge.ts) | Shared REPL bridge gate, auth/policy checks, title derivation, and v1/v2 branch point. |
+| 3 | [`../../src/bridge/remoteBridgeCore.ts`](../../src/bridge/remoteBridgeCore.ts) | Env-less REPL bridge: create code session, call `/bridge`, build v2 transport, refresh JWT, teardown. |
+| 4 | [`../../src/bridge/bridgeMain.ts`](../../src/bridge/bridgeMain.ts) | Standalone `cat-code remote-control`: arg parsing, multi-session spawn, resume, work polling. |
+| 5 | [`../../src/bridge/sessionRunner.ts`](../../src/bridge/sessionRunner.ts) | Spawned child CLI command, env vars, stdout parsing, permission request detection, token refresh injection. |
+| 6 | [`../../src/cli/structuredIO.ts`](../../src/cli/structuredIO.ts) | Stream-json parsing, control request/response lifecycle, permission prompt protocol, sandbox asks. |
+| 7 | [`../../src/cli/remoteIO.ts`](../../src/cli/remoteIO.ts) | `--sdk-url` transport wrapper, CCR v2 client setup, session keepalive, internal event hooks. |
+
+The Entry Points table below routes the remaining surfaces (command exposure,
+env-based bridge, transport selection, ptclove local bridge, remote viewer,
+direct connect, upstream proxy).
 
 ## Entry Points
 
@@ -318,7 +312,7 @@ env injection; it should not block the agent session.
 | Permission mode args | `src/bridge/bridgeMain.ts` | Validates bridge `--permission-mode` against `PERMISSION_MODES` before polling. |
 | Settings permission rules | `src/utils/settings/permissionValidation.ts` | Settings-level permission rule syntax, separate from remote prompt transport. |
 
-## Tests And Verification Routes
+## Tests And Validation
 
 Use focused checks first, then the documented build if behavior changed:
 
@@ -333,7 +327,7 @@ Use focused checks first, then the documented build if behavior changed:
 | Docs-only refresh | `git diff --check` plus link/path spot checks. |
 | Build-level validation | `bun run build:dev:full`. |
 
-## Common Footguns
+## Traps And Stale Assumptions
 
 - Do not treat env-less bridge and CCR v2 transport as the same gate. Env-less
   removes the environment poll layer; env-based sessions can still use CCR v2

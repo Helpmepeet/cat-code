@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-07-05 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-07-11 against `src/main.tsx`, `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
 `src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
 
@@ -8,7 +8,7 @@ Use this map for the browser and Electron runtime-backed app-session paths.
 It covers the active local app stacks, not older dedicated-app design docs or
 the legacy REPL relay server.
 
-## Start Here
+## First Files To Inspect
 
 1. `docs/maps/WORKSPACE_MAP.md`
 2. `src/main.tsx` for `--web` startup wiring
@@ -40,7 +40,7 @@ the legacy REPL relay server.
 | Desktop renderer transcript and permission state | `app/renderer/src/transcriptProjector.ts`, `app/renderer/src/permissionState.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts` | The renderer subscribes before signaling readiness and keeps session-keyed reducers for connection, permissions, bounded raw diagnostics, and projected transcript rows. The projector exhaustively dispatches the SDK message union; background permission counts feed tab attention without moving focus. |
 | Legacy REPL web relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts`, `src/screens/REPL.tsx` | This older server relays REPL events and intentionally disables sending; do not confuse it with `AppSessionWebSocketServer.ts` when routing runtime-backed browser work. |
 
-## Validation
+## Tests And Validation
 
 | Change area | Command |
 |---|---|
@@ -50,12 +50,12 @@ the legacy REPL relay server.
 | Web-mode startup and transport | `bun test src/web/startRuntimeBackedWebMode.test.ts src/web/launchWebAppDevServer.test.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.test.ts src/web/appSessionEventMapper.test.ts` |
 | Browser frontend | `bun run --cwd web test && bun run --cwd web build` |
 | Desktop tests | `bun test app/` |
-| Desktop shell/preload/renderer typecheck | `bunx tsc --noEmit -p app/tsconfig.json` |
+| Desktop shell/preload/renderer typecheck | `bun run --cwd app typecheck` |
 | Desktop engine-sidecar typecheck | `bun run --cwd app typecheck:sidecar` |
 | Desktop renderer build | `bun run --cwd app renderer:build` |
 | Desktop hardening smoke | `bun run --cwd app test:hardening` |
 
-## Common Traps
+## Traps And Stale Assumptions
 
 - `src/main.tsx --web` no longer uses `src/web/WebSocketServer.ts` for the
   browser chat path. Treat `WebSocketServer.ts` as the legacy REPL relay unless

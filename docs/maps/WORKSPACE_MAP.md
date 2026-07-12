@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-07-05
+Last refreshed: 2026-07-11
 
 ## Purpose
 
@@ -16,25 +16,25 @@ and older plans, feature flags, and implementation can drift.
 
 Keep detailed domain content in these sub-maps:
 
-| Sub-map | Scope |
-|---|---|
-| [`prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. |
-| [`agent-mode.md`](agent-mode.md) | Agent Mode orchestration, deployment-aware behavior, roles, worker identity, and mode-specific prompts. |
-| [`tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. |
-| [`tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. |
-| [`terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. |
-| [`codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. |
-| [`query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. |
-| [`config-persistence.md`](config-persistence.md) | Settings layers, config files, transcripts, memory, migrations, and persistence scope. |
-| [`auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. |
-| [`plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. |
-| [`bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. |
-| [`web-app-runtime.md`](web-app-runtime.md) | Browser and Electron app runtimes, app-session controller, local transports, renderer state, and startup seams. |
-| [`ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. |
-| [`native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. |
-| [`proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. |
-| [`build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, feature sets, migrations, release/upgrade/update, lint, and tests. |
-| [`analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. |
+| Sub-map | Scope | Last refreshed |
+|---|---|---|
+| [`prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-07-12 |
+| [`agent-mode.md`](agent-mode.md) | Agent Mode orchestration, deployment-aware behavior, roles, worker identity, and mode-specific prompts. | 2026-05-21 |
+| [`tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. | 2026-07-10 |
+| [`tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-06-06 |
+| [`terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-07-01 |
+| [`codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-07-11 |
+| [`query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-07-10 |
+| [`config-persistence.md`](config-persistence.md) | Settings layers, config files, transcripts, memory, migrations, and persistence scope. | 2026-07-01 |
+| [`auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-07-11 |
+| [`plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-06-16 |
+| [`bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-06-06 |
+| [`web-app-runtime.md`](web-app-runtime.md) | Browser and Electron app runtimes, app-session controller, local transports, renderer state, and startup seams. | 2026-07-11 |
+| [`ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-05-12 |
+| [`native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. | 2026-05-12 |
+| [`proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-07-01 |
+| [`build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-07-11 |
+| [`analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. | 2026-07-11 |
 
 ## Broad Routing Table
 
@@ -51,6 +51,7 @@ Keep detailed domain content in these sub-maps:
 | Background tasks and task UI | `src/tasks.ts` | `src/tasks/`, `src/components/tasks/`, `src/hooks/useBackgroundTaskNavigation.ts` | [`tasks-workers.md`](tasks-workers.md) |
 | Query/provider runtime | `src/QueryEngine.ts`, `src/query.ts` | `src/services/api/client.ts`, `src/services/api/claude.ts`, `src/utils/model/`, `src/context.ts` | [`query-provider-runtime.md`](query-provider-runtime.md) |
 | Codex-backed API behavior | `src/codex-core/`, `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/codexAccountLeaseManager.ts`, Codex transport surfaces | [`codex-core.md`](codex-core.md) |
+| Codex account status observations | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | `src/services/api/codexAccountPool.ts`, `src/services/api/codexUsage.ts` | [`codex-core.md`](codex-core.md), [`auth-accounts-oauth.md`](auth-accounts-oauth.md), [`analytics-diagnostics.md`](analytics-diagnostics.md) |
 | Settings, config, persistence, memory | `src/utils/settings/settings.ts`, `src/utils/config.ts` | `src/utils/sessionStorage.ts`, `src/memdir/`, `src/services/SessionMemory/`, migrations | [`config-persistence.md`](config-persistence.md) |
 | Auth, login, account state | `src/utils/auth.ts` | `src/services/oauth/`, `src/commands/login/`, `src/commands/accounts/`, secure storage, account pool touchpoints | [`auth-accounts-oauth.md`](auth-accounts-oauth.md) |
 | Bridge, remote control, structured IO | `src/bridge/initReplBridge.ts`, `src/cli/structuredIO.ts` | `src/bridge/`, `src/remote/`, `src/server/`, `src/cli/transports/`, `src/upstreamproxy/` | [`bridge-remote-cli.md`](bridge-remote-cli.md) |
@@ -71,5 +72,12 @@ Keep detailed domain content in these sub-maps:
   lines.
 - When a domain needs more detail, update or create the relevant sub-map instead
   of expanding this main map.
+- Sub-maps share a canonical section vocabulary: `First Files To Inspect`,
+  `Tests And Validation`, and `Traps And Stale Assumptions`. Use these names
+  instead of local variants when adding or refreshing sections. Keep
+  `First Files To Inspect` to roughly five to seven entries; deeper routing
+  belongs in the goal/concern tables.
+- When refreshing a sub-map, update both its `Last refreshed:` line and its
+  row in the Map Index above.
 - Prefer implementation over prose when docs disagree; then refresh the affected
   route and note only the durable owner surface here.

@@ -1,6 +1,6 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-07-04 against `CLAUDE.md`,
+Last refreshed: 2026-07-11 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
@@ -47,6 +47,7 @@ files, then verify current source before changing code.
 | Shell update command | `src/main.tsx` | `src/entrypoints/cli.tsx`, `src/cli/update.ts` | `program.command('update').alias('upgrade')` delegates to `src/cli/update.ts`. Early CLI rewrites `--update` and `--upgrade` to the `update` subcommand. |
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
+| Codex account status subcommand | `src/main.tsx`, `src/cli/handlers/codexStatus.ts` | `src/services/api/codexStatus.ts`, `src/services/api/codexStatus.test.ts` | `cat-code codex status --json` emits a read-only advisory JSON observation. It is a CLI/status surface, not a build gate or account reservation mechanism. |
 
 ## Build Script Details
 
@@ -138,7 +139,7 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Auto-updater disable reason | `src/utils/config.ts` | Disabled by development `NODE_ENV`, `DISABLE_AUTOUPDATER`, essential-traffic-only env reason, or old config `autoUpdates === false` unless native protection applies. |
 | Slash `/upgrade` | `src/commands/upgrade/upgrade.tsx` | Opens `https://claude.ai/upgrade/max`, blocks highest Max users, and invokes login. Availability is `claude-ai`, not enterprise, and not `DISABLE_UPGRADE_COMMAND`. |
 
-## Validation
+## Tests And Validation
 
 | Validation | Command | Owner |
 |---|---|---|
@@ -157,6 +158,7 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Codex two-turn smoke | `bun run scripts/test-codex-core-conversation.ts --account <alias> --model <model>` | `scripts/test-codex-core-conversation.ts` |
 | Codex effort mapping | `bun run scripts/test-codex-effort.ts` | `scripts/test-codex-effort.ts` |
 | Codex tool-call continuity | `bun run scripts/test-codex-stream-tool-call-ids.ts` | `scripts/test-codex-stream-tool-call-ids.ts` |
+| Codex status JSON | `bun test src/services/api/codexStatus.test.ts` | `src/services/api/codexStatus.ts` |
 
 `scripts/test-codex-core-conversation.ts` has a usage string mentioning
 `pnpm tsx`, but the file is runnable through the repo's Bun workflow when Bun
@@ -200,7 +202,7 @@ This means lint is branch-diff scoped, not a full-repo lint. If a change depends
 on generated files, renamed files, or files outside `main...HEAD`, verify the
 actual command expansion before trusting a clean lint result.
 
-## Common Traps
+## Traps And Stale Assumptions
 
 - `bun run build` and `./cli` are defined, but `CLAUDE.md` says not to use them
   unless explicitly asked. Default to `bun run build:dev:full` for build

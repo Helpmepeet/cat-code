@@ -5,7 +5,7 @@ Last refreshed: 2026-07-01
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
 
-## Start Here
+## First Files To Inspect
 
 1. `docs/maps/WORKSPACE_MAP.md`
 2. `src/screens/REPL.tsx`
@@ -83,7 +83,7 @@ suppresses dialogs and the order among:
 - onboarding and callout surfaces
 - ultraplan dialogs
 
-## Validation And Tests
+## Tests And Validation
 
 Use focused checks first:
 
@@ -100,7 +100,7 @@ Use focused checks first:
 Component-level TUI coverage is sparse. For terminal UI changes, source
 inspection and manual REPL verification are still normal.
 
-## Common Footguns
+## Traps And Stale Assumptions
 
 - Do not change shared state from `REPL.tsx` without checking
   `src/state/AppStateStore.ts`.

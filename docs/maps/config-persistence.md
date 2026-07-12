@@ -12,7 +12,7 @@ before changing persistence or precedence rules.
 Start with `docs/maps/WORKSPACE_MAP.md` for broad routing, then use this file
 for the config and persistence slice.
 
-## First Reads
+## First Files To Inspect
 
 | Need | Inspect first | Then inspect |
 |---|---|---|
@@ -126,7 +126,7 @@ Use this order when debugging missing, stale, or malformed resumed state:
 
 Do not treat `src/history.ts` or prompt input history as transcript truth.
 
-## Persistence Traps
+## Traps And Stale Assumptions
 
 - Global config and settings are different files with different schemas.
   `settings.env` is preferred over deprecated global config `env`, but both can
