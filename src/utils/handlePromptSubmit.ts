@@ -21,7 +21,7 @@ import { createAbortController } from './abortController.js'
 import type { PastedContent } from './config.js'
 import { logForDebugging } from './debug.js'
 import type { EffortValue } from './effort.js'
-import { claimImmediateOwner, isCurrentImmediateOwner } from './immediateCommand.js'
+import { claimImmediateOwner, isCurrentImmediateOwner, isSerializedLocalJsxPending } from './immediateCommand.js'
 import type { FileHistoryState } from './fileHistory.js'
 import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
@@ -254,7 +254,11 @@ export async function handlePromptSubmit(
     if (
       immediateCommand &&
       immediateCommand.type === 'local-jsx' &&
-      (queryGuard.isActive || isExternalLoading)
+      (queryGuard.isActive || isExternalLoading) &&
+      // Decline while a serialized local-jsx dispatch is in its pre-install
+      // window — its ownerless install/clear would race an owned panel; the
+      // input falls through to the queue and runs serialized, in order.
+      !isSerializedLocalJsxPending()
     ) {
       logEvent('tengu_immediate_command_executed', {
         commandName:

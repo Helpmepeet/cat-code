@@ -2,7 +2,7 @@ import { feature } from 'bun:bundle';
 import type { ContentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'crypto';
 import { setPromptId } from 'src/bootstrap/state.js';
-import { builtInCommandNames, type Command, type CommandBase, findCommand, getCommand, getCommandName, hasCommand, type PromptCommand } from 'src/commands.js';
+import { builtInCommandNames, type Command, type CommandBase, findCommand, getCommand, getCommandName, hasCommand, meetsAvailabilityRequirement, type PromptCommand } from 'src/commands.js';
 import { NO_CONTENT_MESSAGE } from 'src/constants/messages.js';
 import type { SetToolJSXFn, ToolUseContext } from 'src/Tool.js';
 import type { AssistantMessage, AttachmentMessage, Message, NormalizedUserMessage, ProgressMessage, UserMessage } from 'src/types/message.js';
@@ -27,6 +27,7 @@ import { getDisplayPath } from '../file.js';
 import { extractResultText, prepareForkedCommandContext } from '../forkedAgent.js';
 import { getFsImplementation } from '../fsOperations.js';
 import { isFullscreenEnvEnabled } from '../fullscreen.js';
+import { clearSerializedLocalJsxPending, markSerializedLocalJsxPending } from '../immediateCommand.js';
 import { toArray } from '../generators.js';
 import { registerSkillHooks } from '../hooks/registerSkillHooks.js';
 import { logError } from '../log.js';
@@ -380,6 +381,26 @@ export async function processSlashCommand(inputString: string, precedingInputBlo
     };
   }
 
+  // Re-check availability at execution: the mounted command list is not
+  // rebuilt on provider switches, so a queued provider-gated command (e.g.
+  // /usage, openai-only) can be stale by the time it drains.
+  if (!meetsAvailabilityRequirement(getCommand(commandName, context.options.commands))) {
+    logEvent('tengu_input_slash_unavailable', {
+      input: sanitizedCommandName as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+    });
+    const unavailableMessage = `/${commandName} is not available with the current provider`;
+    return {
+      messages: [createSyntheticUserCaveatMessage(), ...attachmentMessages, createUserMessage({
+        content: prepareUserContent({
+          inputString: unavailableMessage,
+          precedingInputBlocks
+        })
+      })],
+      shouldQuery: false,
+      resultText: unavailableMessage
+    };
+  }
+
   // Track slash command usage for feature discovery
 
   const {
@@ -550,6 +571,10 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
     switch (command.type) {
       case 'local-jsx':
         {
+          // Immediate dispatch must decline while this serialized dispatch is
+          // in its pre-install window — its ownerless install/clear would race
+          // an owned immediate panel (immediateCommand.ts).
+          markSerializedLocalJsxPending();
           return new Promise<SlashCommandResult>(resolve => {
             let doneWasCalled = false;
             const onDone = (result?: string, options?: {
@@ -560,6 +585,7 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
               submitNextInput?: boolean;
             }) => {
               doneWasCalled = true;
+              clearSerializedLocalJsxPending();
               // If display is 'skip', don't add any messages to the conversation
               if (options?.display === 'skip') {
                 void resolve({
@@ -612,6 +638,7 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
             }, args)).then(jsx => {
               if (jsx == null) return;
               if (context.options.isNonInteractiveSession) {
+                clearSerializedLocalJsxPending();
                 void resolve({
                   messages: [],
                   shouldQuery: false,
@@ -627,6 +654,9 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
               // Setting isLocalJSXCommand after clear leaves it stuck true,
               // blocking useQueueProcessor and TextInput focus.
               if (doneWasCalled) return;
+              // Panel installed — the modal takes over; the pre-install
+              // dispatch window is closed.
+              clearSerializedLocalJsxPending();
               setToolJSX({
                 jsx,
                 shouldHidePromptInput: true,
@@ -639,6 +669,7 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
               // Promise hangs forever, leaving queryGuard stuck in
               // 'dispatching' and deadlocking the queue processor.
               logError(e);
+              clearSerializedLocalJsxPending();
               if (doneWasCalled) return;
               doneWasCalled = true;
               setToolJSX({

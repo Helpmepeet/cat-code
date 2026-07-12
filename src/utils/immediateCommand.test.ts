@@ -3,7 +3,10 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   _forTestResetImmediateOwner,
   claimImmediateOwner,
+  clearSerializedLocalJsxPending,
   isCurrentImmediateOwner,
+  isSerializedLocalJsxPending,
+  markSerializedLocalJsxPending,
   resolveToolJsxUpdate,
 } from './immediateCommand.js'
 
@@ -79,6 +82,25 @@ describe('resolveToolJsxUpdate', () => {
   test('updates apply normally when no panel is active', () => {
     expect(resolveToolJsxUpdate(undefined, false, {})).toBe('apply')
     expect(resolveToolJsxUpdate(undefined, false, null)).toBe('apply')
+  })
+})
+
+describe('serialized local-jsx pending window', () => {
+  test('marks and clears the pre-install dispatch window', () => {
+    expect(isSerializedLocalJsxPending()).toBe(false)
+    markSerializedLocalJsxPending()
+    expect(isSerializedLocalJsxPending()).toBe(true)
+    clearSerializedLocalJsxPending()
+    expect(isSerializedLocalJsxPending()).toBe(false)
+  })
+
+  test('clearing is idempotent and reset clears a stuck window', () => {
+    clearSerializedLocalJsxPending()
+    expect(isSerializedLocalJsxPending()).toBe(false)
+
+    markSerializedLocalJsxPending()
+    _forTestResetImmediateOwner()
+    expect(isSerializedLocalJsxPending()).toBe(false)
   })
 })
 

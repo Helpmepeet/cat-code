@@ -41,8 +41,33 @@ export function isCurrentImmediateOwner(owner: number): boolean {
   return owner === lastClaimedOwner
 }
 
+/**
+ * Set while the serialized (queued) path is dispatching a local-JSX command
+ * that has not yet installed its panel or fired onDone. The serialized path
+ * issues OWNERLESS installs/clears (processSlashCommand.tsx local-jsx case,
+ * executeUserInput's clearLocalJSX), so an immediate command overlapping this
+ * window would be evicted by the serialized command's late ownerless clear —
+ * the round-2 review race. While pending, immediate dispatch must decline and
+ * let input take the serialized queue path instead. Safe as a single flag:
+ * the queue processor and the query guard serialize these dispatches.
+ */
+let serializedLocalJsxPending = false
+
+export function markSerializedLocalJsxPending(): void {
+  serializedLocalJsxPending = true
+}
+
+export function clearSerializedLocalJsxPending(): void {
+  serializedLocalJsxPending = false
+}
+
+export function isSerializedLocalJsxPending(): boolean {
+  return serializedLocalJsxPending
+}
+
 export function _forTestResetImmediateOwner(): void {
   lastClaimedOwner = 0
+  serializedLocalJsxPending = false
 }
 
 export type ToolJsxSlotAction = 'install' | 'clear' | 'ignore' | 'apply'

@@ -51,8 +51,8 @@ import { endInteractionSpan } from '../utils/telemetry/sessionTracing.js';
 import { useLogMessages } from '../hooks/useLogMessages.js';
 import { useReplBridge } from '../hooks/useReplBridge.js';
 import { usePtcloveBridge } from '../hooks/usePtcloveBridge.js';
-import { type Command, type CommandResultDisplay, type ResumeEntrypoint, getCommandName, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js';
-import { claimImmediateOwner, isCurrentImmediateOwner, resolveToolJsxUpdate } from '../utils/immediateCommand.js';
+import { type Command, type CommandResultDisplay, type ResumeEntrypoint, clearCommandsCache, getCommandName, getCommands, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js';
+import { claimImmediateOwner, isCurrentImmediateOwner, isSerializedLocalJsxPending, resolveToolJsxUpdate } from '../utils/immediateCommand.js';
 import type { PromptInputMode, QueuedCommand, VimMode } from '../types/textInputTypes.js';
 import { MessageSelector, selectableUserMessagesFilter, messagesAfterAreOnlySynthetic } from '../components/MessageSelector.js';
 import { useIdeLogging } from '../hooks/useIdeLogging.js';
@@ -274,6 +274,7 @@ import { UserTextMessage } from 'src/components/messages/UserTextMessage.js';
 import { AwsAuthStatusBox } from '../components/AwsAuthStatusBox.js';
 import { useRateLimitWarningNotification } from 'src/hooks/notifs/useRateLimitWarningNotification.js';
 import {
+  getAPIProvider,
   getProviderForModel,
   persistStartupProviderPreference,
   resolveRequestProvider,
@@ -706,6 +707,21 @@ export function REPL({
 
   // Watch for skill file changes and reload all commands
   useSkillsChange(isRemoteSession ? undefined : getProjectRoot(), setLocalCommands);
+
+  // Provider-gated commands (e.g. /usage, openai-only) come and go with the
+  // session provider, but localCommands is otherwise only rebuilt by the
+  // skills watcher — a model switch that moves the provider would leave the
+  // list stale in BOTH directions (stale entry lingers / gated command never
+  // appears). Rebuild when the provider actually changed.
+  const commandsProviderRef = useRef(getAPIProvider());
+  useEffect(() => {
+    const provider = getAPIProvider();
+    if (provider === commandsProviderRef.current) return;
+    commandsProviderRef.current = provider;
+    if (isRemoteSession) return;
+    clearCommandsCache();
+    getCommands(getProjectRoot()).then(setLocalCommands).catch(error => logError(error));
+  }, [mainLoopModel, isRemoteSession]);
 
   // Track proactive mode for tools dependency - SleepTool filters by proactive state
   const proactiveActive = React.useSyncExternalStore(proactiveModule?.subscribeToProactiveChanges ?? PROACTIVE_NO_OP_SUBSCRIBE, proactiveModule?.isProactiveActive ?? PROACTIVE_FALSE);
@@ -3555,7 +3571,40 @@ export function REPL({
         idleHintShownRef.current = false;
       }
       const shouldTreatAsImmediate = queryGuard.isActive && (matchingCommand?.immediate || options?.fromKeybinding);
-      if (matchingCommand && shouldTreatAsImmediate && matchingCommand.type === 'local-jsx' && meetsAvailabilityRequirement(matchingCommand)) {
+      const immediateEligible = Boolean(matchingCommand && shouldTreatAsImmediate && matchingCommand.type === 'local-jsx');
+      if (immediateEligible && matchingCommand && !meetsAvailabilityRequirement(matchingCommand)) {
+        // Consume instead of falling through: fallthrough would enqueue the
+        // input — for a keybinding that's a synthetic "/<command>" string, and
+        // the queue path's onInputChange('') would wipe the user's real draft.
+        // The stale provider-gated command would also still execute when the
+        // queue drains (processSlashCommand now rejects it, but with noise).
+        if (input.trim() === inputValueRef.current.trim()) {
+          setInputValue('');
+          helpers.setCursorOffset(0);
+          helpers.clearBuffer();
+          setPastedContents({});
+        }
+        addNotification({
+          key: `immediate-unavailable-${matchingCommand.name}`,
+          text: `/${getCommandName(matchingCommand)} is not available with the current provider`,
+          priority: 'immediate'
+        });
+        return;
+      }
+      if (immediateEligible && matchingCommand && isSerializedLocalJsxPending() && options?.fromKeybinding) {
+        // A serialized local-jsx dispatch is in its pre-install window
+        // (immediateCommand.ts): immediate execution would race its ownerless
+        // install/clear, and queueing the synthetic keybinding string would
+        // wipe the real draft. Consume with feedback; typed input (below)
+        // falls through to the queue and runs serialized, in order.
+        addNotification({
+          key: `immediate-busy-${matchingCommand.name}`,
+          text: `/${getCommandName(matchingCommand)} is waiting for another command to finish — try again in a moment`,
+          priority: 'immediate'
+        });
+        return;
+      }
+      if (matchingCommand && immediateEligible && !isSerializedLocalJsxPending() && matchingCommand.type === 'local-jsx') {
         // Only clear input if the submitted text matches what's in the prompt.
         // When a command keybinding fires, input is "/<command>" but the actual
         // input value is the user's existing text - don't clear it in that case.
