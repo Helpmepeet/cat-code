@@ -78,8 +78,27 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows: NestedTranscriptRow[]
 }) {
   if (rows.length === 0) {
+    // Empty session → a clean centered welcome, not a debug placeholder
+    // (Chat.jsx renders its WelcomeScreen when `isEmpty`). No fabricated recents
+    // or prompt suggestions (no real backing) — just a greeting + the paw mark.
     return (
-      <div className="text-sm text-text-subtle">No transcript rows yet.</div>
+      <div className="mx-auto flex min-h-[55vh] w-full max-w-[740px] flex-col items-center justify-center gap-4 px-8 text-center">
+        <span className="text-accent" aria-hidden>
+          <svg width="46" height="46" viewBox="0 0 24 24" fill="currentColor">
+            <ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
+            <ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65" />
+            <ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
+            <ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45" />
+            <path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z" />
+          </svg>
+        </span>
+        <div className="space-y-1.5">
+          <p className="text-lg font-light text-text-primary">How can I help?</p>
+          <p className="text-sm font-light text-text-subtle">
+            Type a message below — Cat Code is connected to this workspace.
+          </p>
+        </div>
+      </div>
     )
   }
 
@@ -88,7 +107,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // new frame or message type (C3). Non-agent rows and lone agents pass through.
   const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
   return (
-    <div className="flex flex-col gap-3">
+    // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
+    // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
+    // 24px top / 32px side padding. The prototype's light body weight is scoped
+    // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
+    // code / mono text stays at a crisp, readable weight.
+    <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
       {items.map(item =>
         item.kind === 'agent-group' ? (
           <DelegateGroup key={item.id} members={item.members} />
@@ -219,7 +243,7 @@ function AssistantProse({
   return (
     <div>
       <MarkdownErrorBoundary fallback={content}>
-        <div className="font-sans text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
+        <div className="font-sans font-light text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
           <Markdown components={MARKDOWN_COMPONENTS}>{shown}</Markdown>
         </div>
       </MarkdownErrorBoundary>

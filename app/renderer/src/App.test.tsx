@@ -7,7 +7,9 @@ import {
   buildDebugExport,
   deriveActivity,
   fmtElapsed,
+  fmtTok,
   reducePromptDrafts,
+  selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
 } from './App.js'
@@ -83,20 +85,36 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   // P4-24: the composer is a multi-line auto-resizing <textarea>, not the old
   // single-line <input>.
   expect(html).toContain('<textarea')
-  expect(html).toContain('Copy for LLM')
-  expect(html).toContain('Permissions')
+  // P4-24 reflow: "Copy for LLM" is a developer affordance, now DEV-gated
+  // (mirrors the raw-events panel) — absent from a default/production pane.
+  expect(html).not.toContain('Copy for LLM')
+  // P4-24: permission mode is now a compact chip in the composer actions row
+  // (Chat.jsx:302 `PermChip`), not a "Permissions" <details> box.
+  expect(html).toContain('Permission mode:')
+  // P4-24 reflow: the transcript is the primary surface, ABOVE the docked
+  // composer (Chat.jsx grammar: read above, type below) — the composer is no
+  // longer pinned to the top of the pane.
+  expect(html.indexOf('<section')).toBeLessThan(
+    html.indexOf('aria-label="Composer"'),
+  )
   // P4-24: the scaffold <h1>Transcript</h1> heading is dropped (full-bleed).
   expect(html).not.toContain('Transcript</h1>')
   // Idle (inputEnabled) session shows no activity indicator / Stop control.
   expect(html).not.toContain('■ Stop')
-  // P4-24: the raw-SDKMessage inspector is now gated behind import.meta.env.DEV
-  // (undefined under `bun test`), so a default/production pane omits it entirely
-  // — no label, no <pre> body. (The Permissions disclosure keeps a <details>.)
+  // P4-24: the raw-SDKMessage inspector is hidden by default (opt-in dev flag),
+  // absent under `bun test`. With the Permissions <details> box now a chip, a
+  // clean idle pane has NO disclosure box at all.
   expect(html).not.toContain('Raw SDKMessage events')
-  expect(html).toContain('<details')
+  expect(html).not.toContain('<details')
   expect(html).not.toContain('<pre')
-  // The pane surfaces the active session's cwd in its header.
-  expect(html).toContain('/tmp/project')
+  // P4-24 reflow: the pane has NO debug header — the cwd is not surfaced here
+  // (it lives in the TabBar; the prototype ChatView has no header row, and the
+  // "Copy for LLM" dev button is gone from the surface).
+  expect(html).not.toContain('/tmp/project')
+  // P4-24: the composer is borderless (Chat.jsx:1407) with a pink send-ARROW
+  // icon button, not a bordered box with a labelled "Send" button.
+  expect(html).toContain('bg-transparent')
+  expect(html).toContain('aria-label="Send prompt"')
 })
 
 test('P4-18c: a generating session (ready + input disabled) shows the activity indicator + Stop', () => {
@@ -201,6 +219,48 @@ test('P4-18c fmtElapsed formats seconds and minutes', () => {
   expect(fmtElapsed(0)).toBe('0s')
   expect(fmtElapsed(5200)).toBe('5s')
   expect(fmtElapsed(65_000)).toBe('1m 05s')
+})
+
+test('P4-18 fmtTok: raw below 1k, N.Nk to 100k, Nk above (matches Chat.jsx:134)', () => {
+  expect(fmtTok(0)).toBe('0')
+  expect(fmtTok(999)).toBe('999')
+  expect(fmtTok(1000)).toBe('1k')
+  expect(fmtTok(1200)).toBe('1.2k')
+  expect(fmtTok(120_000)).toBe('120k')
+})
+
+test('P4-18 selectLiveTokenEstimate: current-turn output ÷ 4; prior turns excluded; no boundary → 0', () => {
+  // No user boundary present → 0, so a retained transcript never leaks as a
+  // huge count (fail to "no estimate", never to a wrong large number).
+  expect(
+    selectLiveTokenEstimate([
+      blockRow({ kind: 'assistant-text', role: 'assistant', content: 'x'.repeat(80) }),
+    ]),
+  ).toBe(0)
+
+  const rows: NestedTranscriptRow[] = [
+    blockRow({ kind: 'user-text' }),
+    // Prior turn's reply — MUST be excluded (it precedes the last boundary).
+    blockRow({ kind: 'assistant-text', role: 'assistant', content: 'p'.repeat(400) }),
+    blockRow({ kind: 'user-text' }), // ← current turn starts here
+    blockRow({
+      kind: 'assistant-text',
+      role: 'assistant',
+      content: 'a'.repeat(38),
+      isStreaming: true,
+    }),
+    blockRow({
+      kind: 'tool-use',
+      toolUseId: 'u',
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: {}, // JSON.stringify({}) → "{}" = 2 chars
+      status: 'pending',
+      result: null,
+    }),
+  ]
+  // (38 + 2) / 4 = 10; the 400-char prior reply does not count.
+  expect(selectLiveTokenEstimate(rows)).toBe(10)
 })
 
 test('composer form owns the ↑/↓ history key scope', () => {

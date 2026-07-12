@@ -13,7 +13,9 @@ import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
 import { permissionActionForKey } from './PermissionPrompt.js'
 import { PermissionQueue } from './PermissionQueue.js'
-import { PermissionRulesEditor } from './PermissionRulesEditor.js'
+import { ContextGauge } from './ContextGauge.js'
+import { selectContextUsage } from './contextUsage.js'
+import { PermissionModeChip } from './PermissionModeChip.js'
 import {
   buildAllowResponse,
   buildDenyResponse,
@@ -203,7 +205,7 @@ import { BannerStack } from './BannerStack.js'
 import {
   REAUTH_ACTION_KEY,
   selectAuthSubmitBlocked,
-  selectReauthBanners,
+  selectVisibleReauthBanners,
 } from './reauthBannerState.js'
 import {
   StartupOAuth,
@@ -247,6 +249,35 @@ const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
 const reduceRemoteSettingsStateBatched = withBatch(reduceRemoteSettingsState)
 const reduceSessionsCatalogStateBatched = withBatch(reduceSessionsCatalogState)
 
+/** Reauth banners the operator dismissed for good ("never show again"),
+ * persisted across launches. A dismissed id suppresses only a still-dismissable
+ * (non-blocking) banner — the all-dead wall always resurfaces
+ * (`selectVisibleReauthBanners`). */
+const DISMISSED_REAUTH_KEY = 'catcode:dismissedReauth'
+
+function loadDismissedReauth(): ReadonlySet<string> {
+  try {
+    const raw = globalThis.localStorage?.getItem(DISMISSED_REAUTH_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : null
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((x): x is string => typeof x === 'string'))
+      : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function persistDismissedReauth(ids: ReadonlySet<string>): void {
+  try {
+    globalThis.localStorage?.setItem(
+      DISMISSED_REAUTH_KEY,
+      JSON.stringify([...ids]),
+    )
+  } catch {
+    // no storage (private mode / headless) — dismissal is then session-only
+  }
+}
+
 export function App() {
   const [state, dispatch] = useReducer(
     reduceServerFrameBatched,
@@ -273,6 +304,8 @@ export function App() {
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
   const [transportError, setTransportError] = useState<string | null>(null)
   const [shellError, setShellError] = useState<string | null>(null)
+  const [dismissedReauthIds, setDismissedReauthIds] =
+    useState<ReadonlySet<string>>(loadDismissedReauth)
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
@@ -1325,15 +1358,34 @@ export function App() {
           </div>
         ) : null}
 
-        {/* P4-15 non-blocking reauth banner (Q2): derived from the P4-5 pool
-         * snapshot, never pushed. Renders null when no account is dead. Its
-         * "Re-authenticate" action begins the same engine OAuth flow. */}
-        <BannerStack
-          banners={selectReauthBanners(activeAccountsSnapshot)}
-          onAction={(_banner, action) => {
-            if (action.key === REAUTH_ACTION_KEY) sendAccountVerb(loginVerb())
-          }}
-        />
+        {/* P4-15 reauth banner (Q2): derived from the P4-5 pool snapshot, never
+         * pushed. It FLOATS as an overlay just below the TabBar (`top-10`)
+         * instead of reflowing the panels — good alert behavior, not a layout
+         * shove. Non-blocking banners carry a × that dismisses them for good
+         * (`selectVisibleReauthBanners` + persisted ids); the all-dead wall stays
+         * non-dismissable. `pointer-events-none` lets clicks pass through any
+         * gutter; the bars themselves re-enable them. */}
+        <div className="pointer-events-none absolute inset-x-0 top-10 z-40">
+          <div className="pointer-events-auto">
+            <BannerStack
+              banners={selectVisibleReauthBanners(
+                activeAccountsSnapshot,
+                dismissedReauthIds,
+              )}
+              onAction={(_banner, action) => {
+                if (action.key === REAUTH_ACTION_KEY) sendAccountVerb(loginVerb())
+              }}
+              onDismiss={banner => {
+                setDismissedReauthIds(prev => {
+                  const next = new Set(prev)
+                  next.add(banner.id)
+                  persistDismissedReauth(next)
+                  return next
+                })
+              }}
+            />
+          </div>
+        </div>
 
         {/* The workspace panels are renderer-owned layout over the P3-4
          * session-keyed stores. Each panel reads its own session slice, so visible
@@ -1534,7 +1586,6 @@ function TasksStrip({
  */
 export function SessionPane({
   activeConnection,
-  activeDescriptor,
   activeLog,
   activeSessionId,
   allowPermission,
@@ -1676,9 +1727,10 @@ export function SessionPane({
     activeConnection.status === 'ready' &&
     !activeConnection.inputEnabled
   const paused = permissionQueue.length > 0
-  const activity = deriveActivity(
-    selectNestedTranscriptRows(transcript, activeSessionId),
-  )
+  // Slice-cached: stable ref while the session's rows are unchanged, so both
+  // `deriveActivity` and the token estimate share one projection.
+  const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const activity = deriveActivity(nestedRows)
 
   // Elapsed clock: reset and tick once per second while a turn runs.
   const [elapsedMs, setElapsedMs] = useState(0)
@@ -1698,6 +1750,15 @@ export function SessionPane({
     }, 1000)
     return () => clearInterval(id)
   }, [generating, activeSessionId])
+
+  // Live per-turn token estimate for the activity byline. Recomputed when the
+  // transcript slice changes (streaming deltas) or the 1s elapsed tick fires,
+  // so its cadence matches the elapsed clock without a second timer. Only while
+  // a turn is running; the gauge is gated behind 30s in `ActivityIndicator`.
+  const liveTokens = useMemo(
+    () => (generating ? selectLiveTokenEstimate(nestedRows) : 0),
+    [generating, nestedRows, elapsedMs],
+  )
 
   // Stop → the real `app.abort` boundary. The requestId is a message envelope
   // (the sidecar aborts the current turn regardless — `sidecarServer.ts:642`),
@@ -1721,6 +1782,26 @@ export function SessionPane({
     setAtBottom(true)
   }, [activeSessionId])
   const contentSignature = `${activeLog.messages.length}:${partialCount}`
+  // P4-24: context-window fullness for the composer donut, derived from the
+  // latest result frame's real usage (`contextUsage.ts`) — null until a turn
+  // completes (then the gauge appears), never a fabricated 0%.
+  const contextUsage = useMemo(
+    () => selectContextUsage(activeLog.messages),
+    [activeLog.messages],
+  )
+  // Dev-only raw-frame inspector (not a shipped surface, not in the Chat.jsx
+  // design): hidden even in dev UNLESS a developer opts in via
+  // `localStorage['catcode:devPanels'] = '1'`, so a normal dev run shows the
+  // clean composer surface.
+  const showRawEvents =
+    import.meta.env.DEV &&
+    (() => {
+      try {
+        return globalThis.localStorage?.getItem('catcode:devPanels') === '1'
+      } catch {
+        return false
+      }
+    })()
   useEffect(() => {
     const el = transcriptScrollRef.current
     if (!el || !atBottom) return
@@ -1865,29 +1946,68 @@ export function SessionPane({
 
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-8">
-      <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
-        <span>
-          {activeDescriptor ? (
-            <span className="mr-2 font-mono text-xs text-text-subtle">
-              {activeDescriptor.cwd}
-            </span>
-          ) : null}
-          {activeConnection.status} · {activeLog.messages.length} messages · {partialCount}{' '}
-          partial frames
-        </span>
-        <button
-          className="rounded border border-text-subtle px-3 py-1 text-xs text-text-primary"
-          onClick={copyForLlm}
-          type="button"
-        >
-          Copy for LLM
-        </button>
-      </div>
-
+      {/* No chat header row: the prototype's ChatView has none (the session
+       * title lives in the TabBar; the title + actions overflow menu is the
+       * P4-6b `SessionActionsMenu`, a separate surface). The cwd/status debug
+       * line and the "Copy for LLM" dev button are dropped — Copy-for-LLM stays
+       * reachable via its keyboard shortcut. */}
       <ConnectionRecovery
         connection={activeConnection}
         sessionId={activeSessionId}
       />
+
+      {/* P4-24 reflow: the transcript is the primary surface — it fills the
+       * viewport as the sole `flex-1` scroller directly under the header, with
+       * the composer and its satellites (activity, pastes, permissions) DOCKED
+       * below it (Chat.jsx grammar: read above, type below). `<main>` stays
+       * `overflow-hidden`, so this region's inner `overflow-auto` engages under
+       * the flex-height chain; the scroll div tracks stick-to-bottom + drives
+       * the jump-to-bottom control. */}
+      <section className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={transcriptScrollRef}
+          onScroll={onTranscriptScroll}
+          className="min-h-0 flex-1 overflow-auto"
+        >
+          <TranscriptView
+            activeSessionId={activeSessionId}
+            state={transcript}
+          />
+        </div>
+        {!atBottom ? (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur ${
+              generating
+                ? paused
+                  ? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'
+                  : 'border-accent/50 bg-shell-chrome/90 text-accent'
+                : 'border-shell-seam bg-shell-chrome/90 text-text-muted'
+            }`}
+          >
+            {generating ? (
+              <>
+                <span
+                  className={`h-1.5 w-1.5 animate-pulse rounded-full ${
+                    paused ? 'bg-tone-warn' : 'bg-accent'
+                  }`}
+                  aria-hidden
+                />
+                <span className="font-semibold">
+                  {paused ? 'Waiting for approval' : activity.verb}
+                </span>
+                <span className="font-mono tabular-nums text-text-subtle">
+                  {fmtElapsed(elapsedMs)}
+                </span>
+                <span aria-hidden>↓</span>
+              </>
+            ) : (
+              <span>↓ Latest</span>
+            )}
+          </button>
+        ) : null}
+      </section>
 
       {planPanelOpen ? null : (
         <PlanBar onOpen={() => setPlanPanelOpen(true)} review={planReview} />
@@ -1900,11 +2020,42 @@ export function SessionPane({
         review={planReview}
       />
 
+      {/* P4-24 fidelity: the composer dock is centered in the SAME max-740px
+       * column as the transcript (Chat.jsx:1320 `maxWidth: MSG_MAX, margin: '0
+       * auto'`) so the input aligns under the message column; a top seam
+       * separates it from the scrolling transcript above. Inner blocks keep
+       * their existing indent (wrapped without re-indentation). */}
+      <div className="mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-4">
+      {/* Docked above the composer, in Chat.jsx order — live permission-request
+       * cards and any error/notice sit directly above the input, then the
+       * in-turn activity row hugs the composer. */}
+      <PermissionQueue
+        items={permissionQueue}
+        onAllow={allowPermission}
+        onDeny={denyPermission}
+        onRestore={restorePermission}
+      />
+
+      {activeLog.error ? (
+        <div className="text-sm text-tone-danger">{activeLog.error}</div>
+      ) : null}
+
+      {transportError ? (
+        <div className="text-sm text-tone-danger">{transportError}</div>
+      ) : null}
+
+      {activeLog.truncated ? (
+        <div className="text-sm text-tone-warning">
+          Raw message history was truncated to the renderer retention budget.
+        </div>
+      ) : null}
+
       {generating ? (
         <ActivityIndicator
           verb={activity.verb}
           target={activity.target}
           elapsedMs={elapsedMs}
+          liveTokens={liveTokens}
           paused={paused}
           onStop={stopTurn}
           stopError={stopError}
@@ -1950,197 +2101,155 @@ export function SessionPane({
         </div>
       ) : null}
 
+      {/* P4-24 composer, trued to Chat.jsx:1318's "minimal, borderless" input:
+       * a transparent auto-resizing textarea (no box), a pink up-arrow SEND icon
+       * (not a "Send" button), a focus-rule underline that lights on focus, and
+       * an icon-only actions row (attach + the context donut). All handlers are
+       * unchanged — this is a visual re-skin only. */}
       <form
         aria-keyshortcuts="ArrowUp ArrowDown"
         aria-label="Composer"
-        className="flex gap-3"
+        className="flex flex-col"
         onKeyDown={onComposerKeyDown}
         onSubmit={submit}
       >
-        <div className="relative min-w-0 flex-1">
-          <SlashCommandPicker
-            open={slashOpen}
-            query={slashQuery ?? ''}
-            commands={slashMatches}
-            activeIndex={slashIndex}
-            onPick={pickSlashCommand}
-          />
-          <MentionPicker
-            open={mentionOpen}
-            query={mentionQuery ?? ''}
-            items={mentionItems}
-            activeIndex={mentionIndex}
-            onPick={pickMention}
-          />
-          {/* P4-24: multi-line, auto-resizing composer (was a single-line
-           * `<input>`). Enter submits, Shift/Alt/Meta+Enter insert a newline
-           * (`onComposerKeyDown`); it grows to ~38vh then scrolls (auto-resize
-           * effect). `max-h-[38vh]` is a STATIC arbitrary class (not an
-           * interpolated one) so Tailwind emits it; the content-driven height +
-           * overflow are set imperatively by the effect. */}
-          <textarea
-            ref={composerRef}
-            aria-label="Prompt"
-            rows={1}
-            className="max-h-[38vh] w-full resize-none overflow-hidden rounded border border-text-subtle bg-app-bg px-3 py-2 font-mono"
+        <div className="peer relative flex items-end gap-3">
+          <div className="relative min-w-0 flex-1">
+            <SlashCommandPicker
+              open={slashOpen}
+              query={slashQuery ?? ''}
+              commands={slashMatches}
+              activeIndex={slashIndex}
+              onPick={pickSlashCommand}
+            />
+            <MentionPicker
+              open={mentionOpen}
+              query={mentionQuery ?? ''}
+              items={mentionItems}
+              activeIndex={mentionIndex}
+              onPick={pickMention}
+            />
+            {/* Multi-line, auto-resizing, BORDERLESS (Chat.jsx:1407): transparent,
+             * 16px light text, accent caret. Enter submits, Shift/Alt/Meta+Enter
+             * insert a newline; grows to ~38vh then scrolls (auto-resize effect).
+             * `max-h-[38vh]` is a STATIC arbitrary class so Tailwind emits it. */}
+            <textarea
+              ref={composerRef}
+              aria-label="Prompt"
+              rows={1}
+              className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light text-text-primary caret-accent outline-none placeholder:text-text-subtle placeholder:font-light"
+              disabled={
+                !activeSessionId ||
+                !activeLog.inputEnabled ||
+                !activeConnection.inputEnabled
+              }
+              onChange={event => {
+                // A genuine keystroke abandons any active ↑/↓ recall cursor
+                // (parity with the prototype resetting historyIdx on input) and
+                // prunes pastes whose token was actually deleted (reason 'edit').
+                setHistoryNav(EMPTY_HISTORY_NAV)
+                setPrompt(event.target.value)
+              }}
+              onCompositionStart={() => {
+                isComposingRef.current = true
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false
+              }}
+              onPaste={handlePaste}
+              placeholder="Send a prompt to the live engine"
+              value={prompt}
+            />
+          </div>
+          {/* Pink up-arrow SEND (Chat.jsx:1419) — icon, not a labelled button;
+           * quiet when the draft is empty. Stop lives in the activity row. */}
+          <button
+            aria-label="Send prompt"
+            title="Send"
+            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors enabled:hover:bg-accent/10 disabled:text-text-subtle"
+            disabled={
+              !activeSessionId ||
+              !activeLog.inputEnabled ||
+              !activeConnection.inputEnabled ||
+              prompt.trim().length === 0
+            }
+            type="submit"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Focus rule (Chat.jsx:1428): a hairline that lights to an accent
+         * gradient while the input has focus. */}
+        <div
+          aria-hidden
+          className="mt-1 h-0.5 rounded-sm bg-white/[0.08] transition-colors peer-focus-within:bg-gradient-to-r peer-focus-within:from-accent peer-focus-within:to-accent/10"
+        />
+
+        {/* Actions row (Chat.jsx:1432): icon-only attach + the context donut. */}
+        <div className="mt-3 flex items-center gap-4">
+          {/* Attach (§10 ❓): parity stub — a real file picker needs an engine
+           * attachment capability that is NOT on the wire; the working attach
+           * path today is a large paste, which the toast + title spell out. */}
+          <button
+            aria-label="Add attachment"
+            title="Add attachment — paste a large block to attach it as a collapsed chip"
+            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle transition-colors hover:text-text-muted disabled:opacity-50"
             disabled={
               !activeSessionId ||
               !activeLog.inputEnabled ||
               !activeConnection.inputEnabled
             }
-            onChange={event => {
-              // A genuine keystroke abandons any active ↑/↓ recall cursor
-              // (parity with the prototype resetting historyIdx on input) and
-              // prunes pastes whose token was actually deleted (reason 'edit').
-              setHistoryNav(EMPTY_HISTORY_NAV)
-              setPrompt(event.target.value)
-            }}
-            onCompositionStart={() => {
-              isComposingRef.current = true
-            }}
-            onCompositionEnd={() => {
-              isComposingRef.current = false
-            }}
-            onPaste={handlePaste}
-            placeholder="Send a prompt to the live engine"
-            value={prompt}
-          />
-        </div>
-        {/* Add-attachment control (§10 ❓). Parity stub, matching the prototype's
-         * own stub (Chat.jsx:1435 fires a placeholder toast): a real file picker
-         * would need an engine attachment capability that is NOT on the wire —
-         * inventing one is out of scope (no new vocabulary). The working attach
-         * path today is a large paste, which the toast + title spell out. P4-24:
-         * the click is now an honest toast (was a silent no-op dead button). */}
-        <button
-          aria-label="Add attachment"
-          title="Add attachment — paste a large block to attach it as a collapsed chip"
-          className="rounded border border-text-subtle px-3 py-2 text-lg leading-none text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
-          disabled={
-            !activeSessionId ||
-            !activeLog.inputEnabled ||
-            !activeConnection.inputEnabled
-          }
-          onClick={() =>
-            toast('Paste a large block to attach it as a collapsed chip.', {
-              tone: 'info',
-            })
-          }
-          type="button"
-        >
-          +
-        </button>
-        <button
-          className="rounded bg-accent px-4 py-2 text-app-bg disabled:opacity-50"
-          disabled={
-            !activeSessionId ||
-            !activeLog.inputEnabled ||
-            !activeConnection.inputEnabled ||
-            prompt.trim().length === 0
-          }
-          type="submit"
-        >
-          Send
-        </button>
-      </form>
-
-      <PermissionQueue
-        items={permissionQueue}
-        onAllow={allowPermission}
-        onDeny={denyPermission}
-        onRestore={restorePermission}
-      />
-
-      <details className="rounded border border-text-subtle/50 px-3 py-2">
-        <summary className="cursor-pointer text-sm text-text-muted">
-          Permissions
-          {permissionContext ? (
-            <span className="ml-2 font-mono text-xs text-accent">
-              {permissionContext.mode}
-            </span>
-          ) : null}
-        </summary>
-        <div className="mt-2">
-          <PermissionRulesEditor
+            onClick={() =>
+              toast('Paste a large block to attach it as a collapsed chip.', {
+                tone: 'info',
+              })
+            }
+            type="button"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <span className="flex-1" />
+          {/* Permission-mode chip (Chat.jsx:302 `PermChip`) + context donut. */}
+          <PermissionModeChip
             context={permissionContext}
             onSetMode={setPermissionMode}
           />
+          {/* Context-window donut (Chat.jsx:239) — real usage only, absent until
+           * the first result frame provides it (never a stub). */}
+          {contextUsage ? <ContextGauge usage={contextUsage} /> : null}
         </div>
-      </details>
+      </form>
+      </div>
 
-      {activeLog.error ? (
-        <div className="text-sm text-tone-danger">{activeLog.error}</div>
-      ) : null}
-
-      {transportError ? (
-        <div className="text-sm text-tone-danger">{transportError}</div>
-      ) : null}
-
-      {activeLog.truncated ? (
-        <div className="text-sm text-tone-warning">
-          Raw message history was truncated to the renderer retention budget.
-        </div>
-      ) : null}
-
-      {/* P4-18c scroll fix: `<main>` is now `overflow-hidden` (a bounded flex
-       * viewport) and THIS transcript region is the sole `flex-1` scroller, so
-       * its inner `overflow-auto` finally engages under the flex-height chain
-       * (the DEV-only raw-events panel below is demoted to natural height). The
-       * scroll div tracks stick-to-bottom + drives the jump-to-bottom control.
-       * P4-24: the `<h1>Transcript</h1>` scaffold heading is dropped for a
-       * full-bleed transcript. */}
-      <section className="relative flex min-h-0 flex-1 flex-col">
-        <div
-          ref={transcriptScrollRef}
-          onScroll={onTranscriptScroll}
-          className="min-h-0 flex-1 overflow-auto rounded border border-text-subtle p-4"
-        >
-          <TranscriptView
-            activeSessionId={activeSessionId}
-            state={transcript}
-          />
-        </div>
-        {!atBottom ? (
-          <button
-            type="button"
-            onClick={jumpToBottom}
-            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur ${
-              generating
-                ? paused
-                  ? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'
-                  : 'border-accent/50 bg-shell-chrome/90 text-accent'
-                : 'border-shell-seam bg-shell-chrome/90 text-text-muted'
-            }`}
-          >
-            {generating ? (
-              <>
-                <span
-                  className={`h-1.5 w-1.5 animate-pulse rounded-full ${
-                    paused ? 'bg-tone-warn' : 'bg-accent'
-                  }`}
-                  aria-hidden
-                />
-                <span className="font-semibold">
-                  {paused ? 'Waiting for approval' : activity.verb}
-                </span>
-                <span className="font-mono tabular-nums text-text-subtle">
-                  {fmtElapsed(elapsedMs)}
-                </span>
-                <span aria-hidden>↓</span>
-              </>
-            ) : (
-              <span>↓ Latest</span>
-            )}
-          </button>
-        ) : null}
-      </section>
-
-      {/* P4-24: the raw-SDKMessage inspector is a developer tool, not a shipped
-       * surface — gate it behind `import.meta.env.DEV` (mirrors the debug-export
-       * guard at the top of App). Vite replaces this with `false` in the
-       * production `renderer:build`, so the panel is dead-code-eliminated from
-       * the shipped app; it is absent under `bun test` too (DEV is undefined). */}
-      {import.meta.env.DEV ? (
+      {/* Raw-SDKMessage inspector — a developer tool, NOT part of the Chat.jsx
+       * design. Hidden by default even in dev (see `showRawEvents`); opt in with
+       * `localStorage['catcode:devPanels'] = '1'`. Vite DCE's it from prod. */}
+      {showRawEvents ? (
         <section className="flex shrink-0 flex-col">
           <details
             className="max-h-64 overflow-auto"
@@ -2194,17 +2303,76 @@ export function fmtElapsed(ms: number): string {
     : `${seconds}s`
 }
 
+/** Compact token count, matching the prototype `fmtTok` (`Chat.jsx:134`): raw
+ * below 1k, `N.Nk` up to 100k, `Nk` above. */
+export function fmtTok(n: number): string {
+  const r = Math.round(n)
+  if (r < 1000) return String(r)
+  const k = r / 1000
+  return `${k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`
+}
+
+/** Kinds that mark the start of the user's current turn — the point after which
+ * new assistant output belongs to this turn. */
+const TURN_BOUNDARY_KINDS: ReadonlySet<NestedTranscriptRow['kind']> = new Set([
+  'user-text',
+  'user-image',
+  'command-echo',
+])
+
+/**
+ * Live per-turn output-token estimate for the activity byline, the faithful
+ * renderer-side equivalent of the engine's `displayedResponseLength / 4`
+ * (`SpinnerAnimationRow.tsx:159-160`): sum the character length of every
+ * assistant-authored block produced since the current turn began (streaming
+ * text + thinking + tool-input, which the projector grows delta-by-delta),
+ * divided by 4. Counts only rows AFTER the last user-authored boundary so prior
+ * turns in a retained transcript never leak in; returns 0 when no boundary is
+ * present (fail to "no estimate", never to a wrong large number). Purely an
+ * estimate — same footing as the TUI, never a fabricated exact count.
+ */
+export function selectLiveTokenEstimate(
+  rows: readonly NestedTranscriptRow[],
+): number {
+  let start = -1
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (TURN_BOUNDARY_KINDS.has(rows[i].kind)) {
+      start = i
+      break
+    }
+  }
+  if (start === -1) return 0
+  let chars = 0
+  for (let i = start + 1; i < rows.length; i++) {
+    const row = rows[i]
+    if (row.kind === 'assistant-text' || row.kind === 'thinking') {
+      chars += row.content.length
+    } else if (row.kind === 'tool-use') {
+      chars += JSON.stringify(row.input).length
+    }
+  }
+  return Math.round(chars / 4)
+}
+
+/** Parity with the engine's `SHOW_TOKENS_AFTER_MS` (`SpinnerAnimationRow.tsx:19`):
+ * the estimated token byline is gated behind 30s of turn time so quick turns
+ * stay quiet — it appears only on genuinely long turns, exactly as the TUI. */
+const SHOW_TOKENS_AFTER_MS = 30_000
+
 /**
  * P4-18c activity indicator (`Chat.jsx` SpinnerWithVerb): pulse dots + verb +
- * active target + elapsed clock + a Stop control wired to the real `app.abort`.
- * Paused (a pending permission request) tints amber and reads "Waiting for
- * approval". The per-turn TOKEN byline is a §6 deferral — no live per-turn token
- * count crosses the app seam, so only the elapsed clock is shown (never mocked).
+ * active target + elapsed clock + optional per-turn token byline + a Stop
+ * control wired to the real `app.abort`. Paused (a pending permission request)
+ * tints amber and reads "Waiting for approval". The token byline is the
+ * renderer-side `displayedResponseLength / 4` estimate (`selectLiveTokenEstimate`),
+ * gated on `elapsed > 30s && tokens > 0` like the engine — an estimate, never a
+ * mocked exact count.
  */
 function ActivityIndicator({
   verb,
   target,
   elapsedMs,
+  liveTokens,
   paused,
   onStop,
   stopError,
@@ -2212,12 +2380,14 @@ function ActivityIndicator({
   verb: string
   target: string | null
   elapsedMs: number
+  liveTokens: number
   paused: boolean
   onStop: () => void
   stopError: string | null
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
+  const showTokens = liveTokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
   return (
     <div className="flex items-center gap-2.5 border-b border-shell-seam px-1 py-1.5 text-xs">
       <span className="flex items-center gap-1" aria-hidden>
@@ -2241,6 +2411,14 @@ function ActivityIndicator({
       )}
       <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle">
         {fmtElapsed(elapsedMs)}
+        {showTokens ? (
+          <span
+            title="Output tokens this turn (estimate); arrow shows phase, not direction"
+          >
+            {' · ↓ '}
+            {fmtTok(liveTokens)} tokens
+          </span>
+        ) : null}
       </span>
       <button
         type="button"

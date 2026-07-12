@@ -5,6 +5,7 @@ import {
   selectAuthSubmitBlocked,
   selectDeadAccounts,
   selectReauthBanners,
+  selectVisibleReauthBanners,
 } from './reauthBannerState.js'
 
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
@@ -115,7 +116,7 @@ describe('selectReauthBanners', () => {
     expect(selectReauthBanners(snapshot([account({ isDefault: true })]))).toEqual([])
   })
 
-  test('dead account → non-dismissable danger banner with reauth action + real reason', () => {
+  test('dead account among healthy → DISMISSABLE danger banner with reauth action + real reason', () => {
     const snap = snapshot([
       account({ id: 'h', isDefault: true }),
       account({
@@ -131,7 +132,8 @@ describe('selectReauthBanners', () => {
     const [b] = banners
     expect(b.id).toBe('reauth:d')
     expect(b.tone).toBe('danger')
-    expect(b.dismissable).toBe(false)
+    // Non-blocking (a healthy account remains) → dismissable (pool fails over).
+    expect(b.dismissable).toBe(true)
     expect(b.detail).toContain('personal')
     expect(b.detail).toContain('invalid_grant')
     expect(b.actions?.[0]?.key).toBe(REAUTH_ACTION_KEY)
@@ -169,5 +171,45 @@ describe('selectReauthBanners', () => {
       'reauth:d1',
       'reauth:d2',
     ])
+  })
+
+  test('all accounts dead (submit blocked) → banner stays NON-dismissable', () => {
+    const snap = snapshot([
+      account({ id: 'd1', status: 'dead', statusReason: 'auth_dead' }),
+      account({ id: 'd2', status: 'dead', statusReason: 'auth_dead' }),
+    ])
+    for (const b of selectReauthBanners(snap)) {
+      expect(b.dismissable).toBe(false)
+    }
+  })
+})
+
+describe('selectVisibleReauthBanners (dismissed = never show again)', () => {
+  const oneDeadAmongHealthy = snapshot([
+    account({ id: 'h', isDefault: true }),
+    account({ id: 'd', status: 'dead', statusReason: 'auth_dead' }),
+  ])
+  const allDead = snapshot([
+    account({ id: 'd', status: 'dead', statusReason: 'auth_dead' }),
+  ])
+
+  test('a dismissed non-blocking banner is hidden', () => {
+    expect(
+      selectVisibleReauthBanners(oneDeadAmongHealthy, new Set(['reauth:d'])),
+    ).toEqual([])
+  })
+
+  test('an un-dismissed banner still shows', () => {
+    expect(
+      selectVisibleReauthBanners(oneDeadAmongHealthy, new Set()).map(b => b.id),
+    ).toEqual(['reauth:d'])
+  })
+
+  test('the all-dead WALL resurfaces even if that account id was dismissed', () => {
+    // 'd' was dismissed while healthy accounts remained; now the pool is fully
+    // dead (blocked) → the non-dismissable wall must still show.
+    const visible = selectVisibleReauthBanners(allDead, new Set(['reauth:d']))
+    expect(visible.map(b => b.id)).toEqual(['reauth:d'])
+    expect(visible[0]?.dismissable).toBe(false)
   })
 })

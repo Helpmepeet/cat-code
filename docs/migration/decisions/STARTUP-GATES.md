@@ -107,6 +107,17 @@ whether even that blocks or just disables submit is §5-Q2.
   is worse: it blocks a window that may have four healthy accounts. If dogfooding shows the
   banner is missed, escalating it is a UI tweak, not an architecture change — the cheap
   direction to be wrong in.
+
+> **Revision (P4-24, 2026-07-12 — operator-driven).** The "persists until acted on / no
+> Dismiss" rule is relaxed for the NON-blocking case. A dead account *among healthy ones*
+> now carries a × that dismisses it for good (persisted "never show again"), because the
+> pool fails over and nagging is the wrong behavior; the banner also FLOATS as a top
+> overlay (`top-10`, below the TabBar) rather than reflowing the panels. The BLOCKING
+> banner (every account dead → `selectAuthSubmitBlocked`) stays non-dismissable and
+> resurfaces even for a previously-dismissed account, so the loud-failure guarantee above
+> is intact. Mechanism: `selectVisibleReauthBanners` + persisted ids (`reauthBannerState.ts`
+> / `App.tsx`, `localStorage['catcode:dismissedReauth']`). This is the "UI tweak, not
+> architecture change" the bullet above anticipated.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics

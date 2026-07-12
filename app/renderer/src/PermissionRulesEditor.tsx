@@ -24,9 +24,13 @@ import type {
 export function PermissionRulesEditor({
   context,
   onSetMode,
+  showModes = true,
 }: {
   context: PermissionContextSnapshot | null
   onSetMode: (mode: PermissionSetModeMode) => void
+  /** When false, render the read-only rules WITHOUT the mode buttons — the
+   * `PermissionModeChip` owns mode switching and reuses this for the rules. */
+  showModes?: boolean
 }) {
   if (!context) {
     return (
@@ -38,31 +42,33 @@ export function PermissionRulesEditor({
 
   return (
     <div aria-label="Permission rules" className="flex flex-col gap-3 text-xs">
-      <div className="flex items-center gap-2">
-        <span className="text-text-muted">Mode:</span>
-        {PERMISSION_SET_MODE_MODES.map(mode => (
-          <button
-            aria-pressed={context.mode === mode}
-            className={
-              context.mode === mode
-                ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
-                : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
-            }
-            key={mode}
-            onClick={() => onSetMode(mode)}
-            type="button"
-          >
-            {mode}
-          </button>
-        ))}
-        {!PERMISSION_SET_MODE_MODES.includes(
-          context.mode as PermissionSetModeMode,
-        ) ? (
-          <span className="font-mono text-text-muted">
-            current: {context.mode}
-          </span>
-        ) : null}
-      </div>
+      {showModes ? (
+        <div className="flex items-center gap-2">
+          <span className="text-text-muted">Mode:</span>
+          {PERMISSION_SET_MODE_MODES.map(mode => (
+            <button
+              aria-pressed={context.mode === mode}
+              className={
+                context.mode === mode
+                  ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
+                  : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
+              }
+              key={mode}
+              onClick={() => onSetMode(mode)}
+              type="button"
+            >
+              {mode}
+            </button>
+          ))}
+          {!PERMISSION_SET_MODE_MODES.includes(
+            context.mode as PermissionSetModeMode,
+          ) ? (
+            <span className="font-mono text-text-muted">
+              current: {context.mode}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <RuleGroup label="Always allow" rules={context.alwaysAllowRules} />
       <RuleGroup label="Always deny" rules={context.alwaysDenyRules} />

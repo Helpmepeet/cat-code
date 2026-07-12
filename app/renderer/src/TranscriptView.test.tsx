@@ -141,7 +141,9 @@ test('P4-18b: a tool card renders the family word, real target, and running stat
 test('renders an empty-state hint when no rows are projected yet', () => {
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
 
-  expect(html).toContain('No transcript rows yet.')
+  // P4-24: an empty session shows a clean centered welcome (Chat.jsx WelcomeScreen
+  // spirit), not the "No transcript rows yet." debug placeholder.
+  expect(html).toContain('How can I help?')
 })
 
 test('P4-18b: a resolved bash card shows the collapsed tail-peek output and done state', () => {

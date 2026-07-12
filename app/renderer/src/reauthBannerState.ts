@@ -74,9 +74,14 @@ export function selectAuthSubmitBlocked(
 /**
  * Derive the reauth banners for the active session's pool. One banner per dead
  * account (its alias + real reason); when the pool is fully exhausted
- * (`selectAuthSubmitBlocked`) the copy also says submit is blocked. Empty when
- * the pool has no dead accounts. Banners are non-dismissable (persist until
- * acted on — the prototype's Dismiss is CUT, `STARTUP-GATES.md §3`).
+ * (`selectAuthSubmitBlocked`) the copy also says submit is blocked.
+ *
+ * Dismissability (P4-15 revision of `STARTUP-GATES.md §3`'s Dismiss-cut): a
+ * BLOCKING banner (all accounts dead → new turns walled) stays non-dismissable —
+ * you must reauth, so hiding it would only confuse. A NON-blocking banner (one
+ * dead account while others are healthy) IS dismissable: the engine pool just
+ * fails over, so nagging is the wrong behavior. The caller persists dismissals
+ * ("never show again") and filters via `selectVisibleReauthBanners`.
  */
 export function selectReauthBanners(
   snapshot: AccountsSnapshot | null,
@@ -98,7 +103,26 @@ export function selectReauthBanners(
       actions: [
         { key: REAUTH_ACTION_KEY, label: 'Re-authenticate', primary: true },
       ],
-      dismissable: false,
+      // Non-blocking (failover covers you) → dismissable; fully-dead (walled) →
+      // persistent, because you must act.
+      dismissable: !blocked,
     }
   })
+}
+
+/**
+ * The reauth banners MINUS any the operator has dismissed. A dismissed banner id
+ * is hidden permanently ("never show again" — the caller persists the id set).
+ * The BLOCKING banner (`dismissable === false`) is NEVER filtered: even if its
+ * account was dismissed while healthy accounts remained, once the pool is fully
+ * dead the wall must surface. So a dismissed id only suppresses a still-
+ * dismissable (non-blocking) banner.
+ */
+export function selectVisibleReauthBanners(
+  snapshot: AccountsSnapshot | null,
+  dismissedIds: ReadonlySet<string>,
+): BannerNotice[] {
+  return selectReauthBanners(snapshot).filter(
+    banner => banner.dismissable === false || !dismissedIds.has(banner.id),
+  )
 }
