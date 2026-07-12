@@ -64,6 +64,7 @@ export const TranscriptView = memo(function TranscriptView({
   activeSessionId,
   accounts,
   orchestratorActive,
+  onToggleOrchestrator,
   cwd,
   branch,
 }: {
@@ -73,6 +74,9 @@ export const TranscriptView = memo(function TranscriptView({
    * pool snapshot + agent-mode active flag + fixed cwd + git branch; read-only (HC1). */
   accounts?: AccountsSnapshot | null
   orchestratorActive?: boolean
+  /** P4-8b — toggle THIS session's agent mode from the empty-state Orchestrator
+   * switch (the session variant is interactive; the launcher stays read-only). */
+  onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
 }) {
@@ -81,6 +85,7 @@ export const TranscriptView = memo(function TranscriptView({
       rows={selectNestedTranscriptRows(state, activeSessionId)}
       accounts={accounts ?? null}
       orchestratorActive={orchestratorActive ?? false}
+      onToggleOrchestrator={onToggleOrchestrator}
       cwd={cwd ?? null}
       branch={branch ?? null}
     />
@@ -91,12 +96,14 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
   accounts = null,
   orchestratorActive = false,
+  onToggleOrchestrator,
   cwd = null,
   branch = null,
 }: {
   rows: NestedTranscriptRow[]
   accounts?: AccountsSnapshot | null
   orchestratorActive?: boolean
+  onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
 }) {
@@ -114,6 +121,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         branch={branch}
         accounts={accounts}
         orchestratorActive={orchestratorActive}
+        onToggleOrchestrator={onToggleOrchestrator}
       />
     )
   }

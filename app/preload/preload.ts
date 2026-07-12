@@ -45,6 +45,7 @@ const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
+const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -103,6 +104,16 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_WORKSPACE_TRUST_VERB, payload)
+  },
+  setAgentMode(sessionId: SessionId, active: boolean): void {
+    // P4-8b — HC3 fixed sender for the in-session Orchestrator toggle. Same
+    // posture as `setPermissionMode`: the renderer supplies only a scalar intent;
+    // main mints the `requestId` and light-coerces the type, and the sidecar is
+    // the trust boundary (Zod schema + engine `matchSessionMode`). No path, no
+    // token crosses; the renderer never authors an engine object or a cwd.
+    const payload = { sessionId, active }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_AGENT_MODE_SET, payload)
   },
   remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void {
     // P4-13 — HC3 fixed sender. Same posture as `accountVerb`: the renderer

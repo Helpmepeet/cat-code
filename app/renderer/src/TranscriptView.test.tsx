@@ -210,6 +210,22 @@ test('renders the rich WelcomeScreen (hero + real Codex table + cwd) when no row
   expect(html).toContain('>On<')
 })
 
+test('P4-8b — threads onToggleOrchestrator to the empty-state WelcomeScreen (interactive switch)', () => {
+  // Proves the full renderer path App→…→TranscriptRowsView→WelcomeScreen: when the
+  // toggle callback is threaded, the in-session Orchestrator becomes a real button.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[]}
+      orchestratorActive={false}
+      cwd="/w/cat-code"
+      onToggleOrchestrator={() => {}}
+    />,
+  )
+  expect(html).toContain('role="switch"')
+  expect(html).toContain('<button')
+  expect(html).not.toContain('aria-readonly="true"')
+})
+
 test('the empty state degrades honestly with no pool snapshot and no cwd (no fabrication)', () => {
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
 

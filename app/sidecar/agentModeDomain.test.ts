@@ -11,9 +11,44 @@ import {
 } from '../../src/agent-mode/sessionState.js'
 import type { LocalAgentTaskState } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
 import type { TaskState } from '../../src/tasks/types.js'
+import { isAgentMode } from '../../src/agent-mode/agentMode.js'
+import type { AppStateStore } from '../../src/state/AppStateStore.js'
 import type { AgentModeSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import { agentModeSnapshot } from './agentModeDomain.js'
+import {
+  agentModeSnapshot,
+  createSidecarAgentModeDomain,
+  type AgentModeExecutor,
+} from './agentModeDomain.js'
+
+/** Minimal AppStateStore fake — the set path never touches tasks; getSnapshot only
+ * reads `.tasks` (empty here) + the executor's `isActive`. */
+function fakeStore(): AppStateStore {
+  return {
+    getState: () => ({ tasks: {} }),
+    subscribe: () => () => {},
+  } as unknown as AppStateStore
+}
+
+/** A fake agent-mode executor — records the switch and reflects it, so a headless
+ * round-trip proves the domain wiring without mutating the real `process.env`. */
+function fakeExecutor(initial = false): {
+  executor: AgentModeExecutor
+  calls: boolean[]
+} {
+  let active = initial
+  const calls: boolean[] = []
+  return {
+    executor: {
+      isActive: () => active,
+      setMode: (next: boolean) => {
+        calls.push(next)
+        active = next
+      },
+    },
+    calls,
+  }
+}
 
 function agentTask(over: Partial<LocalAgentTaskState> = {}): LocalAgentTaskState {
   return {
@@ -181,6 +216,58 @@ test('LIVE PATH: a real persisted .agent-mode-state.json read via the engine flo
     status: 'running',
     origin: 'current',
   })
+})
+
+test('P4-8b setActive(true) switches on via the executor; snapshot reflects it; idempotent no-op', async () => {
+  const { executor, calls } = fakeExecutor(false)
+  const domain = createSidecarAgentModeDomain(fakeStore(), { executor })
+
+  const on = domain.setActive(true)
+  expect(calls).toEqual([true])
+  expect(on).toMatchObject({ ok: true, changed: true })
+  expect((await domain.getSnapshot()).active).toBe(true)
+
+  // Already on → idempotent: still ok, but changed:false (no re-broadcast).
+  const again = domain.setActive(true)
+  expect(again).toMatchObject({ ok: true, changed: false })
+  expect(calls).toEqual([true, true])
+})
+
+test('P4-8b setActive(false) switches off via the executor; snapshot reflects it', async () => {
+  const { executor, calls } = fakeExecutor(true)
+  const domain = createSidecarAgentModeDomain(fakeStore(), { executor })
+
+  const off = domain.setActive(false)
+  expect(calls).toEqual([false])
+  expect(off).toMatchObject({ ok: true, changed: true })
+  expect((await domain.getSnapshot()).active).toBe(false)
+})
+
+test('P4-8b LIVE: the real executor drives matchSessionMode → isAgentMode flips (env save/restore)', () => {
+  const prevAgent = process.env.CLAUDE_CODE_AGENT_MODE
+  const prevCoord = process.env.CLAUDE_CODE_COORDINATOR_MODE
+  try {
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+    delete process.env.CLAUDE_CODE_COORDINATOR_MODE
+    // Default (real) executor → the engine's own matchSessionMode.
+    const domain = createSidecarAgentModeDomain(fakeStore())
+    expect(isAgentMode()).toBe(false)
+
+    // `isAgentMode()` reads `process.env.CLAUDE_CODE_AGENT_MODE`, so these flips
+    // prove `matchSessionMode` set/cleared that exact var through the real executor.
+    const on = domain.setActive(true)
+    expect(on).toMatchObject({ ok: true, changed: true })
+    expect(isAgentMode()).toBe(true)
+
+    const off = domain.setActive(false)
+    expect(off).toMatchObject({ ok: true, changed: true })
+    expect(isAgentMode()).toBe(false)
+  } finally {
+    if (prevAgent === undefined) delete process.env.CLAUDE_CODE_AGENT_MODE
+    else process.env.CLAUDE_CODE_AGENT_MODE = prevAgent
+    if (prevCoord === undefined) delete process.env.CLAUDE_CODE_COORDINATOR_MODE
+    else process.env.CLAUDE_CODE_COORDINATOR_MODE = prevCoord
+  }
 })
 
 test('the outbound agent-mode.snapshot frame is secretGuard-clean', () => {

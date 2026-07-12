@@ -306,6 +306,7 @@ export type SidecarClientMessage =
   | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage
+  | AgentModeSetMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -845,6 +846,54 @@ export type AgentModeSnapshotFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   agentMode: AgentModeSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
+ * P4-8b — agent-mode WRITE verb (the in-session Orchestrator toggle's set)
+ * ------------------------------------------------------------------------- *
+ *
+ * The WelcomeScreen's Orchestrator control was a read-only reflect of
+ * `AgentModeSnapshot.active`; this verb makes the in-session (`variant:'session'`)
+ * toggle ACTUALLY switch the addressed session's agent mode. Like the P4-5
+ * account verbs, the P4-15 workspace-trust accept, and the P4-19 settings write,
+ * it is app-owned inbound vocabulary the engine's shared `appClientMessageSchema`
+ * does NOT carry — it is validated by a sidecar-LOCAL Zod schema at the trust
+ * boundary and dispatched to the engine's OWN runtime mode switch
+ * `matchSessionMode` (`src/agent-mode/agentMode.ts:102`), the SAME function the
+ * `/agent` command uses. It sets/clears `CLAUDE_CODE_AGENT_MODE` in THIS session's
+ * sidecar process only (N-process, LOCKED) and logs `tengu_agent_mode_switched`;
+ * `isAgentMode()` is a live env read (`agentMode.ts:37`), so the NEXT turn's system
+ * prompt (`src/utils/queryContext.ts:66`) runs in the new mode. NO engine respawn,
+ * NO session-lifecycle change (`decisions/AGENT-MODE-TOGGLE.md`).
+ *
+ *  - The renderer authors ONLY the boolean intent; the sidecar calls the engine
+ *    function and re-reads `isAgentMode()`. No path, no token crosses either way.
+ *  - T5a-analog — the verb carries a `requestId` echoed on `agent-mode.set.result`.
+ *  - T7 — the existing inbound size/rate caps apply unchanged.
+ */
+export const AGENT_MODE_VERB_TYPES = ['agent-mode.set'] as const
+
+export type AgentModeVerbType = (typeof AGENT_MODE_VERB_TYPES)[number]
+
+/** Set the addressed session's agent mode on/off (live env switch; no respawn). */
+export type AgentModeSetMessage = {
+  type: 'agent-mode.set'
+  requestId: string
+  active: boolean
+}
+
+/**
+ * P4-8b outbound result echoing the verb's `requestId`, followed by an updated
+ * `agent-mode.snapshot` (with the new `active`) when the switch changed the mode.
+ */
+export type AgentModeSetResultFrame = {
+  kind: 'agent-mode.set.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries token material. */
+  message: string
 }
 
 /* ------------------------------------------------------------------------- *
@@ -1439,6 +1488,7 @@ export type ServerFrame =
   | MemorySnapshotFrame
   | TasksSnapshotFrame
   | AgentModeSnapshotFrame
+  | AgentModeSetResultFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
   | WorkspaceTrustSnapshotFrame
@@ -1500,6 +1550,15 @@ export type CatCodeBridge = {
    * close), not a verb.
    */
   workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void
+  /**
+   * P4-8b — set the addressed session's agent mode on/off (the in-session
+   * WelcomeScreen Orchestrator toggle). The renderer authors ONLY the boolean
+   * intent; the sidecar calls the engine's own `matchSessionMode` (a live
+   * `CLAUDE_CODE_AGENT_MODE` env switch in THIS session's process — no respawn,
+   * no lifecycle change) and re-broadcasts `agent-mode.snapshot`. main mints the
+   * `requestId`; the outcome arrives as an `agent-mode.set.result` frame.
+   */
+  setAgentMode(sessionId: SessionId, active: boolean): void
   /**
    * P4-13 — request a RemoteSettings verb (bridge toggle or direct-connect) on
    * the addressed session's sidecar. The outcome arrives as a

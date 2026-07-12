@@ -22,6 +22,11 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void',
   )
+  // P4-8b — agent-mode set sender rides its own fixed channel (HC3).
+  expect(source).toContain("const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'")
+  expect(source).toContain(
+    'setAgentMode(sessionId: SessionId, active: boolean): void',
+  )
   // P4-13 — RemoteSettings verb sender rides its own fixed channel (HC3).
   expect(source).toContain(
     "const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'",
@@ -34,13 +39,13 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'settingsVerb(sessionId: SessionId, verb: SettingsVerbMessage): void',
   )
-  // 11 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
-  // P4-13 remoteSettingsVerb + P4-19 settingsVerb) + 5 payload-bearing
-  // control-plane senders + the DEV-only debug-state sender (compiled out of the
-  // packaged preload.cjs). (pickDirectory/createSession/restoreSession/
-  // closeSession/listSessions). subscribe / subscribeHost register a listener and
-  // send no payload, so they do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(17)
+  // 12 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
+  // P4-8b setAgentMode + P4-13 remoteSettingsVerb + P4-19 settingsVerb) + 5
+  // payload-bearing control-plane senders + the DEV-only debug-state sender
+  // (compiled out of the packaged preload.cjs). (pickDirectory/createSession/
+  // restoreSession/closeSession/listSessions). subscribe / subscribeHost register
+  // a listener and send no payload, so they do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(18)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')

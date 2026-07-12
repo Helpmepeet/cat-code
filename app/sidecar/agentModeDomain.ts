@@ -21,7 +21,7 @@
  * Read-only; no renderer writes; no new inbound vocabulary. secretGuard-clean by
  * construction — identity/role/status/description text only, never a token.
  */
-import { isAgentMode } from '../../src/agent-mode/agentMode.js'
+import { isAgentMode, matchSessionMode } from '../../src/agent-mode/agentMode.js'
 import {
   readSessionStateWithContinuity,
   type AgentModeSessionState,
@@ -36,6 +36,46 @@ import type {
   AgentModeWorkerItem,
 } from '../shared/protocol.js'
 
+/** The redacted outcome of a set-agent-mode write (no transport, no secret). */
+export type AgentModeSetResult = {
+  ok: boolean
+  message: string
+  /** Whether the switch actually flipped the mode (drives snapshot re-broadcast). */
+  changed: boolean
+}
+
+/**
+ * The engine agent-mode ops, behind a seam (P4-8b). The real implementation
+ * (`createRealAgentModeExecutor`) wires the engine's OWN `isAgentMode` /
+ * `matchSessionMode`; tests inject a fake so a headless round-trip proves the
+ * wiring without mutating the real `process.env` (§10 — mirrors
+ * accountsDomain's / workspaceTrustDomain's executor seam).
+ */
+export type AgentModeExecutor = {
+  /** Is this session in agent mode right now? (real: `isAgentMode()`, agentMode.ts:37) */
+  isActive(): boolean
+  /**
+   * Switch this session's runtime mode via the engine's OWN `matchSessionMode`
+   * (agentMode.ts:102) — the SAME function the `/agent` command uses. Sets/clears
+   * `CLAUDE_CODE_AGENT_MODE` in THIS process only (N-process, LOCKED) and logs
+   * `tengu_agent_mode_switched`. No respawn, no session-lifecycle change.
+   */
+  setMode(active: boolean): void
+}
+
+export function createRealAgentModeExecutor(): AgentModeExecutor {
+  return {
+    isActive() {
+      return isAgentMode()
+    },
+    setMode(active) {
+      // `matchSessionMode` is idempotent (returns undefined when already in mode)
+      // and clears the coordinator flag on both branches — the engine's own switch.
+      matchSessionMode(active ? 'agent' : 'normal')
+    },
+  }
+}
+
 export type SidecarAgentModeDomain = {
   /**
    * Live read-only orchestrator snapshot. Async because the session plane is a
@@ -43,17 +83,61 @@ export type SidecarAgentModeDomain = {
    * a sync read over the same app-state store the runtime mutates.
    */
   getSnapshot(): Promise<AgentModeSnapshot>
+  /**
+   * P4-8b — set this session's agent mode on/off through the engine's own
+   * `matchSessionMode`, re-read `isActive`, and report whether the mode flipped.
+   * Idempotent (already in the requested mode → ok, unchanged). Throw-free.
+   */
+  setActive(active: boolean): AgentModeSetResult
   subscribe(listener: () => void): () => void
 }
 
 export function createSidecarAgentModeDomain(
   appStateStore: AppStateStore,
+  options: { executor?: AgentModeExecutor } = {},
 ): SidecarAgentModeDomain {
+  const executor = options.executor ?? createRealAgentModeExecutor()
   return {
     async getSnapshot() {
       const persisted = await readPersistedAgentModeState()
       const state = appStateStore.getState()
-      return agentModeSnapshot(state.tasks, persisted, isAgentMode())
+      // Read `active` through the executor so the spawn snapshot, the set path,
+      // and any injected test fake all share ONE truth source (real: isAgentMode()).
+      return agentModeSnapshot(state.tasks, persisted, executor.isActive())
+    },
+    setActive(active) {
+      const wasActive = executor.isActive()
+      try {
+        executor.setMode(active)
+        const nowActive = executor.isActive()
+        if (nowActive !== active) {
+          return {
+            ok: false,
+            message: 'Agent Mode switch did not take effect.',
+            changed: wasActive !== nowActive,
+          }
+        }
+        const changed = wasActive !== nowActive
+        return {
+          ok: true,
+          message: changed
+            ? active
+              ? 'Agent Mode enabled for this session.'
+              : 'Agent Mode disabled for this session.'
+            : active
+              ? 'Agent Mode already enabled.'
+              : 'Agent Mode already disabled.',
+          changed,
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not switch Agent Mode: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          changed: false,
+        }
+      }
     },
     // Worker spawns/completions mutate `AppState.tasks`, and the engine writes the
     // agent-mode state file on the same activity, so re-reading the persisted plane

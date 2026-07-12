@@ -601,6 +601,184 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
   expect(snapshot && scanForSecrets(snapshot).ok).toBe(true)
 })
 
+/* ------------------------------------------------------------------------- *
+ * P4-8b — agent-mode SET verb (the in-session Orchestrator toggle) boundary
+ * ------------------------------------------------------------------------- *
+ * Exercises the SERVER boundary (checkStrictKeys + Zod schema + dispatch +
+ * result frame + async snapshot re-broadcast) with a FAKE domain, so the engine
+ * `matchSessionMode`/`process.env` round-trip is not touched here (that is proven
+ * in agentModeDomain.test.ts).
+ */
+function fakeAgentModeDomain(
+  override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
+): { domain: SidecarAgentModeDomain; calls: boolean[] } {
+  const calls: boolean[] = []
+  let active = false
+  const domain: SidecarAgentModeDomain = {
+    async getSnapshot() {
+      return { active, objective: '', phase: 'planning', workers: [] }
+    },
+    setActive(next: boolean) {
+      calls.push(next)
+      if (override) return override(next)
+      const changed = next !== active
+      active = next
+      return { ok: true, message: next ? 'on' : 'off', changed }
+    },
+    subscribe() {
+      return () => {}
+    },
+  }
+  return { domain, calls }
+}
+
+function makeAgentModeServer(
+  override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
+): { server: SidecarServer; calls: boolean[] } {
+  const { domain, calls } = fakeAgentModeDomain(override)
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  return { server, calls }
+}
+
+test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-broadcasts the snapshot', async () => {
+  const { server, calls } = makeAgentModeServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  // Wait out the fire-and-forget attach snapshot so the re-broadcast is isolable.
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'agent-mode.snapshot'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'agent-mode.set',
+        requestId: 'am1',
+        active: true,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  // The result ack is synchronous.
+  const result = received.find(f => f.kind === 'agent-mode.set.result')
+  expect(result && result.kind === 'agent-mode.set.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'agent-mode.set.result' && result.requestId).toBe('am1')
+  expect(calls).toEqual([true])
+
+  // The snapshot re-broadcast is async (file-backed session-plane read) — poll.
+  for (
+    let i = 0;
+    i < 50 && received.filter(f => f.kind === 'agent-mode.snapshot').length <= before;
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const after = received.filter(
+    (f): f is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
+      f.kind === 'agent-mode.snapshot',
+  )
+  expect(after.length).toBeGreaterThan(before)
+  // The freshly re-broadcast snapshot reflects the flipped mode.
+  expect(after[after.length - 1]?.agentMode.active).toBe(true)
+})
+
+test('P4-8b — an idempotent agent-mode.set (no change) acks ok but does NOT re-broadcast', async () => {
+  const { server } = makeAgentModeServer(() => ({ ok: true, message: 'already off', changed: false }))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'agent-mode.snapshot'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'agent-mode.set', requestId: 'am2', active: false } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'agent-mode.set.result' && f.ok)).toBe(true)
+  // Give any (unexpected) async broadcast a chance, then assert none fired.
+  await new Promise(resolve => setTimeout(resolve, 30))
+  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBe(before)
+})
+
+test('P4-8b — rejects agent-mode.set with a NON-boolean active (Zod boundary), no domain call', () => {
+  const { server, calls } = makeAgentModeServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'agent-mode.set', requestId: 'am3', active: 'yes' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-8b — rejects agent-mode.set missing requestId at the schema boundary, no domain call', () => {
+  const { server, calls } = makeAgentModeServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'agent-mode.set', active: true } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKeys), no domain call', () => {
+  const { server, calls } = makeAgentModeServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      // A renderer-supplied extra key is rejected before the verb reaches the domain.
+      message: { type: 'agent-mode.set', requestId: 'am4', active: true, sessionMode: 'coordinator' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
 test('T5a — permission.response for an unknown requestId is rejected', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

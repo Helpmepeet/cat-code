@@ -84,6 +84,7 @@ const CH_PERMISSION = 'catcode:permission'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
+const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -491,6 +492,24 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as WorkspaceTrustMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_AGENT_MODE_SET,
+    (_e, arg: { sessionId: SessionId; active: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-8b — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (Zod schema + engine `matchSessionMode`). Drop a
+      // non-boolean `active` fail-closed rather than forwarding a frame that is
+      // guaranteed to be rejected. main mints the `requestId` (a UX correlation
+      // field, not a security one; the sidecar bounds it structurally).
+      if (typeof arg.active !== 'boolean') return
+      forward(arg.sessionId, {
+        type: 'agent-mode.set',
+        requestId: generateRequestId(),
+        active: arg.active,
+      })
     },
   )
 

@@ -1183,6 +1183,18 @@ export function App() {
 	                ?.mainLoopModel ?? null
 	            }
 	            orchestratorActive={panelOrchestratorActive}
+		            onToggleOrchestrator={next => {
+		              // P4-8b — toggle THIS panel's session (its own sessionId, not
+		              // the globally-active one), mirroring setPermissionMode's
+		              // per-panel dispatch. The sidecar re-broadcasts
+		              // agent-mode.snapshot, which flips the reflected `active`.
+		              try {
+		                getBridge().setAgentMode(sessionId, next)
+		                setTransportError(null)
+		              } catch (error) {
+		                setTransportError(errorMessage(error))
+		              }
+		            }}
 	            allowPermission={(requestId, applySuggestions = []) => {
 	              const item = sessionPermissionQueue.find(
 	                candidate => candidate.request.requestId === requestId,
@@ -1627,6 +1639,7 @@ export function SessionPane({
   onRemovePaste,
   onRevisePlan,
   orchestratorActive,
+  onToggleOrchestrator,
   partialCount,
   pastes,
   permissionContext,
@@ -2005,6 +2018,7 @@ export function SessionPane({
             cwd={activeDescriptor?.cwd ?? null}
             branch={branch}
             orchestratorActive={orchestratorActive}
+            onToggleOrchestrator={onToggleOrchestrator}
             state={transcript}
           />
         </div>
@@ -2606,9 +2620,12 @@ type SessionPaneProps = {
   modelOverride: string | null
   copyForLlm: () => void
   denyPermission: (requestId: string, message?: string) => void
-  /** This session's agent-mode active flag, reflected read-only in the empty
-   * Welcome (there is no agent-mode write verb — a live toggle would be fake). */
+  /** This session's agent-mode active flag, shown in the empty Welcome. */
   orchestratorActive: boolean
+  /** P4-8b — toggle THIS session's agent mode from the empty-state Orchestrator
+   * switch (renderer authors the boolean intent → the `agent-mode.set` verb).
+   * Optional: when absent the empty-state toggle degrades to a read-only reflect. */
+  onToggleOrchestrator?: (next: boolean) => void
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   permissionQueue: ReturnType<typeof selectPermissionQueue>

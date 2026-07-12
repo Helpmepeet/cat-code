@@ -12,8 +12,10 @@
  *  - trust    = best-effort per-cwd flags App joins from live sessions'
  *               `workspace-trust.snapshot` (P4-15) — the per-session-create trust
  *               GATE itself fires post-spawn on `onOpenFolder`, the real flow;
- *  - orchestrator = the P4-5/agent-mode `active` flag, reflected READ-ONLY (there
- *               is no agent-mode write verb — a live toggle would be fake wiring).
+ *  - orchestrator = the P4-5/agent-mode `active` flag. INTERACTIVE in the session
+ *               variant (P4-8b `onToggleOrchestrator` → the `agent-mode.set` verb →
+ *               the engine's own `matchSessionMode`, a live per-session env switch);
+ *               READ-ONLY in the launcher variant (no session yet to toggle).
  *
  * HC1: the renderer authors no path. A recent with an `appSessionId` opens/restores
  * that registry row; a history-only project (no app id) is browse-only (the P4-6b
@@ -68,10 +70,19 @@ type WelcomeScreenProps =
       branch: string | null
       accounts: AccountsSnapshot | null
       orchestratorActive: boolean
+      /**
+       * P4-8b — set THIS session's agent mode on/off (the in-session Orchestrator
+       * toggle). Present only in the session variant (there IS a session to
+       * toggle); when supplied the control is interactive, else it stays a
+       * read-only reflect. The launcher variant never gets it (no session yet).
+       */
+      onToggleOrchestrator?: (next: boolean) => void
     }
 
 export function WelcomeScreen(props: WelcomeScreenProps) {
   const { accounts, orchestratorActive } = props
+  const onToggleOrchestrator =
+    props.variant === 'session' ? props.onToggleOrchestrator : undefined
   return (
     <div className="flex min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[1180px] px-10 pb-8 pt-10">
@@ -124,7 +135,10 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               ) : null}
               <div className="w-px bg-shell-seam" />
               <MetaCol icon={<AgentIcon />} label="Orchestrator">
-                <OrchestratorReflect active={orchestratorActive} />
+                <OrchestratorReflect
+                  active={orchestratorActive}
+                  onToggle={onToggleOrchestrator}
+                />
               </MetaCol>
             </div>
           </div>
@@ -315,21 +329,24 @@ function RecentItem({
 }
 
 /**
- * The orchestrator (Agent Mode) toggle, reflected READ-ONLY. There is no
- * agent-mode write verb (only account/settings/trust verbs exist), so an
- * interactive toggle would be fake wiring; this preserves the element (role +
- * aria-checked, ledger §29) as an honest reflection of the focused session's
- * `agentMode.active`.
+ * The orchestrator (Agent Mode) switch. INTERACTIVE when `onToggle` is supplied
+ * (P4-8b — the in-session `variant:'session'` case: clicking calls the callback
+ * with the negated `active`, which drives `setAgentMode` → the engine's own
+ * `matchSessionMode`, a live env switch that the NEXT turn picks up — no respawn).
+ * READ-ONLY otherwise (the launcher variant: there is no session to toggle, so the
+ * element stays an honest `aria-readonly` reflect of the focused session's
+ * `agentMode.active`, ledger §29). Exported for the DOM-free handler test (this
+ * package has no click harness — AccountsPage.test.tsx convention).
  */
-function OrchestratorReflect({ active }: { active: boolean }) {
-  return (
-    <span
-      role="switch"
-      aria-checked={active}
-      aria-readonly="true"
-      title="Reflects the focused session's Agent Mode (read-only — set at session start)."
-      className="inline-flex items-center gap-2.5"
-    >
+export function OrchestratorReflect({
+  active,
+  onToggle,
+}: {
+  active: boolean
+  onToggle?: (next: boolean) => void
+}) {
+  const visual = (
+    <>
       <span
         className={
           'relative h-[22px] w-[38px] shrink-0 rounded-full border transition-colors ' +
@@ -353,6 +370,33 @@ function OrchestratorReflect({ active }: { active: boolean }) {
       >
         {active ? 'On' : 'Off'}
       </span>
+    </>
+  )
+
+  if (onToggle) {
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={active}
+        onClick={() => onToggle(!active)}
+        title="Toggle this session's Agent Mode. Takes effect on the next turn."
+        className="inline-flex items-center gap-2.5"
+      >
+        {visual}
+      </button>
+    )
+  }
+
+  return (
+    <span
+      role="switch"
+      aria-checked={active}
+      aria-readonly="true"
+      title="Reflects the focused session's Agent Mode (read-only — set at session start)."
+      className="inline-flex items-center gap-2.5"
+    >
+      {visual}
     </span>
   )
 }

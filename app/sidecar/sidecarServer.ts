@@ -668,6 +668,15 @@ export class SidecarServer {
       return
     }
 
+    // P4-8b — the agent-mode set verb is app-owned vocabulary (like C2 and the
+    // account/RemoteSettings/settings/workspace verbs), validated by a sidecar-
+    // LOCAL schema and dispatched to the engine's OWN `matchSessionMode` (a live
+    // env switch, no respawn). NOT part of the engine's shared schema.
+    if (typeof messageType === 'string' && messageType.startsWith('agent-mode.')) {
+      this.handleAgentModeSet(connection, frame.message)
+      return
+    }
+
     // The message payload MUST pass the existing allowlist schema. Anything
     // else is dropped at the boundary (SECURITY-MINIMUM §2, R2 — validate at
     // the trust boundary, never trust the preload).
@@ -1037,6 +1046,59 @@ export class SidecarServer {
     })
     if (result.changed) {
       this.broadcastWorkspaceTrustSnapshot()
+    }
+  }
+
+  /**
+   * P4-8b — the agent-mode set verb (protocol.ts: AGENT_MODE_VERB_TYPES;
+   * `decisions/AGENT-MODE-TOGGLE.md`). Same fail-closed order as
+   * `handleWorkspaceTrustVerb`: sidecar-LOCAL structural schema → domain presence
+   * → dispatch to the domain (which switches mode through the engine's OWN
+   * `matchSessionMode` — a live env switch, no respawn) → `agent-mode.set.result`
+   * frame → re-broadcast the `agent-mode.snapshot` when the mode changed. The
+   * renderer authors only the boolean intent; no path, no token crosses.
+   */
+  private handleAgentModeSet(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = agentModeSetMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid agent-mode verb',
+        false,
+      )
+      return
+    }
+    if (!this.agentMode) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'agent-mode domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    const result = this.agentMode.setActive(parsed.data.active)
+    this.send(connection, {
+      kind: 'agent-mode.set.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: parsed.data.requestId,
+      ok: result.ok,
+      message: result.message,
+    })
+    // The snapshot broadcast is async (the session plane is a file-backed engine
+    // read); fire-and-forget after the synchronous result ack, mirroring the
+    // subscribe-driven re-broadcast path.
+    if (result.changed) {
+      void this.broadcastAgentModeSnapshot()
     }
   }
 
@@ -2055,6 +2117,9 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
     // HC1: no path key — the sidecar trusts only its own spawn cwd.
     ['workspace.trust', new Set(['type', 'requestId'])],
+    // P4-8b agent-mode set verb (app-owned; see AGENT_MODE_VERB_TYPES). The
+    // renderer authors ONLY the boolean intent — any other key is rejected.
+    ['agent-mode.set', new Set(['type', 'requestId', 'active'])],
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
@@ -2190,6 +2255,19 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
 const workspaceTrustMessageSchema = z.object({
   type: z.literal('workspace.trust'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
+
+/**
+ * P4-8b — sidecar-LOCAL schema for the agent-mode set verb (protocol.ts:
+ * AGENT_MODE_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + a bounded `requestId` + a strict boolean `active`.
+ * A non-boolean `active` is rejected here fail-closed before the domain switches
+ * mode; the renderer never authors anything but the boolean intent.
+ */
+const agentModeSetMessageSchema = z.object({
+  type: z.literal('agent-mode.set'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  active: z.boolean(),
 })
 
 /**

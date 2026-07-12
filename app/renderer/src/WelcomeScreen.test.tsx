@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { WelcomeScreen } from './WelcomeScreen.js'
+import { OrchestratorReflect, WelcomeScreen } from './WelcomeScreen.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
@@ -184,4 +184,55 @@ test('the orchestrator toggle is a read-only reflection of agent-mode', () => {
   )
   expect(off).toContain('aria-checked="false"')
   expect(off).toContain('>Off<')
+})
+
+test("P4-8b — the 'session' variant Orchestrator is INTERACTIVE when a toggle callback is present", () => {
+  // With `onToggleOrchestrator` (the in-session case, App wires it per panel) the
+  // reflect becomes a real <button role="switch"> — no longer aria-readonly.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      variant="session"
+      cwd="/w"
+      branch={null}
+      accounts={null}
+      orchestratorActive={false}
+      onToggleOrchestrator={() => {}}
+    />,
+  )
+  expect(html).toContain('role="switch"')
+  expect(html).toContain('aria-checked="false"')
+  expect(html).toContain('<button')
+  // Interactive → NOT the read-only reflect.
+  expect(html).not.toContain('aria-readonly="true"')
+})
+
+test("P4-8b — the 'session' variant stays READ-ONLY when no toggle callback is present", () => {
+  // No callback (defensive / launcher-parity) → the honest read-only span, no button.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} orchestratorActive />,
+  )
+  expect(html).toContain('aria-readonly="true"')
+  expect(html).not.toContain('<button')
+})
+
+test('P4-8b — clicking the interactive Orchestrator calls the callback with the NEGATED active', () => {
+  // This package has no DOM click harness (AccountsPage.test.tsx convention), so
+  // the handler is exercised by invoking the hook-free component directly and
+  // reading its onClick off the returned element — the exact code path a click runs.
+  const calls: boolean[] = []
+  const onEl = OrchestratorReflect({ active: true, onToggle: next => calls.push(next) })
+  expect(onEl.props.role).toBe('switch')
+  expect(onEl.props['aria-checked']).toBe(true)
+  onEl.props.onClick()
+  expect(calls).toEqual([false]) // true → toggles OFF
+
+  const offEl = OrchestratorReflect({ active: false, onToggle: next => calls.push(next) })
+  offEl.props.onClick()
+  expect(calls).toEqual([false, true]) // false → toggles ON
+})
+
+test('P4-8b — without a callback OrchestratorReflect is a non-interactive read-only span', () => {
+  const el = OrchestratorReflect({ active: true })
+  expect(el.props['aria-readonly']).toBe('true')
+  expect(el.props.onClick).toBeUndefined()
 })
