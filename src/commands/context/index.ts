@@ -6,6 +6,7 @@ export const context: Command = {
   description: 'Visualize current context usage as a colored grid',
   isEnabled: () => !getIsNonInteractiveSession(),
   type: 'local-jsx',
+  immediate: true,
   load: () => import('./context.js'),
 }
 

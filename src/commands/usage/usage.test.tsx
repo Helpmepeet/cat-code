@@ -17,6 +17,7 @@ describe('/usage command', () => {
 
     expect(command.description).toBe('Show Codex usage limits')
     expect(command.availability).toEqual(['openai'])
+    expect(command.immediate).toBe(true)
   })
 
   test('ignores reset arguments and still opens the Settings Usage tab', async () => {
