@@ -1,7 +1,7 @@
 # Bug RCA: `gpt-5.6-luna` subagent/side requests die with HTTP 404 "Model not found"
 
 - **Date:** 2026-07-12
-- **Status:** Diagnosed — root cause + HTTP-refusal mechanism confirmed (source, logs, openai/codex#31967); minimal HTTP fix identified (`version` header only, ~80%, pending a confirming probe). **Durable fix (1)+(2) implemented + unit-tested + build-green in `codex-fetch-adapter.ts` (uncommitted, not yet live-verified); currency fix (4) and the confirming probe still open.**
+- **Status:** Diagnosed — root cause + HTTP-refusal mechanism confirmed (source, logs, openai/codex#31967); minimal HTTP fix identified (`version` header only, ~80%, pending a confirming probe). **Durable fix (1)+(2) committed on `migration` (`9cfed13`, pushed; PR #8 for review) with review follow-ups applied — true per-account sticky storage + streaming-only 404-retry; not yet live-verified. Currency fix (4) and the confirming probe still open.**
 - **Area:** Engine — Codex transport (`src/services/api/codex-*`), account lease pool.
 - **Severity:** High. Silently kills subagent (Explore) spawns and title-generation
   side queries whenever a WebSocket blip forces the HTTP fallback while the

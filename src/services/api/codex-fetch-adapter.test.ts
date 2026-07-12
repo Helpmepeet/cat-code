@@ -272,9 +272,87 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
-  test('HTTP model-not-found (404) clears sticky and throws retryable so the turn retries over WebSocket', async () => {
-    const accessToken = createAccessToken('acct_luna_404')
-    const conv = 'conv_luna_404'
+  test('sticky HTTP fallback keeps per-account state (a second account does not clobber the first)', () => {
+    const conv = 'sticky-two-accounts'
+    _setStickyFallbackNowForTest(() => 1_000)
+    resetCodexCacheContext()
+
+    try {
+      _markStickyHttpFallbackForTest(conv, 'ws_fail', 'acct_a')
+      _markStickyHttpFallbackForTest(conv, 'ws_fail', 'acct_b')
+      // Both accounts stay sticky — B's mark must not overwrite A's entry (the P2
+      // bug: a transiently-failed account can be reselected as a last resort).
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_a')).toBe(true)
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_b')).toBe(true)
+      // A third, never-failed account is still free to use WebSocket.
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_c')).toBe(false)
+    } finally {
+      _setStickyFallbackNowForTest(null)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('streaming HTTP model-404 retries over WebSocket on the next attempt', async () => {
+    const accessToken = createAccessToken('acct_ws_retry')
+    const conv = 'conv_ws_retry'
+    const originalFetch = globalThis.fetch
+    let httpCalls = 0
+    globalThis.fetch = (async () => {
+      httpCalls++
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'Model not found gpt-5.6-luna',
+            type: 'invalid_request_error',
+            param: 'model',
+          },
+        }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    const streamingBody = JSON.stringify({
+      stream: true,
+      model: 'claude-sonnet-4-6', // maps to gpt-5.6-luna
+      _openaiInstructionAssembly: { instructions: 'Be precise.', inputMessages: [] },
+    })
+
+    try {
+      // Attempt 1: sticky forces HTTP for this account → 404 → throws + clears sticky.
+      _markStickyHttpFallbackForTest(conv, 'initial_ws_unavailable', 'acct_ws_retry')
+      await expect(
+        createCodexFetch(accessToken, conv)('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: streamingBody,
+        }),
+      ).rejects.toThrow(/retrying over WebSocket/i)
+      expect(httpCalls).toBe(1)
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_ws_retry')).toBe(false)
+
+      // Attempt 2 (what withRetry does): sticky cleared → WebSocket is used, succeeds.
+      const fakeWs = installFakeWs()
+      fakeWs.responseBatches = [
+        [{ type: 'response.output_text.delta', delta: 'ws ok' }, completedWsResponse()],
+      ]
+      const res2 = await createCodexFetch(accessToken, conv)(
+        'https://api.anthropic.com/v1/messages',
+        { method: 'POST', body: streamingBody },
+      )
+      const body2 = await res2.text()
+      expect(fakeWs.getSentCount()).toBeGreaterThan(0) // attempt 2 went over WebSocket
+      expect(httpCalls).toBe(1) // and NOT over HTTP again
+      expect(body2).toContain('event: message_stop')
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conv)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('non-streaming HTTP model-404 does not claim a WebSocket retry', async () => {
+    const accessToken = createAccessToken('acct_luna_nonstream')
+    const conv = 'conv_luna_nonstream'
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async () =>
       new Response(
@@ -289,24 +367,21 @@ describe('codex-fetch-adapter', () => {
       )) as unknown as typeof globalThis.fetch
 
     try {
-      // Force the HTTP path (as a WS blip would), then the HTTP channel 404s luna.
-      _markStickyHttpFallbackForTest(conv, 'initial_ws_unavailable')
-      await expect(
-        createCodexFetch(accessToken, conv)('https://api.anthropic.com/v1/messages', {
+      // Non-streaming has no WebSocket path in this adapter, so the 404 must surface
+      // as a plain response (unchanged) rather than a spurious "retry over WebSocket"
+      // that would loop back to HTTP forever.
+      const response = await createCodexFetch(accessToken, conv)(
+        'https://api.anthropic.com/v1/messages',
+        {
           method: 'POST',
           body: JSON.stringify({
-            stream: true,
-            model: 'claude-sonnet-4-6', // maps to gpt-5.6-luna
-            _openaiInstructionAssembly: {
-              instructions: 'Be precise.',
-              inputMessages: [],
-            },
+            stream: false,
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: { instructions: 'x', inputMessages: [] },
           }),
-        }),
-      ).rejects.toThrow(/retrying over WebSocket/i)
-
-      // Sticky was cleared, so the retry re-attempts WebSocket instead of HTTP.
-      expect(_hasStickyHttpFallbackForTest(conv, 'acct_luna_404')).toBe(false)
+        },
+      )
+      expect(response.status).toBe(404)
     } finally {
       globalThis.fetch = originalFetch
       resetCodexCacheContext()
