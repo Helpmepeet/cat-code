@@ -27,6 +27,7 @@ import { parseFilePatch } from './parser.js'
 import { getFilePatchToolDescription } from './prompt.js'
 import {
   type ApplyPatchFileState,
+  FilePatchError,
   type FilePatchOperation,
   type FilePatchToolInput,
   type FilePatchToolOutput,
@@ -216,6 +217,17 @@ export const FilePatchTool = buildTool({
           return moveDenyValidation
         }
 
+        // Pure suffix check — no filesystem access, so it applies to UNC
+        // destinations too (which skip the fs-dependent checks below).
+        if (destPath.endsWith('.ipynb')) {
+          return {
+            result: false,
+            behavior: 'ask',
+            message: `File is a Jupyter Notebook. Use the ${NOTEBOOK_EDIT_TOOL_NAME} to edit this file.`,
+            errorCode: 5,
+          }
+        }
+
         if (isUncPath(destPath)) {
           continue
         }
@@ -229,34 +241,11 @@ export const FilePatchTool = buildTool({
             errorCode: 6,
           }
         }
-
-        if (destPath.endsWith('.ipynb')) {
-          return {
-            result: false,
-            behavior: 'ask',
-            message: `File is a Jupyter Notebook. Use the ${NOTEBOOK_EDIT_TOOL_NAME} to edit this file.`,
-            errorCode: 5,
-          }
-        }
-
-        // The team-memory secret scan needs the readable source to compute the
-        // moved result; a UNC source can't be read (the deny rule above still
-        // ran, and checkPermissions enforces deny on the destination too).
-        if (isUncPath(operation.path)) {
-          continue
-        }
-        const sourceContent = await readFileContentForValidation(operation.path)
-        if (sourceContent === null) {
-          continue
-        }
-        const movedContent = applyPatchToSingleFile(
-          operation,
-          currentFileState(operation.path, sourceContent),
-        )
-        const moveSecretValidation = validateTeamMemorySecrets(destPath, movedContent)
-        if (moveSecretValidation) {
-          return moveSecretValidation
-        }
+        // The team-memory secret scan for a move destination runs in call() on
+        // the actual moved content: it needs the source content, which for a
+        // UNC source must NOT be read here (a speculative read of a UNC path
+        // during validation risks an NTLM credential leak) but IS read at
+        // execution. See the guard in call().
       }
 
       return { result: true }
@@ -355,6 +344,35 @@ export const FilePatchTool = buildTool({
     }
 
     const applied = applyPatchToBuffers(operations, currentFiles, cachedFiles)
+
+    // Team-memory secret guard on the actual content being written to a move
+    // destination, keyed to the real destination path. validateInput cannot
+    // scan a UNC source's content (a speculative read of a UNC path during
+    // validation risks an NTLM credential leak), but the move reads the source
+    // here — so scan the moved buffer now, before any disk mutation, so a
+    // secret can't be moved into team memory unscanned. Runs only for move
+    // destinations (the moved buffer is entirely new content at that path).
+    const moveDestinations = new Set(
+      operations
+        .filter(
+          (op): op is Extract<FilePatchOperation, { type: 'update' }> =>
+            op.type === 'update' && op.moveTo !== undefined,
+        )
+        .map(op => op.moveTo as string),
+    )
+    for (const file of applied.files) {
+      if (file.after === null || !moveDestinations.has(file.path)) {
+        continue
+      }
+      const secretFailure = validateTeamMemorySecrets(file.path, file.after)
+      if (secretFailure) {
+        throw new FilePatchError(secretFailure.message, {
+          code: 'TEAM_MEMORY_SECRET',
+          path: file.path,
+        })
+      }
+    }
+
     const writtenFiles: Array<{
       path: string
       before: string | null

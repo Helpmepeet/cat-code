@@ -24,24 +24,39 @@ MISSED defects found by the verification pass:
   exclusions). Chained with F1, every Apply_patch in auto mode — to any path —
   silently bypassed the classifier. Same root cause as F1; the `getPath` fix
   closes both.
-- **M2 (MAJOR, fixed — two rounds)**: the `moveTo` destination skipped
+- **M2 (MAJOR, fixed — three rounds)**: the `moveTo` destination skipped
   `validateInput` content checks (secret/deny keyed to the source path only) and
   was never read at call time, so the applier's target-exists guard was inert
   and a destination created after validation could be silently overwritten
   (TOCTOU). First fix added destination deny + secret scan and a call-time
-  destination re-read that trips the guard. The re-review pass then found the
-  destination checks were still (a) keyed to the source path for the notebook
-  guard and (b) short-circuited by the source's UNC early-exit. Second fix
-  centralizes destination validation into its own pass (`FilePatchTool.tsx`,
-  after the per-operation loop): deny + existence + notebook + team-memory
-  secret keyed to the destination, run independently of source-path early exits.
-  Two destination cases are deliberately *not* schema-validated and this is
-  correct, not a gap: a move requires an absent destination (errorCode 6), so a
-  settings-file destination is always a new file where
-  `validateInputForSettingsFileEdit` is a structural no-op (empty before-content)
-  and is instead gated by the dangerous-path safety check in `checkPermissions`;
-  and a UNC source can't be read to compute the moved content for a secret scan
-  (its deny rule is still enforced at `checkPermissions`, which has no UNC skip).
+  destination re-read that trips the guard. Round-3 re-review found the
+  destination checks were still keyed to the source path (notebook) and
+  short-circuited by the source's UNC early-exit; second fix centralized
+  destination validation into its own pass (deny + existence + notebook +
+  secret keyed to the destination). Round-4 re-review found two more, both
+  fixed: the `.ipynb` guard sat *after* the UNC-destination skip (a UNC
+  `.ipynb` destination escaped it — the check is a pure suffix test needing no
+  fs, so it now runs first), and — the real one — the destination secret scan
+  was skipped for a UNC *source* on a false "UNC is unreadable" premise:
+  `call()` reads the UNC source unconditionally (`FilePatchTool.tsx` read
+  phase), so its secret-bearing content could be moved into team memory
+  unscanned. The team-memory secret scan for a move destination now runs in
+  `call()` on the actual moved buffer, before any disk mutation — validation
+  still must not speculatively read a UNC path (NTLM-credential-leak risk), so
+  `call()`, which reads it post-approval, is the correct place. This also
+  removed a redundant second full source read in validation.
+
+  Round-4 Finding 1 (settings destination) is **not** a move-specific gap, and
+  my earlier claim that it is "gated by the dangerous-path safety check" was
+  wrong (corrected here): a session-scoped `.claude/**` allow rule returns
+  `allow` *before* that safety check (`filesystem.ts:1272-1327`). But
+  `validateInputForSettingsFileEdit` only guards edits to an already-valid
+  settings file; it is a no-op for any newly created settings file (empty
+  before-content), so FileWriteTool creating a `settings.json` is equally
+  unvalidated. Creating an invalid settings file is a toolchain-wide property
+  of the settings validator, not an Apply_patch move regression; an
+  Apply_patch-only result-validation would make `move` stricter than `Write`.
+  Left as-is deliberately.
 - **M3 (MEDIUM, fixed)**: `rollbackAppliedFiles` had no per-file error
   isolation; a rollback failure aborted remaining recovery and propagated out,
   masking the original write error. Fixed: per-file try/catch, original error

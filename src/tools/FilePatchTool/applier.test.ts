@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -721,5 +721,50 @@ describe('FilePatchTool.validateInput move destination', () => {
 
     expect(result.result).toBe(false)
     expect((result as { message?: string }).message).toContain('Jupyter Notebook')
+  })
+
+  test('a normal move to an absent non-team-memory destination completes', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+    const srcPath = join(tempDir, 'src.txt')
+    const dstPath = join(tempDir, 'nested', 'dst.txt')
+    writeFileSync(srcPath, 'content\n')
+
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    readFileState.set(srcPath, {
+      content: 'content\n',
+      timestamp: Math.floor(Date.now()),
+      offset: undefined,
+      limit: undefined,
+    })
+
+    await FilePatchTool.call(
+      {
+        ops: [
+          {
+            type: 'update',
+            path: srcPath,
+            moveTo: dstPath,
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'content' },
+                  { kind: 'add', text: 'added' },
+                ],
+              }),
+            ],
+          },
+        ],
+      },
+      {
+        readFileState,
+        updateFileHistoryState: () => undefined,
+      } as never,
+      undefined,
+      { uuid: 'test-parent' } as never,
+    )
+
+    expect(existsSync(srcPath)).toBe(false)
+    expect(readFileSync(dstPath, 'utf8')).toBe('content\nadded\n')
   })
 })
