@@ -525,3 +525,151 @@ describe('applyPatchToBuffers', () => {
     expect(readFileState.get(secondPath)?.content).toBe('alpha\nbeta\n')
   })
 })
+
+describe('FilePatchTool.call disk-mutation safety', () => {
+  function seedReadState(path: string, content: string) {
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    readFileState.set(path, {
+      content,
+      timestamp: Math.floor(Date.now()),
+      offset: undefined,
+      limit: undefined,
+    })
+    return readFileState
+  }
+
+  test('M4: a failing in-memory apply performs no filesystem mutation setup', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'a.txt')
+    writeFileSync(filePath, 'hello\n')
+    const readFileState = seedReadState(filePath, 'hello\n')
+
+    let mkdirCalls = 0
+    const originalFs = getFsImplementation()
+    setFsImplementation({
+      ...originalFs,
+      async mkdir(...args: Parameters<typeof originalFs.mkdir>) {
+        mkdirCalls += 1
+        return originalFs.mkdir(...args)
+      },
+    })
+
+    await expect(
+      FilePatchTool.call(
+        {
+          ops: [
+            {
+              type: 'update',
+              path: filePath,
+              hunks: [
+                hunk({
+                  lines: [
+                    { kind: 'context', text: 'no-such-anchor-line' },
+                    { kind: 'delete', text: 'hello' },
+                  ],
+                }),
+              ],
+            },
+          ],
+        },
+        {
+          readFileState,
+          updateFileHistoryState: () => undefined,
+        } as never,
+        undefined,
+        { uuid: 'test-parent' } as never,
+      ),
+    ).rejects.toThrow()
+
+    // The patch never applied in memory, so mkdir/file-history setup must not
+    // have run and the file must be untouched.
+    expect(mkdirCalls).toBe(0)
+    expect(readFileSync(filePath, 'utf8')).toBe('hello\n')
+  })
+
+  test('M2: a move whose destination appeared after validation is refused, not overwritten', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+    const srcPath = join(tempDir, 'src.txt')
+    const dstPath = join(tempDir, 'dst.txt')
+    writeFileSync(srcPath, 'content\n')
+    // Destination did not exist when validateInput ran; it appeared before call.
+    writeFileSync(dstPath, 'PRE-EXISTING\n')
+    const readFileState = seedReadState(srcPath, 'content\n')
+
+    await expect(
+      FilePatchTool.call(
+        {
+          ops: [
+            {
+              type: 'update',
+              path: srcPath,
+              moveTo: dstPath,
+              hunks: [
+                hunk({
+                  lines: [
+                    { kind: 'context', text: 'content' },
+                    { kind: 'add', text: 'added' },
+                  ],
+                }),
+              ],
+            },
+          ],
+        },
+        {
+          readFileState,
+          updateFileHistoryState: () => undefined,
+        } as never,
+        undefined,
+        { uuid: 'test-parent' } as never,
+      ),
+    ).rejects.toThrow('already exists')
+
+    expect(readFileSync(dstPath, 'utf8')).toBe('PRE-EXISTING\n')
+    expect(readFileSync(srcPath, 'utf8')).toBe('content\n')
+  })
+
+  test('M3: a rollback failure does not mask the original write error', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+    const addPath = join(tempDir, 'new.txt')
+    const deletePath = join(tempDir, 'second.txt')
+    writeFileSync(deletePath, 'bye\n')
+    const readFileState = seedReadState(deletePath, 'bye\n')
+
+    const originalFs = getFsImplementation()
+    setFsImplementation({
+      ...originalFs,
+      async unlink(path: string) {
+        if (path === deletePath) throw new Error('ORIGINAL delete failure')
+        if (path === addPath) throw new Error('ROLLBACK delete failure')
+        return originalFs.unlink(path)
+      },
+    })
+
+    // add new.txt succeeds, then delete second.txt throws (original error);
+    // rolling back the add re-throws (rollback error). The original must win.
+    await expect(
+      FilePatchTool.call(
+        {
+          ops: [
+            {
+              type: 'add',
+              path: addPath,
+              lines: ['created'],
+              noNewlineAtEndOfFile: false,
+            },
+            { type: 'delete', path: deletePath },
+          ],
+        },
+        {
+          readFileState,
+          updateFileHistoryState: () => undefined,
+        } as never,
+        undefined,
+        { uuid: 'test-parent' } as never,
+      ),
+    ).rejects.toThrow('ORIGINAL delete failure')
+  })
+})

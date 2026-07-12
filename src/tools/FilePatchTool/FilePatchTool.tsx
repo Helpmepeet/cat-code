@@ -1,4 +1,5 @@
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
+import { logError } from '../../utils/log.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
 import { getPatchFromContents } from '../../utils/diff.js'
@@ -70,7 +71,7 @@ export const FilePatchTool = buildTool({
     return JSON.stringify(input.ops)
   },
   getPath(input) {
-    const firstPath = 'ops' in input ? input.ops[0]?.path : undefined
+    const firstPath = firstOperationPath(input)
     return firstPath ? expandPath(firstPath) : ''
   },
   backfillObservableInput(input) {
@@ -83,8 +84,7 @@ export const FilePatchTool = buildTool({
     }
   },
   async preparePermissionMatcher(input) {
-    const firstPath = 'ops' in input ? input.ops[0]?.path : undefined
-    return prepareFilePermissionMatcher(firstPath ?? '')
+    return prepareFilePermissionMatcher(firstOperationPath(input) ?? '')
   },
   async checkPermissions(input, context) {
     const operations = normalizeOperations(input)
@@ -195,6 +195,24 @@ export const FilePatchTool = buildTool({
                 errorCode: 6,
               }
             }
+
+            // The moved content lands at moveTo, not fullFilePath. Re-run the
+            // path-keyed guards (deny rule + team-memory secret scan) against
+            // the destination so a move can't slip content past a deny rule or
+            // into a memory dir the source path wasn't subject to.
+            const moveDenyValidation = validateEditDenyRule(operation.moveTo, toolUseContext, 2)
+            if (moveDenyValidation) {
+              return moveDenyValidation
+            }
+
+            const movedContent = applyPatchToSingleFile(
+              operation,
+              currentFileState(fullFilePath, fileContent),
+            )
+            const moveSecretValidation = validateTeamMemorySecrets(operation.moveTo, movedContent)
+            if (moveSecretValidation) {
+              return moveSecretValidation
+            }
           }
 
           const settingsValidationResult = validateInputForSettingsFileEdit(
@@ -224,15 +242,10 @@ export const FilePatchTool = buildTool({
     const operations = normalizeOperations(input)
     const currentFiles = new Map<string, ApplyPatchFileState>()
 
+    // Read-only phase: gather every file's current state before mutating disk.
+    // No prepareFileMutation here — that mkdir + file-history side effect must
+    // not fire until the in-memory apply below has proven the patch applies.
     for (const operation of operations) {
-      if (!isUncPath(operation.path)) {
-        await prepareFileMutation(
-          operation.path,
-          updateFileHistoryState,
-          parentMessage.uuid,
-        )
-      }
-
       const {
         content: originalFileContents,
         fileExists,
@@ -259,6 +272,29 @@ export const FilePatchTool = buildTool({
             originalFileContents.length > 0 && !originalFileContents.endsWith('\n'),
         },
       })
+
+      if (operation.type === 'update' && operation.moveTo) {
+        // Re-read the destination at call time. validateInput checked it was
+        // absent, but it may have appeared since (TOCTOU). Only seed
+        // currentFiles when it now exists — that trips the applier's
+        // target-exists guard instead of silently overwriting; when it's still
+        // absent we leave it out so moveTargetMeta keeps carrying the source's
+        // encoding/line-endings forward.
+        const moveTarget = readFileForEdit(operation.moveTo)
+        if (moveTarget.fileExists) {
+          currentFiles.set(operation.moveTo, {
+            path: operation.moveTo,
+            exists: true,
+            buffer: {
+              content: moveTarget.content,
+              encoding: moveTarget.encoding,
+              lineEndings: moveTarget.lineEndings,
+              noNewlineAtEndOfFile:
+                moveTarget.content.length > 0 && !moveTarget.content.endsWith('\n'),
+            },
+          })
+        }
+      }
     }
 
     // For move operations: the applier emits delete(src) + add(dst).
@@ -305,6 +341,17 @@ export const FilePatchTool = buildTool({
 
         const encoding = originalState?.buffer.encoding ?? moveMeta?.encoding ?? 'utf8'
         const lineEndings = originalState?.buffer.lineEndings ?? moveMeta?.lineEndings ?? 'LF'
+
+        // Deferred until the in-memory apply succeeded (above): create the
+        // parent dir (covers a move into a not-yet-existing directory) and
+        // record file history right before we touch disk.
+        if (!isUncPath(file.path)) {
+          await prepareFileMutation(
+            file.path,
+            updateFileHistoryState,
+            parentMessage.uuid,
+          )
+        }
 
         if (file.type === 'delete') {
           await deleteFileWithSideEffects({
@@ -376,6 +423,34 @@ export const FilePatchTool = buildTool({
   },
 } satisfies ToolDef<ReturnType<typeof inputSchema>, FilePatchToolOutput>)
 
+// Resolve the first target path from any shape getPath/preparePermissionMatcher
+// can receive: the structured `{ ops }` arm, the raw `{ input: envelope }` arm
+// (the only shape the GPT custom-tool path emits), and the synthetic
+// `{ file_path }` that checkPermissions builds per target to reuse
+// checkSingleFileWritePermissions. Returning '' here makes the shared write
+// permission helper resolve the path to cwd, so every deny/safety/rule/
+// working-directory check keys to the project dir instead of the real target —
+// in acceptEdits (and the auto-mode acceptEdits fast path) that silently
+// auto-allows a patch to ANY path. See
+// docs/reports/2026-07-12-apply-patch-tool-review.md F1/M1.
+function firstOperationPath(input: unknown): string | undefined {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const filePath = (input as { file_path?: unknown }).file_path
+    if (typeof filePath === 'string') {
+      return filePath || undefined
+    }
+  }
+  try {
+    const ops =
+      input && typeof input === 'object' && 'input' in input
+        ? parseFilePatch((input as { input: string }).input).ops
+        : (input as { ops?: FilePatchOperation[] }).ops
+    return ops?.[0]?.path
+  } catch {
+    return undefined
+  }
+}
+
 function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
   const parsed = 'input' in input ? parseFilePatch(input.input).ops : input.ops
 
@@ -430,23 +505,34 @@ async function rollbackAppliedFiles(
   readFileState: ToolUseContext['readFileState'],
 ): Promise<void> {
   for (const file of [...writtenFiles].reverse()) {
-    if (!file.existedBefore) {
-      await deleteFileWithSideEffects({
+    // Best-effort: isolate each file so one rollback failure neither aborts
+    // recovery of the rest nor propagates out to mask the original write error
+    // that triggered the rollback (the caller rethrows that error).
+    try {
+      if (!file.existedBefore) {
+        await deleteFileWithSideEffects({
+          absoluteFilePath: file.path,
+          originalFileContents: file.after ?? '',
+          readFileState,
+        })
+        continue
+      }
+
+      writeFileWithSideEffects({
         absoluteFilePath: file.path,
         originalFileContents: file.after ?? '',
+        updatedFile: file.before ?? '',
+        encoding: file.encoding,
+        lineEndings: file.lineEndings,
         readFileState,
       })
-      continue
+    } catch (rollbackError) {
+      logError(
+        rollbackError instanceof Error
+          ? rollbackError
+          : new Error(String(rollbackError)),
+      )
     }
-
-    writeFileWithSideEffects({
-      absoluteFilePath: file.path,
-      originalFileContents: file.after ?? '',
-      updatedFile: file.before ?? '',
-      encoding: file.encoding,
-      lineEndings: file.lineEndings,
-      readFileState,
-    })
   }
 }
 
