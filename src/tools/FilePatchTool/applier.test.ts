@@ -673,3 +673,53 @@ describe('FilePatchTool.call disk-mutation safety', () => {
     ).rejects.toThrow('ORIGINAL delete failure')
   })
 })
+
+describe('FilePatchTool.validateInput move destination', () => {
+  function validateContext() {
+    return {
+      getAppState: () => ({
+        toolPermissionContext: {
+          mode: 'default',
+          additionalWorkingDirectories: new Map(),
+          alwaysAllowRules: {},
+          alwaysDenyRules: {},
+          alwaysAskRules: {},
+          isBypassPermissionsModeAvailable: true,
+        },
+      }),
+      readFileState: createFileStateCacheWithSizeLimit(10),
+    } as never
+  }
+
+  test('M2: rejects a move into a .ipynb destination (destination-type invariant keyed to the destination)', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+    const srcPath = join(tempDir, 'src.txt')
+    const destPath = join(tempDir, 'dest.ipynb')
+    writeFileSync(srcPath, 'content\n')
+
+    const result = await FilePatchTool.validateInput(
+      {
+        ops: [
+          {
+            type: 'update',
+            path: srcPath,
+            moveTo: destPath,
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'content' },
+                  { kind: 'add', text: 'added' },
+                ],
+              }),
+            ],
+          },
+        ],
+      },
+      validateContext(),
+    )
+
+    expect(result.result).toBe(false)
+    expect((result as { message?: string }).message).toContain('Jupyter Notebook')
+  })
+})

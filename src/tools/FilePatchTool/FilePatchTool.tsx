@@ -185,36 +185,6 @@ export const FilePatchTool = buildTool({
         }
 
         if (operation.type === 'update') {
-          if (operation.moveTo) {
-            const moveTargetContent = await readFileContentForValidation(operation.moveTo)
-            if (moveTargetContent !== null) {
-              return {
-                result: false,
-                behavior: 'ask',
-                message: `Cannot move ${fullFilePath} to ${operation.moveTo} because the target already exists.`,
-                errorCode: 6,
-              }
-            }
-
-            // The moved content lands at moveTo, not fullFilePath. Re-run the
-            // path-keyed guards (deny rule + team-memory secret scan) against
-            // the destination so a move can't slip content past a deny rule or
-            // into a memory dir the source path wasn't subject to.
-            const moveDenyValidation = validateEditDenyRule(operation.moveTo, toolUseContext, 2)
-            if (moveDenyValidation) {
-              return moveDenyValidation
-            }
-
-            const movedContent = applyPatchToSingleFile(
-              operation,
-              currentFileState(fullFilePath, fileContent),
-            )
-            const moveSecretValidation = validateTeamMemorySecrets(operation.moveTo, movedContent)
-            if (moveSecretValidation) {
-              return moveSecretValidation
-            }
-          }
-
           const settingsValidationResult = validateInputForSettingsFileEdit(
             fullFilePath,
             fileContent,
@@ -223,6 +193,69 @@ export const FilePatchTool = buildTool({
           if (settingsValidationResult !== null) {
             return settingsValidationResult
           }
+        }
+      }
+
+      // Move destinations get their own pass so destination-type invariants key
+      // to where the content lands, not the source, and are not short-circuited
+      // by a source-path early exit above (e.g. a UNC source). The moved content
+      // is the full patched source file, which is what will exist at the
+      // destination. (No settings-schema check here: a move requires an absent
+      // destination — errorCode 6 — so the target is always a new file, and
+      // validateInputForSettingsFileEdit is a no-op when the before-content is
+      // empty; a settings-path destination is gated by the dangerous-path
+      // safety check in checkPermissions instead.)
+      for (const operation of operations) {
+        if (operation.type !== 'update' || !operation.moveTo) {
+          continue
+        }
+        const destPath = operation.moveTo
+
+        const moveDenyValidation = validateEditDenyRule(destPath, toolUseContext, 2)
+        if (moveDenyValidation) {
+          return moveDenyValidation
+        }
+
+        if (isUncPath(destPath)) {
+          continue
+        }
+
+        const destContent = await readFileContentForValidation(destPath)
+        if (destContent !== null) {
+          return {
+            result: false,
+            behavior: 'ask',
+            message: `Cannot move ${operation.path} to ${destPath} because the target already exists.`,
+            errorCode: 6,
+          }
+        }
+
+        if (destPath.endsWith('.ipynb')) {
+          return {
+            result: false,
+            behavior: 'ask',
+            message: `File is a Jupyter Notebook. Use the ${NOTEBOOK_EDIT_TOOL_NAME} to edit this file.`,
+            errorCode: 5,
+          }
+        }
+
+        // The team-memory secret scan needs the readable source to compute the
+        // moved result; a UNC source can't be read (the deny rule above still
+        // ran, and checkPermissions enforces deny on the destination too).
+        if (isUncPath(operation.path)) {
+          continue
+        }
+        const sourceContent = await readFileContentForValidation(operation.path)
+        if (sourceContent === null) {
+          continue
+        }
+        const movedContent = applyPatchToSingleFile(
+          operation,
+          currentFileState(operation.path, sourceContent),
+        )
+        const moveSecretValidation = validateTeamMemorySecrets(destPath, movedContent)
+        if (moveSecretValidation) {
+          return moveSecretValidation
         }
       }
 

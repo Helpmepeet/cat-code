@@ -24,12 +24,24 @@ MISSED defects found by the verification pass:
   exclusions). Chained with F1, every Apply_patch in auto mode — to any path —
   silently bypassed the classifier. Same root cause as F1; the `getPath` fix
   closes both.
-- **M2 (MAJOR, fixed)**: the `moveTo` destination skipped `validateInput`
-  content checks (secret/deny keyed to the source path only) and was never read
-  at call time, so the applier's target-exists guard was inert and a
-  destination created after validation could be silently overwritten (TOCTOU).
-  Fixed: destination deny + secret scan in `validateInput`, and a call-time
-  destination re-read that trips the guard.
+- **M2 (MAJOR, fixed — two rounds)**: the `moveTo` destination skipped
+  `validateInput` content checks (secret/deny keyed to the source path only) and
+  was never read at call time, so the applier's target-exists guard was inert
+  and a destination created after validation could be silently overwritten
+  (TOCTOU). First fix added destination deny + secret scan and a call-time
+  destination re-read that trips the guard. The re-review pass then found the
+  destination checks were still (a) keyed to the source path for the notebook
+  guard and (b) short-circuited by the source's UNC early-exit. Second fix
+  centralizes destination validation into its own pass (`FilePatchTool.tsx`,
+  after the per-operation loop): deny + existence + notebook + team-memory
+  secret keyed to the destination, run independently of source-path early exits.
+  Two destination cases are deliberately *not* schema-validated and this is
+  correct, not a gap: a move requires an absent destination (errorCode 6), so a
+  settings-file destination is always a new file where
+  `validateInputForSettingsFileEdit` is a structural no-op (empty before-content)
+  and is instead gated by the dangerous-path safety check in `checkPermissions`;
+  and a UNC source can't be read to compute the moved content for a secret scan
+  (its deny rule is still enforced at `checkPermissions`, which has no UNC skip).
 - **M3 (MEDIUM, fixed)**: `rollbackAppliedFiles` had no per-file error
   isolation; a rollback failure aborted remaining recovery and propagated out,
   masking the original write error. Fixed: per-file try/catch, original error
