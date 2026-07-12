@@ -3570,7 +3570,11 @@ export function REPL({
         });
         idleHintShownRef.current = false;
       }
-      const shouldTreatAsImmediate = queryGuard.isActive && (matchingCommand?.immediate || options?.fromKeybinding);
+      // Mirrors handlePromptSubmit's immediate gate: external loading (remote
+      // turn, foregrounded task) also queues submissions, so a matched-but-
+      // unavailable command must be consumed here in that state too — not
+      // only under an active local query guard.
+      const shouldTreatAsImmediate = (queryGuard.isActive || isExternalLoading) && (matchingCommand?.immediate || options?.fromKeybinding);
       const immediateEligible = Boolean(matchingCommand && shouldTreatAsImmediate && matchingCommand.type === 'local-jsx');
       if (immediateEligible && matchingCommand && !meetsAvailabilityRequirement(matchingCommand)) {
         // Consume instead of falling through: fallthrough would enqueue the
@@ -3707,6 +3711,22 @@ export function REPL({
         };
         void executeImmediateCommand();
         return; // Always return early - don't add to history or queue
+      }
+
+      // Keybinding submissions are synthetic "/<command>" strings, never user
+      // input. If one couldn't execute immediately (command unmatched — e.g.
+      // filtered out by availability, a binding registers regardless of the
+      // mounted list — unavailable, wrong type, or blocked) while submissions
+      // would be QUEUED, consume it: the queue path's onInputChange('') would
+      // wipe the user's real draft, and the synthetic string would surface an
+      // unknown-skill message when it drains.
+      if (options?.fromKeybinding && (queryGuard.isActive || isExternalLoading)) {
+        addNotification({
+          key: `immediate-keybinding-blocked-${commandName}`,
+          text: `/${commandName} can't run right now`,
+          priority: 'immediate'
+        });
+        return;
       }
     }
 
