@@ -1,7 +1,7 @@
 import type { UUID } from 'crypto'
 import { logEvent } from 'src/services/analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 'src/services/analytics/metadata.js'
-import { type Command, getCommandName, isCommandEnabled } from '../commands.js'
+import { type Command, getCommandName, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js'
 import { selectableUserMessagesFilter } from '../components/MessageSelector.js'
 import type { SpinnerMode } from '../components/Spinner/types.js'
 import type { QuerySource } from '../constants/querySource.js'
@@ -21,6 +21,7 @@ import { createAbortController } from './abortController.js'
 import type { PastedContent } from './config.js'
 import { logForDebugging } from './debug.js'
 import type { EffortValue } from './effort.js'
+import { claimImmediateOwner, isCurrentImmediateOwner } from './immediateCommand.js'
 import type { FileHistoryState } from './fileHistory.js'
 import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
@@ -241,6 +242,10 @@ export async function handlePromptSubmit(
       cmd =>
         cmd.immediate &&
         isCommandEnabled(cmd) &&
+        // Re-check availability at dispatch: the mounted command list is not
+        // rebuilt on provider switches, so a provider-gated command (e.g.
+        // /usage, openai-only) can be stale in `commands`.
+        meetsAvailabilityRequirement(cmd) &&
         (cmd.name === commandName ||
           cmd.aliases?.includes(commandName) ||
           getCommandName(cmd) === commandName),
@@ -269,6 +274,7 @@ export async function handlePromptSubmit(
         mainLoopModel,
       )
 
+      const owner = claimImmediateOwner()
       let doneWasCalled = false
       const onDone: LocalJSXCommandOnDone = (result, options) => {
         doneWasCalled = true
@@ -277,6 +283,7 @@ export async function handlePromptSubmit(
           jsx: null,
           shouldHidePromptInput: false,
           clearLocalJSX: true,
+          localJsxOwner: owner,
         })
         if (result && options?.display !== 'skip' && params.addNotification) {
           params.addNotification({
@@ -285,7 +292,9 @@ export async function handlePromptSubmit(
             priority: 'immediate',
           })
         }
-        if (options?.nextInput) {
+        // Skipped when stale: a newer immediate command owns the input now,
+        // and a stale nextInput would overwrite what the user typed after.
+        if (options?.nextInput && isCurrentImmediateOwner(owner)) {
           if (options.submitNextInput) {
             enqueue({ value: options.nextInput, mode: 'prompt' })
           } else {
@@ -299,12 +308,15 @@ export async function handlePromptSubmit(
 
       // Skip if onDone already fired — prevents stuck isLocalJSXCommand
       // (see processSlashCommand.tsx local-jsx case for full mechanism).
-      if (jsx && !doneWasCalled) {
+      // Also skip if a newer immediate command was dispatched while this
+      // one was loading — the newer panel owns the slot.
+      if (jsx && !doneWasCalled && isCurrentImmediateOwner(owner)) {
         setToolJSX({
           jsx,
           shouldHidePromptInput: false,
           isLocalJSXCommand: true,
           isImmediate: true,
+          localJsxOwner: owner,
         })
       }
       return

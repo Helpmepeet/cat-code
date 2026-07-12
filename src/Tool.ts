@@ -112,6 +112,9 @@ export type SetToolJSXFn = (
     isImmediate?: boolean
     /** Set to true to clear a local JSX command (e.g., from its onDone callback) */
     clearLocalJSX?: boolean
+    /** Owner token from claimImmediateOwner(); scopes installs/clears so a
+     *  stale immediate command can't evict a newer panel (immediateCommand.ts) */
+    localJsxOwner?: number
   } | null,
 ) => void
 

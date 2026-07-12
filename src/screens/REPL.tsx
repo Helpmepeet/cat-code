@@ -51,7 +51,8 @@ import { endInteractionSpan } from '../utils/telemetry/sessionTracing.js';
 import { useLogMessages } from '../hooks/useLogMessages.js';
 import { useReplBridge } from '../hooks/useReplBridge.js';
 import { usePtcloveBridge } from '../hooks/usePtcloveBridge.js';
-import { type Command, type CommandResultDisplay, type ResumeEntrypoint, getCommandName, isCommandEnabled } from '../commands.js';
+import { type Command, type CommandResultDisplay, type ResumeEntrypoint, getCommandName, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js';
+import { claimImmediateOwner, isCurrentImmediateOwner, resolveToolJsxUpdate } from '../utils/immediateCommand.js';
 import type { PromptInputMode, QueuedCommand, VimMode } from '../types/textInputTypes.js';
 import { MessageSelector, selectableUserMessagesFilter, messagesAfterAreOnlySynthetic } from '../components/MessageSelector.js';
 import { useIdeLogging } from '../hooks/useIdeLogging.js';
@@ -1095,6 +1096,7 @@ export function REPL({
     shouldContinueAnimation?: true;
     showSpinner?: boolean;
     isLocalJSXCommand: true;
+    owner?: number;
   } | null>(null);
 
   // Wrapper for setToolJSX that preserves local JSX commands (like /btw).
@@ -1113,39 +1115,39 @@ export function REPL({
     showSpinner?: boolean;
     isLocalJSXCommand?: boolean;
     clearLocalJSX?: boolean;
+    localJsxOwner?: number;
   } | null) => {
-    // If setting a local JSX command, store it in the ref
-    if (args?.isLocalJSXCommand) {
-      const {
-        clearLocalJSX: _,
-        ...rest
-      } = args;
-      localJSXCommandRef.current = {
-        ...rest,
-        isLocalJSXCommand: true
-      };
-      setToolJSXInternal(rest);
-      return;
-    }
-
-    // If there's an active local JSX command in the ref
-    if (localJSXCommandRef.current) {
-      // Allow clearing only if explicitly requested (from onDone callbacks)
-      if (args?.clearLocalJSX) {
+    const action = resolveToolJsxUpdate(localJSXCommandRef.current?.owner, localJSXCommandRef.current !== null, args);
+    switch (action) {
+      case 'install': {
+        if (!args) return;
+        const {
+          clearLocalJSX: _,
+          localJsxOwner,
+          ...rest
+        } = args;
+        localJSXCommandRef.current = {
+          ...rest,
+          isLocalJSXCommand: true,
+          owner: localJsxOwner
+        };
+        setToolJSXInternal(rest);
+        return;
+      }
+      case 'clear':
         localJSXCommandRef.current = null;
         setToolJSXInternal(null);
         return;
+      case 'ignore':
+        return;
+      case 'apply':
+        setToolJSXInternal(args);
+        return;
+      default: {
+        const _exhaustive: never = action;
+        return _exhaustive;
       }
-      // Otherwise, keep the local JSX command visible - ignore tool updates
-      return;
     }
-
-    // No active local JSX command, allow any update
-    if (args?.clearLocalJSX) {
-      setToolJSXInternal(null);
-      return;
-    }
-    setToolJSXInternal(args);
   }, []);
   const [toolUseConfirmQueue, setToolUseConfirmQueue] = useState<ToolUseConfirm[]>([]);
   // Sticky footer JSX registered by permission request components (currently
@@ -3553,7 +3555,7 @@ export function REPL({
         idleHintShownRef.current = false;
       }
       const shouldTreatAsImmediate = queryGuard.isActive && (matchingCommand?.immediate || options?.fromKeybinding);
-      if (matchingCommand && shouldTreatAsImmediate && matchingCommand.type === 'local-jsx') {
+      if (matchingCommand && shouldTreatAsImmediate && matchingCommand.type === 'local-jsx' && meetsAvailabilityRequirement(matchingCommand)) {
         // Only clear input if the submitted text matches what's in the prompt.
         // When a command keybinding fires, input is "/<command>" but the actual
         // input value is the user's existing text - don't clear it in that case.
@@ -3577,6 +3579,7 @@ export function REPL({
 
         // Execute the command directly
         const executeImmediateCommand = async (): Promise<void> => {
+          const owner = claimImmediateOwner();
           let doneWasCalled = false;
           const onDone = (result?: string, doneOptions?: {
             display?: CommandResultDisplay;
@@ -3586,7 +3589,8 @@ export function REPL({
             setToolJSX({
               jsx: null,
               shouldHidePromptInput: false,
-              clearLocalJSX: true
+              clearLocalJSX: true,
+              localJsxOwner: owner
             });
             const newMessages: MessageType[] = [];
             if (result && doneOptions?.display !== 'skip') {
@@ -3618,8 +3622,10 @@ export function REPL({
             }
             // Restore stashed prompt after local-jsx command completes.
             // The normal stash restoration path (below) is skipped because
-            // local-jsx commands return early from onSubmit.
-            if (stashedPrompt !== undefined) {
+            // local-jsx commands return early from onSubmit. Skipped when a
+            // newer immediate command has been dispatched — a stale restore
+            // would overwrite input the user typed after this command.
+            if (stashedPrompt !== undefined && isCurrentImmediateOwner(owner)) {
               setInputValue(stashedPrompt.text);
               helpers.setCursorOffset(stashedPrompt.cursorOffset);
               setPastedContents(stashedPrompt.pastedContents);
@@ -3637,13 +3643,16 @@ export function REPL({
 
           // Skip if onDone already fired — prevents stuck isLocalJSXCommand
           // (see processSlashCommand.tsx local-jsx case for full mechanism).
-          if (jsx && !doneWasCalled) {
+          // Also skip if a newer immediate command was dispatched while this
+          // one was loading — the newer panel owns the slot.
+          if (jsx && !doneWasCalled && isCurrentImmediateOwner(owner)) {
             // shouldHidePromptInput: false keeps Notifications mounted
             // so the onDone result isn't lost
             setToolJSX({
               jsx,
               shouldHidePromptInput: false,
-              isLocalJSXCommand: true
+              isLocalJSXCommand: true,
+              localJsxOwner: owner
             });
           }
         };

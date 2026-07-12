@@ -13,3 +13,62 @@ export function shouldInferenceConfigCommandBeImmediate(): boolean {
     getFeatureValue_CACHED_MAY_BE_STALE('tengu_immediate_model_command', false)
   )
 }
+
+/**
+ * Ownership tokens for the shared local-JSX slot used by immediate commands.
+ *
+ * Immediate dispatch is fire-and-forget and a command may do async work
+ * before installing JSX or firing onDone (/context runs its whole analysis
+ * first and never installs a panel). Two overlapping immediate commands can
+ * therefore interleave: without ownership, a stale command's onDone
+ * `clearLocalJSX` evicts a newer command's panel — or nulls unrelated live
+ * toolJSX when no panel is installed (PR #9 review, finding 1).
+ *
+ * Rules enforced via resolveToolJsxUpdate:
+ * - an owned clear only clears a panel installed by the same owner;
+ * - an owned clear with no active panel is a no-op (never touches tool UI);
+ * - ownerless calls (the serialized queued-command path) keep the historical
+ *   clear-anything behavior.
+ */
+
+let lastClaimedOwner = 0
+
+export function claimImmediateOwner(): number {
+  return ++lastClaimedOwner
+}
+
+export function isCurrentImmediateOwner(owner: number): boolean {
+  return owner === lastClaimedOwner
+}
+
+export function _forTestResetImmediateOwner(): void {
+  lastClaimedOwner = 0
+}
+
+export type ToolJsxSlotAction = 'install' | 'clear' | 'ignore' | 'apply'
+
+export function resolveToolJsxUpdate(
+  activeLocalJsxOwner: number | undefined,
+  hasActiveLocalJsx: boolean,
+  update: {
+    isLocalJSXCommand?: boolean
+    clearLocalJSX?: boolean
+    localJsxOwner?: number
+  } | null,
+): ToolJsxSlotAction {
+  if (update?.isLocalJSXCommand) return 'install'
+  if (hasActiveLocalJsx) {
+    if (
+      update?.clearLocalJSX &&
+      (update.localJsxOwner === undefined ||
+        update.localJsxOwner === activeLocalJsxOwner)
+    ) {
+      return 'clear'
+    }
+    return 'ignore'
+  }
+  if (update?.clearLocalJSX) {
+    return update.localJsxOwner === undefined ? 'clear' : 'ignore'
+  }
+  return 'apply'
+}
