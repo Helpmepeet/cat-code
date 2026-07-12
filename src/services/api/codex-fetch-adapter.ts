@@ -69,6 +69,10 @@ let codexPromptCacheKey: string | null = null
 interface StickyFallbackEntry {
   until: number
   reason: string
+  // Account the WS failure was observed on. The flag applies only to this account,
+  // so a reassigned/healthy account is not stranded on HTTP (undefined = wildcard:
+  // legacy callers and tests that don't scope by account).
+  accountId?: string
 }
 
 const STICKY_HTTP_FALLBACK_TTL_MS = 60 * 1000
@@ -104,20 +108,31 @@ export function resetCodexCacheContext(): void {
 function markStickyHttpFallback(
   conversationId: string,
   reason: string,
+  accountId?: string,
 ): void {
-  if (stickyHttpFallback.has(conversationId)) {
+  // Keep an existing, unexpired flag only while it is for the SAME account —
+  // preserving "no TTL extension on remark". A different account (e.g. after a
+  // lease reassignment) replaces it, so a healthy account is never forced onto the
+  // HTTP channel that cohort-gates models like gpt-5.6-luna.
+  // See docs/codex/2026-07-12-bug-luna-sticky-http-fallback-404.md.
+  const existing = stickyHttpFallback.get(conversationId)
+  if (existing && now() <= existing.until && existing.accountId === accountId) {
     return
   }
   const until = now() + STICKY_HTTP_FALLBACK_TTL_MS
-  stickyHttpFallback.set(conversationId, { until, reason })
+  stickyHttpFallback.set(conversationId, { until, reason, accountId })
   logForDebugging(
     `[codex-fetch] sticky_http_fallback conv=${conversationId.slice(0, 8)} ` +
-    `reason=${reason} ttl_ms=${STICKY_HTTP_FALLBACK_TTL_MS}`,
+    `reason=${reason} account=${accountId ? accountId.slice(0, 8) : 'any'} ` +
+    `ttl_ms=${STICKY_HTTP_FALLBACK_TTL_MS}`,
     { level: 'warn' },
   )
 }
 
-function hasStickyHttpFallback(conversationId: string): boolean {
+function hasStickyHttpFallback(
+  conversationId: string,
+  accountId?: string,
+): boolean {
   const entry = stickyHttpFallback.get(conversationId)
   if (!entry) return false
   if (now() > entry.until) {
@@ -128,7 +143,32 @@ function hasStickyHttpFallback(conversationId: string): boolean {
     )
     return false
   }
+  // A flag set for a different account does not apply to this one (undefined on
+  // either side is a wildcard). This is what lets a reassigned healthy account
+  // retry WebSocket instead of inheriting the failed account's HTTP stickiness.
+  if (
+    entry.accountId !== undefined &&
+    accountId !== undefined &&
+    entry.accountId !== accountId
+  ) {
+    return false
+  }
   return true
+}
+
+function clearStickyHttpFallback(
+  conversationId: string,
+  accountId?: string,
+): void {
+  const entry = stickyHttpFallback.get(conversationId)
+  if (!entry) return
+  if (
+    accountId === undefined ||
+    entry.accountId === undefined ||
+    entry.accountId === accountId
+  ) {
+    stickyHttpFallback.delete(conversationId)
+  }
 }
 
 function getConversationIdForRequest(
@@ -157,12 +197,16 @@ function getConversationIdForRequest(
 export function _markStickyHttpFallbackForTest(
   conversationId: string,
   reason: string,
+  accountId?: string,
 ): void {
-  markStickyHttpFallback(conversationId, reason)
+  markStickyHttpFallback(conversationId, reason, accountId)
 }
 
-export function _hasStickyHttpFallbackForTest(conversationId: string): boolean {
-  return hasStickyHttpFallback(conversationId)
+export function _hasStickyHttpFallbackForTest(
+  conversationId: string,
+  accountId?: string,
+): boolean {
+  return hasStickyHttpFallback(conversationId, accountId)
 }
 
 /**
@@ -2866,7 +2910,11 @@ function normalizeCodexStreamError(
 
   if (error instanceof CodexWebSocketIdleTimeoutError) {
     if (requestCacheMetadata) {
-      markStickyHttpFallback(requestCacheMetadata.conversationId, 'idle_timeout')
+      markStickyHttpFallback(
+        requestCacheMetadata.conversationId,
+        'idle_timeout',
+        requestCacheMetadata.accountId,
+      )
     }
     logForDebugging(
       `[codex-adapter] ws_error_classified class=idle_timeout retryable=false ` +
@@ -2881,6 +2929,7 @@ function normalizeCodexStreamError(
       markStickyHttpFallback(
         requestCacheMetadata.conversationId,
         'closed_before_completed',
+        requestCacheMetadata.accountId,
       )
     }
     logForDebugging(
@@ -2899,6 +2948,7 @@ function normalizeCodexStreamError(
       markStickyHttpFallback(
         requestCacheMetadata.conversationId,
         'stream_transport_error',
+        requestCacheMetadata.accountId,
       )
     }
     // Any remaining Error subclass reaching this branch is still unclassified
@@ -3077,7 +3127,7 @@ function normalizeInitialWebSocketError(
           : error instanceof CodexWebSocketClosedBeforeCompletedError
             ? 'initial_closed_before_completed'
             : 'initial_ws_unavailable'
-      markStickyHttpFallback(conversationId, reason)
+      markStickyHttpFallback(conversationId, reason, accountId)
     }
     // Report 3.3 instrumentation: pre-first-event failures become
     // APIConnectionError which withRetry treats as retryable. Good branch.
@@ -3329,7 +3379,7 @@ export function createCodexFetch(
       : []
 
     if (isStreamingAnthropicRequest) {
-      if (!hasStickyHttpFallback(conversationId)) {
+      if (!hasStickyHttpFallback(conversationId, currentAccountId)) {
         try {
           // Item 3 rule 1: no per-request prewarm. It re-fired on every
           // session-clearing event and never warmed ahead of time (the real
@@ -3424,6 +3474,20 @@ export function createCodexFetch(
         if (accountError) {
           throw accountError
         }
+      }
+      // Model-not-found over HTTP is a transport-cohort limitation, not a terminal
+      // error: the ChatGPT/Codex HTTP channel refuses some models (e.g. gpt-5.6-luna)
+      // that the WebSocket channel serves. Clear this (conversation, account) sticky
+      // flag and surface a retryable error so withRetry re-attempts over WebSocket
+      // instead of degrading to a same-transport non-streaming retry that 404s again.
+      // See docs/codex/2026-07-12-bug-luna-sticky-http-fallback-404.md.
+      if (codexResponse.status === 404 && /model not found/i.test(errorText)) {
+        clearStickyHttpFallback(conversationId, currentAccountId)
+        throw new APIConnectionError({
+          message:
+            `Codex HTTP channel does not serve model ${codexModel} ` +
+            `(404 Model not found); retrying over WebSocket`,
+        })
       }
       const errorBody = {
         type: 'error',

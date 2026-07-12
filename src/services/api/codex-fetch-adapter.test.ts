@@ -246,6 +246,73 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
+  test('sticky HTTP fallback is scoped to the account it was set for', () => {
+    const conv = 'sticky-account-scope'
+    _setStickyFallbackNowForTest(() => 1_000)
+    resetCodexCacheContext()
+
+    try {
+      // WS failed on the account the subagent was spread onto.
+      _markStickyHttpFallbackForTest(conv, 'initial_ws_unavailable', 'acct_bad')
+      // Same account: the flag applies (stay on HTTP for the TTL).
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_bad')).toBe(true)
+      // Reassigned/healthy account: the stale flag must NOT force it onto HTTP — it
+      // retries WebSocket instead. This is the link-4 fix; conv-only keying returned
+      // true here and stranded the healthy account on HTTP (where luna 404s).
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_healthy')).toBe(false)
+
+      // A wildcard flag (no account) still matches any account — legacy callers.
+      _markStickyHttpFallbackForTest('sticky-wildcard', 'idle_timeout')
+      expect(_hasStickyHttpFallbackForTest('sticky-wildcard', 'acct_anything')).toBe(
+        true,
+      )
+    } finally {
+      _setStickyFallbackNowForTest(null)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('HTTP model-not-found (404) clears sticky and throws retryable so the turn retries over WebSocket', async () => {
+    const accessToken = createAccessToken('acct_luna_404')
+    const conv = 'conv_luna_404'
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: 'Model not found gpt-5.6-luna',
+            type: 'invalid_request_error',
+            param: 'model',
+          },
+        }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    try {
+      // Force the HTTP path (as a WS blip would), then the HTTP channel 404s luna.
+      _markStickyHttpFallbackForTest(conv, 'initial_ws_unavailable')
+      await expect(
+        createCodexFetch(accessToken, conv)('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'claude-sonnet-4-6', // maps to gpt-5.6-luna
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        }),
+      ).rejects.toThrow(/retrying over WebSocket/i)
+
+      // Sticky was cleared, so the retry re-attempts WebSocket instead of HTTP.
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_luna_404')).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
   test('translateToCodexBody preserves function tool strictness and custom tool metadata', () => {
     const { codexBody } = translateToCodexBody({
       model: 'claude-sonnet-4-6',
