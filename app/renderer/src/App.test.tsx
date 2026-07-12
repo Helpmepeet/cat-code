@@ -61,6 +61,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
       }}
       activeAccount={null}
       activeSessionId="session-1"
+      branch={null}
       allowPermission={() => {}}
       modelOverride={null}
       copyForLlm={() => {}}
@@ -162,6 +163,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
       accountsSnapshot={null}
       activeAccount={account}
       activeSessionId="session-1"
+      branch={null}
       allowPermission={() => {}}
       modelOverride="gpt-5.6-terra"
       orchestratorActive={false}
@@ -218,6 +220,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
       }}
       activeAccount={null}
       activeSessionId="session-1"
+      branch={null}
       allowPermission={() => {}}
       modelOverride={null}
       copyForLlm={() => {}}
@@ -368,6 +371,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
       }}
       activeAccount={null}
       activeSessionId="session-1"
+      branch={null}
       allowPermission={() => {}}
       modelOverride={null}
       copyForLlm={() => {}}
@@ -423,6 +427,7 @@ test('P4-24: collapsed-paste pills render with token label, remove control, and 
       }}
       activeAccount={null}
       activeSessionId="session-1"
+      branch={null}
       allowPermission={() => {}}
       modelOverride={null}
       copyForLlm={() => {}}

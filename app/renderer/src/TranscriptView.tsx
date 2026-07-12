@@ -65,14 +65,16 @@ export const TranscriptView = memo(function TranscriptView({
   accounts,
   orchestratorActive,
   cwd,
+  branch,
 }: {
   state: TranscriptState
   activeSessionId: SessionId | null
   /** In-session empty-state Welcome context (Chat.jsx:1272) — the real P4-5 Codex
-   * pool snapshot + agent-mode active flag + fixed cwd; all read-only (HC1). */
+   * pool snapshot + agent-mode active flag + fixed cwd + git branch; read-only (HC1). */
   accounts?: AccountsSnapshot | null
   orchestratorActive?: boolean
   cwd?: string | null
+  branch?: string | null
 }) {
   return (
     <TranscriptRowsView
@@ -80,6 +82,7 @@ export const TranscriptView = memo(function TranscriptView({
       accounts={accounts ?? null}
       orchestratorActive={orchestratorActive ?? false}
       cwd={cwd ?? null}
+      branch={branch ?? null}
     />
   )
 })
@@ -89,11 +92,13 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   accounts = null,
   orchestratorActive = false,
   cwd = null,
+  branch = null,
 }: {
   rows: NestedTranscriptRow[]
   accounts?: AccountsSnapshot | null
   orchestratorActive?: boolean
   cwd?: string | null
+  branch?: string | null
 }) {
   if (rows.length === 0) {
     // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
@@ -106,6 +111,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       <WelcomeScreen
         variant="session"
         cwd={cwd}
+        branch={branch}
         accounts={accounts}
         orchestratorActive={orchestratorActive}
       />

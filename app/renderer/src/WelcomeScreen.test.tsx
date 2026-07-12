@@ -140,6 +140,7 @@ test("the 'session' variant shows a read-only cwd project (no picker) + the real
     <WelcomeScreen
       variant="session"
       cwd="/Users/me/cat-code"
+      branch="feature/login"
       accounts={pool([account({ id: 'main', alias: 'main', isDefault: true, usagePrimary: 15 })])}
       orchestratorActive={false}
     />,
@@ -151,6 +152,9 @@ test("the 'session' variant shows a read-only cwd project (no picker) + the real
   expect(html).toContain('15%')
   // Project is the read-only session cwd, not the interactive picker.
   expect(html).toContain('/Users/me/cat-code')
+  // The real git branch is shown read-only in its own meta column.
+  expect(html).toContain('Branch')
+  expect(html).toContain('feature/login')
   // No interactive project picker button and no recents launcher in-session.
   expect(html).not.toContain('<button')
   expect(html).not.toContain('Open a project')
@@ -158,7 +162,7 @@ test("the 'session' variant shows a read-only cwd project (no picker) + the real
 
 test("the 'session' variant reflects orchestrator read-only and degrades a null pool + null cwd honestly", () => {
   const html = renderToStaticMarkup(
-    <WelcomeScreen variant="session" cwd={null} accounts={null} orchestratorActive />,
+    <WelcomeScreen variant="session" cwd={null} branch={null} accounts={null} orchestratorActive />,
   )
   expect(html).toContain('aria-readonly="true"')
   expect(html).toContain('>On<')

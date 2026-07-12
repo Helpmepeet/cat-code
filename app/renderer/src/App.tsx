@@ -1161,6 +1161,10 @@ export function App() {
 	        selectFirstAccountsSnapshot(accounts)
 	      const panelOrchestratorActive =
 	        selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false
+	      // Read-only git branch for the empty-state meta strip — from the session
+	      // log's `gitBranch` (shared catalog seam), keyed by this panel's session.
+	      const panelBranch =
+	        sessionCatalogRows.find(r => r.sessionId === sessionId)?.gitBranch ?? null
 	      return {
 	        sessionId,
 	        descriptor,
@@ -1173,6 +1177,7 @@ export function App() {
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
+	            branch={panelBranch}
 	            modelOverride={
 	              selectDiagnosticsSnapshot(diagnostics, sessionId)
 	                ?.mainLoopModel ?? null
@@ -1608,6 +1613,7 @@ export function SessionPane({
   activeAccount,
   activeConnection,
   activeDescriptor,
+  branch,
   activeLog,
   activeSessionId,
   allowPermission,
@@ -1997,6 +2003,7 @@ export function SessionPane({
             accounts={accountsSnapshot}
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
+            branch={branch}
             orchestratorActive={orchestratorActive}
             state={transcript}
           />
@@ -2591,6 +2598,8 @@ type SessionPaneProps = {
   activeConnection: ConnectionSnapshot
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
+  /** Read-only git branch for the empty-state meta strip (session log `gitBranch`). */
+  branch: string | null
   activeSessionId: SessionId | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
   /** Real per-session model OVERRIDE (`mainLoopModel`); null = built-in default. */

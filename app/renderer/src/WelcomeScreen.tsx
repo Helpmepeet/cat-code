@@ -63,6 +63,9 @@ type WelcomeScreenProps =
       variant: 'session'
       /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
       cwd: string | null
+      /** The session's git branch, read-only (from the session log's `gitBranch`;
+       * null outside a git repo or before the catalog entry lands). */
+      branch: string | null
       accounts: AccountsSnapshot | null
       orchestratorActive: boolean
     }
@@ -105,6 +108,20 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                 {/* Worktree option cut (D5 Q2); "Locally" is the only real start. */}
                 <span className="text-[13px] text-text-muted">Locally</span>
               </MetaCol>
+              {/* Branch is a SESSION-variant column only: read-only (HC1), the real
+                  `gitBranch` from the session log ('—' outside a repo / pre-catalog).
+                  The launcher's interactive branch chooser was CUT (D5, worktree
+                  option cut), so it keeps 3 columns. */}
+              {props.variant === 'session' ? (
+                <>
+                  <div className="w-px bg-shell-seam" />
+                  <MetaCol icon={<BranchIcon />} label="Branch">
+                    <span className="truncate font-mono text-[13px] text-text-muted">
+                      {props.branch ?? '—'}
+                    </span>
+                  </MetaCol>
+                </>
+              ) : null}
               <div className="w-px bg-shell-seam" />
               <MetaCol icon={<AgentIcon />} label="Orchestrator">
                 <OrchestratorReflect active={orchestratorActive} />
@@ -564,6 +581,17 @@ function AgentIcon() {
       <circle cx="5" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
       <circle cx="19" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
       <path d="M12 7.4v3.6M12 11l-6 5M12 11l6 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function BranchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="6" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="6" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="18" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M6 8.4v7.2M18 9.4c0 4-3 4.6-6 5.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
