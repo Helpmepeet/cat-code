@@ -13,6 +13,7 @@ import { type AdvisorBlock, isAdvisorBlock } from '../utils/advisor.js';
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js';
 import { logError } from '../utils/log.js';
 import type { buildMessageLookups } from '../utils/messages.js';
+import { shouldShowReasoningBlock, type ReasoningDisplayMode } from '../utils/reasoningDisplay.js';
 import { getInitialSettings } from '../utils/settings/settings.js';
 import { CompactSummary } from './CompactSummary.js';
 import { AdvisorMessage } from './messages/AdvisorMessage.js';
@@ -108,12 +109,16 @@ function MessageImpl(t0) {
               // block is also a Codex-tagged thinking block, this one renders
               // as a continuation (no header, dim separator above).
               const prev = index_0 > 0 ? message.message.content[index_0 - 1] : undefined;
+              const hasRawReasoning = message.message.content.some(block =>
+                block.type === 'thinking' &&
+                (block as { reasoningKind?: string }).reasoningKind === 'raw'
+              );
               const isReasoningContinuation =
                 _ && (_ as { type?: string; reasoningKind?: string }).type === 'thinking' &&
                 !!(_ as { reasoningKind?: string }).reasoningKind &&
                 !!prev && (prev as { type?: string; reasoningKind?: string }).type === 'thinking' &&
                 !!(prev as { reasoningKind?: string }).reasoningKind;
-              return <AssistantMessageBlock key={index_0} param={_} addMargin={addMargin} tools={tools} commands={commands} verbose={verbose} inProgressToolUseIDs={inProgressToolUseIDs} progressMessagesForMessage={progressMessagesForMessage} shouldAnimate={shouldAnimate} shouldShowDot={shouldShowDot} width={width} inProgressToolCallCount={inProgressToolUseIDs.size} isTranscriptMode={isTranscriptMode} lookups={lookups} onOpenRateLimitOptions={onOpenRateLimitOptions} thinkingBlockId={`${message.uuid}:${index_0}`} lastThinkingBlockId={lastThinkingBlockId} advisorModel={message.advisorModel} isReasoningContinuation={isReasoningContinuation} />;
+              return <AssistantMessageBlock key={index_0} param={_} addMargin={addMargin} tools={tools} commands={commands} verbose={verbose} inProgressToolUseIDs={inProgressToolUseIDs} progressMessagesForMessage={progressMessagesForMessage} shouldAnimate={shouldAnimate} shouldShowDot={shouldShowDot} width={width} inProgressToolCallCount={inProgressToolUseIDs.size} isTranscriptMode={isTranscriptMode} lookups={lookups} onOpenRateLimitOptions={onOpenRateLimitOptions} thinkingBlockId={`${message.uuid}:${index_0}`} lastThinkingBlockId={lastThinkingBlockId} advisorModel={message.advisorModel} isReasoningContinuation={isReasoningContinuation} hasRawReasoning={hasRawReasoning} />;
             };
             $[22] = addMargin;
             $[23] = commands;
@@ -463,7 +468,8 @@ function AssistantMessageBlock(t0) {
     thinkingBlockId,
     lastThinkingBlockId,
     advisorModel,
-    isReasoningContinuation
+    isReasoningContinuation,
+    hasRawReasoning
   } = t0;
   if (feature("CONNECTOR_TEXT")) {
     if (isConnectorTextBlock(param)) {
@@ -563,16 +569,14 @@ function AssistantMessageBlock(t0) {
         // reasoningDisplay === 'off' suppresses all kind-tagged blocks.
         const reasoningKind = (param as { reasoningKind?: 'summary' | 'raw' }).reasoningKind;
         if (reasoningKind) {
-          let displayMode: 'off' | 'summary' | 'raw' = 'summary';
+          let displayMode: ReasoningDisplayMode = 'summary';
           try {
             const s = getInitialSettings() as { reasoningDisplay?: string };
             if (s?.reasoningDisplay === 'off' || s?.reasoningDisplay === 'summary' || s?.reasoningDisplay === 'raw') {
               displayMode = s.reasoningDisplay;
             }
           } catch {}
-          if (displayMode === 'off') return null;
-          if (reasoningKind === 'raw' && displayMode !== 'raw') return null;
-          if (reasoningKind === 'summary' && displayMode === 'raw') return null;
+          if (!shouldShowReasoningBlock(displayMode, reasoningKind, hasRawReasoning === true)) return null;
           // Past-turn collapse: if this isn't the most recent thinking block
           // in this turn, hide it (transcript mode shows in scrollback).
           const isLastThinkingForKind = !lastThinkingBlockId || thinkingBlockId === lastThinkingBlockId;
