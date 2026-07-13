@@ -89,7 +89,10 @@ import {
 } from '../../utils/telemetry/perfettoTracing.js'
 import type { ContentReplacementState } from '../../utils/toolResultStorage.js'
 import { createAgentId } from '../../utils/uuid.js'
-import { resolveAgentTools } from './agentToolUtils.js'
+import {
+  resolveAgentTools,
+  type AgentToolEnvironment,
+} from './agentToolUtils.js'
 import { type AgentDefinition, isBuiltInAgent } from './loadAgentsDir.js'
 
 /**
@@ -274,6 +277,7 @@ export async function* runAgent({
   onCacheSafeParams,
   contentReplacementState,
   useExactTools,
+  agentToolEnvironment,
   worktreePath,
   description,
   agentName,
@@ -326,6 +330,13 @@ export async function* runAgent({
    * subagent path to produce byte-identical API request prefixes for
    * prompt cache hits. */
   useExactTools?: boolean
+  /** Explicit tool-pool environment for the internal resolveAgentTools() call
+   * when useExactTools is false. Callers that resolve their own copy of this
+   * same tool list OUTSIDE the environment's usual AsyncLocalStorage-based
+   * detection (in-process teammates build their system prompt before their
+   * ALS context exists) pass it explicitly so this per-turn resolution can't
+   * disagree with that prior resolution. Defaults to 'default'. */
+  agentToolEnvironment?: AgentToolEnvironment
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
@@ -558,7 +569,12 @@ export async function* runAgent({
 
   const resolvedTools = useExactTools
     ? availableTools
-    : resolveAgentTools(agentDefinition, availableTools, isAsync).resolvedTools
+    : resolveAgentTools(
+        agentDefinition,
+        availableTools,
+        isAsync,
+        agentToolEnvironment,
+      ).resolvedTools
 
   const additionalWorkingDirectories = Array.from(
     appState.toolPermissionContext.additionalWorkingDirectories.keys(),

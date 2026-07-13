@@ -29,7 +29,10 @@
  * ## Constraints
  *
  * - Agent names must NOT contain `@` (it's used as the separator)
- * - Use `sanitizeAgentName()` from TeammateTool.ts to strip @ from names
+ * - New teammate/local-alias names are canonicalized once via
+ *   `canonicalizeNewTeammateName()` (`src/utils/recipientIdentity.ts`) before
+ *   they ever reach `formatAgentId()`; use `recipientNameKey()` from the same
+ *   module for case-insensitive lookups against an existing name.
  */
 
 /**

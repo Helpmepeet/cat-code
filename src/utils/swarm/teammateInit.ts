@@ -115,6 +115,8 @@ export function initializeTeammateHooks(
         text: jsonStringify(notification),
         timestamp: new Date().toISOString(),
         color: getTeammateColor(),
+        payloadClass: 'notification',
+        notification,
       })
       logForDebugging(
         `[TeammateInit] Sent idle notification to leader ${leadAgentName}`,

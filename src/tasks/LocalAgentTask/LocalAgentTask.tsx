@@ -198,18 +198,46 @@ export function isLocalAgentTask(task: unknown): task is LocalAgentTaskState {
 export function isPanelAgentTask(t: unknown): t is LocalAgentTaskState {
   return isLocalAgentTask(t) && t.agentType !== 'main-session';
 }
-export function queuePendingMessage(taskId: string, msg: string, setAppState: (f: (prev: AppState) => AppState) => void): void {
-  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => ({
-    ...task,
-    pendingMessages: [...task.pendingMessages, msg]
-  }));
+/**
+ * Atomically decide whether a task is currently running and, if so, queue
+ * the message — the status check and the enqueue happen inside the same
+ * synchronous AppState-store updater. `createStore.setState`
+ * (src/state/store.ts:20-27) runs its updater to completion before
+ * returning, so there is no async gap in which a concurrent resume or
+ * completion (also routed through setAppState/setAppStateForTasks) could
+ * flip the task's status between the check and the write. Returns false
+ * without enqueueing for a non-running, non-local-agent, or main-session
+ * task, so callers can fall back to ResumeAgent guidance. The boolean
+ * result depends on that synchronous guarantee — never call this with an
+ * asynchronous (e.g. React) state setter.
+ */
+export function queuePendingMessageIfRunning(taskId: string, message: string, setAppState: SetAppState): boolean {
+  let queued = false;
+  setAppState(prev => {
+    const task = prev.tasks[taskId];
+    if (!isPanelAgentTask(task) || task.status !== 'running') {
+      return prev;
+    }
+    queued = true;
+    return {
+      ...prev,
+      tasks: {
+        ...prev.tasks,
+        [taskId]: {
+          ...task,
+          pendingMessages: [...task.pendingMessages, message]
+        }
+      }
+    };
+  });
+  return queued;
 }
 
 /**
  * Append a message to task.messages so it appears in the viewed transcript
  * immediately. Caller constructs the Message (breaks the messages.ts cycle).
- * queuePendingMessage and resumeAgentBackground route the prompt to the
- * agent's API input but don't touch the display.
+ * queuePendingMessageIfRunning and resumeAgentBackground route the prompt to
+ * the agent's API input but don't touch the display.
  */
 export function appendMessageToLocalAgent(taskId: string, message: Message, setAppState: (f: (prev: AppState) => AppState) => void): void {
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => ({

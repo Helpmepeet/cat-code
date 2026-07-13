@@ -39,9 +39,12 @@ import {
   createPermissionResponseMessage,
   createSandboxPermissionRequestMessage,
   createSandboxPermissionResponseMessage,
-  writeToMailbox,
+  resolveLeaderPrincipal,
+  resolveTeamPrincipalByName,
+  writeControlRequestToMailbox,
+  writeControlToMailbox,
 } from '../teammateMailbox.js'
-import { getTeamDir, readTeamFileAsync } from './teamHelpers.js'
+import { getTeamDir, readTeamFileAsync, readTeamSnapshot } from './teamHelpers.js'
 
 /**
  * Full request schema for a permission request from a worker to the leader
@@ -676,16 +679,16 @@ export async function getLeaderName(teamName?: string): Promise<string | null> {
 export async function sendPermissionRequestViaMailbox(
   request: SwarmPermissionRequest,
 ): Promise<boolean> {
-  const leaderName = await getLeaderName(request.teamName)
-  if (!leaderName) {
-    logForDebugging(
-      `[PermissionSync] Cannot send permission request: leader name not found`,
-    )
-    return false
-  }
-
   try {
-    // Create the permission request message
+    const snapshot = await readTeamSnapshot(request.teamName)
+    const recipient = resolveLeaderPrincipal(snapshot)
+
+    // Create the permission request message. `agent_id` here is actually the
+    // worker's NAME (not workerId/agentId) — deliberate, matching existing
+    // usage: useInboxPoller.ts displays it as the badge name AND uses it as
+    // the recipient name when routing the leader's response back
+    // (sendPermissionResponseViaMailbox(parsed.agent_id, ...)). Changing it
+    // to a real agent ID would break that round-trip.
     const message = createPermissionRequestMessage({
       request_id: request.id,
       agent_id: request.workerName,
@@ -696,20 +699,19 @@ export async function sendPermissionRequestViaMailbox(
       permission_suggestions: request.permissionSuggestions,
     })
 
-    // Send to leader's mailbox (routes to in-process or file-based based on recipient)
-    await writeToMailbox(
-      leaderName,
-      {
-        from: request.workerName,
-        text: jsonStringify(message),
-        timestamp: new Date().toISOString(),
-        color: request.workerColor,
-      },
-      request.teamName,
-    )
+    // Requester creates the outstanding-request record (sending -> written)
+    // so the leader's response can later be claimed exactly once.
+    await writeControlRequestToMailbox({
+      teamName: request.teamName,
+      requestId: request.id,
+      requestType: 'permission',
+      recipient,
+      control: message,
+      color: request.workerColor,
+    })
 
     logForDebugging(
-      `[PermissionSync] Sent permission request ${request.id} to leader ${leaderName} via mailbox`,
+      `[PermissionSync] Sent permission request ${request.id} to leader ${recipient.name} via mailbox`,
     )
     return true
   } catch (error) {
@@ -746,6 +748,15 @@ export async function sendPermissionResponseViaMailbox(
   }
 
   try {
+    const snapshot = await readTeamSnapshot(team)
+    const recipient = resolveTeamPrincipalByName(snapshot, workerName)
+    if (!recipient) {
+      logForDebugging(
+        `[PermissionSync] Cannot send permission response: worker "${workerName}" not found in roster`,
+      )
+      return false
+    }
+
     // Create the permission response message
     const message = createPermissionResponseMessage({
       request_id: requestId,
@@ -755,19 +766,14 @@ export async function sendPermissionResponseViaMailbox(
       permission_updates: resolution.permissionUpdates,
     })
 
-    // Get the sender name (leader's name)
-    const senderName = getAgentName() || 'team-lead'
-
-    // Send to worker's mailbox (routes to in-process or file-based based on recipient)
-    await writeToMailbox(
-      workerName,
-      {
-        from: senderName,
-        text: jsonStringify(message),
-        timestamp: new Date().toISOString(),
-      },
-      team,
-    )
+    // Response side: no new PendingControlRecord — fulfills the one the
+    // worker created when it sent permission_request; the worker's own
+    // consumer claims/finishes it.
+    await writeControlToMailbox({
+      recipient,
+      control: message,
+      teamName: team,
+    })
 
     logForDebugging(
       `[PermissionSync] Sent permission response for ${requestId} to worker ${workerName} via mailbox`,
@@ -815,14 +821,6 @@ export async function sendSandboxPermissionRequestViaMailbox(
     return false
   }
 
-  const leaderName = await getLeaderName(team)
-  if (!leaderName) {
-    logForDebugging(
-      `[PermissionSync] Cannot send sandbox permission request: leader name not found`,
-    )
-    return false
-  }
-
   const workerId = getAgentId()
   const workerName = getAgentName()
   const workerColor = getTeammateColor()
@@ -835,6 +833,9 @@ export async function sendSandboxPermissionRequestViaMailbox(
   }
 
   try {
+    const snapshot = await readTeamSnapshot(team)
+    const recipient = resolveLeaderPrincipal(snapshot)
+
     const message = createSandboxPermissionRequestMessage({
       requestId,
       workerId,
@@ -843,20 +844,19 @@ export async function sendSandboxPermissionRequestViaMailbox(
       host,
     })
 
-    // Send to leader's mailbox (routes to in-process or file-based based on recipient)
-    await writeToMailbox(
-      leaderName,
-      {
-        from: workerName,
-        text: jsonStringify(message),
-        timestamp: new Date().toISOString(),
-        color: workerColor,
-      },
-      team,
-    )
+    // Requester creates the outstanding-request record (sending -> written)
+    // so the leader's response can later be claimed exactly once.
+    await writeControlRequestToMailbox({
+      teamName: team,
+      requestId,
+      requestType: 'sandbox',
+      recipient,
+      control: message,
+      color: workerColor,
+    })
 
     logForDebugging(
-      `[PermissionSync] Sent sandbox permission request ${requestId} for host ${host} to leader ${leaderName} via mailbox`,
+      `[PermissionSync] Sent sandbox permission request ${requestId} for host ${host} to leader ${recipient.name} via mailbox`,
     )
     return true
   } catch (error) {
@@ -895,24 +895,28 @@ export async function sendSandboxPermissionResponseViaMailbox(
   }
 
   try {
+    const snapshot = await readTeamSnapshot(team)
+    const recipient = resolveTeamPrincipalByName(snapshot, workerName)
+    if (!recipient) {
+      logForDebugging(
+        `[PermissionSync] Cannot send sandbox permission response: worker "${workerName}" not found in roster`,
+      )
+      return false
+    }
+
     const message = createSandboxPermissionResponseMessage({
       requestId,
       host,
       allow,
     })
 
-    const senderName = getAgentName() || 'team-lead'
-
-    // Send to worker's mailbox (routes to in-process or file-based based on recipient)
-    await writeToMailbox(
-      workerName,
-      {
-        from: senderName,
-        text: jsonStringify(message),
-        timestamp: new Date().toISOString(),
-      },
-      team,
-    )
+    // Response side: no new PendingControlRecord — fulfills the one the
+    // worker created when it sent sandbox_permission_request.
+    await writeControlToMailbox({
+      recipient,
+      control: message,
+      teamName: team,
+    })
 
     logForDebugging(
       `[PermissionSync] Sent sandbox permission response for ${requestId} (host: ${host}, allow: ${allow}) to worker ${workerName} via mailbox`,

@@ -286,7 +286,7 @@ describe('resolveSystemSubagentName', () => {
       }),
     ).resolves.toEqual({
       agentName: 'Ada',
-      allocatedAgentName: 'Ada',
+      processReservationName: 'Ada',
     })
   })
 
@@ -305,6 +305,7 @@ describe('resolveSystemSubagentName', () => {
       }),
     ).resolves.toEqual({
       agentName: 'custom-worker',
+      processReservationName: 'custom-worker',
     })
   })
 
@@ -321,6 +322,7 @@ describe('resolveSystemSubagentName', () => {
       }),
     ).resolves.toEqual({
       agentName: 'custom-worker',
+      processReservationName: 'custom-worker',
     })
   })
 
@@ -597,6 +599,11 @@ describe('finalizeFailedAgentLaunch', () => {
         prompt: 'Implement auth flow',
         outputFile: '/tmp/agent-123.out',
         canCheckProgress: false,
+        continuationCapabilities: {
+          canSendMessage: true,
+          canResumeAgent: true,
+          canSpawnAgent: false,
+        },
       },
       'toolu_123',
     )
@@ -606,6 +613,54 @@ describe('finalizeFailedAgentLaunch', () => {
       : result.content
     expect(text).toContain("use SendMessage with to: 'agent-123'")
     expect(text).toContain("use ResumeAgent({ agentId: 'agent-123', prompt })")
+  })
+
+  test('omits ResumeAgent hint but keeps SendMessage hint when the invoker cannot resume', () => {
+    const result = AgentTool.mapToolResultToToolResultBlockParam(
+      {
+        status: 'async_launched',
+        agentId: 'agent-123',
+        agentType: 'general-purpose',
+        description: 'Implement auth flow',
+        prompt: 'Implement auth flow',
+        outputFile: '/tmp/agent-123.out',
+        canCheckProgress: false,
+        continuationCapabilities: {
+          canSendMessage: true,
+          canResumeAgent: false,
+          canSpawnAgent: false,
+        },
+      },
+      'toolu_123',
+    )
+
+    const text = Array.isArray(result.content)
+      ? result.content.map(block => ('text' in block ? block.text : '')).join('\n')
+      : result.content
+    expect(text).toContain("use SendMessage with to: 'agent-123'")
+    expect(text).not.toContain('ResumeAgent')
+    expect(text).not.toContain('After it completes or is stopped')
+  })
+
+  test('emits no continuation literal for historical results missing continuationCapabilities', () => {
+    const result = AgentTool.mapToolResultToToolResultBlockParam(
+      {
+        status: 'async_launched',
+        agentId: 'agent-123',
+        agentType: 'general-purpose',
+        description: 'Implement auth flow',
+        prompt: 'Implement auth flow',
+        outputFile: '/tmp/agent-123.out',
+        canCheckProgress: false,
+      },
+      'toolu_123',
+    )
+
+    const text = Array.isArray(result.content)
+      ? result.content.map(block => ('text' in block ? block.text : '')).join('\n')
+      : result.content
+    expect(text).not.toContain('SendMessage')
+    expect(text).not.toContain('ResumeAgent')
   })
 
   test('uses system-assigned names for normal async continuation hints', () => {
@@ -619,6 +674,11 @@ describe('finalizeFailedAgentLaunch', () => {
         prompt: 'Implement auth flow',
         outputFile: '/tmp/agent-123.out',
         canCheckProgress: false,
+        continuationCapabilities: {
+          canSendMessage: true,
+          canResumeAgent: true,
+          canSpawnAgent: false,
+        },
       },
       'toolu_123',
     )
@@ -644,6 +704,11 @@ describe('finalizeFailedAgentLaunch', () => {
         totalToolUseCount: 0,
         totalDurationMs: 42,
         totalTokens: 10,
+        continuationCapabilities: {
+          canSendMessage: true,
+          canResumeAgent: true,
+          canSpawnAgent: false,
+        },
       },
       'toolu_123',
     )
@@ -653,6 +718,35 @@ describe('finalizeFailedAgentLaunch', () => {
       : result.content
     expect(text).toContain("agentName: Ada")
     expect(text).toContain("use ResumeAgent({ agentId: '@Ada', prompt })")
+  })
+
+  test('omits ResumeAgent hint for completed results when canResumeAgent is false', () => {
+    const result = AgentTool.mapToolResultToToolResultBlockParam(
+      {
+        status: 'completed',
+        prompt: 'Implement auth flow',
+        agentId: 'agent-123',
+        agentName: 'Ada',
+        agentType: 'general-purpose',
+        model: 'gpt-5.5',
+        content: [{ type: 'text', text: 'finished' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 42,
+        totalTokens: 10,
+        continuationCapabilities: {
+          canSendMessage: true,
+          canResumeAgent: false,
+          canSpawnAgent: false,
+        },
+      },
+      'toolu_123',
+    )
+
+    const text = Array.isArray(result.content)
+      ? result.content.map(block => ('text' in block ? block.text : '')).join('\n')
+      : result.content
+    expect(text).toContain('agentName: Ada')
+    expect(text).not.toContain('ResumeAgent')
   })
 
   test('records failed worker state when tracking is available before later launch steps fail', async () => {

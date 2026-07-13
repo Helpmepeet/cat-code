@@ -30,14 +30,20 @@ import {
   getPlanFilePath,
   persistFileSnapshotIfRemote,
 } from '../../utils/plans.js'
-import { jsonStringify } from '../../utils/slowOperations.js'
 import {
   getAgentName,
   getTeamName,
   isPlanModeRequired,
   isTeammate,
 } from '../../utils/teammate.js'
-import { writeToMailbox } from '../../utils/teammateMailbox.js'
+import {
+  createPlanApprovalRequestMessage,
+  resolveLeaderPrincipal,
+  type TeamPrincipal,
+  writeControlRequestToMailbox,
+} from '../../utils/teammateMailbox.js'
+import { errorMessage } from '../../utils/errors.js'
+import { readTeamSnapshot } from '../../utils/swarm/teamHelpers.js'
 import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 import { TEAM_CREATE_TOOL_NAME } from '../TeamCreateTool/constants.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from './constants.js'
@@ -138,6 +144,12 @@ export const outputSchema = lazySchema(() =>
       .string()
       .optional()
       .describe('Unique identifier for the plan approval request'),
+    planApprovalError: z
+      .string()
+      .optional()
+      .describe(
+        'Set when submitting the plan for leader approval failed — the teammate is NOT awaiting approval and must not treat this as approved',
+      ),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -270,29 +282,66 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
       }
       const agentName = getAgentName() || 'unknown'
       const teamName = getTeamName()
+      if (!teamName) {
+        throw new Error(
+          'Cannot request plan approval: not currently in a team context.',
+        )
+      }
       const requestId = generateRequestId(
         'plan_approval',
-        formatAgentId(agentName, teamName || 'default'),
+        formatAgentId(agentName, teamName),
       )
 
-      const approvalRequest = {
-        type: 'plan_approval_request',
-        from: agentName,
-        timestamp: new Date().toISOString(),
-        planFilePath: filePath,
-        planContent: plan,
+      const approvalRequest = createPlanApprovalRequestMessage({
         requestId,
+        from: agentName,
+        planFilePath: filePath ?? '',
+        planContent: plan,
+      })
+
+      let leader: TeamPrincipal
+      try {
+        const snapshot = await readTeamSnapshot(teamName)
+        leader = resolveLeaderPrincipal(snapshot)
+      } catch (error) {
+        return {
+          data: {
+            plan,
+            isAgent: true,
+            filePath,
+            awaitingLeaderApproval: false,
+            requestId,
+            planApprovalError: `Cannot verify team roster: ${errorMessage(error)}`,
+          },
+        }
       }
 
-      await writeToMailbox(
-        'team-lead',
-        {
-          from: agentName,
-          text: jsonStringify(approvalRequest),
-          timestamp: new Date().toISOString(),
-        },
-        teamName,
-      )
+      // Requester creates the outstanding-request record (sending ->
+      // written) so the leader's eventual plan_approval_response can be
+      // claimed exactly once (Task 3 Step 6).
+      try {
+        await writeControlRequestToMailbox({
+          teamName,
+          requestId,
+          requestType: 'plan',
+          recipient: leader,
+          control: approvalRequest,
+        })
+      } catch (error) {
+        // Transition state only after delivery (Task 3 Step 6) — a failed
+        // write must not leave the teammate believing it's awaiting
+        // approval that was never actually sent.
+        return {
+          data: {
+            plan,
+            isAgent: true,
+            filePath,
+            awaitingLeaderApproval: false,
+            requestId,
+            planApprovalError: `Failed to submit plan for approval: ${errorMessage(error)}`,
+          },
+        }
+      }
 
       // Update task state to show awaiting approval (for in-process teammates)
       const appState = context.getAppState()
@@ -425,9 +474,24 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
       planWasEdited,
       awaitingLeaderApproval,
       requestId,
+      planApprovalError,
     },
     toolUseID,
   ) {
+    // Submitting for leader approval failed — the teammate must NOT treat
+    // this as approved (that would have been the case if this fell through
+    // to the `isAgent` branch below, since `awaitingLeaderApproval: false`
+    // alone doesn't distinguish "never required" from "failed to submit").
+    if (planApprovalError) {
+      return {
+        type: 'tool_result',
+        content: `Failed to submit your plan for team-lead approval: ${planApprovalError}
+
+You are still in plan mode. Fix the underlying issue and call this tool again — do not proceed with implementation.`,
+        tool_use_id: toolUseID,
+      }
+    }
+
     // Handle teammate awaiting leader approval
     if (awaitingLeaderApproval) {
       return {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { AppState } from '../../state/AppStateStore.js'
+import type { SetAppState } from '../../Task.js'
 import {
   createCodexLeaseForTest,
   getCodexLeaseForOwner,
@@ -17,6 +18,7 @@ import {
   completeAgentTask,
   enqueueAgentNotification,
   markAgentTaskResumed,
+  queuePendingMessageIfRunning,
   unregisterAgentForeground,
   registerAgentForeground,
 } from './LocalAgentTask.js'
@@ -449,5 +451,70 @@ describe('LocalAgentTask foreground cleanup', () => {
     })
 
     expect(getCommandsByMaxPriority('next')).toHaveLength(0)
+  })
+})
+
+describe('queuePendingMessageIfRunning', () => {
+  test('atomically queues only for a running task, leaving a stopped task untouched', () => {
+    let appState = {
+      tasks: {
+        running: {
+          id: 'running',
+          type: 'local_agent',
+          status: 'running',
+          agentId: 'running',
+          agentType: 'general-purpose',
+          pendingMessages: [],
+        },
+        stopped: {
+          id: 'stopped',
+          type: 'local_agent',
+          status: 'completed',
+          agentId: 'stopped',
+          agentType: 'general-purpose',
+          pendingMessages: [],
+        },
+      },
+    } as unknown as AppState
+    const setAppState: SetAppState = updater => {
+      appState = updater(appState)
+    }
+    const runningId = 'running'
+    const stoppedId = 'stopped'
+
+    expect(queuePendingMessageIfRunning(runningId, 'follow-up', setAppState)).toBe(true)
+    expect(appState.tasks[runningId].pendingMessages).toEqual(['follow-up'])
+    expect(queuePendingMessageIfRunning(stoppedId, 'late', setAppState)).toBe(false)
+    expect(appState.tasks[stoppedId].pendingMessages).toEqual([])
+  })
+
+  test('returns false for a missing task without throwing', () => {
+    let appState = { tasks: {} } as unknown as AppState
+    const setAppState: SetAppState = updater => {
+      appState = updater(appState)
+    }
+
+    expect(queuePendingMessageIfRunning('nonexistent', 'hello', setAppState)).toBe(false)
+  })
+
+  test('never queues to a running main-session task', () => {
+    let appState = {
+      tasks: {
+        main: {
+          id: 'main',
+          type: 'local_agent',
+          status: 'running',
+          agentId: 'main',
+          agentType: 'main-session',
+          pendingMessages: [],
+        },
+      },
+    } as unknown as AppState
+    const setAppState: SetAppState = updater => {
+      appState = updater(appState)
+    }
+
+    expect(queuePendingMessageIfRunning('main', 'hello', setAppState)).toBe(false)
+    expect(appState.tasks.main.pendingMessages).toEqual([])
   })
 })

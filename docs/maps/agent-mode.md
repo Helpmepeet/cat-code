@@ -2,7 +2,7 @@
 
 Daily-refreshable routing map for Agent Mode ownership, integration points, and stale-doc checks.
 
-Last refreshed: 2026-05-21 against the current source tree.
+Last refreshed: 2026-07-13 against the current source tree.
 
 ## Refresh Checklist
 
@@ -22,6 +22,7 @@ When refreshing this map, verify these source paths before trusting older docs:
 12. commands: `src/commands/agent/`, `src/commands/agents/`
 13. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
 14. external delegated Claude CLI tool: `src/tools/ClaudeCliTool/`
+15. recipient identity/routing: `src/utils/recipientIdentity.ts`, `src/utils/swarm/teamHelpers.ts` (see `docs/maps/tasks-workers.md` for the full mailbox/roster protocol)
 
 ## Current Mental Model
 
@@ -35,6 +36,17 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 - a three-tool worker boundary: `Agent` spawns new workers, `ResumeAgent` continues stopped workers, and `SendMessage` queues messages into running workers.
 - `src/screens/REPL.tsx` as the operational UI hub.
 - optional friendly subagent names (`agentName`) persisted in `src/utils/sessionStorage.ts` and used for `@name` targeting via `resolveAgentTarget`.
+- (2026-07-12 hardening) `ResumeAgent` is local-subagent-only — it never resumes a teammate process or in-process teammate loop, and public tool schemas were not widened for this rule. Resume-lifecycle ownership (`activeResumeLifecycles` in `src/tools/AgentTool/resumeAgent.ts`) is held from setup start until the detached lifecycle promise settles, not just through setup, so a delayed-resolution race can only launch one resumed lifecycle.
+
+### Bare-teammate vs `@local` recipient routing
+
+`src/utils/recipientIdentity.ts` is the canonicalization/routing-key authority consumed by both `Agent` spawn and `SendMessage` targeting:
+
+- `@name` (`parseLocalRecipient()`) always explicitly targets a local subagent, never a teammate.
+- A bare name prefers a current teammate roster member when Agent Teams is enabled; only when no teammate named `name` exists does a bare name fall back to a local alias, durable handle, or raw local agent ID.
+- New teammate/local-alias names are canonicalized once via `canonicalizeNewTeammateName()` (lowercase `^[a-z0-9][a-z0-9_-]*$`, ≤64 bytes, rejects `*`, `team-lead`, path/address-like punctuation, and Windows device basenames). Collision checks use the case-insensitive `recipientNameKey()`, not raw display names.
+- Recipient identity allocation is atomic and versioned through `TeamFile.recipientRecords` (`src/utils/swarm/teamHelpers.ts`: `allocateTeamRecipient()`, `transitionTeamRecipient()`, `recoverStartingRecipient()`, one `transactTeamFile()` primitive) — see `docs/maps/tasks-workers.md` for the full state machine. Recipient keys are never reused within a team; a terminated teammate cannot be resumed and requires a fresh `Agent` call with a new allocation, not `ResumeAgent`.
+- `src/tools/AgentTool/AgentTool.tsx` `resolveSystemSubagentName()` is the spawn-time reservation path that calls into this same allocator for both plain local subagents and teammates, so a local alias and a teammate name can never collide.
 
 ## Routing Table
 
@@ -49,9 +61,10 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Per-turn Agent Mode context | `src/agent-mode/agentMode.ts` `getAgentModeUserContext()` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, `src/screens/REPL.tsx` | Injects worker tool availability, connected MCP server names, scratchpad context when gated, and formatted durable session state. |
 | Worker state persistence | `src/agent-mode/sessionState.ts` | `src/tools/AgentTool/runAgent.ts`, `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts` | Durable state lives beside transcripts as `<session-id>.agent-mode-state.json`. It tracks objective, active workers, known workers, status, resumability, synthesis status, handles, and worktree path. |
 | Worker lifecycle recording | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts` | Spawns record durable worker state when `sessionStateTracking` is present. Terminal paths record completed, failed, and killed status and set completed results to `synthesisStatus: pending`. |
-| Subagent target resolution (`@name`, IDs) | `src/tools/AgentTool/resolveAgentTarget.ts` | `src/utils/sessionStorage.ts` agent metadata, `src/agent-mode/sessionState.ts` worker handles, `src/tasks/LocalAgentTask/` | Name routing checks the live `agentNameRegistry`, durable Agent Mode worker handles, then persisted subagent metadata (`subagents/agent-*.meta.json`) before falling back to raw agent IDs. |
+| Subagent target resolution (`@name`, IDs) | `src/tools/AgentTool/resolveAgentTarget.ts` | `src/utils/recipientIdentity.ts`, `src/utils/sessionStorage.ts` agent metadata, `src/agent-mode/sessionState.ts` worker handles, `src/tasks/LocalAgentTask/` | Explicit `@name` (`parseLocalRecipient()`) always means local. A bare name checks the live `agentNameRegistry`, durable Agent Mode worker handles, then persisted subagent metadata (`subagents/agent-*.meta.json`) before falling back to raw agent IDs — and, with Agent Teams enabled, a current teammate roster member takes priority over all of those (see "Bare-teammate vs `@local`" above). |
 | Worker control tools | `src/tools/ListWorkersTool/ListWorkersTool.ts` | `src/tools/WaitWorkersTool/WaitWorkersTool.ts`, `src/tools/GetWorkerResultTool/GetWorkerResultTool.ts`, `src/tools/CancelWorkerTool/CancelWorkerTool.ts`, `src/tools.ts` | These tools are enabled only in Agent Mode. They list workers, wait for terminal status, read and optionally synthesize results, and cancel specific workers. |
-| Worker spawn / resume / steering | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/SendMessageTool/SendMessageTool.ts` | `src/tools/AgentTool/resolveAgentTarget.ts`, `src/tools/AgentTool/resumeAgent.ts`, `src/agent-mode/sessionState.ts` | `Agent` spawns new workers. `ResumeAgent` restarts stopped workers by alias, durable handle, or raw agent ID. `SendMessage` only queues into workers that are currently running. |
+| Worker spawn / resume / steering | `src/tools/AgentTool/AgentTool.tsx`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/SendMessageTool/SendMessageTool.ts` | `src/tools/AgentTool/resolveAgentTarget.ts`, `src/tools/AgentTool/resumeAgent.ts`, `src/agent-mode/sessionState.ts` | `Agent` spawns new workers (local subagent or, in a team context, a teammate allocation). `ResumeAgent` restarts stopped LOCAL SUBAGENTS ONLY by alias, durable handle, or raw agent ID — it never resumes a teammate. `SendMessage` queues into a currently running local worker or a rostered (active or idle) teammate; it re-reads fresh state before routing rather than trusting a captured `task.status` (`src/tools/SendMessageTool/SendMessageTool.ts` `routeToLocalWorker`, `src/tasks/LocalAgentTask/LocalAgentTask.tsx` `queuePendingMessageIfRunning()`). |
+| Agent prompt/schema/result capability wording | `src/tools/AgentTool/agentToolUtils.ts` `getAgentContinuationCapabilities()` | `src/tools/AgentTool/prompt.ts` `getPrompt()`, `src/tools/AgentTool/AgentTool.tsx` `mapToolResultToToolResultBlockParam()`, `src/utils/swarm/inProcessRunner.ts` `resolveInProcessRuntime()` | Continuation guidance (SendMessage/ResumeAgent hints, the `name` schema description) is derived from the SAME resolved tool array used to build that invocation's own prompt/API tool definitions — never re-derived from the unfiltered parent tool pool. In-process teammates resolve their tool pool and system prompt from the explicit `'in-process-teammate'` `AgentToolEnvironment` (not AsyncLocalStorage timing) so the two can't disagree. |
 | Prior-session continuity | `src/agent-mode/sessionState.ts` `readSessionStateWithContinuity()` | `src/tools/ListWorkersTool/ListWorkersTool.ts`, `src/tools/ResumeAgentTool/ResumeAgentTool.tsx`, `src/tools/AgentTool/resolveAgentTarget.ts` | Continuity reads recent prior Agent Mode state files for completed, resumable workers and marks unavailable transcripts as stale/non-reusable. |
 | Role prompts | `src/agent-mode/rolePrompts.ts` | `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/runAgent.ts` | Agent Mode adds built-in `agent-mode-coding-worker` and `agent-mode-verifier` definitions. Coding workers can edit/run scoped checks; verifiers are read-only. |
 | Repo-local worker customization | `src/agent-mode/roleFiles.ts` | `.cat-code/roles/implementor.md`, `.cat-code/roles/verifier.md`, `.cat-code/context/*.md` | Built-in role files are injected by role. Context files are listed, not auto-injected; workers decide which relevant files to read. |
@@ -71,8 +84,10 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Session state and worker continuity | `bun test src/agent-mode/sessionState.test.ts src/tools/ListWorkersTool/ListWorkersTool.test.ts src/tools/GetWorkerResultTool/GetWorkerResultTool.test.ts src/tools/WaitWorkersTool/WaitWorkersTool.test.ts src/tools/CancelWorkerTool/CancelWorkerTool.test.ts` |
 | Role prompts and naming | `bun test src/agent-mode/rolePrompts.test.ts src/agent-mode/workerNames.test.ts` |
 | Roster UX | `bun test src/agent-mode/workerUxSummary.test.ts src/agent-mode/AgentModeWorkerRoster.test.tsx` |
-| AgentTool integration and resume | `bun test src/tools/AgentTool/AgentTool.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/resolveAgentTarget.test.ts src/tools/AgentTool/prompt.test.ts src/tools/ResumeAgentTool/ResumeAgentTool.test.ts` |
-| SendMessage worker follow-up | `bun test src/tools/SendMessageTool/SendMessageTool.test.ts` |
+| AgentTool integration and resume | `bun test src/tools/AgentTool/AgentTool.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/resolveAgentTarget.test.ts src/tools/AgentTool/prompt.test.ts src/tools/AgentTool/agentToolUtils.test.ts src/tools/ResumeAgentTool/ResumeAgentTool.test.ts` |
+| SendMessage worker follow-up | `bun test src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/SendMessageTool/UI.test.tsx` |
+| Recipient identity, allocation, and spawn races | `bun test src/utils/recipientIdentity.test.ts src/utils/swarm/teamHelpers.test.ts src/tools/shared/spawnMultiAgent.test.ts` (the plan's two-process `spawnMultiAgent.probe.test.ts` proving a cross-process local/teammate key race is not yet built — known gap, see plan Task 1 Step 9) |
+| In-process teammate prompt/tool-pool consistency | `bun test src/utils/swarm/inProcessRunner.test.ts` |
 | Goal integration | `bun test src/commands/goal/goal.test.ts src/tools/UpdateGoalTool/UpdateGoalTool.test.ts src/utils/threadGoal.test.ts` |
 | Build-level validation | `bun run build:dev:full` |
 

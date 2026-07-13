@@ -53,22 +53,31 @@ import {
 } from '../utils/teammate.js'
 import { isInProcessTeammate } from '../utils/teammateContext.js'
 import {
-  isModeSetRequest,
-  isPermissionRequest,
-  isPermissionResponse,
-  type MailboxSignature,
-  isPlanApprovalRequest,
+  claimPendingControl,
+  classifyMailboxMessage,
+  createPlanApprovalResponseMessage,
+  finishPendingControl,
   isPlanApprovalResponse,
-  isSandboxPermissionRequest,
-  isSandboxPermissionResponse,
-  isShutdownApproved,
-  isShutdownRequest,
-  isTeamPermissionUpdate,
-  markMessagesAsRead,
+  isStructuredProtocolMessage,
+  markMessagesAsReadByPredicate,
+  type MailboxSignature,
+  type ModeSetRequestMessage,
+  type PermissionRequestMessage,
+  type PermissionResponseMessage,
+  type PlanApprovalRequestMessage,
   readMailboxIfChanged,
+  resolveCurrentTeamPrincipal,
+  resolveTeamPrincipalByName,
+  type SandboxPermissionRequestMessage,
+  type SandboxPermissionResponseMessage,
+  type ShutdownApprovedMessage,
+  type ShutdownRequestMessage,
   type TeammateMessage,
-  writeToMailbox,
+  type TeamPermissionUpdateMessage,
+  type TeamPrincipal,
+  writeControlToMailbox,
 } from '../utils/teammateMailbox.js'
+import { readTeamSnapshot, type TeamFile } from '../utils/swarm/teamHelpers.js'
 import {
   hasPermissionCallback,
   hasSandboxPermissionCallback,
@@ -110,6 +119,159 @@ function getAgentNameToPoll(appState: AppState): string | undefined {
 }
 
 const INBOX_POLL_INTERVAL_MS = 1000
+
+/**
+ * Authority-checked dispatch buckets for one poll's unread messages. Pure
+ * and synchronous — takes an already-fetched team snapshot (or `null` for a
+ * legacy/absent team or a session outside any team) so `useInboxPoller.test.ts`
+ * can exercise it without rendering React or touching the filesystem.
+ */
+export type InboxDispatch = {
+  permissionRequests: Array<{ message: TeammateMessage; control: PermissionRequestMessage }>
+  permissionResponses: Array<{ message: TeammateMessage; control: PermissionResponseMessage }>
+  sandboxPermissionRequests: Array<{
+    message: TeammateMessage
+    control: SandboxPermissionRequestMessage
+  }>
+  sandboxPermissionResponses: Array<{
+    message: TeammateMessage
+    control: SandboxPermissionResponseMessage
+  }>
+  shutdownRequests: Array<{ message: TeammateMessage; control: ShutdownRequestMessage }>
+  shutdownApprovals: Array<{ message: TeammateMessage; control: ShutdownApprovedMessage }>
+  teamPermissionUpdates: Array<{
+    message: TeammateMessage
+    control: TeamPermissionUpdateMessage
+  }>
+  modeSetRequests: Array<{ message: TeammateMessage; control: ModeSetRequestMessage }>
+  planApprovalRequests: Array<{ message: TeammateMessage; control: PlanApprovalRequestMessage }>
+  // Plain chat, notifications (idle/task-assignment), and any control type
+  // with no dedicated UI queue here (shutdown_rejected, plan_approval_response
+  // — both handled elsewhere) fall through to the model-visible message path,
+  // same as before Task 3.
+  regularMessages: TeammateMessage[]
+  // Invalid/mismatched controls, and stale-recipient chat/notifications —
+  // acknowledged by exact ID below, never delivered or dispatched.
+  acknowledgeOnlyIds: string[]
+}
+
+function emptyInboxDispatch(): InboxDispatch {
+  return {
+    permissionRequests: [],
+    permissionResponses: [],
+    sandboxPermissionRequests: [],
+    sandboxPermissionResponses: [],
+    shutdownRequests: [],
+    shutdownApprovals: [],
+    teamPermissionUpdates: [],
+    modeSetRequests: [],
+    planApprovalRequests: [],
+    regularMessages: [],
+    acknowledgeOnlyIds: [],
+  }
+}
+
+/**
+ * Classifies a batch of raw unread mailbox messages into authority-checked
+ * dispatch buckets. A `null` snapshot/receiver (legacy team, or no team
+ * context at all) falls back to the pre-Task-3 text-sniff exclusion —
+ * anything control-shaped is dropped rather than delivered as chat, matching
+ * `getTeammateMailboxAttachments`'s same fallback in attachments.ts.
+ */
+export function classifyInboxMessages(args: {
+  messages: readonly TeammateMessage[]
+  snapshot: Readonly<TeamFile> | null
+  receiver: TeamPrincipal | null
+}): InboxDispatch {
+  const dispatch = emptyInboxDispatch()
+  const { messages, snapshot, receiver } = args
+
+  for (const m of messages) {
+    const senderPrincipal =
+      snapshot && resolveTeamPrincipalByName(snapshot, m.from)
+    const classified =
+      snapshot && receiver && senderPrincipal
+        ? classifyMailboxMessage({
+            message: m,
+            sender: senderPrincipal,
+            receiver,
+            pendingControls: snapshot.pendingControls ?? [],
+          })
+        : null
+
+    if (!classified) {
+      if (isStructuredProtocolMessage(m.text)) continue
+      dispatch.regularMessages.push(m)
+      continue
+    }
+
+    switch (classified.kind) {
+      case 'invalid_control':
+      case 'protocol_mismatch':
+        if (m.messageId) dispatch.acknowledgeOnlyIds.push(m.messageId)
+        break
+      case 'notification':
+        dispatch.regularMessages.push(m)
+        break
+      case 'chat': {
+        const isStaleRecipient =
+          m.protocolVersion === 2 &&
+          m.recipientAllocationId !== undefined &&
+          receiver !== null &&
+          m.recipientAllocationId !== receiver.allocationId
+        if (isStaleRecipient) {
+          if (m.messageId) dispatch.acknowledgeOnlyIds.push(m.messageId)
+        } else {
+          dispatch.regularMessages.push(m)
+        }
+        break
+      }
+      case 'control': {
+        const control = classified.control
+        switch (control.type) {
+          case 'permission_request':
+            dispatch.permissionRequests.push({ message: m, control })
+            break
+          case 'permission_response':
+            dispatch.permissionResponses.push({ message: m, control })
+            break
+          case 'sandbox_permission_request':
+            dispatch.sandboxPermissionRequests.push({ message: m, control })
+            break
+          case 'sandbox_permission_response':
+            dispatch.sandboxPermissionResponses.push({ message: m, control })
+            break
+          case 'shutdown_request':
+            dispatch.shutdownRequests.push({ message: m, control })
+            break
+          case 'shutdown_approved':
+            dispatch.shutdownApprovals.push({ message: m, control })
+            break
+          case 'team_permission_update':
+            dispatch.teamPermissionUpdates.push({ message: m, control })
+            break
+          case 'mode_set_request':
+            dispatch.modeSetRequests.push({ message: m, control })
+            break
+          case 'plan_approval_request':
+            dispatch.planApprovalRequests.push({ message: m, control })
+            break
+          // shutdown_rejected and plan_approval_response have no dedicated
+          // queue here (handled by SendMessageTool/inProcessTeammateHelpers
+          // and the plan-approval-response scan above poll(), respectively)
+          // — pass through as before Task 3.
+          case 'shutdown_rejected':
+          case 'plan_approval_response':
+            dispatch.regularMessages.push(m)
+            break
+        }
+        break
+      }
+    }
+  }
+
+  return dispatch
+}
 
 type Props = {
   enabled: boolean
@@ -174,13 +336,38 @@ export function useInboxPoller({
 
     logForDebugging(`[InboxPoller] Found ${unread.length} unread message(s)`)
 
+    // Resolve a versioned team snapshot once per poll for authority-checked
+    // classification. `null` for a legacy/absent team — classifyInboxMessages
+    // falls back to the pre-Task-3 text-sniff exclusion in that case.
+    let controlSnapshot: Readonly<TeamFile> | null = null
+    let receiverPrincipal: TeamPrincipal | null = null
+    if (teamName) {
+      try {
+        controlSnapshot = await readTeamSnapshot(teamName)
+        receiverPrincipal = await resolveCurrentTeamPrincipal(
+          teamName,
+          controlSnapshot,
+        )
+      } catch {
+        controlSnapshot = null
+        receiverPrincipal = null
+      }
+    }
+
     // Check for plan approval responses and transition out of plan mode if approved
-    // Security: Only accept approval responses from the team lead
+    // Security: only accept approval responses whose resolved sender identity
+    // is the team lead — a version-2 snapshot makes this an actual identity
+    // check rather than trusting the unvalidated `from` string.
     if (isTeammate() && isPlanModeRequired()) {
       for (const msg of unread) {
         const approvalResponse = isPlanApprovalResponse(msg.text)
-        // Verify the message is from the team lead to prevent teammates from forging approvals
-        if (approvalResponse && msg.from === 'team-lead') {
+        if (!approvalResponse) continue
+        const senderPrincipal =
+          controlSnapshot && resolveTeamPrincipalByName(controlSnapshot, msg.from)
+        const isFromLeader = senderPrincipal
+          ? senderPrincipal.kind === 'leader'
+          : msg.from === TEAM_LEAD_NAME
+        if (isFromLeader) {
           logForDebugging(
             `[InboxPoller] Received plan approval response from team-lead: approved=${approvalResponse.approved}`,
           )
@@ -208,7 +395,7 @@ export function useInboxPoller({
               `[InboxPoller] Plan rejected by team lead: ${approvalResponse.feedback || 'No feedback provided'}`,
             )
           }
-        } else if (approvalResponse) {
+        } else {
           logForDebugging(
             `[InboxPoller] Ignoring plan approval response from non-team-lead: ${msg.from}`,
           )
@@ -216,56 +403,51 @@ export function useInboxPoller({
       }
     }
 
-    // Helper to mark messages as read in the inbox file.
-    // Called after messages are successfully delivered or reliably queued.
-    const markRead = () => {
-      void markMessagesAsRead(agentName, currentAppState.teamContext?.teamName)
+    const dispatch = classifyInboxMessages({
+      messages: unread,
+      snapshot: controlSnapshot,
+      receiver: receiverPrincipal,
+    })
+    const {
+      permissionRequests,
+      permissionResponses,
+      sandboxPermissionRequests,
+      sandboxPermissionResponses,
+      shutdownRequests,
+      shutdownApprovals,
+      teamPermissionUpdates,
+      modeSetRequests,
+      planApprovalRequests,
+    } = dispatch
+    const regularMessages: TeammateMessage[] = [...dispatch.regularMessages]
+
+    // Invalid/mismatched controls and stale-recipient chat are acknowledged
+    // by exact identity — dropped, never delivered or dispatched. Every
+    // other message this poll dispatches (regular, or to one of the queues
+    // below) is also tracked here so the final ack only ever touches
+    // messages this pass actually classified, never a concurrent append.
+    // Keyed by messageId when present, else the same from/timestamp/text key
+    // `getTeammateMailboxAttachments` uses — legacy call sites (still ~15
+    // across the repo) write chat with no messageId at all.
+    const messageKey = (m: TeammateMessage): string =>
+      m.messageId ?? `${m.from} ${m.timestamp} ${m.text}`
+    const consumedKeys = new Set<string>(dispatch.acknowledgeOnlyIds)
+    const trackForAck = (m: TeammateMessage) => {
+      consumedKeys.add(messageKey(m))
     }
+    for (const m of regularMessages) trackForAck(m)
 
-    // Separate permission messages from regular teammate messages
-    const permissionRequests: TeammateMessage[] = []
-    const permissionResponses: TeammateMessage[] = []
-    const sandboxPermissionRequests: TeammateMessage[] = []
-    const sandboxPermissionResponses: TeammateMessage[] = []
-    const shutdownRequests: TeammateMessage[] = []
-    const shutdownApprovals: TeammateMessage[] = []
-    const teamPermissionUpdates: TeammateMessage[] = []
-    const modeSetRequests: TeammateMessage[] = []
-    const planApprovalRequests: TeammateMessage[] = []
-    const regularMessages: TeammateMessage[] = []
-
-    for (const m of unread) {
-      const permReq = isPermissionRequest(m.text)
-      const permResp = isPermissionResponse(m.text)
-      const sandboxReq = isSandboxPermissionRequest(m.text)
-      const sandboxResp = isSandboxPermissionResponse(m.text)
-      const shutdownReq = isShutdownRequest(m.text)
-      const shutdownApproval = isShutdownApproved(m.text)
-      const teamPermUpdate = isTeamPermissionUpdate(m.text)
-      const modeSetReq = isModeSetRequest(m.text)
-      const planApprovalReq = isPlanApprovalRequest(m.text)
-
-      if (permReq) {
-        permissionRequests.push(m)
-      } else if (permResp) {
-        permissionResponses.push(m)
-      } else if (sandboxReq) {
-        sandboxPermissionRequests.push(m)
-      } else if (sandboxResp) {
-        sandboxPermissionResponses.push(m)
-      } else if (shutdownReq) {
-        shutdownRequests.push(m)
-      } else if (shutdownApproval) {
-        shutdownApprovals.push(m)
-      } else if (teamPermUpdate) {
-        teamPermissionUpdates.push(m)
-      } else if (modeSetReq) {
-        modeSetRequests.push(m)
-      } else if (planApprovalReq) {
-        planApprovalRequests.push(m)
-      } else {
-        regularMessages.push(m)
-      }
+    // Marks only messages this pass actually classified and consumed as
+    // read. A brand-new message that arrived concurrently (after the
+    // classification above) won't match any key here and stays unread for
+    // the next poll — never silently swallowed.
+    const markRead = () => {
+      if (consumedKeys.size === 0) return
+      void markMessagesAsReadByPredicate(
+        agentName,
+        m => consumedKeys.has(messageKey(m)),
+        currentAppState.teamContext?.teamName,
+      )
     }
 
     // Handle permission requests (leader side) - route to ToolUseConfirmQueue
@@ -280,9 +462,8 @@ export function useInboxPoller({
       const setToolUseConfirmQueue = getLeaderToolUseConfirmQueue()
       const teamName = currentAppState.teamContext?.teamName
 
-      for (const m of permissionRequests) {
-        const parsed = isPermissionRequest(m.text)
-        if (!parsed) continue
+      for (const { message: m, control: parsed } of permissionRequests) {
+        trackForAck(m)
 
         if (setToolUseConfirmQueue) {
           // Route through the standard ToolUseConfirmQueue so tmux workers
@@ -356,7 +537,7 @@ export function useInboxPoller({
             },
           }
 
-          // Deduplicate: if markMessagesAsRead failed on a prior poll,
+          // Deduplicate: if the mark-read ack failed on a prior poll,
           // the same message will be re-read — skip if already queued.
           setToolUseConfirmQueue(queue => {
             if (queue.some(q => q.toolUseID === parsed.tool_use_id)) {
@@ -372,7 +553,7 @@ export function useInboxPoller({
       }
 
       // Send desktop notification for the first request
-      const firstParsed = isPermissionRequest(permissionRequests[0]?.text ?? '')
+      const firstParsed = permissionRequests[0]?.control
       if (firstParsed && !isLoading && !focusedInputDialog) {
         void sendNotification(
           {
@@ -390,9 +571,21 @@ export function useInboxPoller({
         `[InboxPoller] Found ${permissionResponses.length} permission response(s)`,
       )
 
-      for (const m of permissionResponses) {
-        const parsed = isPermissionResponse(m.text)
-        if (!parsed) continue
+      for (const { message: m, control: parsed } of permissionResponses) {
+        // Claim the outstanding request record so a duplicate/racing delivery
+        // of the same response can't invoke the callback twice. An unclaimed
+        // response (already consumed elsewhere) is still acknowledged —
+        // the request has already been resolved, this delivery is stale.
+        const claimed = teamName
+          ? await claimPendingControl({ teamName, response: m, control: parsed })
+          : null
+        trackForAck(m)
+        if (teamName && !claimed) {
+          logForDebugging(
+            `[InboxPoller] permission_response for ${parsed.request_id} already claimed/consumed elsewhere — skipping`,
+          )
+          continue
+        }
 
         if (hasPermissionCallback(parsed.request_id)) {
           logForDebugging(
@@ -413,6 +606,14 @@ export function useInboxPoller({
               feedback: parsed.error,
             })
           }
+        }
+
+        if (teamName && claimed) {
+          await finishPendingControl({
+            teamName,
+            requestId: parsed.request_id,
+            outcome: 'consumed',
+          }).catch(() => {})
         }
       }
     }
@@ -435,9 +636,8 @@ export function useInboxPoller({
         createdAt: number
       }> = []
 
-      for (const m of sandboxPermissionRequests) {
-        const parsed = isSandboxPermissionRequest(m.text)
-        if (!parsed) continue
+      for (const { message: m, control: parsed } of sandboxPermissionRequests) {
+        trackForAck(m)
 
         // Validate required nested fields to prevent crashes from malformed messages
         if (!parsed.hostPattern?.host) {
@@ -489,9 +689,17 @@ export function useInboxPoller({
         `[InboxPoller] Found ${sandboxPermissionResponses.length} sandbox permission response(s)`,
       )
 
-      for (const m of sandboxPermissionResponses) {
-        const parsed = isSandboxPermissionResponse(m.text)
-        if (!parsed) continue
+      for (const { message: m, control: parsed } of sandboxPermissionResponses) {
+        const claimed = teamName
+          ? await claimPendingControl({ teamName, response: m, control: parsed })
+          : null
+        trackForAck(m)
+        if (teamName && !claimed) {
+          logForDebugging(
+            `[InboxPoller] sandbox_permission_response for ${parsed.requestId} already claimed/consumed elsewhere — skipping`,
+          )
+          continue
+        }
 
         // Check if we have a registered callback for this request
         if (hasSandboxPermissionCallback(parsed.requestId)) {
@@ -512,6 +720,14 @@ export function useInboxPoller({
             pendingSandboxRequest: null,
           }))
         }
+
+        if (teamName && claimed) {
+          await finishPendingControl({
+            teamName,
+            requestId: parsed.requestId,
+            outcome: 'consumed',
+          }).catch(() => {})
+        }
       }
     }
 
@@ -521,14 +737,8 @@ export function useInboxPoller({
         `[InboxPoller] Found ${teamPermissionUpdates.length} team permission update(s)`,
       )
 
-      for (const m of teamPermissionUpdates) {
-        const parsed = isTeamPermissionUpdate(m.text)
-        if (!parsed) {
-          logForDebugging(
-            `[InboxPoller] Failed to parse team permission update: ${m.text.substring(0, 100)}`,
-          )
-          continue
-        }
+      for (const { message: m, control: parsed } of teamPermissionUpdates) {
+        trackForAck(m)
 
         // Validate required nested fields to prevent crashes from malformed messages
         if (
@@ -573,23 +783,12 @@ export function useInboxPoller({
         `[InboxPoller] Found ${modeSetRequests.length} mode set request(s)`,
       )
 
-      for (const m of modeSetRequests) {
-        // Only accept mode changes from team-lead
-        if (m.from !== 'team-lead') {
-          logForDebugging(
-            `[InboxPoller] Ignoring mode set request from non-team-lead: ${m.from}`,
-          )
-          continue
-        }
-
-        const parsed = isModeSetRequest(m.text)
-        if (!parsed) {
-          logForDebugging(
-            `[InboxPoller] Failed to parse mode set request: ${m.text.substring(0, 100)}`,
-          )
-          continue
-        }
-
+      for (const { message: m, control: parsed } of modeSetRequests) {
+        trackForAck(m)
+        // Sender authority (must be the team lead) and field-identity binding
+        // (control.from === resolved sender name) are already enforced by
+        // classifyMailboxMessage — a message only reaches this bucket once
+        // both have passed.
         const targetMode = permissionModeFromString(parsed.mode)
         logForDebugging(
           `[InboxPoller] Applying mode change from team-lead: ${targetMode}`,
@@ -612,7 +811,7 @@ export function useInboxPoller({
         const teamName = currentAppState.teamContext?.teamName
         const agentName = getAgentName()
         if (teamName && agentName) {
-          setMemberMode(teamName, agentName, targetMode)
+          await setMemberMode(teamName, agentName, targetMode)
         }
       }
     }
@@ -633,43 +832,40 @@ export function useInboxPoller({
       const modeToInherit =
         leaderExternalMode === 'plan' ? 'default' : leaderExternalMode
 
-      for (const m of planApprovalRequests) {
-        const parsed = isPlanApprovalRequest(m.text)
-        if (!parsed) continue
+      for (const { message: m, control: parsed } of planApprovalRequests) {
+        trackForAck(m)
 
-        // Write approval response to teammate's inbox
-        const approvalResponse = {
-          type: 'plan_approval_response',
-          requestId: parsed.requestId,
-          approved: true,
-          timestamp: new Date().toISOString(),
-          permissionMode: modeToInherit,
+        if (!teamName) continue
+        const recipient =
+          controlSnapshot && resolveTeamPrincipalByName(controlSnapshot, m.from)
+        if (!recipient) {
+          logForDebugging(
+            `[InboxPoller] Cannot auto-approve plan for ${m.from}: not in the current roster`,
+          )
+          regularMessages.push(m)
+          continue
         }
 
-        void writeToMailbox(
-          m.from,
-          {
-            from: TEAM_LEAD_NAME,
-            text: jsonStringify(approvalResponse),
-            timestamp: new Date().toISOString(),
-          },
+        const approvalResponse = createPlanApprovalResponseMessage({
+          requestId: parsed.requestId,
+          approved: true,
+          permissionMode: modeToInherit,
+        })
+
+        writeControlToMailbox({
+          recipient,
+          control: approvalResponse,
           teamName,
-        )
+        }).catch(error => {
+          logForDebugging(
+            `[InboxPoller] Failed to send plan approval to ${m.from}: ${error}`,
+          )
+        })
 
         // Update in-process teammate task state if applicable
         const taskId = findInProcessTeammateTaskId(m.from, currentAppState)
         if (taskId) {
-          handlePlanApprovalResponse(
-            taskId,
-            {
-              type: 'plan_approval_response',
-              requestId: parsed.requestId,
-              approved: true,
-              timestamp: new Date().toISOString(),
-              permissionMode: modeToInherit,
-            },
-            setAppState,
-          )
+          handlePlanApprovalResponse(taskId, approvalResponse, setAppState)
         }
 
         logForDebugging(
@@ -690,7 +886,8 @@ export function useInboxPoller({
 
       // Pass through shutdown requests - the UI component will render them nicely
       // and the model will receive instructions via the tool prompt documentation
-      for (const m of shutdownRequests) {
+      for (const { message: m } of shutdownRequests) {
+        trackForAck(m)
         regularMessages.push(m)
       }
     }
@@ -704,13 +901,32 @@ export function useInboxPoller({
         `[InboxPoller] Found ${shutdownApprovals.length} shutdown approval(s)`,
       )
 
-      for (const m of shutdownApprovals) {
-        const parsed = isShutdownApproved(m.text)
-        if (!parsed) continue
+      for (const { message: m, control: parsed } of shutdownApprovals) {
+        // Compare-and-swap the outstanding shutdown_request record so a
+        // concurrently racing consumer (a previous/overlapping poll, or the
+        // headless attachments.ts path) can't double-process the same
+        // approval. Only the claim winner removes the teammate/kills the
+        // pane; the message stays unread (not tracked for ack) on failure,
+        // so a later poll retries.
+        const teamNameForClaim = currentAppState.teamContext?.teamName
+        const claimed = teamNameForClaim
+          ? await claimPendingControl({
+              teamName: teamNameForClaim,
+              response: m,
+              control: parsed,
+            })
+          : null
+        if (!claimed) {
+          logForDebugging(
+            `[InboxPoller] shutdown_approved for request ${parsed.requestId} already claimed/consumed elsewhere — skipping`,
+          )
+          regularMessages.push(m)
+          continue
+        }
 
-        // Kill the pane if we have the info (pane-based teammates)
-        if (parsed.paneId && parsed.backendType) {
-          void (async () => {
+        try {
+          // Kill the pane if we have the info (pane-based teammates)
+          if (parsed.paneId && parsed.backendType) {
             try {
               // Ensure backend classes are imported (no subprocess probes)
               await ensureBackendsRegistered()
@@ -730,22 +946,19 @@ export function useInboxPoller({
                 `[InboxPoller] Failed to kill pane for ${parsed.from}: ${error}`,
               )
             }
-          })()
-        }
+          }
 
-        // Remove the teammate from teamContext.teammates so the count is accurate
-        const teammateToRemove = parsed.from
-        if (teammateToRemove && currentAppState.teamContext?.teammates) {
-          // Find the teammate ID by name
-          const teammateId = Object.entries(
-            currentAppState.teamContext.teammates,
-          ).find(([, t]) => t.name === teammateToRemove)?.[0]
-
-          if (teammateId) {
+          // Remove the teammate from teamContext.teammates so the count is
+          // accurate. Uses the envelope's SENDER identity (validated by
+          // classifyMailboxMessage against the current roster), never
+          // `control.from` independently.
+          const teammateId = m.senderAgentId
+          const teammateToRemove = m.from
+          if (teammateId && currentAppState.teamContext?.teammates) {
             // Remove from team file (leader owns team file mutations)
             const teamName = currentAppState.teamContext?.teamName
             if (teamName) {
-              removeTeammateFromTeamFile(teamName, {
+              await removeTeammateFromTeamFile(teamName, {
                 agentId: teammateId,
                 name: teammateToRemove,
               })
@@ -813,6 +1026,23 @@ export function useInboxPoller({
               `[InboxPoller] Removed ${teammateToRemove} (${teammateId}) from teamContext`,
             )
           }
+
+          await finishPendingControl({
+            teamName: teamNameForClaim!,
+            requestId: parsed.requestId,
+            outcome: 'consumed',
+          })
+          trackForAck(m)
+        } catch (error) {
+          logForDebugging(
+            `[InboxPoller] Failed handling shutdown_approved for request ${parsed.requestId}: ${error}`,
+          )
+          await finishPendingControl({
+            teamName: teamNameForClaim!,
+            requestId: parsed.requestId,
+            outcome: 'retry',
+          }).catch(() => {})
+          // Leave unread (not tracked for ack) for a later poll to retry.
         }
 
         // Pass through for UI rendering - the component will render it nicely

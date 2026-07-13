@@ -25,7 +25,8 @@ import {
   getTeammateColor,
   getTeamName,
 } from '../../utils/teammate.js'
-import { writeToMailbox } from '../../utils/teammateMailbox.js'
+import { createTaskAssignmentMessage, writeToMailbox } from '../../utils/teammateMailbox.js'
+import { jsonStringify } from '../../utils/slowOperations.js'
 import { VERIFICATION_AGENT_TYPE } from '../AgentTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, PROMPT } from './prompt.js'
@@ -273,25 +274,30 @@ export const TaskUpdateTool = buildTool({
       await updateTask(taskListId, taskId, updates)
     }
 
-    // Notify new owner via mailbox when ownership changes
+    // Notify new owner via mailbox when ownership changes. task_assignment
+    // is a non-privileged notification ("remains a notification with its
+    // existing behavior" — Design Decisions): explicit typed `notification`
+    // payload alongside the existing `text` for backward-compatible model
+    // visibility, still on the legacy positional write path (no principal
+    // resolution wired up at this call site).
     if (updates.owner && isAgentSwarmsEnabled()) {
       const senderName = getAgentName() || 'team-lead'
       const senderColor = getTeammateColor()
-      const assignmentMessage = JSON.stringify({
-        type: 'task_assignment',
+      const assignmentMessage = createTaskAssignmentMessage({
         taskId,
         subject: existingTask.subject,
         description: existingTask.description,
         assignedBy: senderName,
-        timestamp: new Date().toISOString(),
       })
       await writeToMailbox(
         updates.owner,
         {
           from: senderName,
-          text: assignmentMessage,
+          text: jsonStringify(assignmentMessage),
           timestamp: new Date().toISOString(),
           color: senderColor,
+          payloadClass: 'notification',
+          notification: assignmentMessage,
         },
         taskListId,
       )

@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-06-06.
+Last refreshed: 2026-07-13.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -11,6 +11,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 - Check concrete task state and lifecycle in `src/tasks/`.
 - Check task UI in `src/components/tasks/`, REPL wiring in `src/screens/REPL.tsx`, navigation in `src/hooks/useBackgroundTaskNavigation.ts`, and input selectors in `src/state/selectors.ts`.
 - For local agent/subagent behavior, check `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts`, `src/tools/AgentTool/runAgent.ts`, and `src/tools/AgentTool/resumeAgent.ts`.
+- For teammate roster/mailbox behavior, check `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, `src/utils/swarm/inProcessRunner.ts`, `src/hooks/useInboxPoller.ts`, and `src/utils/attachments.ts`.
 - For stop behavior, check `src/tasks/stopTask.ts`, task-specific `kill(...)` implementations, and `src/hooks/useCancelRequest.ts`.
 - Refresh tests with the focused test files listed in "Tests".
 
@@ -79,6 +80,20 @@ Start with `src/tasks/InProcessTeammateTask/types.ts` and `src/tasks/InProcessTe
 
 View transitions are in `src/state/teammateViewHelpers.ts`. Despite the name, `enterTeammateView()` also retains local-agent transcripts by setting `retain=true`, clearing `evictAfter`, and triggering REPL disk bootstrap.
 
+## Roster And Mailbox Protocol (2026-07-12 hardening)
+
+Start with `src/utils/swarm/teamHelpers.ts` (roster/allocation authority) and `src/utils/teammateMailbox.ts` (per-recipient mailbox files and envelopes). Both are consumed by `src/utils/swarm/inProcessRunner.ts`, `src/tools/SendMessageTool/SendMessageTool.ts`, `src/hooks/useInboxPoller.ts`, and `src/utils/attachments.ts`.
+
+**Team file and recipient records.** `TeamFile.teamProtocolVersion: 2` plus `recipientRecords: TeamRecipientRecord[]` is the one identity authority shared by local aliases and teammate names inside a team (case-insensitive key via `recipientNameKey()`). Every mutation goes through the single async `transactTeamFile()` primitive (`teamHelpers.ts`): lock, fresh-read, validate version 2, apply one transaction, write once, unlock. No caller performs mailbox I/O while holding this lock. `readTeamSnapshot()` is the read-only, detached-immutable-snapshot counterpart used by routing/authority checks.
+
+Recipient lifecycle: `reserved -> starting -> active -> stopped | terminated`, driven by `allocateTeamRecipient()`, `transitionTeamRecipient()` (compares both `allocationId` and expected `from` state; fails closed), and `recoverStartingRecipient()` (a dead launcher's `starting` record is `'active' | 'terminated' | 'manual_cleanup_required'`, never silently reclaimed from PID death alone). Keys are never reused within a team — a `terminated` record is a tombstone kept until explicit team cleanup, so a replacement teammate needs a fresh `Agent` call and gets a new `allocationId`, never the old identity back.
+
+**Mailbox envelopes.** Every version-2 message (`src/utils/teammateMailbox.ts`) carries `protocolVersion`, an immutable `messageId`, sender/recipient agent IDs, sender/recipient allocation IDs, and exactly one payload class: `chat`, `notification` (`idle_notification`, `task_assignment` — unchanged model-visible behavior), or `control` (closed Zod union `MailboxControlPayloadSchema`, see `docs/maps/tools-permissions.md`). `writeToMailbox()` resolves the sender from runtime identity and returns `{written: true, messageId}` only after the JSON rewrite actually succeeds — a caught-and-swallowed write is a defect, not a documented behavior. `acknowledgeMailboxMessages()` marks only the exact IDs supplied as read; broad `markMessagesAsRead()`/`markMessagesAsReadByPredicate()`-style acknowledgement in the poller/attachment hot paths is the thing to search for and remove if you find it reintroduced. A concurrent mailbox append during acknowledgement remains unread. Unmarked legacy control-shaped JSON is rejected with an explicit protocol-version error (`protocol_mismatch`), not silently delivered or downgraded to chat.
+
+**Broadcast truthfulness.** `SendMessageTool.ts` resolves a versioned recipient snapshot, releases the team lock, then writes with `Promise.allSettled`. `recipients` contains only successful writes; `failed_recipients` reports the rest; `success` is false if any intended recipient failed.
+
+**Shutdown acknowledgement.** A teammate approving shutdown stays alive unless its acknowledgement write to the leader mailbox actually succeeds (`writeControlToMailbox` returning `written: true`) — see `docs/maps/tools-permissions.md` for the request-correlation and authority rules that gate this.
+
 ## Remote Agent Routing
 
 Start with `src/tasks/RemoteAgentTask/RemoteAgentTask.tsx`.
@@ -120,8 +135,9 @@ Start with `src/state/selectors.ts`.
 - `getViewedTeammateTask()` narrows `viewingAgentTaskId` to an in-process teammate.
 - `getActiveAgentForInput()` returns `leader`, `viewed` teammate, or `named_agent` local agent.
 - REPL currently inlines some viewed-agent checks near message display, so verify both selector and REPL code before changing input behavior.
-- Viewed local-agent input appends a user message immediately. If running, it queues with `queuePendingMessage()`; if terminal, it resumes through `resumeAgentBackground()`.
+- Viewed local-agent input appends a user message immediately, then re-reads fresh AppState and calls `queuePendingMessageIfRunning()` (`src/tasks/LocalAgentTask/LocalAgentTask.tsx`) — an atomic, synchronous-updater-based queue-if-currently-running check that returns a boolean. (2026-07-12 hardening: replaced the older `queuePendingMessage()`, which queued unconditionally against a possibly-stale captured `task.status` and could silently queue into a task that had already stopped or race a concurrent resume. `queuePendingMessage()` still exists for internal callers that intentionally don't require a running check — do not use it for ordinary steering.) If queueing returns false, it resumes through `resumeAgentBackground()`.
 - Viewed teammate input queues through `injectUserMessageToTeammate()`.
+- `src/tools/SendMessageTool/SendMessageTool.ts` `routeToLocalWorker()` follows the same fresh-read-then-`queuePendingMessageIfRunning()` pattern rather than trusting the state captured when `resolveAgentTarget()` ran, closing a delayed-resolution race where the target could finish or get resumed by someone else between resolution and routing.
 
 ## Lifecycle And Notifications
 
@@ -156,6 +172,10 @@ Focused existing tests:
 - `bun test src/tools/AgentTool/agentToolUtils.test.ts`
 - `bun test src/tools/AgentTool/resumeAgent.test.ts`
 - `bun test src/tools/AgentTool/prompt.test.ts`
+- `bun test src/tools/ResumeAgentTool/ResumeAgentTool.test.ts`
+- `bun test src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/SendMessageTool/UI.test.tsx`
+- `bun test src/utils/swarm/teamHelpers.test.ts src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts`
+- `bun test src/tools/shared/spawnMultiAgent.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` (the plan's two-process `spawnMultiAgent.probe.test.ts` is not yet built — known gap, see plan Task 1 Step 9)
 
 When changing shell task behavior, also search for task output and background shell tests outside `src/tasks/` because shell execution tests are not all colocated here.
 
@@ -170,3 +190,6 @@ When changing task UI, search for component tests first; this snapshot does not 
 - Do not let terminal local-agent tasks disappear while retained in a viewed transcript; `retain`, `diskLoaded`, and `evictAfter` are coupled.
 - Do not let agent-scoped shell/monitor tasks survive agent exit; keep `runAgent.ts` cleanup aligned with task types.
 - Do not assume remote sessions are local-only tasks. Killing a remote task should archive the remote session and remove sidecar metadata.
+- Do not route a steering message off a captured `task.status` read before an earlier `await` (target resolution, mailbox I/O). Re-read AppState and use `queuePendingMessageIfRunning()` immediately before deciding to queue vs. resume/fail — the target can transition mid-call.
+- Do not reuse a team's recipient key/allocation after `terminated`. It is a tombstone; a replacement needs a fresh `Agent` call through `allocateTeamRecipient()`, not a rewrite of the old record.
+- Do not acknowledge mailbox messages broadly (by predicate or "all unread"). Acknowledge only the exact `messageId`s a handler actually finished processing, or a concurrent append can be silently marked read.

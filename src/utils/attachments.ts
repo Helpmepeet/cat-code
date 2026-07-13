@@ -234,11 +234,18 @@ import { memoryAge, memoryFreshnessText } from '../memdir/memoryAge.js'
 import { getAutoMemPath, isAutoMemoryEnabled } from '../memdir/paths.js'
 import { getAgentMemoryDir } from '../tools/AgentTool/agentMemory.js'
 import {
-  readUnreadMessages,
-  markMessagesAsReadByPredicate,
-  isShutdownApproved,
-  isStructuredProtocolMessage,
+  acknowledgeMailboxMessages,
+  claimPendingControl,
+  classifyMailboxMessage,
+  finishPendingControl,
   isIdleNotification,
+  isStructuredProtocolMessage,
+  markMessagesAsReadByPredicate,
+  readUnreadMessages,
+  resolveTeamPrincipalByName,
+  type MailboxControlPayload,
+  type TeamPrincipal,
+  type TeammateMessage,
 } from './teammateMailbox.js'
 import {
   getAgentName,
@@ -247,7 +254,11 @@ import {
   isTeamLead,
 } from './teammate.js'
 import { isInProcessTeammate } from './teammateContext.js'
-import { removeTeammateFromTeamFile } from './swarm/teamHelpers.js'
+import {
+  readTeamSnapshot,
+  removeTeammateFromTeamFile,
+  type TeamFile,
+} from './swarm/teamHelpers.js'
 import { unassignTeammateTasks } from './tasks.js'
 import { getCompanionIntroAttachment } from '../buddy/prompt.js'
 
@@ -3581,19 +3592,114 @@ async function getTeammateMailboxAttachments(
     `[SwarmMailbox] Checking inbox for agent="${agentName}" team="${teamName || 'default'}"`,
   )
 
-  // Check mailbox for unread messages (routes to in-process or file-based)
-  // Filter out structured protocol messages (permission requests/responses, shutdown
-  // messages, etc.) — these must be left unread for useInboxPoller to route to their
-  // proper handlers (workerPermissions queue, sandbox queue, etc.). Without filtering,
-  // attachment generation races with InboxPoller: whichever reads first marks all
-  // messages as read, and if attachments wins, protocol messages get bundled as raw
-  // LLM context text instead of being routed to their UI handlers.
+  // Check mailbox for unread messages (routes to in-process or file-based).
+  // Classify each through the same authority-checked path useInboxPoller
+  // uses (Task 3): privileged controls are never bundled as raw LLM context,
+  // and an invalid/mismatched control is dropped-and-acknowledged rather
+  // than silently downgraded to chat. A version-2 control classified valid
+  // stays UNREAD for useInboxPoller in interactive mode; in headless mode
+  // (isNonInteractiveSession — no poller runs) this pass processes
+  // shutdown_approved itself, below.
   const allUnreadMessages = await readUnreadMessages(agentName, teamName)
-  const unreadMessages = allUnreadMessages.filter(
-    m => !isStructuredProtocolMessage(m.text),
-  )
+
+  let controlSnapshot: Readonly<TeamFile> | null = null
+  let receiverPrincipal: TeamPrincipal | null = null
+  if (teamName) {
+    try {
+      controlSnapshot = await readTeamSnapshot(teamName)
+      // Resolved by NAME (`agentName` — the mailbox we're actually reading),
+      // never `resolveCurrentTeamPrincipal` (the CURRENT process's own
+      // identity). When the leader is viewing a teammate's transcript,
+      // `agentName` is the teammate being viewed, not the leader itself —
+      // using the current-process identity here would compare every
+      // envelope's recipient fields against the wrong principal and fail
+      // every message closed.
+      receiverPrincipal = resolveTeamPrincipalByName(controlSnapshot, agentName)
+    } catch {
+      // Legacy/absent team file — version-2 controls are never accepted
+      // against it (Design Decisions); every message falls back to the
+      // pre-Task-3 text-sniff exclusion below.
+      controlSnapshot = null
+      receiverPrincipal = null
+    }
+  }
+
+  const deliverableMessages: TeammateMessage[] = []
+  const validHeadlessControls: Array<{
+    message: TeammateMessage
+    control: MailboxControlPayload
+  }> = []
+  // Exact identity of every message this pass has decided to consume —
+  // deliver as chat/notification, or drop as invalid/stale — so the mark-read
+  // pass below only touches messages we actually classified just now and
+  // never a concurrent append that arrived after (messageId when the
+  // envelope has one; the same from/timestamp/text key used for the
+  // AppState.inbox dedup above otherwise).
+  const consumedKeys = new Set<string>()
+  const messageKey = (m: TeammateMessage): string =>
+    m.messageId ?? `${m.from} ${m.timestamp} ${m.text}`
+
+  for (const m of allUnreadMessages) {
+    const senderPrincipal =
+      controlSnapshot && resolveTeamPrincipalByName(controlSnapshot, m.from)
+    const classified =
+      controlSnapshot && receiverPrincipal && senderPrincipal
+        ? classifyMailboxMessage({
+            message: m,
+            sender: senderPrincipal,
+            receiver: receiverPrincipal,
+            pendingControls: controlSnapshot.pendingControls ?? [],
+          })
+        : null
+
+    if (!classified) {
+      // No usable version-2 snapshot/sender — fall back to the pre-Task-3
+      // text-sniff exclusion rather than deliver anything control-shaped.
+      if (!isStructuredProtocolMessage(m.text)) {
+        deliverableMessages.push(m)
+      }
+      consumedKeys.add(messageKey(m))
+      continue
+    }
+
+    switch (classified.kind) {
+      case 'invalid_control':
+      case 'protocol_mismatch':
+        logForDebugging(
+          `[SwarmMailbox] Dropping ${classified.kind} message from ${m.from}: ${classified.reason}`,
+        )
+        consumedKeys.add(messageKey(m))
+        break
+      case 'control':
+        // Interactive mode: leave unread for useInboxPoller to route to its
+        // permission/plan/shutdown/mode handlers. Headless mode has no
+        // poller running, so this pass processes it directly, below.
+        if (toolUseContext.options.isNonInteractiveSession) {
+          validHeadlessControls.push({ message: m, control: classified.control })
+        }
+        break
+      case 'chat':
+      case 'notification': {
+        const isStaleRecipient =
+          m.protocolVersion === 2 &&
+          m.recipientAllocationId !== undefined &&
+          m.recipientAllocationId !== receiverPrincipal!.allocationId
+        if (isStaleRecipient) {
+          logForDebugging(
+            `[SwarmMailbox] Dropping ${classified.kind} message addressed to a stale recipient allocation from ${m.from}`,
+          )
+        } else {
+          deliverableMessages.push(m)
+        }
+        consumedKeys.add(messageKey(m))
+        break
+      }
+    }
+  }
+
+  const unreadMessages = deliverableMessages
   logForDebugging(
-    `[MailboxBridge] Found ${allUnreadMessages.length} unread message(s) for "${agentName}" (${allUnreadMessages.length - unreadMessages.length} structured protocol messages filtered out)`,
+    `[MailboxBridge] Found ${allUnreadMessages.length} unread message(s) for "${agentName}" (${allUnreadMessages.length - unreadMessages.length} control/invalid/stale message(s) held back)`,
   )
 
   // Also check AppState.inbox for pending messages (queued mid-turn by useInboxPoller)
@@ -3667,75 +3773,89 @@ async function getTeammateMailboxAttachments(
     )
   }
 
-  if (allMessages.length === 0) {
-    logForDebugging(`[SwarmMailbox] No messages to deliver, returning empty`)
-    return []
+  // Everything below (ack, headless shutdown_approved processing, marking
+  // AppState inbox messages processed) must run regardless of whether there
+  // is anything left to DELIVER — a poll whose only unread message is a
+  // control (never part of `allMessages`) would otherwise never reach any
+  // of it if this early-returned first (a real bug this exact scenario
+  // caught: shutdown_approved as the sole message in a headless batch).
+  const hasMessagesToDeliver = allMessages.length > 0
+  if (hasMessagesToDeliver) {
+    logForDebugging(
+      `[SwarmMailbox] Returning ${allMessages.length} message(s) as attachment for "${agentName}" (${unreadMessages.length} from file, ${pendingInboxMessages.length} from AppState, after dedup)`,
+    )
+  } else {
+    logForDebugging(`[SwarmMailbox] No messages to deliver`)
   }
-
-  logForDebugging(
-    `[SwarmMailbox] Returning ${allMessages.length} message(s) as attachment for "${agentName}" (${unreadMessages.length} from file, ${pendingInboxMessages.length} from AppState, after dedup)`,
-  )
 
   // Build the attachment BEFORE marking messages as processed
   // This prevents message loss if any operation below fails
-  const attachment: Attachment[] = [
-    {
-      type: 'teammate_mailbox',
-      messages: allMessages,
-    },
-  ]
+  const attachment: Attachment[] = hasMessagesToDeliver
+    ? [
+        {
+          type: 'teammate_mailbox',
+          messages: allMessages,
+        },
+      ]
+    : []
 
-  // Mark only non-structured mailbox messages as read after attachment is built.
-  // Structured protocol messages stay unread for useInboxPoller to handle.
-  if (unreadMessages.length > 0) {
+  // Mark exactly the messages this pass classified and consumed as read —
+  // never a message that arrived concurrently after the classification loop
+  // above (that message won't be in `consumedKeys` and stays unread for the
+  // next poll). Valid controls held back for useInboxPoller (interactive
+  // mode) are deliberately excluded from `consumedKeys` and stay unread.
+  if (consumedKeys.size > 0) {
     await markMessagesAsReadByPredicate(
       agentName,
-      m => !isStructuredProtocolMessage(m.text),
+      m => consumedKeys.has(messageKey(m)),
       teamName,
     )
     logForDebugging(
-      `[MailboxBridge] marked ${unreadMessages.length} non-structured message(s) as read for agent="${agentName}" team="${teamName || 'default'}"`,
+      `[MailboxBridge] marked ${consumedKeys.size} message(s) as read for agent="${agentName}" team="${teamName || 'default'}"`,
     )
   }
 
-  // Process shutdown_approved messages - remove teammates from team file
-  // This mirrors what useInboxPoller does in interactive mode (lines 546-606)
-  // In -p mode, useInboxPoller doesn't run, so we must handle this here
-  if (teamLeadStatus && teamName) {
-    for (const m of allMessages) {
-      const shutdownApproval = isShutdownApproved(m.text)
-      if (shutdownApproval) {
-        const teammateToRemove = shutdownApproval.from
+  // Headless-mode-only processing of shutdown_approved (no useInboxPoller
+  // runs in -p mode to do this). claimPendingControl's compare-and-swap
+  // keeps this safe even if another consumer (print.ts's own team-lead poll
+  // loop) races the same message — only the claim winner runs the side
+  // effects, and finishPendingControl(...'retry') on failure preserves the
+  // record (and leaves the mailbox message unread) for a later pass.
+  if (teamName && validHeadlessControls.length > 0) {
+    for (const { message, control } of validHeadlessControls) {
+      if (control.type !== 'shutdown_approved') continue
+
+      const claimed = await claimPendingControl({
+        teamName,
+        response: message,
+        control,
+      })
+      if (!claimed) {
         logForDebugging(
-          `[SwarmMailbox] Processing shutdown_approved from ${teammateToRemove}`,
+          `[SwarmMailbox] shutdown_approved for request ${control.requestId} already claimed/consumed — skipping`,
         )
+        continue
+      }
 
-        // Find the teammate ID by name
-        const teammateId = appState.teamContext?.teammates
-          ? Object.entries(appState.teamContext.teammates).find(
-              ([, t]) => t.name === teammateToRemove,
-            )?.[0]
-          : undefined
-
+      try {
+        // Resolve the departing member from the message's SENDER identity —
+        // never trust control.from independently.
+        const teammateId = message.senderAgentId
+        const teammateName = message.from
+        logForDebugging(
+          `[SwarmMailbox] Processing shutdown_approved from ${teammateName}`,
+        )
         if (teammateId) {
-          // Remove from team file
-          removeTeammateFromTeamFile(teamName, {
+          await removeTeammateFromTeamFile(teamName, {
             agentId: teammateId,
-            name: teammateToRemove,
+            name: teammateName,
           })
-          logForDebugging(
-            `[SwarmMailbox] Removed ${teammateToRemove} from team file`,
-          )
-
-          // Unassign tasks owned by this teammate
           await unassignTeammateTasks(
             teamName,
             teammateId,
-            teammateToRemove,
+            teammateName,
             'shutdown',
           )
-
-          // Remove from teamContext in AppState
           toolUseContext.setAppState(prev => {
             if (!prev.teamContext?.teammates) return prev
             if (!(teammateId in prev.teamContext.teammates)) return prev
@@ -3750,6 +3870,29 @@ async function getTeammateMailboxAttachments(
             }
           })
         }
+        await finishPendingControl({
+          teamName,
+          requestId: control.requestId,
+          outcome: 'consumed',
+        })
+      } catch (error) {
+        logForDebugging(
+          `[SwarmMailbox] Failed handling shutdown_approved for request ${control.requestId}: ${error}`,
+        )
+        await finishPendingControl({
+          teamName,
+          requestId: control.requestId,
+          outcome: 'retry',
+        }).catch(() => {})
+        continue
+      }
+
+      if (message.messageId && receiverPrincipal) {
+        await acknowledgeMailboxMessages({
+          recipient: receiverPrincipal,
+          teamName,
+          messageIds: [message.messageId],
+        })
       }
     }
   }
@@ -3770,6 +3913,14 @@ async function getTeammateMailboxAttachments(
 
   return attachment
 }
+
+/**
+ * Test-only seam onto the otherwise-private `getTeammateMailboxAttachments`
+ * (Task 3 Step 5) — exercises the real mailbox-classification/acknowledgement
+ * path against a temporary on-disk team + mailbox without needing a full
+ * query-engine attachment-gathering call.
+ */
+export const _attachmentsForTest = getTeammateMailboxAttachments
 
 /**
  * Get team context attachment for teammates in a swarm.

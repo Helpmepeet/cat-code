@@ -8,6 +8,7 @@ import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { registerActiveSubagent } from '../../utils/cleanupRegistry.js'
 import {
+  isLocalAgentTask,
   markAgentTaskResumed,
   registerAsyncAgent,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
@@ -74,30 +75,46 @@ type ResumeAgentBackgroundArgs = {
   sourceSessionId?: string
 }
 
-const activeResumeLaunches = new Set<string>()
+// Lifecycle ownership, not setup ownership: an agentId is held from the
+// start of resumeAgentBackground until the detached runAsyncAgentLifecycle
+// promise it launches actually settles, not merely until launch setup
+// finishes. Otherwise a second resume could slip in while the first
+// lifecycle is still running in the background (its Set membership having
+// already been released right after setup).
+const activeResumeLifecycles = new Set<string>()
 
 export async function resumeAgentBackground(
   args: ResumeAgentBackgroundArgs,
 ): Promise<ResumeAgentResult> {
-  if (activeResumeLaunches.has(args.agentId)) {
+  if (activeResumeLifecycles.has(args.agentId)) {
     throw new AgentResumeInProgressError(args.agentId)
   }
-  activeResumeLaunches.add(args.agentId)
+  activeResumeLifecycles.add(args.agentId)
+  let ownershipTransferred = false
   try {
-    return await resumeAgentBackgroundLocked(args)
+    return await resumeAgentBackgroundLocked(args, lifecycle => {
+      ownershipTransferred = true
+      const release = () => {
+        activeResumeLifecycles.delete(args.agentId)
+      }
+      void lifecycle.then(release, release)
+    })
   } finally {
-    activeResumeLaunches.delete(args.agentId)
+    if (!ownershipTransferred) activeResumeLifecycles.delete(args.agentId)
   }
 }
 
-async function resumeAgentBackgroundLocked({
-  agentId,
-  prompt,
-  toolUseContext,
-  canUseTool,
-  invokingRequestId,
-  sourceSessionId,
-}: ResumeAgentBackgroundArgs): Promise<ResumeAgentResult> {
+async function resumeAgentBackgroundLocked(
+  {
+    agentId,
+    prompt,
+    toolUseContext,
+    canUseTool,
+    invokingRequestId,
+    sourceSessionId,
+  }: ResumeAgentBackgroundArgs,
+  onLifecycleStarted: (lifecycle: Promise<void>) => void,
+): Promise<ResumeAgentResult> {
   const startTime = Date.now()
   const appState = toolUseContext.getAppState()
   // In-process teammates get a no-op setAppState; setAppStateForTasks
@@ -261,6 +278,19 @@ async function resumeAgentBackgroundLocked({
     sessionStateTracking,
   }
 
+  // Fresh-read root state right before committing this resume's side
+  // effects. The transcript/metadata/worktree I/O above can take long
+  // enough for the same task to have already been registered as running by
+  // another path (a concurrent resume that reached here first, or the task
+  // simply having started running through some other route). The
+  // activeResumeLifecycles set only guards concurrent resumeAgentBackground
+  // callers for this exact agentId; this check supplements it rather than
+  // replacing it.
+  const freshTask = toolUseContext.getAppState().tasks[agentId]
+  if (isLocalAgentTask(freshTask) && freshTask.status === 'running') {
+    throw new AgentResumeInProgressError(agentId)
+  }
+
   const spawnedAt = new Date().toISOString()
   const agentTranscriptPath = getAgentTranscriptPath(asAgentId(agentId))
   appendSubagentSpawned(parentTranscriptPath, {
@@ -328,7 +358,11 @@ async function resumeAgentBackgroundLocked({
   const wrapWithCwd = <T>(fn: () => T): T =>
     resumedWorktreePath ? runWithCwdOverride(resumedWorktreePath, fn) : fn()
 
-  void runWithAgentContext(asyncAgentContext, () =>
+  // Capture the detached lifecycle promise (rather than fire-and-forgetting
+  // it with `void`) and hand it to the caller's ownership-transfer callback
+  // before returning, so activeResumeLifecycles stays held until this
+  // background run actually settles.
+  const lifecycle = runWithAgentContext(asyncAgentContext, () =>
     wrapWithCwd(() =>
       runAsyncAgentLifecycle({
         taskId: agentBackgroundTask.agentId,
@@ -363,6 +397,7 @@ async function resumeAgentBackgroundLocked({
       }),
     ),
   )
+  onLifecycleStarted(lifecycle)
 
   return {
     agentId,

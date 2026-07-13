@@ -16,6 +16,7 @@ import {
   readAgentMetadataForSession,
 } from '../../utils/sessionStorage.js'
 import { getTokenCountFromUsage, getTokenUsage } from '../../utils/tokens.js'
+import { parseLocalRecipient, recipientNameKey } from '../../utils/recipientIdentity.js'
 
 export type ResolvedAgentTarget = {
   agentId: string
@@ -96,8 +97,25 @@ export function formatResumedContextNotice(
 }
 
 function normalizeAgentTarget(input: string): string {
-  const trimmed = input.trim()
-  return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed
+  return parseLocalRecipient(input).target
+}
+
+/**
+ * Case-insensitive lookup against the live name→agentId registry. New
+ * allocations key collisions on `recipientNameKey`, so a registered display
+ * name like "Turing" must still resolve when a caller types "@turing".
+ */
+function lookupAgentNameRegistry(
+  registry: ReadonlyMap<string, string>,
+  target: string,
+): string | undefined {
+  const direct = registry.get(target)
+  if (direct) return direct
+  const key = recipientNameKey(target)
+  for (const [name, id] of registry) {
+    if (recipientNameKey(name) === key) return id
+  }
+  return undefined
 }
 
 export async function displayNameForAgent({
@@ -226,7 +244,7 @@ export async function resolveAgentTarget({
   const target = normalizeAgentTarget(input)
   if (target.length === 0) return null
 
-  const registered = appState.agentNameRegistry.get(target)
+  const registered = lookupAgentNameRegistry(appState.agentNameRegistry, target)
   if (registered) {
     const opts = { agentId: registered, appState, sourceSessionId: sessionId }
     const [displayName, contextStats] = await Promise.all([
