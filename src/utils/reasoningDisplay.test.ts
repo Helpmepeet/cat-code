@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { AssistantMessage } from '../types/message.js'
 import { normalizeMessages } from './messages.js'
-import { shouldShowReasoningBlock } from './reasoningDisplay.js'
+import {
+  findLastVisibleThinkingBlockId,
+  shouldShowReasoningBlock,
+} from './reasoningDisplay.js'
 
 type ReasoningBlock = {
   type: 'thinking'
@@ -50,6 +53,42 @@ function visibleReasoningKinds(
   })
 }
 
+function visibleTranscriptReasoningKinds(
+  displayMode: 'off' | 'summary' | 'raw',
+  content: ReasoningBlock[],
+): ReasoningBlock['reasoningKind'][] {
+  const messages: AssistantMessage<ReasoningBlock>[] = content.map(
+    (block, index) => ({
+      type: 'assistant',
+      uuid: `00000000-0000-0000-0000-${index.toString().padStart(12, '0')}`,
+      message: {
+        id: 'provider-message-1',
+        role: 'assistant',
+        content: [block],
+      },
+    }),
+  )
+  const normalized = normalizeMessages(messages as AssistantMessage[])
+  const lastThinkingBlockId = findLastVisibleThinkingBlockId(
+    normalized,
+    displayMode,
+  )
+
+  return normalized.flatMap(row => {
+    const block = row.message.content[0] as ReasoningBlock
+    const thinkingBlockId = `${row.uuid}:0`
+    return thinkingBlockId === lastThinkingBlockId &&
+      shouldShowReasoningBlock(
+        displayMode,
+        block.reasoningKind,
+        row.hasRawReasoning === true,
+        block.thinking.trim().length > 0,
+      )
+      ? [block.reasoningKind]
+      : []
+  })
+}
+
 describe('shouldShowReasoningBlock', () => {
   test('raw mode falls back to the summary when no raw reasoning exists', () => {
     expect(shouldShowReasoningBlock('raw', 'summary', false)).toBe(true)
@@ -70,8 +109,8 @@ describe('shouldShowReasoningBlock', () => {
   test('normalization preserves provider-message raw availability for rendering', () => {
     expect(
       visibleReasoningKinds('raw', [
-        reasoningBlock('summary'),
         reasoningBlock('raw'),
+        reasoningBlock('summary'),
       ]),
     ).toEqual(['raw'])
     expect(visibleReasoningKinds('raw', [reasoningBlock('summary')])).toEqual([
@@ -128,5 +167,27 @@ describe('shouldShowReasoningBlock', () => {
         message => message.hasRawReasoning,
       ),
     ).toEqual([false, true])
+  })
+
+  test('transcript selection follows display visibility in production stop order', () => {
+    const both = [reasoningBlock('raw'), reasoningBlock('summary')]
+
+    expect(visibleTranscriptReasoningKinds('raw', both)).toEqual(['raw'])
+    expect(visibleTranscriptReasoningKinds('summary', both)).toEqual([
+      'summary',
+    ])
+    expect(visibleTranscriptReasoningKinds('off', both)).toEqual([])
+    expect(
+      visibleTranscriptReasoningKinds('raw', [reasoningBlock('summary')]),
+    ).toEqual(['summary'])
+    expect(
+      visibleTranscriptReasoningKinds('raw', [reasoningBlock('raw')]),
+    ).toEqual(['raw'])
+    expect(
+      visibleTranscriptReasoningKinds('raw', [
+        reasoningBlock('raw', '   '),
+        reasoningBlock('summary'),
+      ]),
+    ).toEqual(['summary'])
   })
 })

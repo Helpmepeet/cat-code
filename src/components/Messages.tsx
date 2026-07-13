@@ -32,6 +32,7 @@ import { buildMessageLookups, createAssistantMessage, deriveUUID, getMessagesAft
 import { useAppState } from '../state/AppState.js';
 import { plural } from '../utils/stringUtils.js';
 import { renderableSearchText } from '../utils/transcriptSearch.js';
+import { findLastVisibleThinkingBlockId, getReasoningDisplayMode } from '../utils/reasoningDisplay.js';
 import { Divider } from './design-system/Divider.js';
 import type { UnseenDivider } from './FullscreenLayout.js';
 import { LogoV2 } from './LogoV2/LogoV2.js';
@@ -389,6 +390,7 @@ const MessagesImpl = ({
     }
     return false;
   }, [streamingThinking]);
+  const reasoningDisplayMode = getReasoningDisplayMode();
 
   // Find the last thinking block (message UUID + content index) for hiding past thinking in transcript mode
   // When streaming thinking is visible, use a special ID that won't match any completed thinking block
@@ -398,27 +400,8 @@ const MessagesImpl = ({
     if (!hidePastThinking) return null;
     // If streaming thinking is visible, hide all completed thinking blocks by using a non-matching ID
     if (isStreamingThinkingVisible) return 'streaming';
-    // Iterate backwards to find the last message with a thinking block
-    for (let i = normalizedMessages.length - 1; i >= 0; i--) {
-      const msg = normalizedMessages[i];
-      if (msg?.type === 'assistant') {
-        const content = msg.message.content;
-        // Find the last thinking block in this message
-        for (let j = content.length - 1; j >= 0; j--) {
-          if (content[j]?.type === 'thinking') {
-            return `${msg.uuid}:${j}`;
-          }
-        }
-      } else if (msg?.type === 'user') {
-        const hasToolResult = msg.message.content.some(block => block.type === 'tool_result');
-        if (!hasToolResult) {
-          // Reached a previous user turn so don't show stale thinking from before
-          return 'no-thinking';
-        }
-      }
-    }
-    return null;
-  }, [normalizedMessages, hidePastThinking, isStreamingThinkingVisible]);
+    return findLastVisibleThinkingBlockId(normalizedMessages, reasoningDisplayMode);
+  }, [normalizedMessages, hidePastThinking, isStreamingThinkingVisible, reasoningDisplayMode]);
 
   // Find the latest user bash output message (from ! commands)
   // This allows us to show full output for the most recent bash command

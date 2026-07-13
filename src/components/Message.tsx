@@ -13,8 +13,7 @@ import { type AdvisorBlock, isAdvisorBlock } from '../utils/advisor.js';
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js';
 import { logError } from '../utils/log.js';
 import type { buildMessageLookups } from '../utils/messages.js';
-import { shouldShowReasoningBlock, type ReasoningDisplayMode } from '../utils/reasoningDisplay.js';
-import { getInitialSettings } from '../utils/settings/settings.js';
+import { getReasoningDisplayMode, shouldShowReasoningBlock } from '../utils/reasoningDisplay.js';
 import { CompactSummary } from './CompactSummary.js';
 import { AdvisorMessage } from './messages/AdvisorMessage.js';
 import { AssistantRedactedThinkingMessage } from './messages/AssistantRedactedThinkingMessage.js';
@@ -565,13 +564,7 @@ function AssistantMessageBlock(t0) {
         // reasoningDisplay === 'off' suppresses all kind-tagged blocks.
         const reasoningKind = (param as { reasoningKind?: 'summary' | 'raw' }).reasoningKind;
         if (reasoningKind) {
-          let displayMode: ReasoningDisplayMode = 'summary';
-          try {
-            const s = getInitialSettings() as { reasoningDisplay?: string };
-            if (s?.reasoningDisplay === 'off' || s?.reasoningDisplay === 'summary' || s?.reasoningDisplay === 'raw') {
-              displayMode = s.reasoningDisplay;
-            }
-          } catch {}
+          const displayMode = getReasoningDisplayMode();
           const hasContent = typeof param.thinking === 'string' && param.thinking.trim().length > 0;
           if (!shouldShowReasoningBlock(displayMode, reasoningKind, hasRawReasoning === true, hasContent)) return null;
           // Past-turn collapse: if this isn't the most recent thinking block
