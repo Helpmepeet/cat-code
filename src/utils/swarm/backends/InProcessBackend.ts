@@ -5,12 +5,15 @@ import {
 } from '../../../tasks/InProcessTeammateTask/InProcessTeammateTask.js'
 import { parseAgentId } from '../../../utils/agentId.js'
 import { logForDebugging } from '../../../utils/debug.js'
-import { jsonStringify } from '../../../utils/slowOperations.js'
 import {
   createShutdownRequestMessage,
+  resolveTeamPrincipalByName,
+  writeControlRequestToMailbox,
   writeToMailbox,
 } from '../../../utils/teammateMailbox.js'
+import { TEAM_LEAD_NAME } from '../constants.js'
 import { startInProcessTeammate } from '../inProcessRunner.js'
+import { readTeamSnapshot } from '../teamHelpers.js'
 import {
   killInProcessTeammate,
   spawnInProcessTeammate,
@@ -226,21 +229,35 @@ export class InProcessBackend implements TeammateExecutor {
     // Create shutdown request message
     const shutdownRequest = createShutdownRequestMessage({
       requestId,
-      from: 'team-lead', // Terminate is always called by the leader
+      from: TEAM_LEAD_NAME, // Terminate is always called by the leader
       reason,
     })
 
     // Send to teammate's mailbox
     const teammateAgentName = task.identity.agentName
-    await writeToMailbox(
-      teammateAgentName,
-      {
-        from: 'team-lead',
-        text: jsonStringify(shutdownRequest),
-        timestamp: new Date().toISOString(),
-      },
-      task.identity.teamName,
-    )
+    const teamName = task.identity.teamName
+    try {
+      const snapshot = await readTeamSnapshot(teamName)
+      const recipient = resolveTeamPrincipalByName(snapshot, teammateAgentName)
+      if (!recipient) {
+        logForDebugging(
+          `[InProcessBackend] terminate() failed: ${teammateAgentName} not in the current roster`,
+        )
+        return false
+      }
+      await writeControlRequestToMailbox({
+        teamName,
+        requestId,
+        requestType: 'shutdown',
+        recipient,
+        control: shutdownRequest,
+      })
+    } catch (error) {
+      logForDebugging(
+        `[InProcessBackend] terminate() failed to send shutdown request to ${agentId}: ${error}`,
+      )
+      return false
+    }
 
     // Mark the task as shutdown requested
     requestTeammateShutdown(task.id, this.context.setAppState)

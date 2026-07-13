@@ -29,7 +29,21 @@ import {
 } from '../../utils/sessionStorage.js'
 import * as diskOutput from '../../utils/task/diskOutput.js'
 import * as agentToolUtils from './agentToolUtils.js'
-import { resumeAgentBackground } from './resumeAgent.js'
+import {
+  AgentResumeInProgressError,
+  resumeAgentBackground,
+  TranscriptNotFoundError,
+} from './resumeAgent.js'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
 
 describe('resumeAgentBackground', () => {
   const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
@@ -113,6 +127,101 @@ describe('resumeAgentBackground', () => {
     expect(parentTranscript).toContain('"type":"subagent-spawned"')
     expect(parentTranscript).toContain('"toolUseId":"toolu-resume"')
     expect(parentTranscript).toContain('"agentId":"agent-resume"')
+  })
+
+  test('holds lifecycle ownership until the detached background run settles, not just through setup', async () => {
+    const lifecycle = deferred<void>()
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(() => lifecycle.promise) as never,
+    )
+    const resume = () =>
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      })
+
+    await expect(resume()).resolves.toMatchObject({ agentId: 'agent-resume' })
+    // Setup for the first call already finished (the promise above
+    // resolved), but its lifecycle is still pending — ownership must still
+    // be held, unlike the old setup-scoped Set.
+    await expect(resume()).rejects.toBeInstanceOf(AgentResumeInProgressError)
+
+    lifecycle.resolve()
+    await lifecycle.promise
+    // Give the ownership-release .then(release, release) chain a turn to run
+    // before probing for release.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await expect(resume()).resolves.toMatchObject({ agentId: 'agent-resume' })
+  })
+
+  test('releases lifecycle ownership on setup failure without ever launching a lifecycle', async () => {
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-missing-transcript',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).rejects.toBeInstanceOf(TranscriptNotFoundError)
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+
+    // If ownership had leaked, this second call for the same agentId would
+    // reject with AgentResumeInProgressError instead of reaching (and
+    // failing on) the same missing-transcript setup step again.
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-missing-transcript',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).rejects.toBeInstanceOf(TranscriptNotFoundError)
+  })
+
+  test('releases lifecycle ownership when the detached lifecycle rejects, without an unhandled rejection', async () => {
+    const rejecting = deferred<void>()
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(() => rejecting.promise) as never,
+    )
+
+    const unhandled: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandledRejection)
+    try {
+      await expect(
+        resumeAgentBackground({
+          agentId: 'agent-resume',
+          prompt: 'continue',
+          canUseTool: (() => undefined) as never,
+          toolUseContext: createToolUseContext(),
+        }),
+      ).resolves.toMatchObject({ agentId: 'agent-resume' })
+
+      rejecting.reject(new Error('lifecycle blew up'))
+      await rejecting.promise.catch(() => {})
+      await Promise.resolve()
+      await Promise.resolve()
+
+      await expect(
+        resumeAgentBackground({
+          agentId: 'agent-resume',
+          prompt: 'continue',
+          canUseTool: (() => undefined) as never,
+          toolUseContext: createToolUseContext(),
+        }),
+      ).resolves.toMatchObject({ agentId: 'agent-resume' })
+
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
   })
 })
 

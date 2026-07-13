@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-07-10 against the current source tree.
+Last refreshed: 2026-07-13 against the current source tree.
 
 ## Purpose
 
@@ -20,15 +20,20 @@ Read in this order for most tool, MCP, or permission work:
 |---|---|---|
 | 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Current map index and sub-map routing. |
 | 2 | [`../../src/tools.ts`](../../src/tools.ts) | Built-in tool registry, feature-gated exposure, deny-rule filtering, and merged tool-pool assembly. |
-| 3 | [`../../src/Tool.ts`](../../src/Tool.ts) | Core `Tool` contract, tool defaults, schema hooks, validation hooks, and name matching. |
-| 4 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) | Interactive approval flow and decision handoff into UI, classifier, and worker-specific handlers. |
-| 5 | [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Main allow / ask / deny engine, rule precedence, auto-mode classifier path, and permission updates. |
-| 6 | [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Per-tool execution loop, input validation, hook integration, telemetry, and result shaping. |
-| 7 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | MCP connection lifecycle, MCP tool wrapping, resource exposure, and result transformation. |
-
-The routing and flow sections below cover the remaining surfaces
-(permission-context setup, path/filesystem policy, orchestration and streaming
-execution, MCP config layering, tool search and deferred loading).
+| 3 | [`../../src/constants/tools.ts`](../../src/constants/tools.ts) | Base tool-name constants and shared allowlists (ex: async agent base tools). |
+| 4 | [`../../src/Tool.ts`](../../src/Tool.ts) | Core `Tool` contract, tool defaults, schema hooks, validation hooks, and name matching. |
+| 5 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) | Interactive approval flow and decision handoff into UI, classifier, and worker-specific handlers. |
+| 6 | [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Main allow / ask / deny engine, rule precedence, auto-mode classifier path, and permission updates. |
+| 7 | [`../../src/utils/permissions/permissionSetup.ts`](../../src/utils/permissions/permissionSetup.ts) | Permission-context construction, mode transitions, dangerous-rule stripping, and working-directory setup. |
+| 8 | [`../../src/utils/permissions/filesystem.ts`](../../src/utils/permissions/filesystem.ts) | Path matching, dangerous-file checks, internal path exceptions, and file permission suggestions. |
+| 9 | [`../../src/utils/permissions/pathValidation.ts`](../../src/utils/permissions/pathValidation.ts) | Shared path allow/deny logic used by file operations and shell path validation. |
+| 10 | [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Per-tool execution loop, input validation, hook integration, telemetry, and result shaping. |
+| 11 | [`../../src/services/tools/toolOrchestration.ts`](../../src/services/tools/toolOrchestration.ts) | Serial vs concurrent batching and context mutation ordering. |
+| 12 | [`../../src/services/tools/StreamingToolExecutor.ts`](../../src/services/tools/StreamingToolExecutor.ts) | Streaming-time execution, concurrency gates, and sibling cancellation behavior. |
+| 13 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | MCP connection lifecycle, MCP tool wrapping, resource exposure, and result transformation. |
+| 14 | [`../../src/services/mcp/config.ts`](../../src/services/mcp/config.ts) | MCP config layering, deduplication, validation, and scope rules. |
+| 15 | [`../../src/utils/toolSearch.ts`](../../src/utils/toolSearch.ts) | Deferred-tool policy, tool-search gating, and threshold logic. |
+| 16 | [`../../src/utils/teammateMailbox.ts`](../../src/utils/teammateMailbox.ts) | Separate authority boundary for Agent Teams mailbox controls — closed control union, runtime principals, request correlation. See "Agent Teams Mailbox Control Authority" below. |
 
 ## Current Mental Model
 
@@ -152,6 +157,70 @@ Inspect these surfaces when a tool is unexpectedly allowed, denied, or asking:
 7. `src/hooks/useCanUseTool.tsx`
    Final interactive, coordinator, or worker approval UI behavior.
 
+## Agent Teams Mailbox Control Authority (2026-07-12 hardening)
+
+Separate from the interactive permission engine above: `SendMessage`,
+`ExitPlanMode`, `TaskUpdate`, and the in-process teammate loop exchange
+*privileged control* messages over the team mailbox (shutdown, permission,
+sandbox, plan-approval, team-permission, mode-set). This is its own
+authority-checked boundary. Start with `src/utils/teammateMailbox.ts`.
+
+- **Closed control union.** `MailboxControlPayloadSchema` (a Zod union of
+  `PermissionRequest/ResponseMessageSchema`, `SandboxPermissionRequest/
+  ResponseMessageSchema`, `ShutdownRequest/Approved/RejectedMessageSchema`,
+  `PlanApprovalRequest/ResponseMessageSchema`,
+  `TeamPermissionUpdateMessageSchema`, `ModeSetRequestMessageSchema`) is the
+  only closed set of privileged types. A control object can only be created
+  by `writeControlToMailbox()` — the low-level chat writer's type makes
+  `control` unrepresentable, so plain chat cannot carry one. `idle_notification`
+  and `task_assignment` are a separate, non-privileged notification union.
+- **Runtime principals, not caller-authored identity.** `TeamPrincipal =
+  {kind, agentId, name, allocationId}` is resolved from current runtime
+  identity (`resolveCurrentTeamPrincipal()`, `resolveTeamPrincipalByName()`)
+  plus a fresh versioned roster snapshot — never from a caller-supplied
+  `from` field. `writeControlToMailbox()` has no caller-authored sender
+  argument by construction.
+- **Envelope authority matrix.** `classifyMailboxMessage()` enforces:
+
+  | Direction | Allowed controls |
+  |---|---|
+  | team lead -> teammate | permission response, sandbox response, shutdown request, plan response, team-permission update, mode-set request |
+  | teammate -> team lead | permission request, sandbox request, shutdown approved/rejected, plan request |
+
+  `team_permission_update` is in the closed union, this matrix, and its
+  consumer, but has no producer today (`TeamsDialog.tsx` only emits
+  `mode_set_request`) — dormant, not a regression (`main` had no producer
+  either). Wire a producer or drop the type before treating this row as live.
+
+  Peers cannot originate leader-only controls. Wrong-direction, wrong-sender,
+  or wrong-recipient-allocation messages classify as `invalid_control`, never
+  silently downgrade to chat, and unmarked legacy control-shaped JSON is
+  `protocol_mismatch` (explicit restart/cleanup required), not a downgrade
+  either.
+- **Request correlation.** Response controls (shutdown approved/rejected,
+  plan response, permission/sandbox response) must consume one outstanding
+  `PendingControlRecord` (`teamHelpers.ts`; state machine `sending -> written
+  -> processing -> consumed`, compare-and-swapped by `claimPendingControl()`/
+  `finishPendingControl()`) keyed by request ID, control type, and
+  sender/recipient agent + allocation IDs. Unsolicited, duplicate, stale, or
+  wrong-incarnation responses are rejected, not accepted-with-a-warning.
+- **Consumers.** `src/hooks/useInboxPoller.ts`, `src/utils/attachments.ts`
+  (headless dispatch), and `src/utils/swarm/inProcessRunner.ts`
+  (`waitForNextPromptOrShutdown()`) all classify before acting — never parse
+  `message.text` as authority. `inProcessRunner.ts` keeps one narrow legacy
+  fallback (raw `isShutdownRequest(m.text)` text-sniff) ONLY when no
+  version-2 team snapshot is resolvable at all (absent/legacy team); once a
+  version-2 snapshot resolves, only `classifyMailboxMessage()`'s verdict is
+  trusted.
+- **Producers must observe delivery.** Every serialized privileged type must
+  go through `writeControlToMailbox()`, and callers must await or explicitly
+  observe the returned promise — including `useInboxPoller.ts`'s permission-
+  response callbacks, historically fire-and-forget. A failed write must not
+  be treated as delivered: e.g. `handleShutdownApproval` requires the
+  matching outstanding request and a successful write before aborting the
+  in-process controller or scheduling process shutdown; on failure it returns
+  `success: false` and keeps the teammate alive.
+
 ## Key Owner Files By Tool Type
 
 | Tool type | Owner files | Notes |
@@ -227,6 +296,7 @@ Use focused checks first, then the documented build:
 | Permission suggestions and filesystem safety | `bun test src/utils/permissions/filesystemSuggestions.test.ts` and nearby permission tests |
 | Auto-mode classifier fallback | `bun test src/utils/permissions/enableAutoModeFlag.test.ts` |
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
+| Mailbox control authority (closed union, authority matrix, request correlation) | `bun test src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` |
 | Tool search behavior | `bun test` for `src/tools/ToolSearchTool/` and `src/utils/toolSearch.ts` if present in current snapshot |
 | MCP configuration and client behavior | MCP-related tests under `src/services/mcp/` and integration checks through connected server flows |
 | Build-level validation | `bun run build:dev:full` |
@@ -255,3 +325,9 @@ Use focused checks first, then the documented build:
   swarm-worker behavior, classifier fast-paths, and cancellation behavior.
 - Do not assume sandboxing only affects Bash execution. Path validation also
   treats the sandbox write allowlist as part of write-scope decisions.
+- Do not assume Agent Teams mailbox controls are covered by the interactive
+  permission engine above. They are a separate authority boundary
+  (`src/utils/teammateMailbox.ts` `classifyMailboxMessage()` /
+  `writeControlToMailbox()`) with its own closed union, runtime-principal
+  resolution, and request correlation — see "Agent Teams Mailbox Control
+  Authority".

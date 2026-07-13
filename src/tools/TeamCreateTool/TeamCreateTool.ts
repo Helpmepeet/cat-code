@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { z } from 'zod/v4'
 import { getSessionId } from '../../bootstrap/state.js'
 import { logEvent } from '../../services/analytics/index.js'
@@ -154,22 +155,50 @@ export const TeamCreateTool: Tool<InputSchema, Output> = buildTool({
 
     const teamFilePath = getTeamFilePath(finalTeamName)
 
+    const leadAllocationId = randomUUID()
+    const now = Date.now()
     const teamFile: TeamFile = {
       name: finalTeamName,
       description: _description,
-      createdAt: Date.now(),
+      createdAt: now,
       leadAgentId,
       leadSessionId: getSessionId(), // Store actual session ID for team discovery
+      // New teams always start on version 2: recipient-record allocation,
+      // versioned mailbox envelopes, and pending-control correlation are
+      // only accepted against a version-2 team file. A team created before
+      // this shipped (absent/older version) must be restarted or cleaned up
+      // rather than silently upgraded in place.
+      teamProtocolVersion: 2,
+      recipientRecords: [
+        {
+          allocationId: leadAllocationId,
+          key: TEAM_LEAD_NAME,
+          name: TEAM_LEAD_NAME,
+          kind: 'leader',
+          agentId: leadAgentId,
+          sessionId: getSessionId(),
+          status: 'active',
+          launcherPid: process.pid,
+          launcherInstanceId: randomUUID(),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      // Seeded empty so new teams have it from birth; every reader also
+      // treats an absent field as `[]` (teamHelpers.ts `TeamFile.pendingControls`
+      // doc comment) so this is belt-and-suspenders, not load-bearing.
+      pendingControls: [],
       members: [
         {
           agentId: leadAgentId,
           name: TEAM_LEAD_NAME,
           agentType: leadAgentType,
           model: leadModel,
-          joinedAt: Date.now(),
+          joinedAt: now,
           tmuxPaneId: '',
           cwd: getCwd(),
           subscriptions: [],
+          allocationId: leadAllocationId,
         },
       ],
     }

@@ -4,14 +4,20 @@ import { formatAgentId, parseAgentId } from '../../../utils/agentId.js'
 import { quote } from '../../../utils/bash/shellQuote.js'
 import { registerCleanup } from '../../../utils/cleanupRegistry.js'
 import { logForDebugging } from '../../../utils/debug.js'
-import { jsonStringify } from '../../../utils/slowOperations.js'
-import { writeToMailbox } from '../../../utils/teammateMailbox.js'
+import {
+  createShutdownRequestMessage,
+  resolveTeamPrincipalByName,
+  writeControlRequestToMailbox,
+  writeToMailbox,
+} from '../../../utils/teammateMailbox.js'
 import {
   buildInheritedCliFlags,
   buildInheritedEnvVars,
   getTeammateCommand,
 } from '../spawnUtils.js'
 import { assignTeammateColor } from '../teammateLayoutManager.js'
+import { TEAM_LEAD_NAME } from '../constants.js'
+import { readTeamSnapshot } from '../teamHelpers.js'
 import { isInsideTmux } from './detection.js'
 import type {
   BackendType,
@@ -264,23 +270,38 @@ export class PaneBackendExecutor implements TeammateExecutor {
 
     const { agentName, teamName } = parsed
 
-    // Send shutdown request via mailbox
-    const shutdownRequest = {
-      type: 'shutdown_request',
-      requestId: `shutdown-${agentId}-${Date.now()}`,
-      from: 'team-lead',
-      reason,
-    }
+    try {
+      const snapshot = await readTeamSnapshot(teamName)
+      const recipient = resolveTeamPrincipalByName(snapshot, agentName)
+      if (!recipient) {
+        logForDebugging(
+          `[PaneBackendExecutor] terminate() failed: ${agentName} not in the current roster`,
+        )
+        return false
+      }
+      const requestId = `shutdown-${agentId}-${Date.now()}`
+      const shutdownRequest = createShutdownRequestMessage({
+        requestId,
+        from: TEAM_LEAD_NAME,
+        reason,
+      })
 
-    await writeToMailbox(
-      agentName,
-      {
-        from: 'team-lead',
-        text: jsonStringify(shutdownRequest),
-        timestamp: new Date().toISOString(),
-      },
-      teamName,
-    )
+      // Only the team lead may issue a shutdown_request (Design Decisions) —
+      // this executor is only ever driven by leader-side code paths, so the
+      // resolved sender inside writeControlRequestToMailbox must be the lead.
+      await writeControlRequestToMailbox({
+        teamName,
+        requestId,
+        requestType: 'shutdown',
+        recipient,
+        control: shutdownRequest,
+      })
+    } catch (error) {
+      logForDebugging(
+        `[PaneBackendExecutor] terminate() failed to send shutdown request to ${agentId}: ${error}`,
+      )
+      return false
+    }
 
     logForDebugging(
       `[PaneBackendExecutor] terminate() sent shutdown request to ${agentId}`,

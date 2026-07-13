@@ -28,10 +28,20 @@ import { createAgentId } from '../../utils/uuid.js'
 import * as agentToolUtils from '../AgentTool/agentToolUtils.js'
 import { FORK_AGENT } from '../AgentTool/forkSubagent.js'
 import * as resumeAgentModule from '../AgentTool/resumeAgent.js'
+import * as resolveAgentTargetModule from '../AgentTool/resolveAgentTarget.js'
+import type { ResolvedAgentTarget } from '../AgentTool/resolveAgentTarget.js'
 import {
   ResumeAgentTool,
   type Output as ResumeAgentToolOutput,
 } from './ResumeAgentTool.js'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>(res => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 const createdFiles: string[] = []
 
@@ -636,6 +646,81 @@ describe('ResumeAgentTool', () => {
     expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
     expect(getState().tasks[agentId].status).toBe('running')
     expect(getState().tasks[agentId].prompt).toBe(successfulPrompt)
+  })
+
+  test('a call whose resolution is still in flight re-reads state before acting, losing to a faster resume', async () => {
+    const runAsyncAgentLifecycle = spyOn(
+      agentToolUtils,
+      'runAsyncAgentLifecycle',
+    ).mockImplementation(mock(async () => {}) as never)
+    const agentId = createAgentId()
+    writeAgentTranscript(agentId)
+    await writeAgentMetadata(asAgentId(agentId), {
+      agentType: 'general-purpose',
+      description: 'Race worker',
+    })
+    const { context, getState } = createToolUseContext({
+      agentNameRegistry: new Map([['worker-one', agentId]]),
+      tasks: {
+        [agentId]: {
+          id: agentId,
+          type: 'local_agent',
+          status: 'completed',
+          agentId,
+          agentType: 'general-purpose',
+        },
+      },
+    })
+
+    // Call B's target resolution is held open behind a deferred promise (a
+    // barrier, never a timer) so call A can run resolution + resume to
+    // completion and register running state first. B is released only
+    // afterward, and must then re-read fresh state — not act on the
+    // 'completed' snapshot that existed when B's resolution began — to
+    // correctly detect that the target is now running.
+    const resolveGate = deferred<ResolvedAgentTarget | null>()
+    const realResolveAgentTarget = resolveAgentTargetModule.resolveAgentTarget
+    let resolveCalls = 0
+    const resolveSpy = spyOn(
+      resolveAgentTargetModule,
+      'resolveAgentTarget',
+    ).mockImplementation(
+      mock(async args => {
+        resolveCalls++
+        if (resolveCalls === 1) return resolveGate.promise
+        return realResolveAgentTarget(args)
+      }) as never,
+    )
+
+    const bPromise = ResumeAgentTool.call(
+      { agentId: 'worker-one', prompt: 'B' },
+      context,
+      undefined as never,
+      { requestId: 'req-race-b' } as never,
+    )
+
+    const aResult = await ResumeAgentTool.call(
+      { agentId: 'worker-one', prompt: 'A' },
+      context,
+      undefined as never,
+      { requestId: 'req-race-a' } as never,
+    )
+    expect(aResult.data.success).toBe(true)
+    expect(getState().tasks[agentId].status).toBe('running')
+
+    resolveGate.resolve(
+      await realResolveAgentTarget({
+        input: 'worker-one',
+        appState: getState(),
+        sessionId: getSessionId(),
+      }),
+    )
+    const bResult = await bPromise
+
+    expect(bResult.data.success).toBe(false)
+    expect(bResult.data.message).toContain('already running')
+    expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
+    expect(resolveSpy).toHaveBeenCalledTimes(2)
   })
 
   test('resumes an evicted task from an on-disk transcript', async () => {

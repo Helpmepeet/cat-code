@@ -2,12 +2,26 @@ import React from 'react';
 import { MessageResponse } from '../../components/MessageResponse.js';
 import { Text } from '../../ink.js';
 import { jsonParse } from '../../utils/slowOperations.js';
-import type { Input, SendMessageToolOutput } from './SendMessageTool.js';
+import type { BroadcastOutput, Input, SendMessageToolOutput } from './SendMessageTool.js';
 export function getSendMessageResultTone(result: SendMessageToolOutput): 'error' | 'success' | undefined {
   if (!result.success) {
     return 'error';
   }
   return /\bresumed\b/i.test(result.message) ? 'success' : undefined;
+}
+/**
+ * Truthful per-recipient counts for a broadcast result — surfaces a partial
+ * failure that would otherwise be invisible once the generic "routed result"
+ * branch below returns null for a successful send.
+ */
+export function formatBroadcastSummary(result: BroadcastOutput): string {
+  const succeeded = result.recipients.length;
+  const failed = result.failed_recipients?.length ?? 0;
+  if (failed === 0) {
+    return `Broadcast: ${succeeded} delivered`;
+  }
+  const names = result.failed_recipients!.map(f => f.name).join(', ');
+  return `Broadcast: ${succeeded} delivered, ${failed} failed (${names})`;
 }
 export function renderToolUseMessage(input: Partial<Input>): React.ReactNode {
   if (typeof input.message !== 'object' || input.message === null) {
@@ -24,6 +38,12 @@ export function renderToolResultMessage(content: SendMessageToolOutput | string,
   verbose: boolean;
 }): React.ReactNode {
   const result: SendMessageToolOutput = typeof content === 'string' ? jsonParse(content) : content;
+  if ('recipients' in result && (result.recipients.length > 0 || (result.failed_recipients?.length ?? 0) > 0)) {
+    const tone = getSendMessageResultTone(result);
+    return <MessageResponse>
+        <Text color={tone} dimColor={tone === undefined}>{formatBroadcastSummary(result)}</Text>
+      </MessageResponse>;
+  }
   if ('routing' in result && result.routing) {
     return null;
   }

@@ -298,9 +298,16 @@ export function killInProcessTeammate(
     }
   })
 
-  // Remove from team file (outside state updater to avoid file I/O in callback)
+  // Remove from team file (outside state updater to avoid file I/O in callback).
+  // killInProcessTeammate is synchronous (its return value drives the caller's
+  // notification path below), so this write is fire-and-forget; failures are
+  // logged rather than silently dropped.
   if (teamName && agentId) {
-    removeMemberByAgentId(teamName, agentId)
+    void removeMemberByAgentId(teamName, agentId).catch(error =>
+      logForDebugging(
+        `[spawnInProcess] Failed to remove ${agentId} from team ${teamName}: ${error}`,
+      ),
+    )
   }
 
   if (killed) {

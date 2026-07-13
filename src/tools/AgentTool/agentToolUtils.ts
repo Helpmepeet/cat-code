@@ -59,7 +59,6 @@ import { emitTaskProgress as emitTaskProgressEvent } from '../../utils/task/sdkP
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
-import { isInProcessTeammate } from '../../utils/teammateContext.js'
 import { appendSubagentTerminal } from '../../utils/sessionStorage.js'
 import { unregisterActiveSubagent } from '../../utils/cleanupRegistry.js'
 import { getTokenCountFromUsage } from '../../utils/tokens.js'
@@ -70,6 +69,8 @@ import {
 } from '../../contracts/orchestration.js'
 import { safeParseJSON } from '../../utils/json.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
+import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
+import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 export type ResolvedAgentTools = {
@@ -80,16 +81,32 @@ export type ResolvedAgentTools = {
   allowedAgentTypes?: string[]
 }
 
+/**
+ * Explicit tool-pool environment for filtering/resolution. `'default'` is the
+ * ordinary async-subagent case. `'in-process-teammate'` and `'main-thread'`
+ * are explicit rather than derived from AsyncLocalStorage (isInProcessTeammate())
+ * so a caller that resolves tools BEFORE the teammate's ALS context exists
+ * (inProcessRunner building its initial system prompt) gets the same answer
+ * as a caller resolving tools from inside it (Task 5: prompt/tool-pool
+ * consistency — see docs/superpowers/plans/2026-07-12-agent-control-routing-hardening-plan.md).
+ */
+export type AgentToolEnvironment =
+  | 'default'
+  | 'in-process-teammate'
+  | 'main-thread'
+
 export function filterToolsForAgent({
   tools,
   isBuiltIn,
   isAsync = false,
   permissionMode,
+  environment = 'default',
 }: {
   tools: Tools
   isBuiltIn: boolean
   isAsync?: boolean
   permissionMode?: PermissionMode
+  environment?: AgentToolEnvironment
 }): Tools {
   return tools.filter(tool => {
     // Allow MCP tools for all agents
@@ -111,7 +128,7 @@ export function filterToolsForAgent({
       return false
     }
     if (isAsync && !ASYNC_AGENT_ALLOWED_TOOLS.has(tool.name)) {
-      if (isAgentSwarmsEnabled() && isInProcessTeammate()) {
+      if (isAgentSwarmsEnabled() && environment === 'in-process-teammate') {
         // Allow AgentTool for in-process teammates to spawn sync subagents.
         // Validation in AgentTool.call() prevents background agents and teammate spawning.
         if (toolMatchesName(tool, AGENT_TOOL_NAME)) {
@@ -139,7 +156,7 @@ export function resolveAgentTools(
   >,
   availableTools: Tools,
   isAsync = false,
-  isMainThread = false,
+  environment: AgentToolEnvironment = 'default',
 ): ResolvedAgentTools {
   const {
     tools: agentTools,
@@ -147,6 +164,7 @@ export function resolveAgentTools(
     source,
     permissionMode,
   } = agentDefinition
+  const isMainThread = environment === 'main-thread'
   // When isMainThread is true, skip filterToolsForAgent entirely — the main
   // thread's tool pool is already properly assembled by useMergedTools(), so
   // the sub-agent disallow lists shouldn't apply.
@@ -157,6 +175,7 @@ export function resolveAgentTools(
         isBuiltIn: source === 'built-in',
         isAsync,
         permissionMode,
+        environment,
       })
 
   // Create a set of disallowed tool names for quick lookup
@@ -237,6 +256,44 @@ export function resolveAgentTools(
   }
 }
 
+/**
+ * Which continuation tools the CURRENT invoker of Agent can actually call —
+ * derived from the exact resolved tool array used to build this invocation's
+ * prompt/API tool definitions (never the unfiltered parent pool). Drives
+ * both prompt guidance (getPrompt) and result-trailer wording
+ * (mapToolResultToToolResultBlockParam) so neither ever advertises a tool
+ * this context doesn't have.
+ */
+export type AgentContinuationCapabilities = {
+  canSendMessage: boolean
+  canResumeAgent: boolean
+  canSpawnAgent: boolean
+}
+
+export function getAgentContinuationCapabilities(
+  tools: Tools,
+): AgentContinuationCapabilities {
+  return {
+    canSendMessage: tools.some(tool =>
+      toolMatchesName(tool, SEND_MESSAGE_TOOL_NAME),
+    ),
+    canResumeAgent: tools.some(tool =>
+      toolMatchesName(tool, RESUME_AGENT_TOOL_NAME),
+    ),
+    canSpawnAgent: tools.some(tool => toolMatchesName(tool, AGENT_TOOL_NAME)),
+  }
+}
+
+/**
+ * Intersected onto synchronous and asynchronous local-agent result types.
+ * Optional so historical (already-persisted) results without the field
+ * render conservatively — no continuation call literal — rather than
+ * guessing capability from context that no longer exists.
+ */
+export type AgentContinuationMetadata = {
+  continuationCapabilities?: AgentContinuationCapabilities
+}
+
 export const agentToolResultSchema = lazySchema(() =>
   z.object({
     agentId: z.string(),
@@ -294,7 +351,10 @@ export const agentToolResultSchema = lazySchema(() =>
   }),
 )
 
-export type AgentToolResult = z.input<ReturnType<typeof agentToolResultSchema>>
+export type AgentToolResult = z.input<
+  ReturnType<typeof agentToolResultSchema>
+> &
+  AgentContinuationMetadata
 
 export function getForkWorkerResultOutputFormat(): BetaJSONOutputFormat {
   return {
@@ -490,6 +550,7 @@ export function finalizeAgentTool(
     agentName?: string
     isAsync: boolean
     totalTokensOverride?: number
+    continuationCapabilities?: AgentContinuationCapabilities
   },
 ): AgentToolResult {
   const {
@@ -501,6 +562,7 @@ export function finalizeAgentTool(
     agentName,
     isAsync,
     totalTokensOverride,
+    continuationCapabilities,
   } = metadata
 
   const lastAssistantMessage = getLastAssistantMessage(agentMessages)
@@ -593,6 +655,7 @@ export function finalizeAgentTool(
     agentId,
     agentType,
     ...(agentName ? { agentName } : {}),
+    ...(continuationCapabilities ? { continuationCapabilities } : {}),
     model: resolvedAgentModel,
     changedFiles,
     ...(changedFilesTruncated !== undefined ? { changedFilesTruncated } : {}),

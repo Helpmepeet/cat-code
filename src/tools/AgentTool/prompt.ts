@@ -12,6 +12,7 @@ import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js'
 import { AGENT_TOOL_NAME } from './constants.js'
 import { isForkSubagentEnabled } from './forkSubagent.js'
+import type { AgentContinuationCapabilities } from './agentToolUtils.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 import { type APIProvider } from '../../utils/model/providers.js'
 
@@ -76,7 +77,15 @@ export async function getPrompt(
   allowedAgentTypes?: string[],
   provider?: APIProvider,
   isAgentMode?: boolean,
+  capabilities?: AgentContinuationCapabilities,
 ): Promise<string> {
+  // Undefined capabilities means an older call site that hasn't been wired
+  // to pass them — default to "everything available" rather than the
+  // conservative default used for persisted result rendering, since
+  // AgentTool.tsx's own prompt() always passes real capabilities now and an
+  // unknown/other caller shouldn't have guidance silently stripped.
+  const canResumeAgent = capabilities?.canResumeAgent ?? true
+  const canSendMessage = capabilities?.canSendMessage ?? true
   // Filter agents by allowed types when Agent(x,y) restricts which agents can be spawned
   const effectiveAgents = allowedAgentTypes
     ? agentDefinitions.filter(a => allowedAgentTypes.includes(a.agentType))
@@ -394,7 +403,11 @@ ${usageHeader}
 - **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.${isGPTPromptStyle ? ' **IMPORTANT: run_in_background: true is REQUIRED for true parallel execution — without it, the parent agent is fully blocked waiting for each subagent to finish, even if you emit multiple spawns in the same turn.**' : ''}`
       : ''
   }
-- To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes from its prior transcript. Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered at the worker's next tool round and does not interrupt its current work. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
+- ${
+    canResumeAgent
+      ? `To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes from its prior transcript. `
+      : `A completed or stopped agent cannot be resumed from this context — ${RESUME_AGENT_TOOL_NAME} is not available here; spawn a fresh ${AGENT_TOOL_NAME} instead. `
+  }${canSendMessage ? `Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered at the worker's next tool round and does not interrupt its current work. ` : ''}${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
 - The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.

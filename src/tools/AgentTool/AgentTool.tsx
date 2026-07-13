@@ -11,7 +11,7 @@ import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
 import { isAgentMode } from '../../agent-mode/agentMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
 import { getSessionStatePathFromTranscriptPath, readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
-import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js';
+import { allocateWorkerName, releaseWorkerName, selectWorkerNameCandidate, tryReserveWorkerName } from '../../agent-mode/workerNames.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
@@ -52,8 +52,11 @@ import { BASH_TOOL_NAME } from '../BashTool/toolName.js';
 import { BackgroundHint } from '../BashTool/UI.js';
 import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js';
 import { spawnTeammate } from '../shared/spawnMultiAgent.js';
+import { formatAgentId } from '../../utils/agentId.js';
+import { recipientNameKey } from '../../utils/recipientIdentity.js';
+import { allocateTeamRecipient, RecipientConflictError, tombstoneFailedRecipient, transitionTeamRecipient } from '../../utils/swarm/teamHelpers.js';
 import { setAgentColor } from './agentColorManager.js';
-import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, finalizeAgentTool, formatForkWorkerResultForNotification, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle } from './agentToolUtils.js';
+import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, filterToolsForAgent, finalizeAgentTool, formatForkWorkerResultForNotification, getAgentContinuationCapabilities, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle, type AgentContinuationMetadata } from './agentToolUtils.js';
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEnabled, isInForkChild } from './forkSubagent.js';
@@ -286,6 +289,19 @@ function normalizeExplicitSubagentName(explicitName: string): string {
   return agentName
 }
 
+export type ResolvedSystemSubagentName = {
+  agentName: string
+  // Always set (unlike the old optional `allocatedAgentName`) so callers can
+  // unconditionally release it — whether the name came from an explicit
+  // caller value, a themed pool, or a team allocation, it was held in the
+  // process-local reservation set during async setup.
+  processReservationName: string
+  teamAllocation?: {
+    teamName: string
+    allocationId: string
+  }
+}
+
 export async function resolveSystemSubagentName({
   explicitName,
   agentType,
@@ -293,6 +309,7 @@ export async function resolveSystemSubagentName({
   sessionId,
   sessionStateTracking,
   agentId,
+  teamName,
 }: {
   explicitName?: string
   agentType: string
@@ -300,18 +317,77 @@ export async function resolveSystemSubagentName({
   sessionId: string
   sessionStateTracking?: AgentSessionStateTracking
   agentId: string
-}): Promise<{ agentName: string; allocatedAgentName?: string }> {
+  teamName?: string
+}): Promise<ResolvedSystemSubagentName> {
   const reservedSubagentNames = await getReservedSubagentNames({
     appState,
     sessionId,
     sessionStateTracking,
   })
+  const forbiddenKeys = new Set(reservedSubagentNames.map(recipientNameKey))
+
   if (explicitName) {
     const agentName = normalizeExplicitSubagentName(explicitName)
     if (reservedSubagentNames.includes(agentName)) {
       throw new Error(`Subagent name "${agentName}" is already in use`)
     }
-    return { agentName }
+    if (teamName) {
+      const record = await allocateTeamRecipient({
+        teamName,
+        requestedName: agentName,
+        kind: 'local',
+        conflict: 'error',
+        forbiddenKeys,
+        agentId,
+        sessionId,
+      })
+      if (!tryReserveWorkerName(record.name)) {
+        throw new Error(`Subagent name "${record.name}" is already in use`)
+      }
+      return {
+        agentName: record.name,
+        processReservationName: record.name,
+        teamAllocation: { teamName, allocationId: record.allocationId },
+      }
+    }
+    if (!tryReserveWorkerName(agentName)) {
+      throw new Error(`Subagent name "${agentName}" is already in use`)
+    }
+    return { agentName, processReservationName: agentName }
+  }
+
+  if (teamName) {
+    for (;;) {
+      const candidate = selectWorkerNameCandidate(agentType, forbiddenKeys, {
+        allowGeneric: true,
+      })
+      if (!candidate) {
+        // No themed pool for this agentType (or pool logic exhausted) —
+        // fall back to the agent's own ID, which is never entered into the
+        // team's shared namespace.
+        return { agentName: agentId, processReservationName: agentId }
+      }
+      try {
+        const record = await allocateTeamRecipient({
+          teamName,
+          requestedName: candidate,
+          kind: 'local',
+          conflict: 'error',
+          forbiddenKeys,
+          agentId,
+          sessionId,
+        })
+        tryReserveWorkerName(record.name)
+        return {
+          agentName: record.name,
+          processReservationName: record.name,
+          teamAllocation: { teamName, allocationId: record.allocationId },
+        }
+      } catch (e) {
+        if (!(e instanceof RecipientConflictError)) throw e
+        forbiddenKeys.add(recipientNameKey(candidate))
+      }
+    }
   }
 
   const allocatedAgentName = allocateWorkerName(
@@ -319,10 +395,8 @@ export async function resolveSystemSubagentName({
     reservedSubagentNames,
     { allowGeneric: true },
   )
-  return {
-    agentName: allocatedAgentName ?? agentId,
-    ...(allocatedAgentName ? { allocatedAgentName } : {}),
-  }
+  const finalName = allocatedAgentName ?? agentId
+  return { agentName: finalName, processReservationName: finalName }
 }
 
 function registerAgentName(
@@ -356,7 +430,7 @@ const baseInputSchema = lazySchema(() => z.object({
 const fullInputSchema = lazySchema(() => {
   // Multi-agent parameters
   const multiAgentInputSchema = z.object({
-    name: z.string().optional().describe('Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running, and via ResumeAgent({agentId: name}) after it stops.'),
+    name: z.string().optional().describe("Name for the spawned entity. Outside a team context this is a local subagent alias: use SendMessage while it runs and ResumeAgent after it stops. In a team context this creates a teammate allocation: use SendMessage while it remains rostered; a terminated teammate cannot be resumed or reuse its old identity, so replacement requires a fresh Agent call and a new allocation."),
     team_name: z.string().optional().describe('Team name for spawning. Uses current team context if omitted.'),
     mode: permissionModeSchema().optional().describe('Permission mode for spawned teammate (e.g., "plan" to require plan approval).')
   });
@@ -439,7 +513,7 @@ export const outputSchema = lazySchema(() => {
   return z.union([syncOutputSchema, syncCompletedWithErrorOutputSchema, asyncOutputSchema]);
 });
 type OutputSchema = ReturnType<typeof outputSchema>;
-type Output = z.input<OutputSchema>;
+type Output = z.input<OutputSchema> & AgentContinuationMetadata;
 
 // Private type for teammate spawn results - excluded from exported schema for dead code elimination
 // The 'teammate_spawned' status string is only included when ENABLE_AGENT_SWARMS is true
@@ -508,12 +582,18 @@ export const AgentTool = buildTool({
     // dependency issues during test module loading.
     const isCoordinator = feature('COORDINATOR_MODE') ? isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE) : false;
     const isAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
+    // Derived from the SAME resolved tool array this invocation's own API
+    // tool definitions come from — never re-derived elsewhere — so the
+    // continuation guidance below can't advertise a tool this context
+    // doesn't actually have (Task 5).
+    const capabilities = getAgentContinuationCapabilities(tools);
     return await getPrompt(
       filteredAgents,
       isCoordinator,
       allowedAgentTypes,
       provider,
       isAgentMode,
+      capabilities,
     );
   },
   name: AGENT_TOOL_NAME,
@@ -580,17 +660,43 @@ export const AgentTool = buildTool({
       if (agentDef?.color) {
         setAgentColor(subagent_type!, agentDef.color);
       }
-      const result = await spawnTeammate({
-        name,
-        prompt,
-        description,
-        team_name: teamName,
-        use_splitpane: true,
-        plan_mode_required: spawnMode === 'plan',
-        model: model ?? agentDef?.model,
-        agent_type: subagent_type,
-        invokingRequestId: assistantMessage?.requestId
-      }, toolUseContext);
+      const reservedLocalNames = await getReservedSubagentNames({
+        appState,
+        sessionId: getSessionId(),
+      });
+      const teammateAllocation = await allocateTeamRecipient({
+        teamName,
+        requestedName: name,
+        kind: 'teammate',
+        conflict: 'suffix',
+        forbiddenKeys: new Set(reservedLocalNames.map(recipientNameKey)),
+        agentId: formatAgentId(recipientNameKey(name), teamName),
+        sessionId: getSessionId(),
+      });
+      let result;
+      try {
+        result = await spawnTeammate({
+          name: teammateAllocation.name,
+          prompt,
+          description,
+          team_name: teamName,
+          use_splitpane: true,
+          plan_mode_required: spawnMode === 'plan',
+          model: model ?? agentDef?.model,
+          agent_type: subagent_type,
+          invokingRequestId: assistantMessage?.requestId,
+          allocationId: teammateAllocation.allocationId
+        }, toolUseContext);
+      } catch (error) {
+        // spawnTeammate's own handlers already compensate failures past their
+        // internal reserved->starting transition; this catches everything
+        // before that point (e.g. handleSpawn's pre-flight backend-detection
+        // throw), where the allocation would otherwise leak as a permanent
+        // `reserved` record — never reclaimed by recoverStartingRecipient,
+        // which only handles `starting`.
+        await tombstoneFailedRecipient(teamName, teammateAllocation.allocationId);
+        throw error;
+      }
 
       // Type assertion uses TeammateSpawnedOutput (defined above) instead of any.
       // This type is excluded from the exported outputSchema for dead code elimination.
@@ -785,13 +891,31 @@ export const AgentTool = buildTool({
     let enhancedSystemPrompt: string[] | undefined;
     let forkParentSystemPrompt: ReturnType<typeof buildEffectiveSystemPrompt> | undefined;
     let promptMessages: MessageType[];
+    // Computed once, then threaded through both the async-launched result and
+    // finalizeAgentTool's metadata so spawn-time and completion-time result
+    // rendering agree (Task 5). `toolUseContext.options.tools` is the raw
+    // pool inherited from this context's own parent — for a normal top-level
+    // caller that already matches its real capabilities, but an in-process
+    // teammate inherits its LEADER's unfiltered pool (ResumeAgent/Agent
+    // included) rather than its own actually-resolved, environment-filtered
+    // one, so it's re-filtered the same way `resolveAgentTools()` would for
+    // that environment before deriving capabilities from it.
+    const callerTools = isInProcessTeammate()
+      ? filterToolsForAgent({
+          tools: toolUseContext.options.tools,
+          isBuiltIn: true,
+          environment: 'in-process-teammate',
+        })
+      : toolUseContext.options.tools;
+    const continuationCapabilities = getAgentContinuationCapabilities(callerTools);
     const metadata = {
       prompt,
       resolvedAgentModel,
       isBuiltInAgent: isBuiltInAgent(selectedAgent),
       startTime,
       agentType: selectedAgent.agentType,
-      isAsync: (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled
+      isAsync: (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled,
+      continuationCapabilities
     };
 
     // Use inline env check instead of coordinatorModule to avoid circular
@@ -839,7 +963,8 @@ export const AgentTool = buildTool({
     });
     const {
       agentName,
-      allocatedAgentName,
+      processReservationName,
+      teamAllocation,
     } = await resolveSystemSubagentName({
       explicitName: name,
       agentType: selectedAgent.agentType,
@@ -847,6 +972,7 @@ export const AgentTool = buildTool({
       sessionId: parentSessionId,
       sessionStateTracking,
       agentId: earlyAgentId,
+      teamName,
     });
     let registeredAgentName = false;
     let runAgentParams: Parameters<typeof runAgent>[0];
@@ -952,8 +1078,22 @@ export const AgentTool = buildTool({
       sessionStateTracking,
       };
     } catch (error) {
-      if (allocatedAgentName && !registeredAgentName) {
-        releaseWorkerName(allocatedAgentName);
+      if (!registeredAgentName) {
+        releaseWorkerName(processReservationName);
+        if (teamAllocation) {
+          try {
+            await transitionTeamRecipient({
+              teamName: teamAllocation.teamName,
+              allocationId: teamAllocation.allocationId,
+              from: 'reserved',
+              to: 'terminated',
+            });
+          } catch (transitionError) {
+            logForDebugging(`Failed to tombstone local recipient allocation after launch failure: ${errorMessage(transitionError)}`, {
+              level: 'warn'
+            });
+          }
+        }
       }
       if (worktreeInfo && !worktreeInfo.hookBased && worktreeInfo.worktreeBranch && worktreeInfo.gitRoot) {
         try {
@@ -1056,8 +1196,20 @@ export const AgentTool = buildTool({
     });
     registerAgentName(rootSetAppState, agentName, earlyAgentId);
     registeredAgentName = true;
-    if (allocatedAgentName) {
-      releaseWorkerName(allocatedAgentName);
+    releaseWorkerName(processReservationName);
+    if (teamAllocation) {
+      try {
+        await transitionTeamRecipient({
+          teamName: teamAllocation.teamName,
+          allocationId: teamAllocation.allocationId,
+          from: 'reserved',
+          to: 'active',
+        });
+      } catch (transitionError) {
+        logForDebugging(`Failed to activate local recipient allocation: ${errorMessage(transitionError)}`, {
+          level: 'warn'
+        });
+      }
     }
 
     if (shouldRunAsync) {
@@ -1134,7 +1286,8 @@ export const AgentTool = buildTool({
           description: description,
           prompt: prompt,
           outputFile: getTaskOutputPath(agentBackgroundTask.agentId),
-          canCheckProgress
+          canCheckProgress,
+          continuationCapabilities
         }
       };
     } else {
@@ -1561,7 +1714,8 @@ export const AgentTool = buildTool({
                     description: description,
                     prompt: prompt,
                     outputFile: getTaskOutputPath(backgroundedTaskId),
-                    canCheckProgress
+                    canCheckProgress,
+                    continuationCapabilities
                   }
                 };
               }
@@ -1946,9 +2100,20 @@ The agent is now running and will receive instructions via mailbox.`
         !isAgentMode()
       const target = data.agentName ? `@${data.agentName}` : data.agentId
       const nameLine = data.agentName ? `\nagentName: ${data.agentName}` : ''
+      // Historical results persisted before this field existed render
+      // conservatively — no continuation call literal for a capability we
+      // can no longer confirm (Task 5: AgentContinuationMetadata).
+      const canSendMessage = data.continuationCapabilities?.canSendMessage ?? false
+      const canResumeAgent = data.continuationCapabilities?.canResumeAgent ?? false
+      const runningHint = canSendMessage
+        ? ` While it is running, use SendMessage with to: '${target}' to queue follow-ups.`
+        : ''
+      const stoppedHint = canResumeAgent
+        ? ` After it completes or is stopped, use ResumeAgent({ agentId: '${target}', prompt }) to continue it.`
+        : ''
       const continuationHint = oneShotAsync
         ? 'internal ID - do not mention to user.'
-        : `internal ID - do not mention to user. While it is running, use SendMessage with to: '${target}' to queue follow-ups. After it completes or is stopped, use ResumeAgent({ agentId: '${target}', prompt }) to continue it.`
+        : `internal ID - do not mention to user.${runningHint}${stoppedHint}`
       const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const instructions = data.canCheckProgress
         ? `Do not duplicate this agent's work — avoid reading, grepping, editing, or investigating the same files or topics while it is running. Work on non-overlapping tasks.
@@ -1989,12 +2154,21 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
           content: contentOrMarker
         };
       }
+      // Historical results persisted before this field existed render
+      // conservatively — no ResumeAgent literal for a capability we can no
+      // longer confirm (Task 5: AgentContinuationMetadata).
+      const canResumeAgent = data.continuationCapabilities?.canResumeAgent ?? false
+      const resumeHint = canResumeAgent
+        ? data.agentName
+          ? ` (use ResumeAgent({ agentId: '@${data.agentName}', prompt }) to continue this agent)`
+          : ` (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`
+        : ''
       const continuationText =
         data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
           ? `agentId: ${data.agentId}`
           : data.agentName
-            ? `agentId: ${data.agentId}\nagentName: ${data.agentName} (use ResumeAgent({ agentId: '@${data.agentName}', prompt }) to continue this agent)`
-            : `agentId: ${data.agentId} (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`;
+            ? `agentId: ${data.agentId}\nagentName: ${data.agentName}${resumeHint}`
+            : `agentId: ${data.agentId}${resumeHint}`;
       const usage = data.usage ?? EMPTY_USAGE;
       const changedFilesText = data.changedFiles && data.changedFiles.length > 0 ? `\n<changed_files>\n${data.changedFiles.map(file => `- ${file.path} (${file.op}, ${file.ok ? 'ok' : `error: ${file.error ?? 'unknown error'}`})`).join('\n')}${data.changedFilesTruncated ? `\n- +${data.changedFilesTruncated} more` : ''}\n</changed_files>` : '';
       const errorText = data.status === 'completed_with_error' ? `\nstatus: completed_with_error\nerror: ${data.error}` : '';

@@ -8,7 +8,7 @@ import { buildTool, type ToolDef } from '../../Tool.js'
 import { findTeammateTaskByAgentId } from '../../tasks/InProcessTeammateTask/InProcessTeammateTask.js'
 import {
   isLocalAgentTask,
-  queuePendingMessage,
+  queuePendingMessageIfRunning,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
 import { generateRequestId } from '../../utils/agentId.js'
@@ -23,9 +23,13 @@ import { semanticBoolean } from '../../utils/semanticBoolean.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import type { BackendType } from '../../utils/swarm/backends/types.js'
 import { TEAM_LEAD_NAME } from '../../utils/swarm/constants.js'
-import { readTeamFileAsync } from '../../utils/swarm/teamHelpers.js'
 import {
-  getAgentId,
+  readTeamFileAsync,
+  readTeamSnapshot,
+  type TeamFile,
+} from '../../utils/swarm/teamHelpers.js'
+import { sanitizePathComponent } from '../../utils/tasks.js'
+import {
   getAgentName,
   getTeammateColor,
   getTeamName,
@@ -33,15 +37,26 @@ import {
   isTeammate,
 } from '../../utils/teammate.js'
 import {
+  createPlanApprovalResponseMessage,
   createShutdownApprovedMessage,
   createShutdownRejectedMessage,
   createShutdownRequestMessage,
+  MailboxWriteError,
+  type PendingControlRecord,
+  resolveCurrentTeamPrincipal,
+  resolveLeaderPrincipal,
+  resolveTeamPrincipalByName,
+  type TeamPrincipal,
+  writeControlRequestToMailbox,
+  writeControlToMailbox,
   writeToMailbox,
 } from '../../utils/teammateMailbox.js'
+import { toExternalPermissionMode } from '../../utils/permissions/PermissionMode.js'
 import {
   toTeammateMessageContract,
   type TeammateStructuredPayload,
 } from '../../utils/teammateMessage.js'
+import { parseLocalRecipient, recipientNameKey } from '../../utils/recipientIdentity.js'
 import {
   formatContextSizeHint,
   resolveAgentTarget,
@@ -111,10 +126,13 @@ export type MessageOutput = {
   routing?: MessageRouting
 }
 
+export type FailedRecipient = { name: string; error: string }
+
 export type BroadcastOutput = {
   success: boolean
   message: string
   recipients: string[]
+  failed_recipients?: FailedRecipient[]
   routing?: MessageRouting
 }
 
@@ -153,8 +171,70 @@ function findTeammateColor(
   return undefined
 }
 
-async function handleMessage(
-  recipientName: string,
+type RosterResolution =
+  | { kind: 'none' }
+  | { kind: 'member'; member: TeamPrincipal }
+  | { kind: 'ambiguous' }
+
+/**
+ * Resolves a bare (non-`@`) name against a fresh version-2 team snapshot.
+ * Only `active` teammate recipient records are routable — `reserved`,
+ * `starting`, `stopped`, and `terminated` fail closed to `none` so the
+ * caller falls through to local-worker resolution instead of guessing.
+ *
+ * Ambiguity is detected on either the routing key (`recipientNameKey`) or the
+ * sanitized mailbox-file path (`sanitizePathComponent`): two legacy names
+ * like "legacy.name" and "legacy-name" key differently but collide on disk
+ * (`sanitizePathComponent` maps both to `legacy-name`), so delivery would be
+ * indistinguishable between them. Per the plan's design decision, that fails
+ * closed as ambiguous rather than silently picking one.
+ */
+async function resolveFreshRosterMember(
+  teamName: string,
+  targetName: string,
+): Promise<RosterResolution> {
+  let snapshot: Readonly<TeamFile>
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+  } catch {
+    return { kind: 'none' }
+  }
+
+  const targetKey = recipientNameKey(targetName)
+  const targetPath = sanitizePathComponent(targetName)
+  const candidates = (snapshot.recipientRecords ?? []).filter(
+    record =>
+      record.kind === 'teammate' &&
+      record.status === 'active' &&
+      (recipientNameKey(record.name) === targetKey ||
+        sanitizePathComponent(record.name) === targetPath),
+  )
+
+  if (candidates.length === 0) return { kind: 'none' }
+  const distinctAllocationIds = new Set(candidates.map(c => c.allocationId))
+  if (distinctAllocationIds.size > 1) return { kind: 'ambiguous' }
+
+  const record = candidates[0]!
+  return {
+    kind: 'member',
+    member: {
+      kind: 'teammate',
+      agentId: record.agentId,
+      name: record.name,
+      allocationId: record.allocationId,
+    },
+  }
+}
+
+/**
+ * Routes a plain-text message to a roster-resolved teammate. The recipient
+ * has already been confirmed `active` by `resolveFreshRosterMember` — this
+ * only performs the mailbox write and reports its truthful outcome. A
+ * successful result means "written to the addressed incarnation's mailbox,"
+ * not "processed by the recipient."
+ */
+async function routeToTeammate(
+  member: TeamPrincipal,
   teammateMessage: {
     from: string
     text: string
@@ -162,34 +242,98 @@ async function handleMessage(
     summary?: string
     structured?: TeammateStructuredPayload
   },
+  teamName: string,
   context: ToolUseContext,
 ): Promise<{ data: MessageOutput }> {
+  try {
+    await writeToMailbox({
+      recipient: member,
+      message: {
+        text: teammateMessage.text,
+        summary: teammateMessage.summary,
+        color: teammateMessage.color,
+        structured: teammateMessage.structured,
+      },
+      teamName,
+    })
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Failed to send to ${member.name}: ${errorMessage(error)}`,
+      },
+    }
+  }
+
   const appState = context.getAppState()
-  const teamName = getTeamName(appState.teamContext)
-
-  await writeToMailbox(
-    recipientName,
-    {
-      ...teammateMessage,
-      timestamp: new Date().toISOString(),
-    },
-    teamName,
-  )
-
-  const recipientColor = findTeammateColor(appState, recipientName)
+  const recipientColor = findTeammateColor(appState, member.name)
 
   return {
     data: {
       success: true,
-      message: `Message sent to ${recipientName}'s inbox`,
+      message: `Message sent to ${member.name}'s inbox`,
       routing: {
         sender: teammateMessage.from,
         senderColor: teammateMessage.color,
-        target: `@${recipientName}`,
+        target: `@${member.name}`,
         targetColor: recipientColor,
         summary: teammateMessage.summary,
         content: teammateMessage.text,
       },
+    },
+  }
+}
+
+/**
+ * Resolves a target against running/resumable local subagents (registered
+ * alias, durable worker handle, or raw agent ID) — used both for explicit
+ * `@name` targets (which never consult the team roster) and as the fallback
+ * for a bare name with no active-teammate match. Returns `null` when there is
+ * no local match at all, letting the caller decide the final failure.
+ */
+async function routeToLocalWorker(
+  target: string,
+  displayInput: string,
+  message: string,
+  context: ToolUseContext,
+): Promise<{ data: MessageOutput } | null> {
+  const appState = context.getAppState()
+  const resolved = await resolveAgentTarget({
+    input: target,
+    appState,
+    sessionId: getSessionId(),
+  })
+  if (!resolved) return null
+
+  const { agentId } = resolved
+  // Re-read state after resolution: resolveAgentTarget may have awaited
+  // I/O, during which another SendMessage/ResumeAgent call could have
+  // changed this task's status. Route the running/stopped decision off
+  // fresh state, not the snapshot captured before resolution.
+  const freshAppState = context.getAppState()
+  const task = freshAppState.tasks[agentId]
+  if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
+    const queued = queuePendingMessageIfRunning(
+      agentId,
+      message,
+      context.setAppStateForTasks ?? context.setAppState,
+    )
+    if (queued) {
+      return {
+        data: {
+          success: true,
+          message: `Message queued for delivery to ${displayInput} at its next tool round.`,
+        },
+      }
+    }
+  }
+  const resumeTarget = resolved.displayName.startsWith('@')
+    ? resolved.displayName
+    : displayInput.trim()
+  return {
+    data: {
+      success: false,
+      message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.${formatContextSizeHint(resolved.contextTokens, resolved.contextWindowTokens)}`,
     },
   }
 }
@@ -208,10 +352,7 @@ async function handleBroadcast(
     )
   }
 
-  const teamFile = await readTeamFileAsync(teamName)
-  if (!teamFile) {
-    throw new Error(`Team "${teamName}" does not exist`)
-  }
+  const snapshot = await readTeamSnapshot(teamName)
 
   const senderName =
     getAgentName() || (isTeammate() ? 'teammate' : TEAM_LEAD_NAME)
@@ -223,15 +364,21 @@ async function handleBroadcast(
 
   const senderColor = getTeammateColor()
 
-  const recipients: string[] = []
-  for (const member of teamFile.members) {
-    if (member.name.toLowerCase() === senderName.toLowerCase()) {
-      continue
-    }
-    recipients.push(member.name)
-  }
+  const targets: TeamPrincipal[] = (snapshot.recipientRecords ?? [])
+    .filter(
+      record =>
+        record.kind === 'teammate' &&
+        record.status === 'active' &&
+        record.name.toLowerCase() !== senderName.toLowerCase(),
+    )
+    .map(record => ({
+      kind: 'teammate' as const,
+      agentId: record.agentId,
+      name: record.name,
+      allocationId: record.allocationId,
+    }))
 
-  if (recipients.length === 0) {
+  if (targets.length === 0) {
     return {
       data: {
         success: true,
@@ -241,25 +388,38 @@ async function handleBroadcast(
     }
   }
 
-  for (const recipientName of recipients) {
-    await writeToMailbox(
-      recipientName,
-      {
-        from: senderName,
-        text: content,
-        summary,
-        timestamp: new Date().toISOString(),
-        color: senderColor,
-      },
-      teamName,
-    )
-  }
+  const settled = await Promise.allSettled(
+    targets.map(target =>
+      writeToMailbox({
+        recipient: target,
+        message: { text: content, summary, color: senderColor },
+        teamName,
+      }),
+    ),
+  )
+
+  const recipients: string[] = []
+  const failedRecipients: FailedRecipient[] = []
+  settled.forEach((outcome, index) => {
+    const target = targets[index]!
+    if (outcome.status === 'fulfilled') {
+      recipients.push(target.name)
+    } else {
+      failedRecipients.push({ name: target.name, error: errorMessage(outcome.reason) })
+    }
+  })
+
+  const success = failedRecipients.length === 0
+  const message = success
+    ? `Message broadcast to ${recipients.length} teammate(s): ${recipients.join(', ')}`
+    : `Message broadcast to ${recipients.length} of ${targets.length} teammate(s); failed: ${failedRecipients.map(f => f.name).join(', ')}`
 
   return {
     data: {
-      success: true,
-      message: `Message broadcast to ${recipients.length} teammate(s): ${recipients.join(', ')}`,
+      success,
+      message,
       recipients,
+      ...(failedRecipients.length > 0 ? { failed_recipients: failedRecipients } : {}),
       routing: {
         sender: senderName,
         senderColor,
@@ -271,6 +431,38 @@ async function handleBroadcast(
   }
 }
 
+/**
+ * Finds one outstanding request record matching the exact request/type and
+ * sender/recipient agent+allocation ID tuple — the same correlation
+ * `classifyMailboxMessage`/`claimPendingControl` use, but as a read-only
+ * existence check for a producer about to send the RESPONSE side (shutdown
+ * approval/rejection, plan approval/rejection). A `consumed` record never
+ * matches (replay/duplicate); the actual claim-to-`processing` happens on
+ * the leader's consumption side (useInboxPoller/attachments.ts).
+ */
+function findOutstandingRequest(
+  pendingControls: readonly PendingControlRecord[],
+  args: {
+    requestId: string
+    requestType: PendingControlRecord['requestType']
+    senderAgentId: string
+    senderAllocationId: string
+    recipientAgentId: string
+    recipientAllocationId: string
+  },
+): PendingControlRecord | undefined {
+  return pendingControls.find(
+    p =>
+      p.requestId === args.requestId &&
+      p.requestType === args.requestType &&
+      p.state !== 'consumed' &&
+      p.senderAgentId === args.senderAgentId &&
+      p.senderAllocationId === args.senderAllocationId &&
+      p.recipientAgentId === args.recipientAgentId &&
+      p.recipientAllocationId === args.recipientAllocationId,
+  )
+}
+
 async function handleShutdownRequest(
   targetName: string,
   reason: string | undefined,
@@ -278,25 +470,90 @@ async function handleShutdownRequest(
 ): Promise<{ data: RequestOutput }> {
   const appState = context.getAppState()
   const teamName = getTeamName(appState.teamContext)
-  const senderName = getAgentName() || TEAM_LEAD_NAME
-  const requestId = generateRequestId('shutdown', targetName)
+  if (!teamName) {
+    return {
+      data: {
+        success: false,
+        message: 'Not in a team context.',
+        request_id: '',
+        target: targetName,
+      },
+    }
+  }
 
+  let snapshot: Readonly<TeamFile>
+  let sender: TeamPrincipal
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Cannot verify team roster: ${errorMessage(error)}`,
+        request_id: '',
+        target: targetName,
+      },
+    }
+  }
+  // Authority: only the team lead may issue a shutdown_request. The
+  // call-time snapshot is authoritative — validation may have preceded a
+  // permission wait, so re-checking here is what actually matters.
+  if (sender.kind !== 'leader') {
+    return {
+      data: {
+        success: false,
+        message: 'Only the team lead can request teammate shutdown.',
+        request_id: '',
+        target: targetName,
+      },
+    }
+  }
+
+  const roster = await resolveFreshRosterMember(teamName, targetName)
+  if (roster.kind !== 'member') {
+    return {
+      data: {
+        success: false,
+        message:
+          roster.kind === 'ambiguous'
+            ? `"${targetName}" is an ambiguous legacy teammate name: multiple teammates share the same routing key or mailbox path.`
+            : `No active teammate named "${targetName}" to shut down.`,
+        request_id: '',
+        target: targetName,
+      },
+    }
+  }
+
+  const requestId = generateRequestId('shutdown', targetName)
   const shutdownMessage = createShutdownRequestMessage({
     requestId,
-    from: senderName,
+    from: sender.name,
     reason,
   })
 
-  await writeToMailbox(
-    targetName,
-    {
-      from: senderName,
-      text: jsonStringify(shutdownMessage),
-      timestamp: new Date().toISOString(),
+  try {
+    // The team lock is released before this write; the envelope binds the
+    // exact recipient allocation so a concurrent removal/replacement can't
+    // retarget it.
+    await writeControlRequestToMailbox({
+      teamName,
+      requestId,
+      requestType: 'shutdown',
+      recipient: roster.member,
+      control: shutdownMessage,
       color: getTeammateColor(),
-    },
-    teamName,
-  )
+    })
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Failed to send shutdown request to ${targetName}: ${errorMessage(error)}`,
+        request_id: requestId,
+        target: targetName,
+      },
+    }
+  }
 
   return {
     data: {
@@ -313,80 +570,139 @@ async function handleShutdownApproval(
   context: ToolUseContext,
 ): Promise<{ data: ResponseOutput }> {
   const teamName = getTeamName()
-  const agentId = getAgentId()
-  const agentName = getAgentName() || 'teammate'
+  if (!teamName) {
+    return {
+      data: { success: false, message: 'Not in a team context.', request_id: requestId },
+    }
+  }
+
+  let snapshot: Readonly<TeamFile>
+  let sender: TeamPrincipal
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Cannot verify team roster: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
+  if (sender.kind !== 'teammate') {
+    return {
+      data: {
+        success: false,
+        message: 'Only a teammate can approve its own shutdown.',
+        request_id: requestId,
+      },
+    }
+  }
+
+  const leader = resolveLeaderPrincipal(snapshot)
+  const pending = findOutstandingRequest(snapshot.pendingControls ?? [], {
+    requestId,
+    requestType: 'shutdown',
+    senderAgentId: leader.agentId,
+    senderAllocationId: leader.allocationId,
+    recipientAgentId: sender.agentId,
+    recipientAllocationId: sender.allocationId,
+  })
+  if (!pending) {
+    return {
+      data: {
+        success: false,
+        message: `No outstanding shutdown request "${requestId}" found for you. It may already be resolved or was never sent to you.`,
+        request_id: requestId,
+      },
+    }
+  }
 
   logForDebugging(
-    `[SendMessageTool] handleShutdownApproval: teamName=${teamName}, agentId=${agentId}, agentName=${agentName}`,
+    `[SendMessageTool] handleShutdownApproval: teamName=${teamName}, agentId=${sender.agentId}, agentName=${sender.name}`,
   )
 
   let ownPaneId: string | undefined
   let ownBackendType: BackendType | undefined
-  if (teamName) {
-    const teamFile = await readTeamFileAsync(teamName)
-    if (teamFile && agentId) {
-      const selfMember = teamFile.members.find(m => m.agentId === agentId)
-      if (selfMember) {
-        ownPaneId = selfMember.tmuxPaneId
-        ownBackendType = selfMember.backendType
-      }
+  const teamFile = await readTeamFileAsync(teamName)
+  if (teamFile) {
+    const selfMember = teamFile.members.find(m => m.agentId === sender.agentId)
+    if (selfMember) {
+      ownPaneId = selfMember.tmuxPaneId
+      ownBackendType = selfMember.backendType
     }
   }
 
   const approvedMessage = createShutdownApprovedMessage({
     requestId,
-    from: agentName,
+    from: sender.name,
     paneId: ownPaneId,
     backendType: ownBackendType,
   })
 
-  await writeToMailbox(
-    TEAM_LEAD_NAME,
-    {
-      from: agentName,
-      text: jsonStringify(approvedMessage),
-      timestamp: new Date().toISOString(),
+  // Acknowledgement success is a prerequisite for shutdown (Task 3 Step 10):
+  // abort the in-process controller / schedule process exit only AFTER the
+  // response has actually been written. On failure, the teammate stays
+  // alive and the request remains outstanding for retry.
+  let writeResult: Awaited<ReturnType<typeof writeControlToMailbox>>
+  try {
+    writeResult = await writeControlToMailbox({
+      recipient: leader,
+      control: approvedMessage,
+      teamName,
       color: getTeammateColor(),
-    },
-    teamName,
-  )
+    })
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Failed to send shutdown approval: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
+  if (writeResult.warning) {
+    // { written: true, warning } means the response exists in the mailbox —
+    // log/surface the warning but do not retry or block shutdown.
+    logForDebugging(`[SendMessageTool] ${writeResult.warning}`)
+  }
+
+  const agentId = sender.agentId
+  const agentName = sender.name
 
   if (ownBackendType === 'in-process') {
     logForDebugging(
       `[SendMessageTool] In-process teammate ${agentName} approving shutdown - signaling abort`,
     )
 
-    if (agentId) {
-      const appState = context.getAppState()
-      const task = findTeammateTaskByAgentId(agentId, appState.tasks)
-      if (task?.abortController) {
-        task.abortController.abort()
-        logForDebugging(
-          `[SendMessageTool] Aborted controller for in-process teammate ${agentName}`,
-        )
-      } else {
-        logForDebugging(
-          `[SendMessageTool] Warning: Could not find task/abortController for ${agentName}`,
-        )
-      }
+    const appState = context.getAppState()
+    const task = findTeammateTaskByAgentId(agentId, appState.tasks)
+    if (task?.abortController) {
+      task.abortController.abort()
+      logForDebugging(
+        `[SendMessageTool] Aborted controller for in-process teammate ${agentName}`,
+      )
+    } else {
+      logForDebugging(
+        `[SendMessageTool] Warning: Could not find task/abortController for ${agentName}`,
+      )
     }
   } else {
-    if (agentId) {
-      const appState = context.getAppState()
-      const task = findTeammateTaskByAgentId(agentId, appState.tasks)
-      if (task?.abortController) {
-        logForDebugging(
-          `[SendMessageTool] Fallback: Found in-process task for ${agentName} via AppState, aborting`,
-        )
-        task.abortController.abort()
+    const appState = context.getAppState()
+    const task = findTeammateTaskByAgentId(agentId, appState.tasks)
+    if (task?.abortController) {
+      logForDebugging(
+        `[SendMessageTool] Fallback: Found in-process task for ${agentName} via AppState, aborting`,
+      )
+      task.abortController.abort()
 
-        return {
-          data: {
-            success: true,
-            message: `Shutdown approved (fallback path). Agent ${agentName} is now exiting.`,
-            request_id: requestId,
-          },
-        }
+      return {
+        data: {
+          success: true,
+          message: `Shutdown approved (fallback path). Agent ${agentName} is now exiting.`,
+          request_id: requestId,
+        },
       }
     }
 
@@ -409,24 +725,77 @@ async function handleShutdownRejection(
   reason: string,
 ): Promise<{ data: ResponseOutput }> {
   const teamName = getTeamName()
-  const agentName = getAgentName() || 'teammate'
+  if (!teamName) {
+    return {
+      data: { success: false, message: 'Not in a team context.', request_id: requestId },
+    }
+  }
+
+  let snapshot: Readonly<TeamFile>
+  let sender: TeamPrincipal
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Cannot verify team roster: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
+  if (sender.kind !== 'teammate') {
+    return {
+      data: {
+        success: false,
+        message: 'Only a teammate can reject its own shutdown request.',
+        request_id: requestId,
+      },
+    }
+  }
+
+  const leader = resolveLeaderPrincipal(snapshot)
+  const pending = findOutstandingRequest(snapshot.pendingControls ?? [], {
+    requestId,
+    requestType: 'shutdown',
+    senderAgentId: leader.agentId,
+    senderAllocationId: leader.allocationId,
+    recipientAgentId: sender.agentId,
+    recipientAllocationId: sender.allocationId,
+  })
+  if (!pending) {
+    return {
+      data: {
+        success: false,
+        message: `No outstanding shutdown request "${requestId}" found for you. It may already be resolved or was never sent to you.`,
+        request_id: requestId,
+      },
+    }
+  }
 
   const rejectedMessage = createShutdownRejectedMessage({
     requestId,
-    from: agentName,
+    from: sender.name,
     reason,
   })
 
-  await writeToMailbox(
-    TEAM_LEAD_NAME,
-    {
-      from: agentName,
-      text: jsonStringify(rejectedMessage),
-      timestamp: new Date().toISOString(),
+  try {
+    await writeControlToMailbox({
+      recipient: leader,
+      control: rejectedMessage,
+      teamName,
       color: getTeammateColor(),
-    },
-    teamName,
-  )
+    })
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Failed to send shutdown rejection: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
 
   return {
     data: {
@@ -445,32 +814,74 @@ async function handlePlanApproval(
   const appState = context.getAppState()
   const teamName = appState.teamContext?.teamName
 
-  if (!isTeamLead(appState.teamContext)) {
+  if (!isTeamLead(appState.teamContext) || !teamName) {
     throw new Error(
       'Only the team lead can approve plans. Teammates cannot approve their own or other plans.',
     )
   }
 
-  const leaderMode = appState.toolPermissionContext.mode
-  const modeToInherit = leaderMode === 'plan' ? 'default' : leaderMode
-
-  const approvalResponse = {
-    type: 'plan_approval_response',
-    requestId,
-    approved: true,
-    timestamp: new Date().toISOString(),
-    permissionMode: modeToInherit,
+  let snapshot: Readonly<TeamFile>
+  let sender: TeamPrincipal
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Cannot verify team roster: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
+  if (sender.kind !== 'leader') {
+    return {
+      data: {
+        success: false,
+        message: 'Only the team lead can approve plans.',
+        request_id: requestId,
+      },
+    }
   }
 
-  await writeToMailbox(
-    recipientName,
-    {
-      from: TEAM_LEAD_NAME,
-      text: jsonStringify(approvalResponse),
-      timestamp: new Date().toISOString(),
-    },
-    teamName,
+  const recipient = resolveTeamPrincipalByName(snapshot, recipientName)
+  if (!recipient) {
+    return {
+      data: {
+        success: false,
+        message: `No teammate named "${recipientName}" found in the current roster.`,
+        request_id: requestId,
+      },
+    }
+  }
+
+  const leaderExternalMode = toExternalPermissionMode(
+    appState.toolPermissionContext.mode,
   )
+  const modeToInherit =
+    leaderExternalMode === 'plan' ? 'default' : leaderExternalMode
+
+  const approvalResponse = createPlanApprovalResponseMessage({
+    requestId,
+    approved: true,
+    permissionMode: modeToInherit,
+  })
+
+  try {
+    await writeControlToMailbox({
+      recipient,
+      control: approvalResponse,
+      teamName,
+    })
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Failed to send plan approval to ${recipientName}: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
 
   return {
     data: {
@@ -490,29 +901,68 @@ async function handlePlanRejection(
   const appState = context.getAppState()
   const teamName = appState.teamContext?.teamName
 
-  if (!isTeamLead(appState.teamContext)) {
+  if (!isTeamLead(appState.teamContext) || !teamName) {
     throw new Error(
       'Only the team lead can reject plans. Teammates cannot reject their own or other plans.',
     )
   }
 
-  const rejectionResponse = {
-    type: 'plan_approval_response',
+  let snapshot: Readonly<TeamFile>
+  let sender: TeamPrincipal
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Cannot verify team roster: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
+  if (sender.kind !== 'leader') {
+    return {
+      data: {
+        success: false,
+        message: 'Only the team lead can reject plans.',
+        request_id: requestId,
+      },
+    }
+  }
+
+  const recipient = resolveTeamPrincipalByName(snapshot, recipientName)
+  if (!recipient) {
+    return {
+      data: {
+        success: false,
+        message: `No teammate named "${recipientName}" found in the current roster.`,
+        request_id: requestId,
+      },
+    }
+  }
+
+  const rejectionResponse = createPlanApprovalResponseMessage({
     requestId,
     approved: false,
     feedback,
-    timestamp: new Date().toISOString(),
-  }
+  })
 
-  await writeToMailbox(
-    recipientName,
-    {
-      from: TEAM_LEAD_NAME,
-      text: jsonStringify(rejectionResponse),
-      timestamp: new Date().toISOString(),
-    },
-    teamName,
-  )
+  try {
+    await writeControlToMailbox({
+      recipient,
+      control: rejectionResponse,
+      teamName,
+    })
+  } catch (error) {
+    return {
+      data: {
+        success: false,
+        message: `Failed to send plan rejection to ${recipientName}: ${errorMessage(error)}`,
+        request_id: requestId,
+      },
+    }
+  }
 
   return {
     data: {
@@ -765,6 +1215,39 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         }
       }
 
+      // Early authority pre-checks (fast-fail before the permission wait).
+      // The call-time versioned snapshot inside the handlers below is the
+      // AUTHORITATIVE check — validation may precede a permission prompt the
+      // user takes minutes to answer, during which roster membership can
+      // change — these are a UX nicety, not the security boundary.
+      if (
+        input.message.type === 'shutdown_request' &&
+        !isTeamLead(context.getAppState().teamContext)
+      ) {
+        return {
+          result: false,
+          message: 'Only the team lead can request teammate shutdown.',
+          errorCode: 9,
+        }
+      }
+      if (input.message.type === 'shutdown_response' && !isTeammate()) {
+        return {
+          result: false,
+          message: 'Only a teammate can respond to its own shutdown request.',
+          errorCode: 9,
+        }
+      }
+      if (
+        input.message.type === 'plan_approval_response' &&
+        !isTeamLead(context.getAppState().teamContext)
+      ) {
+        return {
+          result: false,
+          message: 'Only the team lead can approve or reject plans.',
+          errorCode: 9,
+        }
+      }
+
       return { result: true }
     },
 
@@ -848,45 +1331,53 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         }
       }
 
-      // Route to in-process subagent by name, durable handle, or raw agentId
-      // before falling through to ambient-team resolution. Stopped subagents
-      // are NOT auto-resumed; SendMessage targets running recipients only.
-      // Use ResumeAgent for stopped subagents.
+      // Deterministic routing order for a plain-text message to a named
+      // recipient (Task 2): explicit `@name` always means "local worker" and
+      // never consults the team roster. A bare name prefers a currently
+      // active teammate; only when there's no roster match does it fall
+      // back to local-worker resolution (registered alias, durable handle,
+      // or raw agent ID). Stopped subagents are NOT auto-resumed — use
+      // ResumeAgent for those.
       if (typeof input.message === 'string' && input.to !== '*') {
-        const appState = context.getAppState()
-        const resolved = await resolveAgentTarget({
-          input: input.to,
-          appState,
-          sessionId: getSessionId(),
-        })
-        if (resolved) {
-          const { agentId } = resolved
-          const task = appState.tasks[agentId]
-          if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
-            if (task.status === 'running') {
-              queuePendingMessage(
-                agentId,
-                input.message,
-                context.setAppStateForTasks ?? context.setAppState,
-              )
+        let parsed: ReturnType<typeof parseLocalRecipient>
+        try {
+          parsed = parseLocalRecipient(input.to)
+        } catch (error) {
+          return { data: { success: false, message: errorMessage(error) } }
+        }
+
+        if (!parsed.explicit && isAgentSwarmsEnabled()) {
+          const appState = context.getAppState()
+          const teamName = getTeamName(appState.teamContext)
+          if (teamName) {
+            const roster = await resolveFreshRosterMember(teamName, parsed.target)
+            if (roster.kind === 'ambiguous') {
               return {
                 data: {
-                  success: true,
-                  message: `Message queued for delivery to ${input.to} at its next tool round.`,
+                  success: false,
+                  message: `"${parsed.target}" is an ambiguous legacy teammate name: multiple teammates share the same routing key or mailbox path. Use an explicit @name to target a local worker, or resolve the collision in the team roster.`,
                 },
               }
             }
-          }
-          const resumeTarget = resolved.displayName.startsWith('@')
-            ? resolved.displayName
-            : input.to.trim()
-          return {
-            data: {
-              success: false,
-              message: `Agent "${resolved.displayName}" is stopped. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) to restart it.${formatContextSizeHint(resolved.contextTokens, resolved.contextWindowTokens)}`,
-            },
+            if (roster.kind === 'member') {
+              const teammateMessage = toTeammateMessageContract({
+                from: getAgentName() || (isTeammate() ? 'teammate' : TEAM_LEAD_NAME),
+                text: input.message,
+                color: getTeammateColor(),
+                summary: input.summary,
+              })
+              return routeToTeammate(roster.member, teammateMessage, teamName, context)
+            }
           }
         }
+
+        const localResult = await routeToLocalWorker(
+          parsed.target,
+          input.to,
+          input.message,
+          context,
+        )
+        if (localResult) return localResult
       }
 
       if (!isAgentSwarmsEnabled()) {
@@ -902,13 +1393,12 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         if (input.to === '*') {
           return handleBroadcast(input.message, input.summary, context)
         }
-        const teammateMessage = toTeammateMessageContract({
-          from: getAgentName() || (isTeammate() ? 'teammate' : TEAM_LEAD_NAME),
-          text: input.message,
-          color: getTeammateColor(),
-          summary: input.summary,
-        })
-        return handleMessage(input.to, teammateMessage, context)
+        return {
+          data: {
+            success: false,
+            message: `No running subagent, Agent Mode worker, or active teammate found for "${input.to}".`,
+          },
+        }
       }
 
       if (input.to === '*') {

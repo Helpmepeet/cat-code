@@ -15,7 +15,10 @@ import { getTools } from '../../tools.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
-import { resolveAgentTools } from './agentToolUtils.js'
+import {
+  getAgentContinuationCapabilities,
+  resolveAgentTools,
+} from './agentToolUtils.js'
 
 function getAsyncWorkerToolNames(): string[] {
   const availableTools = getTools(getEmptyToolPermissionContext())
@@ -127,5 +130,56 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     expect(toolNames).not.toContain('WaitWorkers')
     expect(toolNames).not.toContain('GetWorkerResult')
     expect(toolNames).not.toContain('CancelWorker')
+  })
+})
+
+describe('resolveAgentTools explicit in-process-teammate environment', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  test('resolves an in-process-teammate tool pool consistent with getAgentContinuationCapabilities', () => {
+    const availableTools = getTools(getEmptyToolPermissionContext())
+    const inProcessTools = resolveAgentTools(
+      {
+        tools: ['*'],
+        disallowedTools: [],
+        source: 'built-in',
+        permissionMode: 'default',
+      },
+      availableTools,
+      false,
+      'in-process-teammate',
+    ).resolvedTools
+    const inProcessNames = inProcessTools.map(tool => tool.name)
+    expect(inProcessNames).not.toContain(AGENT_TOOL_NAME)
+    expect(inProcessNames).not.toContain(RESUME_AGENT_TOOL_NAME)
+    expect(getAgentContinuationCapabilities(inProcessTools)).toEqual({
+      canSendMessage: true,
+      canResumeAgent: false,
+      canSpawnAgent: false,
+    })
+  })
+
+  test('main-thread environment skips filtering like the historical isMainThread flag', () => {
+    const availableTools = getTools(getEmptyToolPermissionContext())
+    const resolved = resolveAgentTools(
+      {
+        tools: ['*'],
+        disallowedTools: [],
+        source: 'built-in',
+        permissionMode: 'default',
+      },
+      availableTools,
+      false,
+      'main-thread',
+    )
+    // 'main-thread' bypasses filterToolsForAgent's sub-agent disallow lists
+    // entirely, so Agent/ResumeAgent — normally stripped for every
+    // subagent/teammate environment — survive here untouched.
+    const toolNames = resolved.resolvedTools.map(tool => tool.name)
+    expect(toolNames).toEqual(availableTools.map(tool => tool.name))
+    expect(toolNames).toContain(AGENT_TOOL_NAME)
+    expect(toolNames).toContain(RESUME_AGENT_TOOL_NAME)
   })
 })

@@ -71,4 +71,34 @@ describe('Agent tool prompt in Agent Mode', () => {
     expect(prompt).toContain('If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default')
     expect(prompt).toContain('prompt, session-state, worker-control, or orchestration behavior changed')
   })
+
+  test('omits ResumeAgent guidance when the invoker cannot resume agents', async () => {
+    const withoutResume = await getPrompt(
+      getBuiltInAgents(),
+      false,
+      undefined,
+      'openai',
+      false,
+      {
+        canSendMessage: true,
+        canResumeAgent: false,
+        canSpawnAgent: false,
+      },
+    )
+    expect(withoutResume).not.toContain('use ResumeAgent')
+
+    const topLevel = await getPrompt(
+      getBuiltInAgents(),
+      false,
+      undefined,
+      'openai',
+      false,
+      {
+        canSendMessage: true,
+        canResumeAgent: true,
+        canSpawnAgent: true,
+      },
+    )
+    expect(topLevel).toContain('use ResumeAgent')
+  })
 })

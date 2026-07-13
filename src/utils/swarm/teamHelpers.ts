@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
@@ -9,7 +10,13 @@ import { errorMessage, getErrnoCode } from '../errors.js'
 import { execFileNoThrowWithCwd } from '../execFileNoThrow.js'
 import { gitExe } from '../git.js'
 import { lazySchema } from '../lazySchema.js'
+import { lock } from '../lockfile.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
+import {
+  canonicalizeNewTeammateName,
+  MAX_TEAMMATE_NAME_BYTES,
+  recipientNameKey,
+} from '../recipientIdentity.js'
 import { jsonParse, jsonStringify } from '../slowOperations.js'
 import { getTasksDir, notifyTasksUpdated } from '../tasks.js'
 import { getAgentName, getTeamName, isTeammate } from '../teammate.js'
@@ -61,6 +68,49 @@ export type TeamAllowedPath = {
   addedAt: number // Timestamp when added
 }
 
+/**
+ * A single named allocation within a team's shared recipient namespace.
+ * Local subagent aliases and teammate names share one collection so a new
+ * allocation of either kind can never collide with the other. Records are
+ * never deleted — `terminated` records remain as tombstones until explicit
+ * team cleanup, so a key/allocationId can never be silently reused.
+ */
+export type TeamRecipientRecord = {
+  allocationId: string
+  key: string
+  name: string
+  kind: 'leader' | 'local' | 'teammate'
+  agentId: string
+  sessionId: string
+  status: 'reserved' | 'starting' | 'active' | 'stopped' | 'terminated'
+  launcherPid: number
+  launcherInstanceId: string
+  backendType?: BackendType
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * One outstanding privileged-control request/response correlation record.
+ * Created (state `sending` -> `written`) by the requester when it emits a
+ * request-shaped control (shutdown request, permission/sandbox/plan
+ * request); claimed (`written` -> `processing`) by the recipient when it
+ * processes the matching response so a duplicate/racing delivery can't be
+ * handled twice; finalized to `consumed` on success or returned to
+ * `written` on handler failure so the response can be retried. See
+ * `docs/superpowers/plans/2026-07-12-agent-control-routing-hardening-plan.md`
+ * Task 3.
+ */
+export type PendingControlRecord = {
+  requestId: string
+  requestType: 'permission' | 'sandbox' | 'shutdown' | 'plan'
+  senderAgentId: string
+  senderAllocationId: string
+  recipientAgentId: string
+  recipientAllocationId: string
+  state: 'sending' | 'written' | 'processing' | 'consumed'
+}
+
 export type TeamFile = {
   name: string
   description?: string
@@ -69,6 +119,16 @@ export type TeamFile = {
   leadSessionId?: string // Actual session UUID of the leader (for discovery)
   hiddenPaneIds?: string[] // Pane IDs that are currently hidden from the UI
   teamAllowedPaths?: TeamAllowedPath[] // Paths all teammates can edit without asking
+  // Absent/non-2 means a legacy team file: version-2 controls (recipient
+  // records, pending controls, typed mailbox envelopes) must not be applied
+  // to it. Legacy teams must be restarted or cleaned up, never silently
+  // upgraded in place.
+  teamProtocolVersion?: 2
+  recipientRecords?: TeamRecipientRecord[]
+  // Absent is treated identically to `[]` everywhere this is read (teams
+  // created before this field shipped, or a caller that doesn't bother
+  // seeding it) — never a distinct "unknown" state.
+  pendingControls?: PendingControlRecord[]
   members: Array<{
     agentId: string
     name: string
@@ -86,6 +146,7 @@ export type TeamFile = {
     backendType?: BackendType
     isActive?: boolean // false when idle, undefined/true when active
     mode?: PermissionMode // Current permission mode for this teammate
+    allocationId?: string // TeamRecipientRecord.allocationId for version-2 teams
   }>
 }
 
@@ -104,6 +165,10 @@ export function sanitizeName(name: string): string {
 /**
  * Sanitizes an agent name for use in deterministic agent IDs.
  * Replaces @ with - to prevent ambiguity in the agentName@teamName format.
+ * @deprecated New teammate/local recipient names are canonicalized once via
+ * `canonicalizeNewTeammateName`/`recipientNameKey` at allocation time and
+ * never need re-sanitizing downstream. Retained only for any remaining
+ * legacy call sites operating on pre-existing names.
  */
 export function sanitizeAgentName(name: string): string {
   return name.replace(/@/g, '-')
@@ -181,14 +246,418 @@ export async function writeTeamFileAsync(
   await writeFile(getTeamFilePath(teamName), jsonStringify(teamFile, null, 2))
 }
 
+// ============================================================================
+// Versioned team transactions
+//
+// All version-2 team-file mutations go through `transactTeamFile`: lock,
+// fresh-read, validate, apply one transaction, write once, unlock. Mailbox
+// I/O must never happen while the team lock is held — callers take a
+// snapshot via `readTeamSnapshot`/`transactTeamFile`, release the lock, then
+// do mailbox I/O separately.
+// ============================================================================
+
+export class TeamFileLockError extends Error {
+  constructor(teamName: string, cause: unknown) {
+    super(`Failed to lock team file for "${teamName}": ${errorMessage(cause)}`)
+    this.name = 'TeamFileLockError'
+  }
+}
+
+export class TeamProtocolVersionError extends Error {
+  constructor(teamName: string, found: number | undefined) {
+    super(
+      `Team "${teamName}" is on protocol version ${found ?? 'legacy'}, not 2. ` +
+        'Restart or clean up this team before using version-2 routing/controls.',
+    )
+    this.name = 'TeamProtocolVersionError'
+  }
+}
+
+export class RecipientConflictError extends Error {
+  constructor(key: string) {
+    super(`Recipient key "${key}" is already allocated in this team`)
+    this.name = 'RecipientConflictError'
+  }
+}
+
+export class RecipientTransitionError extends Error {
+  constructor(allocationId: string, from: string, to: string, reason: string) {
+    super(
+      `Cannot transition recipient ${allocationId} from "${from}" to "${to}": ${reason}`,
+    )
+    this.name = 'RecipientTransitionError'
+  }
+}
+
+const TEAM_LOCK_RETRY_OPTIONS = {
+  retries: 8,
+  factor: 1.5,
+  minTimeout: 10,
+  maxTimeout: 100,
+} as const
+
+function teamLockOptions(teamName: string) {
+  const filePath = getTeamFilePath(teamName)
+  return {
+    lockfilePath: `${filePath}.lock`,
+    realpath: false,
+    stale: 60_000,
+    retries: TEAM_LOCK_RETRY_OPTIONS,
+  } as const
+}
+
+function assertVersion2(
+  teamName: string,
+  teamFile: TeamFile,
+): asserts teamFile is TeamFile & {
+  teamProtocolVersion: 2
+  recipientRecords: TeamRecipientRecord[]
+} {
+  if (teamFile.teamProtocolVersion !== 2 || !teamFile.recipientRecords) {
+    throw new TeamProtocolVersionError(teamName, teamFile.teamProtocolVersion)
+  }
+}
+
 /**
- * Removes a teammate from the team file by agent ID or name.
+ * Briefly locks the team file to fresh-read and validate it, then returns a
+ * detached, immutable snapshot. Safe to hold onto after the lock releases —
+ * it will not reflect subsequent writes. Throws `TeamProtocolVersionError`
+ * for a legacy (pre-version-2) team file.
+ */
+export async function readTeamSnapshot(
+  teamName: string,
+): Promise<Readonly<TeamFile>> {
+  const filePath = getTeamFilePath(teamName)
+  let release: () => Promise<void>
+  try {
+    release = await lock(filePath, teamLockOptions(teamName))
+  } catch (e) {
+    throw new TeamFileLockError(teamName, e)
+  }
+  try {
+    const teamFile = await readTeamFileAsync(teamName)
+    if (!teamFile) {
+      throw new Error(`Team "${teamName}" does not exist`)
+    }
+    assertVersion2(teamName, teamFile)
+    return Object.freeze(structuredClone(teamFile))
+  } finally {
+    await release().catch(() => {})
+  }
+}
+
+/**
+ * The one write path for version-2 team-file mutations: locks, fresh-reads,
+ * validates, applies `transaction` once, writes once, unlocks. Neither the
+ * lock nor the transaction callback may perform mailbox I/O.
+ *
+ * A lock-release failure AFTER a successful write returns the committed
+ * result plus a `warning` instead of throwing — the write already happened,
+ * so throwing here would invite a caller to retry and double-apply it.
+ */
+export async function transactTeamFile<T>(
+  teamName: string,
+  transaction: (
+    teamFile: TeamFile,
+  ) => { teamFile: TeamFile; result: T } | Promise<{ teamFile: TeamFile; result: T }>,
+): Promise<{ result: T; warning?: string }> {
+  const filePath = getTeamFilePath(teamName)
+  let release: () => Promise<void>
+  try {
+    release = await lock(filePath, teamLockOptions(teamName))
+  } catch (e) {
+    throw new TeamFileLockError(teamName, e)
+  }
+
+  let committed: { result: T }
+  try {
+    const current = await readTeamFileAsync(teamName)
+    if (!current) {
+      throw new Error(`Team "${teamName}" does not exist`)
+    }
+    assertVersion2(teamName, current)
+    const { teamFile: next, result } = await transaction(current)
+    await writeTeamFileAsync(teamName, next)
+    committed = { result }
+  } catch (e) {
+    await release().catch(() => {})
+    throw e
+  }
+
+  try {
+    await release()
+    return committed
+  } catch (e) {
+    const warning = `Team file write for "${teamName}" committed, but lock release failed: ${errorMessage(e)}`
+    logForDebugging(`[teamHelpers] ${warning}`)
+    return { ...committed, warning }
+  }
+}
+
+// One UUID per running process — distinguishes "this exact process instance"
+// from a PID, which can be reused by the OS after the process that launched
+// a `starting` allocation has died.
+const PROCESS_INSTANCE_ID = randomUUID()
+
+function isKeyOccupied(
+  key: string,
+  recipientRecords: readonly TeamRecipientRecord[],
+  forbiddenKeys: ReadonlySet<string>,
+): boolean {
+  if (forbiddenKeys.has(key)) return true
+  return recipientRecords.some(record => record.key === key)
+}
+
+/**
+ * Reserves a new recipient key (local subagent alias or teammate name) under
+ * one team transaction. `terminated` records still occupy their key — a
+ * name is never reused within a team, even after the recipient it named is
+ * gone. `forbiddenKeys` lets a caller fold in process-local reservations
+ * (e.g. an in-flight worker-name claim) that this team file doesn't know
+ * about yet.
+ */
+export async function allocateTeamRecipient(args: {
+  teamName: string
+  requestedName: string
+  kind: 'local' | 'teammate'
+  conflict: 'error' | 'suffix'
+  forbiddenKeys: ReadonlySet<string>
+  agentId: string
+  sessionId: string
+  backendType?: BackendType
+}): Promise<TeamRecipientRecord> {
+  const { result } = await transactTeamFile(args.teamName, teamFile => {
+    const recipientRecords = teamFile.recipientRecords ?? []
+
+    const buildCandidate = (name: string): { name: string; key: string } =>
+      args.kind === 'teammate'
+        ? {
+            name: canonicalizeNewTeammateName(name),
+            key: canonicalizeNewTeammateName(name),
+          }
+        : { name, key: recipientNameKey(name) }
+
+    let candidate = buildCandidate(args.requestedName)
+    if (isKeyOccupied(candidate.key, recipientRecords, args.forbiddenKeys)) {
+      if (args.conflict === 'error') {
+        throw new RecipientConflictError(candidate.key)
+      }
+      const baseName = args.requestedName.trim()
+      let suffix = 2
+      for (;;) {
+        const suffixStr = `-${suffix}`
+        // canonicalizeNewTeammateName's charset is ASCII-only (byte length
+        // == character length here), so a plain slice is safe. Truncate the
+        // base so a long-but-otherwise-valid name doesn't throw when a
+        // suffix pushes it over the byte cap — degrade to a shorter unique
+        // candidate instead of surfacing an internal validation error for
+        // what's really just "try another candidate."
+        const maxBaseLength = Math.max(
+          1,
+          MAX_TEAMMATE_NAME_BYTES - suffixStr.length,
+        )
+        const next = buildCandidate(
+          `${baseName.slice(0, maxBaseLength)}${suffixStr}`,
+        )
+        if (!isKeyOccupied(next.key, recipientRecords, args.forbiddenKeys)) {
+          candidate = next
+          break
+        }
+        suffix += 1
+      }
+    }
+
+    const now = Date.now()
+    const record: TeamRecipientRecord = {
+      allocationId: randomUUID(),
+      key: candidate.key,
+      name: candidate.name,
+      kind: args.kind,
+      agentId: args.agentId,
+      sessionId: args.sessionId,
+      status: 'reserved',
+      launcherPid: process.pid,
+      launcherInstanceId: PROCESS_INSTANCE_ID,
+      backendType: args.backendType,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    return {
+      teamFile: { ...teamFile, recipientRecords: [...recipientRecords, record] },
+      result: record,
+    }
+  })
+  return result
+}
+
+/**
+ * Moves one recipient record through its lifecycle. Compares both the
+ * allocation ID and the expected `from` state — an invalid or duplicate
+ * transition fails closed rather than clobbering a state it didn't expect.
+ * Pass `member` to atomically upsert the corresponding `TeamFile.members`
+ * entry (e.g. when a teammate allocation goes `starting` -> `active`).
+ */
+export async function transitionTeamRecipient(args: {
+  teamName: string
+  allocationId: string
+  from: TeamRecipientRecord['status']
+  to: TeamRecipientRecord['status']
+  member?: TeamFile['members'][number]
+}): Promise<void> {
+  await transactTeamFile(args.teamName, teamFile => {
+    const recipientRecords = teamFile.recipientRecords ?? []
+    const index = recipientRecords.findIndex(
+      r => r.allocationId === args.allocationId,
+    )
+    if (index === -1) {
+      throw new RecipientTransitionError(
+        args.allocationId,
+        args.from,
+        args.to,
+        'allocation not found',
+      )
+    }
+    const record = recipientRecords[index]!
+    if (record.status !== args.from) {
+      throw new RecipientTransitionError(
+        args.allocationId,
+        args.from,
+        args.to,
+        `current status is "${record.status}"`,
+      )
+    }
+
+    const updatedRecords = recipientRecords.map((r, i) =>
+      i === index ? { ...r, status: args.to, updatedAt: Date.now() } : r,
+    )
+
+    let members = teamFile.members
+    if (args.member) {
+      const memberIndex = members.findIndex(
+        m => m.agentId === args.member!.agentId,
+      )
+      members =
+        memberIndex === -1
+          ? [...members, args.member]
+          : members.map((m, i) => (i === memberIndex ? args.member! : m))
+    }
+
+    return {
+      teamFile: { ...teamFile, recipientRecords: updatedRecords, members },
+      result: undefined,
+    }
+  })
+}
+
+/**
+ * Best-effort recovery for a `starting` allocation whose launcher may have
+ * crashed mid-launch. PID death alone can only prove the launcher is gone —
+ * it can't positively confirm the backend/task it was starting is gone too —
+ * so a live launcher PID is reported as `manual_cleanup_required` rather
+ * than guessed either way. A confirmed-dead launcher's `starting` record is
+ * tombstoned as `terminated`: it is never promoted to `active` by recovery,
+ * and it never becomes reusable.
+ */
+export async function recoverStartingRecipient(args: {
+  teamName: string
+  allocationId: string
+}): Promise<'active' | 'terminated' | 'manual_cleanup_required'> {
+  function launcherIsAlive(pid: number): boolean {
+    if (pid === process.pid) return true
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const { result } = await transactTeamFile(args.teamName, teamFile => {
+    const recipientRecords = teamFile.recipientRecords ?? []
+    const index = recipientRecords.findIndex(
+      r => r.allocationId === args.allocationId,
+    )
+    if (index === -1) {
+      return { teamFile, result: 'terminated' as const }
+    }
+    const record = recipientRecords[index]!
+    if (record.status !== 'starting') {
+      return {
+        teamFile,
+        result: (record.status === 'active' ? 'active' : 'terminated') as
+          | 'active'
+          | 'terminated',
+      }
+    }
+    if (launcherIsAlive(record.launcherPid)) {
+      return { teamFile, result: 'manual_cleanup_required' as const }
+    }
+    const updatedRecords = recipientRecords.map((r, i) =>
+      i === index ? { ...r, status: 'terminated' as const, updatedAt: Date.now() } : r,
+    )
+    return {
+      teamFile: { ...teamFile, recipientRecords: updatedRecords },
+      result: 'terminated' as const,
+    }
+  })
+  return result
+}
+
+/**
+ * Best-effort tombstone for a failed spawn, regardless of which pre-terminal
+ * state (`reserved` or `starting`) the allocation is currently in. Compensating
+ * catch blocks around a spawn often don't know exactly how far setup
+ * progressed before failing — e.g. a caller-side allocate-then-spawn wrapper
+ * can fail before the spawned handler ever reaches its own `reserved ->
+ * starting` transition. Checking the current status inside one transaction
+ * (rather than requiring an exact `from` match) makes this safe to call from
+ * any failure point without knowing the precise state. A transition failure
+ * (already terminal/active, lock error) is logged, not thrown — the caller
+ * is already propagating the original failure.
+ */
+export async function tombstoneFailedRecipient(
+  teamName: string,
+  allocationId: string,
+): Promise<void> {
+  try {
+    const { result } = await transactTeamFile(teamName, teamFile => {
+      const recipientRecords = teamFile.recipientRecords ?? []
+      const index = recipientRecords.findIndex(r => r.allocationId === allocationId)
+      if (index === -1) return { teamFile, result: false }
+      const record = recipientRecords[index]!
+      if (record.status !== 'reserved' && record.status !== 'starting') {
+        return { teamFile, result: false }
+      }
+      const updatedRecords = recipientRecords.map((r, i) =>
+        i === index ? { ...r, status: 'terminated' as const, updatedAt: Date.now() } : r,
+      )
+      return {
+        teamFile: { ...teamFile, recipientRecords: updatedRecords },
+        result: true,
+      }
+    })
+    if (!result) {
+      logForDebugging(
+        `[teamHelpers] tombstoneFailedRecipient: allocation ${allocationId} in team "${teamName}" was not in a pre-terminal state; left untouched`,
+      )
+    }
+  } catch (e) {
+    logForDebugging(
+      `[teamHelpers] tombstoneFailedRecipient failed for ${allocationId} in "${teamName}": ${errorMessage(e)}`,
+    )
+  }
+}
+
+/**
+ * Removes a teammate from the team file by agent ID or name, and tombstones
+ * its recipient record (if any) so the name is never reused within the team.
  * Used by the leader when processing shutdown approvals.
  */
-export function removeTeammateFromTeamFile(
+export async function removeTeammateFromTeamFile(
   teamName: string,
   identifier: { agentId?: string; name?: string },
-): boolean {
+): Promise<boolean> {
   const identifierStr = identifier.agentId || identifier.name
   if (!identifierStr) {
     logForDebugging(
@@ -197,33 +666,44 @@ export function removeTeammateFromTeamFile(
     return false
   }
 
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
+  try {
+    const { result } = await transactTeamFile(teamName, teamFile => {
+      const originalLength = teamFile.members.length
+      const members = teamFile.members.filter(m => {
+        if (identifier.agentId && m.agentId === identifier.agentId) return false
+        if (identifier.name && m.name === identifier.name) return false
+        return true
+      })
+      const removed = members.length !== originalLength
+
+      const recipientRecords = (teamFile.recipientRecords ?? []).map(r => {
+        const matches =
+          (identifier.agentId !== undefined && r.agentId === identifier.agentId) ||
+          (identifier.name !== undefined && r.name === identifier.name)
+        return matches && r.status !== 'terminated'
+          ? { ...r, status: 'terminated' as const, updatedAt: Date.now() }
+          : r
+      })
+
+      return { teamFile: { ...teamFile, members, recipientRecords }, result: removed }
+    })
+
+    if (result) {
+      logForDebugging(
+        `[TeammateTool] Removed teammate from team file: ${identifierStr}`,
+      )
+    } else {
+      logForDebugging(
+        `[TeammateTool] Teammate ${identifierStr} not found in team file for "${teamName}"`,
+      )
+    }
+    return result
+  } catch (e) {
     logForDebugging(
-      `[TeammateTool] Cannot remove teammate ${identifierStr}: failed to read team file for "${teamName}"`,
+      `[TeammateTool] Cannot remove teammate ${identifierStr} from "${teamName}": ${errorMessage(e)}`,
     )
     return false
   }
-
-  const originalLength = teamFile.members.length
-  teamFile.members = teamFile.members.filter(m => {
-    if (identifier.agentId && m.agentId === identifier.agentId) return false
-    if (identifier.name && m.name === identifier.name) return false
-    return true
-  })
-
-  if (teamFile.members.length === originalLength) {
-    logForDebugging(
-      `[TeammateTool] Teammate ${identifierStr} not found in team file for "${teamName}"`,
-    )
-    return false
-  }
-
-  writeTeamFile(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Removed teammate from team file: ${identifierStr}`,
-  )
-  return true
 }
 
 /**
@@ -232,22 +712,31 @@ export function removeTeammateFromTeamFile(
  * @param paneId - The pane ID to hide
  * @returns true if the pane was added to hidden list, false if team doesn't exist
  */
-export function addHiddenPaneId(teamName: string, paneId: string): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
-  if (!hiddenPaneIds.includes(paneId)) {
-    hiddenPaneIds.push(paneId)
-    teamFile.hiddenPaneIds = hiddenPaneIds
-    writeTeamFile(teamName, teamFile)
+export async function addHiddenPaneId(
+  teamName: string,
+  paneId: string,
+): Promise<boolean> {
+  try {
+    await transactTeamFile(teamName, teamFile => {
+      const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
+      if (hiddenPaneIds.includes(paneId)) {
+        return { teamFile, result: undefined }
+      }
+      return {
+        teamFile: { ...teamFile, hiddenPaneIds: [...hiddenPaneIds, paneId] },
+        result: undefined,
+      }
+    })
     logForDebugging(
       `[TeammateTool] Added ${paneId} to hidden panes for team ${teamName}`,
     )
+    return true
+  } catch (e) {
+    logForDebugging(
+      `[TeammateTool] Cannot add hidden pane ${paneId} for "${teamName}": ${errorMessage(e)}`,
+    )
+    return false
   }
-  return true
 }
 
 /**
@@ -256,95 +745,122 @@ export function addHiddenPaneId(teamName: string, paneId: string): boolean {
  * @param paneId - The pane ID to show (remove from hidden list)
  * @returns true if the pane was removed from hidden list, false if team doesn't exist
  */
-export function removeHiddenPaneId(teamName: string, paneId: string): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
-  const index = hiddenPaneIds.indexOf(paneId)
-  if (index !== -1) {
-    hiddenPaneIds.splice(index, 1)
-    teamFile.hiddenPaneIds = hiddenPaneIds
-    writeTeamFile(teamName, teamFile)
+export async function removeHiddenPaneId(
+  teamName: string,
+  paneId: string,
+): Promise<boolean> {
+  try {
+    await transactTeamFile(teamName, teamFile => {
+      const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
+      if (!hiddenPaneIds.includes(paneId)) {
+        return { teamFile, result: undefined }
+      }
+      return {
+        teamFile: {
+          ...teamFile,
+          hiddenPaneIds: hiddenPaneIds.filter(id => id !== paneId),
+        },
+        result: undefined,
+      }
+    })
     logForDebugging(
       `[TeammateTool] Removed ${paneId} from hidden panes for team ${teamName}`,
     )
+    return true
+  } catch (e) {
+    logForDebugging(
+      `[TeammateTool] Cannot remove hidden pane ${paneId} for "${teamName}": ${errorMessage(e)}`,
+    )
+    return false
   }
-  return true
 }
 
 /**
- * Removes a teammate from the team config file by pane ID.
- * Also removes from hiddenPaneIds if present.
+ * Removes a teammate from the team config file by pane ID, tombstoning its
+ * recipient record. Also removes from hiddenPaneIds if present.
  * @param teamName - The name of the team
  * @param tmuxPaneId - The pane ID of the teammate to remove
  * @returns true if the member was removed, false if team or member doesn't exist
  */
-export function removeMemberFromTeam(
+export async function removeMemberFromTeam(
   teamName: string,
   tmuxPaneId: string,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const memberIndex = teamFile.members.findIndex(
-    m => m.tmuxPaneId === tmuxPaneId,
-  )
-  if (memberIndex === -1) {
-    return false
-  }
-
-  // Remove from members array
-  teamFile.members.splice(memberIndex, 1)
-
-  // Also remove from hiddenPaneIds if present
-  if (teamFile.hiddenPaneIds) {
-    const hiddenIndex = teamFile.hiddenPaneIds.indexOf(tmuxPaneId)
-    if (hiddenIndex !== -1) {
-      teamFile.hiddenPaneIds.splice(hiddenIndex, 1)
+): Promise<boolean> {
+  try {
+    const { result } = await transactTeamFile(teamName, teamFile => {
+      const memberIndex = teamFile.members.findIndex(
+        m => m.tmuxPaneId === tmuxPaneId,
+      )
+      if (memberIndex === -1) {
+        return { teamFile, result: false }
+      }
+      const removedMember = teamFile.members[memberIndex]!
+      const members = teamFile.members.filter((_, i) => i !== memberIndex)
+      const hiddenPaneIds = teamFile.hiddenPaneIds?.filter(
+        id => id !== tmuxPaneId,
+      )
+      const recipientRecords = (teamFile.recipientRecords ?? []).map(r =>
+        r.agentId === removedMember.agentId && r.status !== 'terminated'
+          ? { ...r, status: 'terminated' as const, updatedAt: Date.now() }
+          : r,
+      )
+      return {
+        teamFile: { ...teamFile, members, hiddenPaneIds, recipientRecords },
+        result: true,
+      }
+    })
+    if (result) {
+      logForDebugging(
+        `[TeammateTool] Removed member with pane ${tmuxPaneId} from team ${teamName}`,
+      )
     }
+    return result
+  } catch (e) {
+    logForDebugging(
+      `[TeammateTool] Cannot remove member with pane ${tmuxPaneId} from "${teamName}": ${errorMessage(e)}`,
+    )
+    return false
   }
-
-  writeTeamFile(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Removed member with pane ${tmuxPaneId} from team ${teamName}`,
-  )
-  return true
 }
 
 /**
- * Removes a teammate from a team's member list by agent ID.
- * Use this for in-process teammates which all share the same tmuxPaneId.
+ * Removes a teammate from a team's member list by agent ID, tombstoning its
+ * recipient record. Use this for in-process teammates which all share the
+ * same tmuxPaneId.
  * @param teamName - The name of the team
  * @param agentId - The agent ID of the teammate to remove (e.g., "researcher@my-team")
  * @returns true if the member was removed, false if team or member doesn't exist
  */
-export function removeMemberByAgentId(
+export async function removeMemberByAgentId(
   teamName: string,
   agentId: string,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
+): Promise<boolean> {
+  try {
+    const { result } = await transactTeamFile(teamName, teamFile => {
+      const memberIndex = teamFile.members.findIndex(m => m.agentId === agentId)
+      if (memberIndex === -1) {
+        return { teamFile, result: false }
+      }
+      const members = teamFile.members.filter((_, i) => i !== memberIndex)
+      const recipientRecords = (teamFile.recipientRecords ?? []).map(r =>
+        r.agentId === agentId && r.status !== 'terminated'
+          ? { ...r, status: 'terminated' as const, updatedAt: Date.now() }
+          : r,
+      )
+      return { teamFile: { ...teamFile, members, recipientRecords }, result: true }
+    })
+    if (result) {
+      logForDebugging(
+        `[TeammateTool] Removed member ${agentId} from team ${teamName}`,
+      )
+    }
+    return result
+  } catch (e) {
+    logForDebugging(
+      `[TeammateTool] Cannot remove member ${agentId} from "${teamName}": ${errorMessage(e)}`,
+    )
     return false
   }
-
-  const memberIndex = teamFile.members.findIndex(m => m.agentId === agentId)
-  if (memberIndex === -1) {
-    return false
-  }
-
-  // Remove from members array
-  teamFile.members.splice(memberIndex, 1)
-
-  writeTeamFile(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Removed member ${agentId} from team ${teamName}`,
-  )
-  return true
 }
 
 /**
@@ -354,38 +870,41 @@ export function removeMemberByAgentId(
  * @param memberName - The name of the member to update
  * @param mode - The new permission mode
  */
-export function setMemberMode(
+export async function setMemberMode(
   teamName: string,
   memberName: string,
   mode: PermissionMode,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const member = teamFile.members.find(m => m.name === memberName)
-  if (!member) {
+): Promise<boolean> {
+  try {
+    const { result } = await transactTeamFile(teamName, teamFile => {
+      const member = teamFile.members.find(m => m.name === memberName)
+      if (!member) {
+        return { teamFile, result: false }
+      }
+      if (member.mode === mode) {
+        return { teamFile, result: true }
+      }
+      const members = teamFile.members.map(m =>
+        m.name === memberName ? { ...m, mode } : m,
+      )
+      return { teamFile: { ...teamFile, members }, result: true }
+    })
+    if (result) {
+      logForDebugging(
+        `[TeammateTool] Set member ${memberName} in team ${teamName} to mode: ${mode}`,
+      )
+    } else {
+      logForDebugging(
+        `[TeammateTool] Cannot set member mode: member ${memberName} not found in team ${teamName}`,
+      )
+    }
+    return result
+  } catch (e) {
     logForDebugging(
-      `[TeammateTool] Cannot set member mode: member ${memberName} not found in team ${teamName}`,
+      `[TeammateTool] Cannot set member mode for ${memberName} in "${teamName}": ${errorMessage(e)}`,
     )
     return false
   }
-
-  // Only write if the value is actually changing
-  if (member.mode === mode) {
-    return true
-  }
-
-  // Create updated members array immutably
-  const updatedMembers = teamFile.members.map(m =>
-    m.name === memberName ? { ...m, mode } : m,
-  )
-  writeTeamFile(teamName, { ...teamFile, members: updatedMembers })
-  logForDebugging(
-    `[TeammateTool] Set member ${memberName} in team ${teamName} to mode: ${mode}`,
-  )
-  return true
 }
 
 /**
@@ -394,15 +913,15 @@ export function setMemberMode(
  * @param mode - The permission mode to sync
  * @param teamNameOverride - Optional team name override (uses env var if not provided)
  */
-export function syncTeammateMode(
+export async function syncTeammateMode(
   mode: PermissionMode,
   teamNameOverride?: string,
-): void {
+): Promise<void> {
   if (!isTeammate()) return
   const teamName = teamNameOverride ?? getTeamName()
   const agentName = getAgentName()
   if (teamName && agentName) {
-    setMemberMode(teamName, agentName, mode)
+    await setMemberMode(teamName, agentName, mode)
   }
 }
 
@@ -412,36 +931,39 @@ export function syncTeammateMode(
  * @param teamName - The name of the team
  * @param modeUpdates - Array of {memberName, mode} to update
  */
-export function setMultipleMemberModes(
+export async function setMultipleMemberModes(
   teamName: string,
   modeUpdates: Array<{ memberName: string; mode: PermissionMode }>,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
+): Promise<boolean> {
+  try {
+    const { result } = await transactTeamFile(teamName, teamFile => {
+      const updateMap = new Map(modeUpdates.map(u => [u.memberName, u.mode]))
+      let anyChanged = false
+      const members = teamFile.members.map(member => {
+        const newMode = updateMap.get(member.name)
+        if (newMode !== undefined && member.mode !== newMode) {
+          anyChanged = true
+          return { ...member, mode: newMode }
+        }
+        return member
+      })
+      return {
+        teamFile: anyChanged ? { ...teamFile, members } : teamFile,
+        result: anyChanged,
+      }
+    })
+    if (result) {
+      logForDebugging(
+        `[TeammateTool] Set ${modeUpdates.length} member modes in team ${teamName}`,
+      )
+    }
+    return true
+  } catch (e) {
+    logForDebugging(
+      `[TeammateTool] Cannot set member modes in "${teamName}": ${errorMessage(e)}`,
+    )
     return false
   }
-
-  // Build a map of updates for efficient lookup
-  const updateMap = new Map(modeUpdates.map(u => [u.memberName, u.mode]))
-
-  // Create updated members array immutably
-  let anyChanged = false
-  const updatedMembers = teamFile.members.map(member => {
-    const newMode = updateMap.get(member.name)
-    if (newMode !== undefined && member.mode !== newMode) {
-      anyChanged = true
-      return { ...member, mode: newMode }
-    }
-    return member
-  })
-
-  if (anyChanged) {
-    writeTeamFile(teamName, { ...teamFile, members: updatedMembers })
-    logForDebugging(
-      `[TeammateTool] Set ${modeUpdates.length} member modes in team ${teamName}`,
-    )
-  }
-  return true
 }
 
 /**
@@ -456,32 +978,25 @@ export async function setMemberActive(
   memberName: string,
   isActive: boolean,
 ): Promise<void> {
-  const teamFile = await readTeamFileAsync(teamName)
-  if (!teamFile) {
+  try {
+    await transactTeamFile(teamName, teamFile => {
+      const member = teamFile.members.find(m => m.name === memberName)
+      if (!member || member.isActive === isActive) {
+        return { teamFile, result: undefined }
+      }
+      const members = teamFile.members.map(m =>
+        m.name === memberName ? { ...m, isActive } : m,
+      )
+      return { teamFile: { ...teamFile, members }, result: undefined }
+    })
     logForDebugging(
-      `[TeammateTool] Cannot set member active: team ${teamName} not found`,
+      `[TeammateTool] Set member ${memberName} in team ${teamName} to ${isActive ? 'active' : 'idle'}`,
     )
-    return
-  }
-
-  const member = teamFile.members.find(m => m.name === memberName)
-  if (!member) {
+  } catch (e) {
     logForDebugging(
-      `[TeammateTool] Cannot set member active: member ${memberName} not found in team ${teamName}`,
+      `[TeammateTool] Cannot set member active for ${memberName} in "${teamName}": ${errorMessage(e)}`,
     )
-    return
   }
-
-  // Only write if the value is actually changing
-  if (member.isActive === isActive) {
-    return
-  }
-
-  member.isActive = isActive
-  await writeTeamFileAsync(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Set member ${memberName} in team ${teamName} to ${isActive ? 'active' : 'idle'}`,
-  )
 }
 
 /**

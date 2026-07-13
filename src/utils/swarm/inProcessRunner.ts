@@ -30,7 +30,7 @@ import {
 } from '../../services/compact/compact.js'
 import { resetMicrocompactState } from '../../services/compact/microCompact.js'
 import type { AppState } from '../../state/AppState.js'
-import type { Tool, ToolUseContext } from '../../Tool.js'
+import type { Tool, Tools, ToolUseContext } from '../../Tool.js'
 import { appendTeammateMessage } from '../../tasks/InProcessTeammateTask/InProcessTeammateTask.js'
 import type {
   InProcessTeammateTaskState,
@@ -44,6 +44,7 @@ import {
   updateProgressFromMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { CustomAgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
+import { resolveAgentTools } from '../../tools/AgentTool/agentToolUtils.js'
 import { runAgent } from '../../tools/AgentTool/runAgent.js'
 import { awaitClassifierAutoApproval } from '../../tools/BashTool/bashPermissions.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
@@ -88,16 +89,23 @@ import { claimTask, listTasks, type Task, updateTask } from '../tasks.js'
 import type { TeammateContext } from '../teammateContext.js'
 import { runWithTeammateContext } from '../teammateContext.js'
 import {
+  acknowledgeMailboxMessages,
+  classifyMailboxMessage,
   createIdleNotification,
   getLastPeerDmSummary,
+  type IdleNotificationMessage,
   isPermissionResponse,
   isShutdownRequest,
   type MailboxSignature,
   markMessageAsReadByIndex,
   readMailbox,
   readMailboxIfChanged,
+  resolveTeamPrincipalByName,
+  type ShutdownRequestMessage,
+  type TeamPrincipal,
   writeToMailbox,
 } from '../teammateMailbox.js'
+import { readTeamSnapshot, type TeamFile } from './teamHelpers.js'
 import {
   formatTeammateMessagesForModel,
   serializeTeammateMessage,
@@ -572,6 +580,7 @@ async function sendMessageToLeader(
   text: string,
   color: string | undefined,
   teamName: string,
+  notification?: IdleNotificationMessage,
 ): Promise<void> {
   await writeToMailbox(
     TEAM_LEAD_NAME,
@@ -580,6 +589,9 @@ async function sendMessageToLeader(
       text,
       timestamp: new Date().toISOString(),
       color,
+      ...(notification
+        ? { payloadClass: 'notification' as const, notification }
+        : {}),
     },
     teamName,
   )
@@ -588,6 +600,9 @@ async function sendMessageToLeader(
 /**
  * Sends idle notification to the leader via file-based mailbox.
  * Uses agentName (not agentId) for consistency with process-based teammates.
+ * idle_notification "remains a notification with its existing behavior"
+ * (Design Decisions) — explicit typed `notification` payload alongside the
+ * existing `text`, still on the legacy positional write path.
  */
 async function sendIdleNotification(
   agentName: string,
@@ -608,6 +623,7 @@ async function sendIdleNotification(
     jsonStringify(notification),
     agentColor,
     teamName,
+    notification,
   )
 }
 
@@ -715,6 +731,8 @@ type IdleWaitDeps = {
   readMailboxIfChanged: typeof readMailboxIfChanged
   markMessageAsReadByIndex: typeof markMessageAsReadByIndex
   tryClaimNextTask: typeof tryClaimNextTask
+  readTeamSnapshot: typeof readTeamSnapshot
+  acknowledgeMailboxMessages: typeof acknowledgeMailboxMessages
 }
 
 const defaultIdleWaitDeps: IdleWaitDeps = {
@@ -722,6 +740,8 @@ const defaultIdleWaitDeps: IdleWaitDeps = {
   readMailboxIfChanged,
   markMessageAsReadByIndex,
   tryClaimNextTask,
+  readTeamSnapshot,
+  acknowledgeMailboxMessages,
 }
 
 /**
@@ -820,21 +840,98 @@ async function waitForNextPromptOrShutdown(
       mailboxSignature = mailbox.signature
       const allMessages = mailbox.changed ? mailbox.messages : []
 
+      // Resolve a versioned snapshot once per poll for authority-checked
+      // shutdown detection. `null` (legacy/absent team) falls back to the
+      // pre-Task-3 raw isShutdownRequest text-sniff below — no worse than
+      // before, and version-2 controls are never accepted against a legacy
+      // team anyway (Design Decisions).
+      //
+      // Resolved by NAME from `identity.agentName` — never
+      // `resolveCurrentTeamPrincipal` (which reads getAgentId() off
+      // AsyncLocalStorage/dynamicTeamContext). This poll loop runs between
+      // `runWithTeammateContext`-wrapped prompt iterations, outside that
+      // context's scope, so getAgentId() would silently return undefined
+      // and fall back to resolving the LEADER instead of this teammate.
+      let snapshot: Readonly<TeamFile> | null = null
+      let receiverPrincipal: TeamPrincipal | null = null
+      try {
+        snapshot = await deps.readTeamSnapshot(identity.teamName)
+        receiverPrincipal = resolveTeamPrincipalByName(
+          snapshot,
+          identity.agentName,
+        )
+      } catch {
+        snapshot = null
+        receiverPrincipal = null
+      }
+
       // Scan all unread messages for shutdown requests (highest priority).
       // readMailbox() already reads all messages from disk, so this scan
-      // adds only ~1-2ms of JSON parsing overhead.
+      // adds only ~1-2ms of JSON parsing overhead. Only a valid LEADER
+      // control addressed to THIS teammate's current allocation may return
+      // shutdown — a peer's forged/mismatched attempt classifies as
+      // invalid_control/protocol_mismatch and is acknowledged (dropped),
+      // never treated as shutdown.
       let shutdownIndex = -1
-      let shutdownParsed: ReturnType<typeof isShutdownRequest> = null
+      let shutdownParsed: ShutdownRequestMessage | null = null
+      const droppedMessageIds: string[] = []
       for (let i = 0; i < allMessages.length; i++) {
         const m = allMessages[i]
-        if (m && !m.read) {
+        if (!m || m.read) continue
+
+        // No usable version-2 snapshot at all (legacy/absent team) — fall
+        // back to the pre-Task-3 raw text-sniff. This is distinct from "the
+        // sender name isn't in the roster": an unresolvable SENDER with a
+        // perfectly good snapshot must never fall back to trusting raw text
+        // (that would let an unregistered/forged `from` bypass authority
+        // entirely) — it's simply not a valid shutdown, full stop.
+        if (!snapshot || !receiverPrincipal) {
           const parsed = isShutdownRequest(m.text)
           if (parsed) {
             shutdownIndex = i
             shutdownParsed = parsed
             break
           }
+          continue
         }
+
+        const senderPrincipal = resolveTeamPrincipalByName(snapshot, m.from)
+        if (!senderPrincipal) continue
+
+        const classified = classifyMailboxMessage({
+          message: m,
+          sender: senderPrincipal,
+          receiver: receiverPrincipal,
+          pendingControls: snapshot.pendingControls ?? [],
+        })
+
+        if (
+          classified.kind === 'control' &&
+          classified.control.type === 'shutdown_request'
+        ) {
+          shutdownIndex = i
+          shutdownParsed = classified.control
+          break
+        }
+        if (
+          classified.kind === 'invalid_control' ||
+          classified.kind === 'protocol_mismatch'
+        ) {
+          logForDebugging(
+            `[inProcessRunner] ${identity.agentName} dropping ${classified.kind} message from ${m.from}: ${classified.reason}`,
+          )
+          if (m.messageId) droppedMessageIds.push(m.messageId)
+        }
+      }
+
+      if (droppedMessageIds.length > 0 && receiverPrincipal) {
+        await deps
+          .acknowledgeMailboxMessages({
+            recipient: receiverPrincipal,
+            teamName: identity.teamName,
+            messageIds: droppedMessageIds,
+          })
+          .catch(() => {})
       }
 
       if (shutdownIndex !== -1) {
@@ -946,6 +1043,139 @@ export function waitForNextPromptOrShutdownForTest(params: {
   )
 }
 
+export type InProcessRuntimeDeps = {
+  getSystemPrompt: typeof getSystemPrompt
+}
+
+const defaultInProcessRuntimeDeps: InProcessRuntimeDeps = {
+  getSystemPrompt,
+}
+
+type InProcessRuntime = {
+  /** The teammate's actual resolved tool pool — same array used to build
+   * `systemPrompt` below and passed to runAgent() as agentToolEnvironment
+   * so per-turn resolution can't disagree with it (Task 5). */
+  tools: Tools
+  /** Tool NAME spec (agentDefinition.tools plus injected team-essential
+   * tools, or ['*']) — the CustomAgentDefinition.tools this runtime was
+   * resolved from. */
+  agentToolNames: string[]
+  systemPrompt: string
+}
+
+/**
+ * Resolves the teammate's actual tool pool and builds its system prompt from
+ * that SAME resolved pool.
+ *
+ * This runs BEFORE runWithTeammateContext()/runWithAgentContext() establish
+ * the teammate's AsyncLocalStorage context, so tool resolution here must use
+ * the EXPLICIT 'in-process-teammate' AgentToolEnvironment
+ * (agentToolUtils.ts) rather than the ALS-based isInProcessTeammate() check
+ * filterToolsForAgent falls back to for its 'default' environment —
+ * otherwise the system prompt would be built from the LEADER's unfiltered
+ * tool pool (enabledTools.has(AGENT_TOOL_NAME) etc. would answer for the
+ * leader, not this teammate), diverging from what runAgent() actually
+ * resolves once ALS is live (Task 5: prompt/tool-pool consistency).
+ */
+async function resolveInProcessRuntime(
+  args: {
+    toolUseContext: ToolUseContext
+    agentDefinition?: CustomAgentDefinition
+    systemPromptMode?: 'default' | 'replace' | 'append'
+    systemPrompt?: string
+  },
+  deps: InProcessRuntimeDeps = defaultInProcessRuntimeDeps,
+): Promise<InProcessRuntime> {
+  const { toolUseContext, agentDefinition, systemPromptMode, systemPrompt } =
+    args
+
+  // Inject team-essential tools so teammates can always respond to shutdown
+  // requests, send messages, and coordinate via the task list, even with
+  // explicit tool lists.
+  const agentToolNames = agentDefinition?.tools
+    ? [
+        ...new Set([
+          ...agentDefinition.tools,
+          SEND_MESSAGE_TOOL_NAME,
+          TEAM_CREATE_TOOL_NAME,
+          TEAM_DELETE_TOOL_NAME,
+          TASK_CREATE_TOOL_NAME,
+          TASK_GET_TOOL_NAME,
+          TASK_LIST_TOOL_NAME,
+          TASK_UPDATE_TOOL_NAME,
+        ]),
+      ]
+    : ['*']
+
+  const tools = resolveAgentTools(
+    {
+      tools: agentToolNames,
+      disallowedTools: agentDefinition?.disallowedTools,
+      source: 'projectSettings',
+      permissionMode: 'default',
+    },
+    toolUseContext.options.tools,
+    true,
+    'in-process-teammate',
+  ).resolvedTools
+
+  if (systemPromptMode === 'replace' && systemPrompt) {
+    return { tools, agentToolNames, systemPrompt }
+  }
+
+  const fullSystemPromptParts = await deps.getSystemPrompt(
+    tools,
+    toolUseContext.options.mainLoopModel,
+    undefined,
+    toolUseContext.options.mcpClients,
+  )
+
+  const systemPromptParts = [
+    ...fullSystemPromptParts,
+    TEAMMATE_SYSTEM_PROMPT_ADDENDUM,
+  ]
+
+  // If custom agent definition provided, append its prompt
+  if (agentDefinition) {
+    const customPrompt = agentDefinition.getSystemPrompt()
+    if (customPrompt) {
+      systemPromptParts.push(`\n# Custom Agent Instructions\n${customPrompt}`)
+    }
+
+    // Log agent memory loaded event for in-process teammates
+    if (agentDefinition.memory) {
+      logEvent('tengu_agent_memory_loaded', {
+        ...(process.env.USER_TYPE === 'ant'
+          ? {
+              agent_type:
+                agentDefinition.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            }
+          : {}),
+        scope:
+          agentDefinition.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        source:
+          'in-process-teammate' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      })
+    }
+  }
+
+  // Append mode: add provided system prompt after default
+  if (systemPromptMode === 'append' && systemPrompt) {
+    systemPromptParts.push(systemPrompt)
+  }
+
+  return {
+    tools,
+    agentToolNames,
+    systemPrompt: systemPromptParts.join('\n'),
+  }
+}
+
+/** Test-only seam. Do not widen — see resolveInProcessRuntime's doc comment. */
+export const _forTest = {
+  resolveInProcessRuntime,
+}
+
 /**
  * Runs an in-process teammate with a continuous prompt loop.
  *
@@ -999,54 +1229,21 @@ export async function runInProcessTeammate(
     invocationEmitted: false,
   }
 
-  // Build system prompt based on systemPromptMode
-  let teammateSystemPrompt: string
-  if (systemPromptMode === 'replace' && systemPrompt) {
-    teammateSystemPrompt = systemPrompt
-  } else {
-    const fullSystemPromptParts = await getSystemPrompt(
-      toolUseContext.options.tools,
-      toolUseContext.options.mainLoopModel,
-      undefined,
-      toolUseContext.options.mcpClients,
-    )
-
-    const systemPromptParts = [
-      ...fullSystemPromptParts,
-      TEAMMATE_SYSTEM_PROMPT_ADDENDUM,
-    ]
-
-    // If custom agent definition provided, append its prompt
-    if (agentDefinition) {
-      const customPrompt = agentDefinition.getSystemPrompt()
-      if (customPrompt) {
-        systemPromptParts.push(`\n# Custom Agent Instructions\n${customPrompt}`)
-      }
-
-      // Log agent memory loaded event for in-process teammates
-      if (agentDefinition.memory) {
-        logEvent('tengu_agent_memory_loaded', {
-          ...(process.env.USER_TYPE === 'ant'
-            ? {
-                agent_type:
-                  agentDefinition.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              }
-            : {}),
-          scope:
-            agentDefinition.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          source:
-            'in-process-teammate' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-        })
-      }
-    }
-
-    // Append mode: add provided system prompt after default
-    if (systemPromptMode === 'append' && systemPrompt) {
-      systemPromptParts.push(systemPrompt)
-    }
-
-    teammateSystemPrompt = systemPromptParts.join('\n')
-  }
+  // Resolve the teammate's actual tool pool and build its system prompt from
+  // that SAME resolved pool (Task 5: prompt/tool-pool consistency — see
+  // resolveInProcessRuntime's doc comment above). The resolved `tools` array
+  // itself is only needed to build the system prompt (done inside
+  // resolveInProcessRuntime); the runAgent() call below re-derives the same
+  // pool per turn from the live toolUseContext.options.tools plus the same
+  // agentToolNames + 'in-process-teammate' environment, so newly connected
+  // MCP tools remain visible on later turns instead of being frozen here.
+  const { agentToolNames, systemPrompt: teammateSystemPrompt } =
+    await resolveInProcessRuntime({
+      toolUseContext,
+      agentDefinition,
+      systemPromptMode,
+      systemPrompt,
+    })
 
   // Resolve agent definition - use full system prompt with teammate addendum
   // IMPORTANT: Set permissionMode to 'default' so teammates always get full tool
@@ -1055,23 +1252,7 @@ export async function runInProcessTeammate(
     agentType: identity.agentName,
     whenToUse: `In-process teammate: ${identity.agentName}`,
     getSystemPrompt: () => teammateSystemPrompt,
-    // Inject team-essential tools so teammates can always respond to
-    // shutdown requests, send messages, and coordinate via the task list,
-    // even with explicit tool lists
-    tools: agentDefinition?.tools
-      ? [
-          ...new Set([
-            ...agentDefinition.tools,
-            SEND_MESSAGE_TOOL_NAME,
-            TEAM_CREATE_TOOL_NAME,
-            TEAM_DELETE_TOOL_NAME,
-            TASK_CREATE_TOOL_NAME,
-            TASK_GET_TOOL_NAME,
-            TASK_LIST_TOOL_NAME,
-            TASK_UPDATE_TOOL_NAME,
-          ]),
-        ]
-      : ['*'],
+    tools: agentToolNames,
     source: 'projectSettings',
     permissionMode: 'default',
     // Propagate model from custom agent definition so getAgentModel()
@@ -1293,6 +1474,10 @@ export async function runInProcessTeammate(
             model: model as ModelAlias | undefined,
             preserveToolUseResults: true,
             availableTools: toolUseContext.options.tools,
+            // Explicit — not ALS-derived — so this per-turn resolution
+            // agrees with the tool pool resolveInProcessRuntime() used to
+            // build the system prompt above (Task 5).
+            agentToolEnvironment: 'in-process-teammate',
             allowedTools,
             contentReplacementState: teammateReplacementState,
           })) {

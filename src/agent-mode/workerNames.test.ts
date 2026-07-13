@@ -5,6 +5,7 @@ import {
   releaseWorkerName,
   reserveWorkerName,
   resetWorkerNamesForTests,
+  tryReserveWorkerName,
 } from './workerNames.js'
 
 const originalRandom = Math.random
@@ -94,5 +95,10 @@ describe('workerNames', () => {
     expect(
       allocateWorkerName('general-purpose', [], { allowGeneric: true }),
     ).toBe('Katherine')
+  })
+
+  test('atomic reservation rejects a case-variant of an already-held name', () => {
+    expect(tryReserveWorkerName('Ada')).toBe(true)
+    expect(tryReserveWorkerName('ada')).toBe(false)
   })
 })

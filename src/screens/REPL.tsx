@@ -45,7 +45,7 @@ import { registerSandboxPermissionCallback } from '../hooks/useSwarmPermissionPo
 import { getTeamName, getAgentName } from '../utils/teammate.js';
 import { WorkerPendingPermission } from '../components/permissions/WorkerPendingPermission.js';
 import { injectUserMessageToTeammate, getAllInProcessTeammateTasks } from '../tasks/InProcessTeammateTask/InProcessTeammateTask.js';
-import { isLocalAgentTask, queuePendingMessage, appendMessageToLocalAgent, appendLocalAgentSystemMessage, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
+import { isLocalAgentTask, queuePendingMessageIfRunning, appendMessageToLocalAgent, appendLocalAgentSystemMessage, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerLeaderToolUseConfirmQueue, unregisterLeaderToolUseConfirmQueue, registerLeaderSetToolPermissionContext, unregisterLeaderSetToolPermissionContext } from '../utils/swarm/leaderPermissionBridge.js';
 import { endInteractionSpan } from '../utils/telemetry/sessionTracing.js';
 import { useLogMessages } from '../hooks/useLogMessages.js';
@@ -861,7 +861,7 @@ export function REPL({
         allowedAgentTypes: undefined as string[] | undefined
       };
     }
-    const resolved = resolveAgentTools(mainThreadAgentDefinition, mergedTools, false, true);
+    const resolved = resolveAgentTools(mainThreadAgentDefinition, mergedTools, false, 'main-thread');
     return {
       tools: resolved.resolvedTools,
       allowedAgentTypes: resolved.allowedAgentTypes
@@ -2651,7 +2651,7 @@ export function REPL({
       const assembled = assembleToolPool(state.toolPermissionContext, state.mcp.tools);
       const merged = mergeAndFilterTools(combinedInitialTools, assembled, state.toolPermissionContext.mode);
       if (!mainThreadAgentDefinition) return merged;
-      return resolveAgentTools(mainThreadAgentDefinition, merged, false, true).resolvedTools;
+      return resolveAgentTools(mainThreadAgentDefinition, merged, false, 'main-thread').resolvedTools;
     };
     return {
       abortController,
@@ -4009,9 +4009,10 @@ export function REPL({
       appendMessageToLocalAgent(task.id, createUserMessage({
         content: input
       }), setAppState);
-      if (task.status === 'running') {
-        queuePendingMessage(task.id, input, setAppState);
-      } else {
+      // queuePendingMessageIfRunning re-checks live status atomically inside
+      // the store updater instead of trusting the `task` snapshot captured
+      // at render time, which may be stale by the time the user submits.
+      if (!queuePendingMessageIfRunning(task.id, input, setAppState)) {
         const agentDisplayName = await displayNameForAgent({
           agentId: task.id,
           appState: store.getState()

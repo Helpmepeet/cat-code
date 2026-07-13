@@ -129,7 +129,12 @@ export const ResumeAgentTool = buildTool({
       }
     }
 
-    const task = appState.tasks[resolved.agentId]
+    // Re-read state after resolution: resolveAgentTarget may have awaited
+    // I/O, during which the target could have been resumed/started running
+    // by another call. Reject off fresh state, not the pre-resolution
+    // snapshot.
+    const freshAppState = context.getAppState()
+    const task = freshAppState.tasks[resolved.agentId]
     if (isLocalAgentTask(task) && task.status === 'running') {
       return {
         data: {
