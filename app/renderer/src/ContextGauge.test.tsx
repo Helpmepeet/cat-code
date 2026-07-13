@@ -10,11 +10,11 @@ test('renders the percent + an accessible label', () => {
   expect(html).toContain('aria-label="Context 25% used"')
 })
 
-test('healthy tone (neutral) under 65%', () => {
+test('accent (pink) tone under 65% — the prototype donut at headroom', () => {
   const html = renderToStaticMarkup(
     <ContextGauge usage={{ usedTokens: 1, contextWindow: 2, percentUsed: 64 }} />,
   )
-  expect(html).toContain('text-text-muted')
+  expect(html).toContain('text-accent')
   expect(html).not.toContain('text-tone-warn')
   expect(html).not.toContain('text-tone-danger')
 })

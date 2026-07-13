@@ -22,7 +22,7 @@ import { SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 function WarningList({ items }: { items: string[] }) {
   if (items.length === 0) {
     return (
-      <div className="flex items-center gap-1.5 text-[12px] text-tone-success">
+      <div className="flex items-center gap-1.5 rounded-lg border border-tone-success/15 bg-tone-success/6 px-2.5 py-1.5 text-[12px] text-tone-success">
         <CheckIcon />
         No issues found
       </div>

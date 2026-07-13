@@ -218,7 +218,7 @@ export function SettingsShell({
                     aria-current={on ? 'page' : undefined}
                     className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors ${
                       on
-                        ? 'bg-accent/10 font-semibold text-accent'
+                        ? 'bg-accent/10 font-semibold text-accent-soft'
                         : 'text-text-muted hover:bg-shell-hover'
                     }`}
                     key={item.id}
@@ -228,7 +228,7 @@ export function SettingsShell({
                     <span className="flex-1 truncate">{item.label}</span>
                     {item.locked ? (
                       <LockIcon
-                        className={on ? 'h-2.5 w-2.5 text-accent' : 'h-2.5 w-2.5 text-text-subtle'}
+                        className={on ? 'h-2.5 w-2.5 text-accent-soft' : 'h-2.5 w-2.5 text-text-subtle'}
                       />
                     ) : null}
                   </button>

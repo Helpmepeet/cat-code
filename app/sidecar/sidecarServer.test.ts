@@ -42,6 +42,8 @@ import {
   createSidecarAgentModeDomain,
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
+import type { SidecarRunControlsDomain } from './runControlsDomain.js'
+import type { RunControlsSnapshot } from '../shared/protocol.js'
 import { createTaskStateBase } from '../../src/Task.js'
 import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.js'
 import {
@@ -155,6 +157,7 @@ function makeServer(
   extensions?: SidecarExtensionsDomain,
   agentMode?: SidecarAgentModeDomain,
   settings?: SidecarSettingsDomain,
+  runControls?: SidecarRunControlsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -170,6 +173,7 @@ function makeServer(
     ...(extensions ? { extensions } : {}),
     ...(agentMode ? { agentMode } : {}),
     ...(settings ? { settings } : {}),
+    ...(runControls ? { runControls } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -777,6 +781,286 @@ test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKe
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
   expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
   expect(calls).toEqual([])
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-24c — composer run-control SET verbs (Model / Reasoning / Fast) boundary
+ * ------------------------------------------------------------------------- *
+ * Exercises the SERVER boundary (checkStrictKeys + Zod schema + dispatch + result
+ * frame + subscription-driven snapshot re-broadcast) with a FAKE domain whose set
+ * mutates in-memory state AND fires its subscribe listener — so the re-broadcast
+ * proven here is the REAL store-subscription path, not a synthetic action-driven
+ * one. The engine setter round-trip is proven separately in runControlsDomain.test.ts.
+ */
+function fakeRunControlsDomain(): {
+  domain: SidecarRunControlsDomain
+  calls: string[]
+} {
+  const calls: string[] = []
+  let model = 'claude-opus-4-6'
+  let effort: string | null = null
+  let fast = false
+  let listener: (() => void) | null = null
+  const snapshot = (): RunControlsSnapshot => ({
+    model: {
+      current: model,
+      selected: model,
+      options: [
+        { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' },
+        { value: 'opus', label: 'Opus', provider: 'anthropic' },
+      ],
+    },
+    effort: { current: effort, supported: true, options: ['low', 'medium', 'high'] },
+    fast: { active: fast, supportedByModel: true, available: true, unavailableReason: null },
+  })
+  const domain: SidecarRunControlsDomain = {
+    getSnapshot: snapshot,
+    setModel(next) {
+      calls.push(`model:${next}`)
+      const changed = next !== model
+      model = next
+      if (changed) listener?.()
+      return { ok: true, message: `Model set to ${next}.`, changed }
+    },
+    setEffort(next) {
+      calls.push(`effort:${next}`)
+      const value = next === 'auto' ? null : next
+      const changed = value !== effort
+      effort = value
+      if (changed) listener?.()
+      return { ok: true, message: `Effort set to ${next}.`, changed }
+    },
+    setFast(active) {
+      calls.push(`fast:${active}`)
+      const changed = active !== fast
+      fast = active
+      if (changed) listener?.()
+      return { ok: true, message: active ? 'on' : 'off', changed }
+    },
+    subscribe(l) {
+      listener = l
+      return () => {
+        listener = null
+      }
+    },
+  }
+  return { domain, calls }
+}
+
+function makeRunControlsServer(): {
+  server: SidecarServer
+  calls: string[]
+} {
+  const { domain, calls } = fakeRunControlsDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  return { server, calls }
+}
+
+test('P4-24c — a valid model.set switches the model + re-broadcasts run-controls.snapshot (live path)', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'run-controls.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'model.set',
+        requestId: 'rc1',
+        model: 'gpt-5.6-terra',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  // The result ack echoes the requestId.
+  const result = received.find(f => f.kind === 'run-control.result')
+  expect(result && result.kind === 'run-control.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'run-control.result' && result.verb).toBe('model.set')
+  expect(result && result.kind === 'run-control.result' && result.requestId).toBe('rc1')
+  expect(calls).toEqual(['model:gpt-5.6-terra'])
+
+  // The store-subscription re-broadcast fired synchronously with the new model.
+  const snaps = received.filter(
+    (f): f is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> =>
+      f.kind === 'run-controls.snapshot',
+  )
+  expect(snaps.length).toBeGreaterThan(before)
+  expect(snaps[snaps.length - 1]?.runControls.model.current).toBe('gpt-5.6-terra')
+})
+
+test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast', () => {
+  const { server } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'run-controls.snapshot').length
+
+  // The fake seeds model = 'claude-opus-4-6'; re-setting the same model is a no-op.
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'model.set',
+        requestId: 'rc2',
+        model: 'claude-opus-4-6',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'run-control.result' && f.ok)).toBe(true)
+  expect(received.filter(f => f.kind === 'run-controls.snapshot').length).toBe(before)
+})
+
+test('P4-24c — a valid effort.set + fast.set both round-trip through the domain', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'effort.set', requestId: 'rc3', effort: 'high' } as unknown as ClientFrame['message'],
+    }),
+  )
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'fast.set', requestId: 'rc4', active: true } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(calls).toEqual(['effort:high', 'fast:true'])
+  const snaps = received.filter(
+    (f): f is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> =>
+      f.kind === 'run-controls.snapshot',
+  )
+  expect(snaps[snaps.length - 1]?.runControls.effort.current).toBe('high')
+  expect(snaps[snaps.length - 1]?.runControls.fast.active).toBe(true)
+})
+
+test('P4-24c — rejects model.set with a NON-string model (Zod boundary), no domain call', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'model.set', requestId: 'rc5', model: 42 } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-24c — rejects fast.set with a NON-boolean active, no domain call', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'fast.set', requestId: 'rc6', active: 'yes' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-24c — rejects model.set missing requestId at the schema boundary, no domain call', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'model.set', model: 'opus' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-24c — rejects a run-control verb carrying an unexpected key (checkStrictKeys), no domain call', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      // A renderer-supplied extra key is rejected before the verb reaches the domain.
+      message: {
+        type: 'model.set',
+        requestId: 'rc7',
+        model: 'opus',
+        provider: 'openai',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-24c — a run-control verb with no domain present fails closed (internal_error)', () => {
+  // No runControls domain wired → the verb is structurally valid but has no
+  // executor; it must fail closed, never silently succeed.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'fast.set', requestId: 'rc8', active: true } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(
+    received.some(f => f.kind === 'error' && f.code === 'internal_error'),
+  ).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
 })
 
 test('T5a — permission.response for an unknown requestId is rejected', () => {
@@ -1644,7 +1928,9 @@ test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () =
   expect(received.some(frame => frame.kind === 'error')).toBe(false)
 })
 
-test('C2 — bypassPermissions is REJECTED, always; mode unchanged, no snapshot', () => {
+test('C2 — bypassPermissions is REJECTED when the trusted launch flag is NOT set; mode unchanged, no snapshot', () => {
+  // Default store → isBypassPermissionsModeAvailable false (Tool.ts:152), the
+  // desktop default (no CATCODE_ALLOW_BYPASS). A renderer alone cannot escalate.
   const store = makePermissionStore()
   const server = makeServer(
     new AppSessionController(probeAdapter()),
@@ -1677,6 +1963,41 @@ test('C2 — bypassPermissions is REJECTED, always; mode unchanged, no snapshot'
   ).toBe(true)
   expect(store.getState().toolPermissionContext.mode).toBe('default')
   expect(contextFrames(received)).toHaveLength(before)
+})
+
+test('C2 — bypassPermissions is GRANTED when the trusted launch flag enabled it (isBypassPermissionsModeAvailable)', () => {
+  // The trusted launch surface (CATCODE_ALLOW_BYPASS=1) sets availability at
+  // session construction; the boundary then honours a bypass request.
+  const store = makePermissionStore({ isBypassPermissionsModeAvailable: true })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarPermissionDomain(store),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'permission.setMode',
+        requestId: 'm-bypass-ok',
+        mode: 'bypassPermissions',
+      },
+    }),
+  )
+
+  // The boundary did NOT reject with the availability error, and the engine
+  // applied the mode (session-scoped).
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'error' && frame.message.includes('not available'),
+    ),
+  ).toBe(false)
+  expect(store.getState().toolPermissionContext.mode).toBe('bypassPermissions')
 })
 
 test('C2 — auto is engine-internal and REJECTED at the boundary', () => {
@@ -2704,6 +3025,9 @@ test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', (
   const diagnostics = fakeDiagnostics({
     version: '2.1.87-dev',
     mainLoopModel: null,
+    mainLoopModelForSession: 'gpt-5.6-terra',
+    reasoningEffort: 'high',
+    fastMode: false,
     sandboxEnabled: true,
     installationWarnings: [],
     healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],
@@ -2728,6 +3052,9 @@ test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', (
     diagnostics: {
       version: '2.1.87-dev',
       mainLoopModel: null,
+      mainLoopModelForSession: 'gpt-5.6-terra',
+      reasoningEffort: 'high',
+      fastMode: false,
       sandboxEnabled: true,
       installationWarnings: [],
       healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],

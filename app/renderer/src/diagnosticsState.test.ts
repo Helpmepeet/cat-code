@@ -9,6 +9,9 @@ import {
 const SNAPSHOT: DiagnosticsSnapshot = {
   version: '2.1.87-dev',
   mainLoopModel: null,
+  mainLoopModelForSession: 'gpt-5.6-terra',
+  reasoningEffort: null,
+  fastMode: false,
   sandboxEnabled: true,
   installationWarnings: [],
   healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],

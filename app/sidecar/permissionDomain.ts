@@ -51,8 +51,10 @@ export function createSidecarPermissionDomain(
       // `transitionPermissionMode` so prePlanMode stash/clear, the plan-exit
       // flag, and auto-mode strip/restore all fire. NOT a bare
       // `applyPermissionUpdate({type:'setMode'})`, which skips that cleanup.
-      // Policy guards (bypassPermissions/auto rejection) already ran at the
-      // boundary; the wire type cannot express either mode.
+      // Policy guards already ran at the boundary: `auto` is always rejected,
+      // and `bypassPermissions` reaches here ONLY when the trusted launch flag
+      // enabled it (isBypassPermissionsModeAvailable) — otherwise the boundary
+      // rejected it. `transitionPermissionMode` applies the resulting mode.
       appStateStore.setState(prev => {
         const current = prev.toolPermissionContext.mode
         if (current === mode) return prev

@@ -103,6 +103,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     dispatchAccounts: count('accounts') as never,
     dispatchWorkspaceTrust: count('workspaceTrust') as never,
     dispatchDiagnostics: count('diagnostics') as never,
+    dispatchRunControls: count('runControls') as never,
     dispatchRemoteSettings: count('remoteSettings') as never,
     dispatchSessionsCatalog: count('sessionsCatalog') as never,
     dispatchTranscript: action => {
@@ -158,6 +159,7 @@ test('an empty delivery dispatches nothing', () => {
     dispatchAccounts: mark as never,
     dispatchWorkspaceTrust: mark as never,
     dispatchDiagnostics: mark as never,
+    dispatchRunControls: mark as never,
     dispatchRemoteSettings: mark as never,
     dispatchSessionsCatalog: mark as never,
     dispatchTranscript: mark as never,

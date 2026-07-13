@@ -60,6 +60,7 @@ import {
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
   REMOTE_VERB_TYPES,
+  RUN_CONTROL_VERB_TYPES,
   SETTINGS_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountVerbMessage,
@@ -67,6 +68,8 @@ import {
   type PermissionSetModeMode,
   type RemoteVerbMessage,
   type RemoteVerbType,
+  type RunControlVerbMessage,
+  type RunControlVerbType,
   type ServerFrame,
   type SessionId,
   type SettingsVerbMessage,
@@ -85,6 +88,7 @@ const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
+const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -438,9 +442,10 @@ function registerIpcHandlers(): void {
     (_e, arg: { sessionId: SessionId; mode: unknown }) => {
       if (typeof arg?.sessionId !== 'string') return
       // C2 — light UX coercion only; the SIDECAR is the trust boundary and
-      // re-validates (bypassPermissions/auto rejected there explicitly). A
-      // value outside the wire allowlist drops the whole message fail-closed
-      // rather than forwarding a frame that is guaranteed to be rejected.
+      // re-validates (`auto` rejected there explicitly; `bypassPermissions`
+      // honoured only when the trusted launch flag enabled it). A value outside
+      // the wire allowlist drops the whole message fail-closed rather than
+      // forwarding a frame that is guaranteed to be rejected.
       if (
         !PERMISSION_SET_MODE_MODES.includes(arg.mode as PermissionSetModeMode)
       ) {
@@ -510,6 +515,26 @@ function registerIpcHandlers(): void {
         requestId: generateRequestId(),
         active: arg.active,
       })
+    },
+  )
+
+  ipcMain.on(
+    CH_RUN_CONTROL_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-24c — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (Zod schema + the engine's own setter). Drop any frame
+      // whose `type` is not a run-control verb fail-closed, rather than forwarding a
+      // message guaranteed to be rejected. The renderer authors the `requestId` for
+      // result correlation (a UX field, not a security one; the sidecar bounds it).
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !RUN_CONTROL_VERB_TYPES.includes(verb.type as RunControlVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as RunControlVerbMessage)
     },
   )
 

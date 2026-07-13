@@ -18,6 +18,15 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Chip } from './Chip.js'
 import { basename } from './pathUtils.js'
+import type { SessionId } from '../../shared/protocol.js'
+import {
+  resolveSessionActions,
+  type SessionActionKind,
+} from './sessionActions.js'
+import {
+  SessionActionsMenu,
+  type SessionActionsAnchor,
+} from './SessionActionsMenu.js'
 import {
   bucketByDate,
   collectSessionTags,

@@ -21,6 +21,7 @@ import type {
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
+  RunControlVerbMessage,
   ServerFrame,
   SessionId,
   SettingsVerbMessage,
@@ -46,6 +47,7 @@ const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
+const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -114,6 +116,16 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, active }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_AGENT_MODE_SET, payload)
+  },
+  runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void {
+    // P4-24c — HC3 fixed sender for the composer run-controls (Model / Reasoning /
+    // Fast). Same posture as `accountVerb`: the renderer supplies only a decided
+    // verb payload (a value/selection + requestId); main light-coerces the type and
+    // the sidecar is the trust boundary (Zod schema + the engine's own setter). No
+    // engine object, no path, no token crosses in either direction.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_RUN_CONTROL_VERB, payload)
   },
   remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void {
     // P4-13 — HC3 fixed sender. Same posture as `accountVerb`: the renderer

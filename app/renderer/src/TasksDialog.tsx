@@ -200,7 +200,7 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
       <span
         className={
           'min-w-0 flex-1 truncate text-[12.5px] text-text-primary ' +
-          (isMonoLabel ? 'font-mono text-text-muted' : '')
+          (isMonoLabel ? 'font-mono text-[#c4c4c8]' : '')
         }
       >
         {item.label}

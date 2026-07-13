@@ -172,6 +172,11 @@ import {
   selectDiagnosticsSnapshot,
 } from './diagnosticsState.js'
 import {
+  createRunControlsState,
+  reduceRunControlsState,
+  selectRunControlsSnapshot,
+} from './runControlsState.js'
+import {
   createRemoteSettingsState,
   reduceRemoteSettingsState,
   selectRemoteSettingsSnapshot,
@@ -195,10 +200,7 @@ import {
   createOrchestratorState,
   reduceOrchestratorState,
   selectAgentModeSnapshot,
-  selectWorkerById,
 } from './orchestratorState.js'
-import { OrchestratorPage } from './OrchestratorPage.js'
-import { WorkerFocusView } from './WorkerFocusView.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage, loginVerb } from './AccountsPage.js'
 import { BannerStack } from './BannerStack.js'
@@ -223,6 +225,7 @@ import type {
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
+  RunControlsSnapshot,
   SessionId,
 } from '../../shared/protocol.js'
 import type {
@@ -248,6 +251,11 @@ const reduceOrchestratorStateBatched = withBatch(reduceOrchestratorState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
 const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
+const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
+
+/** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
+ * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
+const newRequestId = (): string => crypto.randomUUID()
 const reduceRemoteSettingsStateBatched = withBatch(reduceRemoteSettingsState)
 const reduceSessionsCatalogStateBatched = withBatch(reduceSessionsCatalogState)
 
@@ -367,6 +375,11 @@ export function App() {
     undefined,
     createDiagnosticsState,
   )
+  const [runControls, dispatchRunControls] = useReducer(
+    reduceRunControlsStateBatched,
+    undefined,
+    createRunControlsState,
+  )
   const [remoteSettings, dispatchRemoteSettings] = useReducer(
     reduceRemoteSettingsStateBatched,
     undefined,
@@ -388,15 +401,11 @@ export function App() {
     createOrchestratorState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
-  // P4-8b — the App-level worker-focus swap (prototype `enterTeammateView`). When
-  // set (and we're on the orchestrator view), the main column focuses ONE worker
-  // read-only; cleared on Escape/back or when nav leaves the orchestrator.
-  const [focusedWorkerId, setFocusedWorkerId] = useState<string | null>(null)
   // P4-15 first-run OAuth phase (renderer-visible sub-states only; the live
   // waiting→alias→success transitions are the coordinated operator step, §0).
   const [oauthPhase, setOauthPhase] = useState<StartupOAuthPhase>('ready')
   const [activeView, setActiveView] = useState<
-    'chat' | 'orchestrator' | 'sessions' | 'goals' | 'accounts' | 'settings'
+    'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   >('chat')
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
@@ -437,6 +446,7 @@ export function App() {
         dispatchAccounts,
         dispatchWorkspaceTrust,
         dispatchDiagnostics,
+        dispatchRunControls,
         dispatchRemoteSettings,
         dispatchSessionsCatalog,
         dispatchTranscript: dispatchSessionEvent,
@@ -1155,7 +1165,7 @@ export function App() {
 	      // Codex pool snapshot (the pool is process-global, so the first-reported
 	      // snapshot is a valid fallback before this session's own frame lands —
 	      // the launcher precedent) + its agent-mode active flag. Both are the SAME
-	      // domain seams the reauth banner / OrchestratorPage already read.
+	      // domain seams the reauth banner / WelcomeScreen already read.
 	      const panelAccounts =
 	        selectAccountsSnapshot(accounts, sessionId) ??
 	        selectFirstAccountsSnapshot(accounts)
@@ -1165,6 +1175,11 @@ export function App() {
 	      // log's `gitBranch` (shared catalog seam), keyed by this panel's session.
 	      const panelBranch =
 	        sessionCatalogRows.find(r => r.sessionId === sessionId)?.gitBranch ?? null
+	      // P4-24c — the LIVE composer run-controls seam (Model/effort/fast + the
+	      // real picker options), re-broadcast on every change so the faces reflect
+	      // this session's current state with no respawn. Supersedes the P4-24 read
+	      // from the spawn-frozen diagnostics snapshot for the composer faces.
+	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
 	      return {
 	        sessionId,
 	        descriptor,
@@ -1178,10 +1193,46 @@ export function App() {
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
 	            branch={panelBranch}
-	            modelOverride={
-	              selectDiagnosticsSnapshot(diagnostics, sessionId)
-	                ?.mainLoopModel ?? null
-	            }
+	            model={panelRunControls?.model.current ?? null}
+	            reasoningEffort={panelRunControls?.effort.current ?? null}
+	            fastMode={panelRunControls?.fast.active ?? false}
+	            runControls={panelRunControls}
+	            onSetModel={model => {
+	              try {
+	                getBridge().runControlVerb(sessionId, {
+	                  type: 'model.set',
+	                  requestId: newRequestId(),
+	                  model,
+	                })
+	                setTransportError(null)
+	              } catch (error) {
+	                setTransportError(errorMessage(error))
+	              }
+	            }}
+	            onSetEffort={effort => {
+	              try {
+	                getBridge().runControlVerb(sessionId, {
+	                  type: 'effort.set',
+	                  requestId: newRequestId(),
+	                  effort,
+	                })
+	                setTransportError(null)
+	              } catch (error) {
+	                setTransportError(errorMessage(error))
+	              }
+	            }}
+	            onSetFast={active => {
+	              try {
+	                getBridge().runControlVerb(sessionId, {
+	                  type: 'fast.set',
+	                  requestId: newRequestId(),
+	                  active,
+	                })
+	                setTransportError(null)
+	              } catch (error) {
+	                setTransportError(errorMessage(error))
+	              }
+	            }}
 	            orchestratorActive={panelOrchestratorActive}
 		            onToggleOrchestrator={next => {
 		              // P4-8b — toggle THIS panel's session (its own sessionId, not
@@ -1364,14 +1415,13 @@ export function App() {
         rows={sidebarRows}
         activeSessionId={activeSessionId}
         activeView={activeView}
-        onSelectView={view => {
-          // Leaving the orchestrator view exits any worker focus (the swap is
-          // scoped to that view).
-          if (view !== 'orchestrator') setFocusedWorkerId(null)
-          setActiveView(view)
-        }}
+        onSelectView={setActiveView}
         onSelectLive={selectTab}
         onRestore={sessionId => void performRestore(sessionId)}
+        modelForSession={id =>
+          selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
+          null
+        }
       />
 
       <div className="relative flex min-w-0 flex-1 flex-col">
@@ -1480,28 +1530,6 @@ export function App() {
             }}
             onNewSession={() => void newSession()}
           />
-        ) : activeView === 'orchestrator' ? (
-          (() => {
-            const agentModeSnapshot = selectAgentModeSnapshot(orchestrator, activeSessionId)
-            // P4-8b main-column focus swap: render one worker read-only when
-            // focused AND still present in the re-broadcast snapshot; otherwise
-            // fall back to the roster (auto-exit a vanished worker).
-            const focused = selectWorkerById(agentModeSnapshot, focusedWorkerId)
-            return focused ? (
-              <WorkerFocusView
-                worker={focused}
-                active={agentModeSnapshot?.active ?? false}
-                onBack={() => setFocusedWorkerId(null)}
-              />
-            ) : (
-              <OrchestratorPage
-                snapshot={agentModeSnapshot}
-                accountsSnapshot={activeAccountsSnapshot}
-                onOpenTasks={() => setTasksOpen(true)}
-                onFocusWorker={setFocusedWorkerId}
-              />
-            )
-          })()
         ) : showTrustGate && activeSessionId ? (
           // Per-session-create trust gate (D4 §1.1): this session's cwd is
           // untrusted. Trust persists via the engine's own store + re-broadcast;
@@ -1629,7 +1657,13 @@ export function SessionPane({
   activeLog,
   activeSessionId,
   allowPermission,
-  modelOverride,
+  model,
+  reasoningEffort,
+  fastMode,
+  runControls,
+  onSetModel,
+  onSetEffort,
+  onSetFast,
   copyForLlm,
   denyPermission,
   history,
@@ -1825,9 +1859,10 @@ export function SessionPane({
     setAtBottom(true)
   }, [activeSessionId])
   const contentSignature = `${activeLog.messages.length}:${partialCount}`
-  // P4-24: context-window fullness for the composer donut, derived from the
-  // latest result frame's real usage (`contextUsage.ts`) — null until a turn
-  // completes (then the gauge appears), never a fabricated 0%.
+  // P4-24: context-window fullness for the composer donut. The prototype's
+  // ContextChip is always on (`Surfaces.jsx:471-473`), so `selectContextUsage`
+  // always returns — real result-frame usage once a turn provides it, a 0%
+  // default-window gauge before then (never hidden).
   const contextUsage = useMemo(
     () => selectContextUsage(activeLog.messages),
     [activeLog.messages],
@@ -2161,7 +2196,7 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onSubmit={submit}
       >
-        <div className="peer relative flex items-end gap-3">
+        <div className="peer relative flex items-end gap-[14px] px-1 pb-[11px]">
           <div className="relative min-w-0 flex-1">
             <SlashCommandPicker
               open={slashOpen}
@@ -2185,7 +2220,7 @@ export function SessionPane({
               ref={composerRef}
               aria-label="Prompt"
               rows={1}
-              className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light text-text-primary caret-accent outline-none placeholder:text-text-subtle placeholder:font-light"
+              className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
               disabled={
                 !activeSessionId ||
                 !activeLog.inputEnabled ||
@@ -2205,7 +2240,7 @@ export function SessionPane({
                 isComposingRef.current = false
               }}
               onPaste={handlePaste}
-              placeholder="Send a prompt to the live engine"
+              placeholder="Ask Cat Code anything or describe a task…"
               value={prompt}
             />
           </div>
@@ -2214,7 +2249,7 @@ export function SessionPane({
           <button
             aria-label="Send prompt"
             title="Send"
-            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors enabled:hover:bg-accent/10 disabled:text-text-subtle"
+            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
             disabled={
               !activeSessionId ||
               !activeLog.inputEnabled ||
@@ -2243,7 +2278,7 @@ export function SessionPane({
          * gradient while the input has focus. */}
         <div
           aria-hidden
-          className="mt-1 h-0.5 rounded-sm bg-white/[0.08] transition-colors peer-focus-within:bg-gradient-to-r peer-focus-within:from-accent peer-focus-within:to-accent/10"
+          className="h-0.5 rounded-sm bg-white/[0.08] transition-colors peer-focus-within:bg-gradient-to-r peer-focus-within:from-accent peer-focus-within:to-accent/[0.12]"
         />
 
         {/* Actions row (Chat.jsx:1454 / Surfaces.jsx:745 `ChipStrip`): attach ·
@@ -2260,7 +2295,13 @@ export function SessionPane({
               tone: 'info',
             })
           }
-          modelOverride={modelOverride}
+          model={model}
+          reasoningEffort={reasoningEffort}
+          fastMode={fastMode}
+          runControls={runControls}
+          onSetModel={onSetModel}
+          onSetEffort={onSetEffort}
+          onSetFast={onSetFast}
           permissionContext={permissionContext}
           onSetMode={setPermissionMode}
           account={activeAccount}
@@ -2616,8 +2657,20 @@ type SessionPaneProps = {
   branch: string | null
   activeSessionId: SessionId | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
-  /** Real per-session model OVERRIDE (`mainLoopModel`); null = built-in default. */
-  modelOverride: string | null
+  /** The RESOLVED model this session runs (`mainLoopModelForSession`); null before the snapshot. */
+  model: string | null
+  /** The session's reasoning-effort tier, or null when running at the provider default. */
+  reasoningEffort: string | null
+  /** The fast-mode toggle; the ⚡ face renders when on OR togglable (P4-24c interactive). */
+  fastMode: boolean
+  /** P4-24c — the live run-controls snapshot (current + real picker options + availability). */
+  runControls?: RunControlsSnapshot | null
+  /** P4-24c — set this session's model (a value from `runControls.model.options`). */
+  onSetModel?: (model: string) => void
+  /** P4-24c — set this session's reasoning-effort tier (a level, or `auto` to clear). */
+  onSetEffort?: (effort: string) => void
+  /** P4-24c — toggle this session's fast mode on/off. */
+  onSetFast?: (active: boolean) => void
   copyForLlm: () => void
   denyPermission: (requestId: string, message?: string) => void
   /** This session's agent-mode active flag, shown in the empty Welcome. */

@@ -86,8 +86,8 @@ export function usageTone(pct: number | null): Tone {
 
 /** Status-dot tone for a pool row (prompt mapping, redacted fields only). */
 export function statusDotTone(account: AccountStatus): Tone {
-  if (account.isDefault && account.status === 'healthy') return 'accent'
   if (account.status === 'healthy' && account.usageLimitReached) return 'warn'
+  if (account.isDefault) return 'accent'
   if (account.status === 'healthy') return 'good'
   if (account.status === 'capped') return 'warn'
   if (account.status === 'dead') return 'danger'
@@ -194,7 +194,7 @@ function DangerBtn({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-lg bg-tone-danger px-3.5 py-2 text-[13px] font-semibold text-app-bg"
+      className="rounded-lg bg-[#ef4444] px-3.5 py-2 text-[13px] font-semibold text-white"
     >
       {children}
     </button>

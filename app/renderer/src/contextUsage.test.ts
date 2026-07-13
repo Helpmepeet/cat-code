@@ -66,16 +66,17 @@ test('uses the LATEST result when several are present', () => {
   expect(usage?.percentUsed).toBe(60)
 })
 
-test('returns null when there is no result frame yet', () => {
-  expect(selectContextUsage([])).toBeNull()
-  expect(selectContextUsage([filler])).toBeNull()
+test('shows a 0% default gauge when no result frame yet (the prototype donut is always on)', () => {
+  const empty = { usedTokens: 0, contextWindow: 200_000, percentUsed: 0 }
+  expect(selectContextUsage([])).toEqual(empty)
+  expect(selectContextUsage([filler])).toEqual(empty)
 })
 
-test('returns null when the result omits contextWindow (fixtures / stale frames)', () => {
-  // The existing sdkMessageFixtures result omits contextWindow — no gauge, never
-  // a fabricated 0%.
+test('defaults the window when the result omits contextWindow (still shows the donut)', () => {
+  // A frame with usage but no contextWindow (e.g. stale fixtures) falls back to the
+  // 200k default rather than hiding — matches the prototype's `contextMax || 200000`.
   const usage = selectContextUsage([
     result({ input_tokens: 10_000 }, { m: { inputTokens: 10_000 } }),
   ])
-  expect(usage).toBeNull()
+  expect(usage).toEqual({ usedTokens: 10_000, contextWindow: 200_000, percentUsed: 5 })
 })

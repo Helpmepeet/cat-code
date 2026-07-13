@@ -42,6 +42,12 @@ export const AGENT_TYPE_TONE_CLASS: Record<
 > = {
   teal: { text: 'text-teal-300', soft: 'bg-teal-300/10', line: 'border-teal-300/30', dot: 'bg-teal-300' },
   blue: { text: 'text-blue-300', soft: 'bg-blue-300/10', line: 'border-blue-300/30', dot: 'bg-blue-300' },
+  // NOTE: this 'purple' bucket is shared by coding-worker (violet-400 #a78bfa) and
+  // implementor (violet-300 #c4b5fd), and is read by both AgentChrome and
+  // TranscriptView. Kept at violet-300 (implementor-correct) to avoid regressing
+  // it; the real fix is a per-type split (coding-worker → violet-400) needing a new
+  // AgentTypeTone key + agentIdentity mapping + the TranscriptView reader
+  // (2026-07-13 UI-drift follow-up, out of the color-only sweep).
   purple: { text: 'text-violet-300', soft: 'bg-violet-300/10', line: 'border-violet-300/30', dot: 'bg-violet-300' },
   sky: { text: 'text-sky-300', soft: 'bg-sky-300/10', line: 'border-sky-300/30', dot: 'bg-sky-300' },
   neutral: { text: 'text-zinc-400', soft: 'bg-zinc-400/10', line: 'border-zinc-400/30', dot: 'bg-zinc-400' },
@@ -95,7 +101,7 @@ export function AgentTypeChip({ role }: { role: string | null }) {
   const tone = AGENT_TYPE_TONE_CLASS[meta.tone]
   return (
     <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-[5px] border px-1.5 py-px text-[10px] font-semibold ${tone.text} ${tone.soft} ${tone.line}`}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-[5px] border px-1.5 py-px text-[9.5px] font-bold uppercase tracking-[0.05em] font-mono ${tone.text} ${tone.soft} ${tone.line}`}
     >
       {meta.label}
     </span>
@@ -105,7 +111,7 @@ export function AgentTypeChip({ role }: { role: string | null }) {
 /** @handle in mono — a web-native mention convention, not a terminal tree row. */
 export function AgentHandle({ name, className }: { name: string; className?: string }) {
   return (
-    <span className={`shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-text-primary ${className ?? ''}`}>
+    <span className={`shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200 ${className ?? ''}`}>
       {name}
     </span>
   )

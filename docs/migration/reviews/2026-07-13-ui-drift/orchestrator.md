@@ -1,0 +1,44 @@
+# Orchestrator mode drift — prototype vs impl (2026-07-13)
+
+**Our:** `app/renderer/src/OrchestratorPage.tsx`, `OrchestratorRoster.tsx`, `WorkerFocusView.tsx`, `LeaseRoster.tsx` (+ shared substrate consumed by all four: `AgentChrome.tsx`, `agentIdentity.ts`, `orchestratorState.ts`)
+**Prototype:** `~/catcode_prototype/cat-app/OrchestratorMode.jsx` (903 lines)
+**Built status:** partial, by design — P4-8a (roster/page/nav, 2026-07-10) + P4-8b (WorkerDetail drilldown, WorkerFocusView, TasksButton, Leases tab, 2026-07-11) landed headless-green; 🖐 GUI acceptance still UNVERIFIED (`STATUS.md` P4-8 row). Several prototype pieces are deliberately deferred/cut per `decisions/AGENT-CHROME.md` (D2) and `PARITY-LEDGER.md` rows 1397-1470 — see Deferred section.
+
+## Scoreboard — H:0 M:1 L:5
+
+## Findings (High → Low)
+
+[Med] OrchestratorBadge icon: prototype renders a distinctive git-branch/delegation SVG glyph — a vertical line + two circles + curved path, 10×10 (`OrchestratorMode.jsx:413`) — inside the pill. We render a plain filled dot instead (`<span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-purple-400" />`, `OrchestratorPage.tsx:50`). The exact correct glyph already exists verbatim elsewhere in our own tree as `OrchestratorIcon` (`Sidebar.tsx:688-704`, whose comment literally says "matches the prototype's OrchestratorBadge svg") but `OrchestratorPage`'s own badge doesn't reuse it. Fix: inline the same `<svg viewBox="0 0 24 24">` (line + 2 circles + path) at 10×10 in `OrchestratorBadge` in place of the dot span, or import/share `OrchestratorIcon` from `Sidebar.tsx`.
+
+[Low] `AgentTypeChip`/`AgentRoleDot` color-class mismatch for coding-worker: the prototype's `W_ROLE['coding-worker'].color` = `'#a78bfa'` (`OrchestratorMode.jsx:30`, Tailwind violet-400). Our own `AGENT_TYPE_META['coding-worker']`/`['agent-mode-coding-worker']` records the same hex (`agentIdentity.ts:107,116`, `color: '#a78bfa'`), but the actual rendered class bucket `AGENT_TYPE_TONE_CLASS.purple` (`AgentChrome.tsx:45`, `text-violet-300`/`bg-violet-300`/`border-violet-300` = `#c4b5fd`) is one shade lighter than the hex it's supposed to represent — because the 'purple' tone bucket is shared with `implementor`, whose own color field (`#c4b5fd`) genuinely *is* violet-300. Every coding-worker row/chip (the primary orchestrator role, `OrchestratorWorkerRow` → `AgentRoleDot`/`AgentTypeChip`) therefore renders violet-300 instead of the violet-400 both the prototype and our own data table intend. Fix: give coding-worker its own tone bucket (`text-violet-400`/`bg-violet-400`/`border-violet-400`) instead of sharing 'purple' with implementor.
+
+[Low] Hardcoded `purple-300` where the prototype ties the SAME text to the `AGENT` constant (`#c084fc` = purple-400): the `/tasks` label (`OrchestratorMode.jsx:429`, `color: AGENT`), the "Open thread" button text (`OrchestratorMode.jsx:771-776`, `color: AGENT`), and the "Task from orchestrator" `WLabel` (`OrchestratorMode.jsx:506`, `<WLabel color={AGENT}>`). Our equivalents all use `text-purple-300` instead: `OrchestratorPage.tsx:121` (`/tasks`), `OrchestratorPage.tsx:189` ("Open thread"), `WorkerFocusView.tsx:109` ("Task from orchestrator", further dimmed with `/80` opacity on top). Fix: swap to `text-purple-400` in all three spots — matches the `waiting`/orchestrator-owner tone already resolved correctly elsewhere via `AGENT_STATE_TONE_CLASS.purple` (`AgentChrome.tsx:35`).
+
+[Low] Section-label default color too bright: the prototype's uncolored `WLabel` (no `color` prop) defaults to `'#3f3f46'` (zinc-700, `OrchestratorMode.jsx:91`) for "Prompt" (`:442`) and the /tasks role-group header (`:792`). Our equivalents use `text-text-subtle` (`#71717a` = zinc-500, two shades brighter): `OrchestratorPage.tsx:198` ("Prompt" in `WorkerDetail`) and `OrchestratorPage.tsx:362` (role-group header, e.g. "Coding worker · N"). Fix: use `text-zinc-700` for the uncolored-label case (the explicit-color labels — Result/Verdict/blocked-state — already route correctly through `resultTone.text` and don't need touching).
+
+[Low] Worker handle one shade too bright: the prototype's handle text (`w.handle`) is `#e4e4e7` (zinc-200) everywhere it appears — single-worker row (`OrchestratorMode.jsx:263`), hover-popover row (`:324`), promoted-lead line (`:348`). Our shared `AgentHandle` (`AgentChrome.tsx:106-112`) uses `text-text-primary` (`#f4f4f5` = zinc-100). Fix: `text-zinc-200` instead of `text-text-primary` in `AgentHandle`.
+
+[Low] Roster shell always bordered: the prototype's roster container border is `1px solid transparent` at rest (`OrchestratorMode.jsx:244`) — invisible until an inner row is hovered — while ours (`OrchestratorRoster.tsx:63`, `border border-shell-seam`) shows a persistent visible outline around the whole bar even at rest. Fix: drop the border class and rely on `bg-shell-chrome` alone, or make it conditional to match the prototype's hover-only treatment.
+
+## Deferred / intentional (not drift)
+
+- Above-composer roster placement (whisper line mounted on the live chat, not just the Orchestrator nav page) — DEFERRED: `PARITY-LEDGER.md:1419`, owner P4-8b.
+- Roster hover popover ("N SUBAGENTS" + full worker rows on hover) — DEFERRED: `PARITY-LEDGER.md:1425`, "popover itself → 8b".
+- Roster chevron (›) + `onOpen` click-through (bar/lead-name clickable to jump to /tasks or a worker) — DEFERRED: `PARITY-LEDGER.md:1419` chevron row, owner P4-8b.
+- Roster compact/dim mode while the orchestrator is generating — DEFERRED: `PARITY-LEDGER.md:1421` ("compact ... → 8b").
+- Footer `BackgroundTaskStatus` pill wired into an actual footer surface — DEFERRED: `PARITY-LEDGER.md:1428`; logic (`orchestratorPill`) is built, footer-pill slot is already owned by P4-9's `TasksStrip` (rule #10, no duplicate).
+- Roster single-worker "quiet, named" distinct treatment collapsed into the general role-grouped row style; per-worker elapsed-time dropped — ADAPTED/DEFERRED: `PARITY-LEDGER.md:1421` (explicitly flagged: "elapsed dropped — no per-worker elapsed on the joined feed").
+- Stop/kill-worker control + composer-to-worker messaging in `WorkerDetail`/`WorkerFocusView` — DEFERRED (needs an inbound write verb): `STATUS.md` P4-8 row (P4-8b entry), `WorkerFocusView.tsx:8-12` docstring.
+- Activity timeline (`w.progress`) + changed-files list (`w.files`) in both detail views — CUT: `STATUS.md` P4-8 row + `WorkerFocusView.tsx:16-18` docstring (fixture arrays, no wire field).
+- Leases tab per-owner lease map / `failoverCount` / per-session `strategy` / failover-event strip — DEGRADED to the honest account pool: `LeaseRoster.tsx:8-19` docstring + `STATUS.md` P4-8 row (C3 flagged engine-extension, not built).
+- `OrchestratorDemoSwitch` (A/B/C demo control) — CUT (intentional): `PARITY-LEDGER.md:1468-1470`, prototype's own header says "DEMO-ONLY: delete on migration".
+- `workerCardStats` mock array (tools/tokens/cost/model/account/etc.) — CUT: `PARITY-LEDGER.md:1408` (D2 §3, mostly mock fixtures).
+- `TasksButton` amber-attention scoped to true user-owned attention only, not every blocked worker (the prototype's own `TasksButton` incoherently reds-out ANY `w.blocked`, contradicting its own neutral-blocked doctrine) — INTENTIONAL correction per D2 C2, documented in `OrchestratorPage.tsx:97-100`.
+- `running`/`background` state tone kept as the prototype's blue rather than the app's pink accent-info — INTENTIONAL: `AgentChrome.tsx:27-28` comment.
+- Blocked-worker copy gated on `active`/owner instead of the prototype's unconditional "orchestrator resolves this" framing (the desktop app's `agentMode.active` is always false — no `CLAUDE_CODE_AGENT_MODE`) — INTENTIONAL/source-correct fix: `STATUS.md` P4-8 row, M1 (2026-07-12).
+
+## Doc-drift notes
+
+- `PARITY-LEDGER.md:1419,1421,1425` all cite "P4-8b" as the owner for above-composer placement, the hover popover, chevron/`onOpen` click-through, and compact mode — but `STATUS.md`'s P4-8 row shows P4-8b (landed 2026-07-11) shipped only WorkerDetail drilldown + WorkerFocusView + TasksButton + Leases tab. None of those four gaps were actually addressed by the session the ledger says owns them; they need a new backlog session, not a re-read of "already owned by 8b."
+- `PARITY-LEDGER.md:1430` marks `TasksButton` "⬜ deferred", but it is built (`OrchestratorPage.tsx:101-136`, wired to the existing P4-9 `TasksDialog` per `STATUS.md`'s P4-8b entry). Stale row, contradicted by current source.
+- `PARITY-LEDGER.md:2161-2169` (the Part-B cross-surface-flow section) still lists WorkerDetail, WorkerFocusView, `Baton`, the blocked/needs-input state, the Leases tab, the footer pill, and the orchestrator badge as "Not built"/⬜ deferred — all of these ARE built as of P4-8b (2026-07-11) per `STATUS.md` and current source. That whole block reads pre-8b and hasn't been refreshed to match Part-A (rows 1397-1470), which do reflect 8b.

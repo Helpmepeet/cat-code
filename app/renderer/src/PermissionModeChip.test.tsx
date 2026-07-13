@@ -27,6 +27,15 @@ test('renders the current mode with a friendly label + accessible name', () => {
   expect(html).toContain('text-sky-400')
 })
 
+test('the engine `default` mode is presented as "Ask" (the prototype label), not "Default"', () => {
+  const html = renderToStaticMarkup(
+    <PermissionModeChip context={ctx('default')} onSetMode={() => {}} />,
+  )
+  expect(html).toContain('Ask')
+  expect(html).toContain('aria-label="Permission mode: Ask"')
+  expect(html).not.toContain('Default')
+})
+
 test('acceptEdits maps to its friendly label + tone', () => {
   const html = renderToStaticMarkup(
     <PermissionModeChip context={ctx('acceptEdits')} onSetMode={() => {}} />,
@@ -43,9 +52,18 @@ test('no context yet → disabled chip, unknown label', () => {
   expect(html).toContain('aria-label="Permission mode: unknown"')
 })
 
-test('an unrecognized mode falls back to its raw name (no crash)', () => {
+test('bypassPermissions renders as "Bypass" (amber) — the prototype 5th mode', () => {
   const html = renderToStaticMarkup(
     <PermissionModeChip context={ctx('bypassPermissions')} onSetMode={() => {}} />,
   )
-  expect(html).toContain('bypassPermissions')
+  expect(html).toContain('Bypass')
+  expect(html).toContain('aria-label="Permission mode: Bypass"')
+  expect(html).toContain('text-amber-400')
+})
+
+test('an unrecognized mode falls back to its raw name (no crash)', () => {
+  const html = renderToStaticMarkup(
+    <PermissionModeChip context={ctx('someFutureMode')} onSetMode={() => {}} />,
+  )
+  expect(html).toContain('someFutureMode')
 })

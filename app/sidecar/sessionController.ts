@@ -3,6 +3,7 @@ import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtim
 import { createQueryEngineSessionController } from '../../src/app-runtime/createQueryEngineSessionController.js'
 import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRuntimeBackedWebAppSession.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { getInitialEffortSetting } from '../../src/utils/effort.js'
 import { getTools } from '../../src/tools.js'
 import { getCommands, type Command } from '../../src/commands.js'
 import {
@@ -51,6 +52,10 @@ import {
   createSidecarAgentModeDomain,
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
+import {
+  createSidecarRunControlsDomain,
+  type SidecarRunControlsDomain,
+} from './runControlsDomain.js'
 import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
@@ -120,12 +125,15 @@ export async function loadSidecarToolPermissionContext(): Promise<ToolPermission
   return {
     ...toolPermissionContext,
     // PERMISSION-BOUNDARY.md §3: bypass is only grantable from a TRUSTED
-    // surface (the CLI expresses that as the --dangerously-skip-permissions
-    // launch flag; the desktop session has no such surface yet). The loader's
-    // settings-derived value reports policy only, which would silently drop
-    // the engine-side backstop the boundary's explicit rejection layers on —
-    // pin availability off until a trusted desktop grant surface is decided.
-    isBypassPermissionsModeAvailable: false,
+    // surface. The desktop's trusted surface is the launch env var
+    // `CATCODE_ALLOW_BYPASS=1` (the operator sets it before the renderer loads,
+    // mirroring the CLI's --dangerously-skip-permissions launch flag). Read
+    // here at session construction — NEVER from a renderer frame — so a
+    // browser-like renderer cannot self-escalate. Off by default; when set, the
+    // sidecar's `permission.setMode` boundary honours a bypass request
+    // (`sidecarServer.ts` handleSetMode reads this same context flag).
+    isBypassPermissionsModeAvailable:
+      process.env.CATCODE_ALLOW_BYPASS === '1',
   }
 }
 
@@ -177,6 +185,14 @@ export async function createNormalSidecarQueryEngineConfig(
   const appStateStore = createStore({
     ...getDefaultAppState(),
     toolPermissionContext,
+    // Honour the user's persisted reasoning-effort setting, exactly as the CLI
+    // seeds it at startup (`main.tsx:2688` — `getInitialEffortSetting()`). The
+    // desktop session otherwise ran on `getDefaultAppState()`'s `undefined`
+    // effort, silently ignoring the user's `/effort` choice; the QueryEngine
+    // reads `appState.effortValue` per request (`query.ts:744`). undefined when
+    // no effort is set (→ provider default), which the diagnostics snapshot
+    // reports as null rather than a fabricated label.
+    effortValue: getInitialEffortSetting(),
   })
   const tools = getTools(appStateStore.getState().toolPermissionContext)
 
@@ -333,6 +349,12 @@ export type SidecarSession = {
    * Read-only; null in probe mode (no engine app-state store).
    */
   agentMode: SidecarAgentModeDomain | null
+  /**
+   * Composer run-controls domain (P4-24c) — the live Model/effort/fast read seam +
+   * the per-session `/model`, `/effort`, `/fast` write verbs over the engine's own
+   * setters. Over the SAME app-state store the runtime enforces. Null in probe mode.
+   */
+  runControls: SidecarRunControlsDomain | null
 }
 
 export async function createSidecarSessionController({
@@ -378,6 +400,7 @@ export async function createSidecarSessionController({
       remoteSettings: null,
       sessionsCatalog: null,
       agentMode: null,
+      runControls: null,
     }
   }
 
@@ -413,5 +436,6 @@ export async function createSidecarSessionController({
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
     sessionsCatalog: await createSidecarSessionsCatalogDomain(),
     agentMode: createSidecarAgentModeDomain(appStateStore),
+    runControls: createSidecarRunControlsDomain(appStateStore),
   }
 }

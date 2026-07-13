@@ -232,10 +232,10 @@ function ProjectPicker({
       </button>
 
       {open ? (
-        <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-[288px] rounded-xl border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.6)]">
+        <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-[288px] rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.6)]">
           {recents.length > 0 ? (
             <>
-              <div className="px-2.5 pb-1 pt-1.5 text-[9.5px] font-bold uppercase tracking-[0.09em] text-text-subtle">
+              <div className="px-2.5 pb-1 pt-1.5 text-[9.5px] font-bold uppercase tracking-[0.09em] text-text-faint">
                 Recent
               </div>
               {recents.map(recent => (
@@ -270,7 +270,7 @@ function ProjectPicker({
             <span className="flex-1 text-[12.5px] text-text-primary">
               Open folder…
             </span>
-            <span className="font-mono text-[11px] text-text-subtle">⌘O</span>
+            <span className="font-mono text-[11px] text-text-faint">⌘O</span>
           </button>
         </div>
       ) : null}
@@ -530,7 +530,7 @@ function Radio({ on }: { on: boolean }) {
       aria-hidden="true"
       className={
         'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ' +
-        (on ? 'border-accent' : 'border-text-subtle')
+        (on ? 'border-accent' : 'border-text-faint')
       }
     >
       {on ? <span className="h-[7px] w-[7px] rounded-full bg-accent" /> : null}

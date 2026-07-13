@@ -36,7 +36,7 @@ const HOVER_DELAY = 120
 const HIDE_DELAY = 200
 
 type NavItem = {
-  id: 'chat' | 'orchestrator' | 'sessions' | 'goals' | 'accounts' | 'settings'
+  id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -44,18 +44,18 @@ type NavItem = {
 }
 
 // The prototype's destination rail (Chat/Sessions/Goals/Accounts/Settings — its
-// own comments already dropped Tasks/Agents from the rail), plus Orchestrator,
-// which the prototype doesn't have. All six are built.
+// own comments already dropped Tasks/Agents from the rail). Orchestrator is a
+// per-session chat mode in the prototype, not a nav destination, so it has no
+// rail entry (the standalone Orchestrator page was removed 2026-07-14).
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
-  { id: 'orchestrator', label: 'Orchestrator', enabled: true, icon: <OrchestratorIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'chat' | 'orchestrator' | 'sessions' | 'goals' | 'accounts' | 'settings'
+type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
 
 export function Sidebar({
   rows,
@@ -64,6 +64,7 @@ export function Sidebar({
   onSelectView,
   onSelectLive,
   onRestore,
+  modelForSession,
 }: {
   rows: SidebarRow[]
   activeSessionId: SessionId | null
@@ -71,6 +72,9 @@ export function Sidebar({
   onSelectView: (view: SidebarView) => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  /** Resolved model for a session (the subtitle's "· model", prototype grammar);
+   * null when unknown — e.g. a restorable row that never attached this run. */
+  modelForSession?: (id: SessionId) => string | null
 }) {
   const [search, setSearch] = useState('')
   const [pinned, setPinned] = useState(false)
@@ -125,7 +129,7 @@ export function Sidebar({
         onMouseLeave={onLeave}
         aria-label="Primary"
         className={
-          'fixed inset-y-0 left-0 z-40 flex flex-col overflow-hidden border-r border-shell-seam bg-shell-chrome transition-[width,box-shadow] duration-200 ease-out ' +
+          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
           (open ? 'w-60 shadow-[4px_0_24px_rgba(0,0,0,0.45)]' : 'w-12')
         }
       >
@@ -156,8 +160,8 @@ export function Sidebar({
               className={
                 'flex h-[22px] w-[22px] items-center justify-center rounded ' +
                 (pinned
-                  ? 'bg-accent/15 text-accent'
-                  : 'text-text-subtle hover:text-text-muted')
+                  ? 'bg-accent/[0.12] text-accent'
+                  : 'text-text-faint hover:text-text-muted')
               }
             >
               <PinIcon />
@@ -170,7 +174,7 @@ export function Sidebar({
             {/* Search */}
             <div className="shrink-0 px-2.5 pb-2.5">
               <div className="relative">
-                <span className="pointer-events-none absolute left-2 top-1/2 flex -translate-y-1/2 text-text-subtle">
+                <span className="pointer-events-none absolute left-2 top-1/2 flex -translate-y-1/2 text-text-faint">
                   <SearchIcon />
                 </span>
                 <input
@@ -179,7 +183,7 @@ export function Sidebar({
                   placeholder="Search sessions…"
                   value={search}
                   onChange={event => setSearch(event.target.value)}
-                  className="w-full rounded-lg border border-white/10 bg-white/5 py-1.5 pl-[26px] pr-2 text-xs text-text-muted outline-none placeholder:text-text-subtle focus:border-accent/40"
+                  className="w-full rounded-lg border border-white/[0.07] bg-white/[0.04] py-1.5 pl-[26px] pr-2 text-xs text-[#d4d4d8] outline-none placeholder:text-text-subtle focus:border-accent/35"
                 />
               </div>
             </div>
@@ -208,6 +212,7 @@ export function Sidebar({
                     }
                     onSelectLive={onSelectLive}
                     onRestore={onRestore}
+                    modelForSession={modelForSession}
                   />
                 ))
               )}
@@ -299,6 +304,7 @@ function SessionGroup({
   onToggle,
   onSelectLive,
   onRestore,
+  modelForSession,
 }: {
   group: WorkspaceGroup
   activeSessionId: SessionId | null
@@ -306,6 +312,7 @@ function SessionGroup({
   onToggle: () => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  modelForSession?: (id: SessionId) => string | null
 }) {
   return (
     <div className="mb-4">
@@ -318,13 +325,13 @@ function SessionGroup({
       >
         <span
           className={
-            'flex shrink-0 text-text-subtle transition-transform ' +
+            'flex shrink-0 text-text-faint transition-transform ' +
             (collapsed ? '-rotate-90' : '')
           }
         >
           <ChevronIcon />
         </span>
-        <span className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+        <span className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
           {group.label}
         </span>
       </button>
@@ -338,6 +345,7 @@ function SessionGroup({
               isActive={row.descriptor.appSessionId === activeSessionId}
               onSelectLive={onSelectLive}
               onRestore={onRestore}
+              modelForSession={modelForSession}
             />
           ))}
     </div>
@@ -349,17 +357,24 @@ function SidebarRowItem({
   isActive,
   onSelectLive,
   onRestore,
+  modelForSession,
 }: {
   row: SidebarRow
   isActive: boolean
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  modelForSession?: (id: SessionId) => string | null
 }) {
   const { descriptor, visual } = row
   const id = descriptor.appSessionId
   const title = tabLabel(descriptor)
   const recency = formatRecency(descriptor.lastAttachedAt)
   const restorable = visual.kind === 'restorable'
+  // The prototype's subtitle is `time · model` (Sidebar.jsx:271, model's last
+  // hyphen-segment). Shown when the session's model is known (attached this run);
+  // omitted otherwise — never fabricated.
+  const model = modelForSession?.(id) ?? null
+  const shortModel = model ? model.split('-').slice(-1)[0] : null
 
   // A LIVE row focuses its tab (reuse App's selectTab); a RESTORABLE row goes
   // through restoreSession — re-spawns the engine, becomes a live tab with its
@@ -387,45 +402,30 @@ function SidebarRowItem({
         }
       }}
     >
-      {isActive ? (
-        <span
-          className="absolute inset-y-1 left-0 w-[2px] rounded-r-sm bg-accent"
-          aria-hidden="true"
-        />
-      ) : null}
-
       <StatusDot tone={visual.tone} />
 
       <div className="min-w-0 flex-1">
         <div
           className={
             'truncate text-xs font-medium ' +
-            (isActive ? 'text-accent-soft' : 'text-text-muted')
+            (isActive
+              ? 'text-[#fce7f3]'
+              : 'text-[#c4c4c8] group-hover:text-text-primary')
           }
         >
           {title}
         </div>
-        {recency ? (
-          <div className="truncate text-[10px] text-text-subtle">{recency}</div>
+        {recency || shortModel ? (
+          <div className="flex items-center gap-[5px] text-[10px] text-text-faint">
+            {recency ? <span className="shrink-0">{recency}</span> : null}
+            {recency && shortModel ? (
+              <span className="text-text-ghost">·</span>
+            ) : null}
+            {shortModel ? <span className="truncate">{shortModel}</span> : null}
+          </div>
         ) : null}
       </div>
 
-      {restorable ? (
-        <button
-          type="button"
-          onClick={event => {
-            event.stopPropagation()
-            onRestore(id)
-          }}
-          title="Restore this session"
-          aria-label={`Restore session ${title}`}
-          className="flex h-[18px] shrink-0 items-center rounded px-1.5 text-[10px] font-medium uppercase tracking-wide text-tone-warn opacity-0 transition-all hover:bg-tone-warn/15 group-hover:opacity-100"
-        >
-          restore
-        </button>
-      ) : null}
-
-      <StatusChip tone={visual.tone} label={visual.label} />
     </div>
   )
 }
@@ -467,8 +467,8 @@ function NavItemExpanded({
       className={
         'flex w-full items-center gap-1 rounded-md py-1.5 ' +
         (active
-          ? 'bg-accent/10 text-accent-soft'
-          : 'text-text-subtle hover:text-text-muted')
+          ? 'bg-accent/[0.09] text-accent-soft'
+          : 'text-text-subtle hover:text-[#d4d4d8]')
       }
     >
       <span className="flex h-5 w-8 shrink-0 items-center justify-center">
@@ -518,32 +518,12 @@ function NavItemRail({
       className={
         'flex h-8 w-8 items-center justify-center rounded-md ' +
         (active
-          ? 'bg-accent/15 text-accent-soft'
-          : 'text-text-subtle hover:text-text-muted')
+          ? 'bg-accent/[0.12] text-accent-soft'
+          : 'text-text-subtle hover:text-[#d4d4d8]')
       }
     >
       {item.icon}
     </button>
-  )
-}
-
-/**
- * The status chip — the SAME mono-uppercase token the TabBar draws, in the
- * row's tone. A live/ready row is quiet (the dot carries it); every non-nominal
- * state shows its label, matching the TabBar's suppress-when-nominal rule.
- */
-function StatusChip({ tone, label }: { tone: TabTone; label: string }) {
-  if (tone === 'live') return null
-  // Opacity-dimmed relative to the TabBar's full-strength chip (Sidebar.tsx-local
-  // — not shared with TabBar's own StatusChip): the row's headline is the session
-  // title, not the runtime state, so the tone still reads at a glance without
-  // out-shouting the title text next to it (fidelity fix — row IA rebalance).
-  return (
-    <span
-      className={`shrink-0 font-mono text-[10px] uppercase tracking-wide ${toneTextClass(tone)}/75`}
-    >
-      {label}
-    </span>
   )
 }
 
@@ -568,19 +548,6 @@ function formatRecency(ms: number): string {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h`
   return `${Math.floor(hrs / 24)}d`
-}
-
-function toneTextClass(tone: TabTone): string {
-  switch (tone) {
-    case 'live':
-      return 'text-tone-good'
-    case 'busy':
-      return 'text-accent'
-    case 'warn':
-      return 'text-tone-warn'
-    case 'dead':
-      return 'text-tone-danger'
-  }
 }
 
 function toneDotClass(tone: TabTone): string {
@@ -682,27 +649,6 @@ function AccountsIcon() {
     >
       <rect x="2" y="3" width="20" height="14" rx="2" />
       <path d="M8 21h8M12 17v4" />
-    </svg>
-  )
-}
-
-// Git-branch / delegation glyph (matches the prototype's OrchestratorBadge svg).
-function OrchestratorIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="6" y1="3" x2="6" y2="15" />
-      <circle cx="18" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
-      <path d="M18 9a9 9 0 0 1-9 9" />
     </svg>
   )
 }

@@ -162,6 +162,27 @@ function InstructionFiles({ snapshot }: { snapshot: MemorySnapshot }) {
   )
 }
 
+// Auto-memory `type` → color-coded chip. Hexes verified vs prototype MemoryPage.jsx:19-24
+// (MEM_TYPE): user #a1a1aa, feedback #f472b6, project #60a5fa, reference #5eead4.
+const MEM_TYPE_CLASS: Record<string, string> = {
+  user: 'text-source-user bg-source-user/10 border-source-user/25',
+  feedback: 'text-accent bg-accent/10 border-accent/25',
+  project: 'text-source-project bg-source-project/10 border-source-project/25',
+  reference: 'text-teal-300 bg-teal-300/10 border-teal-300/25',
+}
+
+function MemTypeChip({ type }: { type: string }) {
+  return (
+    <span
+      className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+        MEM_TYPE_CLASS[type] ?? 'border-shell-seam bg-shell-hover text-text-subtle'
+      }`}
+    >
+      {type}
+    </span>
+  )
+}
+
 function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
   return (
     <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
@@ -185,7 +206,7 @@ function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
               key={memory.filePath}
             >
               <div className="flex items-center gap-2">
-                {memory.type ? <Pill label={memory.type} /> : <Pill label="untyped" />}
+                {memory.type ? <MemTypeChip type={memory.type} /> : <Pill label="untyped" />}
                 <span className="truncate font-mono text-[11px] text-text-muted">
                   {memory.filename}
                 </span>

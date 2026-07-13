@@ -1,0 +1,34 @@
+# Shell & app layout drift — prototype vs impl (2026-07-13)
+
+**Our:** `app/renderer/src/App.tsx` (non-composer: root shell, header/titlebar, workspace split mount, page routing, activity/generating row, overall chrome), `app/renderer/src/WorkspacePanels.tsx`
+**Prototype:** `~/catcode_prototype/cat-app/AppV2.jsx`, `~/catcode_prototype/cat-app/WorkspaceLayout.jsx`
+**Built status:** built — root shell, TabBar mount, workspace split (1-3 resizable panels), page routing (chat/goals/settings/accounts/sessions/orchestrator), and the panel header are all live, non-stub code. `docs/migration/PARITY-LEDGER.md` §01/§04 already carries a dense, largely-accurate per-element ledger for this exact area (see Deferred section below) — most candidate gaps were already reviewed and disposed there.
+
+## Scoreboard — H:0 M:1 L:4
+
+## Findings (High → Low)
+
+[Med] Root shell + main column are missing the prototype's `overflow:hidden` containment guard: prototype sets `overflow:'hidden'` on both the root flex div (`AppV2.jsx:479`) and the main column div (`AppV2.jsx:489`). Ours drops it on both: root is `className="flex h-screen bg-app-bg font-sans text-text-primary"` (`App.tsx:1418`, no `overflow-hidden`) and the main column is `className="relative flex min-w-0 flex-1 flex-col"` (`App.tsx:1435`, no `overflow-hidden`). Every descendant that actually needs bounding (`WorkspacePanels.tsx`'s panel container, `SessionPane`'s `<main>`) does clip locally today, so this isn't currently manifesting as a visible bug, but it removes the belt-and-suspenders guard the prototype relies on to keep the whole Electron window from ever document-scrolling if any future region (banner stack, palette, a long error list) grows unexpectedly. Fix: add `overflow-hidden` to both classNames (`App.tsx:1418` and `:1435`).
+
+[Low] Panel-header project pill tints are stronger than the prototype's and drop its asymmetric padding/letter-spacing. Prototype (`WorkspaceLayout.jsx:31-49`): `border-color: rgba(96,165,250,0.18)`, `background: rgba(96,165,250,0.07)`, `padding: '2px 6px 2px 4px'`, `letterSpacing: '0.02em'`. Ours (`WorkspacePanels.tsx:287-293`): `border-[#60a5fa]/25` (0.25 vs 0.18), `bg-[#60a5fa]/10` (0.10 vs 0.07), uniform `px-1.5 py-0.5` (no asymmetric 4px-left/6px-right), no tracking class. Fix: `border-[#60a5fa]/[0.18] bg-[#60a5fa]/[0.07] tracking-[0.02em]`; padding is a minor enough nit to leave as-is or match with `pl-1 pr-1.5`.
+
+[Low] Panel-header inactive dot uses a different color formula than the prototype. Prototype inactive dot (`WorkspaceLayout.jsx:19-24`): `background: rgba(255,255,255,0.12)` — a faint white dot, nearly invisible against the dark chrome. Ours (`WorkspacePanels.tsx:275-281`): `bg-text-subtle/40` → `rgba(113,113,122,0.4)` — a visibly gray, more prominent dot (both value and hue differ; active-state `bg-accent` does match the prototype's `#f472b6` exactly). Fix: `bg-white/10` (or `bg-white/12` via arbitrary value) for the inactive branch to match the near-invisible prototype resting state.
+
+[Low] Panel-header gap/padding are slightly denser than the prototype. Prototype (`WorkspaceLayout.jsx:9-13`): `gap: 6`, `padding: '0 8px 0 12px'` (asymmetric — less room on the close-button side). Ours (`WorkspacePanels.tsx:271-273`): `gap-2` (8px) and uniform `px-3` (12px both sides). Fix: `gap-1.5` and `pl-3 pr-2` if pixel-truing this row is worth the churn — cosmetic-only, low payoff.
+
+## Deferred / intentional (not drift)
+
+- TabBar mounted unconditionally across every `activeView` (chat/goals/settings/accounts/sessions/orchestrator), not gated to `activePage==='chat'` like the prototype (`AppV2.jsx:492`) — DEFERRED: `PARITY-LEDGER.md:102` "Built but always mounted (no `activePage==='chat'` gate); a background view (goals/settings) still renders the TabBar above it."
+- Panel header height `h-9` (36px) vs prototype's literal 38px, and `shell-chrome`/`shell-seam` tokens vs the prototype's hardcoded `#080809` — DEFERRED/INTENTIONAL: `PARITY-LEDGER.md:291`, explicitly accepted as a deliberate token-based adaptation.
+- Session selector is a native `<select>` (`WorkspacePanels.tsx:294-316`) vs the prototype's custom styled popover (`WorkspaceLayout.jsx:54-106`) — INTENTIONAL: `PARITY-LEDGER.md:296`/`:2134`, "Deliberate — free keyboard/a11y."
+- Drag-to-split shows narrow edge-strip tints with no "Open here" text label, vs the prototype's full-panel pink-wash replace overlay — DEFERRED: `PARITY-LEDGER.md:306-307`, a documented consequence of the replace→split drag-model adaptation (`App.tsx` splits off an edge; prototype replaces the whole panel).
+- Project-pill cross-project AMBER state never fires (pill is always neutral blue) — DEFERRED: `PARITY-LEDGER.md:294`/`:2140`/`:2214`, HC1's one-cwd-per-session model has no "current workspace" to diff against.
+- `ActivityIndicator`/`SpinnerWithVerb` visual nuances — shimmer text animation, playful verb rotation, per-tool tone color, requesting-phase `↑` arrow — not ported; verb text renders flat `text-accent`/`text-tone-warn` instead of the prototype's shimmer/muted-gray scheme — DEFERRED: `PARITY-LEDGER.md:470,472,474`, explicitly named as the remaining un-ported nuances of an otherwise-built, adapted component. (The Stop-button-vs-send-slot-swap angle on this same component is already covered by the composer review's H2, not repeated here.)
+- Goal detail right-side drawer (`goalDetailOpen`/`GoalDetail`) not built — a full-page `GoalsPage` stands in for it — DEFERRED: `PARITY-LEDGER.md:142`, owner P4-10.
+- `PermissionQueue` is mounted per-session inside `SessionPane` rather than as a single app-level fixed/minimizable overlay — DEFERRED/INTENTIONAL: `PARITY-LEDGER.md` "PermissionQueue mount" row (§01).
+- Runtime `--accent` Tweaks-panel theming cut; accent is a fixed `text-accent`/`bg-accent` token — INTENTIONAL: `PARITY-LEDGER.md` "Root shell container" + "Accent theming" rows (§01), the Tweaks panel is prototype-only design tooling with no product analogue.
+
+## Doc-drift notes
+
+- `PARITY-LEDGER.md` §01 "Toast system (`window.toast` + ToastHost mount)" row states `ToastHost.tsx exists (P4-1) but is NOT mounted in App.tsx; no window.toast bus`. Current source contradicts this: `ToastHost` is mounted at `app/renderer/src/main.tsx:16` wrapping `<App/>` at the composition root, and `useToast()` is used live throughout `App.tsx` (e.g. `:310`, and toast calls at `:1294`, `:1306`). The toast system is wired, just one file up from where the ledger looked.
+- `PARITY-LEDGER.md` §01 "Banners state (`banners`/`MOCK_BANNERS`) + action/dismiss" row states `BannerStack.tsx primitive BUILT (P4-1) but NOT mounted in App.tsx`. Current source contradicts this: `<BannerStack>` is mounted at `App.tsx:1462-1482` (the P4-15 reauth-banner overlay, floating below the TabBar). The row predates the P4-15 build and should be updated to reflect a real (if reauth-only) consumer.

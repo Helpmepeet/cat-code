@@ -152,7 +152,7 @@ test('resolveNavSelection routes every enabled Sidebar.tsx NAV id to itself', ()
   // the routing-decision half of the fix; it cannot exercise a live click
   // (no jsdom in this repo — see module doc), only that the pure decision is
   // correct for every id BOTH NavItemExpanded and NavItemRail call it with.
-  const ids = ['chat', 'orchestrator', 'sessions', 'goals', 'accounts', 'settings'] as const
+  const ids = ['chat', 'sessions', 'goals', 'accounts', 'settings'] as const
   for (const id of ids) {
     expect(resolveNavSelection({ id, enabled: true })).toBe(id)
   }

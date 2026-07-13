@@ -104,7 +104,7 @@ export function CommandPalette({
       onMouseDown={onClose}
     >
       <div
-        className="w-full max-w-xl overflow-hidden rounded-xl border border-shell-seam bg-shell-chrome shadow-[0_28px_70px_rgba(0,0,0,0.7)]"
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-surface-raised shadow-[0_28px_70px_rgba(0,0,0,0.7)]"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
@@ -121,7 +121,7 @@ export function CommandPalette({
             placeholder="Search sessions and actions…"
             value={query}
           />
-          <kbd className="rounded bg-shell-hover px-1.5 py-0.5 text-[10px] text-text-subtle">
+          <kbd className="rounded bg-shell-hover px-1.5 py-0.5 text-[10px] text-text-ghost">
             ESC
           </kbd>
         </div>
@@ -168,10 +168,10 @@ export function CommandPalette({
             ['esc', 'dismiss'],
           ].map(([key, label]) => (
             <span key={key} className="flex items-center gap-1.5">
-              <kbd className="rounded bg-shell-hover px-1.5 py-0.5 font-mono text-[9.5px] text-text-subtle">
+              <kbd className="rounded border border-shell-seam bg-shell-hover px-1.5 py-0.5 font-mono text-[9.5px] text-text-faint">
                 {key}
               </kbd>
-              <span className="text-[10px] text-text-subtle">{label}</span>
+              <span className="text-[10px] text-text-ghost">{label}</span>
             </span>
           ))}
         </div>
@@ -253,7 +253,7 @@ function PaletteRow({
 
 function GroupHeader({ label }: { label: string }) {
   return (
-    <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-text-subtle">
+    <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-text-ghost">
       {label}
     </div>
   )

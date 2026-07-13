@@ -17,15 +17,17 @@
   /*
    * Status tones. Values taken from the prototype's own status palette
    * (source-approved, resolving the P1-0 TODO): the prototype paints good/warn/
-   * danger runtime states with these exact hexes across its surfaces
-   *   good   #4ade80 · warn #fbbf24 · danger #f87171
-   * so the P3-5a status chips read as the prototype's shell. `--tone-info`
-   * stays the accent (the prototype has no distinct info hue).
+   * danger/info runtime states with these exact hexes across its surfaces
+   *   good   #4ade80 · warn #fbbf24 · danger #f87171 · info #60a5fa
+   * so the status chips read as the prototype's shell. `--tone-info` is the
+   * prototype's blue (Surfaces.jsx Banner/Toast/Chip info palette — the same
+   * #60a5fa as --color-source-project), NOT the pink accent. The earlier
+   * "prototype has no info hue" claim was wrong (2026-07-13 UI-drift fix).
    */
   --tone-good: #4ade80;
   --tone-warn: #fbbf24;
   --tone-danger: #f87171;
-  --tone-info: var(--accent);
+  --tone-info: #60a5fa;
 }
 
 @theme inline {
@@ -48,6 +50,13 @@
   --color-text-primary: #f4f4f5;
   --color-text-muted: #a1a1aa;
   --color-text-subtle: #71717a;
+  /* Two darker greys the prototype leans on for resting / ghost / disabled text
+   * (t4 #52525b, t5 #3f3f46). Absent before 2026-07-13, so quiet labels fell
+   * back to --text-subtle (#71717a) and read a shade too bright across the UI
+   * (tab bar, pickers, welcome, plan, transcript sub-labels). Adopt where a
+   * label is RESTING/ghost — not as a swap for primary/muted text. */
+  --color-text-faint: #52525b;
+  --color-text-ghost: #3f3f46;
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
 

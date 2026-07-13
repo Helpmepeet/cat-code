@@ -100,7 +100,7 @@ export function SlashCommandPicker({
 
   return (
     <div
-      className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-md overflow-hidden rounded-lg border border-shell-seam bg-shell-chrome shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+      className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-md overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
       role="dialog"
       aria-label="Slash commands"
     >
@@ -109,14 +109,14 @@ export function SlashCommandPicker({
           <span className="rounded bg-accent/15 px-1.5 font-mono text-[11px] font-semibold text-accent">
             /
           </span>
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-subtle">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-ghost">
             Commands
           </span>
           {query.length > 0 ? (
             <span className="font-mono text-[11px] text-text-muted">{query}</span>
           ) : null}
         </div>
-        <span className="font-mono text-[10px] tabular-nums text-text-subtle">
+        <span className="font-mono text-[10px] tabular-nums text-text-ghost">
           {commands.length}
         </span>
       </div>

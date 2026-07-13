@@ -205,7 +205,7 @@ export function PluginsPanel({
             aria-current={tab === key ? 'true' : undefined}
             className={`-mb-px border-b-2 px-3 py-1.5 text-[12.5px] transition-colors ${
               tab === key
-                ? 'border-accent font-semibold text-accent'
+                ? 'border-accent font-semibold text-accent-soft'
                 : 'border-transparent text-text-subtle hover:text-text-muted'
             }`}
             key={key}

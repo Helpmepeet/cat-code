@@ -71,18 +71,23 @@ export type SessionId = string
 
 /**
  * C2 — the modes a renderer may request via `permission.setMode`
- * (decisions/PERMISSION-BOUNDARY.md §3). All four sit inside T5b's
- * already-conceded surface. `bypassPermissions` is REJECTED at the sidecar,
- * always (it escalates beyond T5b: no per-action prompt is ever raised).
- * `auto` is engine-internal/feature-gated and excluded. There is NO
- * `destination` on the wire — the sidecar pins `session` scope; a renderer
- * must never persist `permissions.defaultMode`.
+ * (decisions/PERMISSION-BOUNDARY.md §3). The first four sit inside T5b's
+ * already-conceded surface. `bypassPermissions` is on the wire but is NOT
+ * freely grantable: the sidecar rejects it UNLESS the session was launched with
+ * the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → the context's
+ * `isBypassPermissionsModeAvailable`), mirroring the CLI's
+ * `--dangerously-skip-permissions` trusted-surface model. A renderer alone
+ * (a browser-like surface) can never escalate to it. `auto` is engine-internal/
+ * feature-gated and excluded. There is NO `destination` on the wire — the
+ * sidecar pins `session` scope; a renderer must never persist
+ * `permissions.defaultMode`.
  */
 export const PERMISSION_SET_MODE_MODES = [
   'default',
   'acceptEdits',
   'plan',
   'dontAsk',
+  'bypassPermissions',
 ] as const
 
 export type PermissionSetModeMode = (typeof PERMISSION_SET_MODE_MODES)[number]
@@ -307,6 +312,7 @@ export type SidecarClientMessage =
   | RemoteVerbMessage
   | SettingsVerbMessage
   | AgentModeSetMessage
+  | RunControlVerbMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -897,6 +903,144 @@ export type AgentModeSetResultFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * P4-24c — composer run-controls WRITE verbs (Model / Reasoning / Fast)
+ * ------------------------------------------------------------------------- *
+ *
+ * The composer's Model / Reasoning-effort / Fast faces (P4-24, read-only) become
+ * interactive. Like the P4-5 account verbs, the P4-8b agent-mode set, the P4-15
+ * workspace-trust accept, and the P4-19 settings write, these are app-owned
+ * inbound vocabulary the engine's shared `appClientMessageSchema` does NOT carry
+ * — each is validated by a sidecar-LOCAL Zod schema at the trust boundary and
+ * dispatched to the engine's OWN per-session setters (`decisions/
+ * COMPOSER-RUN-CONTROLS.md`), a LIVE per-session change with NO respawn:
+ *
+ *  - `model.set` → the `/model` write's session-scoped effect: `setSessionProvider`
+ *    + `setMainLoopModelOverride` (`src/bootstrap/state.ts`) so `getMainLoopModel()`
+ *    — the SAME resolver QueryEngine reads per turn (`QueryEngine.ts:283`) — returns
+ *    the new model on the NEXT turn, plus the app-state store's `mainLoopModel` for
+ *    display. N-process (LOCKED) scopes the global override to THIS session.
+ *  - `effort.set` → the `/effort` write (`executeEffort`): persists the level via the
+ *    engine's own `setEffortValue`/`toPersistableEffort` and updates `AppState.effortValue`,
+ *    which QueryEngine reads per request (`query.ts:744`).
+ *  - `fast.set` → the `/fast` toggle (`applyFastMode`): the engine's own fast-mode
+ *    switch, gated on `isFastModeSupportedByModel`/`isFastModeAvailable`.
+ *
+ * Security posture (all preserved): the renderer authors ONLY a value/selection —
+ * a model id from the sidecar-minted option list, an effort level string, or a
+ * boolean — NEVER an engine object, a path (HC1), or a token. Every field is
+ * re-validated at the sidecar (structural Zod + closed `checkStrictKeys`) and the
+ * setter runs engine-side. T5a-analog — each verb carries a `requestId` echoed on
+ * `run-control.result`. T7 — the existing inbound size/rate caps apply unchanged.
+ */
+export const RUN_CONTROL_VERB_TYPES = [
+  'model.set',
+  'effort.set',
+  'fast.set',
+] as const
+
+export type RunControlVerbType = (typeof RUN_CONTROL_VERB_TYPES)[number]
+
+/** Set this session's main-loop model (a value from `RunControlsSnapshot.model.options`). */
+export type RunControlModelSetMessage = {
+  type: 'model.set'
+  requestId: string
+  model: string
+}
+
+/** Set this session's reasoning-effort tier (a level string, or `auto`/`unset` to clear). */
+export type RunControlEffortSetMessage = {
+  type: 'effort.set'
+  requestId: string
+  effort: string
+}
+
+/** Toggle this session's fast mode on/off (engine-gated on model + availability). */
+export type RunControlFastSetMessage = {
+  type: 'fast.set'
+  requestId: string
+  active: boolean
+}
+
+export type RunControlVerbMessage =
+  | RunControlModelSetMessage
+  | RunControlEffortSetMessage
+  | RunControlFastSetMessage
+
+/**
+ * P4-24c outbound result echoing the verb's `requestId`, followed by an updated
+ * `run-controls.snapshot` when the change landed (T5a-analog).
+ */
+export type RunControlResultFrame = {
+  kind: 'run-control.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: RunControlVerbType
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries token material. */
+  message: string
+}
+
+/**
+ * P4-24c — the composer run-controls read model: the live current model/effort/fast
+ * PLUS the real selectable options + availability the pickers need, built at the
+ * sidecar from the engine's OWN `getModelOptions()`/`getSupportedEffortLevels()`/
+ * fast-mode helpers (never a renderer-invented list). Emitted on attach and
+ * re-broadcast whenever the relevant app-state fields change (a `*.set` verb, or
+ * any engine path that moves the model/effort/fast) — so the faces reflect LIVE in
+ * the same session with no respawn. secretGuard-clean by construction (model ids /
+ * effort levels / booleans only, never a token).
+ */
+export type RunControlModelOption = {
+  /** The value a `model.set` verb sends (a `ModelSetting` string; the Default/null option is omitted). */
+  value: string
+  /** Friendly label from the engine's own `getModelOptions()` (e.g. "GPT-5.6 Sol", "Opus"). */
+  label: string
+  /** Display routing hint derived from the value (`getProviderForModel` — gpt-* → OpenAI). */
+  provider: 'anthropic' | 'openai'
+}
+
+export type RunControlsSnapshot = {
+  model: {
+    /** The RESOLVED model this session runs (`getMainLoopModel()`), for the face; null if resolution failed. */
+    current: string | null
+    /** The raw user-specified setting (`getMainLoopModelOverride()`) for option highlighting; null = provider default. */
+    selected: string | null
+    /** Real selectable models (`getModelOptions()`), the Default(null)-value option filtered out. */
+    options: RunControlModelOption[]
+  }
+  effort: {
+    /** The session's effort tier (`AppState.effortValue` → string) or null (= auto / provider default). */
+    current: string | null
+    /** Whether the current model accepts a reasoning-effort knob (`modelSupportsEffort`). */
+    supported: boolean
+    /** The valid effort levels for the current model (`getSupportedEffortLevels`); empty when unsupported. */
+    options: string[]
+  }
+  fast: {
+    /** `AppState.fastMode`. */
+    active: boolean
+    /** `isFastModeSupportedByModel(currentModel)` — gates whether the ⚡ toggle is offered. */
+    supportedByModel: boolean
+    /** `isFastModeAvailable()` — the org/provider/runtime gate. */
+    available: boolean
+    /** `getFastModeUnavailableReason()` display string, or null when available. */
+    unavailableReason: string | null
+  }
+}
+
+/**
+ * P4-24c outbound frame. Emitted on attach (after the other snapshots, before
+ * history replay) and re-broadcast on any change to the session's model/effort/fast.
+ */
+export type RunControlsSnapshotFrame = {
+  kind: 'run-controls.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  runControls: RunControlsSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
  * Accounts read-seam (P4-5) — the CANONICAL domain read-seam recipe
  * ------------------------------------------------------------------------- *
  *
@@ -1382,6 +1526,20 @@ export type DiagnosticsSnapshot = {
   version: string
   /** The engine's raw model override string (`--model`/setting), or null = default. */
   mainLoopModel: string | null
+  /**
+   * The RESOLVED model this session runs (`getMainLoopModel()`, `model.ts:136`) —
+   * honours the user's model setting + provider default, so the composer can show
+   * the real model even with no explicit override. null only if resolution failed.
+   */
+  mainLoopModelForSession: string | null
+  /**
+   * The session's reasoning-effort tier (`AppState.effortValue` → string), or null
+   * when no explicit effort is set (the model runs at the provider default; NOT
+   * fabricated into a label). A GPT/Codex-path concept.
+   */
+  reasoningEffort: string | null
+  /** The fast-mode toggle (`AppState.fastMode`); false unless explicitly enabled. */
+  fastMode: boolean
   /** Whether the Bash sandbox is enabled for this session (`SandboxManager.isSandboxingEnabled()`). */
   sandboxEnabled: boolean
   /** `checkInstall()` warnings — install-path/PATH/symlink issues. */
@@ -1489,6 +1647,8 @@ export type ServerFrame =
   | TasksSnapshotFrame
   | AgentModeSnapshotFrame
   | AgentModeSetResultFrame
+  | RunControlsSnapshotFrame
+  | RunControlResultFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
   | WorkspaceTrustSnapshotFrame
@@ -1559,6 +1719,16 @@ export type CatCodeBridge = {
    * `requestId`; the outcome arrives as an `agent-mode.set.result` frame.
    */
   setAgentMode(sessionId: SessionId, active: boolean): void
+  /**
+   * P4-24c — set one composer run-control (model / reasoning effort / fast) on the
+   * addressed session's sidecar. The renderer authors ONLY a value/selection (a
+   * model id from the sidecar-minted option list, an effort level string, or a
+   * boolean) + a `requestId` for correlation; the sidecar re-validates and runs the
+   * engine's OWN per-session setter (a LIVE change, no respawn), then re-broadcasts
+   * `run-controls.snapshot`. The outcome arrives as a `run-control.result` frame.
+   * No engine object, no path, no token crosses.
+   */
+  runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void
   /**
    * P4-13 — request a RemoteSettings verb (bridge toggle or direct-connect) on
    * the addressed session's sidecar. The outcome arrives as a

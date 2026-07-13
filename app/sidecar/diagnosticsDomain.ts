@@ -22,6 +22,7 @@
 
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
+import { getMainLoopModel } from '../../src/utils/model/model.js'
 import {
   buildInstallationDiagnostics,
   buildInstallationHealthDiagnostics,
@@ -29,6 +30,28 @@ import {
 } from '../../src/utils/status.js'
 import { SandboxManager } from '../../src/utils/sandbox/sandbox-adapter.js'
 import type { DiagnosticsSnapshot } from '../shared/protocol.js'
+
+/**
+ * The RESOLVED model this session runs. Prefers the store's own resolved/override
+ * fields, then falls back to the engine's own resolver (the SAME `getMainLoopModel`
+ * the QueryEngine uses at request time — not a re-derivation). Degrades to null if
+ * the resolver throws (settings/provider read), never crashing the snapshot.
+ */
+function resolveSessionModel(state: AppState): string | null {
+  if (state.mainLoopModelForSession) return state.mainLoopModelForSession
+  if (state.mainLoopModel) return state.mainLoopModel
+  try {
+    return getMainLoopModel()
+  } catch {
+    return null
+  }
+}
+
+/** `AppState.effortValue` (level string | number | undefined) → display string | null. */
+function effortToDisplay(effort: AppState['effortValue']): string | null {
+  if (effort == null) return null
+  return String(effort)
+}
 
 export type SidecarDiagnosticsDomain = {
   /** The spawn-time doctor/status facts for this session. null if the read failed. */
@@ -62,9 +85,13 @@ async function readDiagnosticsSnapshotOnce(
         buildInstallationHealthDiagnostics(),
         buildMemoryDiagnostics(),
       ])
+    const state = appStateStore.getState()
     return {
       version: MACRO.VERSION,
-      mainLoopModel: appStateStore.getState().mainLoopModel,
+      mainLoopModel: state.mainLoopModel,
+      mainLoopModelForSession: resolveSessionModel(state),
+      reasoningEffort: effortToDisplay(state.effortValue),
+      fastMode: state.fastMode ?? false,
       sandboxEnabled: SandboxManager.isSandboxingEnabled(),
       // The engine builders are typed `Diagnostic[]` (`ReactNode`); today they
       // yield plain strings, but a future JSX-emitting variant would be silently

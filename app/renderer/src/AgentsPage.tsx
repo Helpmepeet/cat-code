@@ -26,7 +26,7 @@ const SOURCE_META: Record<AgentConfigSourceId, SourceMeta> = {
   plugin: {
     label: 'Plugin',
     origin: 'From an installed plugin',
-    className: 'text-cyan-300 bg-cyan-300/10 border-cyan-300/25',
+    className: 'text-cyan-400 bg-cyan-400/10 border-cyan-400/25',
   },
   userSettings: {
     label: 'User',
@@ -63,7 +63,7 @@ const AGENT_DOT_CLASS: Record<string, string> = {
   purple: 'bg-source-local',
   orange: 'bg-orange-400',
   pink: 'bg-accent',
-  cyan: 'bg-cyan-300',
+  cyan: 'bg-cyan-400',
 }
 
 export function AgentsPage({

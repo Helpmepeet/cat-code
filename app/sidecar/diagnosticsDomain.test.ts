@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { getDefaultAppState, type AppState } from '../../src/state/AppStateStore.js'
 import { createStore } from '../../src/state/store.js'
 import { createSidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 
@@ -10,9 +10,8 @@ import { createSidecarDiagnosticsDomain } from './diagnosticsDomain.js'
   VERSION: 'test-version',
 }
 
-function makeAppStateStore(mainLoopModel: string | null = null) {
-  const base = getDefaultAppState()
-  return createStore({ ...base, mainLoopModel })
+function makeAppStateStore(overrides: Partial<AppState> = {}) {
+  return createStore({ ...getDefaultAppState(), ...overrides })
 }
 
 test('the domain reads once at spawn — getSnapshot returns a stable reference', async () => {
@@ -22,20 +21,53 @@ test('the domain reads once at spawn — getSnapshot returns a stable reference'
   expect(first).toBe(second)
 })
 
-test('reads the real MACRO version, sandbox flag, and mainLoopModel from the live app-state store', async () => {
-  const domain = await createSidecarDiagnosticsDomain(makeAppStateStore('claude-opus-4-6'))
+test('reads the real MACRO version, sandbox flag, and model/effort/fast from the live app-state store', async () => {
+  const domain = await createSidecarDiagnosticsDomain(
+    makeAppStateStore({
+      mainLoopModel: 'claude-opus-4-6',
+      mainLoopModelForSession: 'claude-opus-4-6',
+      effortValue: 'high',
+      fastMode: true,
+    }),
+  )
   const snapshot = domain.getSnapshot()
   expect(snapshot).not.toBeNull()
   expect(snapshot?.version).toBe('test-version')
   expect(snapshot?.mainLoopModel).toBe('claude-opus-4-6')
+  expect(snapshot?.mainLoopModelForSession).toBe('claude-opus-4-6')
+  expect(snapshot?.reasoningEffort).toBe('high')
+  expect(snapshot?.fastMode).toBe(true)
   expect(typeof snapshot?.sandboxEnabled).toBe('boolean')
   expect(Array.isArray(snapshot?.installationWarnings)).toBe(true)
   expect(Array.isArray(snapshot?.healthWarnings)).toBe(true)
   expect(Array.isArray(snapshot?.memoryWarnings)).toBe(true)
 })
 
-test('a null mainLoopModel (built-in default) round-trips as null, not a fabricated label', async () => {
-  const domain = await createSidecarDiagnosticsDomain(makeAppStateStore(null))
+test('a null mainLoopModel override still resolves a session model; unset effort/fast report honestly', async () => {
+  const domain = await createSidecarDiagnosticsDomain(makeAppStateStore())
   const snapshot = domain.getSnapshot()
+  // The raw override is null (built-in default), not a fabricated label.
   expect(snapshot?.mainLoopModel).toBeNull()
+  // mainLoopModelForSession falls back to the engine's own resolver
+  // (getMainLoopModel) — a real string, or null only if resolution throws.
+  const resolved = snapshot?.mainLoopModelForSession
+  expect(resolved === null || typeof resolved === 'string').toBe(true)
+  // No explicit effort set → null (running at the provider default), not "High".
+  expect(snapshot?.reasoningEffort).toBeNull()
+  // Fast mode is off unless explicitly enabled.
+  expect(snapshot?.fastMode).toBe(false)
+})
+
+test('an explicit mainLoopModelForSession is preferred over the resolver fallback', async () => {
+  const domain = await createSidecarDiagnosticsDomain(
+    makeAppStateStore({ mainLoopModel: null, mainLoopModelForSession: 'gpt-5.6-terra' }),
+  )
+  expect(domain.getSnapshot()?.mainLoopModelForSession).toBe('gpt-5.6-terra')
+})
+
+test('a numeric effort value serialises to its string form', async () => {
+  const domain = await createSidecarDiagnosticsDomain(
+    makeAppStateStore({ effortValue: 3 }),
+  )
+  expect(domain.getSnapshot()?.reasoningEffort).toBe('3')
 })

@@ -83,6 +83,20 @@ const BANNER_TONE: Record<BannerTone, Tone> = {
   accent: 'accent',
 }
 
+/**
+ * The prototype's Banner paints its icon with a saturated `accent` shade but
+ * its title + non-primary action text with a distinctly lighter tint one step
+ * up (Surfaces.jsx:789-793 `color` vs `accent`, title at :805, button at :814)
+ * — `t.text` alone (shared with the icon) reads too saturated for those two.
+ * No shared-token equivalent exists yet, so this is a literal per-tone map.
+ */
+const BANNER_SOFT_TEXT: Record<BannerTone, string> = {
+  danger: 'text-[#fca5a5]',
+  warn: 'text-[#fde68a]',
+  info: 'text-[#bfdbfe]',
+  accent: 'text-[#fbcfe8]',
+}
+
 export function BannerStack({
   banners,
   onAction,
@@ -117,6 +131,7 @@ function BannerRow({
   onDismiss?: (banner: BannerNotice) => void
 }) {
   const t = toneClasses(BANNER_TONE[banner.tone])
+  const softText = BANNER_SOFT_TEXT[banner.tone]
   const dismissable = banner.dismissable !== false
   return (
     <div
@@ -131,7 +146,7 @@ function BannerRow({
         )}
       </span>
       <div className="min-w-0 flex-1">
-        <span className={`font-semibold ${t.text}`}>{banner.title}</span>
+        <span className={`font-semibold ${softText}`}>{banner.title}</span>
         {banner.detail ? (
           <span className="ml-2 text-text-muted">{banner.detail}</span>
         ) : null}
@@ -145,7 +160,7 @@ function BannerRow({
             'rounded-md px-[11px] py-1 text-[11.5px] font-semibold transition-colors ' +
             (action.primary
               ? t.badge
-              : `border border-white/12 bg-transparent ${t.text} hover:bg-white/5`)
+              : `border border-white/12 bg-transparent ${softText} hover:bg-white/5`)
           }
         >
           {action.label}

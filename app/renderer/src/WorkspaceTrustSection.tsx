@@ -68,7 +68,7 @@ export function WorkspaceTrustSection({
       </PaneSection>
 
       <PaneSection title="Additional trusted directories">
-        <p className="mb-2 text-[11.5px] text-text-subtle">
+        <p className="mb-2 text-[11.5px] text-text-faint">
           Directories outside the workspace tools may access (`--add-dir` and
           `permissions.additionalDirectories`).
         </p>
@@ -81,7 +81,7 @@ export function WorkspaceTrustSection({
                 className="flex items-center justify-between rounded-md bg-shell-hover px-2 py-1"
                 key={entry.path}
               >
-                <code className="font-mono text-[12px] text-text-muted">{entry.path}</code>
+                <code className="font-mono text-[12px] text-text-subtle">{entry.path}</code>
                 <span className="text-[10.5px] text-text-subtle">{entry.source}</span>
               </div>
             ))}

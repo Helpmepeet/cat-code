@@ -123,7 +123,7 @@ export function TabBar({
         ))}
 
         <button
-          className="flex w-10 shrink-0 items-center justify-center text-xl leading-none text-text-subtle transition-colors hover:text-accent"
+          className="flex w-10 shrink-0 items-center justify-center text-xl leading-none text-text-ghost transition-colors hover:text-accent"
           onClick={onNewTab}
           title="New session  ⌘T"
           aria-label="New session"
@@ -142,7 +142,7 @@ export function TabBar({
               disabled={!canAddPanel}
               title={canAddPanel ? 'Split view' : 'No other session to split'}
               aria-label="Split view"
-              className="flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-[3px] text-[11px] text-text-subtle transition-colors hover:border-accent/35 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:text-text-subtle"
+              className="flex items-center gap-1.5 rounded-md border border-white/8 px-2.5 py-[3px] text-[11px] text-text-faint transition-colors hover:border-accent/35 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/8 disabled:hover:text-text-faint"
             >
               <SplitIcon panelCount={panelCount} />
               <span>Split</span>
@@ -154,7 +154,7 @@ export function TabBar({
               onClick={onRemovePanel}
               title="Close last panel"
               aria-label="Unsplit"
-              className="flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-[3px] text-[11px] text-text-subtle transition-colors hover:border-white/20 hover:text-text-primary"
+              className="flex items-center gap-1.5 rounded-md border border-white/8 px-2.5 py-[3px] text-[11px] text-text-faint transition-colors hover:border-white/18 hover:text-text-primary"
             >
               <UnsplitIcon />
               <span>Unsplit</span>
@@ -230,8 +230,8 @@ function Tab({
     <div
       ref={ref}
       className={
-        'group relative flex min-w-[90px] max-w-[176px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-shell-seam pl-3 pr-1.5 transition-colors ' +
-        (isActive ? 'bg-shell-active' : 'hover:bg-shell-hover')
+        'group relative flex min-w-[90px] max-w-[176px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-[rgba(255,255,255,0.05)] pl-3 pr-1.5 transition-colors ' +
+        (isActive ? 'bg-[rgba(255,255,255,0.05)]' : 'hover:bg-[rgba(255,255,255,0.025)]')
       }
       role="tab"
       aria-selected={isActive}
@@ -265,7 +265,7 @@ function Tab({
       <span
         className={
           'min-w-0 flex-1 truncate text-xs transition-colors ' +
-          (isActive ? 'text-text-primary' : 'text-text-subtle')
+          (isActive ? 'text-text-primary' : 'text-text-faint')
         }
       >
         {title}

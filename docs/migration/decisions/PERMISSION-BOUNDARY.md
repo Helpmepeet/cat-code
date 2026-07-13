@@ -13,7 +13,7 @@ tree on 2026-07-03; where this doc and source disagree, **source wins**.
 | # | Question | Verdict |
 |---|---|---|
 | **C1** | "always allow" through the boundary | **DECIDED + IMPLEMENTED NOW** — suggestion **selection by index**, validated at the sidecar; renderer never authors update objects. Zero engine (`src/`) changes. |
-| **C2** | mode switch | **DECIDED, spec'd for P2-4** — new inbound `permission.setMode` frame, session-destination only, `bypassPermissions` rejected at the boundary. Not implemented here. |
+| **C2** | mode switch | **DECIDED, spec'd for P2-4** — new inbound `permission.setMode` frame, session-destination only; `bypassPermissions` boundary-rejected unless the trusted launch flag `CATCODE_ALLOW_BYPASS=1` enabled it (§3, 2026-07-13). Not implemented here. |
 | **C3** | rules-editor read path | **DECIDED, spec'd for P2-4** — new read-only outbound `permission.context` snapshot frame, emitted on attach and on change, built from the engine's live context. Not implemented here. |
 | **C4** | `deny.interrupt` | **CONFIRMED CUT** — `app.abort` already mass-denies all pendings and aborts the turn; no second kill path. |
 
@@ -189,16 +189,20 @@ and a standalone mode switcher has no pending request to select from.
   auto-approve anyway; `dontAsk` is strictly restrictive (converts ask → deny,
   `src/utils/permissions/permissions.ts:521-531`). `auto` is internal/feature-gated
   (`src/types/permissions.ts:28-36`) — excluded.
-- **`bypassPermissions` is REJECTED at the sidecar**, always. It escalates beyond T5b: no
-  per-action prompt is ever raised, killing both the round-trip and its audit trail, and the TUI /
-  bridge double-gate it behind a launch-level trust flag
-  (`isBypassPermissionsModeDisabled()` + `isBypassPermissionsModeAvailable`,
-  `src/hooks/useReplBridge.tsx:427-440`; cycle gate `getNextPermissionMode.ts:42,62`). The
-  sidecar's context ships `isBypassPermissionsModeAvailable: false`
-  (`src/Tool.ts:142-150`) so it would also fail engine-side — but the boundary rejects it
-  explicitly rather than leaning on that default. If the desktop app ever wants bypass, the grant
-  must come from a **trusted surface** (Electron-main native dialog or launch flag), which is a
-  separate future decision — do not widen this frame.
+- **`bypassPermissions` is grantable ONLY from a trusted launch surface** (the "separate future
+  decision" below, taken 2026-07-13, operator-authorized). It escalates beyond T5b: no per-action
+  prompt is ever raised, killing both the round-trip and its audit trail. The desktop's trusted
+  surface is the launch env var **`CATCODE_ALLOW_BYPASS=1`** — read at SESSION CONSTRUCTION
+  (`app/sidecar/sessionController.ts` `loadSidecarToolPermissionContext`), **never from a renderer
+  frame**, mirroring the CLI's `--dangerously-skip-permissions` launch flag. It sets the context's
+  `isBypassPermissionsModeAvailable`; the sidecar's `permission.setMode` boundary
+  (`app/sidecar/sidecarServer.ts` `handleSetMode`) rejects a bypass request **UNLESS** that context
+  flag is `true`, failing closed on a missing domain or unset flag (`!== true`). So a renderer alone
+  (a browser-like surface) can **never self-escalate** — the operator must opt in at launch, exactly
+  as at the terminal. The engine's own bypass killswitch (`isBypassPermissionsModeDisabled()` /
+  `bypassPermissionsKillswitch`) still applies on top. **Default (no env var): unavailable +
+  boundary-rejected, identical to the prior always-reject.** The renderer shows the "Bypass
+  permissions" mode disabled with a launch-flag hint when unavailable (visual parity, no grant).
 - **No `destination` on the wire — pinned `session` at the sidecar.** A renderer must never
   persist `permissions.defaultMode` (a compromised renderer writing
   `defaultMode: bypassPermissions` into `userSettings` would disarm every future session — a
@@ -363,7 +367,8 @@ kill path is added, matching SECURITY-MINIMUM's one-channel posture.
   No other raw-frame field is read.
 - **A9 — Why is `dontAsk` in C2's allowlist but not the TUI cycle?** It is strictly
   capability-reducing (ask→deny); the prototype mode surface lists it; excluding it would buy no
-  security. `bypassPermissions` is the only mode with real escalation, and it is rejected.
+  security. `bypassPermissions` is the only mode with real escalation; it is rejected UNLESS the
+  trusted launch flag `CATCODE_ALLOW_BYPASS=1` enabled it at construction (see §3, 2026-07-13).
 - **A10 — C3 leak surface:** rule strings are user-authored policy already shown by the TUI's
   `/permissions` surface; `scanForSecrets` guards key names on the frame like all outbound
   traffic. A user who writes a credential INTO a rule string exposes it to their own renderer —

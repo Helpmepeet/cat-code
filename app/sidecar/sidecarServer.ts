@@ -60,10 +60,12 @@ import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
+  RUN_CONTROL_VERB_TYPES,
   type AccountVerbMessage,
   type ClientFrame,
   type PermissionContextSnapshot,
   type RemoteVerbMessage,
+  type RunControlVerbMessage,
   type ServerFrame,
   type SessionId,
   type SettingsVerbMessage,
@@ -79,6 +81,7 @@ import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
+import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
 import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
@@ -140,6 +143,13 @@ export type SidecarServerOptions = {
    * change; when absent, no orchestrator frame is emitted.
    */
   agentMode?: SidecarAgentModeDomain
+  /**
+   * Composer run-controls read-seam + write verbs (P4-24c). When present, a
+   * `run-controls.snapshot` frame is emitted on attach and re-broadcast on the
+   * store change a `model.set`/`effort.set`/`fast.set` verb causes; when absent,
+   * no run-controls frame is emitted and the verbs fail closed.
+   */
+  runControls?: SidecarRunControlsDomain
   /**
    * Accounts read-seam + lifecycle verbs (P4-5). Optional because the P1-0 probe
    * fixture has no engine; when absent, no `accounts.snapshot` frame is emitted
@@ -226,6 +236,7 @@ export class SidecarServer {
   private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
   private readonly agentMode: SidecarAgentModeDomain | null
+  private readonly runControls: SidecarRunControlsDomain | null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
@@ -243,6 +254,7 @@ export class SidecarServer {
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
   private unsubscribeAgentModeSnapshot: (() => void) | null = null
+  private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private activeTurn = false
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
@@ -260,6 +272,7 @@ export class SidecarServer {
     this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
     this.agentMode = options.agentMode ?? null
+    this.runControls = options.runControls ?? null
     this.accounts = options.accounts ?? null
     this.workspaceTrust = options.workspaceTrust ?? null
     this.diagnostics = options.diagnostics ?? null
@@ -307,6 +320,15 @@ export class SidecarServer {
     if (this.agentMode) {
       this.unsubscribeAgentModeSnapshot = this.agentMode.subscribe(() => {
         void this.broadcastAgentModeSnapshot()
+      })
+    }
+    // P4-24c — re-broadcast the run-controls snapshot whenever the session's
+    // model/effort/fast actually changes. The domain's subscribe is change-detected
+    // (no per-token storm), so this fires on a `*.set` verb OR any engine path that
+    // moves those fields — the faces reflect live with no respawn.
+    if (this.runControls) {
+      this.unsubscribeRunControlsSnapshot = this.runControls.subscribe(() => {
+        this.broadcastRunControlsSnapshot()
       })
     }
 
@@ -409,6 +431,10 @@ export class SidecarServer {
     // effort (a non-agent-mode session degrades to an empty roster); fire-and-forget
     // since a read-only snapshot has no ordering dependency on history replay.
     void this.sendAgentModeSnapshot(connection)
+    // P4-24c — composer run-controls snapshot (current model/effort/fast + the real
+    // selectable options + availability). Read-at-call + re-broadcast on change; no
+    // renderer-authored state (the value/selection rides the app-owned write verbs).
+    this.sendRunControlsSnapshot(connection)
     // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
@@ -563,6 +589,8 @@ export class SidecarServer {
     this.unsubscribeTasksSnapshot = null
     this.unsubscribeAgentModeSnapshot?.()
     this.unsubscribeAgentModeSnapshot = null
+    this.unsubscribeRunControlsSnapshot?.()
+    this.unsubscribeRunControlsSnapshot = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -674,6 +702,20 @@ export class SidecarServer {
     // env switch, no respawn). NOT part of the engine's shared schema.
     if (typeof messageType === 'string' && messageType.startsWith('agent-mode.')) {
       this.handleAgentModeSet(connection, frame.message)
+      return
+    }
+
+    // P4-24c — the composer run-control set verbs (model.set / effort.set /
+    // fast.set) are app-owned vocabulary (like C2 and the account/RemoteSettings/
+    // settings/workspace/agent-mode verbs), validated by a sidecar-LOCAL schema and
+    // dispatched to the engine's OWN per-session setters (a live change, no
+    // respawn). NOT part of the engine's shared schema. Membership test (three
+    // distinct prefixes) rather than a single startsWith.
+    if (
+      typeof messageType === 'string' &&
+      (RUN_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      this.handleRunControlVerb(connection, frame.message)
       return
     }
 
@@ -865,17 +907,23 @@ export class SidecarServer {
     const requestId =
       typeof raw.requestId === 'string' ? raw.requestId : undefined
 
-    // bypassPermissions is REJECTED at the boundary, always — it escalates
-    // beyond T5b (no per-action prompt is ever raised again, killing the
-    // round-trip and its audit trail). The engine-side context default
-    // (isBypassPermissionsModeAvailable: false) would also refuse it, but the
-    // boundary rejects explicitly rather than leaning on that default.
-    if (raw.mode === 'bypassPermissions') {
+    // bypassPermissions escalates beyond T5b (no per-action prompt is ever
+    // raised again, killing the round-trip and its audit trail), so it is
+    // grantable ONLY when a TRUSTED surface enabled it: the launch opt-in
+    // `CATCODE_ALLOW_BYPASS=1`, read at session construction into the context's
+    // `isBypassPermissionsModeAvailable` (sessionController.ts). The renderer
+    // alone can never reach it — a browser-like surface must not self-escalate.
+    // Fail closed: a missing domain or unset flag rejects (`!== true`).
+    if (
+      raw.mode === 'bypassPermissions' &&
+      this.permissions?.getToolPermissionContext()
+        .isBypassPermissionsModeAvailable !== true
+    ) {
       this.sendError(
         connection,
         requestId,
         'bad_request',
-        'mode "bypassPermissions" is never grantable over IPC',
+        'mode "bypassPermissions" is not available (launch with CATCODE_ALLOW_BYPASS=1)',
         false,
       )
       return
@@ -1100,6 +1148,72 @@ export class SidecarServer {
     if (result.changed) {
       void this.broadcastAgentModeSnapshot()
     }
+  }
+
+  /**
+   * P4-24c — the composer run-control set verbs (protocol.ts: RUN_CONTROL_VERB_TYPES;
+   * `decisions/COMPOSER-RUN-CONTROLS.md`). Same fail-closed order as the other verbs:
+   * sidecar-LOCAL structural schema → domain presence → dispatch to the domain
+   * (which runs the engine's OWN `/model`/`/effort`/`/fast` setter — a live change,
+   * no respawn) → `run-control.result` frame. The `run-controls.snapshot`
+   * re-broadcast is NOT emitted here: the setter mutates the app-state store, whose
+   * change-detected subscription (constructor) re-broadcasts the fresh snapshot to
+   * every connection — the SAME path any engine-side model/effort/fast change takes
+   * (proving a real live frame, not an action-driven synthetic one). The renderer
+   * authors ONLY the value/selection; no engine object, no path, no token crosses.
+   */
+  private handleRunControlVerb(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = runControlVerbMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid run-control verb',
+        false,
+      )
+      return
+    }
+    if (!this.runControls) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'run-controls domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    const verb = parsed.data as RunControlVerbMessage
+    let result: { ok: boolean; message: string; changed: boolean }
+    switch (verb.type) {
+      case 'model.set':
+        result = this.runControls.setModel(verb.model)
+        break
+      case 'effort.set':
+        result = this.runControls.setEffort(verb.effort)
+        break
+      case 'fast.set':
+        result = this.runControls.setFast(verb.active)
+        break
+    }
+
+    this.send(connection, {
+      kind: 'run-control.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: verb.requestId,
+      verb: verb.type,
+      ok: result.ok,
+      message: result.message,
+    })
+    // No explicit snapshot re-broadcast here — the setter's store mutation drives
+    // the change-detected subscription, which re-emits `run-controls.snapshot`.
   }
 
   /**
@@ -1792,6 +1906,47 @@ export class SidecarServer {
   }
 
   /**
+   * P4-24c — build + send the composer run-controls snapshot to one connection.
+   * `getSnapshot()` is a pure, throw-free read of the live app-state + the engine's
+   * own model/effort/fast helpers; the shared `send` path applies clone/JSON checks,
+   * the outbound secret guard, and the size cap. Wrapped so a snapshot failure can
+   * never strand the attaching connection.
+   */
+  private sendRunControlsSnapshot(connection: Connection): void {
+    if (!this.runControls) {
+      return
+    }
+    try {
+      const raw = this.runControls.getSnapshot()
+      const snapshot = this.prepareOutboundPayload(raw, 'run-controls.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'run-controls.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        runControls: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] run-controls.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastRunControlsSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendRunControlsSnapshot(connection)
+    }
+  }
+
+  /**
    * P4-5 — build + send the redacted accounts snapshot to one connection. Same
    * idiom as the other read-seams: `getSnapshot()` is a pure, throw-free read of
    * the live pool; the shared `send` path applies clone/JSON checks, the outbound
@@ -2120,6 +2275,11 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-8b agent-mode set verb (app-owned; see AGENT_MODE_VERB_TYPES). The
     // renderer authors ONLY the boolean intent — any other key is rejected.
     ['agent-mode.set', new Set(['type', 'requestId', 'active'])],
+    // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
+    // renderer authors ONLY the value/selection — any other key is rejected.
+    ['model.set', new Set(['type', 'requestId', 'model'])],
+    ['effort.set', new Set(['type', 'requestId', 'effort'])],
+    ['fast.set', new Set(['type', 'requestId', 'active'])],
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
@@ -2269,6 +2429,33 @@ const agentModeSetMessageSchema = z.object({
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   active: z.boolean(),
 })
+
+/**
+ * P4-24c — sidecar-LOCAL schema for the composer run-control set verbs (protocol.ts:
+ * RUN_CONTROL_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + a bounded `requestId` + a bounded value/selection. The
+ * BUSINESS validation (is `model` a real option, is `effort` a valid level) is the
+ * engine setter's own concern in the domain — the boundary checks shape only, never
+ * trusting the frame. A non-string model/effort or non-boolean `active` is rejected
+ * here fail-closed before the domain runs any setter.
+ */
+const runControlVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('model.set'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    model: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('effort.set'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    effort: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('fast.set'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    active: z.boolean(),
+  }),
+])
 
 /**
  * P4-13 — sidecar-LOCAL schemas for the RemoteSettings verbs (protocol.ts:

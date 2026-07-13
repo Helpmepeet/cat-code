@@ -185,10 +185,8 @@ function ToggleSwitch({
     <button
       aria-checked={value}
       aria-label={label}
-      className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-        value
-          ? 'border-accent/40 bg-accent/80'
-          : 'border-shell-seam bg-shell-hover'
+      className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+        value ? 'bg-accent' : 'bg-white/10'
       }`}
       disabled={disabled}
       onClick={() => onChange(!value)}
@@ -196,8 +194,8 @@ function ToggleSwitch({
       type="button"
     >
       <span
-        className={`inline-block h-[16px] w-[16px] rounded-full bg-white shadow-sm transition-transform ${
-          value ? 'translate-x-[18px]' : 'translate-x-[3px]'
+        className={`inline-block h-[16px] w-[16px] rounded-full shadow-sm transition-transform ${
+          value ? 'bg-app-bg translate-x-[18px]' : 'bg-text-subtle translate-x-[3px]'
         }`}
       />
     </button>

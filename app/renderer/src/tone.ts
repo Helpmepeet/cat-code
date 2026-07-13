@@ -11,9 +11,10 @@
  *
  * The tone set is the union the prototype's surfaces paint with
  * (Surfaces.jsx Chip/Banner/Toast palettes): `default` (quiet grey), `accent`
- * (the pink brand hue), plus the three status tones `good`/`warn`/`danger` and
- * `info` (which the prototype has no distinct hue for — it reuses accent, so
- * `--tone-info` is the accent token, theme.css:23).
+ * (the pink brand hue), plus the four status tones `good`/`warn`/`danger`/
+ * `info`. `info` is the prototype's blue #60a5fa (`--tone-info`, theme.css) —
+ * an earlier note wrongly said the prototype had no info hue and reused accent;
+ * corrected 2026-07-13 (UI-drift review).
  */
 
 export type Tone = 'default' | 'accent' | 'warn' | 'danger' | 'good' | 'info'

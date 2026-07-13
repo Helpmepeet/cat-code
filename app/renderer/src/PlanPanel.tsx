@@ -157,7 +157,7 @@ export function PlanPanel({
             <span className={t.text}>{PlanIcon}</span>
             <span className="text-sm font-semibold text-text-primary">Plan</span>
             <span
-              className={`rounded-full border px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ${t.softBg} ${t.softBorder} ${t.text}`}
+              className={`rounded-[5px] border px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.06em] ${t.softBg} ${t.softBorder} ${t.text}`}
             >
               planning
             </span>
@@ -241,7 +241,7 @@ export function PlanPanel({
             <div>
               <textarea
                 autoFocus
-                className="w-full resize-none rounded-md border border-shell-seam bg-app-bg px-2.5 py-2 font-mono text-[12px] text-text-primary outline-none"
+                className="w-full resize-none rounded-md border border-shell-seam bg-app-bg px-2.5 py-2 text-[12px] text-text-primary outline-none"
                 onChange={event => setRevisionText(event.target.value)}
                 onKeyDown={event => {
                   if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {

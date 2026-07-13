@@ -158,7 +158,7 @@ export function WorkspaceTrustGate({
         you trust the workspace, project commands stay gated.
       </p>
       <div className="mb-5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-        <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+        <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
           Workspace
         </div>
         <code className="break-all font-mono text-[13px] text-text-primary">{cwd}</code>
@@ -206,7 +206,7 @@ export function StartupOAuth({
           here. Your Codex account appears once the engine captures the callback.
         </p>
         <div className="mb-3.5 flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-shell-seam border-t-accent" />
+          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent/20 border-t-accent" />
           <span className="text-[12.5px] text-text-muted">
             Waiting for browser authorization…
           </span>
