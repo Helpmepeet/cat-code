@@ -73,6 +73,8 @@ export type AssistantMessage<TContentBlock = BetaContentBlock | ContentBlock | C
   uuid: UUID | string
   timestamp?: string
   advisorModel?: string
+  /** Provider-message-scoped raw reasoning availability, preserved across normalization. */
+  hasRawReasoning?: boolean
   requestId?: string | null
   message: {
     id?: string

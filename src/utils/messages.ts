@@ -72,6 +72,7 @@ import type {
   ToolUseSummaryMessage,
   UserMessage,
 } from '../types/message.js'
+import { hasUsableRawReasoning } from './reasoningDisplay.js'
 import { isAdvisorBlock } from './advisor.js'
 import { isAgentSwarmsEnabled } from './agentSwarmsEnabled.js'
 import { count } from './array.js'
@@ -751,6 +752,19 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
     switch (message.type) {
       case 'assistant': {
         isNewChain = isNewChain || message.message.content.length > 1
+        const hasReasoningDisplayMetadata =
+          message.hasRawReasoning !== undefined ||
+          message.message.content.some(block => {
+            const reasoningKind = (block as { reasoningKind?: unknown })
+              .reasoningKind
+            return (
+              block.type === 'thinking' &&
+              (reasoningKind === 'summary' || reasoningKind === 'raw')
+            )
+          })
+        const hasRawReasoning =
+          message.hasRawReasoning ??
+          hasUsableRawReasoning(message.message.content)
         return message.message.content.map((_, index) => {
           const uuid = isNewChain
             ? deriveUUID(message.uuid, index)
@@ -770,6 +784,7 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             error: message.error,
             isApiErrorMessage: message.isApiErrorMessage,
             advisorModel: message.advisorModel,
+            ...(hasReasoningDisplayMetadata ? { hasRawReasoning } : {}),
           } as NormalizedAssistantMessage
         })
       }
