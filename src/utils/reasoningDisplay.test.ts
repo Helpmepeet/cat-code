@@ -21,12 +21,21 @@ function visibleReasoningKinds(
   displayMode: 'off' | 'summary' | 'raw',
   content: ReasoningBlock[],
 ): ReasoningBlock['reasoningKind'][] {
-  const message: AssistantMessage<ReasoningBlock> = {
-    type: 'assistant',
-    uuid: '00000000-0000-0000-0000-000000000001',
-    message: { role: 'assistant', content },
-  }
-  const normalized = normalizeMessages([message as AssistantMessage])
+  // claude.ts yields one AssistantMessage per content_block_stop. Sibling
+  // blocks from the same provider response have distinct UUIDs but share the
+  // provider message.id.
+  const messages: AssistantMessage<ReasoningBlock>[] = content.map(
+    (block, index) => ({
+      type: 'assistant',
+      uuid: `00000000-0000-0000-0000-${index.toString().padStart(12, '0')}`,
+      message: {
+        id: 'provider-message-1',
+        role: 'assistant',
+        content: [block],
+      },
+    }),
+  )
+  const normalized = normalizeMessages(messages as AssistantMessage[])
 
   return normalized.flatMap(row => {
     const block = row.message.content[0] as ReasoningBlock
@@ -92,5 +101,32 @@ describe('shouldShowReasoningBlock', () => {
         reasoningBlock('raw', '   '),
       ]),
     ).toEqual(['summary'])
+  })
+
+  test('reasoning messages without provider IDs are not grouped together', () => {
+    const messages: AssistantMessage<ReasoningBlock>[] = [
+      {
+        type: 'assistant',
+        uuid: '00000000-0000-0000-0000-000000000010',
+        message: {
+          role: 'assistant',
+          content: [reasoningBlock('summary')],
+        },
+      },
+      {
+        type: 'assistant',
+        uuid: '00000000-0000-0000-0000-000000000011',
+        message: {
+          role: 'assistant',
+          content: [reasoningBlock('raw')],
+        },
+      },
+    ]
+
+    expect(
+      normalizeMessages(messages as AssistantMessage[]).map(
+        message => message.hasRawReasoning,
+      ),
+    ).toEqual([false, true])
   })
 })

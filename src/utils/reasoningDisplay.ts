@@ -19,6 +19,16 @@ export function hasUsableRawReasoning(
   )
 }
 
+export function hasReasoningDisplayMetadata(
+  content: readonly ReasoningContentBlock[],
+): boolean {
+  return content.some(
+    block =>
+      block.type === 'thinking' &&
+      (block.reasoningKind === 'summary' || block.reasoningKind === 'raw'),
+  )
+}
+
 export function shouldShowReasoningBlock(
   displayMode: ReasoningDisplayMode,
   reasoningKind: ReasoningKind,

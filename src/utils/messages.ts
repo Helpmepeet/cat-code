@@ -72,7 +72,10 @@ import type {
   ToolUseSummaryMessage,
   UserMessage,
 } from '../types/message.js'
-import { hasUsableRawReasoning } from './reasoningDisplay.js'
+import {
+  hasReasoningDisplayMetadata,
+  hasUsableRawReasoning,
+} from './reasoningDisplay.js'
 import { isAdvisorBlock } from './advisor.js'
 import { isAgentSwarmsEnabled } from './agentSwarmsEnabled.js'
 import { count } from './array.js'
@@ -747,22 +750,42 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
   // for all subsequent messages to maintain proper ordering and prevent duplicate UUIDs.
   // This flag is set to true once we encounter a message with multiple content blocks,
   // and remains true for all subsequent messages in the normalization process.
+  const reasoningDisplayByProviderMessageId = new Map<
+    string,
+    { hasRawReasoning: boolean }
+  >()
+  for (const message of messages) {
+    if (message.type !== 'assistant') continue
+    const providerMessageId = message.message.id
+    if (typeof providerMessageId !== 'string') continue
+    const hasDisplayMetadata =
+      message.hasRawReasoning !== undefined ||
+      hasReasoningDisplayMetadata(message.message.content)
+    if (!hasDisplayMetadata) continue
+    const hasRawReasoning =
+      message.hasRawReasoning ??
+      hasUsableRawReasoning(message.message.content)
+    const previous = reasoningDisplayByProviderMessageId.get(providerMessageId)
+    reasoningDisplayByProviderMessageId.set(providerMessageId, {
+      hasRawReasoning: previous?.hasRawReasoning === true || hasRawReasoning,
+    })
+  }
+
   let isNewChain = false
   return messages.flatMap(message => {
     switch (message.type) {
       case 'assistant': {
         isNewChain = isNewChain || message.message.content.length > 1
-        const hasReasoningDisplayMetadata =
+        const providerReasoningDisplay =
+          typeof message.message.id === 'string'
+            ? reasoningDisplayByProviderMessageId.get(message.message.id)
+            : undefined
+        const shouldAttachReasoningDisplayMetadata =
+          providerReasoningDisplay !== undefined ||
           message.hasRawReasoning !== undefined ||
-          message.message.content.some(block => {
-            const reasoningKind = (block as { reasoningKind?: unknown })
-              .reasoningKind
-            return (
-              block.type === 'thinking' &&
-              (reasoningKind === 'summary' || reasoningKind === 'raw')
-            )
-          })
+          hasReasoningDisplayMetadata(message.message.content)
         const hasRawReasoning =
+          providerReasoningDisplay?.hasRawReasoning ??
           message.hasRawReasoning ??
           hasUsableRawReasoning(message.message.content)
         return message.message.content.map((_, index) => {
@@ -784,7 +807,9 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             error: message.error,
             isApiErrorMessage: message.isApiErrorMessage,
             advisorModel: message.advisorModel,
-            ...(hasReasoningDisplayMetadata ? { hasRawReasoning } : {}),
+            ...(shouldAttachReasoningDisplayMetadata
+              ? { hasRawReasoning }
+              : {}),
           } as NormalizedAssistantMessage
         })
       }
