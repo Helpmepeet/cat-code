@@ -236,6 +236,68 @@ test('the empty state degrades honestly with no pool snapshot and no cwd (no fab
   expect(html).toContain('This workspace')
 })
 
+// IS-C (M5) — restore affordance. A cached preview reads as "restored", an
+// engaged restore pulses "Resuming…", and a no-cache restore shows the skeleton
+// instead of an empty WelcomeScreen (report F4's "reads as a hang").
+const cachedRow: NestedTranscriptRow = {
+  ...blockSource,
+  id: 's:m:0:f',
+  kind: 'assistant-text',
+  role: 'assistant',
+  content: 'cached line',
+}
+
+test('IS-C: preview rows render under a static "Restored session" divider', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[cachedRow]} restorePhase="preview" />,
+  )
+  expect(html).toContain('Restored session')
+  expect(html).toContain('cached line')
+  // Static, not the in-flight resume label.
+  expect(html).not.toContain('Resuming session')
+})
+
+test('IS-C: an engaged preview shows the pulsing "Resuming session…" divider', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[cachedRow]} restorePhase="resuming" />,
+  )
+  expect(html).toContain('Resuming session…')
+  expect(html).toContain('animate-pulse') // live pulse dot
+  expect(html).toContain('cached line')
+})
+
+test('IS-C: a no-cache connecting pane shows the restore skeleton, never an empty Welcome', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[]} restorePhase="connecting" cwd="/w/cat-code" />,
+  )
+  expect(html).toContain('Restoring session…')
+  expect(html).toContain('aria-busy="true"')
+  // The whole point of F4: no live/empty WelcomeScreen while a restore is pending.
+  expect(html).not.toContain('Welcome back')
+})
+
+test('IS-C: a preview that distilled to zero rows shows the skeleton, not Welcome', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[]} restorePhase="preview" />,
+  )
+  expect(html).toContain('Restored session')
+  expect(html).not.toContain('Welcome back')
+})
+
+test('IS-C: an ordinary empty pane (no restore) still shows the WelcomeScreen', () => {
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
+  expect(html).toContain('Welcome back')
+  expect(html).not.toContain('Restoring session')
+  expect(html).not.toContain('Restored session')
+})
+
+test('IS-C: an ordinary live pane renders no restore divider', () => {
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={[cachedRow]} />)
+  expect(html).not.toContain('Restored session')
+  expect(html).not.toContain('Resuming session')
+  expect(html).toContain('cached line')
+})
+
 test('P4-18b: a resolved bash card shows the collapsed tail-peek output and done state', () => {
   const html = render(
     toolRow({

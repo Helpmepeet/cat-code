@@ -76,7 +76,7 @@ import {
   selectPreviewTranscript,
   selectPreviewTruncationMessage,
 } from './previewTranscriptState.js'
-import { TranscriptView } from './TranscriptView.js'
+import { TranscriptView, type RestorePhase } from './TranscriptView.js'
 import {
   completeSlashDraft,
   filterSlashCommands,
@@ -2021,6 +2021,25 @@ export function SessionPane({
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const activity = deriveActivity(nestedRows)
 
+  // IS-C (M5) — the restore affordance phase for TranscriptView. A preview pane
+  // reads as "restored" (pulsing "resuming" once engaged); a no-cache restore
+  // that is spawning with nothing to show yet gets the skeleton instead of an
+  // empty WelcomeScreen (report F4). `engineSessionId != null` on a connecting
+  // pane means a real transcript is being resumed (host.ts:342,642) — a fresh
+  // `New session` has a null engineSessionId until ready, so it still Welcomes.
+  const restoreConnecting =
+    activeConnection.status === 'connecting' ||
+    activeConnection.status === 'starting'
+  const restorePhase: RestorePhase | null = preview
+    ? previewEngaged
+      ? 'resuming'
+      : 'preview'
+    : restoreConnecting &&
+        activeDescriptor?.engineSessionId != null &&
+        nestedRows.length === 0
+      ? 'connecting'
+      : null
+
   // Elapsed clock: reset and tick once per second while a turn runs.
   const [elapsedMs, setElapsedMs] = useState(0)
   const turnStartRef = useRef<number | null>(null)
@@ -2277,6 +2296,7 @@ export function SessionPane({
             branch={branch}
             orchestratorActive={orchestratorActive}
             onToggleOrchestrator={onToggleOrchestrator}
+            restorePhase={restorePhase}
             state={transcript}
           />
         </div>

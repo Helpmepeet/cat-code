@@ -54,6 +54,19 @@ import {
   AGENT_TYPE_TONE_CLASS,
 } from './AgentChrome.js'
 
+/**
+ * IS-C (M5) — how a restore reads while it is NOT yet a live session. App
+ * derives this from the preview flag + connection status (never a frame):
+ * - `preview` — cached transcript shown, not engaged; rows sit under a static
+ *   "Restored session" divider.
+ * - `resuming` — a lazy restore is in flight over the still-shown cached rows;
+ *   the divider pulses "Resuming session…".
+ * - `connecting` — a restore is spawning with NO cache to preview (the no-cache
+ *   path that used to render an empty pane and read as a hang, report F4); the
+ *   pane shows the restore skeleton until live replay lands.
+ */
+export type RestorePhase = 'preview' | 'resuming' | 'connecting'
+
 // Perf (2026-07-08, F3): memoized so an App re-render that did NOT change this
 // session's transcript slice (a keystroke in the composer, another session's
 // frame) skips the whole subtree. `state`/`activeSessionId` are referentially
@@ -67,6 +80,7 @@ export const TranscriptView = memo(function TranscriptView({
   onToggleOrchestrator,
   cwd,
   branch,
+  restorePhase,
 }: {
   state: TranscriptState
   activeSessionId: SessionId | null
@@ -79,6 +93,8 @@ export const TranscriptView = memo(function TranscriptView({
   onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
+  /** IS-C (M5) — restore affordance phase; null for an ordinary live pane. */
+  restorePhase?: RestorePhase | null
 }) {
   return (
     <TranscriptRowsView
@@ -88,6 +104,7 @@ export const TranscriptView = memo(function TranscriptView({
       onToggleOrchestrator={onToggleOrchestrator}
       cwd={cwd ?? null}
       branch={branch ?? null}
+      restorePhase={restorePhase ?? null}
     />
   )
 })
@@ -99,6 +116,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onToggleOrchestrator,
   cwd = null,
   branch = null,
+  restorePhase = null,
 }: {
   rows: NestedTranscriptRow[]
   accounts?: AccountsSnapshot | null
@@ -106,8 +124,26 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
+  restorePhase?: RestorePhase | null
 }) {
   if (rows.length === 0) {
+    // IS-C (M5) — a restore in flight must never read as an empty pane / hang.
+    // The no-cache `connecting` path and a cached preview that distilled to zero
+    // rows (truncation-only edge) both render the restore skeleton instead of
+    // the live WelcomeScreen.
+    if (restorePhase !== null) {
+      return (
+        <PreviewSkeleton
+          label={
+            restorePhase === 'connecting'
+              ? 'Restoring session…'
+              : restorePhase === 'resuming'
+                ? 'Resuming session…'
+                : 'Restored session'
+          }
+        />
+      )
+    }
     // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
     // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex pool
     // table (P4-5) + the orchestrator reflect. HC1 session variant — Project is
@@ -130,6 +166,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // card at read time — a pure derivation over the already-nested rows, never a
   // new frame or message type (C3). Non-agent rows and lone agents pass through.
   const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
+  // IS-C (M5) — cached preview rows (engaged or not) sit under the "restored
+  // session" divider so the pane never masquerades as a live session; the
+  // `connecting` phase only fires on an empty pane (handled above), so it draws
+  // no divider over live rows.
+  const restored = restorePhase === 'preview' || restorePhase === 'resuming'
   return (
     // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
     // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
@@ -137,6 +178,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
     // code / mono text stays at a crisp, readable weight.
     <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
+      {restored ? (
+        <RestoredSessionDivider resuming={restorePhase === 'resuming'} />
+      ) : null}
       {items.map(item =>
         item.kind === 'agent-group' ? (
           <DelegateGroup key={item.id} members={item.members} />
@@ -147,6 +191,64 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     </div>
   )
 })
+
+/**
+ * IS-C (M5) — the "restored session" divider above cached preview rows. Shares
+ * the centered-hairline seam grammar (see `Seam`) but carries a live pulse dot
+ * so an in-flight resume reads as work, not a static label. Pure presentation.
+ */
+function RestoredSessionDivider({ resuming }: { resuming: boolean }) {
+  return (
+    <div className="flex items-center gap-3 py-1" role="status">
+      <div className="h-px flex-1 bg-accent/20" />
+      <div className="flex items-center gap-1.5 whitespace-nowrap text-[11px]">
+        <span
+          className={`h-1.5 w-1.5 rounded-full bg-accent ${resuming ? 'animate-pulse' : ''}`}
+          aria-hidden
+        />
+        <span className="text-text-muted">
+          {resuming ? 'Resuming session…' : 'Restored session'}
+        </span>
+      </div>
+      <div className="h-px flex-1 bg-accent/20" />
+    </div>
+  )
+}
+
+const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as const
+
+/**
+ * IS-C (M5) — restore skeleton for a pane with no rows yet: the no-cache
+ * `connecting` path (report F4's "reads as a hang") and the empty-cache preview
+ * fallback. A pulsing header + shimmer bars signal work in flight; it never
+ * shows the live/empty WelcomeScreen while a restore is pending.
+ */
+function PreviewSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      className="mx-auto flex w-full max-w-[740px] flex-col gap-3 px-8 pt-6"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className="flex items-center gap-2 text-[11px] text-text-subtle">
+        <span
+          className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
+          aria-hidden
+        />
+        <span>{label}</span>
+      </div>
+      <div className="flex flex-col gap-2.5" aria-hidden>
+        {SKELETON_BAR_WIDTHS.map((width, index) => (
+          <div
+            key={index}
+            className={`h-3 animate-pulse rounded bg-shell-hover ${width}`}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // Memoized per row: a slice-cached read reuses unchanged row objects, so only
 // the rows that actually changed re-render (markdown re-parses once per body).
