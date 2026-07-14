@@ -414,6 +414,28 @@ export class Host implements HostApi {
   }
 
   /* --------------------------------------------------------------------- *
+   * setTitle — the P4-6 title-rider's GENERATION half (wired 2026-07-14)
+   * --------------------------------------------------------------------- *
+   *
+   * The sidecar generates an AI session title after a fresh session's first turn
+   * (reusing the engine's `generateSessionTitle`, the same machinery the TUI
+   * uses) and pushes it via the one-shot `session-title` frame; main relays it
+   * here. Durable via the registry (survives restart → restorable rows keep the
+   * title); `emitStatus` propagates the updated descriptor so the sidebar/tab
+   * relabel live from the cwd-basename fallback. Display text only — length-
+   * capped here (`capTitle`). No-op on a malformed id, an empty title, or a
+   * vanished row (a race with close/evict), never a throw.
+   */
+  async setTitle(appSessionId: SessionId, title: string): Promise<void> {
+    await this.launched
+    if (!isUuid(appSessionId)) return
+    const capped = capTitle(title)
+    if (capped === undefined || capped.length === 0) return
+    await this.registry.setTitle(appSessionId, capped)
+    this.emitStatus(appSessionId)
+  }
+
+  /* --------------------------------------------------------------------- *
    * listSessions — live ∪ restorable (§6)
    * --------------------------------------------------------------------- */
 

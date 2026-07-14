@@ -8,10 +8,15 @@
  * live ∪ restorable, stable arrival order — see `sidebarState.ts`) and raises
  * the SAME intent callbacks
  * (`onSelectLive` reuses App's `selectTab`; `onRestore` calls the host
- * `restoreSession`). Only real `SessionDescriptor` fields (title, cwd, status,
- * recency) are rendered — no cost/model/tags fixtures (C3).
+ * `restoreSession`). Only real data is rendered — the `SessionDescriptor`
+ * title/cwd/recency plus the live diagnostics model (the subtitle's `· model`);
+ * no cost/tags fixtures (C3).
  *
  * §0 fidelity flags (divergences from the prototype, by design):
+ *  - No per-row status dot: the prototype's sidebar rows carry none (title +
+ *    `time · model` only), so the earlier real-added health dot was removed
+ *    2026-07-14 to match the prototype (operator decision). Live/dead/busy state
+ *    still surfaces on the TabBar.
  *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
  *    Accounts (P4-5), and Settings. None are mocked.
  *  - The prototype's per-row actions menu (rename/branch/rewind/export/delete) is
@@ -28,7 +33,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { basename } from './pathUtils.js'
 import type { SessionId } from '../../shared/protocol.js'
 import { resolveNavSelection, type SidebarRow } from './sidebarState.js'
-import type { TabTone } from './tabStatus.js'
 import { tabLabel } from './TabBar.js'
 
 // Rail geometry + hover timing, matching the prototype (RAIL_W/FULL_W/delays).
@@ -402,8 +406,6 @@ function SidebarRowItem({
         }
       }}
     >
-      <StatusDot tone={visual.tone} />
-
       <div className="min-w-0 flex-1">
         <div
           className={
@@ -527,16 +529,6 @@ function NavItemRail({
   )
 }
 
-/** A solid tone dot — the quiet health indicator, identical to the TabBar's. */
-function StatusDot({ tone }: { tone: TabTone }) {
-  return (
-    <span
-      className={`h-1.5 w-1.5 shrink-0 rounded-full ${toneDotClass(tone)}`}
-      aria-hidden="true"
-    />
-  )
-}
-
 /** Relative recency from `lastAttachedAt` — the real, source-backed subtitle
  * (the prototype's `time`); model/cost are NOT rendered (no real backing, C3). */
 function formatRecency(ms: number): string {
@@ -548,19 +540,6 @@ function formatRecency(ms: number): string {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h`
   return `${Math.floor(hrs / 24)}d`
-}
-
-function toneDotClass(tone: TabTone): string {
-  switch (tone) {
-    case 'live':
-      return 'bg-tone-good'
-    case 'busy':
-      return 'bg-accent'
-    case 'warn':
-      return 'bg-tone-warn'
-    case 'dead':
-      return 'bg-tone-danger'
-  }
 }
 
 /* ── Icons (ported from the prototype's inline SVGs; attribute-only, no CSS) ── */

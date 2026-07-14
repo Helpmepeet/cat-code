@@ -194,6 +194,9 @@ async function main(): Promise<void> {
     ...(agentMode ? { agentMode } : {}),
     ...(runControls ? { runControls } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
+    // P4-6 title-rider: a resumed session already has its title + history, so its
+    // first turn this run is a continuation — never retitle it from that prompt.
+    resumed: resumedMessages !== undefined,
     idleTtlMs,
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,
     // then exit 0 (a clean, expected shutdown — not a crash). `cleanup` is the

@@ -82,6 +82,11 @@ import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
+import {
+  createSessionTitleGenerator,
+  type SessionTitleDeps,
+  type SessionTitleGenerator,
+} from './sessionTitleGen.js'
 import type { SidecarAccountsDomain } from './accountsDomain.js'
 import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
@@ -214,6 +219,19 @@ export type SidecarServerOptions = {
    * is never armed regardless of `idleTtlMs`.
    */
   onIdle?: () => void
+  /**
+   * P4-6 title-rider: true when this session was resumed (has restored history).
+   * A resumed session already carries its title and history, so its first turn
+   * this run is a continuation — retitling it from that prompt would mislabel it.
+   * The title generator skips generation entirely when set. Defaults to false.
+   */
+  resumed?: boolean
+  /**
+   * P4-6 title-rider: override the engine title deps in tests (generate / existing-
+   * title check / persist). Absent ⇒ `realSessionTitleDeps` (the TUI machinery),
+   * so production never injects and a test never needs the Haiku round-trip.
+   */
+  titleDeps?: SessionTitleDeps
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -246,6 +264,8 @@ export class SidecarServer {
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
+  /** P4-6 title-rider — the one-shot AI-title generator for this session. */
+  private readonly titleGenerator: SessionTitleGenerator
   private readonly log: (line: string) => void
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
@@ -282,6 +302,11 @@ export class SidecarServer {
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
+    this.titleGenerator = createSessionTitleGenerator({
+      engineSessionId: this.engineSessionId,
+      resumed: options.resumed ?? false,
+      ...(options.titleDeps ? { deps: options.titleDeps } : {}),
+    })
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
 
     // Subscribe once; broadcast every event to all connected clients as a raw
@@ -891,6 +916,14 @@ export class SidecarServer {
       })
       .finally(() => {
         this.activeTurn = false
+        // P4-6 title-rider: after the first turn of a fresh session, generate +
+        // persist an AI title (the same machinery the TUI uses) and push it live.
+        // One-shot and self-guarding — a resumed session, an existing title, or an
+        // empty prompt is a no-op inside the generator. Fire-and-forget: a title
+        // never gates or delays the turn.
+        void this.titleGenerator.maybeGenerate(message.prompt, title =>
+          this.broadcastSessionTitle(title),
+        )
       })
   }
 
@@ -1943,6 +1976,27 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.sendRunControlsSnapshot(connection)
+    }
+  }
+
+  /**
+   * P4-6 title-rider — push the one-shot AI title to every attached connection.
+   * `send` applies the clone/JSON checks, the outbound secretGuard, and the size
+   * cap (the title is plain display text, guard-clean by construction). Main taps
+   * this frame → `host.setTitle`; it is deliberately NOT part of attach/replay —
+   * it fires once, after the first turn, only when a title was actually generated.
+   */
+  private broadcastSessionTitle(title: string): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.send(connection, {
+        kind: 'session-title',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        title,
+      })
     }
   }
 

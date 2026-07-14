@@ -24,7 +24,7 @@ const assistant: SDKMessage = {
   parent_tool_use_id: 'toolu_parent',
 }
 const result: SDKMessage = { ...SDK_MESSAGE_FIXTURE.result[0]!.message, uuid: 'r1' }
-const compact: SDKMessage = { ...findSystem('compact_boundary'), uuid: 'c1' }
+const compact: SDKMessage = { ...findSystem('compact_boundary'), uuid: '0-0-0-0-c1' }
 const streamEvent: SDKMessage = SDK_MESSAGE_FIXTURE.stream_event[0]!.message
 
 function log(messages: SDKMessage[]): RawMessageSessionLog {
@@ -78,7 +78,7 @@ describe('selectMessageMetadata', () => {
   })
 
   test('system compact_boundary: compaction trigger + preTokens', () => {
-    const meta = selectMessageMetadata(log([compact]), 'c1')
+    const meta = selectMessageMetadata(log([compact]), '0-0-0-0-c1')
     expect(meta!.compaction).not.toBeNull()
     expect(meta!.compaction!.trigger).toBe('auto')
     expect(meta!.compaction!.preTokens).toBe(167034)
@@ -90,8 +90,8 @@ describe('selectMessageMetadata', () => {
   })
 
   test('a message missing every optional field degrades to nulls, never throws', () => {
-    const bare: SDKMessage = { ...findSystem('init'), uuid: 'bare' }
-    const meta = selectMessageMetadata(log([bare]), 'bare')
+    const bare: SDKMessage = { ...findSystem('init'), uuid: '0-0-0-0-bare' }
+    const meta = selectMessageMetadata(log([bare]), '0-0-0-0-bare')
     expect(meta).not.toBeNull()
     expect(meta!.requestId).toBeNull()
     expect(meta!.totalCostUsd).toBeNull()

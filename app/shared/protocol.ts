@@ -1633,8 +1633,29 @@ export type SessionsCatalogSnapshotFrame = {
   catalog: SessionsCatalogSnapshot
 }
 
+/**
+ * P4-6 title-rider — the GENERATION half, wired 2026-07-14. A ONE-SHOT outbound
+ * frame emitted after a FRESH session's first turn completes, when the engine's
+ * `generateSessionTitle` (Haiku — the SAME machinery the TUI uses,
+ * `REPL.tsx:3032-3042`) resolves and the session had no title. Main taps it →
+ * `host.setTitle` → durable registry → `descriptor.title` → the sidebar/tab
+ * relabel from the cwd-basename fallback to the AI title. Display text only
+ * (the shared `send` path's `secretGuard` still scans it; the host also
+ * length-caps it). Never emitted for a resumed session or when a title already
+ * exists. Main does NOT forward it to the renderer — the title reaches the UI
+ * as a host descriptor update (HostEvent), the registry being the sidebar's
+ * source of truth.
+ */
+export type SessionTitleFrame = {
+  kind: 'session-title'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  title: string
+}
+
 export type ServerFrame =
   | ReadyFrame
+  | SessionTitleFrame
   | EventFrame
   | PongFrame
   | ErrorFrame

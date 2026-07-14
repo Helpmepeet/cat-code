@@ -336,6 +336,15 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
   sup.subscribe(event => {
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
+    // P4-6 title-rider: the sidecar's one-shot AI title is a sidecar→host signal,
+    // not a renderer frame. Relay it to the durable registry (host is engine-free,
+    // so it cannot pull the engine's title) and DO NOT forward it — the title
+    // reaches the sidebar/tab as a host descriptor update (HostEvent). event.sessionId
+    // is the appSessionId (the supervisor's routing key = the host's row id).
+    if (frame.kind === 'session-title') {
+      void host?.setTitle(event.sessionId, frame.title)
+      return
+    }
     deliver(attachmentGate.onFrame(event.sessionId, frame))
     if (isTerminalLifecycleFrame(frame)) {
       attachmentGate.clearSession(event.sessionId)

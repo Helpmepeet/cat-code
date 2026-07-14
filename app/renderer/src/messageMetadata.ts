@@ -139,7 +139,7 @@ export function buildSessionMetadataView(input: {
 
 function derivePreview(message: SDKMessage, type: string): string {
   const inner = readRecord(message, 'message')
-  const content = inner ? (inner as Record<string, unknown>).content : undefined
+  const content = inner ? inner.content : undefined
   if (typeof content === 'string') return clip(content)
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -183,10 +183,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readRecord(
-  message: SDKMessage,
+  message: unknown,
   key: string,
 ): Record<string, unknown> | null {
-  const value = (message as Record<string, unknown>)[key]
+  if (!isRecord(message)) return null
+  const value = message[key]
   return isRecord(value) ? value : null
 }
 
@@ -198,13 +199,15 @@ function readRecordOf(
   return isRecord(value) ? value : null
 }
 
-function readString(message: SDKMessage, key: string): string | null {
-  const value = (message as Record<string, unknown>)[key]
+function readString(message: unknown, key: string): string | null {
+  if (!isRecord(message)) return null
+  const value = message[key]
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-function readNumber(message: SDKMessage, key: string): number | null {
-  return numberOrNull((message as Record<string, unknown>)[key])
+function readNumber(message: unknown, key: string): number | null {
+  if (!isRecord(message)) return null
+  return numberOrNull(message[key])
 }
 
 function numberOrNull(value: unknown): number | null {

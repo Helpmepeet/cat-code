@@ -1,22 +1,30 @@
 /**
- * Sidebar projection (P3-5b, order corrected to prototype parity) — the FULL
- * roster (live ∪ restorable) the left rail renders, in stable arrival order —
- * the SAME order the TabBar uses, not a recency sort.
+ * Sidebar projection (CC-2 fix, 2026-07-14) — the FULL roster (live ∪
+ * restorable) the left rail renders, in a STABLE order keyed on each session's
+ * immutable `createdAt`.
  *
- * An earlier version of this projection sorted every row by `lastAttachedAt`
- * descending on every render, on the theory that a just-closed/just-restored
- * row should surface at the top as the obvious restore candidate. The
- * prototype does not actually do this: `Sidebar.jsx`'s `groupByWorkspace` only
- * ever sorts the GROUPS (current-workspace-first, then alphabetical); rows
- * within a group keep whatever order they arrive in and are never re-sorted
- * by an interaction. (Proof in the prototype's own mock data — `data.js`'s
- * `s-phase1a` entry, "13h" old, sits at the END of the `cat-code` group, after
- * "Yesterday"-old entries, which only makes sense if nothing re-sorts by
- * recency within a group.) The recency sort meant restoring a session visibly
- * jumped its row to the top of its group instead of settling into a stable
- * spot — surprising in actual use. `lastAttachedAt` still drives the row's
- * displayed recency text (`Sidebar.tsx`'s `formatRecency`); it no longer
- * drives row ORDER.
+ * Why NOT `state.order` (the TabBar's order): `reorderOnArrival`
+ * (`shellState.ts`) deliberately moves a session to the END of `state.order`
+ * when it regains tab membership — correct for the TabBar (restoring a closed
+ * session opens it as a fresh tab at the end), but the Sidebar is the PERSISTENT
+ * roster, where that same move reads as the row "warping" to a new spot on every
+ * restore/open (operator, 2026-07-14: hard to track the row you just clicked).
+ * `createdAt` is written once on the first spawn and preserved across every
+ * restart/restore (`registry.ts` `upsertOnSpawn` sets it only for a NEW row), so
+ * ordering by it keeps each row FIXED regardless of clicks or restores — matching
+ * the prototype, whose `groupByWorkspace` never re-sorts rows within a group by
+ * any interaction (only the GROUPS reorder, current-workspace-first).
+ *
+ * An earlier version sorted rows by `lastAttachedAt` (recency); the prototype
+ * does not, and restore bumps `lastAttachedAt`, so that ALSO jumped a restored
+ * row. `lastAttachedAt` still drives the displayed recency text (`Sidebar.tsx`
+ * `formatRecency`) — never row ORDER.
+ *
+ * Deferred (the operator's fuller CC-2 spec, 2026-07-07): float a row to the top
+ * ONLY when its session SENDS a message. That needs a `lastMessageSentAt` signal
+ * the data model does not carry yet (attach/restore must NOT bump it, so
+ * `lastAttachedAt` cannot stand in). Until then the order is stable-by-creation,
+ * which removes the warp and matches the prototype's static order.
  *
  * Pure (no React) so the descriptor → row-visual mapping is unit-testable,
  * and it reuses `TabTone` so both panels share one status vocabulary.
@@ -84,6 +92,15 @@ export function selectSidebarRows(state: ShellState): SidebarRow[] {
   return state.order
     .map(id => state.byId[id])
     .filter((value): value is SessionDescriptor => value !== undefined)
+    .slice()
+    // Stable order by the immutable `createdAt` (see module doc): a click or
+    // restore never moves a row, because `createdAt` never changes. Ties (same
+    // creation ms) break on the immutable id so the order is fully deterministic.
+    .sort((a, b) =>
+      a.createdAt !== b.createdAt
+        ? a.createdAt - b.createdAt
+        : a.appSessionId.localeCompare(b.appSessionId),
+    )
     .map(descriptor => ({
       descriptor,
       visual: deriveSidebarRowVisual(descriptor),

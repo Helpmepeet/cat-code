@@ -360,6 +360,54 @@ test('app.submit emits the live user event before the assistant and the projecto
   expect(rows.filter(row => row.kind === 'user-text')).toHaveLength(1)
 })
 
+test('P4-6 title-rider — after a fresh session first turn, broadcasts a session-title frame', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'assistant',
+        message: {
+          id: 'm1',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        parent_tool_use_id: null,
+        session_id: ENGINE_SESSION,
+        uuid: '00000000-0000-4000-8000-00000000b001',
+      } as never
+    },
+  })
+  // Inject fake title deps so the seam is proven without a Haiku round-trip: the
+  // server must run the generator after the turn and broadcast the frame.
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    resumed: false,
+    titleDeps: {
+      generate: async () => 'Fix login button',
+      hasExistingTitle: () => false,
+      persist: () => {},
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'r1', prompt: 'fix the login button' }),
+  )
+  await waitFor(() => received.some(f => f.kind === 'session-title'))
+
+  expect(received.find(f => f.kind === 'session-title')).toEqual({
+    kind: 'session-title',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    title: 'Fix login button',
+  })
+})
+
 test('T4 — rejects a submit whose goalSnapshot is not a valid ThreadGoal', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

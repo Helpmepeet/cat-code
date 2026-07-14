@@ -334,6 +334,38 @@ test('ready frame bridges engineSessionId into the row and emits session-status'
  * HC1 — invalid_cwd
  * ------------------------------------------------------------------------- */
 
+test('setTitle — persists on the row, surfaces the descriptor, caps length, no-ops on empty/bad id', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+
+  const before = h.events.length
+  await h.host.setTitle(appSessionId, 'Fix login button')
+
+  // Durable on the row AND surfaced on the descriptor (the sidebar's source).
+  expect(h.registry.findSession(appSessionId)?.title).toBe('Fix login button')
+  expect(
+    h.host.listSessions().find(s => s.appSessionId === appSessionId)?.title,
+  ).toBe('Fix login button')
+  // A HostEvent was emitted so the renderer relabels the tab/sidebar live.
+  expect(h.events.length).toBeGreaterThan(before)
+
+  // Empty title is a no-op — never clobbers a real title with a blank.
+  await h.host.setTitle(appSessionId, '')
+  expect(h.registry.findSession(appSessionId)?.title).toBe('Fix login button')
+
+  // Length-capped to MAX_SESSION_TITLE_CHARS (200).
+  await h.host.setTitle(appSessionId, 'x'.repeat(500))
+  expect(h.registry.findSession(appSessionId)?.title?.length).toBe(200)
+
+  // A malformed id resolves to a silent no-op (defensive; never throws).
+  await expect(
+    h.host.setTitle('not-a-uuid' as never, 'ignored'),
+  ).resolves.toBeUndefined()
+})
+
 test('createSession rejects a cwd that is not an existing directory (invalid_cwd)', async () => {
   const h = makeHost()
   const result = await h.host.createSession({ cwd: '/no/such/dir' })

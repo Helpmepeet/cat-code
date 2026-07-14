@@ -40,14 +40,14 @@ test('selectSidebarRows lists the full roster (live ∪ restorable)', () => {
   expect(ids.sort()).toEqual(['dead', 'live'])
 })
 
-test('rows are in stable arrival order, NOT sorted by lastAttachedAt', () => {
-  // Prototype parity (see module doc): Sidebar.jsx never re-sorts rows within
-  // a group by recency, only arrival order — a row with a MORE recent
-  // lastAttachedAt does not jump ahead of one that arrived earlier.
+test('rows are in stable creation order, NOT reordered by lastAttachedAt', () => {
+  // CC-2 / prototype parity (see module doc): rows order by the immutable
+  // createdAt and are never re-sorted by recency — a row with a MORE recent
+  // lastAttachedAt does not jump ahead of one created earlier.
   let state = createShellState()
-  state = reduceShellState(state, added(descriptor('old', { lastAttachedAt: 100 })))
-  state = reduceShellState(state, added(descriptor('new', { lastAttachedAt: 300 })))
-  state = reduceShellState(state, added(descriptor('mid', { lastAttachedAt: 200 })))
+  state = reduceShellState(state, added(descriptor('old', { createdAt: 1, lastAttachedAt: 100 })))
+  state = reduceShellState(state, added(descriptor('new', { createdAt: 2, lastAttachedAt: 300 })))
+  state = reduceShellState(state, added(descriptor('mid', { createdAt: 3, lastAttachedAt: 200 })))
 
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
     'old',
@@ -56,32 +56,33 @@ test('rows are in stable arrival order, NOT sorted by lastAttachedAt', () => {
   ])
 })
 
-test('restoring a closed session appends its row after tabs opened since, not to the top', () => {
-  // The regression this order fix targets: restoreSession fires session-added
-  // for an already-known id, which only reorders `order` when the id is just
-  // regaining tab membership (shellState.ts's reorderOnArrival) — so a
-  // restored session's Sidebar row settles at the END, matching where it now
-  // sits in the TabBar, instead of jumping to the top of its group.
+test('CC-2: restoring a closed session does NOT move its Sidebar row', () => {
+  // The warp this fix targets: restoreSession fires session-added for a known id
+  // regaining tab membership, which shellState's reorderOnArrival moves to the
+  // END of state.order (correct for the TabBar's fresh tab). The Sidebar must NOT
+  // follow that — ordering by the immutable createdAt keeps 'a' in place across
+  // the close→restore round-trip, so the row the operator just clicked stays put.
   let state = createShellState()
-  state = reduceShellState(state, added(descriptor('a', { status: 'ready' })))
-  state = reduceShellState(state, added(descriptor('b', { status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('a', { createdAt: 1, status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('b', { createdAt: 2, status: 'ready' })))
+  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
+
+  // 'a' closes → a restorable row.
   state = reduceShellState(state, {
     type: 'session-status',
-    session: descriptor('a', { status: 'exited', restorable: true }),
+    session: descriptor('a', { createdAt: 1, status: 'exited', restorable: true }),
   })
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
-    'a',
-    'b',
-  ])
+  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
 
+  // 'a' is restored → regains tab membership → shellState moves it to the END of
+  // state.order. The Sidebar row STAYS put (this is the fix; the old test asserted
+  // the warp — ['b','a']).
   state = reduceShellState(
     state,
-    added(descriptor('a', { status: 'spawning', restorable: false })),
+    added(descriptor('a', { createdAt: 1, status: 'spawning', restorable: false })),
   )
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
-    'b',
-    'a',
-  ])
+  expect(state.order).toEqual(['b', 'a']) // TabBar order DID move (unchanged behavior)
+  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
 })
 
 test('a live ready row is kind:live, tone:live, and shows no chip', () => {
