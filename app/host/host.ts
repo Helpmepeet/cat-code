@@ -519,6 +519,28 @@ export class Host implements HostApi {
   }
 
   /* --------------------------------------------------------------------- *
+   * canPreview — the IS-A transcript-cache gate (read-only)
+   * --------------------------------------------------------------------- */
+
+  /**
+   * Instant session open (IS-A): may the renderer fetch this session's at-rest
+   * transcript cache? True ONLY for a session that is NOT live, HAS a registry
+   * row, and HAS a non-null `engineSessionId` — i.e. exactly the descriptor's
+   * `restorable` flag, which `isRestorable(row, liveStatus)` already forces false
+   * when a process is live (`host.ts:639-645`). Reusing the descriptor keeps the
+   * not-live guard in one place; a LIVE or unknown id returns false, so main
+   * never reads a cache off disk for an id the host does not vouch for (the IS-A
+   * boundary-test requirement — main-side validation before any disk touch).
+   */
+  canPreview(appSessionId: SessionId): boolean {
+    if (!isUuid(appSessionId)) return false
+    return (
+      this.listSessions().find(s => s.appSessionId === appSessionId)?.restorable ===
+      true
+    )
+  }
+
+  /* --------------------------------------------------------------------- *
    * subscribe — HostEvent stream (the renderer's list is a projection, never a
    * poll loop)
    * --------------------------------------------------------------------- */

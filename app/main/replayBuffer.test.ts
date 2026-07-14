@@ -155,3 +155,36 @@ test('default cap is the documented value', () => {
   expect(DEFAULT_MAX_BUFFERED_FRAMES).toBe(512)
   expect(DEFAULT_MAX_BUFFERED_BYTES).toBe(8 * 1024 * 1024)
 })
+
+test('snapshotSession returns exactly one session in delivery order (ready head + recent)', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record('s-a', readyFrame('s-a'))
+  buffer.record('s-a', pongFrame('a1', 's-a'))
+  buffer.record('s-b', readyFrame('s-b'))
+  buffer.record('s-b', pongFrame('b1', 's-b'))
+
+  const only = buffer.snapshotSession('s-a')
+  // The permanent ready head is INCLUDED here (distill drops it, not this).
+  expect(only.map(f => f.kind)).toEqual(['ready', 'pong'])
+  expect(new Set(only.map(f => f.sessionId))).toEqual(new Set(['s-a']))
+})
+
+test('snapshotSession is empty for a never-buffered session', () => {
+  const buffer = new FrameReplayBuffer()
+  expect(buffer.snapshotSession('nope')).toEqual([])
+})
+
+test('snapshotSession includes the truncation marker when the session was lossy', () => {
+  const cap = 2
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  for (let i = 0; i < cap + 2; i++) buffer.record(SID, pongFrame(`n${i}`))
+
+  const only = buffer.snapshotSession(SID)
+  expect(only[0]?.kind).toBe('ready')
+  expect(isReplayTruncationFrame(only[1])).toBe(true)
+  expect(only.slice(2).map(f => (f.kind === 'pong' ? f.nonce : null))).toEqual([
+    'n2',
+    'n3',
+  ])
+})

@@ -1682,6 +1682,36 @@ export type ServerFrame =
   | SettingsResultFrame
 
 /* ------------------------------------------------------------------------- *
+ * Transcript cache — the at-rest "instant session open" artifact
+ * (docs/migration/specs/2026-07-14-instant-session-open-design.md — M1). NOT a
+ * wire frame: a per-session cache main persists on eviction and the renderer
+ * fetches by id over the read-only `previewSession` control-plane method to
+ * render a dead session's transcript instantly, before any sidecar spawn. The
+ * codec (distill / write / read / delete) lives in `app/main/transcriptCache.ts`;
+ * this is only the shared shape the preload/renderer reference. Additive — no
+ * PROTOCOL_VERSION bump (it is not a `ServerFrame`, so the on-wire vocabulary is
+ * unchanged). `frames` holds only the distill allowlist: message `event` frames
+ * + the truncation-boundary error frame — never `ready`, permission, or any
+ * operational snapshot, so cache hydration can reach nothing but transcript state.
+ */
+export type TranscriptCacheHeader = {
+  appSessionId: SessionId
+  /** The transcript key (two-id bridge). null only for a never-ready session. */
+  engineSessionId: string | null
+  protocolVersion: typeof PROTOCOL_VERSION
+  /** Stamped for diagnostics; reads gate on protocolVersion + guardVersion. */
+  appVersion: string
+  /** Guard-drift fast-path (the real guard is a read-time `scanForSecrets` re-scan). */
+  guardVersion: number
+  writtenAt: number
+}
+
+export type TranscriptCache = {
+  header: TranscriptCacheHeader
+  frames: ServerFrame[]
+}
+
+/* ------------------------------------------------------------------------- *
  * Renderer-facing bridge surface (the preload allowlist, SECURITY-MINIMUM §2 R1)
  * ------------------------------------------------------------------------- */
 
@@ -1811,6 +1841,17 @@ export type CatCodeBridge = {
   createSession(input: CreateSessionInput): Promise<HostResult<SessionDescriptor>>
   /** Restore a registry row's session by id (registry-mediated; HC2). */
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
+  /**
+   * Instant session open (M2) — fetch a dead session's cached transcript by id,
+   * read-only, WITHOUT spawning a sidecar. Modeled exactly on `restoreSession`:
+   * id-only, rate/size-guarded, fixed channel. Main validates the id against the
+   * host's restorable roster (`host.canPreview`) BEFORE touching disk, then reads
+   * the size-bounded, schema-validated, secret-re-scanned cache; a missing /
+   * corrupt / non-restorable id resolves to `null` (the no-cache fallback). The
+   * cache carries only transcript-bearing frames, so nothing but transcript state
+   * is reachable from it. See the instant-session-open design (M2 + Security delta).
+   */
+  previewSession(appSessionId: SessionId): Promise<TranscriptCache | null>
   /** Graceful close; the row is kept restorable. */
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
   /** Snapshot of live ∪ restorable sessions. */

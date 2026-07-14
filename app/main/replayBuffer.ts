@@ -100,6 +100,24 @@ export class FrameReplayBuffer {
     return frames
   }
 
+  /**
+   * One session's frames in delivery order: its `ready` head, then the
+   * truncation marker if lossy, then its buffered recent frames — the single-
+   * session slice of `snapshot()`. Empty when the session was never buffered.
+   * Used by the transcript-cache persist path (IS-A); the permanent `ready` head
+   * is INCLUDED here (like `snapshot()`) and dropped by the cache's `distill`
+   * allowlist, so the ready-drop decision lives in exactly one place.
+   */
+  snapshotSession(sessionId: SessionId): ServerFrame[] {
+    const entry = this.sessions.get(sessionId)
+    if (!entry) return []
+    const frames: ServerFrame[] = []
+    if (entry.ready) frames.push(entry.ready)
+    if (entry.truncated) frames.push(replayTruncationFrame(sessionId))
+    frames.push(...entry.recent)
+    return frames
+  }
+
   /** Forget a session's buffer (e.g. its sidecar was torn down). */
   clearSession(sessionId: SessionId): void {
     this.sessions.delete(sessionId)

@@ -249,6 +249,7 @@ async function runProductionHardeningSmoke(
       'createSession',
       'listSessions',
       'pickDirectory',
+      'previewSession',
       'restoreSession',
       'subscribeHost',
     ].sort()

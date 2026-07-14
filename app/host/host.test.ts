@@ -1175,3 +1175,36 @@ test('F5: a runtime bound-reap emits session-removed for the reaped terminal row
   // The new live row survived; the reaped one is gone from the doc.
   expect(registry.findSession(created.value.appSessionId)).toBeDefined()
 })
+
+/* ------------------------------------------------------------------------- *
+ * canPreview — the IS-A transcript-cache gate (not-live + restorable row)
+ * ------------------------------------------------------------------------- */
+
+test('canPreview is true only for a not-live restorable row; false for live/unknown/non-restorable', async () => {
+  const h = makeHost()
+
+  // Unknown / malformed id → false (no row).
+  expect(h.host.canPreview(randomUUID())).toBe(false)
+  expect(h.host.canPreview('not-a-uuid')).toBe(false)
+
+  // A LIVE session (ready) is never previewable — restoreSession would reject an
+  // already-live id, so canPreview must force false while a process is live.
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-live')
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-live')
+  expect(h.host.canPreview(appSessionId)).toBe(false)
+
+  // Close it → not-live + restorable row (transcript + engineSessionId) → true.
+  writeTranscript(h.storageDir, 'engine-live')
+  const closed = await h.host.closeSession(appSessionId)
+  expect(closed.ok).toBe(true)
+  expect(h.host.canPreview(appSessionId)).toBe(true)
+
+  // A clean row that never acquired an engineSessionId is NOT restorable → false.
+  const orphan = randomUUID()
+  await h.registry.upsertOnSpawn({ appSessionId: orphan, cwd: h.cwd })
+  await h.registry.markClean(orphan)
+  expect(h.host.canPreview(orphan)).toBe(false)
+})

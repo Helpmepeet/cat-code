@@ -41,6 +41,15 @@ import {
 } from '../shared/debugState.js'
 import { AttachmentGate } from './attachmentGate.js'
 import {
+  deleteCache,
+  distill,
+  listCachedSessionIds,
+  readCache,
+  resolvePreview,
+  transcriptCacheDir,
+  writeCache,
+} from './transcriptCache.js'
+import {
   atomicWriteJson0600,
   createDebouncedAction,
   createDevPickerBypass,
@@ -75,6 +84,7 @@ import {
   type SettingsVerbMessage,
   type SettingsVerbType,
   type SidecarClientMessage,
+  type TranscriptCache,
   type WorkspaceTrustMessage,
   type WorkspaceTrustVerbType,
 } from '../shared/protocol.js'
@@ -104,6 +114,7 @@ const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
+const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
@@ -131,6 +142,54 @@ let latestRendererSnapshot: DebugRendererSnapshot | null = null
  * Electron-free and unit-tested; main just `send`s whatever it returns.
  */
 const attachmentGate = new AttachmentGate()
+
+/**
+ * IS-A — where the at-rest transcript caches live: beside the durable registry
+ * (`<config-home>/desktop/transcript-cache`), same trust domain as the registry
+ * file and the engine transcript JSONL. Fixed at startup (env is stable per run),
+ * matching the registry's own `defaultRegistryDir()` timing.
+ */
+const TRANSCRIPT_CACHE_DIR = transcriptCacheDir(defaultRegistryDir())
+
+/**
+ * Persist one session's transcript cache (IS-A). Called at every eviction point
+ * in **snapshot → atomic persist → evict** order (the caller evicts AFTER this):
+ * snapshot the session's buffered frames, distill to the transcript-only cache,
+ * and atomically write it. Skips a session with no buffered frames or no
+ * engineSessionId (never restorable, so a cache would never be served). Wrapped
+ * fail-safe: a persist error degrades to the no-cache path, never breaks
+ * eviction or the synchronous quit.
+ */
+function persistTranscriptCache(appSessionId: SessionId): void {
+  try {
+    const frames = attachmentGate.snapshotSession(appSessionId)
+    if (frames.length === 0) return
+    const cache = distill(frames)
+    if (cache.header.engineSessionId === null) return
+    writeCache(TRANSCRIPT_CACHE_DIR, cache)
+  } catch (error) {
+    process.stderr.write(
+      `[main] transcript-cache persist failed for ${appSessionId}: ${errText(error)}\n`,
+    )
+  }
+}
+
+/**
+ * Startup cache GC (IS-A). The launch-time registry reap runs BEFORE main
+ * subscribes to HostEvents, so reaped rows emit no `session-removed` — a cache
+ * file whose row is gone would otherwise linger forever. Delete every cache file
+ * whose id the host no longer vouches for as restorable. Runs once, after the
+ * registry launch sweep settles.
+ */
+function gcTranscriptCache(): void {
+  try {
+    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR)) {
+      if (!host || !host.canPreview(id)) deleteCache(TRANSCRIPT_CACHE_DIR, id)
+    }
+  } catch (error) {
+    process.stderr.write(`[main] transcript-cache GC failed: ${errText(error)}\n`)
+  }
+}
 
 // Perf (2026-07-08, F3): send the whole batch as ONE `webContents.send`, not one
 // send per frame. A restore replays its history as a single `frames[]` from the
@@ -347,6 +406,11 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     }
     deliver(attachmentGate.onFrame(event.sessionId, frame))
     if (isTerminalLifecycleFrame(frame)) {
+      // IS-A — snapshot → persist → evict. A crash reaches eviction through this
+      // terminal frame (the supervisor emits no exit after a host-asked kill, so
+      // graceful close/quit/restart persist via the host's evictReplay callback
+      // instead); persist here so a crashed session is still previewable.
+      persistTranscriptCache(event.sessionId)
       attachmentGate.clearSession(event.sessionId)
     }
   })
@@ -362,6 +426,11 @@ function wireHostEvents(h: Host): void {
   h.subscribe(event => {
     const contents = mainWindow?.webContents
     if (contents) contents.send(CH_HOST_EVENT, event satisfies HostEvent)
+    // IS-A delete-on-reap: a row that left the live∪restorable set (reaped or its
+    // engineSessionId cleared) must not keep an at-rest transcript cache.
+    if (event.type === 'session-removed') {
+      deleteCache(TRANSCRIPT_CACHE_DIR, event.appSessionId)
+    }
     scheduleDebugStateExport.schedule()
   })
 }
@@ -702,6 +771,27 @@ function registerHostControlPlane(): void {
   ipcMain.handle(CH_HOST_LIST, (): SessionDescriptor[] => {
     return host ? host.listSessions() : []
   })
+
+  ipcMain.handle(
+    CH_HOST_PREVIEW,
+    (_e, appSessionId: unknown): TranscriptCache | null => {
+      // IS-A — read a dead session's transcript cache. The host VALIDATES the id
+      // (canPreview: not-live + restorable row) BEFORE any disk touch; a
+      // non-restorable / live / unknown id never reads a file (resolvePreview
+      // short-circuits without calling readCache). readCache then re-validates the
+      // file fail-closed (size / schema / secret re-scan) and returns null on any
+      // failure. Never returns file contents for an id the host does not vouch for.
+      const h = host
+      if (!h) return null
+      return resolvePreview(
+        {
+          canPreview: id => h.canPreview(id),
+          readCache: id => readCache(TRANSCRIPT_CACHE_DIR, id),
+        },
+        String(appSessionId),
+      )
+    },
+  )
 }
 
 function registerDebugStateHandler(): void {
@@ -924,10 +1014,22 @@ function ensureHost(): Host {
     validateCwd,
     launched,
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
-    // so a reload never replays a dead session's frames.
-    evictReplay: appSessionId => attachmentGate.clearSession(appSessionId),
+    // so a reload never replays a dead session's frames. IS-A: persist the
+    // transcript cache FIRST (snapshot → persist → evict). This fires on
+    // close/restart AND — synchronously — on the quit path (host.shutdownAll),
+    // so the persist here uses a synchronous atomic write. Restart persisting a
+    // cache is acceptable (a bounded extra sync write).
+    evictReplay: appSessionId => {
+      persistTranscriptCache(appSessionId)
+      attachmentGate.clearSession(appSessionId)
+    },
   })
   wireHostEvents(host)
+
+  // IS-A startup GC: after the launch sweep settles (its reaps predate the
+  // HostEvent subscription, so they emit no session-removed), drop any orphaned
+  // cache file whose row is no longer restorable.
+  void launched.then(() => gcTranscriptCache())
 
   // The primary startup session: main's OWN process.cwd() (trusted main input,
   // not a renderer string). host.createSession awaits `launched` internally, so

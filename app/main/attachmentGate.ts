@@ -56,6 +56,15 @@ export class AttachmentGate {
     this.attached = false
   }
 
+  /**
+   * One session's buffered frames (IS-A transcript-cache persist path). Main
+   * snapshots BEFORE evicting so a dead session's transcript can be distilled to
+   * an at-rest cache. Thin pass-through to the buffer, mirroring `clearSession`.
+   */
+  snapshotSession(sessionId: SessionId): ServerFrame[] {
+    return this.buffer.snapshotSession(sessionId)
+  }
+
   /** Drop stale replay for one restarting session without detaching the renderer. */
   clearSession(sessionId: SessionId): void {
     this.buffer.clearSession(sessionId)

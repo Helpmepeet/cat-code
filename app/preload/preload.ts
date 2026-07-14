@@ -26,6 +26,7 @@ import type {
   SessionId,
   SettingsVerbMessage,
   SubmitOptions,
+  TranscriptCache,
   WorkspaceTrustMessage,
 } from '../shared/protocol.js'
 import type {
@@ -61,6 +62,7 @@ const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
+const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const sendGuard = createRendererIpcGuard()
@@ -196,6 +198,16 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ appSessionId })
     return ipcRenderer.invoke(CH_HOST_RESTORE, appSessionId) as Promise<
       HostResult<SessionDescriptor>
+    >
+  },
+  previewSession(appSessionId: SessionId): Promise<TranscriptCache | null> {
+    // IS-A — instant session open. Modeled exactly on restoreSession: id-only,
+    // rate/size-guarded, fixed channel. Read-only; main validates the id against
+    // the host's restorable roster before reading any cache off disk, and never
+    // returns file contents for an id the host does not vouch for.
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_PREVIEW, appSessionId) as Promise<
+      TranscriptCache | null
     >
   },
   closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
