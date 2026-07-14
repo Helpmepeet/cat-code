@@ -1,0 +1,2 @@
+export const MAP_ROUTING_GUIDANCE =
+  'Repository routing: when ownership is not established and the task requires broad repository navigation, read docs/maps/WORKSPACE_MAP.md before the first broad search, choose only the relevant focused map, then verify the route in source. If the caller supplied exact owner files or a focused map, start there and skip the workspace router. Maps route; source is authoritative.'

@@ -11,6 +11,7 @@ import { AGENT_TOOL_NAME } from '../constants.js'
 import type { BuiltInAgentDefinition } from '../loadAgentsDir.js'
 import { EXPLORE_AGENT } from './exploreAgent.js'
 import { resolveRequestProvider, type APIProvider } from '../../../utils/model/providers.js'
+import { MAP_ROUTING_GUIDANCE } from './mapRoutingGuidance.js'
 
 function getPlanV2SystemPrompt(provider: APIProvider): string {
   // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
@@ -42,6 +43,7 @@ Phase 1 — Understand requirements.
 
 Phase 2 — Explore the codebase.
 - Read any files provided in the initial prompt.
+- ${MAP_ROUTING_GUIDANCE}
 - Find existing patterns and conventions using ${searchToolsHint}.
 - Understand the current architecture.
 - Identify similar features or patterns in the codebase as references. Read at least 3 real examples before moving to Phase 3 — one example is not enough to understand the conventions. Do not narrate this count to the user.
@@ -95,6 +97,7 @@ You will be provided with a set of requirements and optionally a perspective on 
 
 2. **Explore Thoroughly**:
    - Read any files provided to you in the initial prompt
+   - ${MAP_ROUTING_GUIDANCE}
    - Find existing patterns and conventions using ${searchToolsHint}
    - Understand the current architecture
    - Identify similar features as reference

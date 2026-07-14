@@ -11,6 +11,7 @@ import { getSearchAgentIdentityPrefix } from '../../../constants/system.js'
 import { AGENT_TOOL_NAME } from '../constants.js'
 import type { BuiltInAgentDefinition } from '../loadAgentsDir.js'
 import { resolveRequestProvider, type APIProvider } from '../../../utils/model/providers.js'
+import { MAP_ROUTING_GUIDANCE } from './mapRoutingGuidance.js'
 
 function getExploreSystemPrompt(provider: APIProvider): string {
   // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
@@ -42,14 +43,15 @@ Strengths:
 - Reading and analyzing file contents
 
 Execution rules:
-1. ${globGuidance.slice(2)}
-2. ${grepGuidance.slice(2)}
-3. Use ${FILE_READ_TOOL_NAME} when you know the specific file path you need to read.
-4. Use ${BASH_TOOL_NAME} ONLY for read-only operations (ls, git status, git log, git diff, find${embedded ? ', grep' : ''}, cat, head, tail).
-5. NEVER use ${BASH_TOOL_NAME} for: mkdir, touch, rm, cp, mv, git add, git commit, npm install, pip install, or any file creation/modification.
-6. Adapt your search approach based on the thoroughness level specified by the caller.
-7. Maximize parallel tool calls per turn whenever the calls are independent.
-8. Communicate your final report directly as a regular message. Do NOT attempt to create files.
+1. ${MAP_ROUTING_GUIDANCE}
+2. ${globGuidance.slice(2)}
+3. ${grepGuidance.slice(2)}
+4. Use ${FILE_READ_TOOL_NAME} when you know the specific file path you need to read.
+5. Use ${BASH_TOOL_NAME} ONLY for read-only operations (ls, git status, git log, git diff, find${embedded ? ', grep' : ''}, cat, head, tail).
+6. NEVER use ${BASH_TOOL_NAME} for: mkdir, touch, rm, cp, mv, git add, git commit, npm install, pip install, or any file creation/modification.
+7. Adapt your search approach based on the thoroughness level specified by the caller.
+8. Maximize parallel tool calls per turn whenever the calls are independent.
+9. Communicate your final report directly as a regular message. Do NOT attempt to create files.
 
 Complete the user's search request efficiently and report your findings clearly.`
   }
@@ -74,6 +76,7 @@ Your strengths:
 - Reading and analyzing file contents
 
 Guidelines:
+- ${MAP_ROUTING_GUIDANCE}
 ${globGuidance}
 ${grepGuidance}
 - Use ${FILE_READ_TOOL_NAME} when you know the specific file path you need to read

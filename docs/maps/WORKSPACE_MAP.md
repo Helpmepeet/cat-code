@@ -4,13 +4,16 @@ Last refreshed: 2026-07-14
 
 ## Purpose
 
-This is the main daily-refreshable routing map for Cat Code. Use it to choose
-the first files to inspect before changing behavior. It is not a full
-architecture guide and should not duplicate detailed domain notes; put those in
-the focused sub-maps linked below.
+This is the main daily-refreshable routing map for Cat Code. When a task needs
+broad repository navigation and ownership is not established, start here,
+choose only the relevant focused map, then continue into source. If exact owner
+files or a focused map were supplied, start there and skip this router. It is
+not a full architecture guide and should not duplicate detailed domain notes;
+put those in the focused sub-maps linked below.
 
-Verify behavior in source before editing. This repository is a forked snapshot,
-and older plans, feature flags, and implementation can drift.
+Maps route; source is authoritative. Verify behavior in source before editing.
+This repository is a forked snapshot, and older plans, feature flags, and
+implementation can drift.
 
 ## Map Index
 
@@ -26,7 +29,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-07-14 |
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-07-14 |
 | [`docs/maps/codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-07-13 |
-| [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-07-10 |
+| [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-07-14 |
 | [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, config files, transcripts, memory, migrations, and persistence scope. | 2026-07-13 |
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-07-11 |
 | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-06-16 |

@@ -23,8 +23,12 @@ build/test/typecheck battery applies (§3). Never mix them.**
 - **Execution boundary:** `cat-code exec` is reserved exclusively for exercising
   the Claude harness. Never use it to invoke, test, or stand in for Codex or
   Cat Code; use each system's native execution path instead.
-- Non-trivial bug/feature/question → open `docs/maps/WORKSPACE_MAP.md` first,
-  follow its routing table to the owner files, then verify in source.
+- **Repository routing for implementation and diagnosis:** when ownership is not
+  established and the task requires broad repository navigation, open
+  `docs/maps/WORKSPACE_MAP.md` before the first broad search, choose only the
+  relevant focused map, then verify the route in source. If exact owner files or
+  a focused map were supplied, start there and skip the workspace router. Maps
+  route; source is authoritative.
 - Prompt/instruction/output-style work → `docs/prompts/2026-04-30-prompt-surfaces.md` first.
 - Desktop-app / migration work → `docs/migration/STATUS.md` (single source of
   truth for program state) + `.claude/rules/migration.md` (orchestrator rules).
@@ -94,7 +98,8 @@ bun run --cwd web test && bun run --cwd web typecheck && bun run --cwd web build
 ### Docs-only changes
 
 ```bash
-git diff --check              # plus: confirm every file path a doc cites exists
+git diff --check
+bun run maps:lint             # validates map index, dates, links, and cited paths
 ```
 
 Lint caveat (all areas): `bun run lint` only lints files changed vs

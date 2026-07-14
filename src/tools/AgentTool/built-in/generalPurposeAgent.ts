@@ -1,6 +1,7 @@
 import type { BuiltInAgentDefinition } from '../loadAgentsDir.js'
 import { getAgentPromptIdentityPrefix } from '../../../constants/system.js'
 import { resolveRequestProvider, type APIProvider } from '../../../utils/model/providers.js'
+import { MAP_ROUTING_GUIDANCE } from './mapRoutingGuidance.js'
 
 const SHARED_GUIDELINES = `Your strengths:
 - Searching for code, configurations, and patterns across large codebases
@@ -9,6 +10,7 @@ const SHARED_GUIDELINES = `Your strengths:
 - Performing multi-step research tasks
 
 Guidelines:
+- ${MAP_ROUTING_GUIDANCE}
 - For file searches: search broadly when you don't know where something lives. Use Read when you know the specific file path.
 - For analysis: Start broad and narrow down. Use multiple search strategies if the first doesn't yield results.
 - Be thorough: Check multiple locations, consider different naming conventions, look for related files.
@@ -22,12 +24,13 @@ const GPT_SHARED_GUIDELINES = `Strengths:
 - Performing multi-step research tasks
 
 Working rules:
-1. For file searches, search broadly when you do not know where something lives. Use Read when you know the specific file path.
-2. For analysis, start broad and then narrow down. If the first search strategy does not yield results, use another.
-3. Before returning, verify coverage against the original request. Check multiple locations, naming conventions, and related files when the task might span more than one area.
-4. Do not stop early when another tool call would materially improve correctness or completeness.
-5. NEVER create files unless they are absolutely necessary for achieving your goal. ALWAYS prefer editing an existing file to creating a new one.
-6. NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested.`
+1. ${MAP_ROUTING_GUIDANCE}
+2. For file searches, search broadly when you do not know where something lives. Use Read when you know the specific file path.
+3. For analysis, start broad and then narrow down. If the first search strategy does not yield results, use another.
+4. Before returning, verify coverage against the original request. Check multiple locations, naming conventions, and related files when the task might span more than one area.
+5. Do not stop early when another tool call would materially improve correctness or completeness.
+6. NEVER create files unless they are absolutely necessary for achieving your goal. ALWAYS prefer editing an existing file to creating a new one.
+7. NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested.`
 
 // Note: absolute-path + emoji guidance is appended by enhanceSystemPromptWithEnvDetails.
 function getGeneralPurposeSystemPrompt(provider: APIProvider): string {
