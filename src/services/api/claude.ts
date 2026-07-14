@@ -2956,10 +2956,16 @@ async function* queryModel(
           return
         }
 
-        yield getAssistantMessageFromError(error, errorModel, {
+        const deferredTerminalFailure =
+          fallbackError instanceof CannotRetryError
+            ? fallbackError.deferredTerminalFailure
+            : undefined
+        const assistantError = getAssistantMessageFromError(error, errorModel, {
           messages,
           messagesForAPI,
+          deferredTerminalFailure,
         })
+        yield assistantError
         releaseStreamResources()
         return
       }
@@ -3014,10 +3020,16 @@ async function* queryModel(
         return
       }
 
-      yield getAssistantMessageFromError(error, errorModel, {
+      const deferredTerminalFailure =
+        errorFromRetry instanceof CannotRetryError
+          ? errorFromRetry.deferredTerminalFailure
+          : undefined
+      const assistantError = getAssistantMessageFromError(error, errorModel, {
         messages,
         messagesForAPI,
+        deferredTerminalFailure,
       })
+      yield assistantError
       releaseStreamResources()
       return
     }

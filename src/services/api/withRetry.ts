@@ -80,6 +80,7 @@ import {
 import { REPEATED_529_ERROR_MESSAGE } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
+import type { DeferredTerminalFailureV1 } from '../../types/message.js'
 import { ReauthenticationRequiredError } from './codexTokenRefresh.js'
 import {
   failoverClaudeAccount,
@@ -289,6 +290,7 @@ export class CannotRetryError extends Error {
   constructor(
     public readonly originalError: unknown,
     public readonly retryContext: RetryContext,
+    public readonly deferredTerminalFailure?: DeferredTerminalFailureV1,
   ) {
     const message = errorMessage(originalError)
     super(message)
@@ -346,6 +348,29 @@ export async function* withRetry<T>(
     attemptCount: number,
     accountRef?: string,
   ): never => {
+    const isCodexTerminal =
+      options.isCodexRequest === true ||
+      originalError instanceof CodexAccountCapError ||
+      originalError instanceof CodexAccountAuthError ||
+      (options.ownerId !== undefined && poolManagesCredentials())
+    const deferredTerminalFailure: DeferredTerminalFailureV1 | undefined =
+      isCodexTerminal
+        ? {
+            version: 1,
+            provider: 'openai',
+            code:
+              originalError instanceof CodexAccountAuthError
+                ? 'account_recovery'
+                : originalError instanceof APIConnectionError
+                  ? 'transient_network'
+                  : originalError instanceof APIError && originalError.status === 429
+                    ? 'ambiguous_rate_limit'
+                    : getCodexExhaustionDiagnosticCode() === 'quota.exhausted'
+                      ? 'quota_exhausted'
+                      : 'account_recovery',
+            observedAt: Date.now(),
+          }
+        : undefined
     if (
       options.isCodexRequest === true ||
       originalError instanceof CodexAccountCapError ||
@@ -361,7 +386,11 @@ export async function* withRetry<T>(
         model: retryContext.model,
       })
     }
-    throw new CannotRetryError(originalError, retryContext)
+    throw new CannotRetryError(
+      originalError,
+      retryContext,
+      deferredTerminalFailure,
+    )
   }
 
   const assertCodexLeaseFailoverBudget = (

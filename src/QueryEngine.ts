@@ -73,6 +73,7 @@ import {
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
 import {
+  flushCurrentTranscriptDurably,
   flushSessionStorage,
   recordTranscript,
 } from './utils/sessionStorage.js'
@@ -161,6 +162,9 @@ export type QueryEngineConfig = {
   setSDKStatus?: (status: SDKStatus) => void
   abortController?: AbortController
   orphanedPermission?: OrphanedPermission
+  /** Internal accepted-input gate for the deferred continuation runner. */
+  deferredAttemptUuid?: string
+  deferredJobId?: string
   /**
    * Snip-boundary handler: receives each yielded system message plus the
    * current mutableMessages store. Returns undefined if the message is not a
@@ -239,6 +243,8 @@ export class QueryEngine {
       agents = [],
       setSDKStatus,
       orphanedPermission,
+      deferredAttemptUuid,
+      deferredJobId,
     } = this.config
 
     this.discoveredSkillNames.clear()
@@ -449,6 +455,17 @@ export class QueryEngine {
 
     // Push new messages, including user input and any attachments
     this.mutableMessages.push(...messagesFromUserInput)
+    if (deferredAttemptUuid && deferredJobId) {
+      for (const message of messagesFromUserInput) {
+        if (message.type === 'user' && message.uuid === deferredAttemptUuid) {
+          message.origin = {
+            kind: 'deferred-continuation',
+            jobId: deferredJobId,
+            attemptUuid: deferredAttemptUuid,
+          }
+        }
+      }
+    }
 
     // Update params to reflect updates from processing /slash commands
     const messages = [...this.mutableMessages]
@@ -480,6 +497,17 @@ export class QueryEngine {
           await flushSessionStorage()
         }
       }
+    }
+
+    if (deferredAttemptUuid) {
+      const accepted = messagesFromUserInput.some(
+        message =>
+          message.type === 'user' && message.uuid === deferredAttemptUuid,
+      )
+      if (!accepted) {
+        throw new Error('Deferred continuation UUID did not match accepted input')
+      }
+      await flushCurrentTranscriptDurably(deferredAttemptUuid)
     }
 
     // Filter messages that should be acknowledged after transcript
@@ -1279,6 +1307,8 @@ export async function* ask({
   agents = [],
   setSDKStatus,
   orphanedPermission,
+  deferredAttemptUuid,
+  deferredJobId,
 }: {
   commands: Command[]
   prompt: string | Array<ContentBlockParam>
@@ -1310,6 +1340,8 @@ export async function* ask({
   agents?: AgentDefinition[]
   setSDKStatus?: (status: SDKStatus) => void
   orphanedPermission?: OrphanedPermission
+  deferredAttemptUuid?: string
+  deferredJobId?: string
 }): AsyncGenerator<SDKMessage, void, unknown> {
   const engine = new QueryEngine({
     cwd,
@@ -1338,6 +1370,8 @@ export async function* ask({
     setSDKStatus,
     abortController,
     orphanedPermission,
+    deferredAttemptUuid,
+    deferredJobId,
     ...(feature('HISTORY_SNIP')
       ? {
           snipReplay: (yielded: Message, store: Message[]) => {

@@ -1,0 +1,914 @@
+import { constants as fsConstants } from 'node:fs'
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  unlink,
+} from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import z from 'zod/v4'
+import type { EffortValue } from '../utils/effort.js'
+import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
+import { lock } from '../utils/lockfile.js'
+import { PERMISSION_MODES, type PermissionMode } from '../types/permissions.js'
+import type { DeferredContinuationResultEntryV1 } from '../types/logs.js'
+import type {
+  AssistantMessage,
+  DeferredTerminalFailureV1,
+  Message,
+} from '../types/message.js'
+import {
+  resolveRequestProvider,
+  type APIProvider,
+} from '../utils/model/providers.js'
+import { getProjectsDir } from '../utils/sessionStorage.js'
+import {
+  buildCodexStatus,
+  type CodexStatus,
+} from './api/codexStatus.js'
+
+export type DeferredContinuationEligibility =
+  | { action: 'run_now'; observedAt: number }
+  | {
+      action: 'schedule'
+      observedAt: number
+      resetAt: number
+      notBefore: number
+    }
+  | {
+      action: 'refuse'
+      reason:
+        | 'not_codex'
+        | 'not_terminal_quota'
+        | 'observation_uncertain'
+        | 'quota_reset_unknown'
+        | 'account_recovery'
+    }
+
+export type DeferredContinuationJobV1 = {
+  version: 1
+  jobId: string
+  sessionId: string
+  projectStorageKey: string
+  context: {
+    cwd: string
+    worktreeRoot?: string
+    model: string
+    effort?: EffortValue
+    permissionMode: PermissionMode
+  }
+  createdAt: number
+  statusObservedAt: number
+  scheduleReason: 'account_available' | 'hard_quota_reset'
+  resetAt?: number
+  notBefore: number
+  state: 'pending' | 'submitted' | 'ambiguous'
+  attempt: {
+    number: number
+    messageUuid: string
+    submittedAt?: number
+  }
+  transientRetries: number
+}
+
+export type DeferredContinuationTerminalState =
+  | 'completed'
+  | 'canceled'
+  | 'needs_attention'
+
+export type DeferredContinuationTerminalReason =
+  | 'completed'
+  | 'command'
+  | 'human_message'
+  | 'quota_reset_unknown'
+  | 'network'
+  | 'account_recovery'
+  | 'ambiguous_rate_limit'
+  | 'permission_required'
+  | 'permission_restore'
+  | 'context_window'
+  | 'max_turns'
+  | 'max_budget'
+  | 'session_restore'
+  | 'transcript_persistence'
+  | 'aborted'
+  | 'unknown'
+
+export type DeferredContinuationHistoryV1 = DeferredContinuationJobV1 & {
+  terminalState: DeferredContinuationTerminalState
+  terminalReason: DeferredContinuationTerminalReason
+  terminalAt: number
+}
+
+const finiteTimestamp = z.number().finite().nonnegative()
+const uuid = z.string().uuid()
+const effort = z.union([
+  z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  z.number().finite().nonnegative(),
+])
+const terminalReasonSchema = z.enum([
+  'completed',
+  'command',
+  'human_message',
+  'quota_reset_unknown',
+  'network',
+  'account_recovery',
+  'ambiguous_rate_limit',
+  'permission_required',
+  'permission_restore',
+  'context_window',
+  'max_turns',
+  'max_budget',
+  'session_restore',
+  'transcript_persistence',
+  'aborted',
+  'unknown',
+])
+
+export const deferredContinuationJobSchema = z
+  .object({
+    version: z.literal(1),
+    jobId: uuid,
+    sessionId: uuid,
+    projectStorageKey: z.string().min(1).max(512).refine(isProjectStorageKey),
+    context: z
+      .object({
+        cwd: z.string().min(1),
+        worktreeRoot: z.string().min(1).optional(),
+        model: z.string().min(1),
+        effort: effort.optional(),
+        permissionMode: z.enum(PERMISSION_MODES),
+      })
+      .strict(),
+    createdAt: finiteTimestamp,
+    statusObservedAt: finiteTimestamp,
+    scheduleReason: z.enum(['account_available', 'hard_quota_reset']),
+    resetAt: finiteTimestamp.optional(),
+    notBefore: finiteTimestamp,
+    state: z.enum(['pending', 'submitted', 'ambiguous']),
+    attempt: z
+      .object({
+        number: z.number().int().positive(),
+        messageUuid: uuid,
+        submittedAt: finiteTimestamp.optional(),
+      })
+      .strict(),
+    transientRetries: z.number().int().min(0).max(3),
+  })
+  .strict()
+  .superRefine((job, ctx) => {
+    if (job.scheduleReason === 'hard_quota_reset' && job.resetAt === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'hard quota jobs require resetAt' })
+    }
+    if (job.scheduleReason === 'account_available' && job.resetAt !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'immediate jobs omit resetAt' })
+    }
+    if (job.state === 'pending' && job.attempt.submittedAt !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'pending attempts omit submittedAt' })
+    }
+    if (job.state !== 'pending' && job.attempt.submittedAt === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'submitted attempts require submittedAt' })
+    }
+  })
+
+export const deferredContinuationHistorySchema = z.custom<DeferredContinuationHistoryV1>(
+  value => {
+    if (!value || typeof value !== 'object') return false
+    const candidate = value as Record<string, unknown>
+    const { terminalState, terminalReason, terminalAt, ...job } = candidate
+    return (
+      deferredContinuationJobSchema.safeParse(job).success &&
+      (terminalState === 'completed' ||
+        terminalState === 'canceled' ||
+        terminalState === 'needs_attention') &&
+      terminalReasonSchema.safeParse(terminalReason).success &&
+      (terminalState !== 'completed' || terminalReason === 'completed') &&
+      (terminalState !== 'canceled' ||
+        terminalReason === 'command' ||
+        terminalReason === 'human_message') &&
+      (terminalState !== 'needs_attention' ||
+        (terminalReason !== 'completed' &&
+          terminalReason !== 'command' &&
+          terminalReason !== 'human_message')) &&
+      typeof terminalAt === 'number' &&
+      Number.isFinite(terminalAt) &&
+      terminalAt >= 0
+    )
+  },
+)
+
+export const deferredContinuationResultSchema = z
+  .object({
+    type: z.literal('deferred-continuation-result'),
+    version: z.literal(1),
+    sessionId: uuid,
+    attemptUuid: uuid,
+    outcome: z.enum([
+      'completed',
+      'quota_exhausted',
+      'account_recovery',
+      'transient_network',
+      'ambiguous_rate_limit',
+      'permission_required',
+      'context_window',
+      'max_turns',
+      'max_budget',
+      'session_restore',
+      'aborted',
+      'unknown',
+    ]),
+    observedAt: finiteTimestamp,
+  })
+  .strict()
+
+export const DEFERRED_LOCK_STALE_MS = 120_000
+export const DEFERRED_LOCK_UPDATE_MS = 20_000
+export const DEFERRED_SCAN_INTERVAL_MS = 60_000
+
+type StorePaths = ReturnType<typeof getDeferredContinuationPaths>
+
+export function isProjectStorageKey(value: string): boolean {
+  return (
+    value !== '.' &&
+    value !== '..' &&
+    basename(value) === value &&
+    !value.includes('/') &&
+    !value.includes('\\')
+  )
+}
+
+export function getDeferredContinuationPaths(
+  root = join(getClaudeConfigHomeDir(), 'deferred-continuations'),
+) {
+  return {
+    root,
+    pending: join(root, 'pending'),
+    history: join(root, 'history'),
+    locks: join(root, 'locks'),
+    tmp: join(root, 'tmp'),
+  }
+}
+
+async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 })
+  const info = await lstat(path)
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error('Deferred continuation storage is not a private directory')
+  }
+  if ((info.mode & 0o077) !== 0) {
+    throw new Error('Deferred continuation storage permissions are too broad')
+  }
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new Error('Deferred continuation storage has the wrong owner')
+  }
+}
+
+export async function ensureDeferredContinuationStore(paths = getDeferredContinuationPaths()): Promise<void> {
+  await ensurePrivateDirectory(paths.root)
+  await Promise.all([
+    ensurePrivateDirectory(paths.pending),
+    ensurePrivateDirectory(paths.history),
+    ensurePrivateDirectory(paths.locks),
+    ensurePrivateDirectory(paths.tmp),
+  ])
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, fsConstants.O_RDONLY)
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+async function atomicWriteJson(path: string, value: unknown, paths: StorePaths): Promise<void> {
+  await ensureDeferredContinuationStore(paths)
+  const tempPath = join(paths.tmp, `${randomUUID()}.tmp`)
+  const handle = await open(
+    tempPath,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      (fsConstants.O_NOFOLLOW ?? 0),
+    0o600,
+  )
+  try {
+    await handle.writeFile(`${JSON.stringify(value)}\n`, 'utf8')
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  await rename(tempPath, path)
+  await chmod(path, 0o600)
+  await syncDirectory(dirname(path))
+}
+
+async function readPrivateJson(path: string): Promise<unknown> {
+  const before = await lstat(path)
+  if (!before.isFile() || before.isSymbolicLink() || (before.mode & 0o077) !== 0) {
+    throw new Error('Deferred continuation record failed private-file validation')
+  }
+  if (typeof process.getuid === 'function' && before.uid !== process.getuid()) {
+    throw new Error('Deferred continuation record has the wrong owner')
+  }
+  const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    const after = await handle.stat()
+    if (before.dev !== after.dev || before.ino !== after.ino || !after.isFile()) {
+      throw new Error('Deferred continuation record changed while opening')
+    }
+    return JSON.parse(await handle.readFile('utf8'))
+  } finally {
+    await handle.close()
+  }
+}
+
+function pendingPath(paths: StorePaths, sessionId: string): string {
+  if (!uuid.safeParse(sessionId).success) throw new Error('Invalid session ID')
+  return join(paths.pending, `${sessionId}.json`)
+}
+
+export async function readPendingDeferredContinuation(
+  sessionId: string,
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationJobV1 | null> {
+  await ensureDeferredContinuationStore(paths)
+  try {
+    return deferredContinuationJobSchema.parse(
+      await readPrivateJson(pendingPath(paths, sessionId)),
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+export async function createPendingDeferredContinuation(
+  job: DeferredContinuationJobV1,
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationJobV1> {
+  const parsed = deferredContinuationJobSchema.parse(job)
+  await ensureDeferredContinuationStore(paths)
+  const guard = await acquireDeferredContinuationLocks(parsed, paths)
+  try {
+    if (await readPendingDeferredContinuation(parsed.sessionId, paths)) {
+      throw new Error('A deferred continuation already exists for this session')
+    }
+    await atomicWriteJson(pendingPath(paths, parsed.sessionId), parsed, paths)
+    return parsed
+  } finally {
+    await guard.release()
+  }
+}
+
+export async function writePendingDeferredContinuation(
+  job: DeferredContinuationJobV1,
+  paths = getDeferredContinuationPaths(),
+): Promise<void> {
+  const parsed = deferredContinuationJobSchema.parse(job)
+  await atomicWriteJson(pendingPath(paths, parsed.sessionId), parsed, paths)
+}
+
+export async function moveDeferredContinuationToHistory(
+  job: DeferredContinuationJobV1,
+  terminalState: DeferredContinuationTerminalState,
+  terminalReason: DeferredContinuationTerminalReason,
+  now = Date.now(),
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationHistoryV1> {
+  const history = deferredContinuationHistorySchema.parse({
+    ...job,
+    terminalState,
+    terminalReason,
+    terminalAt: now,
+  }) as DeferredContinuationHistoryV1
+  await atomicWriteJson(join(paths.history, `${job.jobId}.json`), history, paths)
+  await unlink(pendingPath(paths, job.sessionId))
+  await syncDirectory(paths.pending)
+  return history
+}
+
+export async function listDueDeferredContinuations(
+  now = Date.now(),
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationJobV1[]> {
+  await ensureDeferredContinuationStore(paths)
+  const names = (await readdir(paths.pending)).filter(name => name.endsWith('.json')).sort()
+  const jobs: DeferredContinuationJobV1[] = []
+  for (const name of names) {
+    try {
+      const job = deferredContinuationJobSchema.parse(
+        await readPrivateJson(join(paths.pending, name)),
+      )
+      if (job.state === 'pending' && job.notBefore <= now) jobs.push(job)
+    } catch {
+      // Malformed records fail closed and are not executed.
+    }
+  }
+  return jobs.sort((a, b) => a.notBefore - b.notBefore || a.jobId.localeCompare(b.jobId))
+}
+
+export async function listDeferredContinuations(
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationJobV1[]> {
+  await ensureDeferredContinuationStore(paths)
+  const jobs: DeferredContinuationJobV1[] = []
+  for (const name of (await readdir(paths.pending)).filter(name => name.endsWith('.json')).sort()) {
+    try {
+      jobs.push(
+        deferredContinuationJobSchema.parse(
+          await readPrivateJson(join(paths.pending, name)),
+        ),
+      )
+    } catch {
+      // Malformed records fail closed and are never returned as executable work.
+    }
+  }
+  return jobs
+}
+
+export function getDeferredContinuationLockTargets(
+  job: Pick<DeferredContinuationJobV1, 'sessionId'>,
+  paths = getDeferredContinuationPaths(),
+): { job: string; session: string } {
+  if (!uuid.safeParse(job.sessionId).success) throw new Error('Invalid session ID')
+  return {
+    job: join(paths.locks, `job-${job.jobId}`),
+    session: join(paths.locks, `session-${job.sessionId}`),
+  }
+}
+
+export async function getLatestDeferredContinuationHistory(
+  sessionId: string,
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationHistoryV1 | null> {
+  if (!uuid.safeParse(sessionId).success) throw new Error('Invalid session ID')
+  await ensureDeferredContinuationStore(paths)
+  let latest: DeferredContinuationHistoryV1 | null = null
+  for (const name of (await readdir(paths.history)).filter(name => name.endsWith('.json'))) {
+    try {
+      const parsed = deferredContinuationHistorySchema.parse(
+        await readPrivateJson(join(paths.history, name)),
+      ) as DeferredContinuationHistoryV1
+      if (
+        parsed.sessionId === sessionId &&
+        (!latest || parsed.terminalAt > latest.terminalAt)
+      ) {
+        latest = parsed
+      }
+    } catch {
+      // Malformed history is never rendered or treated as authority.
+    }
+  }
+  return latest
+}
+
+export type DeferredContinuationNoticeV1 = {
+  version: 1
+  sessionId: string
+  kind:
+    | 'completed'
+    | 'canceled_command'
+    | 'canceled_human'
+    | 'needs_attention'
+    | 'ambiguous'
+    | 'network_retry'
+    | 'quota_rescheduled'
+  reason?: DeferredContinuationTerminalReason | 'ambiguous'
+  notBefore?: number
+  retry?: number
+  observedAt: number
+}
+
+const deferredContinuationNoticeSchema = z
+  .object({
+    version: z.literal(1),
+    sessionId: uuid,
+    kind: z.enum([
+      'completed',
+      'canceled_command',
+      'canceled_human',
+      'needs_attention',
+      'ambiguous',
+      'network_retry',
+      'quota_rescheduled',
+    ]),
+    reason: z.union([terminalReasonSchema, z.literal('ambiguous')]).optional(),
+    notBefore: finiteTimestamp.optional(),
+    retry: z.number().int().positive().max(3).optional(),
+    observedAt: finiteTimestamp,
+  })
+  .strict()
+  .superRefine((notice, ctx) => {
+    const rescheduled =
+      notice.kind === 'network_retry' || notice.kind === 'quota_rescheduled'
+    if (rescheduled && notice.notBefore === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'reschedule notices require notBefore' })
+    }
+    if (!rescheduled && notice.notBefore !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'terminal notices omit notBefore' })
+    }
+    if (notice.kind === 'network_retry' && notice.retry === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'network retry notices require retry' })
+    }
+    if (notice.kind !== 'network_retry' && notice.retry !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'only network retry notices include retry' })
+    }
+    const needsReason = notice.kind === 'needs_attention' || notice.kind === 'ambiguous'
+    if (needsReason && notice.reason === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'safety-stop notices require a reason' })
+    }
+    if (!needsReason && notice.reason !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'non-terminal notices omit reasons' })
+    }
+    if (notice.kind === 'ambiguous' && notice.reason !== 'ambiguous') {
+      ctx.addIssue({ code: 'custom', message: 'ambiguous notices use the fixed reason' })
+    }
+    if (notice.kind === 'needs_attention' && notice.reason === 'ambiguous') {
+      ctx.addIssue({ code: 'custom', message: 'attention notices use a terminal reason' })
+    }
+  })
+
+function noticePath(paths: StorePaths, sessionId: string): string {
+  if (!uuid.safeParse(sessionId).success) throw new Error('Invalid session ID')
+  return join(paths.tmp, `notice-${sessionId}.json`)
+}
+
+export async function recordDeferredContinuationNotice(
+  notice: DeferredContinuationNoticeV1,
+  paths = getDeferredContinuationPaths(),
+): Promise<void> {
+  const parsed = deferredContinuationNoticeSchema.parse(notice)
+  await atomicWriteJson(noticePath(paths, parsed.sessionId), parsed, paths)
+}
+
+export async function takeDeferredContinuationNotice(
+  sessionId: string,
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationNoticeV1 | null> {
+  await ensureDeferredContinuationStore(paths)
+  const path = noticePath(paths, sessionId)
+  try {
+    const notice = deferredContinuationNoticeSchema.parse(await readPrivateJson(path))
+    await unlink(path)
+    await syncDirectory(paths.tmp)
+    return notice
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+export type DeferredHumanPromptDecision =
+  | { action: 'allow' }
+  | { action: 'allow_after_cancel'; notice: string }
+  | { action: 'block'; notice: string }
+
+export async function prepareHumanPromptAgainstDeferredContinuation(
+  sessionId: string,
+): Promise<DeferredHumanPromptDecision> {
+  let existing: DeferredContinuationJobV1 | null
+  try {
+    existing = await readPendingDeferredContinuation(sessionId)
+  } catch {
+    return {
+      action: 'block',
+      notice:
+        'Automatic continuation stopped — needs you. Cat Code could not validate the scheduled continuation safely. Review the latest transcript and continue manually.',
+    }
+  }
+  if (!existing) return { action: 'allow' }
+  let guard: DeferredContinuationLockGuard
+  try {
+    guard = await acquireDeferredContinuationLocks(existing)
+  } catch {
+    return {
+      action: 'block',
+      notice:
+        'A scheduled continuation is already in progress. Wait for it to finish, then send your message again.',
+    }
+  }
+  try {
+    const current = await readPendingDeferredContinuation(sessionId)
+    if (!current) return { action: 'allow' }
+    if (current.state === 'pending') {
+      const observedAt = Date.now()
+      await recordDeferredContinuationNotice({
+        version: 1,
+        sessionId,
+        kind: 'canceled_human',
+        observedAt,
+      })
+      await moveDeferredContinuationToHistory(
+        current,
+        'canceled',
+        'human_message',
+        observedAt,
+      )
+      return {
+        action: 'allow_after_cancel',
+        notice: 'Scheduled continuation canceled because you sent a new message.',
+      }
+    }
+    if (current.state === 'ambiguous') {
+      return {
+        action: 'block',
+        notice:
+          'Automatic continuation stopped — needs you. Cat Code may have started the continuation before it closed. Review the latest transcript and continue manually.',
+      }
+    }
+    return {
+      action: 'block',
+      notice:
+        'A scheduled continuation is already in progress. Wait for it to finish, then send your message again.',
+    }
+  } finally {
+    await guard.release()
+  }
+}
+
+async function ensureLockTarget(path: string): Promise<void> {
+  try {
+    const handle = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600)
+    await handle.close()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+  const info = await lstat(path)
+  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0) {
+    throw new Error('Deferred continuation lock target failed private-file validation')
+  }
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new Error('Deferred continuation lock target has the wrong owner')
+  }
+}
+
+export async function shouldScannerAttemptLock(
+  target: string,
+  now = Date.now(),
+  paths = getDeferredContinuationPaths(),
+): Promise<boolean> {
+  const lockDirectory = `${target}.lock`
+  let identity: { ino: number; mtimeMs: number }
+  try {
+    const info = await lstat(lockDirectory)
+    if (!info.isDirectory() || info.isSymbolicLink()) return false
+    if ((info.mode & 0o077) !== 0) return false
+    if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+      return false
+    }
+    if (now - info.mtimeMs < DEFERRED_LOCK_STALE_MS) return false
+    identity = { ino: info.ino, mtimeMs: info.mtimeMs }
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+  }
+  const observationPath = join(paths.tmp, `stale-${basename(target)}.json`)
+  try {
+    const previous = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, unknown>
+    if (
+      previous.ino === identity.ino &&
+      previous.mtimeMs === identity.mtimeMs &&
+      typeof previous.observedAt === 'number' &&
+      now - previous.observedAt >= DEFERRED_SCAN_INTERVAL_MS
+    ) {
+      return true
+    }
+  } catch {
+    // First observation is recorded below.
+  }
+  await atomicWriteJson(observationPath, { ...identity, observedAt: now }, paths)
+  return false
+}
+
+export type DeferredContinuationLockGuard = {
+  signal: AbortSignal
+  assertHealthy(): void
+  release(): Promise<void>
+}
+
+async function acquireOneLock(target: string): Promise<DeferredContinuationLockGuard> {
+  await ensureLockTarget(target)
+  let compromised: Error | null = null
+  const abortController = new AbortController()
+  const release = await lock(target, {
+    realpath: false,
+    stale: DEFERRED_LOCK_STALE_MS,
+    update: DEFERRED_LOCK_UPDATE_MS,
+    retries: 0,
+    onCompromised: error => {
+      compromised = error
+      abortController.abort(error)
+    },
+  })
+  return {
+    signal: abortController.signal,
+    assertHealthy() {
+      if (compromised) throw compromised
+    },
+    release,
+  }
+}
+
+export async function acquireDeferredContinuationLocks(
+  job: Pick<DeferredContinuationJobV1, 'jobId' | 'sessionId'>,
+  paths = getDeferredContinuationPaths(),
+): Promise<DeferredContinuationLockGuard> {
+  await ensureDeferredContinuationStore(paths)
+  const targets = getDeferredContinuationLockTargets(job, paths)
+  const jobGuard = await acquireOneLock(targets.job)
+  try {
+    const sessionGuard = await acquireOneLock(targets.session)
+    const abortController = new AbortController()
+    const abort = (signal: AbortSignal) => {
+      if (!abortController.signal.aborted) abortController.abort(signal.reason)
+    }
+    jobGuard.signal.addEventListener('abort', () => abort(jobGuard.signal), {
+      once: true,
+    })
+    sessionGuard.signal.addEventListener(
+      'abort',
+      () => abort(sessionGuard.signal),
+      { once: true },
+    )
+    return {
+      signal: abortController.signal,
+      assertHealthy() {
+        jobGuard.assertHealthy()
+        sessionGuard.assertHealthy()
+      },
+      async release() {
+        await sessionGuard.release()
+        await jobGuard.release()
+      },
+    }
+  } catch (error) {
+    await jobGuard.release()
+    throw error
+  }
+}
+
+async function validatePrivateComponent(path: string, kind: 'directory' | 'file') {
+  const info = await lstat(path)
+  if (info.isSymbolicLink() || (kind === 'directory' ? !info.isDirectory() : !info.isFile())) {
+    throw new Error('Untrusted deferred continuation path component')
+  }
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new Error('Deferred continuation path has the wrong owner')
+  }
+  if ((info.mode & 0o077) !== 0) {
+    throw new Error('Deferred continuation path permissions are too broad')
+  }
+  return info
+}
+
+export async function readTrustedDeferredTranscript(
+  job: Pick<DeferredContinuationJobV1, 'projectStorageKey' | 'sessionId'>,
+  projectsRoot = getProjectsDir(),
+): Promise<unknown[]> {
+  if (!isProjectStorageKey(job.projectStorageKey) || !uuid.safeParse(job.sessionId).success) {
+    throw new Error('Invalid deferred continuation transcript identity')
+  }
+  await validatePrivateComponent(projectsRoot, 'directory')
+  const projectDir = join(projectsRoot, job.projectStorageKey)
+  await validatePrivateComponent(projectDir, 'directory')
+  const transcriptPath = join(projectDir, `${job.sessionId}.jsonl`)
+  const before = await validatePrivateComponent(transcriptPath, 'file')
+  const handle = await open(transcriptPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    const after = await handle.stat()
+    if (before.dev !== after.dev || before.ino !== after.ino || !after.isFile()) {
+      throw new Error('Transcript changed while opening')
+    }
+    const text = await handle.readFile('utf8')
+    return text
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line))
+  } finally {
+    await handle.close()
+  }
+}
+
+export function reconcileSubmittedDeferredContinuation(
+  job: DeferredContinuationJobV1,
+  transcriptEntries: readonly unknown[],
+):
+  | { action: 'return_pending' }
+  | { action: 'apply_result'; result: DeferredContinuationResultEntryV1 }
+  | { action: 'mark_ambiguous' } {
+  if (job.state !== 'submitted') throw new Error('Only submitted jobs can be reconciled')
+  const hasUserMessage = transcriptEntries.some(entry => {
+    if (!entry || typeof entry !== 'object') return false
+    const value = entry as Record<string, unknown>
+    return value.type === 'user' && value.uuid === job.attempt.messageUuid
+  })
+  if (!hasUserMessage) return { action: 'return_pending' }
+  for (const entry of transcriptEntries) {
+    const result = deferredContinuationResultSchema.safeParse(entry)
+    if (
+      result.success &&
+      result.data.sessionId === job.sessionId &&
+      result.data.attemptUuid === job.attempt.messageUuid
+    ) {
+      return { action: 'apply_result', result: result.data }
+    }
+  }
+  return { action: 'mark_ambiguous' }
+}
+const TERMINAL_FAILURE_CODES = new Set<DeferredTerminalFailureV1['code']>([
+  'quota_exhausted',
+  'account_recovery',
+  'transient_network',
+  'ambiguous_rate_limit',
+])
+
+export function parseDeferredTerminalFailure(
+  value: unknown,
+): DeferredTerminalFailureV1 | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Record<string, unknown>
+  if (
+    candidate.version !== 1 ||
+    candidate.provider !== 'openai' ||
+    typeof candidate.code !== 'string' ||
+    !TERMINAL_FAILURE_CODES.has(candidate.code as DeferredTerminalFailureV1['code']) ||
+    typeof candidate.observedAt !== 'number' ||
+    !Number.isFinite(candidate.observedAt) ||
+    candidate.observedAt <= 0
+  ) {
+    return null
+  }
+  return {
+    version: 1,
+    provider: 'openai',
+    code: candidate.code as DeferredTerminalFailureV1['code'],
+    observedAt: candidate.observedAt,
+  }
+}
+
+export function findLatestMainTerminalFailure(
+  messages: readonly Message[],
+): DeferredTerminalFailureV1 | null {
+  const latestAssistant = messages.findLast(
+    (message): message is AssistantMessage => message.type === 'assistant',
+  )
+  if (latestAssistant?.isApiErrorMessage !== true) return null
+  return parseDeferredTerminalFailure(latestAssistant?.deferredTerminalFailure)
+}
+
+export async function evaluateDeferredContinuationEligibility(options: {
+  messages: readonly Message[]
+  model: string
+  baseProvider?: APIProvider
+  now?: number
+  buildStatus?: () => Promise<CodexStatus>
+}): Promise<DeferredContinuationEligibility> {
+  const now = options.now ?? Date.now()
+  if (resolveRequestProvider(options.model, options.baseProvider) !== 'openai') {
+    return { action: 'refuse', reason: 'not_codex' }
+  }
+
+  const failure = findLatestMainTerminalFailure(options.messages)
+  if (!failure || failure.code !== 'quota_exhausted') {
+    return { action: 'refuse', reason: 'not_terminal_quota' }
+  }
+
+  const status = await (options.buildStatus ?? (() => buildCodexStatus({ refresh: 'auto' })))()
+  const observedAt = Date.parse(status.observed_at)
+  if (!Number.isFinite(observedAt) || observedAt < failure.observedAt) {
+    return { action: 'refuse', reason: 'observation_uncertain' }
+  }
+
+  switch (status.decision.action) {
+    case 'delegate':
+      return { action: 'run_now', observedAt }
+    case 'attempt':
+      return { action: 'refuse', reason: 'observation_uncertain' }
+    case 'recheck':
+      return { action: 'refuse', reason: 'quota_reset_unknown' }
+    case 'human_recovery':
+      return { action: 'refuse', reason: 'account_recovery' }
+    case 'wait': {
+      const resetAt = Date.parse(status.decision.not_before ?? '')
+      if (!Number.isFinite(resetAt) || resetAt <= 0) {
+        return { action: 'refuse', reason: 'quota_reset_unknown' }
+      }
+      return {
+        action: 'schedule',
+        observedAt,
+        resetAt,
+        notBefore: Math.max(now, resetAt + 60_000),
+      }
+    }
+    default: {
+      const exhaustive: never = status.decision.action
+      return exhaustive
+    }
+  }
+}

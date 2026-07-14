@@ -165,6 +165,24 @@ describe('buildCodexStatus', () => {
     expect(status.pool.quota_blocked).toBe(1)
   })
 
+  test('hard cap ignores reset evidence older than cappedAt', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-stale-reset',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: NOW,
+          usageResetAt: NOW / 1000 - 60,
+        }),
+      ],
+    })
+
+    const result = await buildCodexStatus({ now: NOW, refresh: 'never', loadPool: false })
+    expect(result.decision.action).toBe('recheck')
+    expect(result.decision.not_before).toBeNull()
+  })
+
   test('(4) transient/unknown observation → attempt', async () => {
     seedCodexAccountPoolForTest({
       accounts: [

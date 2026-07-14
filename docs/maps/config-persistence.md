@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-07-01
+Last refreshed: 2026-07-13
 
 ## Purpose
 
@@ -22,6 +22,7 @@ for the config and persistence slice.
 | Environment application from config/settings | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/utils/sessionEnvVars.ts` |
 | Instruction memory and rule discovery | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/settings/constants.ts` |
 | Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
+| Deferred continuation queue | `src/services/deferredContinuation.ts` | `src/services/deferredContinuationRunner.ts`, `src/types/logs.ts`, and `src/utils/sessionStorage.ts`; user-private, fsync-backed queue/history/locks live under `${CLAUDE_CONFIG_DIR:-~/.cat-code}/deferred-continuations/`. Jobs never persist prompts, credentials, account identity, transcript paths, or temporary permission grants. |
 | Persistent memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/utils/permissions/filesystem.ts` |
 | Session memory summaries | `src/services/SessionMemory/sessionMemory.ts` | `src/services/SessionMemory/sessionMemoryUtils.ts`, `src/utils/permissions/filesystem.ts` |
 | Admin/remote policy | `src/services/remoteManagedSettings/index.ts`, `src/services/policyLimits/index.ts` | `src/utils/settings/mdm/`, `src/utils/settings/managedPath.ts` |
@@ -37,7 +38,7 @@ for the config and persistence slice.
 | Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. Arrays replace during source writes but concat/dedupe during normal merged reads. |
 | Hot reload of settings | `src/utils/settings/changeDetector.ts` | `src/utils/settings/applySettingsChange.ts`, `src/utils/hooks.ts` | File watcher changes run `ConfigChange` hooks first. `fanOut()` owns cache reset before subscribers read fresh settings, and `applySettingsChange()` is shared by both interactive AppState updates and the headless/SDK subscribe path. MDM/plist/registry changes are polled. |
 | Initial merged settings snapshot | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts` | `getInitialSettings()`/`getSettings_DEPRECATED()` use a session cache. Reset that cache through the established change paths, not per listener. |
-| Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.js` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
+| Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.tsx` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
 | Global config file location | `src/utils/env.ts` | `src/utils/envUtils.ts`, `src/constants/oauth.ts` | `getGlobalClaudeFile()` uses legacy `~/.cat-code/.config.json` if present, otherwise `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`. The suffix can vary for OAuth config. |
 | Global config reads and writes | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/lockfile.ts` | `enableConfigs()` gates reads. `saveGlobalConfig()` uses a lock, backups, cache write-through, and an auth-loss guard. |
 | Project instruction files and rule globs | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/markdownConfigLoader.ts` | Project instruction discovery now checks `CLAUDE.md`, `.cat-code/CLAUDE.md`, and `.cat-code/rules/*.md` before legacy `.claude` fallbacks, across cwd ancestors and additional dirs. |
@@ -84,6 +85,7 @@ for the config and persistence slice.
 | Remote managed settings cache | `~/.cat-code/remote-settings.json` | `src/services/remoteManagedSettings/` |
 | Policy limits cache | `~/.cat-code/policy-limits.json` | `src/services/policyLimits/index.ts` |
 | Session transcript | `~/.cat-code/projects/<sanitized-project>/<sessionId>.jsonl` | `src/utils/sessionStorage.ts` |
+| Deferred continuations | `~/.cat-code/deferred-continuations/{pending,history,locks,tmp}` | `src/services/deferredContinuation.ts`, `src/services/deferredContinuationRunner.ts` |
 | Session memory | `~/.cat-code/projects/<sanitized-project>/<sessionId>/session-memory/summary.md` | `src/services/SessionMemory/`, `src/utils/permissions/filesystem.ts` |
 | Auto memory | `~/.cat-code/projects/<sanitized-git-root>/memory/MEMORY.md` by default | `src/memdir/paths.ts`, `src/memdir/memdir.ts` |
 | Team memory | `~/.cat-code/projects/<sanitized-git-root>/memory/team/MEMORY.md` by default | `src/memdir/teamMemPaths.ts` |
@@ -110,6 +112,14 @@ Important exceptions:
   source.
 - Env application is not the same as settings merge. Before trust, project and
   local settings can only contribute safe env vars.
+
+## Tests And Validation
+
+| Surface | Focused command |
+|---|---|
+| Session transcript persistence | `bun test src/utils/sessionStorage.test.ts` |
+| Deferred queue, locks, identity, cancellation, and recovery | `bun test src/services/deferredContinuation.test.ts src/services/deferredContinuation.probe.test.ts src/utils/sessionRestore.deferred.test.ts` |
+| Full engine gate | `bun run build:dev:full` |
 
 ## Recovery And Resume Route
 

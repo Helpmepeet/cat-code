@@ -363,6 +363,7 @@ function baseCreateAssistantMessage({
   apiError,
   error,
   errorDetails,
+  deferredTerminalFailure,
   isVirtual,
   usage = {
     input_tokens: 0,
@@ -385,6 +386,7 @@ function baseCreateAssistantMessage({
   apiError?: AssistantMessage['apiError']
   error?: SDKAssistantMessageError
   errorDetails?: string
+  deferredTerminalFailure?: AssistantMessage['deferredTerminalFailure']
   isVirtual?: true
   usage?: Usage
 }): AssistantMessage {
@@ -408,6 +410,7 @@ function baseCreateAssistantMessage({
     apiError,
     error,
     errorDetails,
+    deferredTerminalFailure,
     isApiErrorMessage,
     isVirtual,
   }
@@ -442,11 +445,13 @@ export function createAssistantAPIErrorMessage({
   apiError,
   error,
   errorDetails,
+  deferredTerminalFailure,
 }: {
   content: string
   apiError?: AssistantMessage['apiError']
   error?: SDKAssistantMessageError
   errorDetails?: string
+  deferredTerminalFailure?: AssistantMessage['deferredTerminalFailure']
 }): AssistantMessage {
   return baseCreateAssistantMessage({
     content: [
@@ -459,6 +464,7 @@ export function createAssistantAPIErrorMessage({
     apiError,
     error,
     errorDetails,
+    deferredTerminalFailure,
   })
 }
 

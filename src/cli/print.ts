@@ -492,8 +492,22 @@ export async function runHeadless(
     setupTrigger?: 'init' | 'maintenance' | undefined
     sessionStartHooksPromise?: ReturnType<typeof processSessionStartHooks>
     setSDKStatus?: (status: SDKStatus) => void
+    suppressInterruptedTurnReplay?: boolean
+    deferredAttemptUuid?: string
+    deferredJobId?: string
+    deferredAbortSignal?: AbortSignal
   },
-): Promise<void> {
+): Promise<{
+  messages: Message[]
+  result:
+    | {
+        type?: string
+        subtype?: string
+        is_error?: boolean
+        permission_denials?: readonly unknown[]
+      }
+    | undefined
+} | void> {
   if (
     process.env.USER_TYPE === 'ant' &&
     isEnvTruthy(process.env.CLAUDE_CODE_EXIT_AFTER_FIRST_RENDER)
@@ -927,7 +941,7 @@ export async function runHeadless(
     }
   }
 
-  switch (options.outputFormat) {
+  if (!options.deferredAttemptUuid) switch (options.outputFormat) {
     case 'json':
       if (!lastMessage || lastMessage.type !== 'result') {
         throw new Error('No messages returned')
@@ -981,6 +995,12 @@ export async function runHeadless(
     await extractMemoriesModule!.drainPendingExtraction()
   }
 
+  if (options.deferredAttemptUuid) {
+    return {
+      messages: initialMessages,
+      result: lastMessage?.type === 'result' ? lastMessage : undefined,
+    }
+  }
   gracefulShutdownSync(
     lastMessage?.type === 'result' && lastMessage?.is_error ? 1 : 0,
   )
@@ -1017,6 +1037,10 @@ function runHeadlessStreaming(
     setSDKStatus?: (status: SDKStatus) => void
     promptSuggestions?: boolean | undefined
     workload?: string | undefined
+    suppressInterruptedTurnReplay?: boolean
+    deferredAttemptUuid?: string
+    deferredJobId?: string
+    deferredAbortSignal?: AbortSignal
   },
   turnInterruptionState?: TurnInterruptionState,
 ): AsyncIterable<StdoutMessage> {
@@ -1186,7 +1210,8 @@ function runHeadlessStreaming(
   if (
     turnInterruptionState &&
     turnInterruptionState.kind !== 'none' &&
-    resumeInterruptedTurnEnv
+    resumeInterruptedTurnEnv &&
+    !options.suppressInterruptedTurnReplay
   ) {
     logForDebugging(
       `[print.ts] Auto-resuming interrupted turn (kind: ${turnInterruptionState.kind})`,
@@ -2144,6 +2169,19 @@ function runHeadlessStreaming(
           }
 
           abortController = createAbortController()
+          if (options.deferredAbortSignal) {
+            const abortForCompromisedLock = () =>
+              abortController?.abort(options.deferredAbortSignal?.reason)
+            if (options.deferredAbortSignal.aborted) {
+              abortForCompromisedLock()
+            } else {
+              options.deferredAbortSignal.addEventListener(
+                'abort',
+                abortForCompromisedLock,
+                { once: true },
+              )
+            }
+          }
           const turnStartTime = feature('FILE_PERSISTENCE')
             ? Date.now()
             : undefined
@@ -2211,6 +2249,14 @@ function runHeadlessStreaming(
                 ),
               agents: currentAgents,
               orphanedPermission: cmd.orphanedPermission,
+              deferredAttemptUuid:
+                cmd.uuid === options.deferredAttemptUuid
+                  ? options.deferredAttemptUuid
+                  : undefined,
+              deferredJobId:
+                cmd.uuid === options.deferredAttemptUuid
+                  ? options.deferredJobId
+                  : undefined,
               setSDKStatus: status => {
                 output.enqueue({
                   type: 'system',
@@ -4132,6 +4178,17 @@ function runHeadlessStreaming(
         value: await resolveAndPrepend(message, message.message.content),
         uuid: message.uuid,
         priority: message.priority,
+        ...(message.uuid === options.deferredAttemptUuid
+          ? {
+              skipSlashCommands: true,
+              isMeta: false,
+              origin: {
+                kind: 'deferred-continuation' as const,
+                jobId: options.deferredJobId!,
+                attemptUuid: options.deferredAttemptUuid,
+              },
+            }
+          : {}),
       })
       // Increment prompt count for attribution tracking and save snapshot
       // The snapshot persists promptCount so it survives compaction
@@ -5227,6 +5284,7 @@ function getStructuredIO(
   options: {
     sdkUrl: string | undefined
     replayUserMessages?: boolean
+    deferredAttemptUuid?: string
   },
 ): StructuredIO {
   let inputStream: AsyncIterable<string>
@@ -5242,6 +5300,9 @@ function getStructuredIO(
             content: inputPrompt,
           },
           parent_tool_use_id: null,
+          ...(options.deferredAttemptUuid
+            ? { uuid: options.deferredAttemptUuid as UUID }
+            : {}),
         } satisfies SDKUserMessage),
       ])
     } else {

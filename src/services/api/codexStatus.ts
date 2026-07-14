@@ -340,7 +340,19 @@ function quotaResetSeconds(
   usage: AccountUsage | undefined,
 ): number | null {
   const primaryReset = usage ? usage.primaryWindow.resetAt : account.usageResetAt
+  const cappedAt =
+    typeof account.cappedAt === 'number' && Number.isFinite(account.cappedAt)
+      ? account.cappedAt
+      : null
   if (typeof primaryReset === 'number' && Number.isFinite(primaryReset) && primaryReset > 0) {
+    if (
+      account.status === 'capped' &&
+      account.statusReason === 'usage_cap' &&
+      cappedAt !== null &&
+      primaryReset * 1000 < cappedAt
+    ) {
+      return null
+    }
     return primaryReset
   }
   return null

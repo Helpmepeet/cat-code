@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
-import { dirname } from 'path'
+import { realpath } from 'node:fs/promises'
+import { dirname, isAbsolute, relative } from 'path'
 import {
   getMainLoopModelOverride,
   getSessionId,
@@ -369,6 +370,50 @@ export function restoreWorktreeForResume(
   // The /resume slash command calls this mid-session after caches have been
   // populated against the old cwd. Cheap no-ops for the CLI-flag path
   // (caches aren't populated yet there).
+  clearMemoryFileCaches()
+  clearSystemPromptSections()
+  getPlansDirectory.cache.clear?.()
+}
+
+export async function restoreTrustedDeferredContinuationContext(
+  context: { cwd: string; worktreeRoot?: string },
+  transcript: {
+    projectPath?: string
+    worktreeSession?: PersistedWorktreeSession | null
+  },
+): Promise<void> {
+  if (!isAbsolute(context.cwd)) {
+    throw new Error('Deferred continuation cwd must be absolute')
+  }
+  const canonicalCwd = await realpath(context.cwd)
+  const canonicalProject = transcript.projectPath
+    ? await realpath(transcript.projectPath)
+    : null
+  const canonicalWorktree = context.worktreeRoot
+    ? await realpath(context.worktreeRoot)
+    : null
+  const transcriptWorktree = transcript.worktreeSession?.worktreePath
+    ? await realpath(transcript.worktreeSession.worktreePath)
+    : null
+
+  if (canonicalWorktree !== transcriptWorktree) {
+    throw new Error('Deferred continuation worktree identity mismatch')
+  }
+  const trustedRoot = canonicalWorktree ?? canonicalProject
+  if (!trustedRoot) {
+    throw new Error('Deferred continuation transcript lacks trusted project context')
+  }
+  const rel = relative(trustedRoot, canonicalCwd)
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('Deferred continuation cwd is outside trusted project context')
+  }
+
+  process.chdir(canonicalCwd)
+  setCwd(canonicalCwd)
+  setOriginalCwd(canonicalProject ?? canonicalCwd)
+  if (transcript.worktreeSession) {
+    restoreWorktreeSession(transcript.worktreeSession)
+  }
   clearMemoryFileCaches()
   clearSystemPromptSections()
   getPlansDirectory.cache.clear?.()

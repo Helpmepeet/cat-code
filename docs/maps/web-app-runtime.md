@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-07-11 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-07-14 against `src/main.tsx`, `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
 `src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
 
