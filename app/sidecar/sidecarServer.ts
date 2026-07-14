@@ -69,6 +69,7 @@ import {
   type ServerFrame,
   type SessionId,
   type SettingsVerbMessage,
+  type SlashCatalogEntry,
 } from '../shared/protocol.js'
 import {
   EDITABLE_SETTING_SOURCES,
@@ -192,6 +193,17 @@ export type SidecarServerOptions = {
    */
   sessionsCatalog?: SidecarSessionsCatalogDomain
   /**
+   * The session's user-invocable slash commands WITH display metadata (name +
+   * description + optional arg hint), built at spawn from the sidecar's
+   * `getCommands` catalog (`sessionController.ts`). Sent to each attaching
+   * connection on connect as a read-only `slash-catalog.snapshot`, so the composer
+   * picker renders rich rows (prototype parity) before the first turn — the engine
+   * otherwise ships names-only on the per-turn `system/init.slash_commands`
+   * (`QueryEngine.ts:598`). Spawn-frozen, so never re-broadcast. Absent in probe
+   * mode / when the catalog load degraded to empty.
+   */
+  slashCatalog?: readonly SlashCatalogEntry[]
+  /**
    * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
    * transcript, already converted by the engine's `toSDKMessages` (index.ts
    * converts the SAME `resumeEngineSession().messages` array that seeded the
@@ -261,6 +273,7 @@ export class SidecarServer {
   private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly sessionsCatalog: SidecarSessionsCatalogDomain | null
+  private readonly slashCatalog: readonly SlashCatalogEntry[]
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
@@ -299,6 +312,7 @@ export class SidecarServer {
     this.extensions = options.extensions ?? null
     this.remoteSettings = options.remoteSettings ?? null
     this.sessionsCatalog = options.sessionsCatalog ?? null
+    this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
@@ -486,10 +500,31 @@ export class SidecarServer {
     // history), after the other snapshots and before replay. Spawn-frozen,
     // secretGuard-clean by construction (display metadata only).
     this.sendSessionsSnapshot(connection)
+    // The rich slash-command catalog (name + arg-hint + description), before
+    // history + any live event so the composer picker renders prototype-parity
+    // rows on a fresh session's very first keystroke. Single-socket ordering
+    // guarantees the renderer projects it before the user could type `/`.
+    this.sendSlashCatalogSnapshot(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
     return connection
+  }
+
+  /**
+   * Send the read-only `slash-catalog.snapshot` (name + description + arg hint) to
+   * one attaching connection. Display metadata only, secretGuard-clean by
+   * construction; still goes through the normal outbound `send` path (secretGuard
+   * + size cap). Skipped when the catalog is empty (probe / degraded load).
+   */
+  private sendSlashCatalogSnapshot(connection: Connection): void {
+    if (this.slashCatalog.length === 0) return
+    this.send(connection, {
+      kind: 'slash-catalog.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      commands: [...this.slashCatalog],
+    })
   }
 
   /**

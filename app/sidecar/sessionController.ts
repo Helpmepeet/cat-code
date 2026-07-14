@@ -6,6 +6,7 @@ import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { getInitialEffortSetting } from '../../src/utils/effort.js'
 import { getTools } from '../../src/tools.js'
 import { getCommands, type Command } from '../../src/commands.js'
+import type { SlashCatalogEntry } from '../shared/protocol.js'
 import {
   getAgentDefinitionsWithOverrides,
   type AgentDefinitionsResult,
@@ -231,11 +232,33 @@ export async function createNormalSidecarQueryEngineConfig(
     appState: appStateStore.getState(),
   })
 
+  // The composer SlashCommandPicker renders name + arg-hint + description columns
+  // (prototype parity). The engine's `system/init.slash_commands` is NAMES ONLY
+  // (the locked SDK shape, `systemInit.ts:69`), so the P3-7 picker shipped
+  // name-only — the drift the operator saw. The description/argumentHint live on
+  // the `Command` objects the sidecar already loaded (`commands`, above); project
+  // the SAME user-invocable set `slash_commands` ships (`userInvocable !== false`)
+  // into the rich display catalog, delivered as a read-only outbound snapshot on
+  // connect (`slash-catalog.snapshot`, the C3 read-seam pattern) so the picker
+  // has real descriptions before the first turn. `name` matches `slash_commands`
+  // exactly (`c.name`), so completing a pick still inserts `/name` the engine
+  // parses. Spawn-frozen; the sidecar never re-broadcasts it.
+  const slashCatalog: SlashCatalogEntry[] = commands
+    .filter(command => command.userInvocable !== false)
+    .map(command => ({
+      name: command.name,
+      description: command.description,
+      ...(command.argumentHint
+        ? { argumentHint: command.argumentHint }
+        : {}),
+    }))
+
   return {
     appStateStore,
     agentDefinitions,
     availableMcpServers,
     extensionsSnapshot,
+    slashCatalog,
     /**
      * The real command catalog for this cwd (same array wired into the query
      * engine above) — returned so the RemoteSettings domain (P4-13) can derive
@@ -355,6 +378,15 @@ export type SidecarSession = {
    * setters. Over the SAME app-state store the runtime enforces. Null in probe mode.
    */
   runControls: SidecarRunControlsDomain | null
+  /**
+   * The session's real user-invocable slash commands WITH display metadata (name
+   * + description + optional arg hint), built at spawn from the SAME `getCommands`
+   * catalog that feeds `slash_commands`. The server pushes it on connect as a
+   * read-only `slash-catalog.snapshot` so the composer picker renders rich rows
+   * (prototype parity) before the first turn. Empty in probe mode / when the
+   * catalog load degraded.
+   */
+  slashCatalog: SlashCatalogEntry[]
 }
 
 export async function createSidecarSessionController({
@@ -401,6 +433,7 @@ export async function createSidecarSessionController({
       sessionsCatalog: null,
       agentMode: null,
       runControls: null,
+      slashCatalog: [],
     }
   }
 
@@ -416,6 +449,7 @@ export async function createSidecarSessionController({
     extensionsSnapshot,
     commands,
     queryEngineConfig,
+    slashCatalog,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
   return {
@@ -437,5 +471,6 @@ export async function createSidecarSessionController({
     sessionsCatalog: await createSidecarSessionsCatalogDomain(),
     agentMode: createSidecarAgentModeDomain(appStateStore),
     runControls: createSidecarRunControlsDomain(appStateStore),
+    slashCatalog,
   }
 }

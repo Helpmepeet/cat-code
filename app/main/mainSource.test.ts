@@ -173,6 +173,23 @@ test('control-plane cwd never trusts the renderer: HC1 native picker + host reva
   }
 })
 
+test('IS-B lazy restore enables replay coalescing on the real host handler', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const restoreStart = source.indexOf('ipcMain.handle(\n    CH_HOST_RESTORE')
+  const restoreEnd = source.indexOf('ipcMain.handle(\n    CH_HOST_CLOSE', restoreStart)
+  const restoreBody = source.slice(restoreStart, restoreEnd)
+
+  const startIndex = restoreBody.indexOf(
+    'attachmentGate.startReplayCoalescing(sessionId)',
+  )
+  const restoreIndex = restoreBody.indexOf('host.restoreSession(sessionId)')
+  expect(startIndex).toBeGreaterThan(-1)
+  expect(restoreIndex).toBeGreaterThan(startIndex)
+  expect(restoreBody).toContain(
+    'attachmentGate.cancelReplayCoalescing(sessionId)',
+  )
+})
+
 test('HC1 ORIGIN rule: the renderer create handler resolves a token, never a renderer cwd', () => {
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
 

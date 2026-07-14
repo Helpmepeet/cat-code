@@ -1,10 +1,15 @@
 import { expect, test } from 'bun:test'
+import type { SlashCatalogEntry } from '../../shared/protocol.js'
 import {
   completeSlashDraft,
   filterSlashCommands,
   nextSlashIndex,
   parseSlashDraft,
 } from './SlashCommandPicker.js'
+
+/** Catalog entries whose descriptions never incidentally match a name query. */
+const entriesOf = (names: string[]): SlashCatalogEntry[] =>
+  names.map(name => ({ name, description: 'd' }))
 
 test('parseSlashDraft opens only on a single leading slash-token', () => {
   // Open: a bare slash and an in-progress command name (no whitespace yet).
@@ -23,32 +28,45 @@ test('parseSlashDraft opens only on a single leading slash-token', () => {
 
 test('filterSlashCommands ranks prefix matches before substring matches', () => {
   const names = ['help', 'clear', 'compact', 'model', 'permissions']
+  const entries = entriesOf(names)
+  const names_ = (result: SlashCatalogEntry[]) => result.map(e => e.name)
 
   // Prefix group first (catalog order); no substring-only match for 'c' here.
-  expect(filterSlashCommands(names, 'c')).toEqual(['clear', 'compact'])
+  expect(names_(filterSlashCommands(entries, 'c'))).toEqual(['clear', 'compact'])
   // 'e' prefixes nothing but is a substring of help/clear/model/permissions —
   // all land in the substring group, in catalog order.
-  expect(filterSlashCommands(names, 'e')).toEqual([
+  expect(names_(filterSlashCommands(entries, 'e'))).toEqual([
     'help',
     'clear',
     'model',
     'permissions',
   ])
   // 'omp' is a substring of compact only.
-  expect(filterSlashCommands(names, 'omp')).toEqual(['compact'])
+  expect(names_(filterSlashCommands(entries, 'omp'))).toEqual(['compact'])
   // Case-insensitive.
-  expect(filterSlashCommands(names, 'HE')).toEqual(['help'])
+  expect(names_(filterSlashCommands(entries, 'HE'))).toEqual(['help'])
   // A bare slash (empty query) shows the whole catalog, in order.
-  expect(filterSlashCommands(names, '')).toEqual(names)
+  expect(names_(filterSlashCommands(entries, ''))).toEqual(names)
   // No match → empty (picker stays closed).
-  expect(filterSlashCommands(names, 'zzz')).toEqual([])
+  expect(filterSlashCommands(entries, 'zzz')).toEqual([])
+})
+
+test('filterSlashCommands matches on description substring, after name prefixes', () => {
+  const entries: SlashCatalogEntry[] = [
+    { name: 'model', description: 'Switch the model' },
+    { name: 'clear', description: 'Reset the transcript' },
+  ]
+  // 'switch' is in no NAME but is in model's description → matches via the rest group.
+  expect(filterSlashCommands(entries, 'switch').map(e => e.name)).toEqual([
+    'model',
+  ])
 })
 
 test('filterSlashCommands does not duplicate a name across groups', () => {
   // 'co' prefixes 'compact'; it must not ALSO appear via the substring pass.
-  const result = filterSlashCommands(['compact', 'incompatible'], 'co')
-  expect(result).toEqual(['compact', 'incompatible'])
-  expect(result.filter(name => name === 'compact')).toHaveLength(1)
+  const result = filterSlashCommands(entriesOf(['compact', 'incompatible']), 'co')
+  expect(result.map(e => e.name)).toEqual(['compact', 'incompatible'])
+  expect(result.filter(e => e.name === 'compact')).toHaveLength(1)
 })
 
 test('nextSlashIndex wraps in both directions and tolerates empty', () => {

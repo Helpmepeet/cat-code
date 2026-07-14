@@ -35,10 +35,10 @@ import {
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './ToastHost.js'
 import {
-  activeAfterLiveChange,
+  activeAfterPaneChange,
   createShellState,
   reduceShellState,
-  selectLiveSessions,
+  selectPaneSessions,
   sessionAtSlot,
   type ShellState,
 } from './shellState.js'
@@ -57,7 +57,6 @@ import {
 } from './rawMessageLog.js'
 import {
   createTranscriptState,
-  projectServerFrame,
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptRows,
@@ -65,6 +64,18 @@ import {
   type TranscriptRow,
   type TranscriptState,
 } from './transcriptProjector.js'
+import {
+  PREVIEW_DWELL_MS,
+  claimLazyRestore,
+  createPreviewTranscriptState,
+  hasPreviewTranscript,
+  previewClosePlan,
+  reduceLiveTranscriptState,
+  reducePreviewTranscriptState,
+  selectPreviewSwapSessions,
+  selectPreviewTranscript,
+  selectPreviewTruncationMessage,
+} from './previewTranscriptState.js'
 import { TranscriptView } from './TranscriptView.js'
 import {
   completeSlashDraft,
@@ -177,6 +188,11 @@ import {
   selectRunControlsSnapshot,
 } from './runControlsState.js'
 import {
+  createSlashCatalogState,
+  reduceSlashCatalogState,
+  selectSlashCatalog,
+} from './slashCatalogState.js'
+import {
   createRemoteSettingsState,
   reduceRemoteSettingsState,
   selectRemoteSettingsSnapshot,
@@ -202,7 +218,7 @@ import {
   selectAgentModeSnapshot,
 } from './orchestratorState.js'
 import { GoalsPage } from './GoalsPage.js'
-import { AccountsPage, loginVerb } from './AccountsPage.js'
+import { AccountsPage, loginVerb, switchVerb } from './AccountsPage.js'
 import { BannerStack } from './BannerStack.js'
 import {
   REAUTH_ACTION_KEY,
@@ -227,6 +243,7 @@ import type {
   RemoteVerbMessage,
   RunControlsSnapshot,
   SessionId,
+  SlashCatalogEntry,
 } from '../../shared/protocol.js'
 import type {
   HostError,
@@ -239,7 +256,6 @@ import type {
 // folded into each store in ONE dispatch (`applyServerFrameBatch`); single
 // actions still pass straight through, so every other dispatch site is unchanged.
 const reduceServerFrameBatched = withBatch(reduceServerFrame)
-const projectServerFrameBatched = withBatch(projectServerFrame)
 const reducePermissionStateBatched = withBatch(reducePermissionState)
 const reduceConnectionStateBatched = withBatch(reduceConnectionState)
 const reduceSettingsStateBatched = withBatch(reduceSettingsState)
@@ -252,6 +268,9 @@ const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
 const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
 const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
+const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
+/** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
+const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
@@ -295,9 +314,14 @@ export function App() {
     createRawMessageLogState,
   )
   const [transcript, dispatchSessionEvent] = useReducer(
-    projectServerFrameBatched,
+    reduceLiveTranscriptState,
     undefined,
     createTranscriptState,
+  )
+  const [previewTranscript, dispatchPreviewTranscript] = useReducer(
+    reducePreviewTranscriptState,
+    undefined,
+    createPreviewTranscriptState,
   )
   const [permissions, dispatchPermission] = useReducer(
     reducePermissionStateBatched,
@@ -380,6 +404,11 @@ export function App() {
     undefined,
     createRunControlsState,
   )
+  const [slashCatalog, dispatchSlashCatalog] = useReducer(
+    reduceSlashCatalogStateBatched,
+    undefined,
+    createSlashCatalogState,
+  )
   const [remoteSettings, dispatchRemoteSettings] = useReducer(
     reduceRemoteSettingsStateBatched,
     undefined,
@@ -420,6 +449,8 @@ export function App() {
   // the active tab is removed.
   const shellRef = useRef(shell)
   shellRef.current = shell
+  const lazyRestoreClaimsRef = useRef<Set<SessionId>>(new Set())
+  const cancelledRestoresRef = useRef<Set<SessionId>>(new Set())
   // Ids a live `session-removed` dropped before the initial snapshot folded in —
   // so the baseline hydrate never resurrects a row the host already reaped (F3).
   const removedIdsRef = useRef<Set<SessionId>>(new Set())
@@ -431,6 +462,14 @@ export function App() {
     // dispatches, not 9 per frame. Focus semantics are unchanged: a background
     // frame never steals focus from another live tab. See serverFrameBatch.ts.
     const unsubscribe = bridge.subscribe(frames => {
+      const previewing = new Set<SessionId>()
+      for (const sessionId in shellRef.current.previews) {
+        previewing.add(sessionId)
+      }
+      const swapSessions = selectPreviewSwapSessions(frames, previewing)
+      for (const sessionId of swapSessions) {
+        dispatchSessionEvent({ type: 'preview-live-reset', sessionId })
+      }
       applyServerFrameBatch(frames, {
         getRosterById: () => shellRef.current.byId,
         setActiveSessionId,
@@ -447,10 +486,14 @@ export function App() {
         dispatchWorkspaceTrust,
         dispatchDiagnostics,
         dispatchRunControls,
+        dispatchSlashCatalog,
         dispatchRemoteSettings,
         dispatchSessionsCatalog,
         dispatchTranscript: dispatchSessionEvent,
       })
+      for (const sessionId of swapSessions) {
+        dispatchPreviewTranscript({ type: 'preview-reset', sessionId })
+      }
     })
     bridge.rendererReady()
     return unsubscribe
@@ -480,8 +523,21 @@ export function App() {
       // now-non-live active tab) run in the post-commit effect below, which
       // reads the RECONCILED roster — reading shellRef here would see the
       // pre-event state (the reducer commits on the next render).
+      if (
+        event.type !== 'session-removed' &&
+        event.session.restorable
+      ) {
+        lazyRestoreClaimsRef.current.delete(event.session.appSessionId)
+        cancelledRestoresRef.current.delete(event.session.appSessionId)
+      }
       if (event.type === 'session-removed') {
         removedIdsRef.current.add(event.appSessionId)
+        lazyRestoreClaimsRef.current.delete(event.appSessionId)
+        cancelledRestoresRef.current.delete(event.appSessionId)
+        dispatchPreviewTranscript({
+          type: 'preview-reset',
+          sessionId: event.appSessionId,
+        })
       }
       dispatchShell({ type: 'event', event })
     })
@@ -508,54 +564,73 @@ export function App() {
     }
   }, [])
 
-  // Focus correction (F1) — runs AFTER the roster commits, so it sees the
-  // reconciled live-tab set. Two cases, both against the LIVE projection (the
-  // TabBar's view), so a closed→restorable active session (which left the bar
-  // but stayed in the roster) is handled just like a removal:
-  //  1. the active session is no longer a LIVE tab → move focus to the first
-  //     remaining live tab, or null (empty shell);
-  //  2. nothing is active but live tabs exist (e.g. relaunch with only
-  //     restorable rows that just went live) → show the first live tab.
+  // Focus correction runs after the roster commits against pane membership:
+  // live tabs union cached previews. A preview remains a valid owner until it is
+  // closed, reaped, or swapped to the same-id live projection.
   // A frame arriving for any session still wins the pane first (it sets active
-  // before this runs). Restorable-only rows never auto-focus — they're the
-  // Sidebar's restore-offer, not tabs.
+  // before this runs). Restorable-only rows still do not auto-focus until their
+  // cache has actually opened a preview pane.
   useEffect(() => {
-    const liveOrder = selectLiveSessions(shell).map(
+    const paneOrder = selectPaneSessions(shell).map(
       descriptor => descriptor.appSessionId,
     )
     setActiveSessionId(current => {
-      if (current !== null) return activeAfterLiveChange(current, liveOrder)
-      return liveOrder[0] ?? null
+      if (current !== null) return activeAfterPaneChange(current, paneOrder)
+      return paneOrder[0] ?? null
     })
   }, [shell])
 
+  useEffect(() => {
+    for (const sessionId in shell.previews) {
+      if (
+        shell.tabs[sessionId] &&
+        !hasPreviewTranscript(previewTranscript, sessionId)
+      ) {
+        dispatchShell({ type: 'preview-close', sessionId })
+        lazyRestoreClaimsRef.current.delete(sessionId)
+      }
+    }
+  }, [previewTranscript, shell])
+
   const activeConnection = selectConnection(connection, activeSessionId)
 
-  // Build one tab model per live session, fusing the host descriptor with the
+  // Build one tab model per pane session, fusing the host descriptor with the
   // per-session connection view + pending-permission count (the background
   // attention badge). Every tab is computed from its OWN sessionId slice, so a
   // background tab's status/badge is correct without it being active.
   const tabs: TabModel[] = useMemo(
     () =>
-      selectLiveSessions(shell).map(descriptor => ({
-        descriptor,
-        visual: deriveTabVisualState({
+      selectPaneSessions(shell).map(descriptor => {
+        const sessionId = descriptor.appSessionId
+        const previewOnly =
+          shell.previews[sessionId] === true && shell.tabs[sessionId] !== true
+        return {
           descriptor,
-          connection: selectConnection(connection, descriptor.appSessionId),
-          pendingPermissionCount: selectPendingPermissionCount(
-            permissions,
-            descriptor.appSessionId,
-          ),
-          isActive: descriptor.appSessionId === activeSessionId,
-        }),
-      })),
+          visual: previewOnly
+            ? {
+                label: 'preview',
+                tone: 'busy' as const,
+                restartable: false,
+                needsAttention: false,
+              }
+            : deriveTabVisualState({
+                descriptor,
+                connection: selectConnection(connection, sessionId),
+                pendingPermissionCount: selectPendingPermissionCount(
+                  permissions,
+                  sessionId,
+                ),
+                isActive: sessionId === activeSessionId,
+              }),
+        }
+      }),
     [shell, connection, permissions, activeSessionId],
   )
-  const liveSessionIds = useMemo(
+  const paneSessionIds = useMemo(
     () => tabs.map(tab => tab.descriptor.appSessionId),
     [tabs],
   )
-  const liveSessionKey = liveSessionIds.join('\u0000')
+  const paneSessionKey = paneSessionIds.join('\u0000')
   const tabDescriptorsById = useMemo(
     () =>
       new Map(
@@ -608,22 +683,23 @@ export function App() {
   )
 
   useEffect(() => {
-    if (!hostSnapshotReady && liveSessionIds.length === 0) return
+    if (!hostSnapshotReady && paneSessionIds.length === 0) return
     setWorkspaceLayoutState(current => {
       const next = reconcileWorkspaceLayout(
         current,
-        liveSessionIds,
+        paneSessionIds,
         activeSessionId,
       )
       return workspaceLayoutsEqual(current, next) ? current : next
     })
-    // liveSessionKey is the stable content signature of liveSessionIds; keying
+    // paneSessionKey is the stable content signature of live ∪ preview ids; keying
     // the effect on the key (not the array identity, which churns every tabs
     // recompute) is the whole point of computing it.
-  }, [activeSessionId, hostSnapshotReady, liveSessionKey])
+  }, [activeSessionId, hostSnapshotReady, paneSessionKey])
 
   // Re-apply-on-restore (P3-6): the held `pendingRestore` split snaps back once
-  // EVERY session it references is live again — order-independent, overriding
+  // EVERY session it references owns a live or preview pane — order-independent,
+  // overriding
   // whatever the operator clicked while restoring. Abandoned if a referenced
   // session is unrecoverable (neither live nor restorable), which unblocks the
   // disk write below so the operator's actual layout can persist instead.
@@ -634,20 +710,20 @@ export function App() {
         .map(row => row.descriptor.appSessionId),
     [sidebarRows],
   )
-  const rosterKey = [...liveSessionIds, ...restorableIds].join(' ')
+  const rosterKey = [...paneSessionIds, ...restorableIds].join(' ')
   useEffect(() => {
     if (!pendingRestore || !hostSnapshotReady) return
-    const ready = readyToRestoreLayout(pendingRestore, liveSessionIds)
+    const ready = readyToRestoreLayout(pendingRestore, paneSessionIds)
     if (ready) {
       setWorkspaceLayoutState(ready)
       setPendingRestore(null)
       return
     }
-    const known = new Set<SessionId>([...liveSessionIds, ...restorableIds])
+    const known = new Set<SessionId>([...paneSessionIds, ...restorableIds])
     if (pendingRestore.panels.some(panel => !known.has(panel.sessionId))) {
       setPendingRestore(null) // a referenced session is gone; stop waiting
     }
-    // rosterKey is the stable signature of live ∪ restorable ids.
+    // rosterKey is the stable signature of pane ∪ restorable ids.
   }, [pendingRestore, hostSnapshotReady, rosterKey])
 
   useEffect(() => {
@@ -833,7 +909,7 @@ export function App() {
     setWorkspaceLayoutState(current => setWorkspaceWidths(current, widths))
   }, [])
 
-  // TabBar Split (P4-4): open the next un-panelled live session as a new panel,
+  // TabBar Split (P4-4): open the next un-panelled pane session as a new panel,
   // split off the active panel's right edge. Reuses the SAME split reducer the
   // drag-tab-to-edge path uses (P3-6) — no new wiring. The layout model forbids
   // the same session in two panels, so "split" adds a DIFFERENT session (the
@@ -841,7 +917,7 @@ export function App() {
   const addWorkspacePanel = useCallback(() => {
     if (workspaceLayout.panels.length >= MAX_WORKSPACE_PANELS) return
     const shown = new Set(workspaceLayout.panels.map(panel => panel.sessionId))
-    const next = liveSessionIds.find(id => !shown.has(id))
+    const next = paneSessionIds.find(id => !shown.has(id))
     if (!next) {
       setLayoutNotice(
         'No other session to open in a split — create or select another session first.',
@@ -849,7 +925,7 @@ export function App() {
       return
     }
     splitWorkspacePanelWithSession(workspaceLayout.activeIndex, 'right', next)
-  }, [liveSessionIds, splitWorkspacePanelWithSession, workspaceLayout])
+  }, [paneSessionIds, splitWorkspacePanelWithSession, workspaceLayout])
 
   // TabBar Unsplit (P4-4): drop the last panel — the existing close-panel path.
   const removeWorkspacePanel = useCallback(() => {
@@ -858,6 +934,20 @@ export function App() {
   }, [closeWorkspacePanelAt, workspaceLayout])
 
   const closeTab = useCallback(async (sessionId: SessionId) => {
+    if (shellRef.current.previews[sessionId]) {
+      const plan = previewClosePlan(
+        shellRef.current.tabs[sessionId] === true,
+        lazyRestoreClaimsRef.current.has(sessionId),
+      )
+      dispatchPreviewTranscript({ type: 'preview-reset', sessionId })
+      dispatchShell({ type: 'preview-close', sessionId })
+      if (plan.cancelRestore) {
+        cancelledRestoresRef.current.add(sessionId)
+      } else {
+        lazyRestoreClaimsRef.current.delete(sessionId)
+      }
+      if (!plan.closeLive) return
+    }
     // Non-destructive: closeSession keeps the registry row and emits
     // session-status(exited, restorable) — NOT session-removed (the row stays in
     // the live∪restorable roster). The tab leaves the TabBar because that clean
@@ -885,28 +975,79 @@ export function App() {
     }
   }, [])
 
-  // The ONE real restore call (host.restoreSession via the bridge). Picking a
-  // restorable row (Sidebar restore-offer / ⌘K palette) fires this directly —
-  // no confirm dialog, no hydration overlay: the row re-spawns its engine and
-  // becomes a live tab off the resulting session-added/status HostEvents (not
-  // an optimistic local add), and its transcript replays into the pane as
-  // replay:true event frames (F1 seed + F2 replay — RESTORE-HISTORY.md).
-  // Restore failures surface in the existing shell-error banner.
-  const performRestore = useCallback(async (sessionId: SessionId) => {
+  const restoreLiveSession = useCallback(async (sessionId: SessionId) => {
     const bridge = getBridge()
     try {
       const result = await bridge.restoreSession(sessionId)
       if (result.ok) {
+        if (cancelledRestoresRef.current.delete(sessionId)) {
+          lazyRestoreClaimsRef.current.delete(sessionId)
+          const closeResult = await bridge.closeSession(sessionId)
+          if (!closeResult.ok) {
+            setShellError(hostErrorMessage(closeResult.error))
+          } else {
+            setShellError(null)
+          }
+          return
+        }
         setActiveSessionId(result.value.appSessionId)
         setActiveView('chat')
         setShellError(null)
       } else {
+        lazyRestoreClaimsRef.current.delete(sessionId)
+        cancelledRestoresRef.current.delete(sessionId)
         setShellError(hostErrorMessage(result.error))
       }
     } catch (error) {
+      lazyRestoreClaimsRef.current.delete(sessionId)
+      cancelledRestoresRef.current.delete(sessionId)
       setShellError(errorMessage(error))
     }
   }, [])
+
+  const engagePreview = useCallback(
+    (sessionId: SessionId) => {
+      if (!claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) return
+      void restoreLiveSession(sessionId)
+    },
+    [restoreLiveSession],
+  )
+
+  // Restorable selection first asks main for the IS-A transcript-only cache. A
+  // hit opens a same-id preview pane without spawning; cache miss preserves the
+  // eager restore fallback. Only subsequent pane engagement invokes restore.
+  const performRestore = useCallback(
+    async (sessionId: SessionId) => {
+      const bridge = getBridge()
+      try {
+        const cache = await bridge.previewSession(sessionId)
+        const descriptor = shellRef.current.byId[sessionId]
+        if (
+          removedIdsRef.current.has(sessionId) ||
+          !descriptor?.restorable
+        ) {
+          return
+        }
+        if (cache) {
+          dispatchPreviewTranscript({ type: 'preview-load', cache })
+          dispatchShell({ type: 'preview-open', sessionId })
+          setWorkspaceLayoutState(current =>
+            focusOrAssignWorkspaceSession(current, sessionId).state,
+          )
+          setActiveSessionId(sessionId)
+          setActiveView('chat')
+          setShellError(null)
+          return
+        }
+        if (claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) {
+          await restoreLiveSession(sessionId)
+        }
+      } catch (error) {
+        setShellError(errorMessage(error))
+      }
+    },
+    [restoreLiveSession],
+  )
 
   function submitSession(
     sessionId: SessionId,
@@ -1158,6 +1299,11 @@ export function App() {
 	          ? selectNonPlanPermissionQueue(permissions, sessionId)
 	          : []
 	      const descriptor = tabDescriptorsById.get(sessionId)
+          const panelPreviewTranscript = selectPreviewTranscript(
+            previewTranscript,
+            sessionId,
+          )
+          const panelIsPreview = panelPreviewTranscript !== null
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
 	      ).length
@@ -1180,6 +1326,9 @@ export function App() {
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
 	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
+      // The composer slash picker's rich catalog (name + arg-hint + description)
+      // for THIS pane's session, from the `slash-catalog.snapshot` read seam.
+      const panelSlashCatalog = selectSlashCatalog(slashCatalog, sessionId)
 	      return {
 	        sessionId,
 	        descriptor,
@@ -1188,15 +1337,35 @@ export function App() {
 	          <SessionPane
 	            accountsSnapshot={panelAccounts}
 	            activeAccount={selectActiveAccount(panelAccounts)}
+            onSwitchAccount={accountId => {
+              // The composer profile popover's switch — the engine's own
+              // `account.switch` verb to THIS pane's sidecar (its sessionId, not
+              // the globally-active one), mirroring the run-control verbs. The
+              // renderer only NAMES the id; the sidecar re-resolves it (T6).
+              try {
+                getBridge().accountVerb(sessionId, switchVerb(accountId))
+                setTransportError(null)
+              } catch (error) {
+                setTransportError(errorMessage(error))
+              }
+            }}
+            onManageAccounts={() => setActiveView('accounts')}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
+                preview={panelIsPreview}
+                previewTruncationMessage={selectPreviewTruncationMessage(
+                  previewTranscript,
+                  sessionId,
+                )}
+                onPreviewEngage={() => engagePreview(sessionId)}
 	            branch={panelBranch}
 	            model={panelRunControls?.model.current ?? null}
 	            reasoningEffort={panelRunControls?.effort.current ?? null}
 	            fastMode={panelRunControls?.fast.active ?? false}
 	            runControls={panelRunControls}
+            slashCatalog={panelSlashCatalog}
 	            onSetModel={model => {
 	              try {
 	                getBridge().runControlVerb(sessionId, {
@@ -1343,7 +1512,7 @@ export function App() {
 	                entry,
 	              )
 	            }
-	            transcript={transcript}
+		            transcript={panelPreviewTranscript ?? transcript}
 	            transportError={transportError}
 	          />
 	        ),
@@ -1410,7 +1579,7 @@ export function App() {
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
       {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
-       * restore-offer, alongside the TabBar's live-only view. */}
+       * restore-offer, alongside the TabBar's live ∪ preview view. */}
       <Sidebar
         rows={sidebarRows}
         activeSessionId={activeSessionId}
@@ -1433,7 +1602,7 @@ export function App() {
           onRestart={restartTab}
           onNewTab={newSession}
           panelCount={workspaceLayout.panels.length}
-          canAddPanel={liveSessionIds.length > workspaceLayout.panels.length}
+          canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
           onAddPanel={addWorkspacePanel}
           onRemovePanel={removeWorkspacePanel}
         />
@@ -1651,16 +1820,22 @@ function TasksStrip({
 export function SessionPane({
   accountsSnapshot,
   activeAccount,
+  onSwitchAccount,
+  onManageAccounts,
   activeConnection,
   activeDescriptor,
   branch,
   activeLog,
   activeSessionId,
+  preview = false,
+  previewTruncationMessage = null,
+  onPreviewEngage,
   allowPermission,
   model,
   reasoningEffort,
   fastMode,
   runControls,
+  slashCatalog = EMPTY_SLASH_CATALOG,
   onSetModel,
   onSetEffort,
   onSetFast,
@@ -1700,10 +1875,21 @@ export function SessionPane({
   // log (up to 8 MiB) was the dominant DOM reflow on every switch/frame/keystroke;
   // gated + capped to the last 20 messages, it costs nothing until asked for.
   const [rawDebugOpen, setRawDebugOpen] = useState(false)
-  const slashCommands = selectSlashCommands(transcript, activeSessionId)
+  // The picker renders rich rows (name + arg-hint + description, prototype
+  // parity) from the `slash-catalog.snapshot` read seam (the `slashCatalog`
+  // prop). It falls back to the names-only `slash_commands` catalog (from the
+  // init frame) when the rich snapshot is absent — a session that predates it, or
+  // a degraded catalog load — so the picker never regresses below name-only.
+  const slashEntries: readonly SlashCatalogEntry[] =
+    slashCatalog.length > 0
+      ? slashCatalog
+      : selectSlashCommands(transcript, activeSessionId).map(name => ({
+          name,
+          description: '',
+        }))
   const slashQuery = parseSlashDraft(prompt)
   const slashMatches =
-    slashQuery === null ? [] : filterSlashCommands(slashCommands, slashQuery)
+    slashQuery === null ? [] : filterSlashCommands(slashEntries, slashQuery)
   const slashOpen =
     !slashDismissed && slashQuery !== null && slashMatches.length > 0
   const slashIndex =
@@ -1768,6 +1954,26 @@ export function SessionPane({
   // (parity `Chat.jsx:716`, `src/hooks/useTextInput.ts`).
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const isComposingRef = useRef(false)
+  const [previewEngaged, setPreviewEngaged] = useState(false)
+  const previewEngageRef = useRef(onPreviewEngage)
+  previewEngageRef.current = onPreviewEngage
+  useEffect(() => {
+    setPreviewEngaged(false)
+    if (!preview) return
+    const timer = window.setTimeout(
+      () => {
+        setPreviewEngaged(true)
+        previewEngageRef.current?.()
+      },
+      PREVIEW_DWELL_MS,
+    )
+    return () => window.clearTimeout(timer)
+  }, [activeSessionId, preview])
+  const engagePreviewPane = (): void => {
+    if (!preview) return
+    setPreviewEngaged(true)
+    previewEngageRef.current?.()
+  }
   // Auto-resize the textarea to its content, capped at ~38vh, then let it scroll
   // (prototype `resizeComposer`, `Chat.jsx:437-441`). Imperative height/overflow
   // is the only way to size a textarea to its content — it is NOT a JSX inline
@@ -1803,6 +2009,12 @@ export function SessionPane({
     !!activeSessionId &&
     activeConnection.status === 'ready' &&
     !activeConnection.inputEnabled
+  const composerEnabled =
+    !!activeSessionId &&
+    !preview &&
+    activeLog.inputEnabled &&
+    activeConnection.status === 'ready' &&
+    activeConnection.inputEnabled
   const paused = permissionQueue.length > 0
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
@@ -1936,7 +2148,10 @@ export function SessionPane({
           // the usual typeahead-accept key. Both keep the draft in the composer
           // so the user can add arguments before submitting.
           event.preventDefault()
-          pickSlashCommand(slashMatches[slashIndex])
+          {
+            const picked = slashMatches[slashIndex]
+            if (picked) pickSlashCommand(picked.name)
+          }
           return
         case 'Escape':
           event.preventDefault()
@@ -2047,6 +2262,14 @@ export function SessionPane({
           onScroll={onTranscriptScroll}
           className="min-h-0 flex-1 overflow-auto"
         >
+          {previewTruncationMessage ? (
+            <div
+              className="mx-auto mb-3 w-full max-w-[740px] border-l-2 border-tone-warning px-3 py-2 text-xs text-tone-warning"
+              role="status"
+            >
+              {previewTruncationMessage}
+            </div>
+          ) : null}
           <TranscriptView
             accounts={accountsSnapshot}
             activeSessionId={activeSessionId}
@@ -2221,11 +2444,10 @@ export function SessionPane({
               aria-label="Prompt"
               rows={1}
               className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
-              disabled={
-                !activeSessionId ||
-                !activeLog.inputEnabled ||
-                !activeConnection.inputEnabled
-              }
+              disabled={!activeSessionId}
+              readOnly={!composerEnabled}
+              onFocus={engagePreviewPane}
+              onPointerDown={engagePreviewPane}
               onChange={event => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor
                 // (parity with the prototype resetting historyIdx on input) and
@@ -2240,7 +2462,15 @@ export function SessionPane({
                 isComposingRef.current = false
               }}
               onPaste={handlePaste}
-              placeholder="Ask Cat Code anything or describe a task…"
+              placeholder={
+                preview
+                  ? previewEngaged
+                    ? 'Connecting…'
+                    : 'Focus to reconnect…'
+                  : activeConnection.status !== 'ready'
+                    ? 'Connecting…'
+                    : 'Ask Cat Code anything or describe a task…'
+              }
               value={prompt}
             />
           </div>
@@ -2250,12 +2480,7 @@ export function SessionPane({
             aria-label="Send prompt"
             title="Send"
             className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
-            disabled={
-              !activeSessionId ||
-              !activeLog.inputEnabled ||
-              !activeConnection.inputEnabled ||
-              prompt.trim().length === 0
-            }
+            disabled={!composerEnabled || prompt.trim().length === 0}
             type="submit"
           >
             <svg
@@ -2285,11 +2510,7 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
-          attachDisabled={
-            !activeSessionId ||
-            !activeLog.inputEnabled ||
-            !activeConnection.inputEnabled
-          }
+          attachDisabled={!composerEnabled}
           onAttach={() =>
             toast('Paste a large block to attach it as a collapsed chip.', {
               tone: 'info',
@@ -2305,6 +2526,9 @@ export function SessionPane({
           permissionContext={permissionContext}
           onSetMode={setPermissionMode}
           account={activeAccount}
+          accounts={accountsSnapshot?.accounts ?? []}
+          onSwitchAccount={onSwitchAccount}
+          onManageAccounts={onManageAccounts}
           contextUsage={contextUsage}
         />
       </form>
@@ -2617,6 +2841,8 @@ type ShellAction =
       removed: ReadonlySet<SessionId>
     }
   | { type: 'event'; event: HostEvent }
+  | { type: 'preview-open'; sessionId: SessionId }
+  | { type: 'preview-close'; sessionId: SessionId }
 
 function reduceShell(state: ShellState, action: ShellAction): ShellState {
   if (action.type === 'hydrate') {
@@ -2641,7 +2867,8 @@ function reduceShell(state: ShellState, action: ShellAction): ShellState {
     }
     return next
   }
-  return reduceShellState(state, action.event)
+  if (action.type === 'event') return reduceShellState(state, action.event)
+  return reduceShellState(state, action)
 }
 
 type SessionPaneProps = {
@@ -2650,12 +2877,23 @@ type SessionPaneProps = {
   accountsSnapshot: AccountsSnapshot | null
   /** This session's active pool account (real alias), or null before its snapshot. */
   activeAccount: AccountStatus | null
+  /** Switch this session to `accountId` from the composer profile popover
+   * (the engine's `account.switch` verb). Absent → the account face stays read-only. */
+  onSwitchAccount?: (accountId: string) => void
+  /** Open the Accounts page (the profile popover's "Manage accounts →"). */
+  onManageAccounts?: () => void
   activeConnection: ConnectionSnapshot
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
   /** Read-only git branch for the empty-state meta strip (session log `gitBranch`). */
   branch: string | null
   activeSessionId: SessionId | null
+  /** Cache-backed transcript is currently painted; operational stores stay live-only. */
+  preview?: boolean
+  /** Visible-lossiness boundary retained beside a truncation-only cache. */
+  previewTruncationMessage?: string | null
+  /** First focus, pointer-down, or pane dwell lazily restores the real session. */
+  onPreviewEngage?: () => void
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
   /** The RESOLVED model this session runs (`mainLoopModelForSession`); null before the snapshot. */
   model: string | null
@@ -2665,6 +2903,9 @@ type SessionPaneProps = {
   fastMode: boolean
   /** P4-24c — the live run-controls snapshot (current + real picker options + availability). */
   runControls?: RunControlsSnapshot | null
+  /** The session's rich slash-command catalog (name + description + arg hint) for
+   * the composer picker; empty/absent falls the picker back to the names-only list. */
+  slashCatalog?: readonly SlashCatalogEntry[]
   /** P4-24c — set this session's model (a value from `runControls.model.options`). */
   onSetModel?: (model: string) => void
   /** P4-24c — set this session's reasoning-effort tier (a level, or `auto` to clear). */

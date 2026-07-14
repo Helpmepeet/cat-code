@@ -23,6 +23,11 @@ import {
   projectServerFrame,
   selectTranscriptRows,
 } from '../renderer/src/transcriptProjector.js'
+import {
+  createSlashCatalogState,
+  reduceSlashCatalogState,
+  selectSlashCatalog,
+} from '../renderer/src/slashCatalogState.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import { MAX_FRAME_BYTES, MAX_PROMPT_BYTES } from '../shared/limits.js'
 import {
@@ -31,6 +36,7 @@ import {
   type PermissionContextFrame,
   type ServerFrame,
   type SettingsVerbMessage,
+  type SlashCatalogEntry,
 } from '../shared/protocol.js'
 import {
   createSidecarPermissionDomain,
@@ -358,6 +364,43 @@ test('app.submit emits the live user event before the assistant and the projecto
   state = projectServerFrame(state, { ...events[0]!, replay: true })
   rows = selectTranscriptRows(state, SESSION)
   expect(rows.filter(row => row.kind === 'user-text')).toHaveLength(1)
+})
+
+test('fresh-session slash catalog — rich slash-catalog.snapshot is delivered on attach and populates the picker before any turn', () => {
+  // The engine ships names-only on the per-turn `system/init.slash_commands`, so
+  // the P3-7 picker rendered bare `/name` rows until (and only with) the first
+  // turn. The sidecar now pushes a RICH `slash-catalog.snapshot` (name +
+  // description + arg hint) on connect. Prove the frame arrives with NO submit,
+  // and that the renderer's OWN reducer captures exactly what the picker reads.
+  const slashCatalog: SlashCatalogEntry[] = [
+    { name: 'help', description: 'Show help' },
+    { name: 'model', description: 'Switch the model', argumentHint: '<name>' },
+  ]
+
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    slashCatalog,
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  // No app.submit — this is exactly the fresh-session case that was broken.
+  const catalogFrames = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'slash-catalog.snapshot' }> =>
+      frame.kind === 'slash-catalog.snapshot',
+  )
+  expect(catalogFrames).toHaveLength(1)
+  expect(catalogFrames[0]!.commands).toEqual(slashCatalog)
+
+  // Drive the renderer's real reducer with the frame, then read exactly what the
+  // SlashCommandPicker reads — rich rows with descriptions + arg hints.
+  let state = createSlashCatalogState()
+  state = reduceSlashCatalogState(state, { type: 'frame', frame: catalogFrames[0]! })
+  expect(selectSlashCatalog(state, SESSION)).toEqual(slashCatalog)
 })
 
 test('P4-6 title-rider — after a fresh session first turn, broadcasts a session-title frame', async () => {

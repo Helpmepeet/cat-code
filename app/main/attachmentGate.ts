@@ -22,14 +22,48 @@
  */
 
 import { FrameReplayBuffer } from './replayBuffer.js'
-import type { ServerFrame, SessionId } from '../shared/protocol.js'
+import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  type ServerFrame,
+  type SessionId,
+} from '../shared/protocol.js'
+import {
+  MAX_HISTORY_REPLAY_BYTES,
+  MAX_HISTORY_REPLAY_FRAMES,
+} from '../shared/limits.js'
+
+export const LAZY_REPLAY_FLUSH_MS = 50
+
+type ReplayCoalescingEntry = {
+  frames: ServerFrame[]
+  replayFrames: number
+  replayBytes: number
+  sawReplay: boolean
+}
+
+type ReplayCoalescingLimits = {
+  maxFrames: number
+  maxBytes: number
+}
 
 export class AttachmentGate {
   private readonly buffer: FrameReplayBuffer
+  private readonly replayLimits: ReplayCoalescingLimits
+  private readonly replayCoalescing = new Map<
+    SessionId,
+    ReplayCoalescingEntry
+  >()
   private attached = false
 
-  constructor(buffer: FrameReplayBuffer = new FrameReplayBuffer()) {
+  constructor(
+    buffer: FrameReplayBuffer = new FrameReplayBuffer(),
+    replayLimits: ReplayCoalescingLimits = {
+      maxFrames: MAX_HISTORY_REPLAY_FRAMES,
+      maxBytes: MAX_HISTORY_REPLAY_BYTES,
+    },
+  ) {
     this.buffer = buffer
+    this.replayLimits = replayLimits
   }
 
   /**
@@ -38,7 +72,85 @@ export class AttachmentGate {
    */
   onFrame(sessionId: SessionId, frame: ServerFrame): ServerFrame[] {
     this.buffer.record(sessionId, frame)
-    return this.attached ? [frame] : []
+    if (!this.attached) return []
+
+    const entry = this.replayCoalescing.get(sessionId)
+    if (!entry) return [frame]
+
+    const replay = frame.kind === 'event' && frame.replay === true
+    const historyTruncation =
+      frame.kind === 'error' &&
+      frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
+    if (replay) {
+      const frameBytes = serializedUtf8Bytes(frame)
+      if (frameBytes > this.replayLimits.maxBytes) {
+        this.replayCoalescing.delete(sessionId)
+        return [...entry.frames, frame]
+      }
+      if (
+        entry.replayFrames >= this.replayLimits.maxFrames ||
+        entry.replayBytes + frameBytes > this.replayLimits.maxBytes
+      ) {
+        const flushed = entry.frames
+        this.replayCoalescing.set(sessionId, {
+          frames: [frame],
+          replayFrames: 1,
+          replayBytes: frameBytes,
+          sawReplay: true,
+        })
+        return flushed
+      }
+      entry.replayFrames += 1
+      entry.replayBytes += frameBytes
+      entry.sawReplay = true
+    }
+
+    entry.frames.push(frame)
+    if (
+      (entry.sawReplay && !replay) ||
+      (frame.kind === 'error' && !historyTruncation) ||
+      frame.kind === 'lifecycle'
+    ) {
+      this.replayCoalescing.delete(sessionId)
+      return entry.frames
+    }
+    return []
+  }
+
+  /**
+   * Begin one lazy restore's bootstrap batch. Ready and snapshot frames precede
+   * history replay in the real sidecar attach order, so they wait with the replay
+   * instead of exposing a live-ready empty pane before history lands.
+   */
+  startReplayCoalescing(sessionId: SessionId): void {
+    if (this.replayCoalescing.has(sessionId)) return
+    this.replayCoalescing.set(sessionId, {
+      frames: [],
+      replayFrames: 0,
+      replayBytes: 0,
+      sawReplay: false,
+    })
+  }
+
+  /** Flush the bootstrap/replay batch when main's short window expires. */
+  flushReplayCoalescing(sessionId: SessionId): ServerFrame[] {
+    const entry = this.replayCoalescing.get(sessionId)
+    if (!entry) return []
+    this.replayCoalescing.delete(sessionId)
+    return entry.frames
+  }
+
+  /** Cancel lazy mode after a typed restore failure without losing buffered frames. */
+  cancelReplayCoalescing(sessionId: SessionId): ServerFrame[] {
+    return this.flushReplayCoalescing(sessionId)
+  }
+
+  hasPendingReplayCoalescing(sessionId: SessionId): boolean {
+    return (this.replayCoalescing.get(sessionId)?.frames.length ?? 0) > 0
+  }
+
+  isReplayCoalescing(sessionId: SessionId): boolean {
+    return this.replayCoalescing.has(sessionId)
   }
 
   /**
@@ -48,12 +160,14 @@ export class AttachmentGate {
   onRendererReady(): ServerFrame[] {
     if (this.attached) return []
     this.attached = true
+    this.replayCoalescing.clear()
     return this.buffer.snapshot()
   }
 
   /** A new document is loading (reload or new window): re-arm for a fresh replay. */
   onNavigationStart(): void {
     this.attached = false
+    this.replayCoalescing.clear()
   }
 
   /**
@@ -67,12 +181,14 @@ export class AttachmentGate {
 
   /** Drop stale replay for one restarting session without detaching the renderer. */
   clearSession(sessionId: SessionId): void {
+    this.replayCoalescing.delete(sessionId)
     this.buffer.clearSession(sessionId)
   }
 
   /** The session was torn down (macOS window-all-closed): drop everything. */
   reset(): void {
     this.attached = false
+    this.replayCoalescing.clear()
     this.buffer.clear()
   }
 
@@ -80,4 +196,8 @@ export class AttachmentGate {
   get isAttached(): boolean {
     return this.attached
   }
+}
+
+function serializedUtf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength
 }

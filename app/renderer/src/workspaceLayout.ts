@@ -93,26 +93,26 @@ export function writeWorkspaceLayoutToStorage(
 
 export function reconcileWorkspaceLayout(
   state: WorkspaceLayoutState,
-  liveSessionIds: readonly SessionId[],
+  paneSessionIds: readonly SessionId[],
   preferredSessionId: SessionId | null,
 ): WorkspaceLayoutState {
-  const live = new Set(liveSessionIds)
+  const panes = new Set(paneSessionIds)
   const seen = new Set<SessionId>()
   let panels = state.panels.filter(panel => {
-    if (!live.has(panel.sessionId) || seen.has(panel.sessionId)) return false
+    if (!panes.has(panel.sessionId) || seen.has(panel.sessionId)) return false
     seen.add(panel.sessionId)
     return true
   })
 
   if (
     preferredSessionId &&
-    live.has(preferredSessionId) &&
+    panes.has(preferredSessionId) &&
     (panels.length === 0 || panels.length === 1)
   ) {
     panels = [{ sessionId: preferredSessionId }]
   }
-  if (panels.length === 0 && liveSessionIds[0]) {
-    panels = [{ sessionId: liveSessionIds[0] }]
+  if (panels.length === 0 && paneSessionIds[0]) {
+    panels = [{ sessionId: paneSessionIds[0] }]
   }
 
   // Point the active ring at the preferred session's panel when it is shown; if
@@ -132,21 +132,19 @@ export function reconcileWorkspaceLayout(
 
 /**
  * Re-apply-on-restore (P3-6): a persisted multi-panel split, on relaunch,
- * references sessions that come back `restorable` and go live one at a time as
- * the operator restores them. Rather than mutate the active layout while they
- * are half-restored (which would hide the live startup session and is order-
- * fragile), the caller HOLDS the saved layout and calls this: it returns the
- * saved layout to snap into place ONLY once EVERY session it references is live
- * again, else null (keep waiting). The snap is atomic and order-independent —
- * whatever the operator clicked in between is overridden by the saved split.
+ * references sessions that come back `restorable` and become pane members one
+ * at a time through preview or live restore. Rather than mutate the active layout
+ * while they are half-open, the caller HOLDS the saved layout and calls this: it
+ * returns the saved layout only once EVERY referenced session has a pane. The
+ * snap is atomic and order-independent.
  */
 export function readyToRestoreLayout(
   pending: WorkspaceLayoutState,
-  liveSessionIds: readonly SessionId[],
+  paneSessionIds: readonly SessionId[],
 ): WorkspaceLayoutState | null {
   if (pending.panels.length === 0) return null
-  const live = new Set(liveSessionIds)
-  return pending.panels.every(panel => live.has(panel.sessionId))
+  const panes = new Set(paneSessionIds)
+  return pending.panels.every(panel => panes.has(panel.sessionId))
     ? pending
     : null
 }

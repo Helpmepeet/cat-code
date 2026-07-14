@@ -39,7 +39,10 @@ import {
   type DebugRendererSnapshot,
   type DebugStateFile,
 } from '../shared/debugState.js'
-import { AttachmentGate } from './attachmentGate.js'
+import {
+  AttachmentGate,
+  LAZY_REPLAY_FLUSH_MS,
+} from './attachmentGate.js'
 import {
   deleteCache,
   distill,
@@ -142,6 +145,27 @@ let latestRendererSnapshot: DebugRendererSnapshot | null = null
  * Electron-free and unit-tested; main just `send`s whatever it returns.
  */
 const attachmentGate = new AttachmentGate()
+const replayFlushTimers = new Map<SessionId, ReturnType<typeof setTimeout>>()
+
+function scheduleReplayFlush(sessionId: SessionId): void {
+  if (replayFlushTimers.has(sessionId)) return
+  const timer = setTimeout(() => {
+    replayFlushTimers.delete(sessionId)
+    deliver(attachmentGate.flushReplayCoalescing(sessionId))
+  }, LAZY_REPLAY_FLUSH_MS)
+  replayFlushTimers.set(sessionId, timer)
+}
+
+function cancelReplayFlush(sessionId: SessionId): void {
+  const timer = replayFlushTimers.get(sessionId)
+  if (timer) clearTimeout(timer)
+  replayFlushTimers.delete(sessionId)
+}
+
+function cancelAllReplayFlushes(): void {
+  for (const timer of replayFlushTimers.values()) clearTimeout(timer)
+  replayFlushTimers.clear()
+}
 
 /**
  * IS-A — where the at-rest transcript caches live: beside the durable registry
@@ -339,6 +363,7 @@ function createWindow(): void {
   // replay. `did-start-navigation` fires on the initial load and on reloads.
   window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      cancelAllReplayFlushes()
       attachmentGate.onNavigationStart()
     }
   })
@@ -405,12 +430,18 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       return
     }
     deliver(attachmentGate.onFrame(event.sessionId, frame))
+    if (attachmentGate.hasPendingReplayCoalescing(event.sessionId)) {
+      scheduleReplayFlush(event.sessionId)
+    } else if (!attachmentGate.isReplayCoalescing(event.sessionId)) {
+      cancelReplayFlush(event.sessionId)
+    }
     if (isTerminalLifecycleFrame(frame)) {
       // IS-A — snapshot → persist → evict. A crash reaches eviction through this
       // terminal frame (the supervisor emits no exit after a host-asked kill, so
       // graceful close/quit/restart persist via the host's evictReplay callback
       // instead); persist here so a crashed session is still previewable.
       persistTranscriptCache(event.sessionId)
+      cancelReplayFlush(event.sessionId)
       attachmentGate.clearSession(event.sessionId)
     }
   })
@@ -753,10 +784,26 @@ function registerHostControlPlane(): void {
 
   ipcMain.handle(
     CH_HOST_RESTORE,
-    (_e, appSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
+    async (_e, appSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
       if (!host) return Promise.resolve(noHost<SessionDescriptor>())
       // HC2 — the host validates id shape + membership; pass through as unknown.
-      return host.restoreSession(String(appSessionId))
+      const sessionId = String(appSessionId)
+      // IS-B/M4 — only a renderer-requested lazy restore enters bootstrap/replay
+      // coalescing. Fresh create, restart, and ordinary live traffic keep their
+      // existing delivery behavior.
+      attachmentGate.startReplayCoalescing(sessionId)
+      try {
+        const result = await host.restoreSession(sessionId)
+        if (!result.ok) {
+          cancelReplayFlush(sessionId)
+          deliver(attachmentGate.cancelReplayCoalescing(sessionId))
+        }
+        return result
+      } catch (error) {
+        cancelReplayFlush(sessionId)
+        deliver(attachmentGate.cancelReplayCoalescing(sessionId))
+        throw error
+      }
     },
   )
 
@@ -1021,6 +1068,7 @@ function ensureHost(): Host {
     // cache is acceptable (a bounded extra sync write).
     evictReplay: appSessionId => {
       persistTranscriptCache(appSessionId)
+      cancelReplayFlush(appSessionId)
       attachmentGate.clearSession(appSessionId)
     },
   })
@@ -1141,6 +1189,7 @@ app.on('window-all-closed', () => {
   // NEW session id via `ensureHost`) never replays dead-session frames into the
   // fresh window.
   attachmentGate.reset()
+  cancelAllReplayFlushes()
   if (process.platform !== 'darwin') {
     app.quit()
   }

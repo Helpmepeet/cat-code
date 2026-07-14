@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
 import {
-  activeAfterLiveChange,
+  activeAfterPaneChange,
   createShellState,
   reduceShellState,
   selectLiveSessions,
+  selectPaneSessions,
   selectSession,
   selectSessions,
   sessionAtSlot,
@@ -123,6 +124,72 @@ test('sessionAtSlot indexes the TAB order, skipping restorable-only roster rows 
   expect(sessionAtSlot(state, 3)).toBeNull() // the offer never absorbs a slot
 })
 
+test('pane roster is live union previewing and preview tabs keep their slot on restore', () => {
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('live')))
+  state = reduceShellState(
+    state,
+    added(descriptor('preview', { status: 'exited', restorable: true })),
+  )
+  state = reduceShellState(state, {
+    type: 'preview-open',
+    sessionId: 'preview',
+  })
+
+  expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['live'])
+  expect(selectPaneSessions(state).map(s => s.appSessionId)).toEqual([
+    'live',
+    'preview',
+  ])
+  expect(sessionAtSlot(state, 2)).toBe('preview')
+
+  state = reduceShellState(state, added(descriptor('preview', { status: 'spawning' })))
+  expect(selectPaneSessions(state).map(s => s.appSessionId)).toEqual([
+    'live',
+    'preview',
+  ])
+})
+
+test('closing a preview drops preview membership only', () => {
+  let state = createShellState()
+  state = reduceShellState(
+    state,
+    added(descriptor('preview', { status: 'exited', restorable: true })),
+  )
+  state = reduceShellState(state, {
+    type: 'preview-open',
+    sessionId: 'preview',
+  })
+  state = reduceShellState(state, {
+    type: 'preview-close',
+    sessionId: 'preview',
+  })
+
+  expect(selectPaneSessions(state)).toEqual([])
+  expect(selectSession(state, 'preview')).not.toBeNull()
+  expect(selectLiveSessions(state)).toEqual([])
+})
+
+test('a reaped registry row force-closes its preview', () => {
+  let state = createShellState()
+  state = reduceShellState(
+    state,
+    added(descriptor('preview', { status: 'exited', restorable: true })),
+  )
+  state = reduceShellState(state, {
+    type: 'preview-open',
+    sessionId: 'preview',
+  })
+  state = reduceShellState(state, {
+    type: 'session-removed',
+    appSessionId: 'preview',
+  })
+
+  expect(selectPaneSessions(state)).toEqual([])
+  expect(state.previews).toEqual({})
+  expect(selectSession(state, 'preview')).toBeNull()
+})
+
 test('selectLiveSessions excludes a closed (restorable) session but keeps it in the roster (F1)', () => {
   let state = createShellState()
   state = reduceShellState(state, added(descriptor('live', { status: 'ready' })))
@@ -239,18 +306,18 @@ test('crash-then-restart-in-place does NOT reorder — the tab never lost member
   expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['a', 'b'])
 })
 
-test('activeAfterLiveChange: active session that left the live set moves to first live tab', () => {
-  expect(activeAfterLiveChange('closed', ['live'])).toBe('live')
+test('activeAfterPaneChange: active session that left the pane set moves to first pane', () => {
+  expect(activeAfterPaneChange('closed', ['live'])).toBe('live')
 })
 
-test('activeAfterLiveChange: active session still live stays put', () => {
-  expect(activeAfterLiveChange('live', ['live', 'other'])).toBe('live')
+test('activeAfterPaneChange: a previewing active session stays put', () => {
+  expect(activeAfterPaneChange('preview', ['live', 'preview'])).toBe('preview')
 })
 
-test('activeAfterLiveChange: no live tabs left → null (empty shell)', () => {
-  expect(activeAfterLiveChange('closed', [])).toBeNull()
+test('activeAfterPaneChange: no panes left → null (empty shell)', () => {
+  expect(activeAfterPaneChange('closed', [])).toBeNull()
 })
 
-test('activeAfterLiveChange: a null active stays null', () => {
-  expect(activeAfterLiveChange(null, ['live'])).toBeNull()
+test('activeAfterPaneChange: a null active stays null', () => {
+  expect(activeAfterPaneChange(null, ['live'])).toBeNull()
 })

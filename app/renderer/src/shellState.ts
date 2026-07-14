@@ -32,11 +32,18 @@ export type ShellState = {
    * row folded from the hydrate snapshot (previous run) never becomes a tab.
    */
   tabs: Record<SessionId, true>
+  /** Dead-session panes opened from the transcript cache, keyed like live tabs. */
+  previews: Record<SessionId, true>
 }
 
 export function createShellState(): ShellState {
-  return { order: [], byId: {}, tabs: {} }
+  return { order: [], byId: {}, tabs: {}, previews: {} }
 }
+
+export type ShellStateAction =
+  | HostEvent
+  | { type: 'preview-open'; sessionId: SessionId }
+  | { type: 'preview-close'; sessionId: SessionId }
 
 /**
  * Fold one `HostEvent` into the roster. `added` appends (idempotent — a
@@ -46,18 +53,40 @@ export function createShellState(): ShellState {
  */
 export function reduceShellState(
   state: ShellState,
-  event: HostEvent,
+  event: ShellStateAction,
 ): ShellState {
   switch (event.type) {
+    case 'preview-open': {
+      const descriptor = state.byId[event.sessionId]
+      if (!descriptor?.restorable || state.previews[event.sessionId]) return state
+      return {
+        ...state,
+        previews: { ...state.previews, [event.sessionId]: true },
+      }
+    }
+    case 'preview-close': {
+      if (!state.previews[event.sessionId]) return state
+      const previews = { ...state.previews }
+      delete previews[event.sessionId]
+      return { ...state, previews }
+    }
     case 'session-added': {
       const id = event.session.appSessionId
       const present = Boolean(state.byId[id])
       const wasTab = Boolean(state.tabs[id])
       const tabs = foldTabMembership(state.tabs, event.session)
       return {
-        order: reorderOnArrival(state.order, id, present, wasTab, tabs),
+        order: reorderOnArrival(
+          state.order,
+          id,
+          present,
+          wasTab,
+          Boolean(state.previews[id]),
+          tabs,
+        ),
         byId: { ...state.byId, [id]: event.session },
         tabs,
+        previews: state.previews,
       }
     }
     case 'session-status': {
@@ -74,9 +103,17 @@ export function reduceShellState(
       const wasTab = Boolean(state.tabs[id])
       const tabs = foldTabMembership(state.tabs, event.session)
       return {
-        order: reorderOnArrival(state.order, id, present, wasTab, tabs),
+        order: reorderOnArrival(
+          state.order,
+          id,
+          present,
+          wasTab,
+          Boolean(state.previews[id]),
+          tabs,
+        ),
         byId: { ...state.byId, [id]: event.session },
         tabs,
+        previews: state.previews,
       }
     }
     case 'session-removed': {
@@ -86,10 +123,13 @@ export function reduceShellState(
       delete byId[id]
       const tabs = { ...state.tabs }
       delete tabs[id]
+      const previews = { ...state.previews }
+      delete previews[id]
       return {
         order: state.order.filter(candidate => candidate !== id),
         byId,
         tabs,
+        previews,
       }
     }
     default:
@@ -143,10 +183,11 @@ function reorderOnArrival(
   id: SessionId,
   present: boolean,
   wasTab: boolean,
+  wasPreview: boolean,
   tabs: ShellState['tabs'],
 ): SessionId[] {
   if (!present) return [...order, id]
-  const becameTab = !wasTab && tabs[id] === true
+  const becameTab = !wasTab && !wasPreview && tabs[id] === true
   if (!becameTab) return order
   return [...order.filter(candidate => candidate !== id), id]
 }
@@ -173,20 +214,26 @@ export function selectLiveSessions(state: ShellState): SessionDescriptor[] {
   )
 }
 
+/** Pane/TabBar roster: running tabs plus dead sessions opened as previews. */
+export function selectPaneSessions(state: ShellState): SessionDescriptor[] {
+  return selectSessions(state).filter(descriptor => {
+    const id = descriptor.appSessionId
+    return state.tabs[id] === true || state.previews[id] === true
+  })
+}
+
 /**
- * The active id after the roster changes such that the ACTIVE session is no
- * longer a LIVE tab (it was closed → now restorable, or removed). Only moves
- * focus OFF a now-non-live active session, to the first remaining LIVE tab (or
- * null → empty shell); a background change never moves focus. `liveOrder` is the
- * post-change live tab order.
+ * The active id after the pane roster changes. Live tabs and cached previews are
+ * both valid focus owners; only a close/reap that removes the active id moves
+ * focus to the first remaining pane (or null).
  */
-export function activeAfterLiveChange(
+export function activeAfterPaneChange(
   current: SessionId | null,
-  liveOrder: readonly SessionId[],
+  paneOrder: readonly SessionId[],
 ): SessionId | null {
   if (current === null) return null
-  if (liveOrder.includes(current)) return current
-  return liveOrder[0] ?? null
+  if (paneOrder.includes(current)) return current
+  return paneOrder[0] ?? null
 }
 
 export function selectSession(
@@ -223,5 +270,5 @@ export function sessionAtSlot(
   slot: number,
 ): SessionId | null {
   if (slot < 1 || slot > 9) return null
-  return selectLiveSessions(state)[slot - 1]?.appSessionId ?? null
+  return selectPaneSessions(state)[slot - 1]?.appSessionId ?? null
 }

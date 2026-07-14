@@ -160,5 +160,11 @@ export type HostApi = {
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
   listSessions(): SessionDescriptor[]
+  /**
+   * IS-A — read-only restorability gate for the transcript-cache preview path.
+   * True only for a not-live row with a non-null engineSessionId (the descriptor's
+   * `restorable`); main calls it before reading a cache off disk.
+   */
+  canPreview(appSessionId: SessionId): boolean
   subscribe(cb: (event: HostEvent) => void): () => void
 }

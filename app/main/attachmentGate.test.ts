@@ -13,7 +13,12 @@ import {
   FrameReplayBuffer,
   isReplayTruncationFrame,
 } from './replayBuffer.js'
-import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/protocol.js'
+import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  PROTOCOL_VERSION,
+  type ServerFrame,
+  type SessionId,
+} from '../shared/protocol.js'
 
 const SID: SessionId = 'sess-1'
 
@@ -49,6 +54,38 @@ function exited(): ServerFrame {
   }
 }
 
+function replayFrame(index: number): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        uuid: `replay-${index}`,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `history ${index}` }],
+        },
+      } as never,
+    },
+  }
+}
+
+function historyTruncation(): ServerFrame {
+  return {
+    kind: 'error',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+    code: 'internal_error',
+    message: 'Earlier restored-session history was omitted.',
+    retryable: false,
+  }
+}
+
 /** Collect everything the gate would deliver to the renderer, in order. */
 function drive(steps: (gate: AttachmentGate, out: ServerFrame[]) => void): ServerFrame[] {
   const gate = new AttachmentGate()
@@ -78,6 +115,100 @@ test('after attach, frames are forwarded live (not re-buffered for a second repl
   gate.onRendererReady()
   expect(gate.isAttached).toBe(true)
   expect(gate.onFrame(SID, pong('live')).map(f => f.kind)).toEqual(['pong'])
+})
+
+test('lazy restore bootstrap and replay flush as one batch on first post-replay frame', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startReplayCoalescing(SID)
+
+  expect(gate.onFrame(SID, readyFrame())).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(0))).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(1))).toEqual([])
+
+  expect(gate.onFrame(SID, pong('live'))).toEqual([
+    readyFrame(),
+    replayFrame(0),
+    replayFrame(1),
+    pong('live'),
+  ])
+  expect(gate.isReplayCoalescing(SID)).toBe(false)
+})
+
+test('history truncation boundary stays before retained replay in the same batch', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startReplayCoalescing(SID)
+
+  expect(gate.onFrame(SID, readyFrame())).toEqual([])
+  expect(gate.onFrame(SID, historyTruncation())).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(0))).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(1))).toEqual([])
+
+  expect(gate.onFrame(SID, pong('live'))).toEqual([
+    readyFrame(),
+    historyTruncation(),
+    replayFrame(0),
+    replayFrame(1),
+    pong('live'),
+  ])
+})
+
+test('lazy restore bootstrap and replay flush as one batch on the window', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startReplayCoalescing(SID)
+
+  gate.onFrame(SID, readyFrame())
+  gate.onFrame(SID, replayFrame(0))
+  gate.onFrame(SID, replayFrame(1))
+
+  expect(gate.flushReplayCoalescing(SID)).toEqual([
+    readyFrame(),
+    replayFrame(0),
+    replayFrame(1),
+  ])
+  expect(gate.flushReplayCoalescing(SID)).toEqual([])
+})
+
+test('zero-history lazy restore holds ready until the window flush', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startReplayCoalescing(SID)
+
+  expect(gate.onFrame(SID, readyFrame())).toEqual([])
+  expect(gate.flushReplayCoalescing(SID)).toEqual([readyFrame()])
+})
+
+test('lazy replay coalescing enforces frame and byte caps', () => {
+  const countBounded = new AttachmentGate(new FrameReplayBuffer(), {
+    maxFrames: 2,
+    maxBytes: 1024 * 1024,
+  })
+  countBounded.onRendererReady()
+  countBounded.startReplayCoalescing(SID)
+  countBounded.onFrame(SID, readyFrame())
+  countBounded.onFrame(SID, replayFrame(0))
+  countBounded.onFrame(SID, replayFrame(1))
+  expect(countBounded.onFrame(SID, replayFrame(2))).toEqual([
+    readyFrame(),
+    replayFrame(0),
+    replayFrame(1),
+  ])
+  expect(countBounded.flushReplayCoalescing(SID)).toEqual([replayFrame(2)])
+
+  const byteBounded = new AttachmentGate(new FrameReplayBuffer(), {
+    maxFrames: 10,
+    maxBytes: 1,
+  })
+  byteBounded.onRendererReady()
+  byteBounded.startReplayCoalescing(SID)
+  byteBounded.onFrame(SID, readyFrame())
+  expect(byteBounded.onFrame(SID, replayFrame(0))).toEqual([
+    readyFrame(),
+    replayFrame(0),
+  ])
+  expect(byteBounded.isReplayCoalescing(SID)).toBe(false)
 })
 
 test('StrictMode double rendererReady replays only ONCE (no duplicate ready/probe)', () => {

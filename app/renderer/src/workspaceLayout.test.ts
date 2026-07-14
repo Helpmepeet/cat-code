@@ -137,6 +137,30 @@ test('reconcile keeps the focused split panel when the active session is not sho
   expect(reconciled.activeIndex).toBe(1)
 })
 
+test('a preview session id remains a valid split-panel member and swaps in place', () => {
+  const split = splitWorkspacePanel(
+    createWorkspaceLayout('live'),
+    0,
+    'right',
+    'preview',
+  ).state
+
+  const previewLayout = reconcileWorkspaceLayout(
+    split,
+    ['live', 'preview'],
+    'preview',
+  )
+  const liveLayout = reconcileWorkspaceLayout(
+    previewLayout,
+    ['live', 'preview'],
+    'preview',
+  )
+
+  expect(sessionIds(previewLayout)).toEqual(['live', 'preview'])
+  expect(liveLayout).toEqual(previewLayout)
+  expect(liveLayout.panels[1]?.sessionId).toBe('preview')
+})
+
 test('closing a split panel collapses back to one panel', () => {
   const split = splitWorkspacePanel(
     createWorkspaceLayout('a'),

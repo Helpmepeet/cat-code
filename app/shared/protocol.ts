@@ -1653,6 +1653,39 @@ export type SessionTitleFrame = {
   title: string
 }
 
+/**
+ * A single user-invocable slash command with the display metadata the composer
+ * SlashCommandPicker renders. The engine's `system/init.slash_commands` field
+ * carries NAMES ONLY (the locked SDK shape); `description`/`argumentHint` live on
+ * the engine-side `Command` objects (`src/types/command.ts:182,191`) and were NOT
+ * on the wire — so the P3-7 picker shipped name-only, flagged for exactly this
+ * read-only catalog snapshot. Display metadata only, no capability.
+ */
+export type SlashCatalogEntry = {
+  /** User-invocable command name, no leading slash (matches `slash_commands`). */
+  name: string
+  /** One-line description (`Command.description`). */
+  description: string
+  /** Gray arg hint shown after the name (`Command.argumentHint`, e.g. "<name>"); omitted when none. */
+  argumentHint?: string
+}
+
+/**
+ * Read-only outbound catalog snapshot (C3 precedent): the session's real
+ * user-invocable slash commands WITH display metadata, built spawn-time from the
+ * sidecar's `getCommands(cwd)` catalog (the SAME source that feeds
+ * `slash_commands`). Sent on attach so the composer picker renders name +
+ * argHint + description before the first turn. Spawn-frozen (the catalog does not
+ * change during a session), so — unlike run-controls — NOT re-broadcast.
+ * secretGuard-clean by construction (display strings only).
+ */
+export type SlashCatalogSnapshotFrame = {
+  kind: 'slash-catalog.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  commands: SlashCatalogEntry[]
+}
+
 export type ServerFrame =
   | ReadyFrame
   | SessionTitleFrame
@@ -1679,6 +1712,7 @@ export type ServerFrame =
   | RemoteSettingsSnapshotFrame
   | RemoteSettingsResultFrame
   | SessionsCatalogSnapshotFrame
+  | SlashCatalogSnapshotFrame
   | SettingsResultFrame
 
 /* ------------------------------------------------------------------------- *

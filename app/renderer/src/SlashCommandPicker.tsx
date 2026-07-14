@@ -13,14 +13,16 @@
  * `app.submit` path — command PARSING/EXECUTION stays engine-side and the
  * renderer never gains a command-execution capability (SECURITY-MINIMUM T2/§2).
  *
- * The engine's `slash_commands` carries names ONLY (no description / argHint /
- * source badge — those live on the engine-side `Command` objects and are NOT on
- * the wire today). So the picker is WIRED but name-only; the richer prototype
- * metadata would need a read-only catalog-snapshot frame — flagged as an
- * extend-engine decision, NOT shipped here (see the P3-7 report / proposal).
+ * Rows carry the full prototype metadata — name + arg hint + description — from
+ * the read-only `slash-catalog.snapshot` (the sidecar projects the engine-side
+ * `Command` objects' `description`/`argumentHint`, which the SDK
+ * `slash_commands` field flattens away). The composer falls back to the
+ * names-only `slash_commands` catalog when the snapshot is absent, rendering the
+ * name column alone (`description` empty).
  */
 
 import { useEffect, useRef } from 'react'
+import type { SlashCatalogEntry } from '../../shared/protocol.js'
 
 /**
  * Extract the in-progress slash query from the composer draft, or `null` when
@@ -36,26 +38,27 @@ export function parseSlashDraft(draft: string): string | null {
 }
 
 /**
- * Filter the catalog names for a query: case-insensitive PREFIX matches first
- * (the intent when typing a command name), then remaining SUBSTRING matches,
- * each group in the catalog's own order (the engine's `slash_commands` order).
- * A bare `/` (empty query) shows the whole catalog. Mirrors the prototype's
- * `SlashCommandPicker` ranking.
+ * Filter the catalog for a query: case-insensitive NAME-PREFIX matches first
+ * (the intent when typing a command name), then remaining matches on name OR
+ * description substring (the prototype ranks name-prefix then description-match),
+ * each group in the catalog's own order. A bare `/` (empty query) shows the whole
+ * catalog. Mirrors the prototype's `SlashCommandPicker` ranking.
  */
 export function filterSlashCommands(
-  names: readonly string[],
+  entries: readonly SlashCatalogEntry[],
   query: string,
-): string[] {
+): SlashCatalogEntry[] {
   const q = query.toLowerCase()
-  if (q.length === 0) return [...names]
-  const prefix: string[] = []
-  const substring: string[] = []
-  for (const name of names) {
-    const lower = name.toLowerCase()
-    if (lower.startsWith(q)) prefix.push(name)
-    else if (lower.includes(q)) substring.push(name)
+  if (q.length === 0) return [...entries]
+  const prefix: SlashCatalogEntry[] = []
+  const rest: SlashCatalogEntry[] = []
+  for (const entry of entries) {
+    const name = entry.name.toLowerCase()
+    if (name.startsWith(q)) prefix.push(entry)
+    else if (name.includes(q) || entry.description.toLowerCase().includes(q))
+      rest.push(entry)
   }
-  return [...prefix, ...substring]
+  return [...prefix, ...rest]
 }
 
 /** Move `activeIndex` within `[0, length)`, wrapping at both ends. */
@@ -83,7 +86,7 @@ export function SlashCommandPicker({
 }: {
   open: boolean
   query: string
-  commands: string[]
+  commands: SlashCatalogEntry[]
   activeIndex: number
   onPick: (name: string) => void
 }) {
@@ -100,7 +103,7 @@ export function SlashCommandPicker({
 
   return (
     <div
-      className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-md overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+      className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_20px_48px_rgba(0,0,0,0.7),0_0_0_1px_rgba(244,114,182,0.06)]"
       role="dialog"
       aria-label="Slash commands"
     >
@@ -127,35 +130,57 @@ export function SlashCommandPicker({
         role="listbox"
         aria-label="Slash command matches"
       >
-        {commands.map((name, index) => {
+        {commands.map((entry, index) => {
           const isActive = index === activeIndex
           return (
-            <li key={name} role="option" aria-selected={isActive}>
+            <li key={entry.name} role="option" aria-selected={isActive}>
               <button
                 type="button"
                 data-slash-active={isActive}
-                aria-label={`Insert slash command /${name}`}
+                aria-label={`Insert slash command /${entry.name}`}
                 // onMouseDown (not onClick) so selecting a command never blurs
                 // the composer input first (which would drop the draft focus).
                 onMouseDown={event => {
                   event.preventDefault()
-                  onPick(name)
+                  onPick(entry.name)
                 }}
                 className={
-                  'flex w-full items-center gap-2 border-l-2 px-3 py-1 text-left transition-colors ' +
+                  'flex w-full items-baseline border-l-2 px-3 py-1 text-left transition-colors ' +
                   (isActive
-                    ? 'border-accent bg-shell-active'
+                    ? 'border-accent bg-accent/[0.07]'
                     : 'border-transparent hover:bg-shell-hover')
                 }
               >
+                {/* Command name column (fixed width so descriptions align),
+                 * monospace, pink when active — with the gray arg hint. */}
                 <span
                   className={
-                    'font-mono text-[12.5px] ' +
+                    'min-w-[148px] shrink-0 font-mono text-[12.5px] font-medium tracking-[-0.01em] ' +
                     (isActive ? 'text-accent' : 'text-text-primary')
                   }
                 >
-                  /{name}
+                  /{entry.name}
+                  {entry.argumentHint ? (
+                    <span className="ml-1.5 font-normal text-text-faint">
+                      {entry.argumentHint}
+                    </span>
+                  ) : null}
                 </span>
+                {/* Separator + description (ellipsized), only when present so a
+                 * names-only fallback row renders as the name alone. */}
+                {entry.description ? (
+                  <>
+                    <span className="mr-2.5 shrink-0 text-[#2e2e33]">·</span>
+                    <span
+                      className={
+                        'min-w-0 flex-1 truncate text-[11.5px] ' +
+                        (isActive ? 'text-text-muted' : 'text-text-faint')
+                      }
+                    >
+                      {entry.description}
+                    </span>
+                  </>
+                ) : null}
               </button>
             </li>
           )

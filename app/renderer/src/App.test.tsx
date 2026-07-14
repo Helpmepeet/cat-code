@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { ComponentProps } from 'react'
 import {
   App,
   ConnectionRecovery,
@@ -33,6 +35,33 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   // No active-session pane chrome without a session.
   expect(html).not.toContain('aria-label="Prompt"')
   expect(html).not.toContain('Transcript (projected)')
+})
+
+test('IS-B restorable-row wiring previews before restore and opens the same-id pane', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const restoreStart = source.indexOf('const performRestore = useCallback(')
+  const restoreEnd = source.indexOf('\n  function submitSession(', restoreStart)
+  const restoreBody = source.slice(restoreStart, restoreEnd)
+
+  expect(source).toContain(
+    'onRestore={sessionId => void performRestore(sessionId)}',
+  )
+  expect(restoreBody).toContain('await bridge.previewSession(sessionId)')
+  expect(restoreBody).toContain('removedIdsRef.current.has(sessionId)')
+  expect(restoreBody).toContain('!descriptor?.restorable')
+  expect(restoreBody).toContain(
+    "dispatchShell({ type: 'preview-open', sessionId })",
+  )
+  expect(restoreBody).toContain(
+    'focusOrAssignWorkspaceSession(current, sessionId).state',
+  )
+  expect(restoreBody.indexOf('bridge.previewSession(sessionId)')).toBeLessThan(
+    restoreBody.indexOf('restoreLiveSession(sessionId)'),
+  )
+  expect(source).toContain('event.session.restorable')
+  expect(source).toContain(
+    'lazyRestoreClaimsRef.current.delete(event.session.appSessionId)',
+  )
 })
 
 test('P4-24: the active session pane renders the multi-line composer + transcript spine', () => {
@@ -126,6 +155,121 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   // icon button, not a bordered box with a labelled "Send" button.
   expect(html).toContain('bg-transparent')
   expect(html).toContain('aria-label="Send prompt"')
+})
+
+test('IS-B preview paints cached rows and keeps the composer focusable-readOnly', () => {
+  const html = renderToStaticMarkup(
+    <SessionPane
+      accountsSnapshot={null}
+      orchestratorActive={false}
+      activeConnection={{ status: 'ready', inputEnabled: true }}
+      activeDescriptor={{
+        appSessionId: 'session-1',
+        engineSessionId: 'engine-1',
+        cwd: '/tmp/project',
+        title: null,
+        status: 'exited',
+        restorable: true,
+        createdAt: 0,
+        lastAttachedAt: 0,
+      }}
+      activeLog={{
+        inputEnabled: true,
+        messages: [],
+        retainedBytes: 0,
+        truncated: false,
+        error: null,
+        messageBytes: [],
+      }}
+      activeAccount={null}
+      activeSessionId="session-1"
+      branch={null}
+      allowPermission={() => {}}
+      model={null}
+      reasoningEffort={null}
+      fastMode={false}
+      copyForLlm={() => {}}
+      denyPermission={() => {}}
+      history={[]}
+      mentionItems={[]}
+      onApprovePlan={() => {}}
+      onPaste={() => {}}
+      onPreviewEngage={() => {}}
+      onRemovePaste={() => {}}
+      onRevisePlan={() => {}}
+      partialCount={0}
+      pastes={[]}
+      permissionContext={null}
+      permissionQueue={[]}
+      planReview={null}
+      preview
+      previewTruncationMessage="Earlier restored history was omitted."
+      prompt=""
+      restorePermission={() => {}}
+      setPermissionMode={() => {}}
+      setPrompt={() => {}}
+      submit={() => {}}
+      transcript={createTranscriptState()}
+      transportError={null}
+    />,
+  )
+
+  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  expect(textarea).toContain('readOnly=""')
+  expect(textarea).not.toContain('disabled=""')
+  expect(textarea).toContain('placeholder="Focus to reconnect…"')
+  expect(html).toContain('Earlier restored history was omitted.')
+  expect(html).toContain('disabled=""')
+})
+
+test('IS-B connecting composer remains focusable-readOnly until live input is enabled', () => {
+  const props = {
+    accountsSnapshot: null,
+    orchestratorActive: false,
+    activeConnection: { status: 'connecting', inputEnabled: false },
+    activeDescriptor: undefined,
+    activeLog: {
+      inputEnabled: false,
+      messages: [],
+      retainedBytes: 0,
+      truncated: false,
+      error: null,
+      messageBytes: [],
+    },
+    activeAccount: null,
+    activeSessionId: 'session-1',
+    branch: null,
+    allowPermission: () => {},
+    model: null,
+    reasoningEffort: null,
+    fastMode: false,
+    copyForLlm: () => {},
+    denyPermission: () => {},
+    history: [],
+    mentionItems: [],
+    onApprovePlan: () => {},
+    onPaste: () => {},
+    onRemovePaste: () => {},
+    onRevisePlan: () => {},
+    partialCount: 0,
+    pastes: [],
+    permissionContext: null,
+    permissionQueue: [],
+    planReview: null,
+    prompt: '',
+    restorePermission: () => {},
+    setPermissionMode: () => {},
+    setPrompt: () => {},
+    submit: () => {},
+    transcript: createTranscriptState(),
+    transportError: null,
+  } satisfies ComponentProps<typeof SessionPane>
+  const html = renderToStaticMarkup(<SessionPane {...props} />)
+  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+
+  expect(textarea).toContain('readOnly=""')
+  expect(textarea).not.toContain('disabled=""')
+  expect(textarea).toContain('placeholder="Connecting…"')
 })
 
 test('P4-24: the composer bar forwards the REAL active account + model override', () => {

@@ -60,6 +60,34 @@ test('normal startup loads the real command catalog (P3-7: commands: [] retired)
   }
 })
 
+test('fresh session builds the rich slash catalog with descriptions (drift: picker was name-only)', async () => {
+  // The engine's `system/init.slash_commands` is NAMES ONLY (the locked SDK
+  // shape), so the P3-7 picker rendered bare `/name` rows — no descriptions or
+  // arg hints, unlike the prototype. The sidecar now projects the SAME
+  // user-invocable set into a rich display catalog (name + description +
+  // argumentHint) from the `Command` objects it already loads, delivered as
+  // `slash-catalog.snapshot`. Prove it carries a real description. Needs a
+  // credential (the test-only login() guard, see the catalog test above).
+  const previousKey = process.env.ANTHROPIC_API_KEY
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-slash-catalog-test'
+  clearCommandMemoizationCaches()
+  try {
+    const { slashCatalog } = await createNormalSidecarQueryEngineConfig(
+      process.cwd(),
+    )
+    expect(slashCatalog.length).toBeGreaterThan(0)
+    const help = slashCatalog.find(entry => entry.name === 'help')
+    expect(help).toBeDefined()
+    // The picker's description column — a non-empty string, not just the name.
+    expect(typeof help?.description).toBe('string')
+    expect(help?.description.length).toBeGreaterThan(0)
+  } finally {
+    if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = previousKey
+    clearCommandMemoizationCaches()
+  }
+})
+
 test('command catalog load degrades to [] instead of throwing (session-safety)', async () => {
   // The credential-less path (no ANTHROPIC_API_KEY in this test env) makes the
   // eager login() factory throw; session construction must swallow it and run

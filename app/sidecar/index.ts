@@ -158,6 +158,7 @@ async function main(): Promise<void> {
     sessionsCatalog,
     agentMode,
     runControls,
+    slashCatalog,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: args.cwd,
@@ -193,6 +194,7 @@ async function main(): Promise<void> {
     ...(sessionsCatalog ? { sessionsCatalog } : {}),
     ...(agentMode ? { agentMode } : {}),
     ...(runControls ? { runControls } : {}),
+    ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its
     // first turn this run is a continuation — never retitle it from that prompt.
