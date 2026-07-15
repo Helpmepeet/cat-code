@@ -173,7 +173,9 @@ describe('account recovery diagnostics', () => {
       async () => {
         attempts += 1
         if (attempts === 1) {
-          throw new CodexAccountCapError('account-one')
+          throw new APIConnectionError({
+            cause: new CodexAccountCapError('account-one'),
+          })
         }
         return getCodexLeaseForOwner('subagent-cap')?.accountId
       },
@@ -320,25 +322,83 @@ describe('account recovery diagnostics', () => {
       accountId: 'account-one',
     })
 
-    globalThis.fetch = (async () => {
-      return new Response(
-        JSON.stringify({ error: 'invalid_grant' }),
-        {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        },
-      )
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input)
+      if (url.includes('/oauth/token')) {
+        return new Response(
+          JSON.stringify({ error: 'invalid_grant' }),
+          {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        )
+      }
+
+      const requestAccountId = new Headers(init?.headers).get('chatgpt-account-id')
+      if (requestAccountId === 'account-one') {
+        return new Response('', {
+          status: 502,
+          headers: {
+            'x-openai-authorization-error': '401',
+            'x-openai-ide-error-code': 'token_invalidated',
+          },
+        })
+      }
+      if (requestAccountId === 'account-two') {
+        return new Response(
+          [
+            'event: response.output_text.delta',
+            `data: ${JSON.stringify({
+              type: 'response.output_text.delta',
+              delta: 'recovered',
+            })}`,
+            '',
+            'event: response.completed',
+            `data: ${JSON.stringify({
+              type: 'response.completed',
+              response: {
+                usage: {
+                  input_tokens: 4,
+                  output_tokens: 1,
+                  input_tokens_details: { cached_tokens: 0 },
+                },
+              },
+            })}`,
+            '',
+          ].join('\n'),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          },
+        )
+      }
+      throw new Error(`Unexpected account route: ${requestAccountId ?? 'none'}`)
     }) as typeof globalThis.fetch
 
     let attempts = 0
     try {
       for await (const _message of withRetry(
-        async () => ({}) as never,
-        async () => {
+        () =>
+          getAnthropicClient({
+            maxRetries: 0,
+            model: 'gpt-5.6-luna',
+            provider: 'openai',
+            codexLeaseOwnerId: 'subagent-auth',
+            codexLeaseOwnerType: 'subagent',
+            codexConversationIdOverride: 'conv_auth_recovery_sdk',
+          }),
+        async client => {
           attempts += 1
-          if (attempts === 1) {
-            throw new CodexAccountAuthError('account-one', 401)
-          }
+          await client.beta.messages.create({
+            model: 'gpt-5.6-luna',
+            max_tokens: 16,
+            stream: true,
+            messages: [{ role: 'user', content: 'probe' }],
+            _openaiInstructionAssembly: {
+              instructions: 'probe',
+              inputMessages: [],
+            },
+          } as never).withResponse()
           return getCodexLeaseForOwner('subagent-auth')?.accountId
         },
         {
@@ -366,6 +426,7 @@ describe('account recovery diagnostics', () => {
     ).toHaveLength(1)
     expect(codes).toContain('account.failover.succeeded')
     expect(codes).not.toContain('quota.exhausted')
+    expect(codes).not.toContain('account.transient_failure')
   })
 
   test('binds Codex auth recovery to the request account after the lease has moved off it', async () => {

@@ -292,6 +292,143 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
+  test('classifies header-only HTTP token invalidation as an account-bound auth error', async () => {
+    const accountId = 'acct_header_auth'
+    const accessToken = createAccessToken(accountId)
+    const originalFetch = globalThis.fetch
+    const cases = [
+      {
+        responseStatus: 502,
+        headers: {
+          'x-openai-authorization-error': '401',
+          'x-openai-ide-error-code': 'token_invalidated',
+        },
+        expectedStatus: 401,
+      },
+      {
+        responseStatus: 403,
+        headers: {
+          'x-openai-ide-error-code': 'token_revoked',
+        },
+        expectedStatus: 403,
+      },
+    ] as const
+
+    try {
+      for (const testCase of cases) {
+        globalThis.fetch = (async () =>
+          new Response('', {
+            status: testCase.responseStatus,
+            headers: testCase.headers,
+          })) as unknown as typeof globalThis.fetch
+
+        let thrown: unknown
+        try {
+          await createCodexFetch(accessToken, undefined, {
+            resolveTokensForRequest: async () => ({
+              accessToken,
+              refreshToken: 'refresh-header-auth',
+              expiresAt: Date.now() + 60 * 60_000,
+              accountId,
+              source: 'pool',
+            }),
+          })(
+            'https://api.anthropic.com/v1/messages',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                model: 'gpt-5.6-luna',
+                _openaiInstructionAssembly: {
+                  instructions: 'Be precise.',
+                  inputMessages: [],
+                },
+              }),
+            },
+          )
+        } catch (error) {
+          thrown = error
+        }
+
+        expect(thrown).toBeInstanceOf(CodexAccountAuthError)
+        expect((thrown as CodexAccountAuthError).accountId).toBe(accountId)
+        expect((thrown as CodexAccountAuthError).status).toBe(
+          testCase.expectedStatus,
+        )
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('classifies header-only auth errors from deferred HTTP fallback', async () => {
+    const accountId = 'acct_deferred_header_auth'
+    const accessToken = createAccessToken(accountId)
+    const conversationId = 'conv_deferred_header_auth'
+    const originalFetch = globalThis.fetch
+    const fakeWs = installFakeWs()
+
+    globalThis.fetch = (async () =>
+      new Response('', {
+        status: 502,
+        headers: {
+          'x-openai-authorization-error': '401',
+          'x-openai-ide-error-code': 'token_invalidated',
+        },
+      })) as unknown as typeof globalThis.fetch
+
+    fakeWs.responseBatches = [
+      [
+        {
+          type: 'response.output_item.done',
+          item: { type: 'reasoning' },
+        },
+        { __close: { code: 1000, reason: 'connection closed' } },
+      ],
+    ]
+
+    try {
+      const response = await createCodexFetch(accessToken, conversationId, {
+        resolveTokensForRequest: async () => ({
+          accessToken,
+          refreshToken: 'refresh-deferred-header-auth',
+          expiresAt: Date.now() + 60 * 60_000,
+          accountId,
+          source: 'pool',
+        }),
+      })(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'gpt-5.6-luna',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        },
+      )
+
+      let thrown: unknown
+      try {
+        await response.text()
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(CodexAccountAuthError)
+      expect((thrown as CodexAccountAuthError).accountId).toBe(accountId)
+      expect((thrown as CodexAccountAuthError).status).toBe(401)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conversationId)
+      resetCodexCacheContext()
+    }
+  })
+
   test('streaming HTTP model-404 retries over WebSocket on the next attempt', async () => {
     const accessToken = createAccessToken('acct_ws_retry')
     const conv = 'conv_ws_retry'
@@ -2154,14 +2291,39 @@ describe('codex-fetch-adapter', () => {
       {
         status: 500,
         body: 'internal server error',
+        headers: {},
       },
       {
         status: 403,
         body: 'request forbidden by upstream policy',
+        headers: {},
       },
       {
         status: 429,
         body: 'rate limit exceeded; retry later',
+        headers: {},
+      },
+      {
+        status: 502,
+        body: '',
+        headers: {
+          'x-openai-ide-error-code': 'token_invalidated',
+        },
+      },
+      {
+        status: 502,
+        body: '',
+        headers: {
+          'x-openai-authorization-error': '401',
+        },
+      },
+      {
+        status: 502,
+        body: '',
+        headers: {
+          'x-openai-authorization-error': '401',
+          'x-openai-ide-error-code': 'unknown_auth_error',
+        },
       },
     ]
 
@@ -2195,24 +2357,40 @@ describe('codex-fetch-adapter', () => {
       globalThis.fetch = (async () =>
         new Response(testCase.body, {
           status: testCase.status,
-          headers: { 'Content-Type': 'text/plain' },
+          headers: {
+            'Content-Type': 'text/plain',
+            ...testCase.headers,
+          },
         })) as unknown as typeof globalThis.fetch
 
       try {
         let thrown: unknown
+        const accessToken = createAccessToken('acct_http_classification')
         const response = await createCodexFetch(
-          createAccessToken('acct_http_classification'),
+          accessToken,
           `conv_ambiguous_${testCase.status}`,
-        )('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
-            _openaiInstructionAssembly: {
-              instructions: 'Be precise.',
-              inputMessages: [],
-            },
-          }),
-        }).catch(error => {
+          {
+            resolveTokensForRequest: async () => ({
+              accessToken,
+              refreshToken: 'refresh-a',
+              expiresAt: Date.now() + 60_000,
+              accountId: 'acct_http_classification',
+              source: 'pool',
+            }),
+          },
+        )(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-6',
+              _openaiInstructionAssembly: {
+                instructions: 'Be precise.',
+                inputMessages: [],
+              },
+            }),
+          },
+        ).catch(error => {
           thrown = error
           return null
         })

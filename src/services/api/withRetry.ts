@@ -257,6 +257,16 @@ function isStaleConnectionError(error: unknown): boolean {
   return details?.code === 'ECONNRESET' || details?.code === 'EPIPE'
 }
 
+function unwrapCodexAccountError(error: unknown): unknown {
+  if (!(error instanceof APIConnectionError)) {
+    return error
+  }
+  return error.cause instanceof CodexAccountAuthError ||
+    error.cause instanceof CodexAccountCapError
+    ? error.cause
+    : error
+}
+
 export interface RetryContext {
   maxTokensOverride?: number
   model: string
@@ -491,7 +501,8 @@ export async function* withRetry<T>(
 
         return operation(client, attempt, retryContext)
       })
-    } catch (error) {
+    } catch (caughtError) {
+      const error = unwrapCodexAccountError(caughtError)
       lastError = error
       logForDebugging(
         `API error (attempt ${attempt}/${maxRetries + 1}): ${error instanceof APIError ? `${error.status} ${error.message}` : errorMessage(error)}`,

@@ -1,7 +1,7 @@
 # Bug RCA: `gpt-5.6-luna` subagent/side requests die with HTTP 404 "Model not found"
 
 - **Date:** 2026-07-12
-- **Status:** Diagnosed — root cause + HTTP-refusal mechanism confirmed (source, logs, openai/codex#31967); minimal HTTP fix identified (`version` header only, ~80%, pending a confirming probe). **Durable fix (1)+(2) committed on `migration` (`9cfed13`, pushed; PR #8 for review) with review follow-ups applied — true per-account sticky storage + streaming-only 404-retry; not yet live-verified. Currency fix (4) and the confirming probe still open.**
+- **Status:** Diagnosed — root cause + HTTP-refusal mechanism confirmed (source, logs, openai/codex#31967); minimal HTTP fix identified (`version` header only, ~80%, pending a confirming probe). **Durable fix (1)+(2) committed on `migration` (`9cfed13`, pushed; PR #8 for review) with review follow-ups applied — true per-account sticky storage + streaming-only 404-retry; not yet live-verified. Trigger fix (3) was implemented and automatically verified on 2026-07-15; see `docs/reports/2026-07-15-codex-subagent-single-usable-account-failure.md`. Currency fix (4) and the confirming probe remain open.**
 - **Area:** Engine — Codex transport (`src/services/api/codex-*`), account lease pool.
 - **Severity:** High. Silently kills subagent (Explore) spawns and title-generation
   side queries whenever a WebSocket blip forces the HTTP fallback while the
@@ -249,9 +249,9 @@ would not prove the HTTP case — judged unlikely (coherent identity-isolation t
 HTTP-POST repro instructions, row 2 matching our HTTP corpus 32/32), and the probe
 in fix option 4 kills it.
 
-## Recommended fix (NOT applied)
+## Fix status and remaining recommendation
 
-**Durable — do these (model/version-agnostic; break link 4, the only link that
+**Durable — implemented (model/version-agnostic; break link 4, the only link that
 turns a transient blip on a *bad* account into a terminal failure on a *good* one):**
 
 1. **Primary:** key the sticky flag by `conversation + account`, or clear it on
@@ -261,11 +261,11 @@ turns a transient blip on a *bad* account into a terminal failure on a *good* on
    fixed all three observed subagent incidents.
 2. **Backstop:** treat HTTP `404 Model not found` as "retry over WS" rather than
    terminal (`codex-fetch-adapter.ts:3416-3438` + `withRetry` classification).
-3. **Removes the trigger:** classify the header-only `token_invalidated` as
+3. **Implemented 2026-07-15 — removes the trigger:** classify the header-only `token_invalidated` as
    `CodexAccountAuthError` by inspecting the `x-openai-ide-error-code` /
    `x-openai-authorization-error` response headers in `classifyCodexHttpAccountError`
-   (`codex-fetch-adapter.ts:372-392`), so the dead-token WS failure fails over
-   cleanly (`:3380-3398`) instead of marking sticky. Related prior work:
+   so the dead-token WS failure enters account-bound refresh/dead-mark/failover
+   instead of transient connection handling. Related prior work:
    `docs/reports/2026-07-10-codex-token-invalidated-recovery.md`.
 
 Minimal robust PR: (1) + (2).
