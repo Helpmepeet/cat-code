@@ -12,7 +12,7 @@ import type { LocalJSXCommandOnDone } from '../../types/command.js';
 import { clearFastModeCooldown, getFastModeModelDisplay, getFastModeModel, getFastModeRuntimeState, getFastModeUnavailableReason, isFastModeEnabled, isFastModeSupportedByModel, prefetchFastModeStatus } from '../../utils/fastMode.js';
 import { formatDuration } from '../../utils/format.js';
 import { formatModelPricing, getOpus46CostTier } from '../../utils/modelCost.js';
-function applyFastMode(enable: boolean, setAppState: (f: (prev: AppState) => AppState) => void): void {
+export function applyFastMode(enable: boolean, setAppState: (f: (prev: AppState) => AppState) => void): void {
   clearFastModeCooldown();
   if (enable) {
     setAppState(prev => {
