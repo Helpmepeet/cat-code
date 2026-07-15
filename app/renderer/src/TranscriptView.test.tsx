@@ -266,11 +266,11 @@ test('IS-C: an engaged preview shows the pulsing "Resuming session…" divider',
   expect(html).toContain('cached line')
 })
 
-test('IS-C: a no-cache connecting pane shows the restore skeleton, never an empty Welcome', () => {
+test('PL-A: a no-cache connecting pane shows an unambiguous opening skeleton, never an empty Welcome', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView rows={[]} restorePhase="connecting" cwd="/w/cat-code" />,
   )
-  expect(html).toContain('Restoring session…')
+  expect(html).toContain('Opening session…')
   expect(html).toContain('aria-busy="true"')
   // The whole point of F4: no live/empty WelcomeScreen while a restore is pending.
   expect(html).not.toContain('Welcome back')
@@ -287,7 +287,7 @@ test('IS-C: a preview that distilled to zero rows shows the skeleton, not Welcom
 test('IS-C: an ordinary empty pane (no restore) still shows the WelcomeScreen', () => {
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
   expect(html).toContain('Welcome back')
-  expect(html).not.toContain('Restoring session')
+  expect(html).not.toContain('Opening session')
   expect(html).not.toContain('Restored session')
 })
 

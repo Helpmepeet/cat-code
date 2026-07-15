@@ -37,8 +37,11 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   expect(html).not.toContain('Transcript (projected)')
 })
 
-test('IS-B restorable-row wiring previews before restore and opens the same-id pane', () => {
+test('PL-A startup preload is after-paint/store-only and restore is store-first', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const preloadStart = source.indexOf('// PL-A: roster hydration unlocks')
+  const preloadEnd = source.indexOf('\n  const rosterKey', preloadStart)
+  const preloadBody = source.slice(preloadStart, preloadEnd)
   const restoreStart = source.indexOf('const performRestore = useCallback(')
   const restoreEnd = source.indexOf('\n  function submitSession(', restoreStart)
   const restoreBody = source.slice(restoreStart, restoreEnd)
@@ -46,21 +49,30 @@ test('IS-B restorable-row wiring previews before restore and opens the same-id p
   expect(source).toContain(
     'onRestore={sessionId => void performRestore(sessionId)}',
   )
+  expect(preloadBody).toContain('window.requestAnimationFrame')
+  expect(preloadBody).toContain('window.setTimeout')
+  expect(preloadBody).toContain('runStartupTranscriptPreload')
+  expect(preloadBody).toContain("type: 'preview-load'")
+  expect(preloadBody).toContain('projected,')
+  expect(preloadBody).not.toContain("dispatchShell({ type: 'preview-open'")
+
+  expect(restoreBody).toContain('openPreloadedPreview(')
+  expect(restoreBody).toContain('openPreviewPane(sessionId)')
   expect(restoreBody).toContain('await bridge.previewSession(sessionId)')
   expect(restoreBody).toContain('removedIdsRef.current.has(sessionId)')
   expect(restoreBody).toContain('!descriptor?.restorable')
-  expect(restoreBody).toContain(
-    "dispatchShell({ type: 'preview-open', sessionId })",
-  )
-  expect(restoreBody).toContain(
-    'focusOrAssignWorkspaceSession(current, sessionId).state',
+  expect(restoreBody.indexOf('openPreloadedPreview(')).toBeLessThan(
+    restoreBody.indexOf('bridge.previewSession(sessionId)'),
   )
   expect(restoreBody.indexOf('bridge.previewSession(sessionId)')).toBeLessThan(
-    restoreBody.indexOf('restoreLiveSession(sessionId)'),
+    restoreBody.indexOf('await restoreLiveSession(sessionId)'),
   )
   expect(source).toContain('event.session.restorable')
   expect(source).toContain(
     'lazyRestoreClaimsRef.current.delete(event.session.appSessionId)',
+  )
+  expect(source).toContain(
+    "type: 'preview-reset',\n          sessionId: event.appSessionId",
   )
 })
 

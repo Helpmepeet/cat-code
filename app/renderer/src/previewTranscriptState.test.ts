@@ -17,6 +17,7 @@ import { batch } from './serverFrameBatch.js'
 import {
   claimLazyRestore,
   createPreviewTranscriptState,
+  projectPreviewTranscriptCache,
   previewClosePlan,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
@@ -99,6 +100,18 @@ test('cache frames project to the same transcript rows as the live projector', (
   expect(selectTranscriptRows(previewTranscript!, SID)).toEqual(
     selectTranscriptRows(live, SID),
   )
+})
+
+test('preview-load retains an already-projected entry without projecting again', () => {
+  const cached = cache([messageFrame(0)])
+  const projected = projectPreviewTranscriptCache(cached)
+  const preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
+    type: 'preview-load',
+    cache: cached,
+    projected,
+  })
+
+  expect(preview.bySession[SID]).toBe(projected)
 })
 
 test('preview-reset drops exactly one session', () => {

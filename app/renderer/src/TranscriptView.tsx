@@ -136,7 +136,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         <PreviewSkeleton
           label={
             restorePhase === 'connecting'
-              ? 'Restoring session…'
+              ? 'Opening session…'
               : restorePhase === 'resuming'
                 ? 'Resuming session…'
                 : 'Restored session'
