@@ -1,0 +1,38 @@
+/** Test-only child that writes session+done NDJSON in one stdout write. */
+
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
+
+async function main(): Promise<void> {
+  const request = JSON.parse(await new Response(Bun.stdin.stream()).text()) as {
+    items: Array<{ appSessionId: string; engineSessionId: string }>
+  }
+  const sessions = request.items.map(item => ({
+      type: 'session',
+      appSessionId: item.appSessionId,
+      engineSessionId: item.engineSessionId,
+      frames: [
+        {
+          kind: 'event',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: item.appSessionId,
+          replay: true,
+          event: {
+            type: 'message',
+            message: {
+              type: 'user',
+              session_id: item.engineSessionId,
+              uuid: '44444444-4444-4444-8444-444444444444',
+              parent_tool_use_id: null,
+              message: { role: 'user', content: 'fixture' },
+            },
+          },
+        },
+      ],
+    }))
+  process.stdout.write(
+    `${sessions.map(session => JSON.stringify(session)).join('\n')}\n${JSON.stringify({ type: 'done', attempted: sessions.length })}\n`,
+  )
+  process.exit(0)
+}
+
+void main()

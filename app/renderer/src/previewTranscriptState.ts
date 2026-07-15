@@ -26,7 +26,11 @@ export type PreviewTranscriptState = {
 }
 
 export type PreviewTranscriptAction =
-  | { type: 'preview-load'; cache: TranscriptCache }
+  | {
+      type: 'preview-load'
+      cache: TranscriptCache
+      projected?: PreviewTranscriptEntry
+    }
   | { type: 'preview-reset'; sessionId: SessionId }
 
 export type LiveTranscriptAction =
@@ -66,23 +70,30 @@ export function reducePreviewTranscriptState(
   }
 
   const sessionId = action.cache.header.appSessionId
-  const cacheFrames = action.cache.frames.filter(
-    frame => frame.sessionId === sessionId,
-  )
-  let transcript = projectServerFrame(
-    createTranscriptState(),
-    previewReadyFrame(action.cache),
-  )
-  transcript = projectServerFrameBatched(transcript, batch(cacheFrames))
-  const truncationMessage =
-    cacheFrames.find(frame => frame.kind === 'error')?.message ?? null
+  const entry = action.projected ?? projectPreviewTranscriptCache(action.cache)
 
   return {
     bySession: {
       ...state.bySession,
-      [sessionId]: { transcript, truncationMessage },
+      [sessionId]: entry,
     },
   }
+}
+
+/** Project one cache before admission so startup preload budgets projected RAM. */
+export function projectPreviewTranscriptCache(
+  cache: TranscriptCache,
+): PreviewTranscriptEntry {
+  const sessionId = cache.header.appSessionId
+  const cacheFrames = cache.frames.filter(frame => frame.sessionId === sessionId)
+  let transcript = projectServerFrame(
+    createTranscriptState(),
+    previewReadyFrame(cache),
+  )
+  transcript = projectServerFrameBatched(transcript, batch(cacheFrames))
+  const truncationMessage =
+    cacheFrames.find(frame => frame.kind === 'error')?.message ?? null
+  return { transcript, truncationMessage }
 }
 
 export function selectPreviewTranscript(
@@ -104,6 +115,17 @@ export function hasPreviewTranscript(
   sessionId: SessionId,
 ): boolean {
   return state.bySession[sessionId] !== undefined
+}
+
+/** The actual click-path decision: a store hit opens without invoking fallback. */
+export function openPreloadedPreview(
+  state: PreviewTranscriptState,
+  sessionId: SessionId,
+  open: () => void,
+): boolean {
+  if (!hasPreviewTranscript(state, sessionId)) return false
+  open()
+  return true
 }
 
 /**

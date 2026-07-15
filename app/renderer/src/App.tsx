@@ -69,6 +69,7 @@ import {
   claimLazyRestore,
   createPreviewTranscriptState,
   hasPreviewTranscript,
+  openPreloadedPreview,
   previewClosePlan,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
@@ -76,6 +77,13 @@ import {
   selectPreviewTranscript,
   selectPreviewTruncationMessage,
 } from './previewTranscriptState.js'
+import {
+  STARTUP_PRELOAD_MAX_SESSIONS,
+  calculateStartupPreloadCapacity,
+  estimateProjectedPreviewBytes,
+  runStartupTranscriptPreload,
+  selectStartupPreloadCandidates,
+} from './sessionPreload.js'
 import { TranscriptView, type RestorePhase } from './TranscriptView.js'
 import {
   completeSlashDraft,
@@ -323,6 +331,8 @@ export function App() {
     undefined,
     createPreviewTranscriptState,
   )
+  const previewTranscriptRef = useRef(previewTranscript)
+  previewTranscriptRef.current = previewTranscript
   const [permissions, dispatchPermission] = useReducer(
     reducePermissionStateBatched,
     undefined,
@@ -451,12 +461,104 @@ export function App() {
   shellRef.current = shell
   const lazyRestoreClaimsRef = useRef<Set<SessionId>>(new Set())
   const cancelledRestoresRef = useRef<Set<SessionId>>(new Set())
+  const startupPreloadStartedRef = useRef(false)
+  const preloadCandidateIdsRef = useRef<Set<SessionId>>(new Set())
+  const preloadQueuedIdsRef = useRef<Set<SessionId>>(new Set())
+  const preloadReservedBytesRef = useRef<Map<SessionId, number>>(new Map())
+  const preloadQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const preloadCancelledRef = useRef(false)
   // Ids a live `session-removed` dropped before the initial snapshot folded in —
   // so the baseline hydrate never resurrects a row the host already reaped (F3).
   const removedIdsRef = useRef<Set<SessionId>>(new Set())
 
+  /**
+   * One admission queue + one reservation ledger for startup and same-launch
+   * backfill. React dispatches commit asynchronously, so the byte reservations
+   * close the window where two serialized jobs could otherwise both observe a
+   * stale store and independently spend the full 12-session / 64 MiB budget.
+   */
+  const queueTranscriptPreload = useCallback(
+    (
+      descriptors: readonly SessionDescriptor[],
+      options: { throttleMs?: number; quiet?: boolean } = {},
+    ) => {
+      const selected: SessionDescriptor[] = []
+      for (const descriptor of selectStartupPreloadCandidates(
+        descriptors,
+        STARTUP_PRELOAD_MAX_SESSIONS,
+      )) {
+        const sessionId = descriptor.appSessionId
+        if (
+          preloadCandidateIdsRef.current.has(sessionId) ||
+          preloadCandidateIdsRef.current.size < STARTUP_PRELOAD_MAX_SESSIONS
+        ) {
+          preloadCandidateIdsRef.current.add(sessionId)
+          if (!preloadQueuedIdsRef.current.has(sessionId)) {
+            preloadQueuedIdsRef.current.add(sessionId)
+            selected.push(descriptor)
+          }
+        }
+      }
+      if (selected.length === 0) return
+
+      preloadQueueRef.current = preloadQueueRef.current.then(async () => {
+        try {
+          const current = previewTranscriptRef.current
+          const { remainingSessions, remainingBytes } =
+            calculateStartupPreloadCapacity(
+              current,
+              preloadReservedBytesRef.current,
+            )
+          if (remainingSessions <= 0 || remainingBytes <= 0) return
+
+          const selectedById = new Map(
+            selected.map(descriptor => [descriptor.appSessionId, descriptor]),
+          )
+          await runStartupTranscriptPreload({
+            descriptors: selected,
+            previewSession: id => getBridge().previewSession(id),
+            onLoad: (cache, projected) => {
+              preloadReservedBytesRef.current.set(
+                cache.header.appSessionId,
+                estimateProjectedPreviewBytes(projected),
+              )
+              dispatchPreviewTranscript({
+                type: 'preview-load',
+                cache,
+                projected,
+              })
+            },
+            isEligible: id => {
+              const currentDescriptor = shellRef.current.byId[id]
+              return (
+                !removedIdsRef.current.has(id) &&
+                (currentDescriptor?.restorable === true ||
+                  (currentDescriptor === undefined &&
+                    selectedById.get(id)?.restorable === true))
+              )
+            },
+            isAlreadyLoaded: id =>
+              hasPreviewTranscript(previewTranscriptRef.current, id) ||
+              preloadReservedBytesRef.current.has(id),
+            isCancelled: () => preloadCancelledRef.current,
+            maxSessions: remainingSessions,
+            maxProjectedBytes: remainingBytes,
+            throttleMs: options.throttleMs,
+            log: options.quiet ? () => {} : undefined,
+          })
+        } finally {
+          for (const descriptor of selected) {
+            preloadQueuedIdsRef.current.delete(descriptor.appSessionId)
+          }
+        }
+      })
+    },
+    [],
+  )
+
   useEffect(() => {
     const bridge = getBridge()
+    preloadCancelledRef.current = false
     // Main delivers a batch of frames per IPC message (perf F3). Fold the whole
     // batch into every store with ONE dispatch each — so a restore replay is 9
     // dispatches, not 9 per frame. Focus semantics are unchanged: a background
@@ -493,6 +595,7 @@ export function App() {
       })
       for (const sessionId of swapSessions) {
         dispatchPreviewTranscript({ type: 'preview-reset', sessionId })
+        preloadReservedBytesRef.current.delete(sessionId)
       }
     })
     bridge.rendererReady()
@@ -527,8 +630,18 @@ export function App() {
         event.type !== 'session-removed' &&
         event.session.restorable
       ) {
-        lazyRestoreClaimsRef.current.delete(event.session.appSessionId)
-        cancelledRestoresRef.current.delete(event.session.appSessionId)
+        const descriptor = event.session
+        const sessionId = descriptor.appSessionId
+        lazyRestoreClaimsRef.current.delete(sessionId)
+        cancelledRestoresRef.current.delete(sessionId)
+
+        // PL-A + PL-B composition: main re-emits a stable session-status after
+        // writing a backfilled cache. Admit that cache through the existing
+        // previewSession read path, serialized and under the same count/RAM
+        // bounds as startup. This adds no IPC method or inbound frame kind.
+        if (!hasPreviewTranscript(previewTranscriptRef.current, sessionId)) {
+          queueTranscriptPreload([descriptor], { throttleMs: 0, quiet: true })
+        }
       }
       if (event.type === 'session-removed') {
         removedIdsRef.current.add(event.appSessionId)
@@ -538,6 +651,7 @@ export function App() {
           type: 'preview-reset',
           sessionId: event.appSessionId,
         })
+        preloadReservedBytesRef.current.delete(event.appSessionId)
       }
       dispatchShell({ type: 'event', event })
     })
@@ -560,9 +674,10 @@ export function App() {
       })
     return () => {
       cancelled = true
+      preloadCancelledRef.current = true
       unsubscribe()
     }
-  }, [])
+  }, [queueTranscriptPreload])
 
   // Focus correction runs after the roster commits against pane membership:
   // live tabs union cached previews. A preview remains a valid owner until it is
@@ -710,6 +825,31 @@ export function App() {
         .map(row => row.descriptor.appSessionId),
     [sidebarRows],
   )
+
+  // PL-A: roster hydration unlocks a store-only preload after the first paint.
+  // A requestAnimationFrame followed by a timer yields one painted renderer
+  // frame before sequential cache reads begin. The scheduler independently caps
+  // main-thread scans and projected renderer heap, and never opens a pane.
+  useEffect(() => {
+    if (!hostSnapshotReady || startupPreloadStartedRef.current) return
+    let cancelled = false
+    let timer: number | null = null
+    const frame = window.requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        startupPreloadStartedRef.current = true
+        const descriptors = selectSidebarRows(shellRef.current)
+          .filter(row => row.visual.restorable)
+          .map(row => row.descriptor)
+        if (!cancelled) queueTranscriptPreload(descriptors)
+      }, 0)
+    })
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(frame)
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [hostSnapshotReady, queueTranscriptPreload])
+
   const rosterKey = [...paneSessionIds, ...restorableIds].join(' ')
   useEffect(() => {
     if (!pendingRestore || !hostSnapshotReady) return
@@ -1013,40 +1153,58 @@ export function App() {
     [restoreLiveSession],
   )
 
-  // Restorable selection first asks main for the IS-A transcript-only cache. A
-  // hit opens a same-id preview pane without spawning; cache miss preserves the
-  // eager restore fallback. Only subsequent pane engagement invokes restore.
+  const openPreviewPane = useCallback((sessionId: SessionId) => {
+    dispatchShell({ type: 'preview-open', sessionId })
+    setWorkspaceLayoutState(current =>
+      focusOrAssignWorkspaceSession(current, sessionId).state,
+    )
+    setActiveSessionId(sessionId)
+    setActiveView('chat')
+    setShellError(null)
+  }, [])
+
+  // PL-A store-first path: a startup-preloaded transcript opens synchronously
+  // with zero click-time IPC. A not-preloaded/cache-miss row retains IS-B's
+  // existing fetch then eager-restore fallback.
   const performRestore = useCallback(
-    async (sessionId: SessionId) => {
-      const bridge = getBridge()
-      try {
-        const cache = await bridge.previewSession(sessionId)
-        const descriptor = shellRef.current.byId[sessionId]
-        if (
-          removedIdsRef.current.has(sessionId) ||
-          !descriptor?.restorable
-        ) {
-          return
-        }
-        if (cache) {
-          dispatchPreviewTranscript({ type: 'preview-load', cache })
-          dispatchShell({ type: 'preview-open', sessionId })
-          setWorkspaceLayoutState(current =>
-            focusOrAssignWorkspaceSession(current, sessionId).state,
-          )
-          setActiveSessionId(sessionId)
-          setActiveView('chat')
-          setShellError(null)
-          return
-        }
-        if (claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) {
-          await restoreLiveSession(sessionId)
-        }
-      } catch (error) {
-        setShellError(errorMessage(error))
+    (sessionId: SessionId) => {
+      const descriptor = shellRef.current.byId[sessionId]
+      if (removedIdsRef.current.has(sessionId) || !descriptor?.restorable) return
+      if (
+        openPreloadedPreview(
+          previewTranscriptRef.current,
+          sessionId,
+          () => openPreviewPane(sessionId),
+        )
+      ) {
+        return
       }
+
+      const bridge = getBridge()
+      void (async () => {
+        try {
+          const cache = await bridge.previewSession(sessionId)
+          const currentDescriptor = shellRef.current.byId[sessionId]
+          if (
+            removedIdsRef.current.has(sessionId) ||
+            !currentDescriptor?.restorable
+          ) {
+            return
+          }
+          if (cache) {
+            dispatchPreviewTranscript({ type: 'preview-load', cache })
+            openPreviewPane(sessionId)
+            return
+          }
+          if (claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) {
+            await restoreLiveSession(sessionId)
+          }
+        } catch (error) {
+          setShellError(errorMessage(error))
+        }
+      })()
     },
-    [restoreLiveSession],
+    [openPreviewPane, restoreLiveSession],
   )
 
   function submitSession(

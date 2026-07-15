@@ -16,7 +16,7 @@ import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { realpathSync, statSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 
 import {
   isSidecarSendError,
@@ -24,6 +24,7 @@ import {
   type SupervisorEvent,
 } from '../supervisor/supervisor.js'
 import {
+  defaultTranscriptPath,
   defaultRegistryDir,
   SessionRegistry,
 } from '../host/registry.js'
@@ -52,6 +53,11 @@ import {
   transcriptCacheDir,
   writeCache,
 } from './transcriptCache.js'
+import {
+  persistTranscriptBackfillResult,
+  runTranscriptBackfill,
+} from './transcriptBackfill.js'
+import { MAX_TRANSCRIPT_BACKFILL_SESSIONS } from '../shared/transcriptBackfill.js'
 import {
   atomicWriteJson0600,
   createDebouncedAction,
@@ -175,6 +181,12 @@ function cancelAllReplayFlushes(): void {
  */
 const TRANSCRIPT_CACHE_DIR = transcriptCacheDir(defaultRegistryDir())
 
+/** One background PL-B pass per app process; never concurrent with itself. */
+let transcriptBackfillStarted = false
+let transcriptBackfillAbort: AbortController | null = null
+let registryLaunchSettled: Promise<unknown> | null = null
+const TRANSCRIPT_BACKFILL_START_DELAY_MS = 250
+
 /**
  * Persist one session's transcript cache (IS-A). Called at every eviction point
  * in **snapshot → atomic persist → evict** order (the caller evicts AFTER this):
@@ -215,6 +227,108 @@ function gcTranscriptCache(): void {
   }
 }
 
+/**
+ * PL-B — after first window paint, backfill only uncached, restorable, non-live
+ * rows. The worker reads the engine transcript; main remains engine-free and is
+ * the single cache writer. Every result is race-checked against fresh host state
+ * before write so an opened/live, removed, re-keyed, or concurrently-cached row
+ * is skipped safely.
+ */
+async function backfillTranscriptCaches(): Promise<void> {
+  if (transcriptBackfillStarted) return
+  transcriptBackfillStarted = true
+  await registryLaunchSettled
+  const h = host
+  if (!h) return
+
+  // Discovery must not synchronously parse + recursively secret-scan every
+  // cache on Electron's main thread. One directory listing tells us which rows
+  // already have an artifact; strict readCache validation still runs at the
+  // preload boundary and after every backfill write.
+  const cachedIds = new Set(listCachedSessionIds(TRANSCRIPT_CACHE_DIR))
+  const items = h
+    .listSessions()
+    .filter(
+      session =>
+        session.restorable &&
+        session.engineSessionId !== null &&
+        !cachedIds.has(session.appSessionId),
+    )
+    .sort((a, b) => b.lastAttachedAt - a.lastAttachedAt)
+    .slice(0, MAX_TRANSCRIPT_BACKFILL_SESSIONS)
+    .map(session => ({
+      appSessionId: session.appSessionId,
+      engineSessionId: session.engineSessionId!,
+      transcriptPath: defaultTranscriptPath(session.cwd, session.engineSessionId!),
+    }))
+  if (items.length === 0) return
+
+  const abort = new AbortController()
+  transcriptBackfillAbort = abort
+  try {
+    const summary = await runTranscriptBackfill({
+      items,
+      command: process.env.CATCODE_BUN_BIN ?? 'bun',
+      args: [
+        'run',
+        TRANSCRIPT_BACKFILL_WORKER_ENTRY,
+        '--bare',
+      ],
+      cwd: process.cwd(),
+      signal: abort.signal,
+      onSession: result => {
+        const currentHost = host
+        if (!currentHost || !currentHost.canPreview(result.appSessionId)) return
+        const persisted = persistTranscriptBackfillResult(
+          {
+            cacheDir: TRANSCRIPT_CACHE_DIR,
+            getCurrentSession: appSessionId =>
+              currentHost
+                .listSessions()
+                .find(session => session.appSessionId === appSessionId),
+            transcriptExists: session =>
+              session.engineSessionId !== null &&
+              existsSync(defaultTranscriptPath(session.cwd, session.engineSessionId)),
+          },
+          result,
+        )
+        if (persisted === 'written') {
+          const session = currentHost
+            .listSessions()
+            .find(row => row.appSessionId === result.appSessionId)
+          if (session?.restorable) {
+            // Reuse the existing outbound host stream. The unchanged descriptor
+            // is a cache-ready nudge; PL-A performs the existing read-only
+            // previewSession call and never opens a pane.
+            sendHostEvent({ type: 'session-status', session })
+          }
+        }
+        if (persisted === 'rejected') {
+          process.stderr.write(
+            `[main] transcript-cache backfill rejected after write for ${result.appSessionId}\n`,
+          )
+        }
+      },
+      log: line => process.stderr.write(`${line}\n`),
+    })
+    process.stderr.write(
+      `[main] transcript-cache backfill attempted=${summary.attempted} accepted=${summary.accepted} failed=${summary.failed} rejected=${summary.rejected}\n`,
+    )
+  } catch (error) {
+    if (abort.signal.aborted) {
+      // macOS keeps the process alive after window-all-closed. The next activate
+      // creates a fresh host/window and may retry after that window paints.
+      transcriptBackfillStarted = false
+    } else {
+      process.stderr.write(
+        `[main] transcript-cache backfill failed: ${errText(error)}\n`,
+      )
+    }
+  } finally {
+    if (transcriptBackfillAbort === abort) transcriptBackfillAbort = null
+  }
+}
+
 // Perf (2026-07-08, F3): send the whole batch as ONE `webContents.send`, not one
 // send per frame. A restore replays its history as a single `frames[]` from the
 // gate (`onRendererReady` → buffer snapshot); one send ⇒ one renderer IPC task ⇒
@@ -233,6 +347,15 @@ function deliver(frames: ServerFrame[]): void {
 
 /** The sidecar entry path — also the registry's orphan-identity marker (§9-A3). */
 const SIDECAR_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'index.ts')
+/** Same dev/packaged source topology as SIDECAR_ENTRY; separate worker mode. */
+const TRANSCRIPT_BACKFILL_WORKER_ENTRY = join(
+  __dirname,
+  '..',
+  '..',
+  'app',
+  'sidecar',
+  'transcriptBackfillWorker.ts',
+)
 
 function createSupervisor(): SidecarSupervisor {
   // Dev: `bun run <repo>/app/sidecar/index.ts`. Packaged: the --compile'd Bun
@@ -392,6 +515,9 @@ function createWindow(): void {
   window.once('ready-to-show', () => {
     window.show()
     readinessLatch.windowReady()
+    // Paint first. The worker import is the ~189 MB engine-graph cost; never pay
+    // it on the launch/first-window critical path.
+    setTimeout(() => void backfillTranscriptCaches(), TRANSCRIPT_BACKFILL_START_DELAY_MS)
   })
 
   if (IS_DEV) {
@@ -455,8 +581,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
  */
 function wireHostEvents(h: Host): void {
   h.subscribe(event => {
-    const contents = mainWindow?.webContents
-    if (contents) contents.send(CH_HOST_EVENT, event satisfies HostEvent)
+    sendHostEvent(event)
     // IS-A delete-on-reap: a row that left the live∪restorable set (reaped or its
     // engineSessionId cleared) must not keep an at-rest transcript cache.
     if (event.type === 'session-removed') {
@@ -464,6 +589,11 @@ function wireHostEvents(h: Host): void {
     }
     scheduleDebugStateExport.schedule()
   })
+}
+
+function sendHostEvent(event: HostEvent): void {
+  const contents = mainWindow?.webContents
+  if (contents) contents.send(CH_HOST_EVENT, event)
 }
 
 function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | null {
@@ -1054,6 +1184,7 @@ function ensureHost(): Host {
   const launched = registry.launch().catch(error => {
     process.stderr.write(`[main] registry launch failed: ${errText(error)}\n`)
   })
+  registryLaunchSettled = launched
 
   host = new Host({
     supervisor,
@@ -1178,6 +1309,8 @@ app.on('window-all-closed', () => {
   } else {
     supervisor?.shutdown()
   }
+  transcriptBackfillAbort?.abort()
+  transcriptBackfillAbort = null
   supervisor = null
   // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
@@ -1203,4 +1336,6 @@ app.on('before-quit', () => {
   } else {
     supervisor?.shutdown()
   }
+  transcriptBackfillAbort?.abort()
+  transcriptBackfillAbort = null
 })

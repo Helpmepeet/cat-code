@@ -57,10 +57,8 @@ import {
 /**
  * IS-C (M5) — how a restore reads while it is NOT yet a live session. App
  * derives this from the preview flag + connection status (never a frame):
- * - `preview` — cached transcript shown, not engaged; rows sit under a static
- *   "Restored session" divider.
- * - `resuming` — a lazy restore is in flight over the still-shown cached rows;
- *   the divider pulses "Resuming session…".
+ * - `preview` — cached transcript shown, not engaged.
+ * - `resuming` — a lazy restore is in flight over the still-shown cached rows.
  * - `connecting` — a restore is spawning with NO cache to preview (the no-cache
  *   path that used to render an empty pane and read as a hang, report F4); the
  *   pane shows the restore skeleton until live replay lands.
@@ -132,17 +130,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // rows (truncation-only edge) both render the restore skeleton instead of
     // the live WelcomeScreen.
     if (restorePhase !== null) {
-      return (
-        <PreviewSkeleton
-          label={
-            restorePhase === 'connecting'
-              ? 'Restoring session…'
-              : restorePhase === 'resuming'
-                ? 'Resuming session…'
-                : 'Restored session'
-          }
-        />
-      )
+      return <PreviewSkeleton />
     }
     // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
     // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex pool
@@ -166,10 +154,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // card at read time — a pure derivation over the already-nested rows, never a
   // new frame or message type (C3). Non-agent rows and lone agents pass through.
   const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
-  // IS-C (M5) — cached preview rows (engaged or not) sit under the "restored
-  // session" divider so the pane never masquerades as a live session; the
-  // `connecting` phase only fires on an empty pane (handled above), so it draws
-  // no divider over live rows.
+  // IS-C (M5) — cached preview rows (engaged or not) keep a non-text restore
+  // marker so the pane never masquerades as a live session; the `connecting`
+  // phase only fires on an empty pane (handled above), so it draws no divider
+  // over live rows.
   const restored = restorePhase === 'preview' || restorePhase === 'resuming'
   return (
     // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
@@ -193,23 +181,17 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
 })
 
 /**
- * IS-C (M5) — the "restored session" divider above cached preview rows. Shares
- * the centered-hairline seam grammar (see `Seam`) but carries a live pulse dot
- * so an in-flight resume reads as work, not a static label. Pure presentation.
+ * IS-C (M5) — non-text marker above cached preview rows. Shares the
+ * centered-hairline seam grammar (see `Seam`) and carries a live pulse dot for
+ * in-flight resume. Pure presentation.
  */
 function RestoredSessionDivider({ resuming }: { resuming: boolean }) {
   return (
-    <div className="flex items-center gap-3 py-1" role="status">
+    <div className="flex items-center gap-3 py-1" aria-hidden>
       <div className="h-px flex-1 bg-accent/20" />
-      <div className="flex items-center gap-1.5 whitespace-nowrap text-[11px]">
-        <span
-          className={`h-1.5 w-1.5 rounded-full bg-accent ${resuming ? 'animate-pulse' : ''}`}
-          aria-hidden
-        />
-        <span className="text-text-muted">
-          {resuming ? 'Resuming session…' : 'Restored session'}
-        </span>
-      </div>
+      <span
+        className={`h-1.5 w-1.5 rounded-full bg-accent ${resuming ? 'animate-pulse' : ''}`}
+      />
       <div className="h-px flex-1 bg-accent/20" />
     </div>
   )
@@ -220,10 +202,10 @@ const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as co
 /**
  * IS-C (M5) — restore skeleton for a pane with no rows yet: the no-cache
  * `connecting` path (report F4's "reads as a hang") and the empty-cache preview
- * fallback. A pulsing header + shimmer bars signal work in flight; it never
- * shows the live/empty WelcomeScreen while a restore is pending.
+ * fallback. A pulsing dot + shimmer bars signal work in flight; it never shows
+ * the live/empty WelcomeScreen while a restore is pending.
  */
-function PreviewSkeleton({ label }: { label: string }) {
+function PreviewSkeleton() {
   return (
     <div
       className="mx-auto flex w-full max-w-[740px] flex-col gap-3 px-8 pt-6"
@@ -231,13 +213,7 @@ function PreviewSkeleton({ label }: { label: string }) {
       aria-live="polite"
       aria-busy="true"
     >
-      <div className="flex items-center gap-2 text-[11px] text-text-subtle">
-        <span
-          className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
-          aria-hidden
-        />
-        <span>{label}</span>
-      </div>
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
       <div className="flex flex-col gap-2.5" aria-hidden>
         {SKELETON_BAR_WIDTHS.map((width, index) => (
           <div

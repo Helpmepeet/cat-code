@@ -190,6 +190,33 @@ test('IS-B lazy restore enables replay coalescing on the real host handler', () 
   )
 })
 
+test('PL-B starts one bounded serialized worker only after first paint; main stays engine-free', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const readyStart = source.indexOf("window.once('ready-to-show'")
+  const readyEnd = source.indexOf('\n  })', readyStart)
+  const readyBody = source.slice(readyStart, readyEnd)
+  expect(readyStart).toBeGreaterThan(-1)
+  expect(readyBody.indexOf('window.show()')).toBeGreaterThan(-1)
+  expect(readyBody.indexOf('backfillTranscriptCaches()')).toBeGreaterThan(
+    readyBody.indexOf('window.show()'),
+  )
+  expect(readyBody).toContain('setTimeout(')
+
+  const backfillStart = source.indexOf(
+    'async function backfillTranscriptCaches(): Promise<void>',
+  )
+  const backfillEnd = source.indexOf('\n}\n', backfillStart)
+  const backfillBody = source.slice(backfillStart, backfillEnd)
+  expect(backfillBody).toContain('.sort((a, b) => b.lastAttachedAt - a.lastAttachedAt)')
+  expect(backfillBody).toContain('.slice(0, MAX_TRANSCRIPT_BACKFILL_SESSIONS)')
+  expect(backfillBody).toContain('listCachedSessionIds(TRANSCRIPT_CACHE_DIR)')
+  expect(backfillBody).not.toContain('readCache(TRANSCRIPT_CACHE_DIR')
+  expect(backfillBody.match(/runTranscriptBackfill\(/g)).toHaveLength(1)
+  expect(backfillBody).toContain("persisted === 'written'")
+  expect(backfillBody).toContain("sendHostEvent({ type: 'session-status', session })")
+  expect(source).not.toMatch(/from ['"]\.\.\/\.\.\/src\//)
+})
+
 test('HC1 ORIGIN rule: the renderer create handler resolves a token, never a renderer cwd', () => {
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
 
