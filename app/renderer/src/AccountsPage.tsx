@@ -131,7 +131,7 @@ export function renameError(
 }
 
 /** Human reset label from the pool's Unix-SECONDS reset hint. */
-function formatResetLabel(sec: number | null): string {
+export function formatResetLabel(sec: number | null): string {
   if (!sec) return 'soon'
   const ms = sec * 1000 - Date.now()
   if (ms <= 0) return 'now'
