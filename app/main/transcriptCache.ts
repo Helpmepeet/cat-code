@@ -125,6 +125,20 @@ export function distill(frames: ServerFrame[]): TranscriptCache {
     (ready?.sessionId ?? kept[0]?.sessionId ?? frames[0]?.sessionId ?? '')
   const engineSessionId =
     ready && ready.kind === 'ready' ? ready.engineSessionId : null
+  return createTranscriptCache(appSessionId, engineSessionId, kept)
+}
+
+/**
+ * Build the same cache envelope for a transcript-only frame set produced by the
+ * PL-B worker. Main calls this only after strict worker-boundary validation and
+ * a fresh non-live/restorable race check; keeping envelope construction here
+ * makes on-close and backfilled caches round-trip through the exact same codec.
+ */
+export function createTranscriptCache(
+  appSessionId: SessionId,
+  engineSessionId: string | null,
+  frames: ServerFrame[],
+): TranscriptCache {
   return {
     header: {
       appSessionId,
@@ -134,7 +148,7 @@ export function distill(frames: ServerFrame[]): TranscriptCache {
       guardVersion: TRANSCRIPT_CACHE_GUARD_VERSION,
       writtenAt: Date.now(),
     },
-    frames: kept,
+    frames,
   }
 }
 

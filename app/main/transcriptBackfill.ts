@@ -1,0 +1,259 @@
+/**
+ * Main-owned PL-B worker runner. This module contains no Electron imports and is
+ * unit-testable. It spawns exactly ONE serialized engine-graph worker, sends one
+ * bounded manifest, parses bounded NDJSON records, validates every record
+ * fail-closed, re-scans for secret-keyed material, and hands accepted session
+ * results to main (the sole cache writer).
+ */
+
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+
+import type { SessionDescriptor } from '../shared/hostApi.js'
+import { scanForSecrets } from '../shared/secretGuard.js'
+import {
+  MAX_TRANSCRIPT_BACKFILL_INPUT_BYTES,
+  MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES,
+  TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+  parseTranscriptBackfillRequest,
+  parseTranscriptBackfillResult,
+  type TranscriptBackfillItem,
+  type TranscriptBackfillSessionResult,
+} from '../shared/transcriptBackfill.js'
+import {
+  createTranscriptCache,
+  readCache,
+  writeCache,
+} from './transcriptCache.js'
+
+export const TRANSCRIPT_BACKFILL_TIMEOUT_MS = 5 * 60 * 1000
+const MAX_BACKFILL_STDERR_BYTES = 64 * 1024
+
+export type TranscriptBackfillRunOptions = {
+  items: TranscriptBackfillItem[]
+  command: string
+  args: string[]
+  cwd: string
+  env?: NodeJS.ProcessEnv
+  signal?: AbortSignal
+  timeoutMs?: number
+  spawnWorker?: typeof spawn
+  onSession: (result: TranscriptBackfillSessionResult) => void
+  log?: (line: string) => void
+}
+
+export type TranscriptBackfillRunSummary = {
+  attempted: number
+  accepted: number
+  failed: number
+  rejected: number
+}
+
+export type TranscriptBackfillPersistResult =
+  | 'written'
+  | 'ineligible'
+  | 'already_cached'
+  | 'rejected'
+
+/**
+ * Final main-side race gate + single-writer commit. The caller supplies a FRESH
+ * host descriptor and transcript existence check; a live/removed/re-keyed row
+ * or a cache written concurrently while the worker ran is never overwritten.
+ */
+export function persistTranscriptBackfillResult(
+  options: {
+    cacheDir: string
+    getCurrentSession: (appSessionId: string) => SessionDescriptor | undefined
+    transcriptExists: (session: SessionDescriptor) => boolean
+  },
+  result: TranscriptBackfillSessionResult,
+): TranscriptBackfillPersistResult {
+  const current = options.getCurrentSession(result.appSessionId)
+  if (
+    !current?.restorable ||
+    current.engineSessionId !== result.engineSessionId ||
+    !options.transcriptExists(current)
+  ) {
+    return 'ineligible'
+  }
+  if (readCache(options.cacheDir, result.appSessionId) !== null) {
+    return 'already_cached'
+  }
+  writeCache(
+    options.cacheDir,
+    createTranscriptCache(
+      result.appSessionId,
+      result.engineSessionId,
+      result.frames,
+    ),
+  )
+  return readCache(options.cacheDir, result.appSessionId) === null
+    ? 'rejected'
+    : 'written'
+}
+
+export async function runTranscriptBackfill(
+  options: TranscriptBackfillRunOptions,
+): Promise<TranscriptBackfillRunSummary> {
+  const request = parseTranscriptBackfillRequest({
+    version: TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+    items: options.items,
+  })
+  if (!request) throw new Error('invalid transcript-backfill manifest')
+  const input = JSON.stringify(request)
+  if (Buffer.byteLength(input, 'utf8') > MAX_TRANSCRIPT_BACKFILL_INPUT_BYTES) {
+    throw new Error('transcript-backfill manifest exceeds input limit')
+  }
+  if (request.items.length === 0) {
+    return { attempted: 0, accepted: 0, failed: 0, rejected: 0 }
+  }
+
+  const spawnWorker = options.spawnWorker ?? spawn
+  const child = spawnWorker(options.command, options.args, {
+    cwd: options.cwd,
+    env: {
+      ...process.env,
+      ...options.env,
+      // Defense in depth with the worker's own pre-import assignment + --bare
+      // argv: SessionStart hooks must stay suppressed even if one gate drifts.
+      CLAUDE_CODE_SIMPLE: '1',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }) as ChildProcessWithoutNullStreams
+
+  const expected = new Map(
+    request.items.map(item => [
+      item.appSessionId,
+      `${item.engineSessionId}\0${item.transcriptPath}`,
+    ]),
+  )
+  const seen = new Set<string>()
+  let accepted = 0
+  let failed = 0
+  let rejected = 0
+  let doneAttempted: number | null = null
+  let pending = Buffer.alloc(0)
+  let stderr = Buffer.alloc(0)
+  let timedOut = false
+  let aborted = false
+
+  const terminate = () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+  }
+  const timeout = setTimeout(() => {
+    timedOut = true
+    terminate()
+  }, options.timeoutMs ?? TRANSCRIPT_BACKFILL_TIMEOUT_MS)
+  const onAbort = () => {
+    aborted = true
+    terminate()
+  }
+  options.signal?.addEventListener('abort', onAbort, { once: true })
+
+  child.stderr.on('data', chunk => {
+    if (stderr.byteLength >= MAX_BACKFILL_STDERR_BYTES) return
+    const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    stderr = Buffer.concat([
+      stderr,
+      next.subarray(0, MAX_BACKFILL_STDERR_BYTES - stderr.byteLength),
+    ])
+  })
+
+  child.stdout.on('data', chunk => {
+    const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    pending = Buffer.concat([pending, next])
+    while (true) {
+      const newline = pending.indexOf(0x0a)
+      if (newline < 0) break
+      const line = pending.subarray(0, newline)
+      pending = pending.subarray(newline + 1)
+      if (line.byteLength === 0) continue
+      if (line.byteLength > MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES) {
+        rejected += 1
+        terminate()
+        return
+      }
+      let raw: unknown
+      try {
+        raw = JSON.parse(line.toString('utf8'))
+      } catch {
+        rejected += 1
+        terminate()
+        return
+      }
+      const result = parseTranscriptBackfillResult(raw)
+      if (!result || !scanForSecrets(result).ok) {
+        rejected += 1
+        terminate()
+        return
+      }
+      if (result.type === 'done') {
+        if (doneAttempted !== null) {
+          rejected += 1
+          terminate()
+          return
+        }
+        doneAttempted = result.attempted
+        continue
+      }
+      const identity = expected.get(result.appSessionId)
+      if (
+        !identity ||
+        !identity.startsWith(`${result.engineSessionId}\0`) ||
+        seen.has(result.appSessionId)
+      ) {
+        rejected += 1
+        terminate()
+        return
+      }
+      seen.add(result.appSessionId)
+      if (result.type === 'failure') {
+        failed += 1
+      } else {
+        options.onSession(result)
+        accepted += 1
+      }
+    }
+    // Only the unterminated tail is one in-flight record. Several complete
+    // records may arrive in one OS chunk and are drained above before this cap.
+    if (pending.byteLength > MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES) {
+      rejected += 1
+      terminate()
+    }
+  })
+
+  child.stdin.end(input)
+  const { code, signal } = await waitForExit(child)
+  clearTimeout(timeout)
+  options.signal?.removeEventListener('abort', onAbort)
+
+  const diagnostics = stderr.toString('utf8').trim()
+  if (diagnostics) options.log?.(diagnostics)
+  if (aborted) throw new Error('transcript-backfill worker aborted')
+  if (timedOut) throw new Error('transcript-backfill worker timed out')
+  if (code !== 0) {
+    throw new Error(
+      `transcript-backfill worker failed (code=${String(code)} signal=${String(signal)})`,
+    )
+  }
+  if (pending.byteLength !== 0 || doneAttempted !== request.items.length) {
+    throw new Error('transcript-backfill worker ended without a valid done record')
+  }
+  if (seen.size !== request.items.length) {
+    throw new Error('transcript-backfill worker omitted a session result')
+  }
+  return {
+    attempted: request.items.length,
+    accepted,
+    failed,
+    rejected,
+  }
+}
+
+function waitForExit(
+  child: ChildProcessWithoutNullStreams,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code, signal) => resolve({ code, signal }))
+  })
+}
