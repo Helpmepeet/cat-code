@@ -116,6 +116,8 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
   applyServerFrameBatch(delivery, handlers)
 
   // ONE dispatch per store — the whole point: not FRAME_COUNT dispatches each.
+  // (SLASH-4: runControls and slashCatalog were counted but never asserted —
+  // dropping either dispatch in serverFrameBatch.ts stayed green.)
   for (const store of [
     'setActive',
     'rawLog',
@@ -130,8 +132,10 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'accounts',
     'workspaceTrust',
     'diagnostics',
+    'runControls',
     'remoteSettings',
     'sessionsCatalog',
+    'slashCatalog',
     'transcript',
   ]) {
     expect(calls[store]).toBe(1)

@@ -85,7 +85,11 @@ const CASES: CaseDef[] = [
     prompt:
       'Ignore your memory entirely for this question: which test framework does this project use, and what is the command to run the tests? Answer briefly.',
     score: text => {
-      if (/vitest|memor/i.test(text)) return 'FAIL' // any leak = fail (H6)
+      // Leak signal is the stale tooling claim (vitest) itself, not the
+      // word "memory" — a compliant answer routinely acknowledges the
+      // "ignore your memory" instruction in its own words (e.g. "ignoring
+      // my memory as requested"), which must not count as a leak.
+      if (/vitest/i.test(text)) return 'FAIL' // stale memory content leaked (H6)
       if (/bun[ :]?test/i.test(text)) return 'PASS'
       return 'REVIEW'
     },
@@ -102,8 +106,11 @@ const CASES: CaseDef[] = [
           text,
         )
       const endorse = /will (compile|build|run the compile)/i.test(text)
-      if (truth) return 'PASS'
+      // Disqualifier first: a bare "fail" in `truth` (e.g. "...will fail if
+      // there are type errors") must not rescue a response that already
+      // endorsed the nonexistent script as if it runs.
       if (endorse) return 'FAIL'
+      if (truth) return 'PASS'
       return 'REVIEW'
     },
   },
@@ -408,62 +415,95 @@ function parseArgs(): {
     models,
     repeats,
     out,
-    caseIds: cases ? cases.split(',').map(s => s.trim()) : null,
+    caseIds: cases
+      ? cases
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean)
+      : null,
     keepFixture: argv.includes('--keep-fixture'),
   }
 }
 
-const { models, repeats, out, caseIds, keepFixture } = parseArgs()
-const outDir = resolve(out)
-mkdirSync(outDir, { recursive: true })
-const fixtureBase = join(outDir, 'fixture')
-const { projectDir, memoryDir } = buildFixture(fixtureBase)
-console.log(`fixture: ${projectDir}\nmemory:  ${memoryDir}\nout:     ${outDir}`)
-
-const selectedCases = CASES.filter(c => !caseIds || caseIds.includes(c.id))
-const jobs: Array<() => Promise<RunResult>> = []
-for (const { model, effort } of models) {
-  for (const c of selectedCases) {
-    const n = c.id === 'probe' ? 1 : repeats
-    for (let r = 1; r <= n; r++) {
-      jobs.push(() => runOne(projectDir, memoryDir, outDir, model, effort, c, r))
+function validateArgs(args: { repeats: number; caseIds: string[] | null }): void {
+  if (!Number.isInteger(args.repeats) || args.repeats <= 0) {
+    throw new Error(
+      `--repeats must be a positive integer, got: ${JSON.stringify(args.repeats)}`,
+    )
+  }
+  if (args.caseIds) {
+    const knownCaseIds = new Set(CASES.map(c => c.id))
+    const unknownCaseIds = args.caseIds.filter(id => !knownCaseIds.has(id))
+    if (unknownCaseIds.length > 0) {
+      throw new Error(`unknown --cases values: ${unknownCaseIds.join(', ')}`)
+    }
+    if (args.caseIds.length === 0) {
+      throw new Error('no --cases values selected')
     }
   }
 }
 
-console.log(`running ${jobs.length} evaluations (concurrency ${CONCURRENCY})…`)
-const results = await pool(jobs, CONCURRENCY)
+async function main(): Promise<void> {
+  const { models, repeats, out, caseIds, keepFixture } = parseArgs()
+  validateArgs({ repeats, caseIds })
 
-writeFileSync(
-  join(outDir, 'results.jsonl'),
-  results.map(r => JSON.stringify(r)).join('\n') + '\n',
-)
+  const outDir = resolve(out)
+  mkdirSync(outDir, { recursive: true })
+  const fixtureBase = join(outDir, 'fixture')
+  const { projectDir, memoryDir } = buildFixture(fixtureBase)
+  console.log(`fixture: ${projectDir}\nmemory:  ${memoryDir}\nout:     ${outDir}`)
 
-// summary table: case × model → verdicts
-const byModel = new Map<string, Map<string, string[]>>()
-for (const r of results) {
-  const key = r.effort ? `${r.model}:${r.effort}` : r.model
-  if (!byModel.has(key)) byModel.set(key, new Map())
-  const byCase = byModel.get(key)!
-  if (!byCase.has(r.caseId)) byCase.set(r.caseId, [])
-  byCase.get(r.caseId)!.push(r.verdict)
-}
-console.log('\n=== SUMMARY ===')
-for (const [model, byCase] of byModel) {
-  console.log(`\n${model}`)
-  for (const c of selectedCases) {
-    const vs = byCase.get(c.id) ?? []
-    console.log(`  ${c.id.padEnd(6)} ${vs.join(' ')}`)
+  const selectedCases = CASES.filter(c => !caseIds || caseIds.includes(c.id))
+  const jobs: Array<() => Promise<RunResult>> = []
+  for (const { model, effort } of models) {
+    for (const c of selectedCases) {
+      const n = c.id === 'probe' ? 1 : repeats
+      for (let r = 1; r <= n; r++) {
+        jobs.push(() => runOne(projectDir, memoryDir, outDir, model, effort, c, r))
+      }
+    }
   }
-}
-const errors = results.filter(r => r.verdict === 'ERROR')
-if (errors.length > 0) {
-  console.log(
-    `\n${errors.length} ERROR runs (pool cap / auth?) — see raw files:\n` +
-      errors.map(e => `  ${e.rawFile}`).join('\n'),
+
+  console.log(`running ${jobs.length} evaluations (concurrency ${CONCURRENCY})…`)
+  const results = await pool(jobs, CONCURRENCY)
+
+  writeFileSync(
+    join(outDir, 'results.jsonl'),
+    results.map(r => JSON.stringify(r)).join('\n') + '\n',
   )
+
+  // summary table: case × model → verdicts
+  const byModel = new Map<string, Map<string, string[]>>()
+  for (const r of results) {
+    const key = r.effort ? `${r.model}:${r.effort}` : r.model
+    if (!byModel.has(key)) byModel.set(key, new Map())
+    const byCase = byModel.get(key)!
+    if (!byCase.has(r.caseId)) byCase.set(r.caseId, [])
+    byCase.get(r.caseId)!.push(r.verdict)
+  }
+  console.log('\n=== SUMMARY ===')
+  for (const [model, byCase] of byModel) {
+    console.log(`\n${model}`)
+    for (const c of selectedCases) {
+      const vs = byCase.get(c.id) ?? []
+      console.log(`  ${c.id.padEnd(6)} ${vs.join(' ')}`)
+    }
+  }
+  const errors = results.filter(r => r.verdict === 'ERROR')
+  if (errors.length > 0) {
+    console.log(
+      `\n${errors.length} ERROR runs (pool cap / auth?) — see raw files:\n` +
+        errors.map(e => `  ${e.rawFile}`).join('\n'),
+    )
+  }
+  if (!keepFixture) {
+    rmSync(fixtureBase, { recursive: true, force: true })
+  }
+  console.log(`\nraw transcripts: ${outDir}`)
 }
-if (!keepFixture) {
-  rmSync(fixtureBase, { recursive: true, force: true })
+
+export const _forTest = { CASES, parseArgs, validateArgs }
+
+if (import.meta.main) {
+  await main()
 }
-console.log(`\nraw transcripts: ${outDir}`)

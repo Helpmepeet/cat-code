@@ -1,6 +1,11 @@
 import { expect, test } from 'bun:test'
+import type { ReactElement, ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ComposerActionsBar } from './ComposerActionsBar.js'
+import {
+  AccountSwitcherPanel,
+  ComposerActionsBar,
+  ContextUsagePanel,
+} from './ComposerActionsBar.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
@@ -253,6 +258,234 @@ test('P4-24c — without runControls, the faces stay the P4-24 read-only static 
   expect(html).not.toContain('Enable fast mode')
   // No model/effort menu triggers — only the permission-mode chip.
   expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(1)
+})
+
+// ── Profile account-switcher popover (the prototype's `AccountChip`) ──────────
+
+test('with a switch handler, the account face becomes an interactive menu trigger', () => {
+  // Read-only (no handler) → a <span> face, no menu trigger (existing tests). WITH
+  // onSwitchAccount → the face is a <button aria-haspopup="menu"> that opens the
+  // switcher. No runControls/model here, so the only OTHER trigger is the perm chip.
+  const readOnly = render({ account: account({ alias: 'hiby' }) })
+  expect(countOccurrences(readOnly, 'aria-haspopup="menu"')).toBe(1)
+
+  const interactive = render({
+    account: account({ alias: 'hiby' }),
+    onSwitchAccount: () => {},
+  })
+  expect(countOccurrences(interactive, 'aria-haspopup="menu"')).toBe(2)
+  // Same alias + title contract as the read-only face (real status on the title).
+  expect(interactive).toContain('hiby')
+  expect(interactive).toContain('Active account: hiby · healthy')
+})
+
+function pool(): AccountStatus[] {
+  return [
+    account({ id: 'a-hiby', alias: 'hiby', isDefault: true, switchable: false, usagePrimary: 10, usageWeekly: 20 }),
+    account({ id: 'a-yox', alias: 'yoxrent', isDefault: false, switchable: true, usagePrimary: 55, usageWeekly: 40 }),
+    account({
+      id: 'a-cap',
+      alias: 'oldcap',
+      status: 'capped',
+      availabilityLabel: 'Limit reached (resets in 2h)',
+      isDefault: false,
+      switchable: false,
+      usageResetAt: null,
+    }),
+  ]
+}
+
+test('AccountSwitcherPanel lists the real pool with a healthy count', () => {
+  const rows = pool()
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('hiby')
+  expect(html).toContain('yoxrent')
+  expect(html).toContain('oldcap')
+  // 2 of 3 healthy (hiby + yoxrent; oldcap is capped).
+  expect(html).toContain('/3 healthy')
+  expect(html).toContain('>2</span>/3 healthy')
+})
+
+test('AccountSwitcherPanel: only a switchable non-active row is an enabled switch target', () => {
+  const rows = pool()
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  // The one switchable non-active row carries the switch affordance...
+  expect(html).toContain('Switch to yoxrent')
+  // ...and the active row + the capped row are BOTH unavailable as a switch
+  // target (ACCT-6: aria-disabled, not native `disabled` — they stay in the
+  // tab order so a keyboard user can still perceive their state).
+  expect(countOccurrences(html, 'aria-disabled="true"')).toBe(2)
+  expect(countOccurrences(html, 'aria-disabled="false"')).toBe(1)
+  expect(html).not.toContain('disabled=""')
+  expect(html).not.toContain('Switch to hiby')
+  expect(html).not.toContain('Switch to oldcap')
+})
+
+test('AccountSwitcherPanel: a capped account shows its real availability label, not a hardcoded "Capped" (ACCT-1)', () => {
+  const rows = pool()
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('Limit reached (resets in 2h)')
+  expect(html).not.toContain('>Capped<')
+  // Only the capped row implies reset timing (the "· ↺" suffix).
+  expect(html).toContain('· ↺ soon')
+  // Healthy rows show real used-percent (10% / 20% for the active account).
+  expect(html).toContain('10%')
+  expect(html).toContain('20%')
+})
+
+test('AccountSwitcherPanel: dead and quarantined rows show their real label, never "Capped" (ACCT-1)', () => {
+  const rows = [
+    account({
+      id: 'a-dead',
+      alias: 'deadacct',
+      status: 'dead',
+      availabilityLabel: 'Needs re-login',
+      switchable: false,
+      usageResetAt: null,
+    }),
+    account({
+      id: 'a-quarantined',
+      alias: 'quaracct',
+      status: 'quarantined',
+      availabilityLabel: 'Connection issue (retrying)',
+      switchable: false,
+      usageResetAt: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('Needs re-login')
+  expect(html).toContain('Connection issue (retrying)')
+  expect(html).not.toContain('>Capped<')
+  // Neither dead nor quarantined implies a reset timer.
+  expect(html).not.toContain('↺')
+})
+
+test('AccountSwitcherPanel: the header count excludes a healthy account that hit its usage limit (ACCT-4)', () => {
+  const rows = [
+    account({ id: 'a-1', alias: 'one', status: 'healthy', usageLimitReached: false }),
+    account({ id: 'a-2', alias: 'two', status: 'healthy', usageLimitReached: true }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  // Only 1 of 2 is truly ready, even though both report status 'healthy' —
+  // matches the sidecar's readyCount predicate, not a bare status check.
+  expect(html).toContain('>1</span>/2 healthy')
+})
+
+test('AccountSwitcherPanel: clicking a switchable row invokes onSwitch with its real id (ACCT-9)', () => {
+  // This package has no DOM/click-simulation harness (see AccountsPage.test.tsx's
+  // header comment) — the sibling convention is to exercise the EXACT handler a
+  // click would fire, not a re-implementation, by calling the component function
+  // directly and invoking the onClick prop off the returned element tree. Static
+  // markup alone (the prior coverage) never proves the wiring is correct — it
+  // can't fire a click, so a broken id or a dropped handler still renders fine.
+  type ButtonEl = ReactElement<{ onClick?: () => void; children?: ReactNode }>
+  type DivEl = ReactElement<{ className?: string; children?: ReactNode }>
+
+  const rows = pool()
+  const switched: string[] = []
+  const element = AccountSwitcherPanel({
+    active: rows[0]!,
+    pool: rows,
+    onSwitch: id => switched.push(id),
+  })
+  // Locate the rows container by its own marker className rather than a fixed
+  // positional index, so inserting/reordering a sibling element in the panel's
+  // JSX can't silently make this grab the wrong node.
+  const rowsContainer = (element.props.children as DivEl[]).find(child =>
+    child?.props?.className?.includes('max-h-[300px]'),
+  )!
+  const buttons = rowsContainer.props.children as ButtonEl[]
+
+  const yoxRow = buttons.find(b => b.key === 'a-yox')!
+  expect(typeof yoxRow.props.onClick).toBe('function')
+  yoxRow.props.onClick?.()
+  expect(switched).toEqual(['a-yox'])
+
+  // The active row and the unavailable (capped) row are not switch targets —
+  // no click handler is attached at all, so a click can never fire onSwitch.
+  const activeRow = buttons.find(b => b.key === 'a-hiby')!
+  expect(activeRow.props.onClick).toBeUndefined()
+  const cappedRow = buttons.find(b => b.key === 'a-cap')!
+  expect(cappedRow.props.onClick).toBeUndefined()
+})
+
+test('AccountSwitcherPanel: the Manage footer appears only when a handler is wired', () => {
+  const rows = pool()
+  const withManage = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} onManage={() => {}} />,
+  )
+  expect(withManage).toContain('Manage accounts →')
+  const without = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(without).not.toContain('Manage accounts →')
+})
+
+// ── Context donut usage popover (the prototype's `ContextChip`) ───────────────
+
+test('the context donut is an interactive dialog trigger when usage is present (ACCT-3: informational, not a menu)', () => {
+  // No runControls/account here, so the only OTHER trigger is the perm chip.
+  const html = render({ contextUsage: USAGE })
+  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(1)
+  expect(countOccurrences(html, 'aria-haspopup="dialog"')).toBe(1)
+  // The donut visual + its readout survive (real percent, never fabricated).
+  expect(html).toContain('Context 21% used')
+})
+
+test('ContextUsagePanel shows Plan usage (5h + weekly) plus the real Context total', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={USAGE}
+      account={account({ usagePrimary: 10, usageWeekly: 20, usageResetAt: null })}
+    />,
+  )
+  expect(html).toContain('Plan usage')
+  expect(html).toContain('5-hour limit')
+  expect(html).toContain('Weekly · all models')
+  expect(html).toContain('10%')
+  expect(html).toContain('20%')
+  // The 5h row carries the pool's single reset hint; null → the canonical "soon".
+  expect(html).toContain('resets soon')
+  // Aggregate Context row: real percent + "42k / 200k" (fmt), never a per-category bar.
+  expect(html).toContain('Context')
+  expect(html).toContain('42k / 200k')
+})
+
+test('ContextUsagePanel with no account shows the Context total only (no plan usage)', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} account={null} />,
+  )
+  expect(html).not.toContain('Plan usage')
+  expect(html).toContain('Context')
+  expect(html).toContain('42k / 200k')
+})
+
+test('ContextUsagePanel with an account whose usage is not yet fetched suppresses Plan usage (ACCT-10)', () => {
+  // A real pre-poll state: the account exists but both usage fields are still
+  // null (usage snapshot broadcast before refreshAccountsUsageOnce completes).
+  // The gate is `account != null && (usagePrimary != null || usageWeekly != null)`
+  // — this exercises the untested "account present, both usages null" branch.
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={USAGE}
+      account={account({ usagePrimary: null, usageWeekly: null })}
+    />,
+  )
+  expect(html).not.toContain('Plan usage')
+  expect(html).not.toContain('5-hour limit')
+  expect(html).not.toContain('Weekly · all models')
+  expect(html).toContain('Context')
+  expect(html).toContain('42k / 200k')
 })
 
 test('the attach button reflects the disabled gate (echo-only stub)', () => {

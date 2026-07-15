@@ -170,7 +170,7 @@ export function SlashCommandPicker({
                  * names-only fallback row renders as the name alone. */}
                 {entry.description ? (
                   <>
-                    <span className="mr-2.5 shrink-0 text-[#2e2e33]">·</span>
+                    <span className="mr-2.5 shrink-0 text-text-ghost">·</span>
                     <span
                       className={
                         'min-w-0 flex-1 truncate text-[11.5px] ' +

@@ -43,6 +43,15 @@ function pongFrame(nonce: string, sessionId: SessionId = SID): ServerFrame {
   return { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId, nonce }
 }
 
+function slashCatalogFrame(sessionId: SessionId = SID): ServerFrame {
+  return {
+    kind: 'slash-catalog.snapshot',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    commands: [{ name: 'help', description: 'Show help' }],
+  }
+}
+
 test('a frame produced before attach is delivered on the first snapshot (the F2 failure)', () => {
   const buffer = new FrameReplayBuffer()
   // Sidecar attached and produced its one-shot ready + probe BEFORE any renderer.
@@ -76,6 +85,56 @@ test('a later ready frame replaces the head rather than duplicating it', () => {
   buffer.record(SID, readyFrame()) // e.g. a fresh sidecar re-announced
   const snapshot = buffer.snapshot()
   expect(snapshot.filter(f => f.kind === 'ready')).toHaveLength(1)
+})
+
+// SLASH-6 — the rich slash-catalog snapshot is sent once per connect and is
+// the composer picker's only source; it must survive a renderer reload even
+// after the ring buffer below has evicted it (main/App.tsx never re-runs
+// connect() on reload/reattach, so nothing else would re-send it).
+
+test('the slash-catalog snapshot is a sticky head, like ready, and survives the ring buffer evicting everything else', () => {
+  const cap = 2
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, slashCatalogFrame())
+  for (let i = 0; i < cap + 3; i++) buffer.record(SID, pongFrame(`n${i}`))
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot[0]?.kind).toBe('ready')
+  expect(snapshot[1]?.kind).toBe('slash-catalog.snapshot')
+  expect(isReplayTruncationFrame(snapshot[2])).toBe(true)
+  // The catalog frame itself was never counted against the ring buffer's cap.
+  const nonces = snapshot.slice(3).map(f => (f.kind === 'pong' ? f.nonce : null))
+  expect(nonces).toHaveLength(cap)
+})
+
+test('a reload re-request still receives the slash-catalog snapshot after eviction (SLASH-6 failure scenario)', () => {
+  const cap = 1
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, slashCatalogFrame())
+  // A busy session pushes well past the ring-buffer cap.
+  for (let i = 0; i < cap + 10; i++) buffer.record(SID, pongFrame(`n${i}`))
+
+  // Renderer reload: main re-arms replay and returns the current buffer
+  // snapshot without re-running connect() (AttachmentGate.onRendererReady).
+  const afterReload = buffer.snapshot()
+  expect(afterReload.some(f => f.kind === 'slash-catalog.snapshot')).toBe(true)
+})
+
+test('a later slash-catalog snapshot replaces the sticky slot rather than duplicating it', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, slashCatalogFrame())
+  buffer.record(SID, slashCatalogFrame())
+  const snapshot = buffer.snapshot()
+  expect(snapshot.filter(f => f.kind === 'slash-catalog.snapshot')).toHaveLength(1)
+})
+
+test('no slash-catalog frame recorded means none is replayed (never a fabricated snapshot)', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  const snapshot = buffer.snapshot()
+  expect(snapshot.some(f => f.kind === 'slash-catalog.snapshot')).toBe(false)
 })
 
 test('non-ready frames ring-buffer at the cap; ready is never evicted', () => {

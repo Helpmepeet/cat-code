@@ -88,6 +88,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsLastResult={null}
       orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
@@ -181,6 +182,7 @@ test('IS-B preview paints cached rows and keeps the composer focusable-readOnly'
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsLastResult={null}
       orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
@@ -245,6 +247,7 @@ test('IS-B preview paints cached rows and keeps the composer focusable-readOnly'
 test('IS-B connecting composer remains focusable-readOnly until live input is enabled', () => {
   const props = {
     accountsSnapshot: null,
+    accountsLastResult: null,
     orchestratorActive: false,
     activeConnection: { status: 'connecting', inputEnabled: false },
     activeDescriptor: undefined,
@@ -327,6 +330,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
         messageBytes: [],
       }}
       accountsSnapshot={null}
+      accountsLastResult={null}
       activeAccount={account}
       activeSessionId="session-1"
       branch={null}
@@ -366,6 +370,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsLastResult={null}
       orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: false }}
       activeDescriptor={{
@@ -519,6 +524,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsLastResult={null}
       orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
@@ -577,6 +583,7 @@ test('P4-24: collapsed-paste pills render with token label, remove control, and 
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsLastResult={null}
       orchestratorActive={false}
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{

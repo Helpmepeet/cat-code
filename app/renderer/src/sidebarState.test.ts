@@ -1,10 +1,14 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { createShellState, reduceShellState } from './shellState.js'
 import {
   deriveSidebarRowVisual,
+  normalizeSidebarGroupExpansion,
   resolveNavSelection,
   selectSidebarRows,
+  selectVisibleSidebarRows,
+  shouldShowSidebarGroupExpansionToggle,
+  type SidebarRow,
 } from './sidebarState.js'
 
 function descriptor(
@@ -27,6 +31,122 @@ function descriptor(
 function added(session: SessionDescriptor) {
   return { type: 'session-added', session } as const
 }
+
+function row(id: string): SidebarRow {
+  const d = descriptor(id)
+  return { descriptor: d, visual: deriveSidebarRowVisual(d) }
+}
+
+const rows10 = Array.from({ length: 10 }, (_, i) => row(`r${i}`))
+
+test('selectVisibleSidebarRows shows every row at/under the cap (no toggle)', () => {
+  const rows = rows10.slice(0, 6)
+  const result = selectVisibleSidebarRows(rows, null, 6, false)
+  expect(result.overLimit).toBe(false)
+  expect(result.hiddenCount).toBe(0)
+  expect(result.visible).toHaveLength(6)
+})
+
+test('selectVisibleSidebarRows caps to the first N when collapsed', () => {
+  const result = selectVisibleSidebarRows(rows10, null, 6, false)
+  expect(result.overLimit).toBe(true)
+  expect(result.visible.map(r => r.descriptor.appSessionId)).toEqual([
+    'r0',
+    'r1',
+    'r2',
+    'r3',
+    'r4',
+    'r5',
+  ])
+  expect(result.hiddenCount).toBe(4)
+})
+
+test('selectVisibleSidebarRows expanded shows all, toggle still offered', () => {
+  const result = selectVisibleSidebarRows(rows10, null, 6, true)
+  expect(result.overLimit).toBe(true)
+  expect(result.visible).toHaveLength(10)
+  expect(result.hiddenCount).toBe(0)
+})
+
+test('selectVisibleSidebarRows keeps the active session visible past the cap', () => {
+  // Active 'r8' is in the hidden tail → appended so it never disappears.
+  const result = selectVisibleSidebarRows(rows10, 'r8', 6, false)
+  expect(result.visible.map(r => r.descriptor.appSessionId)).toEqual([
+    'r0',
+    'r1',
+    'r2',
+    'r3',
+    'r4',
+    'r5',
+    'r8',
+  ])
+  expect(result.hiddenCount).toBe(3)
+})
+
+test('selectVisibleSidebarRows does not duplicate an active session already in the head', () => {
+  const result = selectVisibleSidebarRows(rows10, 'r2', 6, false)
+  expect(result.visible).toHaveLength(6)
+  expect(
+    result.visible.filter(r => r.descriptor.appSessionId === 'r2'),
+  ).toHaveLength(1)
+  expect(result.hiddenCount).toBe(4)
+})
+
+// ── SIDEBAR-1: the limit+1 boundary where the sole overflow row is the kept
+// active session — every row is already visible, so there is nothing left to
+// reveal and the toggle must not render "Show 0 more".
+
+test('selectVisibleSidebarRows at the limit+1 boundary with the active row as the sole overflow reports zero hidden', () => {
+  const rows7 = rows10.slice(0, 7)
+  const result = selectVisibleSidebarRows(rows7, 'r6', 6, false)
+  expect(result.overLimit).toBe(true)
+  expect(result.hiddenCount).toBe(0)
+  expect(result.visible).toHaveLength(7)
+})
+
+describe('shouldShowSidebarGroupExpansionToggle (SIDEBAR-1)', () => {
+  test('does not render collapsed with zero hidden rows (the limit+1 boundary)', () => {
+    expect(shouldShowSidebarGroupExpansionToggle(false, 0, true)).toBe(false)
+  })
+
+  test('renders collapsed "Show N more" once rows are actually hidden', () => {
+    expect(shouldShowSidebarGroupExpansionToggle(false, 4, true)).toBe(true)
+  })
+
+  test('renders expanded "Show less" whenever the group is still over the cap', () => {
+    expect(shouldShowSidebarGroupExpansionToggle(true, 0, true)).toBe(true)
+  })
+
+  test('does not render expanded once the group is no longer over the cap', () => {
+    expect(shouldShowSidebarGroupExpansionToggle(true, 0, false)).toBe(false)
+  })
+})
+
+describe('normalizeSidebarGroupExpansion (SIDEBAR-2)', () => {
+  test('resets a sticky expanded flag once the group shrinks to/below the cap', () => {
+    expect(normalizeSidebarGroupExpansion(true, false)).toBe(false)
+  })
+
+  test('preserves expanded while the group remains over the cap', () => {
+    expect(normalizeSidebarGroupExpansion(true, true)).toBe(true)
+  })
+
+  test('leaves a collapsed group collapsed regardless of overLimit', () => {
+    expect(normalizeSidebarGroupExpansion(false, true)).toBe(false)
+    expect(normalizeSidebarGroupExpansion(false, false)).toBe(false)
+  })
+
+  test('does not silently re-expand after the group regrows past the cap', () => {
+    // Expand while over the cap, shrink under it (resets), then grow back over
+    // it — the flag must come back false (a fresh collapse), never re-derive
+    // true from the stale pre-shrink value.
+    let expanded = true
+    expanded = normalizeSidebarGroupExpansion(expanded, false) // shrank ≤ cap
+    expect(expanded).toBe(false)
+    expanded = normalizeSidebarGroupExpansion(expanded, true) // grew > cap again
+    expect(expanded).toBe(false)
+  })
+})
 
 test('selectSidebarRows lists the full roster (live ∪ restorable)', () => {
   let state = createShellState()

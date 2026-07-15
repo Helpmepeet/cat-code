@@ -32,12 +32,26 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { basename } from './pathUtils.js'
 import type { SessionId } from '../../shared/protocol.js'
-import { resolveNavSelection, type SidebarRow } from './sidebarState.js'
+import {
+  normalizeSidebarGroupExpansion,
+  resolveNavSelection,
+  selectVisibleSidebarRows,
+  shouldShowSidebarGroupExpansionToggle,
+  type SidebarRow,
+} from './sidebarState.js'
 import { tabLabel } from './TabBar.js'
 
 // Rail geometry + hover timing, matching the prototype (RAIL_W/FULL_W/delays).
 const HOVER_DELAY = 120
 const HIDE_DELAY = 200
+
+/**
+ * Max session rows a workspace group shows before a "Show N more" toggle
+ * (operator, 2026-07-14: one project's session list grew long enough to bury the
+ * rest of the rail). NOT a prototype element — a deliberate declutter deviation.
+ * The active session is always kept visible even when it falls past the cap.
+ */
+const SIDEBAR_GROUP_ROW_LIMIT = 6
 
 type NavItem = {
   id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
@@ -318,6 +332,25 @@ function SessionGroup({
   onRestore: (sessionId: SessionId) => void
   modelForSession?: (id: SessionId) => string | null
 }) {
+  // "Show more" cap — a long single-project session list buries the rest of the
+  // rail. Pure logic (tested in sidebarState.test) keeps the active session
+  // visible even when it falls past the cap.
+  const [expanded, setExpanded] = useState(false)
+  const {
+    visible: visibleRows,
+    hiddenCount,
+    overLimit,
+  } = selectVisibleSidebarRows(
+    group.rows,
+    activeSessionId,
+    SIDEBAR_GROUP_ROW_LIMIT,
+    expanded,
+  )
+
+  useEffect(() => {
+    setExpanded(value => normalizeSidebarGroupExpansion(value, overLimit))
+  }, [overLimit])
+
   return (
     <div className="mb-4">
       <button
@@ -340,9 +373,9 @@ function SessionGroup({
         </span>
       </button>
 
-      {collapsed
-        ? null
-        : group.rows.map(row => (
+      {collapsed ? null : (
+        <>
+          {visibleRows.map(row => (
             <SidebarRowItem
               key={row.descriptor.appSessionId}
               row={row}
@@ -352,6 +385,22 @@ function SessionGroup({
               modelForSession={modelForSession}
             />
           ))}
+          {shouldShowSidebarGroupExpansionToggle(
+            expanded,
+            hiddenCount,
+            overLimit,
+          ) ? (
+            <button
+              type="button"
+              onClick={() => setExpanded(value => !value)}
+              aria-expanded={expanded}
+              className="flex w-full items-center gap-1 rounded-md px-2 py-1 pl-[26px] text-[11px] font-medium text-text-faint transition-colors hover:bg-shell-hover hover:text-text-muted"
+            >
+              {expanded ? 'Show less' : `Show ${hiddenCount} more`}
+            </button>
+          ) : null}
+        </>
+      )}
     </div>
   )
 }

@@ -226,7 +226,7 @@ import {
   selectAgentModeSnapshot,
 } from './orchestratorState.js'
 import { GoalsPage } from './GoalsPage.js'
-import { AccountsPage, loginVerb, switchVerb } from './AccountsPage.js'
+import { AccountsPage, loginVerb, resultToastTone, switchVerb } from './AccountsPage.js'
 import { BannerStack } from './BannerStack.js'
 import {
   REAUTH_ACTION_KEY,
@@ -242,8 +242,10 @@ import { SessionsPage } from './SessionsPage.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
+  AccountResultFrame,
   AccountStatus,
   AccountsSnapshot,
+  AccountSwitchMessage,
   AccountVerbMessage,
   CatCodeBridge,
   PermissionResponseInput,
@@ -1495,13 +1497,17 @@ export function App() {
 	          <SessionPane
 	            accountsSnapshot={panelAccounts}
 	            activeAccount={selectActiveAccount(panelAccounts)}
-            onSwitchAccount={accountId => {
+	            accountsLastResult={accounts.lastResult}
+            onSwitchAccount={verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not
               // the globally-active one), mirroring the run-control verbs. The
               // renderer only NAMES the id; the sidecar re-resolves it (T6).
+              // The verb (with its correlation requestId) is minted by
+              // SessionPane itself (ACCT-5) so it can track the same id it
+              // dispatches here against `accounts.lastResult`.
               try {
-                getBridge().accountVerb(sessionId, switchVerb(accountId))
+                getBridge().accountVerb(sessionId, verb)
                 setTransportError(null)
               } catch (error) {
                 setTransportError(errorMessage(error))
@@ -1980,6 +1986,7 @@ export function SessionPane({
   activeAccount,
   onSwitchAccount,
   onManageAccounts,
+  accountsLastResult,
   activeConnection,
   activeDescriptor,
   branch,
@@ -2021,6 +2028,32 @@ export function SessionPane({
   transportError,
 }: SessionPaneProps) {
   const toast = useToast()
+  // ACCT-5 — correlate the composer profile popover's account switch by the
+  // requestId SessionPane itself mints (switchVerb), matching AccountsPage's
+  // pendingRef/lastResult pattern: NO optimistic UI, toast only on the real
+  // `account.result` for this session.
+  const pendingAccountSwitchRef = useRef<string | null>(null)
+  useEffect(() => {
+    const pendingRequestId = pendingAccountSwitchRef.current
+    if (
+      pendingRequestId &&
+      accountsLastResult &&
+      accountsLastResult.requestId === pendingRequestId &&
+      accountsLastResult.sessionId === activeSessionId
+    ) {
+      pendingAccountSwitchRef.current = null
+      toast(accountsLastResult.message, {
+        tone: resultToastTone(accountsLastResult.ok),
+      })
+    }
+  }, [accountsLastResult, activeSessionId, toast])
+  const handleSwitchAccount = onSwitchAccount
+    ? (accountId: string) => {
+        const verb = switchVerb(accountId)
+        pendingAccountSwitchRef.current = verb.requestId
+        onSwitchAccount(verb)
+      }
+    : undefined
   // SlashCommandPicker (P3-7): typeahead over THIS session's real slash catalog
   // (the `slash_commands` the sidecar's `getCommands(cwd)` produced, captured
   // from the init frame). Picking inserts `/name ` into the draft; the user
@@ -2705,7 +2738,7 @@ export function SessionPane({
           onSetMode={setPermissionMode}
           account={activeAccount}
           accounts={accountsSnapshot?.accounts ?? []}
-          onSwitchAccount={onSwitchAccount}
+          onSwitchAccount={handleSwitchAccount}
           onManageAccounts={onManageAccounts}
           contextUsage={contextUsage}
         />
@@ -3055,11 +3088,16 @@ type SessionPaneProps = {
   accountsSnapshot: AccountsSnapshot | null
   /** This session's active pool account (real alias), or null before its snapshot. */
   activeAccount: AccountStatus | null
-  /** Switch this session to `accountId` from the composer profile popover
-   * (the engine's `account.switch` verb). Absent → the account face stays read-only. */
-  onSwitchAccount?: (accountId: string) => void
+  /** Dispatch a minted `account.switch` verb (its requestId already assigned by
+   * SessionPane, ACCT-5) to this session's sidecar. Absent → the account face
+   * stays read-only. */
+  onSwitchAccount?: (verb: AccountSwitchMessage) => void
   /** Open the Accounts page (the profile popover's "Manage accounts →"). */
   onManageAccounts?: () => void
+  /** Global most-recent `account.result` (ACCT-5) — SessionPane correlates it by
+   * requestId + sessionId against its own in-flight composer switch and toasts
+   * the real outcome; no optimistic UI, mirrors AccountsPage's `pendingRef`. */
+  accountsLastResult: AccountResultFrame | null
   activeConnection: ConnectionSnapshot
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog

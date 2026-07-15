@@ -155,3 +155,41 @@ test('a connected session responds to a valid ping (happy-path liveness)', async
     expect(pong.nonce).toBe('live-1')
   }
 })
+
+test('a real sidecar process delivers the projected slash catalog (SLASH-2: index.ts join, not a stub)', async () => {
+  // sessionController.test.ts proves the catalog is BUILT (real getCommands
+  // path); sidecarServer.test.ts proves the server DELIVERS a hand-injected
+  // stub catalog. Neither exercises index.ts:179-198 threading
+  // createSidecarSessionController(...).slashCatalog into
+  // `new SidecarServer({ slashCatalog })` — the actual production join. This
+  // spawns the REAL sidecar entrypoint (like every other test in this file)
+  // and asserts the delivered snapshot is the real projected catalog.
+  //
+  // getCommands(cwd) needs an Anthropic credential present only to pass a
+  // NODE_ENV=test-only guard in the eager login() command factory
+  // (sessionController.test.ts) — no live model call is made. Without it the
+  // catalog fails closed to `[]` and index.ts never sends this frame at all
+  // (`...(slashCatalog.length > 0 ? { slashCatalog } : {})`), which would
+  // make this test indistinguishable from a broken join — so the dummy key is
+  // required for the assertion to mean anything.
+  supervisor = new SidecarSupervisor({
+    sidecarCommand: 'bun',
+    sidecarArgs: ['run', sidecarEntry],
+    sidecarEnv: { ANTHROPIC_API_KEY: 'sk-ant-slash-catalog-join-probe' },
+    sidecarCwd: process.cwd(),
+  })
+  const sessionId = supervisor.spawnSession('slash-catalog-join-probe')
+
+  const snapshot = await waitForFrame(
+    supervisor,
+    frame => frame.kind === 'slash-catalog.snapshot',
+  )
+  expect(snapshot.kind).toBe('slash-catalog.snapshot')
+  if (snapshot.kind !== 'slash-catalog.snapshot') return
+  expect(snapshot.sessionId).toBe(sessionId)
+  expect(snapshot.commands.length).toBeGreaterThan(0)
+  const help = snapshot.commands.find(command => command.name === 'help')
+  expect(help).toBeDefined()
+  expect(typeof help?.description).toBe('string')
+  expect(help && help.description.length).toBeGreaterThan(0)
+})

@@ -31,6 +31,7 @@
  */
 
 import type { SessionDescriptor } from '../../shared/hostApi.js'
+import type { SessionId } from '../../shared/protocol.js'
 import type { ShellState } from './shellState.js'
 import type { TabTone } from './tabStatus.js'
 
@@ -86,6 +87,77 @@ export function resolveNavSelection<Id extends string>(item: {
   enabled: boolean
 }): Id | null {
   return item.enabled ? item.id : null
+}
+
+export type VisibleSidebarRows = {
+  /** Rows to render now. */
+  visible: SidebarRow[]
+  /**
+   * Rows hidden behind the "Show more" toggle — 0 when expanded, under cap, OR
+   * (SIDEBAR-1 boundary) the group is exactly `limit + 1` over and the sole
+   * overflow row is the kept active session, so nothing is left to reveal.
+   */
+  hiddenCount: number
+  /** Whether the group exceeds `limit` — i.e. an expanded group has a reason
+   * to offer "Show less", independent of whether anything is currently hidden. */
+  overLimit: boolean
+}
+
+/**
+ * Which rows a workspace group shows given its "Show more" cap (a declutter
+ * deviation, NOT a prototype element). Expanded, or at/under `limit`: every row.
+ * Collapsed and over `limit`: the first `limit` rows PLUS the active session's
+ * row if it falls in the hidden tail — so a long project list never buries the
+ * session you are actually on. The head keeps the caller's stable order; a kept
+ * active row is appended (it is highlighted, so its exact slot does not matter).
+ */
+export function selectVisibleSidebarRows(
+  rows: SidebarRow[],
+  activeSessionId: SessionId | null,
+  limit: number,
+  expanded: boolean,
+): VisibleSidebarRows {
+  const overLimit = rows.length > limit
+  if (!overLimit || expanded) {
+    return { visible: rows, hiddenCount: 0, overLimit }
+  }
+  const head = rows.slice(0, limit)
+  const activeHidden = rows.find(
+    row =>
+      row.descriptor.appSessionId === activeSessionId && !head.includes(row),
+  )
+  const visible = activeHidden ? [...head, activeHidden] : head
+  return { visible, hiddenCount: rows.length - visible.length, overLimit }
+}
+
+/**
+ * SIDEBAR-2 — the React-correct state transition for a group's sticky
+ * `expanded` flag: reset to collapsed the moment the group is no longer
+ * `overLimit` (shrunk to/below the cap), so a later regrowth past the cap
+ * starts collapsed again instead of silently reusing a stale `expanded=true`.
+ * Call from a `useEffect` keyed on `overLimit` — never mutate state at render.
+ */
+export function normalizeSidebarGroupExpansion(
+  expanded: boolean,
+  overLimit: boolean,
+): boolean {
+  return overLimit ? expanded : false
+}
+
+/**
+ * SIDEBAR-1 — gates the "Show more"/"Show less" toggle on an actual reason to
+ * show it: collapsed, only when rows are truly hidden (`hiddenCount > 0` — not
+ * `overLimit`, which stays true even at the boundary where every row is
+ * already visible, e.g. limit+1 rows with the sole overflow row being the kept
+ * active session); expanded, whenever the group is still `overLimit` so
+ * "Show less" remains reachable.
+ */
+export function shouldShowSidebarGroupExpansionToggle(
+  expanded: boolean,
+  hiddenCount: number,
+  overLimit: boolean,
+): boolean {
+  return expanded ? overLimit : hiddenCount > 0
 }
 
 export function selectSidebarRows(state: ShellState): SidebarRow[] {

@@ -16,11 +16,16 @@
  *
  * Retention: the single `ready` frame per session is kept as a permanent head
  * outside the replay budget (a late renderer must recover its session id).
- * Non-ready frames are bounded by BOTH count and their serialized UTF-8 JSON
- * bytes. Oldest frames are evicted until both limits hold. A frame larger than
- * the whole byte budget is not retained. Any eviction/omission inserts one
- * synthetic error boundary between `ready` and retained frames, so consumers
- * cannot mistake a lossy replay for complete history.
+ * The `slash-catalog.snapshot` frame (SLASH-6) is a second sticky slot for the
+ * same reason: it is sent once per connect and is the composer's only source
+ * for the rich picker, so it must survive a renderer reload even after the
+ * ring buffer below has evicted it — a later snapshot replaces, never appends.
+ * Non-ready, non-slash-catalog frames are bounded by BOTH count and their
+ * serialized UTF-8 JSON bytes. Oldest frames are evicted until both limits
+ * hold. A frame larger than the whole byte budget is not retained. Any
+ * eviction/omission inserts one synthetic error boundary between the sticky
+ * frames and the retained ring, so consumers cannot mistake a lossy replay
+ * for complete history.
  */
 
 import {
@@ -40,6 +45,9 @@ const REPLAY_TRUNCATION_MESSAGE =
 
 type SessionEntry = {
   ready: ServerFrame | null
+  /** SLASH-6 — sticky like `ready`: replaced on each new snapshot, never
+   * subject to the `recent` ring buffer's count/byte eviction. */
+  slashCatalog: ServerFrame | null
   recent: ServerFrame[]
   recentBytes: number
   truncated: boolean
@@ -53,15 +61,28 @@ export class FrameReplayBuffer {
     private readonly maxRecentBytes: number = DEFAULT_MAX_BUFFERED_BYTES,
   ) {}
 
-  /** Record one frame. The `ready` frame replaces the head; others ring-buffer. */
+  /**
+   * Record one frame. The `ready` and `slash-catalog.snapshot` frames each
+   * replace their own sticky slot; everything else ring-buffers.
+   */
   record(sessionId: SessionId, frame: ServerFrame): void {
     let entry = this.sessions.get(sessionId)
     if (!entry) {
-      entry = { ready: null, recent: [], recentBytes: 0, truncated: false }
+      entry = {
+        ready: null,
+        slashCatalog: null,
+        recent: [],
+        recentBytes: 0,
+        truncated: false,
+      }
       this.sessions.set(sessionId, entry)
     }
     if (frame.kind === 'ready') {
       entry.ready = frame
+      return
+    }
+    if (frame.kind === 'slash-catalog.snapshot') {
+      entry.slashCatalog = frame
       return
     }
     const frameBytes = serializedUtf8Bytes(frame)
@@ -94,6 +115,7 @@ export class FrameReplayBuffer {
     const frames: ServerFrame[] = []
     for (const [sessionId, entry] of this.sessions) {
       if (entry.ready) frames.push(entry.ready)
+      if (entry.slashCatalog) frames.push(entry.slashCatalog)
       if (entry.truncated) frames.push(replayTruncationFrame(sessionId))
       frames.push(...entry.recent)
     }
@@ -113,6 +135,7 @@ export class FrameReplayBuffer {
     if (!entry) return []
     const frames: ServerFrame[] = []
     if (entry.ready) frames.push(entry.ready)
+    if (entry.slashCatalog) frames.push(entry.slashCatalog)
     if (entry.truncated) frames.push(replayTruncationFrame(sessionId))
     frames.push(...entry.recent)
     return frames

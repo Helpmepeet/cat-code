@@ -72,7 +72,7 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
   process.env.ANTHROPIC_API_KEY = 'sk-ant-slash-catalog-test'
   clearCommandMemoizationCaches()
   try {
-    const { slashCatalog } = await createNormalSidecarQueryEngineConfig(
+    const { slashCatalog, commands } = await createNormalSidecarQueryEngineConfig(
       process.cwd(),
     )
     expect(slashCatalog.length).toBeGreaterThan(0)
@@ -81,6 +81,33 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
     // The picker's description column — a non-empty string, not just the name.
     expect(typeof help?.description).toBe('string')
     expect(help?.description.length).toBeGreaterThan(0)
+
+    // SLASH-9: pin a real argumentHint projection, not just help.description.
+    // Find any loaded command that actually carries one and prove the
+    // projected catalog entry preserved it verbatim (breaking/dropping the
+    // `...(command.argumentHint ? { argumentHint } : {})` spread must fail
+    // this, unlike the hand-authored stub in sidecarServer.test.ts).
+    const commandWithHint = commands.find(
+      command => typeof command.argumentHint === 'string' && command.argumentHint.length > 0,
+    )
+    expect(commandWithHint).toBeDefined()
+    const projectedHintEntry = slashCatalog.find(
+      entry => entry.name === commandWithHint?.name,
+    )
+    expect(projectedHintEntry?.argumentHint).toBe(commandWithHint?.argumentHint)
+
+    // SLASH-9: exact userInvocable name-set parity with the engine's own
+    // filter (src/utils/messages/systemInit.ts:69-71) applied to the SAME
+    // `commands` array — not a re-derivation, a literal copy of that filter,
+    // so a drift between the two independent `userInvocable !== false`
+    // call sites is caught rather than assumed to stay in sync.
+    const engineSlashCommandNames = commands
+      .filter(c => c.userInvocable !== false)
+      .map(c => c.name)
+      .sort()
+    expect(slashCatalog.map(entry => entry.name).sort()).toEqual(
+      engineSlashCommandNames,
+    )
   } finally {
     if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = previousKey

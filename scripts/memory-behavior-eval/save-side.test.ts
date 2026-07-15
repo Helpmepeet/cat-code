@@ -27,22 +27,43 @@ describe('save-side evaluation lanes', () => {
 
     expect(_forTest.buildForcedGateOverrides(direct)).toEqual({
       tengu_passport_quail: false,
+      tengu_slate_thimble: false,
       tengu_moth_copse: false,
       tengu_herring_clock: false,
       tengu_bramble_lintel: 1,
     })
     expect(_forTest.buildForcedGateOverrides(extraction)).toEqual({
       tengu_passport_quail: true,
+      tengu_slate_thimble: true,
       tengu_moth_copse: false,
       tengu_herring_clock: false,
       tengu_bramble_lintel: 1,
     })
     expect(_forTest.buildForcedGateOverrides(teamExtraction)).toEqual({
       tengu_passport_quail: true,
+      tengu_slate_thimble: true,
       tengu_moth_copse: false,
       tengu_herring_clock: true,
       tengu_bramble_lintel: 1,
     })
+  })
+
+  test('forces the non-interactive extraction gate so -p sessions drain extraction (EVAL-1)', () => {
+    // isExtractModeActive() (src/memdir/paths.ts) requires BOTH
+    // tengu_passport_quail and, under a non-interactive session,
+    // tengu_slate_thimble. Forcing only the first leaves extraction inactive
+    // under `-p`, so every extraction-lane case fails scoreExecution's
+    // "background extraction did not complete" check regardless of truth.
+    for (const run of runs.filter(r => r.lane === 'extraction')) {
+      expect(_forTest.buildForcedGateOverrides(run).tengu_slate_thimble).toBe(
+        true,
+      )
+    }
+    for (const run of runs.filter(r => r.lane === 'direct')) {
+      expect(_forTest.buildForcedGateOverrides(run).tengu_slate_thimble).toBe(
+        false,
+      )
+    }
   })
 
   test('requires a scoped private rule without changing team policy', () => {
@@ -79,6 +100,45 @@ describe('save-side evaluation lanes', () => {
         index: '- [Changed](feedback_dependency_policy.md) — changed\n',
       }).reasons,
     ).toContain('private correction modified team memory')
+  })
+
+  test('does not reject a preserved ask-first rule that is properly scoped by an exception (EVAL-4)', () => {
+    const contradictionCase = _forTest.CASES.find(
+      caseDef => caseDef.id === 'contradiction-supersession',
+    )!
+    const scopedTopic =
+      '---\nname: dependency upgrade questions\ndescription: Ask before choosing dependency versions\ntype: feedback\n---\n\nAlways ask before choosing a dependency version, except during a security response, where for patch-only dependency upgrades choose the latest compatible patch.\n'
+    const scopedHook =
+      '- [Dependency upgrade questions](feedback_dependency_upgrade_questions.md) — always ask before choosing a dependency version, except during a security response, where for patch-only dependency upgrades choose the latest compatible patch\n'
+    const scopedSnapshot = {
+      index: scopedHook,
+      topics: [
+        { path: 'feedback_dependency_upgrade_questions.md', content: scopedTopic },
+      ],
+    }
+
+    const scored = contradictionCase.score(scopedSnapshot)
+    expect(scored.reasons).not.toContain(
+      'superseded unconditional ask-first rule remains',
+    )
+    expect(scored.verdict).toBe('PASS')
+
+    const unconditionalTopic =
+      '---\nname: dependency upgrade questions\ndescription: Ask before choosing dependency versions\ntype: feedback\n---\n\nAlways ask before choosing a dependency version. Also, during a security response, for patch-only dependency upgrades choose the latest compatible patch.\n'
+    const unconditionalHook =
+      '- [Dependency upgrade questions](feedback_dependency_upgrade_questions.md) — always ask before choosing a dependency version; also during a security response choose the latest compatible patch for patch-only dependency upgrades\n'
+    const staleSnapshot = {
+      index: unconditionalHook,
+      topics: [
+        {
+          path: 'feedback_dependency_upgrade_questions.md',
+          content: unconditionalTopic,
+        },
+      ],
+    }
+    expect(contradictionCase.score(staleSnapshot).reasons).toContain(
+      'superseded unconditional ask-first rule remains',
+    )
   })
 })
 
@@ -181,5 +241,31 @@ describe('save-side execution evidence', () => {
         extractionSkippedDirectWrite: true,
       }),
     ).toContain('background extraction ran during the direct lane')
+  })
+})
+
+describe('save-side --score-existing missing artifacts (EVAL-7)', () => {
+  test('reports a deliberate ERROR verdict instead of throwing on a missing memory artifact', () => {
+    const emptyOutDir = `/tmp/save-side-eval7-${process.pid}-${Date.now()}`
+    const result = Bun.spawnSync(
+      [
+        'bun',
+        import.meta.dir + '/save-side.ts',
+        '--score-existing',
+        '--lanes',
+        'extraction',
+        '--cases',
+        'turn-ask',
+        '--out',
+        emptyOutDir,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    const stdout = result.stdout.toString()
+    expect(result.exitCode).toBe(1)
+    expect(stdout).toContain('extraction-turn-ask')
+    expect(stdout).toContain('ERROR')
+    expect(stdout).toContain('missing artifact')
+    expect(result.stderr.toString()).not.toContain('ENOENT')
   })
 })
