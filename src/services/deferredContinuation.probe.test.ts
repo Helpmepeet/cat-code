@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   acquireDeferredContinuationLocks,
+  createPendingDeferredContinuation,
   type DeferredContinuationJobV1,
 } from './deferredContinuation.js'
+import {
+  failPreparedBackgroundDeferredContinuation,
+  prepareBackgroundDeferredContinuation,
+} from './deferredContinuationRunner.js'
+import { getProjectDir } from '../utils/sessionStorage.js'
 
 const CHILD = join(import.meta.dir, 'deferredContinuation.probe.child.ts')
 const cleanup: string[] = []
@@ -169,6 +175,76 @@ describe('deferred continuation process probes', () => {
       expect(JSON.parse(await readFile(pending, 'utf8')).state).toBe('pending')
     } finally {
       await guard.release()
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+
+  test('an active submitted job does not starve an unrelated due session', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-cross-session-')
+    cleanup.push(root)
+    const config = join(root, 'config')
+    const cwd = join(root, 'project')
+    const originalCwd = process.cwd()
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = config
+    await mkdir(cwd, { mode: 0o700 })
+    await mkdir(config, { mode: 0o700 })
+    try {
+      const projectDir = getProjectDir(cwd)
+      await mkdir(projectDir, { recursive: true, mode: 0o700 })
+      await chmod(dirname(projectDir), 0o700)
+      await chmod(projectDir, 0o700)
+
+      const submitted: DeferredContinuationJobV1 = {
+        ...probeJob(Date.now() - 1),
+        jobId: '41111111-1111-4111-8111-111111111111',
+        sessionId: '51111111-1111-4111-8111-111111111111',
+        state: 'submitted',
+        attempt: {
+          number: 1,
+          messageUuid: '61111111-1111-4111-8111-111111111111',
+          submittedAt: Date.now(),
+        },
+      }
+      const pending: DeferredContinuationJobV1 = {
+        ...probeJob(Date.now() - 1),
+        jobId: '71111111-1111-4111-8111-111111111111',
+        sessionId: '81111111-1111-4111-8111-111111111111',
+        projectStorageKey: basename(projectDir),
+        context: {
+          cwd,
+          model: 'gpt-5.6-terra',
+          permissionMode: 'default',
+        },
+        attempt: {
+          number: 1,
+          messageUuid: '91111111-1111-4111-8111-111111111111',
+        },
+      }
+      await writeFile(
+        join(projectDir, `${pending.sessionId}.jsonl`),
+        `${JSON.stringify({
+          type: 'user',
+          uuid: 'a1111111-1111-4111-8111-111111111111',
+          sessionId: pending.sessionId,
+          cwd,
+          message: { role: 'user', content: 'seed' },
+        })}\n`,
+        { mode: 0o600 },
+      )
+      await createPendingDeferredContinuation(submitted)
+      await createPendingDeferredContinuation(pending)
+      const foregroundGuard = await acquireDeferredContinuationLocks(submitted)
+      try {
+        const prepared = await prepareBackgroundDeferredContinuation()
+        expect(prepared?.jobId).toBe(pending.jobId)
+        await failPreparedBackgroundDeferredContinuation('unknown')
+      } finally {
+        await foregroundGuard.release()
+      }
+    } finally {
+      process.chdir(originalCwd)
       if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previous
     }

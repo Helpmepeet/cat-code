@@ -11,12 +11,15 @@ import {
   deferredContinuationHistorySchema,
   deferredContinuationJobSchema,
   deferredContinuationResultSchema,
+  DEFERRED_CONTINUATION_HISTORY_RETENTION_MS,
+  pruneDeferredContinuationHistory,
   DEFERRED_LOCK_STALE_MS,
   DEFERRED_SCAN_INTERVAL_MS,
   ensureDeferredContinuationStore,
   getDeferredContinuationLockTargets,
   getDeferredContinuationPaths,
   getLatestDeferredContinuationHistory,
+  listDueDeferredContinuations,
   prepareHumanPromptAgainstDeferredContinuation,
   readPendingDeferredContinuation,
   readTrustedDeferredTranscript,
@@ -25,12 +28,18 @@ import {
   shouldScannerAttemptLock,
   takeDeferredContinuationNotice,
 } from './deferredContinuation.js'
+import {
+  _forTest as deferredRunnerForTest,
+  beginForegroundDeferredContinuation,
+  settleForegroundDeferredAttempt,
+} from './deferredContinuationRunner.js'
 import type { AssistantMessage, Message } from '../types/message.js'
 
 const NOW = 1_700_000_000_000
 const cleanup: string[] = []
 
 afterEach(async () => {
+  deferredRunnerForTest.clearForegroundRegistrations()
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
@@ -193,6 +202,113 @@ describe('deferred continuation durable store', () => {
     expect((await stat(join(paths.pending, `${job().sessionId}.json`))).mode & 0o077).toBe(0)
   })
 
+  test('durable terminal history makes a surviving pending record non-executable', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-terminal-authority-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const pending = job({ notBefore: NOW - 1 })
+    await createPendingDeferredContinuation(pending, paths)
+    await writeFile(
+      join(paths.history, `${pending.jobId}.json`),
+      `${JSON.stringify({
+        ...pending,
+        terminalState: 'canceled',
+        terminalReason: 'command',
+        terminalAt: NOW,
+      })}\n`,
+      { mode: 0o600 },
+    )
+
+    expect(await readPendingDeferredContinuation(pending.sessionId, paths)).toBeNull()
+    expect(await listDueDeferredContinuations(NOW, paths)).toEqual([])
+    expect((await getLatestDeferredContinuationHistory(pending.sessionId, paths))?.terminalState).toBe('canceled')
+
+    await writeFile(
+      join(paths.history, `${pending.jobId}.json`),
+      `${JSON.stringify({
+        ...pending,
+        sessionId: '44444444-4444-4444-8444-444444444444',
+        terminalState: 'canceled',
+        terminalReason: 'command',
+        terminalAt: NOW,
+      })}\n`,
+      { mode: 0o600 },
+    )
+    expect(await readPendingDeferredContinuation(pending.sessionId, paths)).toBeNull()
+    expect(await listDueDeferredContinuations(NOW, paths)).toEqual([])
+  })
+
+  test('history retention removes only aged records nothing still relies on', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-retention-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    await ensureDeferredContinuationStore(paths)
+    const writeHistory = async (jobId: string, terminalAt: number) =>
+      writeFile(
+        join(paths.history, `${jobId}.json`),
+        `${JSON.stringify({
+          ...job({ jobId }),
+          terminalState: 'completed',
+          terminalReason: 'completed',
+          terminalAt,
+        })}\n`,
+        { mode: 0o600 },
+      )
+    const aged = NOW - DEFERRED_CONTINUATION_HISTORY_RETENTION_MS - 1
+    await writeHistory('55555555-5555-4555-8555-555555555555', aged)
+    await writeHistory('66666666-6666-4666-8666-666666666666', NOW - 1_000)
+
+    expect(await pruneDeferredContinuationHistory(NOW, paths)).toBe(1)
+    expect(
+      await lstat(join(paths.history, '66666666-6666-4666-8666-666666666666.json')),
+    ).toBeDefined()
+    await expect(
+      lstat(join(paths.history, '55555555-5555-4555-8555-555555555555.json')),
+    ).rejects.toThrow()
+  })
+
+  test('history retention never removes a tombstone still suppressing a pending record', async () => {
+    // moveDeferredContinuationToHistory writes history before unlinking
+    // pending, so a crash between those steps leaves both files and the
+    // history record is the only thing keeping the terminal job
+    // non-executable. Age alone must never delete it.
+    const root = await mkdtemp('/tmp/cat-code-deferred-retention-tombstone-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const stranded = job({ notBefore: NOW - 1 })
+    await createPendingDeferredContinuation(stranded, paths)
+    const aged = NOW - DEFERRED_CONTINUATION_HISTORY_RETENTION_MS - 1
+    await writeFile(
+      join(paths.history, `${stranded.jobId}.json`),
+      `${JSON.stringify({
+        ...stranded,
+        terminalState: 'completed',
+        terminalReason: 'completed',
+        terminalAt: aged,
+      })}\n`,
+      { mode: 0o600 },
+    )
+
+    expect(await pruneDeferredContinuationHistory(NOW, paths)).toBe(0)
+    // The decisive assertion: the job stays non-executable after pruning.
+    expect(await readPendingDeferredContinuation(stranded.sessionId, paths)).toBeNull()
+    expect(await listDueDeferredContinuations(NOW, paths)).toEqual([])
+  })
+
+  test('history retention keeps unreadable history rather than making pending work executable', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-retention-malformed-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const stranded = job({ notBefore: NOW - 1 })
+    await createPendingDeferredContinuation(stranded, paths)
+    await writeFile(join(paths.history, `${stranded.jobId}.json`), 'not json\n', {
+      mode: 0o600,
+    })
+
+    expect(await pruneDeferredContinuationHistory(NOW, paths)).toBe(0)
+    expect(await readPendingDeferredContinuation(stranded.sessionId, paths)).toBeNull()
+  })
+
   test('distinct jobs for one session serialize on the session lock and cannot both create', async () => {
     const root = await mkdtemp('/tmp/cat-code-deferred-create-race-')
     cleanup.push(root)
@@ -340,6 +456,31 @@ describe('deferred continuation durable store', () => {
       await createPendingDeferredContinuation(submitted)
       expect((await prepareHumanPromptAgainstDeferredContinuation(job().sessionId)).action).toBe('block')
       expect((await readPendingDeferredContinuation(job().sessionId))?.state).toBe('submitted')
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+
+  test('foreground result-journal failure stops for attention instead of stranding submitted', async () => {
+    const root = await mkdtemp('/tmp/cat-code-result-journal-failure-')
+    cleanup.push(root)
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = root
+    try {
+      const pending = job({ notBefore: NOW - 1 })
+      await createPendingDeferredContinuation(pending)
+      const attempt = await beginForegroundDeferredContinuation(pending)
+      expect(attempt).not.toBeNull()
+      expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
+        outcome: 'completed',
+        observedAt: NOW,
+      })).toBe(true)
+      await attempt!.finished
+
+      expect(await readPendingDeferredContinuation(pending.sessionId)).toBeNull()
+      expect((await getLatestDeferredContinuationHistory(pending.sessionId))?.terminalReason).toBe('transcript_persistence')
+      expect((await takeDeferredContinuationNotice(pending.sessionId))?.kind).toBe('needs_attention')
     } finally {
       if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previous

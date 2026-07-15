@@ -164,18 +164,6 @@ function emitClaudeDiagnostic(
   })
 }
 
-function getCodexExhaustionDiagnosticCode(): 'auth.missing' | 'account.pool.unavailable' | 'quota.exhausted' {
-  const counts = countStatuses(getPoolStatus().accounts)
-  if (!counts) {
-    return 'auth.missing'
-  }
-  const capped = counts.capped ?? 0
-  if (capped === counts.total) {
-    return 'quota.exhausted'
-  }
-  return 'account.pool.unavailable'
-}
-
 function getClaudeUnavailableDiagnosticCode(): 'auth.missing' | 'account.pool.unavailable' {
   return countStatuses(getClaudePoolStatus().accounts) ? 'account.pool.unavailable' : 'auth.missing'
 }
@@ -347,27 +335,30 @@ export async function* withRetry<T>(
     originalError: unknown,
     attemptCount: number,
     accountRef?: string,
+    terminalCode?: DeferredTerminalFailureV1['code'],
   ): never => {
     const isCodexTerminal =
       options.isCodexRequest === true ||
       originalError instanceof CodexAccountCapError ||
       originalError instanceof CodexAccountAuthError ||
       (options.ownerId !== undefined && poolManagesCredentials())
+    const resolvedTerminalCode =
+      terminalCode ??
+      (originalError instanceof CodexAccountCapError
+        ? 'quota_exhausted'
+        : originalError instanceof CodexAccountAuthError
+          ? 'account_recovery'
+          : originalError instanceof APIConnectionError
+            ? 'transient_network'
+            : originalError instanceof APIError && originalError.status === 429
+              ? 'ambiguous_rate_limit'
+              : undefined)
     const deferredTerminalFailure: DeferredTerminalFailureV1 | undefined =
-      isCodexTerminal
+      isCodexTerminal && resolvedTerminalCode
         ? {
             version: 1,
             provider: 'openai',
-            code:
-              originalError instanceof CodexAccountAuthError
-                ? 'account_recovery'
-                : originalError instanceof APIConnectionError
-                  ? 'transient_network'
-                  : originalError instanceof APIError && originalError.status === 429
-                    ? 'ambiguous_rate_limit'
-                    : getCodexExhaustionDiagnosticCode() === 'quota.exhausted'
-                      ? 'quota_exhausted'
-                      : 'account_recovery',
+            code: resolvedTerminalCode,
             observedAt: Date.now(),
           }
         : undefined
@@ -560,7 +551,7 @@ export async function* withRetry<T>(
               throw failoverError
             }
             emitCodexDiagnostic({
-              code: getCodexExhaustionDiagnosticCode(),
+              code: 'quota.exhausted',
               severity: 'error',
               recoverable: false,
               account_ref: error.accountId,
@@ -573,6 +564,7 @@ export async function* withRetry<T>(
                 : new Error(getCodexLeaseExhaustedMessage()),
               attempt,
               error.accountId,
+              'quota_exhausted',
             )
           }
         }
@@ -602,7 +594,7 @@ export async function* withRetry<T>(
           }
 
           emitCodexDiagnostic({
-            code: getCodexExhaustionDiagnosticCode(),
+            code: 'quota.exhausted',
             severity: 'error',
             recoverable: false,
             account_ref: error.accountId,
@@ -613,6 +605,7 @@ export async function* withRetry<T>(
             new Error(getCodexLeaseExhaustedMessage()),
             attempt,
             error.accountId,
+            'quota_exhausted',
           )
         }
       }
@@ -749,7 +742,7 @@ export async function* withRetry<T>(
                 throw failoverError
               }
               emitCodexDiagnostic({
-                code: getCodexExhaustionDiagnosticCode(),
+                code: 'account.pool.unavailable',
                 severity: 'error',
                 recoverable: false,
                 account_ref: accountId,
@@ -762,6 +755,7 @@ export async function* withRetry<T>(
                   : new Error(getCodexLeaseExhaustedMessage()),
                 attempt,
                 accountId,
+                'account_recovery',
               )
             }
           }
@@ -790,7 +784,7 @@ export async function* withRetry<T>(
           }
 
           emitCodexDiagnostic({
-            code: getCodexExhaustionDiagnosticCode(),
+            code: 'account.pool.unavailable',
             severity: 'error',
             recoverable: false,
             account_ref: accountId,
@@ -801,6 +795,7 @@ export async function* withRetry<T>(
             new Error(getCodexLeaseExhaustedMessage()),
             attempt,
             accountId,
+            'account_recovery',
           )
         }
       }
@@ -918,7 +913,7 @@ export async function* withRetry<T>(
                 throw failoverError
               }
               emitCodexDiagnostic({
-                code: getCodexExhaustionDiagnosticCode(),
+                code: 'account.pool.unavailable',
                 severity: 'error',
                 recoverable: false,
                 account_ref: accountId,
@@ -946,7 +941,7 @@ export async function* withRetry<T>(
               continue
             }
             emitCodexDiagnostic({
-              code: getCodexExhaustionDiagnosticCode(),
+              code: 'account.pool.unavailable',
               severity: 'error',
               recoverable: false,
               account_ref: accountId,

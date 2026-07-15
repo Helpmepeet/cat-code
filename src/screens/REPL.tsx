@@ -3270,6 +3270,7 @@ export function REPL({
     const deferredOrigin = newMessages.find(m => m.type === 'user' && m.origin?.kind === 'deferred-continuation')?.origin;
     let deferredThrew = false;
     let deferredPersistenceFailed = false;
+    let deferredProviderEntered = false;
     let removeDeferredLockAbort: (() => void) | undefined;
     try {
       // isLoading is derived from queryGuard — tryStart() above already
@@ -3338,6 +3339,7 @@ export function REPL({
       }
       logForDebugging(`[REPL:onQuery] onQueryImpl start`);
       try {
+        deferredProviderEntered = true;
         await onQueryImpl(latestMessages, newMessages, abortController, shouldQuery, additionalAllowedTools, mainLoopModelParam, effort);
       } catch (error) {
         deferredThrew = true;
@@ -3360,7 +3362,8 @@ export function REPL({
           messages: [...messagesRef.current, ...deferredTerminalMessagesRef.current],
           aborted: abortController.signal.aborted,
           threw: deferredThrew,
-          permissionDenied: deferredPermissionDeniedRef.current.has(deferredOrigin.attemptUuid)
+          permissionDenied: deferredPermissionDeniedRef.current.has(deferredOrigin.attemptUuid),
+          providerEntered: deferredProviderEntered
         });
         if (result) settleForegroundDeferredAttempt(deferredOrigin, result);
         deferredPermissionDeniedRef.current.delete(deferredOrigin.attemptUuid);

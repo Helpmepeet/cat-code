@@ -141,6 +141,7 @@ describe('deferred continuation runner', () => {
         aborted: true,
         threw: false,
         permissionDenied: false,
+        providerEntered: true,
         observedAt: NOW,
       }),
     ).toEqual({ outcome: 'aborted', observedAt: NOW })
@@ -151,6 +152,7 @@ describe('deferred continuation runner', () => {
         aborted: false,
         threw: false,
         permissionDenied: false,
+        providerEntered: true,
       }),
     ).toBeNull()
   })
@@ -205,10 +207,24 @@ describe('deferred continuation runner', () => {
     const registration = registerForegroundDeferredAttempt(submittedJob())
     expect(classifyForegroundDeferredAttempt({
       origin: registration.command.origin,
+      messages: [{
+        type: 'user',
+        uuid: submittedJob().attempt.messageUuid,
+        message: { role: 'user', content: 'continue' },
+      }],
+      aborted: false,
+      threw: false,
+      permissionDenied: false,
+      providerEntered: false,
+      observedAt: NOW,
+    })).toEqual({ outcome: 'unknown', observedAt: NOW })
+    expect(classifyForegroundDeferredAttempt({
+      origin: registration.command.origin,
       messages: [],
       aborted: false,
       threw: true,
       permissionDenied: false,
+      providerEntered: true,
       observedAt: NOW,
     })).toEqual({ outcome: 'unknown', observedAt: NOW })
   })

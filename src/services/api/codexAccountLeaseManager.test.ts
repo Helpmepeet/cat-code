@@ -11,6 +11,7 @@ import {
   createCodexFetch,
   CodexAccountAuthError,
   CodexAccountCapError,
+  CodexResponseFailedError,
   resetCodexCacheContext,
 } from './codex-fetch-adapter.js'
 import { resolveCodexOAuthTokensForLeaseOwner } from './client.js'
@@ -895,12 +896,51 @@ describe('codexAccountLeaseManager', () => {
 
     expect(thrown).toBeInstanceOf(CannotRetryError)
     expect((thrown as CannotRetryError).originalError).toBeInstanceOf(Error)
+    expect((thrown as CannotRetryError).deferredTerminalFailure?.code).toBe('quota_exhausted')
     expect(((thrown as CannotRetryError).originalError as Error).message).toContain(
       'All Codex accounts are capped or unavailable',
     )
     expect(
       classifyAPIError((thrown as CannotRetryError).originalError as Error),
     ).toBe('rate_limit')
+  })
+
+  test('non-quota response failure cannot inherit quota evidence from capped pool state', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'capped-account',
+      accounts: [buildPoolAccount({
+        accountId: 'capped-account',
+        status: 'capped',
+        statusReason: 'usage_cap',
+      })],
+    })
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new CodexResponseFailedError({
+            code: 'server_error',
+            message: 'non-quota structured failure',
+          })
+        },
+        {
+          maxRetries: 0,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).originalError).toBeInstanceOf(CodexResponseFailedError)
+    expect((thrown as CannotRetryError).deferredTerminalFailure).toBeUndefined()
   })
 
   test('withRetry records single-account cap/auth states without rotating', async () => {
@@ -2293,6 +2333,76 @@ describe('codexAccountLeaseManager', () => {
           (message as { recoverable?: boolean }).recoverable === false,
       ),
     ).toBe(true)
+  })
+
+  test('terminal cap failure reports quota exhaustion from the typed decision, not from pool counts', async () => {
+    // The diagnostic code and the deferred envelope are projections of one
+    // terminal decision: a hard cap that could not be failed over. Neither may
+    // re-derive quota belief from a pool snapshot. Here the pool is only
+    // partially capped when the decision fires (the second account is dead, so
+    // it counts toward `total` but can never serve traffic). The previous
+    // count-based helper reported `account.pool.unavailable` for this shape and
+    // only said `quota.exhausted` when capped === total.
+    const emitted: unknown[] = []
+    installStreamJsonAccountDiagnosticHook({
+      emit: message => {
+        emitted.push(message)
+      },
+      getSessionId: () => 'partial-cap-session',
+      createUuid: () => `partial-cap-${emitted.length + 1}`,
+    })
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-a',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-a', alias: 'a' }),
+        buildPoolAccount({ accountId: 'account-b', alias: 'b', status: 'dead' }),
+      ],
+    })
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new CodexAccountCapError('account-a')
+        },
+        {
+          maxRetries: 0,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    const statuses = getPoolStatus().accounts.map(account => account.status)
+    const capped = statuses.filter(status => status === 'capped').length
+    // Precondition: partially capped at the terminal decision.
+    expect(capped).toBeGreaterThan(0)
+    expect(capped).toBeLessThan(statuses.length)
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).deferredTerminalFailure).toMatchObject({
+      version: 1,
+      provider: 'openai',
+      code: 'quota_exhausted',
+    })
+    expect(
+      emitted.some(
+        message => (message as { code?: string }).code === 'quota.exhausted',
+      ),
+    ).toBe(true)
+    expect(
+      emitted.some(
+        message =>
+          (message as { code?: string }).code === 'account.pool.unavailable',
+      ),
+    ).toBe(false)
   })
 
   test('withRetry global Codex cap failover uses the replacement account instead of falsely exhausting', async () => {

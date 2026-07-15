@@ -17,6 +17,7 @@ import {
   listDeferredContinuations,
   listDueDeferredContinuations,
   moveDeferredContinuationToHistory,
+  pruneDeferredContinuationHistory,
   recordDeferredContinuationNotice,
   readPendingDeferredContinuation,
   readTrustedDeferredTranscript,
@@ -195,93 +196,107 @@ export async function prepareBackgroundDeferredContinuation(
   if (preparedBackgroundAttempt) {
     throw new Error('A deferred continuation worker is already prepared')
   }
-  const submitted = (await listDeferredContinuations()).find(
+  // Bounded history cleanup during normal queue startup. It only removes
+  // records no surviving pending job still relies on, so it cannot resurrect
+  // terminal work, and a failure here must never block due jobs.
+  await pruneDeferredContinuationHistory(now).catch(() => 0)
+  const submittedJobs = (await listDeferredContinuations()).filter(
     job => job.state === 'submitted',
   )
-  if (submitted) {
+  for (const submitted of submittedJobs) {
     const target = getDeferredContinuationLockTargets(submitted).job
     if (await shouldScannerAttemptLock(target, now)) {
-      await reconcileDeferredContinuationJob(submitted)
+      try {
+        await reconcileDeferredContinuationJob(submitted)
+      } catch {
+        // Another owner may have refreshed or acquired the lock after the
+        // observation. That submitted job must not block unrelated sessions.
+      }
     }
-    return null
   }
-  const [candidate] = await listDueDeferredContinuations(now)
-  if (!candidate) return null
-  const target = getDeferredContinuationLockTargets(candidate).job
-  if (!(await shouldScannerAttemptLock(target, now))) return null
-  const guard = await acquireDeferredContinuationLocks(candidate)
-  try {
-    guard.assertHealthy()
-    const current = await readPendingDeferredContinuation(candidate.sessionId)
-    if (
-      !current ||
-      current.jobId !== candidate.jobId ||
-      current.state !== 'pending' ||
-      current.notBefore > now
-    ) {
-      await guard.release()
-      return null
-    }
-    if (
-      resolveRequestProvider(current.context.model) !== 'openai' ||
-      !RESTORABLE_BACKGROUND_PERMISSION_MODES.has(current.context.permissionMode)
-    ) {
-      const reason =
-        resolveRequestProvider(current.context.model) !== 'openai'
-          ? 'session_restore'
-          : 'permission_restore'
-      await recordDeferredContinuationNotice({
-        version: 1,
-        sessionId: current.sessionId,
-        kind: 'needs_attention',
-        reason,
-        observedAt: now,
-      })
-      await moveDeferredContinuationToHistory(
-        current,
-        'needs_attention',
-        reason,
-        now,
-      )
-      await guard.release()
-      return null
+  for (const candidate of await listDueDeferredContinuations(now)) {
+    const target = getDeferredContinuationLockTargets(candidate).job
+    if (!(await shouldScannerAttemptLock(target, now))) continue
+    let guard: DeferredContinuationLockGuard
+    try {
+      guard = await acquireDeferredContinuationLocks(candidate)
+    } catch {
+      continue
     }
     try {
-      const entries = await readTrustedDeferredTranscript(current)
-      await restoreTrustedDeferredContinuationContext(
-        current.context,
-        transcriptRestoreMetadata(current, entries),
-      )
-    } catch {
-      await recordDeferredContinuationNotice({
-        version: 1,
-        sessionId: current.sessionId,
-        kind: 'needs_attention',
-        reason: 'session_restore',
-        observedAt: now,
-      })
-      await moveDeferredContinuationToHistory(
-        current,
-        'needs_attention',
-        'session_restore',
-        now,
-      )
+      guard.assertHealthy()
+      const current = await readPendingDeferredContinuation(candidate.sessionId)
+      if (
+        !current ||
+        current.jobId !== candidate.jobId ||
+        current.state !== 'pending' ||
+        current.notBefore > now
+      ) {
+        await guard.release()
+        continue
+      }
+      if (
+        resolveRequestProvider(current.context.model) !== 'openai' ||
+        !RESTORABLE_BACKGROUND_PERMISSION_MODES.has(current.context.permissionMode)
+      ) {
+        const reason =
+          resolveRequestProvider(current.context.model) !== 'openai'
+            ? 'session_restore'
+            : 'permission_restore'
+        await recordDeferredContinuationNotice({
+          version: 1,
+          sessionId: current.sessionId,
+          kind: 'needs_attention',
+          reason,
+          observedAt: now,
+        })
+        await moveDeferredContinuationToHistory(
+          current,
+          'needs_attention',
+          reason,
+          now,
+        )
+        await guard.release()
+        return null
+      }
+      try {
+        const entries = await readTrustedDeferredTranscript(current)
+        await restoreTrustedDeferredContinuationContext(
+          current.context,
+          transcriptRestoreMetadata(current, entries),
+        )
+      } catch {
+        await recordDeferredContinuationNotice({
+          version: 1,
+          sessionId: current.sessionId,
+          kind: 'needs_attention',
+          reason: 'session_restore',
+          observedAt: now,
+        })
+        await moveDeferredContinuationToHistory(
+          current,
+          'needs_attention',
+          'session_restore',
+          now,
+        )
+        await guard.release()
+        return null
+      }
+      const submitted: DeferredContinuationJobV1 = {
+        ...current,
+        state: 'submitted',
+        attempt: { ...current.attempt, submittedAt: now },
+      }
+      await writePendingDeferredContinuation(submitted)
+      preparedBackgroundAttempt = { job: submitted, guard, completed: false }
+      delete process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+      return submitted
+    } catch (error) {
       await guard.release()
-      return null
+      throw error
     }
-    const submitted: DeferredContinuationJobV1 = {
-      ...current,
-      state: 'submitted',
-      attempt: { ...current.attempt, submittedAt: now },
-    }
-    await writePendingDeferredContinuation(submitted)
-    preparedBackgroundAttempt = { job: submitted, guard, completed: false }
-    delete process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
-    return submitted
-  } catch (error) {
-    await guard.release()
-    throw error
   }
+  return null
 }
 
 export function getPreparedBackgroundDeferredContinuation(): DeferredContinuationJobV1 | null {
@@ -307,9 +322,7 @@ export async function completePreparedBackgroundDeferredContinuation(
       Date.now(),
       prepared.job.attempt.messageUuid,
     )
-    await persistAttemptResult(prepared.job, classified)
-    prepared.guard.assertHealthy()
-    await applyAttemptResult(prepared.job, classified)
+    await finalizeDeferredAttempt(prepared.job, classified, prepared.guard)
   } finally {
     preparedBackgroundAttempt = null
     await prepared.guard.release()
@@ -428,6 +441,7 @@ export function classifyForegroundDeferredAttempt(options: {
   aborted: boolean
   threw: boolean
   permissionDenied: boolean
+  providerEntered: boolean
   observedAt?: number
 }): DeferredAttemptResult | null {
   if (!validateForegroundDeferredOrigin(options.origin)) return null
@@ -437,6 +451,7 @@ export function classifyForegroundDeferredAttempt(options: {
   }
   if (options.aborted) return { outcome: 'aborted', observedAt }
   if (options.threw) return { outcome: 'unknown', observedAt }
+  if (!options.providerEntered) return { outcome: 'unknown', observedAt }
   return classifyDeferredHeadlessResult(
     options.messages,
     { type: 'result', subtype: 'success', is_error: false },
@@ -467,6 +482,28 @@ async function persistAttemptResult(
     observedAt: result.observedAt,
   })
   await flushCurrentTranscriptDurably()
+}
+
+async function finalizeDeferredAttempt(
+  job: DeferredContinuationJobV1,
+  result: DeferredAttemptResult,
+  guard: Pick<DeferredContinuationLockGuard, 'assertHealthy'>,
+): Promise<void> {
+  if (result.outcome !== 'transcript_persistence') {
+    try {
+      await persistAttemptResult(job, result)
+    } catch {
+      guard.assertHealthy()
+      await stopDeferredContinuationForAttention(
+        job,
+        'transcript_persistence',
+        Date.now(),
+      )
+      return
+    }
+  }
+  guard.assertHealthy()
+  await applyAttemptResult(job, result)
 }
 
 async function stopDeferredContinuationForAttention(
@@ -630,9 +667,7 @@ export async function runDeferredContinuationAttempt(options: {
     await writePendingDeferredContinuation(submitted)
     guard.assertHealthy()
     const result = await options.execute(submitted, getContinuationPrompt(submitted))
-    await persistAttemptResult(submitted, result)
-    guard.assertHealthy()
-    await applyAttemptResult(submitted, result)
+    await finalizeDeferredAttempt(submitted, result, guard)
     return 'completed'
   } finally {
     await guard.release()
@@ -669,11 +704,7 @@ export async function beginForegroundDeferredContinuation(
     const finished = (async () => {
       try {
         const result = await registration.result
-        if (result.outcome !== 'transcript_persistence') {
-          await persistAttemptResult(submitted, result)
-        }
-        guard.assertHealthy()
-        await applyAttemptResult(submitted, result)
+        await finalizeDeferredAttempt(submitted, result, guard)
       } finally {
         await guard.release()
       }

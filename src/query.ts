@@ -1615,6 +1615,14 @@ async function* queryLoop(
     // sent to the model as text. Bash-mode commands are already excluded by
     // INLINE_NOTIFICATION_MODES in getQueuedCommandAttachments.
     //
+    // Deferred continuations are excluded for the same structural reason: the
+    // attachment path cannot satisfy their contract. They must reach onQuery
+    // as a user message so REPL.tsx can run the durable pre-provider transcript
+    // barrier and settle the runner's UUID registry from the query lifecycle —
+    // an attachment never enters newMessages, so the barrier would be skipped
+    // and the runner's job/session locks would be held for the process
+    // lifetime. Left queued, useQueueProcessor submits them after the turn.
+    //
     // Agent scoping: the queue is a process-global singleton shared by the
     // coordinator and all in-process subagents. Each loop drains only what's
     // addressed to it — main thread drains agentId===undefined, subagents
@@ -1629,6 +1637,7 @@ async function* queryLoop(
       sleepRan ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
+      if (cmd.origin?.kind === 'deferred-continuation') return false
       if (isMainThread) return cmd.agentId === undefined
       // Subagents only drain task-notifications addressed to them — never
       // user prompts, even if someone stamps an agentId on one.

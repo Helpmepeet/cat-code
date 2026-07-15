@@ -334,15 +334,37 @@ function pendingPath(paths: StorePaths, sessionId: string): string {
   return join(paths.pending, `${sessionId}.json`)
 }
 
+async function terminalHistoryExists(
+  job: Pick<DeferredContinuationJobV1, 'jobId' | 'sessionId'>,
+  paths: StorePaths,
+): Promise<boolean> {
+  try {
+    deferredContinuationHistorySchema.parse(
+      await readPrivateJson(join(paths.history, `${job.jobId}.json`)),
+    )
+    // The job ID determines the terminal-authority filename. Any valid record
+    // at that exact path suppresses surviving pending work, even when its
+    // contents do not match, so corruption cannot make the job executable.
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    // Once a terminal-authority filename exists, malformed or mismatched
+    // contents must fail closed instead of making surviving pending work
+    // executable after an interrupted history transition.
+    return true
+  }
+}
+
 export async function readPendingDeferredContinuation(
   sessionId: string,
   paths = getDeferredContinuationPaths(),
 ): Promise<DeferredContinuationJobV1 | null> {
   await ensureDeferredContinuationStore(paths)
   try {
-    return deferredContinuationJobSchema.parse(
+    const job = deferredContinuationJobSchema.parse(
       await readPrivateJson(pendingPath(paths, sessionId)),
     )
+    return (await terminalHistoryExists(job, paths)) ? null : job
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
@@ -406,6 +428,7 @@ export async function listDueDeferredContinuations(
       const job = deferredContinuationJobSchema.parse(
         await readPrivateJson(join(paths.pending, name)),
       )
+      if (await terminalHistoryExists(job, paths)) continue
       if (job.state === 'pending' && job.notBefore <= now) jobs.push(job)
     } catch {
       // Malformed records fail closed and are not executed.
@@ -421,16 +444,90 @@ export async function listDeferredContinuations(
   const jobs: DeferredContinuationJobV1[] = []
   for (const name of (await readdir(paths.pending)).filter(name => name.endsWith('.json')).sort()) {
     try {
-      jobs.push(
-        deferredContinuationJobSchema.parse(
-          await readPrivateJson(join(paths.pending, name)),
-        ),
+      const job = deferredContinuationJobSchema.parse(
+        await readPrivateJson(join(paths.pending, name)),
       )
+      if (!(await terminalHistoryExists(job, paths))) jobs.push(job)
     } catch {
       // Malformed records fail closed and are never returned as executable work.
     }
   }
   return jobs
+}
+
+/**
+ * Terminal history is retained for this long, then cleaned during normal queue
+ * startup. It is the durable evidence behind `/continue-after-limit status`
+ * after a job ends, so the window is generous rather than minimal.
+ */
+export const DEFERRED_CONTINUATION_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Bounded cleanup of `history/`.
+ *
+ * History records are not inert logs: `terminalHistoryExists()` treats any
+ * record at `history/<jobId>.json` as the terminal authority that suppresses a
+ * surviving `pending/<sessionId>.json`. `moveDeferredContinuationToHistory()`
+ * writes history *before* unlinking pending, so a crash between those two steps
+ * leaves both files, and the history record is the only thing preventing the
+ * already-terminal job from being read back as executable work. Deleting such a
+ * record would resurrect it — the exact failure age-based pruning invites.
+ *
+ * So a record is removed only when both hold:
+ *  - no surviving pending record still references its job ID (nothing left to
+ *    suppress, so the tombstone has no remaining duty), and
+ *  - it aged past the retention window.
+ *
+ * Anything unreadable fails closed and is kept. If the pending scan cannot be
+ * completed exactly, the whole pass is skipped: pruning is opportunistic
+ * housekeeping, and skipping a pass costs only disk.
+ */
+export async function pruneDeferredContinuationHistory(
+  now = Date.now(),
+  paths = getDeferredContinuationPaths(),
+): Promise<number> {
+  await ensureDeferredContinuationStore(paths)
+  const referencedJobIds = new Set<string>()
+  for (const name of (await readdir(paths.pending)).filter(name =>
+    name.endsWith('.json'),
+  )) {
+    try {
+      referencedJobIds.add(
+        deferredContinuationJobSchema.parse(
+          await readPrivateJson(join(paths.pending, name)),
+        ).jobId,
+      )
+    } catch (error) {
+      // A record that vanished mid-scan references nothing. Any other failure
+      // means this pass cannot prove which tombstones are still load-bearing.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      if (!(error instanceof z.ZodError)) return 0
+      // A malformed pending record is never parsed back into executable work
+      // by listDueDeferredContinuations, so it cannot be resurrected.
+    }
+  }
+  let removed = 0
+  for (const name of (await readdir(paths.history)).filter(name =>
+    name.endsWith('.json'),
+  )) {
+    try {
+      const parsed = deferredContinuationHistorySchema.parse(
+        await readPrivateJson(join(paths.history, name)),
+      ) as DeferredContinuationHistoryV1
+      if (referencedJobIds.has(parsed.jobId)) continue
+      if (now - parsed.terminalAt < DEFERRED_CONTINUATION_HISTORY_RETENTION_MS) {
+        continue
+      }
+      await unlink(join(paths.history, name))
+      removed++
+    } catch {
+      // Unreadable or malformed history stays: terminalHistoryExists() treats
+      // any record at that filename as terminal authority, so removing it could
+      // make a surviving pending record executable again.
+    }
+  }
+  if (removed > 0) await syncDirectory(paths.history)
+  return removed
 }
 
 export function getDeferredContinuationLockTargets(

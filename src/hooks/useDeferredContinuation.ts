@@ -8,7 +8,10 @@ import {
   takeDeferredContinuationNotice,
   type DeferredContinuationJobV1,
 } from '../services/deferredContinuation.js'
-import { beginForegroundDeferredContinuation } from '../services/deferredContinuationRunner.js'
+import {
+  beginForegroundDeferredContinuation,
+  reconcileDeferredContinuationJob,
+} from '../services/deferredContinuationRunner.js'
 import { formatDeferredContinuationBackground, formatDeferredContinuationNotice } from '../services/deferredContinuationPresentation.js'
 import { getDeferredContinuationBackgroundStatus } from '../services/deferredContinuationLaunchAgent.js'
 
@@ -62,6 +65,18 @@ export function useDeferredContinuation({ setMessages }: Props): void {
       }
       const firstPoll = !hasPolled
       hasPolled = true
+      if (job?.state === 'submitted') {
+        try {
+          await reconcileDeferredContinuationJob(job)
+          await consumeNotice()
+        } catch {
+          // A live foreground/background owner still holding the locks is
+          // expected. Retry until it settles or becomes reclaimable.
+        }
+        timer = setTimeout(() => void check(), 1_000)
+        timer.unref?.()
+        return
+      }
       if (!job || job.state !== 'pending') {
         timer = setTimeout(() => void check(), 1_000)
         timer.unref?.()
@@ -100,6 +115,8 @@ export function useDeferredContinuation({ setMessages }: Props): void {
         show(
           'Status: Stopped — needs you\nAutomatic continuation could not finish safely. Review the latest transcript and continue manually.',
         )
+        timer = setTimeout(() => void check(), 1_000)
+        timer.unref?.()
       })
     }
 
