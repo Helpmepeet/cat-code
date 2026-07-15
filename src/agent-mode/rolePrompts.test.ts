@@ -89,7 +89,7 @@ describe('Normal-mode implementor prompt', () => {
     }
   })
 
-  test('exposes implementation tools without orchestrator or peer-worker routing tools', () => {
+  test('exposes implementation tools without nested delegation or worker routing tools', () => {
     // Tools are listed by constant name in source; assert on the constant
     // identifiers rather than resolved string values.
     const toolsBlock = implementorSource.slice(
@@ -102,9 +102,11 @@ describe('Normal-mode implementor prompt', () => {
     expect(toolsBlock).toContain('FILE_WRITE_TOOL_NAME')
     expect(toolsBlock).toContain('GLOB_TOOL_NAME')
     expect(toolsBlock).toContain('GREP_TOOL_NAME')
-    // The implementor must NOT carry Agent (no nested spawning) or the
-    // orchestrator/peer-worker routing tools.
+    // The implementor must NOT carry Agent or ClaudeCli (no nested model
+    // delegation), nor the orchestrator/peer-worker routing tools.
     expect(implementorSource).not.toContain('AGENT_TOOL_NAME')
+    expect(implementorSource).not.toContain('CLAUDE_CLI_TOOL_NAME')
+    expect(implementorSource).not.toContain('ClaudeCli')
     expect(implementorSource).toContain('disallowedTools: [')
     expect(implementorSource).toContain('SEND_MESSAGE_TOOL_NAME')
     expect(implementorSource).toContain('TEAM_CREATE_TOOL_NAME')

@@ -10,7 +10,6 @@ import { TEAM_DELETE_TOOL_NAME } from 'src/tools/TeamDeleteTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from 'src/tools/FilePatchTool/constants.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from 'src/tools/ExitPlanModeTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from 'src/tools/NotebookEditTool/constants.js'
-import { CLAUDE_CLI_TOOL_NAME } from 'src/tools/ClaudeCliTool/constants.js'
 import { hasEmbeddedSearchTools } from 'src/utils/embeddedTools.js'
 import {
   resolveRequestProvider,
@@ -39,7 +38,6 @@ TOOL DOCTRINE:
 - Use ${FILE_READ_TOOL_NAME}, ${GLOB_TOOL_NAME}, and ${GREP_TOOL_NAME} for targeted investigation.
 - Use ${FILE_EDIT_TOOL_NAME}, ${FILE_PATCH_TOOL_NAME}, and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for build, test, lint, and other local commands.
-- Use ${CLAUDE_CLI_TOOL_NAME} only when a bounded task needs a separate external Claude CLI pass. Provide a self-contained prompt and choose model/effort when useful.
 - If deeper read-only investigation is needed, use the search and read tools yourself or block with the exact research question the main agent should delegate.
 
 BOUNDARIES:
@@ -88,7 +86,6 @@ Keep the whole response compact and operational.`
 - Use ${FILE_READ_TOOL_NAME}, ${GLOB_TOOL_NAME}, and ${GREP_TOOL_NAME} for targeted investigation.
 - Use ${FILE_EDIT_TOOL_NAME}, ${FILE_PATCH_TOOL_NAME}, and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for local build, test, lint, and repo commands.
-- Use ${CLAUDE_CLI_TOOL_NAME} only when a bounded task needs a separate external Claude CLI pass. Provide a self-contained prompt and choose model/effort when useful.
 - If deeper read-only investigation is needed, use the search and read tools yourself or block with the exact research question the main agent should delegate.
 
 ## Boundaries
@@ -133,7 +130,6 @@ export const IMPLEMENTOR_AGENT: BuiltInAgentDefinition = {
     FILE_WRITE_TOOL_NAME,
     GLOB_TOOL_NAME,
     GREP_TOOL_NAME,
-    CLAUDE_CLI_TOOL_NAME,
   ],
   disallowedTools: [
     EXIT_PLAN_MODE_TOOL_NAME,
