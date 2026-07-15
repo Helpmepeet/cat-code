@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-07-11
+Last refreshed: 2026-07-13
 
 ## Purpose
 
@@ -56,6 +56,7 @@ active local features.
 | Change target | Start here | Follow-up files |
 |---|---|---|
 | Add or remove a `logEvent` call | Call site, then `src/services/analytics/index.ts` | `src/services/analytics/metadata.ts` for PII-safe fields; `src/services/api/logging.ts` for API-specific events. |
+| Change file-operation analytics | `src/utils/fileOperationAnalytics.ts` | `src/tools/FilePatchTool/FilePatchTool.tsx`, `src/services/analytics/index.ts` | Keep file-patch operation labels aligned with emitted result categories; do not infer mutation success from an unvalidated destination. |
 | Change event sampling or first-party event behavior | `src/services/analytics/firstPartyEventLogger.ts` | `src/services/analytics/firstPartyEventLoggingExporter.ts`, `src/services/analytics/growthbook.ts`, `src/services/analytics/sinkKillswitch.ts` |
 | Change Datadog behavior | `src/services/analytics/datadog.ts` | `src/services/analytics/sink.ts` |
 | Change GrowthBook feature reads | `src/services/analytics/growthbook.ts` | Search for `getFeatureValue_CACHED_MAY_BE_STALE`, `getDynamicConfig_CACHED_MAY_BE_STALE`, `checkGate_CACHED_OR_BLOCKING`, and `checkSecurityRestrictionGate`. |

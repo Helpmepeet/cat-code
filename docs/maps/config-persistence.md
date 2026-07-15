@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-07-01
+Last refreshed: 2026-07-13
 
 ## Purpose
 
@@ -22,7 +22,7 @@ for the config and persistence slice.
 | Environment application from config/settings | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/utils/sessionEnvVars.ts` |
 | Instruction memory and rule discovery | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/settings/constants.ts` |
 | Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
-| Persistent memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/utils/permissions/filesystem.ts` |
+| Persistent memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/memdir/memoryTypes.ts`, `src/services/extractMemories/prompts.ts` |
 | Session memory summaries | `src/services/SessionMemory/sessionMemory.ts` | `src/services/SessionMemory/sessionMemoryUtils.ts`, `src/utils/permissions/filesystem.ts` |
 | Admin/remote policy | `src/services/remoteManagedSettings/index.ts`, `src/services/policyLimits/index.ts` | `src/utils/settings/mdm/`, `src/utils/settings/managedPath.ts` |
 
@@ -37,10 +37,11 @@ for the config and persistence slice.
 | Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. Arrays replace during source writes but concat/dedupe during normal merged reads. |
 | Hot reload of settings | `src/utils/settings/changeDetector.ts` | `src/utils/settings/applySettingsChange.ts`, `src/utils/hooks.ts` | File watcher changes run `ConfigChange` hooks first. `fanOut()` owns cache reset before subscribers read fresh settings, and `applySettingsChange()` is shared by both interactive AppState updates and the headless/SDK subscribe path. MDM/plist/registry changes are polled. |
 | Initial merged settings snapshot | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts` | `getInitialSettings()`/`getSettings_DEPRECATED()` use a session cache. Reset that cache through the established change paths, not per listener. |
-| Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.js` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
+| Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.tsx` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
 | Global config file location | `src/utils/env.ts` | `src/utils/envUtils.ts`, `src/constants/oauth.ts` | `getGlobalClaudeFile()` uses legacy `~/.cat-code/.config.json` if present, otherwise `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`. The suffix can vary for OAuth config. |
 | Global config reads and writes | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/lockfile.ts` | `enableConfigs()` gates reads. `saveGlobalConfig()` uses a lock, backups, cache write-through, and an auth-loss guard. |
 | Project instruction files and rule globs | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/markdownConfigLoader.ts` | Project instruction discovery now checks `CLAUDE.md`, `.cat-code/CLAUDE.md`, and `.cat-code/rules/*.md` before legacy `.claude` fallbacks, across cwd ancestors and additional dirs. |
+| Memory type and scope selection | `src/memdir/memoryTypes.ts` | `src/memdir/memdir.ts`, `src/memdir/teamMemPrompts.ts`, `src/services/extractMemories/prompts.ts` | Feedback defaults to private; preserve an explicit team scope only when the guidance is clearly project-wide. Private corrections must not modify team memory. |
 | Project-keyed user state | `src/utils/config.ts` | `src/utils/git.ts`, `src/utils/path.ts` | `getProjectPathForConfig()` keys by canonical git root when available, otherwise original cwd. Values are stored inside the global config `projects` object, not in repo files. |
 | Trust persistence | `src/utils/config.ts` | `src/bootstrap/state.ts`, `src/components/TrustDialog/` | Trust can be session-only for some cases, or persisted as `projects[projectPath].hasTrustDialogAccepted`. Parent-directory checks are part of trust lookup. |
 | Legacy config migrations | `src/utils/config.ts` | `src/main.tsx`, `src/migrations/` | `config.ts` has local field migrations and backup behavior. Startup migrations handle renamed settings/config fields elsewhere. |

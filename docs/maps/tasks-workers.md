@@ -1,19 +1,17 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-07-13.
+Last refreshed: 2026-07-14.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
-## Refresh Checklist
+## First Files To Inspect
 
-- Re-read `docs/maps/WORKSPACE_MAP.md`.
-- Check task exposure in `src/tasks.ts` and base types in `src/Task.ts`.
-- Check concrete task state and lifecycle in `src/tasks/`.
-- Check task UI in `src/components/tasks/`, REPL wiring in `src/screens/REPL.tsx`, navigation in `src/hooks/useBackgroundTaskNavigation.ts`, and input selectors in `src/state/selectors.ts`.
-- For local agent/subagent behavior, check `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/agentToolUtils.ts`, `src/tools/AgentTool/runAgent.ts`, and `src/tools/AgentTool/resumeAgent.ts`.
-- For teammate roster/mailbox behavior, check `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, `src/utils/swarm/inProcessRunner.ts`, `src/hooks/useInboxPoller.ts`, and `src/utils/attachments.ts`.
-- For stop behavior, check `src/tasks/stopTask.ts`, task-specific `kill(...)` implementations, and `src/hooks/useCancelRequest.ts`.
-- Refresh tests with the focused test files listed in "Tests".
+- `src/tasks.ts` and `src/Task.ts` for task exposure and base types.
+- `src/tasks/` for concrete lifecycle and stop behavior.
+- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `runAgent.ts`, and `resumeAgent.ts` for local-agent work.
+- `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, and `src/utils/swarm/inProcessRunner.ts` for teammate routing.
+- `src/components/tasks/`, `src/screens/REPL.tsx`, `src/hooks/useBackgroundTaskNavigation.ts`, and `src/state/selectors.ts` for terminal task UI.
+- `src/agent-mode/sessionState.ts` and the worker-control tool directories for durable Agent Mode worker state.
 
 ## Entry Points
 

@@ -1,6 +1,6 @@
 # Codex Core Map
 
-Last refreshed: 2026-07-11
+Last refreshed: 2026-07-13
 
 ## Purpose
 
@@ -88,7 +88,7 @@ src/codex-core/client.ts:runCodexLLM()
 | Per-owner failover | `src/services/api/withRetry.ts` | `src/services/api/codexAccountLeaseManager.ts` | Leased owners fail over locally; unleased main-thread requests fall back to pool switching. |
 | Structured account diagnostics | `src/services/api/accountDiagnostics.ts` | `src/entrypoints/sdk/coreSchemas.ts`, `src/services/api/client.ts`, `src/services/api/withRetry.ts` | Downstream remediation only requires `version`, `code`, `severity`, `provider`, and `recoverable`; optional fields are sanitized hints. |
 | WebSocket incremental continuation | `src/services/api/codex-websocket-transport.ts` | `src/services/api/codex-continuation-e2e.test.ts`, `src/utils/messages.ts` | `responseItemsEqual()` and `getIncrementalInputDelta()` are the strict continuation gates. |
-| HTTP fallback / stream normalization | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts` | Adapter owns stream translation for both HTTP SSE and websocket-backed event flows. |
+| HTTP fallback / stream normalization | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts` | Adapter owns stream translation for both HTTP SSE and websocket-backed event flows. Sticky HTTP fallback is scoped per account profile; retry a model-404 over WebSocket only for streaming requests. |
 | Initial stream liveness and aborts | `src/services/api/codex-fetch-adapter.ts` | `src/services/api/codex-fetch-adapter.test.ts`, `src/services/api/codex-websocket-transport.ts` | `primeCodexEvents()` waits for visible output or completion before releasing the stream, uses `CLAUDE_STREAM_IDLE_TIMEOUT_MS` for initial-output and idle timeouts, and cancels HTTP readers on abort. HTTP requests forward the caller `RequestInit.signal`. |
 | Standalone response parsing | `src/codex-core/response.ts` | `src/codex-core/errors.ts` | Core classifies 401/403 as auth, 429 as quota or rate-limit, 400/model text as model, else backend. |
 | Long-running token freshness | `src/codex-core/accounts.ts`, `src/services/api/codexTokenRefresh.ts` | `src/services/api/codexAccountPool.ts`, `src/services/oauth/codex-client.ts` | Refresh-on-use goes through `maybeRefreshAccount()`. Timer/startup refresh lives in `codexTokenRefresh.ts:touchAll()` and skips accounts outside the shared refresh skew. Startup touch-all is skipped for non-interactive print sessions; periodic refresh and quarantine probes still start for vault accounts. Check the persisted vault `refresh` state, transport classifier, and ownership guards before changing account health rules. |

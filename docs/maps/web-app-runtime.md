@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-07-11 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-07-15 against `src/main.tsx`, `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
 `src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
 
@@ -10,11 +10,12 @@ the legacy REPL relay server.
 
 ## First Files To Inspect
 
-1. `docs/maps/WORKSPACE_MAP.md`
-2. `src/main.tsx` for `--web` startup wiring
-3. `app/main/main.ts` for Electron startup, or
-   `src/web/startRuntimeBackedWebMode.ts` for browser startup
-4. The owner surface below that matches the behavior you are changing
+1. `src/main.tsx` and `src/web/startRuntimeBackedWebMode.ts` for browser startup.
+2. `app/main/main.ts` for Electron host, IPC, attachment, and cache wiring.
+3. `app/shared/protocol.ts` and `app/shared/hostApi.ts` for desktop wire/control contracts.
+4. `app/sidecar/sessionController.ts` and `app/sidecar/sidecarServer.ts` for the engine boundary.
+5. `app/renderer/src/App.tsx` and `app/renderer/src/shellState.ts` for session/pane behavior.
+6. `app/main/transcriptCache.ts` and `app/renderer/src/previewTranscriptState.ts` for instant restore previews.
 
 ## Routing Table
 
@@ -35,9 +36,12 @@ the legacy REPL relay server.
 | Electron desktop startup and security | `app/main/main.ts` | `app/main/navigationPolicy.ts`, `app/main/attachmentGate.ts`, `app/main/replayBuffer.ts` | Electron main applies the window/security baseline, owns fixed IPC handlers, starts one sidecar-backed session, gates/replays frames across renderer attachment and reload, and exposes host-level sidecar restart. |
 | Desktop sidecar lifecycle | `app/supervisor/supervisor.ts` | `app/shared/framing.ts`, `app/shared/limits.ts`, `app/shared/protocol.ts` | The Electron-free supervisor owns the session-to-child registry, bounded Unix-socket path allocation, framed transport, restart/kill behavior, and sidecar status events. |
 | Desktop engine boundary | `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` | `app/sidecar/sessionController.ts`, `app/sidecar/initializeRuntime.ts`, `src/app-runtime/` | The Bun sidecar initializes the real runtime, constructs a QueryEngine-backed controller, strictly validates inbound allowlisted frames, reattaches only engine-minted permission updates, and raw-forwards cloneable, JSON-safe, secret-screened session events. |
+| Desktop Agent Mode controls | `app/sidecar/agentModeDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, `app/main/main.ts`, `app/preload/preload.ts`, `app/renderer/src/AgentChrome.tsx` | The sidecar joins persisted Agent Mode state with live local-agent tasks for a redacted snapshot. Its allowlisted set verb switches only the sidecar process through `matchSessionMode()` and broadcasts a fresh snapshot. |
+| Desktop Codex account usage display | `app/sidecar/accountsDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/WelcomeScreen.tsx`, `app/renderer/src/ComposerActionsBar.tsx` | The renderer receives a redacted pool snapshot. Usage refresh uses the cached usage endpoint without token refresh or completion use, then the sidecar re-broadcasts changed usage fields. |
 | Desktop preload contract | `app/preload/preload.ts` | `app/preload/rendererIpcGuard.ts`, `app/shared/protocol.ts`, `app/main/main.ts` | The context-isolated preload exposes fixed submit, abort, permission, ping, restart, subscribe, and renderer-ready operations; a byte/rate guard protects the fixed senders and there is no generic IPC channel API. |
-| Desktop renderer shell and session routing | `app/renderer/src/App.tsx`, `app/renderer/src/shellState.ts` | `app/renderer/src/TabBar.tsx`, `app/renderer/src/Sidebar.tsx`, `app/renderer/src/tabStatus.ts`, `app/renderer/src/sidebarState.ts` | `App` seeds the session roster from `listSessions()`, folds live host events without polling, and owns active selection plus create/close/restart/restore calls. Tabs retain arrival order; the sidebar independently projects the same live/restorable roster by recency. Per-session connection, transcript, and permission stores remain resident while focus changes. |
-| Desktop renderer transcript and permission state | `app/renderer/src/transcriptProjector.ts`, `app/renderer/src/permissionState.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts` | The renderer subscribes before signaling readiness and keeps session-keyed reducers for connection, permissions, bounded raw diagnostics, and projected transcript rows. The projector exhaustively dispatches the SDK message union; background permission counts feed tab attention without moving focus. |
+| Desktop restore preview cache | `app/main/transcriptCache.ts` | `app/main/main.ts`, `app/shared/hostApi.ts`, `app/preload/preload.ts`, `app/renderer/src/previewTranscriptState.ts` | A dead restorable session may be previewed without spawning a sidecar. The main process reads only bounded, versioned, secret-screened cache frames after the host’s `canPreview()` gate; renderer state merges the later live replay. |
+| Desktop renderer shell and session routing | `app/renderer/src/App.tsx`, `app/renderer/src/shellState.ts` | `app/renderer/src/TabBar.tsx`, `app/renderer/src/Sidebar.tsx`, `app/renderer/src/tabStatus.ts`, `app/renderer/src/sidebarState.ts`, `app/sidecar/sessionTitleGen.ts` | `App` seeds the session roster from `listSessions()`, folds live host events without polling, and owns active selection plus create/close/restart/restore calls. Tabs retain arrival order; the sidebar independently projects the same live/restorable roster by recency. A fresh sidecar may emit one generated title after its first prompt; main persists it in the host row. |
+| Desktop transcript, restore affordance, and picker state | `app/renderer/src/transcriptProjector.ts`, `app/renderer/src/previewTranscriptState.ts`, `app/renderer/src/slashCatalogState.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts`, `app/renderer/src/SlashCommandPicker.tsx` | Live and cached rows stay separate until replay takes over; `TranscriptView` distinguishes preview, resuming, and no-cache connection states. The picker consumes the sidecar’s read-only rich slash-catalog snapshot, with names-only initialization as fallback. |
 | Legacy REPL web relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts`, `src/screens/REPL.tsx` | This older server relays REPL events and intentionally disables sending; do not confuse it with `AppSessionWebSocketServer.ts` when routing runtime-backed browser work. |
 
 ## Tests And Validation
@@ -71,6 +75,9 @@ the legacy REPL relay server.
 - `app/renderer/src/shellState.ts` owns roster ordering, not active focus.
   `App.tsx` owns focus transitions so background frames and host events cannot
   silently steal the active pane.
+- A transcript cache is an untrusted recovery artifact, not a second transcript
+  authority: preserve its size, schema/version, and secret checks, and do not
+  bypass the host’s not-live/restorable gate to display it.
 - Desktop Electron main and the renderer must not import engine runtime modules.
   The Bun sidecar is the engine boundary; `app/supervisor/` must remain
   Electron-free.

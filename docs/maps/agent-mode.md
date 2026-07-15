@@ -4,25 +4,17 @@ Daily-refreshable routing map for Agent Mode ownership, integration points, and 
 
 Last refreshed: 2026-07-13 against the current source tree.
 
-## Refresh Checklist
+## First Files To Inspect
 
 When refreshing this map, verify these source paths before trusting older docs:
 
-1. `src/agent-mode/`
-2. worker role prompts and allowed tools: `src/agent-mode/rolePrompts.ts`, `src/constants/tools.ts`
-3. `src/constants/prompts.ts` Agent Mode sections
-4. `src/utils/systemPrompt.ts`
-5. `src/QueryEngine.ts`
-6. `src/screens/REPL.tsx`
-7. `src/tools/AgentTool/`
-8. `src/tools/ResumeAgentTool/`
-9. agent targeting: `src/tools/AgentTool/resolveAgentTarget.ts`, `src/utils/sessionStorage.ts` subagent metadata
-10. worker-control tools: `src/tools/ListWorkersTool/`, `src/tools/WaitWorkersTool/`, `src/tools/GetWorkerResultTool/`, `src/tools/CancelWorkerTool/`
-11. resume/session paths: `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`
-12. commands: `src/commands/agent/`, `src/commands/agents/`
-13. current docs under `docs/agent/`, treating plan/manual docs as historical unless source confirms them
-14. external delegated Claude CLI tool: `src/tools/ClaudeCliTool/`
-15. recipient identity/routing: `src/utils/recipientIdentity.ts`, `src/utils/swarm/teamHelpers.ts` (see `docs/maps/tasks-workers.md` for the full mailbox/roster protocol)
+1. `src/agent-mode/agentMode.ts` and `src/agent-mode/sessionState.ts`
+2. `src/tools/AgentTool/AgentTool.tsx`, `src/tools/AgentTool/resolveAgentTarget.ts`, and `src/tools/AgentTool/resumeAgent.ts`
+3. `src/tools/ResumeAgentTool/`, `src/tools/SendMessageTool/`, and the worker-control tool directories
+4. `src/utils/recipientIdentity.ts` and `src/utils/swarm/teamHelpers.ts` (see `docs/maps/tasks-workers.md` for the mailbox/roster protocol)
+5. `src/screens/REPL.tsx`, `src/utils/sessionStorage.ts`, and `src/utils/sessionRestore.ts`
+6. `src/constants/prompts.ts`, `src/utils/systemPrompt.ts`, and `src/QueryEngine.ts`
+7. Desktop controls: `app/sidecar/agentModeDomain.ts`, `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, and `app/renderer/src/AgentChrome.tsx`
 
 ## Current Mental Model
 
@@ -53,6 +45,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | Concern | Start here | Then inspect | Notes |
 |---|---|---|---|
 | Mode selection and env | `src/agent-mode/agentMode.ts` | `src/utils/systemPrompt.ts`, `src/constants/prompts.ts`, `src/tools/AgentTool/builtInAgents.ts`, `src/utils/sessionStorage.ts` | `isAgentMode()` reads `CLAUDE_CODE_AGENT_MODE`. `getCurrentSessionMode()` returns `agent`, `coordinator`, or `normal`. `matchSessionMode()` mutates env vars to match resumed session metadata. |
+| Desktop Agent Mode snapshot and toggle | `app/sidecar/agentModeDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, `app/main/main.ts`, `app/preload/preload.ts`, `app/renderer/src/AgentChrome.tsx` | The sidecar projects persisted session state plus live local-agent tasks into a redacted snapshot. `agent-mode.set` uses the engine's `matchSessionMode()` in that sidecar process only; it does not respawn a session. |
 | `/agent` entrypoint | `src/commands/agent/agent.tsx` | `src/screens/REPL.tsx` `enterAgentModeSession`, `src/commands.ts` | `/agent` starts a fresh Agent Mode session, clears the conversation, and forwards inline args as the next submitted prompt. |
 | Agent list/config UX | `src/commands/agents/agents.tsx` | `src/components/agents/AgentsMenu.tsx`, `src/tools/AgentTool/loadAgentsDir.ts` | `/agents` is a general agent configuration UI, not the Agent Mode runtime owner. |
 | Orchestrator prompt doctrine | `src/agent-mode/orchestratorPrompt.ts` | `src/agent-mode/agentMode.ts`, `src/constants/prompts.ts` | This is the live Agent Mode orchestrator prompt. It rejects a mandatory plan-approval-execute workflow and pushes substantive execution to workers. |

@@ -231,6 +231,7 @@ authority-checked boundary. Start with `src/utils/teammateMailbox.ts`.
 | Resource tools | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/` | Separate from normal MCP call tools; still part of the tool pool and can be deferred. |
 | Agent orchestration tools | `src/tools/AgentTool/`, worker-control tool dirs, `src/services/tools/toolOrchestration.ts` | These shape subagent behavior and can change the global tool pool seen by workers. |
 | Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. |
+| Apply-patch file mutation | `src/tools/FilePatchTool/FilePatchTool.tsx` | `src/tools/FilePatchTool/applier.test.ts`, `src/tools/FilePatchTool/FilePatchTool.permissions.test.ts`, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation; rollback and result enumeration are part of the tool's safety contract. |
 
 ## Tool Search And Deferred Loading
 
