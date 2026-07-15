@@ -333,6 +333,27 @@ export type SubagentTerminalMessage = {
   lastActivityAt?: string
 }
 
+export type DeferredContinuationResultEntryV1 = {
+  type: 'deferred-continuation-result'
+  version: 1
+  sessionId: string
+  attemptUuid: string
+  outcome:
+    | 'completed'
+    | 'quota_exhausted'
+    | 'account_recovery'
+    | 'transient_network'
+    | 'ambiguous_rate_limit'
+    | 'permission_required'
+    | 'context_window'
+    | 'max_turns'
+    | 'max_budget'
+    | 'session_restore'
+    | 'aborted'
+    | 'unknown'
+  observedAt: number
+}
+
 export type Entry =
   | TranscriptMessage
   | SummaryMessage
@@ -358,6 +379,7 @@ export type Entry =
   | ContextCollapseSnapshotEntry
   | SubagentSpawnedMessage
   | SubagentTerminalMessage
+  | DeferredContinuationResultEntryV1
 
 export function sortLogs(logs: LogOption[]): LogOption[] {
   return logs.sort((a, b) => {

@@ -13,6 +13,7 @@ import { AFK_MODE_BETA_HEADER } from 'src/constants/betas.js'
 import type { SDKAssistantMessageError } from 'src/entrypoints/agentSdkTypes.js'
 import type {
   AssistantMessage,
+  DeferredTerminalFailureV1,
   Message,
   UserMessage,
 } from 'src/types/message.js'
@@ -465,14 +466,23 @@ export function extractUnknownErrorFormat(value: unknown): string | undefined {
   return undefined
 }
 
-export function getAssistantMessageFromError(
+function getAssistantMessageFromErrorInternal(
   error: unknown,
   model: string,
   options?: {
     messages?: Message[]
     messagesForAPI?: (UserMessage | AssistantMessage)[]
+    deferredTerminalFailure?: DeferredTerminalFailureV1
   },
 ): AssistantMessage {
+  const withTerminalFailure = <T extends Parameters<typeof createAssistantAPIErrorMessage>[0]>(
+    value: T,
+  ): T & { deferredTerminalFailure?: DeferredTerminalFailureV1 } => ({
+    ...value,
+    ...(options?.deferredTerminalFailure && {
+      deferredTerminalFailure: options.deferredTerminalFailure,
+    }),
+  })
   // Check for SDK timeout errors
   if (
     error instanceof APIConnectionTimeoutError ||
@@ -971,10 +981,13 @@ export function getAssistantMessageFromError(
     error.message.includes(getCodexLeaseExhaustedMessage())
   ) {
     const codexError = getCodexLeaseExhaustedAssistantError()
-    return createAssistantAPIErrorMessage({
-      content: codexError.content,
+    return createAssistantAPIErrorMessage(withTerminalFailure({
+      content:
+        options?.deferredTerminalFailure?.code === 'quota_exhausted'
+          ? 'Codex usage limit reached.\n\nRun /continue-after-limit to continue this conversation after the reset.'
+          : codexError.content,
       error: codexError.error,
-    })
+    }))
   }
 
   // Connection errors (non-timeout) — use formatAPIError for detailed messages
@@ -995,6 +1008,22 @@ export function getAssistantMessageFromError(
     content: API_ERROR_MESSAGE_PREFIX,
     error: 'unknown',
   })
+}
+
+export function getAssistantMessageFromError(
+  error: unknown,
+  model: string,
+  options?: {
+    messages?: Message[]
+    messagesForAPI?: (UserMessage | AssistantMessage)[]
+    deferredTerminalFailure?: DeferredTerminalFailureV1
+  },
+): AssistantMessage {
+  const message = getAssistantMessageFromErrorInternal(error, model, options)
+  if (options?.deferredTerminalFailure) {
+    message.deferredTerminalFailure = options.deferredTerminalFailure
+  }
+  return message
 }
 
 /**

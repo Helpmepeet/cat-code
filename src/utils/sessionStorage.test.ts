@@ -6,16 +6,20 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'
-import { clearSessionMessagesCache, enrichLogs, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession } from './sessionStorage.js'
+import { createUserMessage } from './messages.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordDeferredContinuationResult, recordTranscript, resetProjectForTesting } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
+  const originalTestPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
 
   let tempDir: string
   let sessionId: string
 
   beforeEach(() => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    resetProjectForTesting()
     tempDir = mkdtempSync(join(tmpdir(), 'session-storage-'))
     sessionId = randomUUID()
     switchSession(asSessionId(sessionId), tempDir)
@@ -23,7 +27,13 @@ describe('session storage', () => {
 
   afterEach(() => {
     clearSessionMessagesCache()
+    resetProjectForTesting()
     switchSession(asSessionId(originalSessionId), originalProjectDir)
+    if (originalTestPersistence === undefined) {
+      delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    } else {
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = originalTestPersistence
+    }
     rmSync(tempDir, { recursive: true, force: true })
   })
 
@@ -170,5 +180,45 @@ describe('session storage', () => {
     // never the drifted mtime — the days-off value can no longer leak through.
     expect(logs[0]!.modified.toISOString()).toBe(snapshotTs)
     expect(logs[0]!.modified.getTime()).toBeLessThan(driftedMtime.getTime())
+  })
+
+  test('durable transcript barrier requires the accepted UUID to be readable', async () => {
+    const acceptedUuid = randomUUID()
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${JSON.stringify({ type: 'user', uuid: acceptedUuid })}\n`,
+    )
+    await expect(flushCurrentTranscriptDurably(acceptedUuid)).resolves.toBeUndefined()
+    await expect(flushCurrentTranscriptDurably(randomUUID())).rejects.toThrow(
+      'UUID is not durable',
+    )
+  })
+
+  test('deferred result persistence is exact, sanitized, and session-bound', async () => {
+    await recordTranscript([
+      createUserMessage({ content: 'accepted', uuid: randomUUID() }),
+    ])
+    const entry = {
+      type: 'deferred-continuation-result' as const,
+      version: 1 as const,
+      sessionId,
+      attemptUuid: randomUUID(),
+      outcome: 'completed' as const,
+      observedAt: Date.now(),
+    }
+    await recordDeferredContinuationResult(entry)
+    await flushSessionStorage()
+    expect(await Bun.file(getTranscriptPathForSession(sessionId)).text()).toContain(
+      entry.attemptUuid,
+    )
+    await expect(
+      recordDeferredContinuationResult({
+        ...entry,
+        rawError: 'must not persist',
+      } as typeof entry),
+    ).rejects.toThrow('Invalid deferred continuation result entry')
+    await expect(
+      recordDeferredContinuationResult({ ...entry, sessionId: randomUUID() }),
+    ).rejects.toThrow('Invalid deferred continuation result entry')
   })
 })

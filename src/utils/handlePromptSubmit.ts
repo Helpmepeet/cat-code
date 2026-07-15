@@ -1,4 +1,6 @@
 import type { UUID } from 'crypto'
+import { getSessionId } from '../bootstrap/state.js'
+import { prepareHumanPromptAgainstDeferredContinuation, takeDeferredContinuationNotice } from '../services/deferredContinuation.js'
 import { logEvent } from 'src/services/analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 'src/services/analytics/metadata.js'
 import { type Command, getCommandName, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js'
@@ -26,6 +28,7 @@ import type { FileHistoryState } from './fileHistory.js'
 import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
 import { enqueue } from './messageQueueManager.js'
+import { createSystemMessage } from './messages.js'
 import { resolveSkillModelOverride } from './model/model.js'
 import type { ProcessUserInputContext } from './processUserInput/processUserInput.js'
 import { processUserInput } from './processUserInput/processUserInput.js'
@@ -189,6 +192,19 @@ export async function handlePromptSubmit(
   const hasImages = Object.values(pastedContents).some(isValidImagePaste)
   if (input.trim() === '') {
     return
+  }
+
+  if (!input.trim().startsWith('/') || skipSlashCommands) {
+    const deferredDecision =
+      await prepareHumanPromptAgainstDeferredContinuation(getSessionId())
+    if (deferredDecision.action !== 'allow') {
+      params.setMessages?.(previous => [
+        ...previous,
+        createSystemMessage(deferredDecision.notice, 'info'),
+      ])
+      if (deferredDecision.action === 'block') return
+      await takeDeferredContinuationNotice(getSessionId()).catch(() => null)
+    }
   }
 
   // Handle exit commands by triggering the exit command instead of direct process.exit

@@ -1,7 +1,7 @@
 import { feature } from 'bun:bundle'
 import { randomUUID } from 'crypto'
 import type { UUID } from 'crypto'
-import type { Dirent } from 'fs'
+import { constants as fsConstants, type Dirent } from 'fs'
 // Sync fs primitives for readFileTailSync — separate from fs/promises
 // imports above. Named (not wildcard) per CLAUDE.md style; no collisions
 // with the async-suffixed names.
@@ -47,6 +47,7 @@ import {
   type ContentReplacementEntry,
   type ContextCollapseCommitEntry,
   type ContextCollapseSnapshotEntry,
+  type DeferredContinuationResultEntryV1,
   type Entry,
   type FileHistorySnapshotMessage,
   type LogOption,
@@ -1528,6 +1529,8 @@ class Project {
     } else if (entry.type === 'marble-origami-snapshot') {
       // Always append. Last-wins on restore — later entries supersede.
       void this.enqueueWrite(sessionFile, entry)
+    } else if (entry.type === 'deferred-continuation-result') {
+      void this.enqueueWrite(sessionFile, entry)
     } else {
       const messageSet = await getSessionMessages(sessionId)
       if (entry.type === 'queue-operation') {
@@ -1897,6 +1900,74 @@ export async function recordContextCollapseSnapshot(snapshot: {
 
 export async function flushSessionStorage(): Promise<void> {
   await getProject().flush()
+}
+
+const DEFERRED_CONTINUATION_RESULT_OUTCOMES = new Set<
+  DeferredContinuationResultEntryV1['outcome']
+>([
+  'completed',
+  'quota_exhausted',
+  'account_recovery',
+  'transient_network',
+  'ambiguous_rate_limit',
+  'permission_required',
+  'context_window',
+  'max_turns',
+  'max_budget',
+  'session_restore',
+  'aborted',
+  'unknown',
+])
+
+export async function recordDeferredContinuationResult(
+  entry: DeferredContinuationResultEntryV1,
+): Promise<void> {
+  const keys = Object.keys(entry).sort()
+  if (
+    keys.join(',') !==
+      'attemptUuid,observedAt,outcome,sessionId,type,version' ||
+    entry.type !== 'deferred-continuation-result' ||
+    entry.version !== 1 ||
+    entry.sessionId !== getSessionId() ||
+    !validateUuid(entry.attemptUuid) ||
+    !DEFERRED_CONTINUATION_RESULT_OUTCOMES.has(entry.outcome) ||
+    !Number.isFinite(entry.observedAt) ||
+    entry.observedAt < 0
+  ) {
+    throw new Error('Invalid deferred continuation result entry')
+  }
+  await getProject().appendEntry(entry)
+}
+
+export async function flushCurrentTranscriptDurably(
+  expectedUuid?: string,
+): Promise<void> {
+  await flushSessionStorage()
+  const transcriptPath = getTranscriptPath()
+  const handle = await fsOpen(
+    transcriptPath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+  )
+  try {
+    await handle.sync()
+    if (expectedUuid) {
+      const stat = await handle.stat()
+      const bytes = Math.min(stat.size, 1024 * 1024)
+      const buffer = Buffer.alloc(bytes)
+      await handle.read(buffer, 0, bytes, stat.size - bytes)
+      if (!buffer.toString('utf8').includes(`\"uuid\":\"${expectedUuid}\"`)) {
+        throw new Error('Deferred continuation UUID is not durable')
+      }
+    }
+  } finally {
+    await handle.close()
+  }
+  const parent = await fsOpen(dirname(transcriptPath), fsConstants.O_RDONLY)
+  try {
+    await parent.sync()
+  } finally {
+    await parent.close()
+  }
 }
 
 export async function hydrateRemoteSession(

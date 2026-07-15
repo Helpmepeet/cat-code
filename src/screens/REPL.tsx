@@ -82,6 +82,7 @@ import { useCostSummary } from '../costHook.js';
 import { useFpsMetrics } from '../context/fpsMetrics.js';
 import { useAfterFirstRender } from '../hooks/useAfterFirstRender.js';
 import { useDeferredHookMessages } from '../hooks/useDeferredHookMessages.js';
+import { useDeferredContinuation } from '../hooks/useDeferredContinuation.js';
 import { addToHistory, removeLastFromHistory, expandPastedTextRefs, parseReferences } from '../history.js';
 import { prependModeCharacterToInput } from '../components/PromptInput/inputModes.js';
 import { prependToShellHistoryCache } from '../utils/suggestions/shellHistoryCompletion.js';
@@ -147,7 +148,7 @@ import { handlePromptSubmit, type PromptInputHelpers } from '../utils/handleProm
 import { useQueueProcessor } from '../hooks/useQueueProcessor.js';
 import { useMailboxBridge } from '../hooks/useMailboxBridge.js';
 import { queryCheckpoint, logQueryProfileReport } from '../utils/queryProfiler.js';
-import type { Message as MessageType, UserMessage, ProgressMessage, HookResultMessage, PartialCompactDirection } from '../types/message.js';
+import type { Message as MessageType, MessageOrigin, UserMessage, ProgressMessage, HookResultMessage, PartialCompactDirection } from '../types/message.js';
 import { query } from '../query.js';
 import { mergeClients, useMergedClients } from '../hooks/useMergedClients.js';
 import { getQuerySourceForREPL } from '../utils/promptCategory.js';
@@ -190,7 +191,9 @@ import type { ContentBlockParam, ImageBlockParam } from '@anthropic-ai/sdk/resou
 import type { ProcessUserInputContext } from '../utils/processUserInput/processUserInput.js';
 import type { PastedContent } from '../utils/config.js';
 import { copyPlanForFork, copyPlanForResume, getPlanSlug, setPlanSlug } from '../utils/plans.js';
-import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript, saveAiGeneratedTitle } from '../utils/sessionStorage.js';
+import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript, saveAiGeneratedTitle, recordTranscript, flushCurrentTranscriptDurably } from '../utils/sessionStorage.js';
+import { classifyForegroundDeferredAttempt, getForegroundDeferredAbortSignal, settleForegroundDeferredAttempt, validateForegroundDeferredOrigin } from '../services/deferredContinuationRunner.js';
+import { acquireDeferredContinuationLocks, readPendingDeferredContinuation, type DeferredContinuationLockGuard } from '../services/deferredContinuation.js';
 import { deserializeMessages } from '../utils/conversationRecovery.js';
 import { extractReadFilesFromMessages, extractBashToolsFromMessages } from '../utils/queryHelpers.js';
 import { resetMicrocompactState } from '../services/compact/microCompact.js';
@@ -1944,7 +1947,17 @@ export function REPL({
   })));
   const resume = useCallback(async (sessionId: UUID, log: LogOption, entrypoint: ResumeEntrypoint) => {
     const resumeStart = performance.now();
+    let deferredResumeGuard: DeferredContinuationLockGuard | undefined;
     try {
+      const deferredJob = await readPendingDeferredContinuation(sessionId);
+      if (deferredJob) {
+        try {
+          deferredResumeGuard = await acquireDeferredContinuationLocks(deferredJob);
+        } catch {
+          setMessages(previous => [...previous, createSystemMessage('A scheduled continuation is already in progress. Wait for it to finish, then resume this conversation again.', 'warning')]);
+          return;
+        }
+      }
       // Deserialize messages to properly clean up the conversation
       // This filters unresolved tool uses and adds a synthetic assistant message if needed
       const messages = deserializeMessages(log.messages);
@@ -2154,6 +2167,8 @@ export function REPL({
         success: false
       });
       throw error;
+    } finally {
+      await deferredResumeGuard?.release();
     }
   }, [resetLoadingState, setAppState]);
 
@@ -2833,6 +2848,9 @@ export function REPL({
     setAbortController,
     onBackgroundQuery: handleBackgroundQuery
   });
+  const activeDeferredOriginRef = useRef<MessageOrigin>(undefined);
+  const deferredTerminalMessagesRef = useRef<MessageType[]>([]);
+  const deferredPermissionDeniedRef = useRef(new Set<string>());
   const onQueryEvent = useCallback((event: Parameters<typeof handleMessageFromStream>[0]) => {
     // Relay streaming text deltas to the web UI bus
     if (event.type === 'stream_event' && event.event.type === 'content_block_delta' && 'text' in event.event.delta) {
@@ -2841,6 +2859,9 @@ export function REPL({
     handleMessageFromStream(event, newMessage => {
       // Relay complete messages to the web UI bus
       if (newMessage.type === 'assistant') {
+        if (activeDeferredOriginRef.current?.kind === 'deferred-continuation') {
+          deferredTerminalMessagesRef.current.push(newMessage);
+        }
         const textContent = newMessage.message.content
           .filter((b: { type: string }) => b.type === 'text')
           .map((b: { type: string; text?: string }) => b.text ?? '')
@@ -3049,6 +3070,14 @@ export function REPL({
     }
     logForDebugging(`[REPL:query-setup] getToolUseContext start totalMessages=${messagesIncludingNewMessages.length} newMessages=${newMessages.length} model=${mainLoopModelParam}`);
     const toolUseContext = getToolUseContext(messagesIncludingNewMessages, newMessages, abortController, mainLoopModelParam);
+    const deferredOrigin = newMessages.find(m => m.type === 'user' && m.origin?.kind === 'deferred-continuation')?.origin;
+    const queryCanUseTool = deferredOrigin?.kind === 'deferred-continuation' ? async (...args: Parameters<typeof canUseTool>) => {
+      const decision = await canUseTool(...args);
+      if (decision.behavior === 'deny') {
+        deferredPermissionDeniedRef.current.add(deferredOrigin.attemptUuid);
+      }
+      return decision;
+    } : canUseTool;
     // getToolUseContext reads tools/mcpClients fresh from store.getState()
     // (via computeTools/mergeClients). Use those rather than the closure-
     // captured `tools`/`mcpClients` — useManageMCPConnections may have
@@ -3130,7 +3159,7 @@ export function REPL({
       systemPrompt,
       userContext,
       systemContext,
-      canUseTool,
+      canUseTool: queryCanUseTool,
       toolUseContext,
       querySource: getQuerySourceForREPL()
     })) {
@@ -3238,6 +3267,11 @@ export function REPL({
       return;
     }
     logForDebugging(`[REPL:onQuery] tryStart generation=${thisGeneration}`);
+    const deferredOrigin = newMessages.find(m => m.type === 'user' && m.origin?.kind === 'deferred-continuation')?.origin;
+    let deferredThrew = false;
+    let deferredPersistenceFailed = false;
+    let deferredProviderEntered = false;
+    let removeDeferredLockAbort: (() => void) | undefined;
     try {
       // isLoading is derived from queryGuard — tryStart() above already
       // transitioned dispatching→running, so no setter call needed here.
@@ -3248,6 +3282,30 @@ export function REPL({
         messagesRef.current,
       );
       setMessages(oldMessages => [...oldMessages, ...newMessages]);
+      if (deferredOrigin?.kind === 'deferred-continuation') {
+        if (!validateForegroundDeferredOrigin(deferredOrigin)) {
+          throw new Error('Deferred continuation origin did not match the locked live registry');
+        }
+        const lockSignal = getForegroundDeferredAbortSignal(deferredOrigin);
+        if (!lockSignal) {
+          throw new Error('Deferred continuation lock authority is unavailable');
+        }
+        const abortForCompromisedLock = () => abortController.abort(lockSignal.reason);
+        if (lockSignal.aborted) abortForCompromisedLock();
+        else {
+          lockSignal.addEventListener('abort', abortForCompromisedLock, { once: true });
+          removeDeferredLockAbort = () => lockSignal.removeEventListener('abort', abortForCompromisedLock);
+        }
+        activeDeferredOriginRef.current = deferredOrigin;
+        deferredTerminalMessagesRef.current = [];
+        try {
+          await recordTranscript(messagesRef.current);
+          await flushCurrentTranscriptDurably(deferredOrigin.attemptUuid);
+        } catch (error) {
+          deferredPersistenceFailed = true;
+          throw error;
+        }
+      }
       responseLengthRef.current = 0;
       if (feature('TOKEN_BUDGET')) {
         const parsedBudget = input ? parseTokenBudget(input) : null;
@@ -3281,8 +3339,10 @@ export function REPL({
       }
       logForDebugging(`[REPL:onQuery] onQueryImpl start`);
       try {
+        deferredProviderEntered = true;
         await onQueryImpl(latestMessages, newMessages, abortController, shouldQuery, additionalAllowedTools, mainLoopModelParam, effort);
       } catch (error) {
+        deferredThrew = true;
         logForDebugging(`[REPL:onQuery] onQueryImpl error: ${errorMessage(error)}`);
         logError(error);
         throw error;
@@ -3292,6 +3352,24 @@ export function REPL({
       }
       logForDebugging(`[REPL:onQuery] onQueryImpl complete`);
     } finally {
+      if (deferredOrigin?.kind === 'deferred-continuation') {
+        removeDeferredLockAbort?.();
+        const result = deferredPersistenceFailed ? {
+          outcome: 'transcript_persistence' as const,
+          observedAt: Date.now()
+        } : classifyForegroundDeferredAttempt({
+          origin: deferredOrigin,
+          messages: [...messagesRef.current, ...deferredTerminalMessagesRef.current],
+          aborted: abortController.signal.aborted,
+          threw: deferredThrew,
+          permissionDenied: deferredPermissionDeniedRef.current.has(deferredOrigin.attemptUuid),
+          providerEntered: deferredProviderEntered
+        });
+        if (result) settleForegroundDeferredAttempt(deferredOrigin, result);
+        deferredPermissionDeniedRef.current.delete(deferredOrigin.attemptUuid);
+        activeDeferredOriginRef.current = undefined;
+        deferredTerminalMessagesRef.current = [];
+      }
       // queryGuard.end() atomically checks generation and transitions
       // running→idle. Returns false if a newer query owns the guard
       // (cancel+resubmit race where the stale finally fires as a microtask).
@@ -4596,6 +4674,8 @@ export function REPL({
       setMessages
     });
   }
+
+  useDeferredContinuation({ setMessages });
 
   // Note: Permission polling is now handled by useInboxPoller
   // - Workers receive permission responses via mailbox messages

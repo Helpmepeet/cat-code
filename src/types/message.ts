@@ -34,6 +34,22 @@ export type MessageOrigin =
       meta?: Record<string, string>
     }
   | { kind: 'teammate'; messages: TeammateMessageContract[] }
+  | {
+      kind: 'deferred-continuation'
+      jobId: string
+      attemptUuid: string
+    }
+
+export type DeferredTerminalFailureV1 = {
+  version: 1
+  provider: 'openai'
+  code:
+    | 'quota_exhausted'
+    | 'account_recovery'
+    | 'transient_network'
+    | 'ambiguous_rate_limit'
+  observedAt: number
+}
 
 export type PartialCompactDirection = 'from' | 'up_to'
 
@@ -89,6 +105,7 @@ export type AssistantMessage<TContentBlock = BetaContentBlock | ContentBlock | C
   apiError?: unknown
   error?: unknown
   errorDetails?: unknown
+  deferredTerminalFailure?: DeferredTerminalFailureV1
 }
 
 export type AttachmentMessage = {

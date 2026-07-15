@@ -607,6 +607,18 @@ const _pendingSSH: PendingSSH | undefined = feature('SSH_REMOTE') ? {
 export async function main() {
   profileCheckpoint('main_function_start');
 
+  // Fixed internal one-shot worker entry. It accepts no arguments and selects
+  // its job only from the validated private queue. The trusted runner restores
+  // cwd/worktree before this function reaches settings, instructions, skills,
+  // tools, or project bootstrap, then threads the job through normal headless
+  // resume using process-local state rather than a public option.
+  if (process.argv.slice(2).length === 1 && process.argv[2] === 'deferred-continuation-worker') {
+    const runner = await import('./services/deferredContinuationRunner.js');
+    const job = await runner.prepareBackgroundDeferredContinuation();
+    if (!job) return;
+    process.argv = [process.argv[0]!, process.argv[1]!, runner.getContinuationPrompt(job), '--print', '--resume', job.sessionId, '--model', job.context.model, '--permission-mode', job.context.permissionMode, '--output-format', 'json'];
+  }
+
   // SECURITY: Prevent Windows from executing commands from current directory
   // This must be set before ANY command execution to prevent PATH hijacking attacks
   // See: https://docs.microsoft.com/en-us/windows/win32/api/processenv/nf-processenv-searchpathw
@@ -1044,6 +1056,11 @@ async function run(): Promise<CommanderCommand> {
   // --plugin-dir takes exactly one arg; repeat the flag for multiple dirs.
   .option('--plugin-dir <path>', 'Load plugins from a directory for this session only (repeatable: --plugin-dir A --plugin-dir B)', (val: string, prev: string[]) => [...prev, val], [] as string[]).option('--disable-slash-commands', 'Disable all skills', () => true).option('--web', 'Start WebSocket server for browser UI on port 3456').option('--chrome', 'Enable Claude in Chrome integration').option('--no-chrome', 'Disable Claude in Chrome integration').option('--file <specs...>', 'File resources to download at startup. Format: file_id:relative_path (e.g., --file file_abc:doc.txt file_def:img.png)').action(async (prompt, options) => {
     profileCheckpoint('action_handler_start');
+
+    const deferredWorker = (await import('./services/deferredContinuationRunner.js')).getPreparedBackgroundDeferredContinuation();
+    if (deferredWorker?.context.effort !== undefined) {
+      (options as { effort?: unknown }).effort = deferredWorker.context.effort;
+    }
 
     // --bare = one-switch minimal mode. Sets SIMPLE so all the existing
     // gates fire (CLAUDE.md, skills, hooks inside executeHooks, agent
@@ -2881,7 +2898,9 @@ async function run(): Promise<CommanderCommand> {
         runHeadless
       } = await import('src/cli/print.js');
       profileCheckpoint('after_print_import');
-      void runHeadless(inputPrompt, () => headlessStore.getState(), headlessStore.setState, commandsHeadless, tools, sdkMcpConfigs, agentDefinitions.activeAgents, {
+      const deferredRunner = await import('./services/deferredContinuationRunner.js');
+      const deferredWorkerJob = deferredRunner.getPreparedBackgroundDeferredContinuation();
+      const headlessRun = runHeadless(inputPrompt, () => headlessStore.getState(), headlessStore.setState, commandsHeadless, tools, sdkMcpConfigs, agentDefinitions.activeAgents, {
         continue: options.continue,
         resume: options.resume,
         verbose: verbose,
@@ -2910,8 +2929,29 @@ async function run(): Promise<CommanderCommand> {
         agent: agentCli,
         workload: options.workload,
         setupTrigger: setupTrigger ?? undefined,
-        sessionStartHooksPromise
+        sessionStartHooksPromise,
+        suppressInterruptedTurnReplay: deferredWorkerJob ? true : undefined,
+        deferredAttemptUuid: deferredWorkerJob?.attempt.messageUuid,
+        deferredJobId: deferredWorkerJob?.jobId,
+        deferredAbortSignal: deferredRunner.getPreparedBackgroundDeferredAbortSignal()
       });
+      if (deferredWorkerJob) {
+        try {
+          const evidence = await headlessRun;
+          if (evidence) {
+            await deferredRunner.completePreparedBackgroundDeferredContinuation(evidence.messages, evidence.result);
+            gracefulShutdownSync(evidence.result?.is_error ? 1 : 0);
+          } else {
+            await deferredRunner.failPreparedBackgroundDeferredContinuation('session_restore');
+            gracefulShutdownSync(1);
+          }
+        } catch (error) {
+          await deferredRunner.failPreparedBackgroundDeferredContinuation('unknown');
+          throw error;
+        }
+      } else {
+        void headlessRun;
+      }
       return;
     }
 
