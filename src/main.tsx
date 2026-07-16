@@ -169,7 +169,7 @@ import { setAllHookEventsEnabled } from 'src/utils/hooks/hookEvents.js';
 import { refreshModelCapabilities } from 'src/utils/model/modelCapabilities.js';
 import { peekForStdinData, writeToStderr } from 'src/utils/process.js';
 import { setCwd } from 'src/utils/Shell.js';
-import { type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
+import { DeferredContinuationBusyError, type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
 import { parseSettingSourcesFlag } from 'src/utils/settings/constants.js';
 import { plural } from 'src/utils/stringUtils.js';
 import { type ChannelEntry, getInitialMainLoopModel, getIsNonInteractiveSession, getSdkBetas, getSessionId, getUserMsgOptIn, setAllowedChannels, setAllowedSettingSources, setChromeFlagOverride, setClientType, setCwdState, setDirectConnectServerUrl, setFlagSettingsPath, setInitialMainLoopModel, setInlinePlugins, setIsInteractive, setKairosActive, setOriginalCwd, setQuestionPreviewFormat, setSdkBetas, setSessionBypassPermissionsMode, setSessionPersistenceDisabled, setSessionSource, setUserMsgOptIn, switchSession } from './bootstrap/state.js';
@@ -3301,6 +3301,9 @@ async function run(): Promise<CommanderCommand> {
             success: false
           });
         }
+        if (error instanceof DeferredContinuationBusyError) {
+          return await exitWithError(root, error.message);
+        }
         logError(error);
         process.exit(1);
       }
@@ -3808,6 +3811,9 @@ async function run(): Promise<CommanderCommand> {
                 entrypoint: 'file' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
                 success: false
               });
+              if (error instanceof DeferredContinuationBusyError) {
+                return await exitWithError(root, error.message, () => gracefulShutdown(1));
+              }
               logError(error);
               await exitWithError(root, `Unable to load transcript from file: ${options.resume}`, () => gracefulShutdown(1));
             }
@@ -3850,6 +3856,9 @@ async function run(): Promise<CommanderCommand> {
             entrypoint: 'cli_flag' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
             success: false
           });
+          if (error instanceof DeferredContinuationBusyError) {
+            return await exitWithError(root, error.message);
+          }
           logError(error);
           await exitWithError(root, `Failed to resume session ${sessionId}`);
         }

@@ -12,6 +12,12 @@ import {
 } from '../bootstrap/state.js'
 import { clearSystemPromptSections } from '../constants/systemPromptSections.js'
 import { restoreCostStateForSession } from '../cost-tracker.js'
+import {
+  acquireDeferredContinuationLocks,
+  readPendingDeferredContinuation,
+  type DeferredContinuationJobV1,
+  type DeferredContinuationLockGuard,
+} from '../services/deferredContinuation.js'
 import type { AppState } from '../state/AppState.js'
 import type { AgentColorName } from '../tools/AgentTool/agentColorManager.js'
 import {
@@ -419,6 +425,66 @@ export async function restoreTrustedDeferredContinuationContext(
   getPlansDirectory.cache.clear?.()
 }
 
+export const DEFERRED_RESUME_BUSY_NOTICE =
+  'A scheduled continuation is already in progress. Wait for it to finish, then resume this conversation again.'
+
+export type DeferredResumeDecision =
+  | { action: 'allow' }
+  | { action: 'block'; notice: string }
+
+/**
+ * Thrown when a resume is refused because a background continuation owns the
+ * session. Typed so the CLI resume entries can show the reason instead of their
+ * generic "failed to resume" text — a session that is merely busy for one turn
+ * must not look like a corrupt transcript.
+ */
+export class DeferredContinuationBusyError extends Error {
+  constructor(notice: string) {
+    super(notice)
+    this.name = 'DeferredContinuationBusyError'
+  }
+}
+
+/**
+ * Resume/adopt must respect the per-session deferred continuation lock so it
+ * cannot read and adopt a transcript while a background attempt is appending to
+ * it (docs/codex/2026-07-14-continue-after-limit-implementation-plan.md, "Human
+ * interaction"). Reopening a transcript is not a human message: the same plan
+ * requires that it leave a merely pending job scheduled, so this probes the lock
+ * and never cancels the job — that is what separates it from
+ * prepareHumanPromptAgainstDeferredContinuation.
+ *
+ * The probe releases immediately. The session lock is per-attempt; holding it
+ * for the life of a REPL would starve the runner forever. The write itself is
+ * gated again when a turn is submitted, so this only has to refuse the adopt.
+ *
+ * Staleness is deliberately left to the store: acquire reclaims a lock left by a
+ * crashed worker, so a dead attempt never bricks resume.
+ */
+export async function checkDeferredContinuationResume(
+  sessionId: string,
+): Promise<DeferredResumeDecision> {
+  let job: DeferredContinuationJobV1 | null
+  try {
+    job = await readPendingDeferredContinuation(sessionId)
+  } catch {
+    // An unreadable record cannot be driving a live attempt — the runner parses
+    // the same file — and refusing to open the transcript would contradict the
+    // safety-stop notice that tells the user to review it manually.
+    return { action: 'allow' }
+  }
+  if (!job) return { action: 'allow' }
+
+  let guard: DeferredContinuationLockGuard
+  try {
+    guard = await acquireDeferredContinuationLocks(job)
+  } catch {
+    return { action: 'block', notice: DEFERRED_RESUME_BUSY_NOTICE }
+  }
+  await guard.release()
+  return { action: 'allow' }
+}
+
 /**
  * Undo restoreWorktreeForResume before a mid-session /resume switches to
  * another session. Without this, /resume from a worktree session to a
@@ -552,6 +618,18 @@ export async function processResumedConversation(
     initialState: AppState
   },
 ): Promise<ProcessedResume> {
+  // Refuse to adopt a transcript a background continuation is appending to.
+  // Scoped to the adopt path: --fork-session writes to a fresh session file, so
+  // it is not the second writer this lock exists to prevent. Runs before any
+  // state is touched so a blocked resume changes nothing.
+  const adoptedSessionId = opts.sessionIdOverride ?? result.sessionId
+  if (!opts.forkSession && adoptedSessionId) {
+    const deferred = await checkDeferredContinuationResume(adoptedSessionId)
+    if (deferred.action === 'block') {
+      throw new DeferredContinuationBusyError(deferred.notice)
+    }
+  }
+
   // Match coordinator/normal mode to the resumed session
   let modeWarning: string | undefined
   if (feature('COORDINATOR_MODE')) {

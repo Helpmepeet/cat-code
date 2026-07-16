@@ -29,7 +29,7 @@ import { checkCrossProjectResume } from '../utils/crossProjectResume.js';
 import type { FileHistorySnapshot } from '../utils/fileHistory.js';
 import { logError } from '../utils/log.js';
 import { createSystemMessage } from '../utils/messages.js';
-import { computeStandaloneAgentContext, restoreAgentFromSession, restoreWorktreeForResume } from '../utils/sessionRestore.js';
+import { checkDeferredContinuationResume, computeStandaloneAgentContext, restoreAgentFromSession, restoreWorktreeForResume } from '../utils/sessionRestore.js';
 import { adoptResumedSessionFile, enrichLogs, isCustomTitleEnabled, loadAllProjectsMessageLogsProgressive, loadSameRepoMessageLogsProgressive, recordContentReplacement, resetSessionFilePointer, restoreSessionMetadata, type SessionLogResult } from '../utils/sessionStorage.js';
 import type { ThinkingConfig } from '../utils/thinking.js';
 import type { ContentReplacementRecord } from '../utils/toolResultStorage.js';
@@ -103,6 +103,7 @@ export function ResumeConversation({
     mainThreadAgentDefinition?: AgentDefinition;
   } | null>(null);
   const [crossProjectCommand, setCrossProjectCommand] = React.useState<string | null>(null);
+  const [deferredNotice, setDeferredNotice] = React.useState<string | null>(null);
   const sessionLogResultRef = React.useRef<SessionLogResult | null>(null);
   // Mirror of logs.length so loadMoreLogs can compute value indices outside
   // the setLogs updater (keeping it pure per React's contract).
@@ -198,6 +199,17 @@ export function ResumeConversation({
       const result_3 = await loadConversationForResume(log_0, undefined);
       if (!result_3) {
         throw new Error('Failed to load conversation');
+      }
+      // Do not adopt a transcript a background continuation is appending to.
+      // Unlike the CLI paths this can ask the human: surface the reason and
+      // hand the picker back so they can wait or choose another conversation.
+      if (result_3.sessionId && !forkSession) {
+        const deferred = await checkDeferredContinuationResume(result_3.sessionId);
+        if (deferred.action === 'block') {
+          setDeferredNotice(deferred.notice);
+          setResuming(false);
+          return;
+        }
       }
       if (feature('COORDINATOR_MODE')) {
         /* eslint-disable @typescript-eslint/no-require-imports */
@@ -318,7 +330,14 @@ export function ResumeConversation({
   if (filteredLogs.length === 0) {
     return <NoConversationsMessage />;
   }
-  return <LogSelector logs={filteredLogs} maxHeight={rows} onCancel={onCancel} onSelect={onSelect} onLogsChanged={isResumeWithRenameEnabled ? () => loadLogs(showAllProjects) : undefined} onLoadMore={loadMoreLogs} initialSearchQuery={initialSearchQuery} showAllProjects={showAllProjects} onToggleAllProjects={handleToggleAllProjects} onAgenticSearch={agenticSessionSearch} />;
+  const selector = <LogSelector logs={filteredLogs} maxHeight={deferredNotice ? rows - 2 : rows} onCancel={onCancel} onSelect={onSelect} onLogsChanged={isResumeWithRenameEnabled ? () => loadLogs(showAllProjects) : undefined} onLoadMore={loadMoreLogs} initialSearchQuery={initialSearchQuery} showAllProjects={showAllProjects} onToggleAllProjects={handleToggleAllProjects} onAgenticSearch={agenticSessionSearch} />;
+  if (!deferredNotice) {
+    return selector;
+  }
+  return <Box flexDirection="column" gap={1}>
+      <Text color="warning">{deferredNotice}</Text>
+      {selector}
+    </Box>;
 }
 function NoConversationsMessage() {
   const $ = _c(2);
