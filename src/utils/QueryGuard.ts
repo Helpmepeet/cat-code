@@ -136,6 +136,20 @@ export class QueryGuard {
     return this._status !== 'idle'
   }
 
+  /**
+   * Is a model turn actually executing?
+   *
+   * Narrower than `isActive`, which also counts `dispatching` — the window a
+   * caller reserves for ITSELF before its async chain reaches onQuery. A
+   * dispatch is exclusive (`reserve` only succeeds from idle), so code running
+   * inside a dispatch that asked `isActive` would see its own reservation and
+   * conclude another turn was in flight. Ask this instead when the question is
+   * "is a turn running?" rather than "is the guard taken?".
+   */
+  get isRunning(): boolean {
+    return this._status === 'running'
+  }
+
   get generation(): number {
     return this._generation
   }
