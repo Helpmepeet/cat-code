@@ -462,6 +462,92 @@ describe('deferred continuation durable store', () => {
     }
   })
 
+  // F10: `ambiguous` exists to stop AUTOMATIC retry, because replaying could
+  // repeat tool actions. A human taking the conversation back is the safe
+  // resolution the state is waiting for, so it must clear the job rather than
+  // trap it. Before this, every human message was refused with `block` and the
+  // record survived, leaving "continue manually" impossible without deleting
+  // state by hand.
+  test('human input takes over an ambiguous job instead of trapping it', async () => {
+    const root = await mkdtemp('/tmp/cat-code-human-ambiguous-')
+    cleanup.push(root)
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = root
+    try {
+      await createPendingDeferredContinuation(
+        job({
+          state: 'ambiguous',
+          attempt: { ...job().attempt, submittedAt: NOW },
+        }),
+      )
+      const decision = await prepareHumanPromptAgainstDeferredContinuation(
+        job().sessionId,
+      )
+      expect(decision.action).toBe('allow_after_cancel')
+      // The takeover still has to disclose that an attempt may already have run.
+      expect(decision.action !== 'allow' && decision.notice).toContain(
+        'may have started',
+      )
+      expect(await readPendingDeferredContinuation(job().sessionId)).toBeNull()
+      const history = await getLatestDeferredContinuationHistory(job().sessionId)
+      expect(history?.terminalState).toBe('canceled')
+      expect(history?.terminalReason).toBe('human_message')
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+
+  // F8: the preflight read is a durable-state input, so an oversized transcript
+  // must fail closed with a stated reason instead of being materialized whole
+  // (string + split array + every parsed line) and risking an OOM kill that
+  // leaves the job pending for the minute worker to retry forever.
+  test('trusted transcript read fails closed above its byte bound', async () => {
+    const root = await mkdtemp('/tmp/cat-code-transcript-bound-')
+    cleanup.push(root)
+    await chmod(root, 0o700)
+    const project = join(root, job().projectStorageKey)
+    await mkdir(project, { mode: 0o700 })
+    const line = `${JSON.stringify({ type: 'user', uuid: job().attempt.messageUuid })}\n`
+    await writeFile(join(project, `${job().sessionId}.jsonl`), line.repeat(64), {
+      mode: 0o600,
+    })
+    await expect(
+      readTrustedDeferredTranscript(job(), root, 16),
+    ).rejects.toThrow('too large')
+    expect(
+      await readTrustedDeferredTranscript(job(), root, line.length * 64),
+    ).toHaveLength(64)
+  })
+
+  // The reader is chunked, so a JSON line straddling a chunk boundary — and a
+  // multi-byte character split across one — must still parse exactly.
+  test('trusted transcript read reassembles lines across chunk boundaries', async () => {
+    const root = await mkdtemp('/tmp/cat-code-transcript-chunks-')
+    cleanup.push(root)
+    await chmod(root, 0o700)
+    const project = join(root, job().projectStorageKey)
+    await mkdir(project, { mode: 0o700 })
+    // Comfortably larger than the reader's chunk size, with a multi-byte
+    // character at the end so a naive per-chunk decode would corrupt it.
+    const wide = { type: 'user', uuid: job().attempt.messageUuid, text: `${'x'.repeat(2 * 1024 * 1024)}é` }
+    await writeFile(
+      join(project, `${job().sessionId}.jsonl`),
+      `${JSON.stringify({ type: 'system' })}\n${JSON.stringify(wide)}\n`,
+      { mode: 0o600 },
+    )
+    const entries = await readTrustedDeferredTranscript(job(), root)
+    expect(entries).toHaveLength(2)
+    expect(entries[1]).toEqual(wide)
+    // The decisive check: reconciliation still sees the attempt's user message.
+    expect(
+      reconcileSubmittedDeferredContinuation(
+        job({ state: 'submitted', attempt: { ...job().attempt, submittedAt: NOW } }),
+        entries,
+      ),
+    ).toEqual({ action: 'mark_ambiguous' })
+  })
+
   test('foreground result-journal failure stops for attention instead of stranding submitted', async () => {
     const root = await mkdtemp('/tmp/cat-code-result-journal-failure-')
     cleanup.push(root)

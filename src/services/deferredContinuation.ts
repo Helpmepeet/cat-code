@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { StringDecoder } from 'node:string_decoder'
 import z from 'zod/v4'
 import type { EffortValue } from '../utils/effort.js'
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
@@ -694,36 +695,44 @@ export async function prepareHumanPromptAgainstDeferredContinuation(
   try {
     const current = await readPendingDeferredContinuation(sessionId)
     if (!current) return { action: 'allow' }
-    if (current.state === 'pending') {
-      const observedAt = Date.now()
-      await recordDeferredContinuationNotice({
-        version: 1,
-        sessionId,
-        kind: 'canceled_human',
-        observedAt,
-      })
-      await moveDeferredContinuationToHistory(
-        current,
-        'canceled',
-        'human_message',
-        observedAt,
-      )
-      return {
-        action: 'allow_after_cancel',
-        notice: 'Scheduled continuation canceled because you sent a new message.',
+    switch (current.state) {
+      case 'submitted':
+        return {
+          action: 'block',
+          notice:
+            'A scheduled continuation is already in progress. Wait for it to finish, then send your message again.',
+        }
+      // `ambiguous` blocks automatic retry because replaying could repeat tool
+      // actions. It does not block the human: taking the conversation back is
+      // the resolution the state is waiting for, and refusing it here left the
+      // job with no exit but deleting the record by hand.
+      case 'pending':
+      case 'ambiguous': {
+        const observedAt = Date.now()
+        await recordDeferredContinuationNotice({
+          version: 1,
+          sessionId,
+          kind: 'canceled_human',
+          observedAt,
+        })
+        await moveDeferredContinuationToHistory(
+          current,
+          'canceled',
+          'human_message',
+          observedAt,
+        )
+        return {
+          action: 'allow_after_cancel',
+          notice:
+            current.state === 'ambiguous'
+              ? 'Scheduled continuation canceled because you sent a new message. Cat Code may have started the continuation before it closed, so review the latest transcript before relying on it.'
+              : 'Scheduled continuation canceled because you sent a new message.',
+        }
       }
-    }
-    if (current.state === 'ambiguous') {
-      return {
-        action: 'block',
-        notice:
-          'Automatic continuation stopped — needs you. Cat Code may have started the continuation before it closed. Review the latest transcript and continue manually.',
+      default: {
+        const exhaustive: never = current.state
+        return exhaustive
       }
-    }
-    return {
-      action: 'block',
-      notice:
-        'A scheduled continuation is already in progress. Wait for it to finish, then send your message again.',
     }
   } finally {
     await guard.release()
@@ -864,9 +873,64 @@ async function validatePrivateComponent(path: string, kind: 'directory' | 'file'
   return info
 }
 
+/** Chunk size for the forward transcript reader, matching the session-storage
+ * reader it borrows its approach from (`sessionStoragePortable.ts`). */
+const DEFERRED_TRANSCRIPT_CHUNK_BYTES = 1024 * 1024
+
+/**
+ * Ceiling on a transcript the deferred preflight will read.
+ *
+ * The preflight runs before durable state moves, so it fails closed rather than
+ * risking an OOM exit: a killed process leaves the job `pending` and the minute
+ * worker simply retries it forever. Callers turn the throw into a stated
+ * terminal outcome instead (`deferredContinuationRunner.ts` reports
+ * `session_restore` for a transcript it cannot read).
+ *
+ * The bound is deliberately far above real transcripts. Reconciliation and
+ * restore both need arbitrary entries from anywhere in the file, so the parsed
+ * entries — not the file bytes — are the residual peak, and only a caller-side
+ * projection could bound that further.
+ */
+export const DEFERRED_TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
+
+/**
+ * Chunked forward line reader. Peak allocation is one chunk plus the longest
+ * line, instead of the whole file as a string plus an array of every line.
+ * `StringDecoder` holds back partial multi-byte characters so a character split
+ * across a chunk boundary is not corrupted into replacement characters.
+ */
+async function* readTranscriptLines(
+  handle: Awaited<ReturnType<typeof open>>,
+  maxBytes: number,
+): AsyncGenerator<string> {
+  const chunk = Buffer.allocUnsafe(DEFERRED_TRANSCRIPT_CHUNK_BYTES)
+  const decoder = new StringDecoder('utf8')
+  let carry = ''
+  let total = 0
+  for (;;) {
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null)
+    if (bytesRead === 0) break
+    total += bytesRead
+    if (total > maxBytes) {
+      throw new Error('Deferred continuation transcript is too large to read safely')
+    }
+    carry += decoder.write(chunk.subarray(0, bytesRead))
+    let newline = carry.indexOf('\n')
+    while (newline !== -1) {
+      const line = carry.slice(0, newline)
+      carry = carry.slice(newline + 1)
+      if (line) yield line
+      newline = carry.indexOf('\n')
+    }
+  }
+  carry += decoder.end()
+  if (carry) yield carry
+}
+
 export async function readTrustedDeferredTranscript(
   job: Pick<DeferredContinuationJobV1, 'projectStorageKey' | 'sessionId'>,
   projectsRoot = getProjectsDir(),
+  maxBytes = DEFERRED_TRANSCRIPT_MAX_BYTES,
 ): Promise<unknown[]> {
   if (!isProjectStorageKey(job.projectStorageKey) || !uuid.safeParse(job.sessionId).success) {
     throw new Error('Invalid deferred continuation transcript identity')
@@ -876,17 +940,22 @@ export async function readTrustedDeferredTranscript(
   await validatePrivateComponent(projectDir, 'directory')
   const transcriptPath = join(projectDir, `${job.sessionId}.jsonl`)
   const before = await validatePrivateComponent(transcriptPath, 'file')
+  if (before.size > maxBytes) {
+    throw new Error('Deferred continuation transcript is too large to read safely')
+  }
   const handle = await open(transcriptPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
   try {
     const after = await handle.stat()
     if (before.dev !== after.dev || before.ino !== after.ino || !after.isFile()) {
       throw new Error('Transcript changed while opening')
     }
-    const text = await handle.readFile('utf8')
-    return text
-      .split('\n')
-      .filter(Boolean)
-      .map(line => JSON.parse(line))
+    const entries: unknown[] = []
+    // The size gate above is the fast path; the running total re-checks because
+    // the file can still grow while it is being read.
+    for await (const line of readTranscriptLines(handle, maxBytes)) {
+      entries.push(JSON.parse(line))
+    }
+    return entries
   } finally {
     await handle.close()
   }

@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
 import command from './index.js'
 import {
   REFUSALS,
@@ -12,6 +13,7 @@ import { QueryGuard } from '../../utils/QueryGuard.js'
 import type { DeferredContinuationJobV1 } from '../../services/deferredContinuation.js'
 
 const NOW = new Date('2026-07-15T00:00:00Z').getTime()
+const actualState = await import('../../bootstrap/state.js')
 
 function job(): DeferredContinuationJobV1 {
   return {
@@ -168,5 +170,63 @@ describe('/continue-after-limit disable-background failure', () => {
       'disable-background',
     )
     expect(text).toBe(message)
+  })
+})
+
+// F10: `cancel` refused an ambiguous job and left the record in place, so the
+// state it told the user to resolve manually had no exit. F18: the durable
+// record already distinguishes command cancellation from human-message
+// cancellation; the status copy did not.
+describe('/continue-after-limit cancel of an ambiguous job', () => {
+  test('clears the job, keeps the safety warning, and records a command cancel', async () => {
+    const root = await mkdtemp('/tmp/cat-code-cancel-ambiguous-')
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = root
+    mock.module('../../bootstrap/state.js', () => ({
+      ...actualState,
+      getSessionId: () => job().sessionId,
+    }))
+    try {
+      const store = await import('../../services/deferredContinuation.js')
+      await store.createPendingDeferredContinuation({
+        ...job(),
+        state: 'ambiguous',
+        attempt: { ...job().attempt, submittedAt: NOW },
+      })
+      const { call: freshCall } = await import('./continue-after-limit.js')
+
+      let text: string | null = null
+      await freshCall(
+        result => {
+          text = typeof result === 'string' ? result : null
+        },
+        { isQueryActive: false } as never,
+        'cancel',
+      )
+
+      expect(text).toContain('canceled')
+      // Cancelling does not make a possibly-started attempt un-started.
+      expect(text).toContain('may have started')
+      expect(await store.readPendingDeferredContinuation(job().sessionId)).toBeNull()
+      const history = await store.getLatestDeferredContinuationHistory(job().sessionId)
+      expect(history?.terminalState).toBe('canceled')
+      expect(history?.terminalReason).toBe('command')
+      // The notice the cancel just recorded was shown inline, so it must not be
+      // left behind for the hook to replay.
+      expect(await store.takeDeferredContinuationNotice(job().sessionId)).toBeNull()
+    } finally {
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('status copy names which side cancelled', () => {
+    expect(
+      historyText({ ...job(), terminalState: 'canceled', terminalReason: 'command', terminalAt: NOW }),
+    ).toContain('by command')
+    expect(
+      historyText({ ...job(), terminalState: 'canceled', terminalReason: 'human_message', terminalAt: NOW }),
+    ).toContain('sent a new message')
   })
 })

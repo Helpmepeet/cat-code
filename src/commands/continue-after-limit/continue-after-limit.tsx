@@ -146,44 +146,60 @@ Scheduled continuation completed at ${new Intl.DateTimeFormat(undefined, {
     }).format(new Date(history.terminalAt))}.`
   }
   if (history.terminalState === 'canceled') {
-    return 'Status: Canceled\nThe scheduled continuation was canceled.'
+    // The durable record already carries which side cancelled (the schema
+    // admits only these two reasons for a canceled job), so the status says so
+    // rather than making the user guess whether their own message did it.
+    return history.terminalReason === 'human_message'
+      ? 'Status: Canceled\nThe scheduled continuation was canceled because you sent a new message.'
+      : 'Status: Canceled\nThe scheduled continuation was canceled by command.'
   }
   return formatDeferredContinuationStopped(history.terminalReason)
 }
 
-async function cancel(sessionId: string): Promise<string> {
+/**
+ * `cleared` reports whether this call moved a job to history, so the caller can
+ * consume the notice it just recorded. It used to be inferred by matching the
+ * returned prose, which silently stopped being true as soon as the copy varied.
+ */
+type CancelResult = { text: string; cleared: boolean }
+
+async function cancel(sessionId: string): Promise<CancelResult> {
   let existing: DeferredContinuationJobV1 | null
   try {
     existing = await readPendingDeferredContinuation(sessionId)
   } catch {
-    return formatDeferredContinuationStopped('unknown')
+    return { text: formatDeferredContinuationStopped('unknown'), cleared: false }
   }
   if (!existing) {
-    return 'Nothing to cancel — no continuation is scheduled for this conversation.'
+    return {
+      text: 'Nothing to cancel — no continuation is scheduled for this conversation.',
+      cleared: false,
+    }
   }
   let guard
   try {
     guard = await acquireDeferredContinuationLocks(existing)
   } catch {
-    return `Continuation is already running and cannot be canceled safely. Wait for it to
-finish, then check /continue-after-limit status.`
+    return {
+      text: `Continuation is already running and cannot be canceled safely. Wait for it to
+finish, then check /continue-after-limit status.`,
+      cleared: false,
+    }
   }
   try {
     const current = await readPendingDeferredContinuation(sessionId)
     if (!current) {
-      return 'Nothing to cancel — no continuation is scheduled for this conversation.'
+      return {
+        text: 'Nothing to cancel — no continuation is scheduled for this conversation.',
+        cleared: false,
+      }
     }
     if (current.state === 'submitted') {
-      return `Continuation is already running and cannot be canceled safely. Wait for it to
-finish, then check /continue-after-limit status.`
-    }
-    if (current.state === 'ambiguous') {
-      return `Automatic continuation stopped — needs you.
-
-Cat Code may have started the continuation before it closed. It will not
-retry automatically because that could repeat tool actions.
-
-Review the latest transcript and continue manually.`
+      return {
+        text: `Continuation is already running and cannot be canceled safely. Wait for it to
+finish, then check /continue-after-limit status.`,
+        cleared: false,
+      }
     }
     const now = Date.now()
     await recordDeferredContinuationNotice({
@@ -193,7 +209,19 @@ Review the latest transcript and continue manually.`
       observedAt: now,
     })
     await moveDeferredContinuationToHistory(current, 'canceled', 'command', now)
-    return 'Scheduled continuation canceled.'
+    // `ambiguous` withholds automatic retry, not the user's own decision to
+    // stop. Cancelling clears the schedule; it cannot un-start an attempt that
+    // may already have run, so the warning stays.
+    return {
+      text:
+        current.state === 'ambiguous'
+          ? `Scheduled continuation canceled.
+
+Cat Code may have started the continuation before it closed, so review the
+latest transcript before relying on it.`
+          : 'Scheduled continuation canceled.',
+      cleared: true,
+    }
   } finally {
     await guard.release()
   }
@@ -255,8 +283,8 @@ export const call: LocalJSXCommandCall = async (onDone, context, rawArgs) => {
   }
   if (args === 'cancel') {
     const result = await cancel(sessionId)
-    onDone(result, { display: 'system' })
-    if (result === 'Scheduled continuation canceled.') {
+    onDone(result.text, { display: 'system' })
+    if (result.cleared) {
       await takeDeferredContinuationNotice(sessionId).catch(() => null)
     }
     return null
