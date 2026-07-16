@@ -1910,6 +1910,68 @@ test('C5 — an over-long freeform "other" is rejected by the schema', async () 
   expect(controller.getPendingPermissionRequests().length).toBe(1)
 })
 
+// A rejected answer MUST carry its requestId or the renderer cannot clear the
+// in-flight guard it set before sending, leaving the operator unable to answer
+// or decline a request that is still pending. Reachable without a compromised
+// renderer (an honest over-long freeform paste).
+test('C5 — a schema-rejected answer still correlates: the error carries the requestId and the request stays answerable', async () => {
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, () => {}),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  const requestId = controller.getPendingPermissionRequests()[0]!.requestId
+
+  server.handleData(
+    conn,
+    askAnswerFrame(
+      [{ optionIndices: [0] }, { optionIndices: [0], other: 'x'.repeat(5000) }],
+      requestId,
+    ),
+  )
+
+  const error = received.find(f => f.kind === 'error' && f.code === 'bad_request')
+  expect(error?.kind).toBe('error')
+  expect(error && 'requestId' in error ? error.requestId : undefined).toBe(requestId)
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C5 — a non-integer option index is rejected fail-closed', async () => {
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, () => {}),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    askAnswerFrame([{ optionIndices: [0.5] }, { optionIndices: [0] }]),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C5 — a non-array answers payload is rejected fail-closed', async () => {
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, () => {}),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(conn, askAnswerFrame({ 0: { optionIndices: [0] } }))
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
 test('C5 — an extra nested key on an answer is rejected (strict inner schema)', async () => {
   const controller = new AppSessionController(
     askQuestionAdapter(ASK_QUESTIONS, () => {}),

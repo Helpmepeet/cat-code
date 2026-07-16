@@ -1535,6 +1535,7 @@ export function App() {
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
+                isActivePane={sessionId === activeSessionId}
                 preview={panelIsPreview}
                 previewTruncationMessage={selectPreviewTruncationMessage(
                   previewTranscript,
@@ -2042,6 +2043,7 @@ export function SessionPane({
   branch,
   activeLog,
   activeSessionId,
+  isActivePane,
   preview = false,
   previewTruncationMessage = null,
   onPreviewEngage,
@@ -2602,6 +2604,7 @@ export function SessionPane({
       {askQuestion ? (
         <AskQuestionFlow
           key={askQuestion.request.requestId}
+          isActivePane={isActivePane}
           onAnswer={onAnswerQuestions}
           onCancel={onCancelQuestions}
           questions={askQuestion.questions}
@@ -3168,6 +3171,8 @@ type SessionPaneProps = {
   /** Read-only git branch for the empty-state meta strip (session log `gitBranch`). */
   branch: string | null
   activeSessionId: SessionId | null
+  /** This pane is the operator's focused one — gates window-level keyboard ownership in a split. */
+  isActivePane: boolean
   /** Cache-backed transcript is currently painted; operational stores stay live-only. */
   preview?: boolean
   /** Visible-lossiness boundary retained beside a truncation-only cache. */

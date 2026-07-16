@@ -149,3 +149,24 @@ test('selectGenericPermissionQueue drops the ask flow but keeps other cards', ()
   )
   expect(generic.map(item => item.request.requestId)).toEqual(['perm-bash-1'])
 })
+
+// The dedicated flow declines a malformed request (selectAskQuestion → null), so
+// the generic queue must KEEP it. Excluding it from both paths would leave the
+// request invisible and permanently pending, with no way to answer or decline.
+test('selectGenericPermissionQueue keeps a malformed ask request the dedicated flow cannot render', () => {
+  const malformed: PermissionRequest = {
+    requestId: 'perm-ask-bad',
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: ASK_USER_QUESTION_TOOL_NAME,
+      input: { questions: [] },
+      tool_use_id: 'toolu-ask-bad',
+    },
+  }
+  const state = withRequests(malformed)
+  expect(selectAskQuestion(state, 'session-1')).toBeNull()
+  const generic = selectGenericPermissionQueue(
+    selectNonPlanPermissionQueue(state, 'session-1'),
+  )
+  expect(generic.map(item => item.request.requestId)).toEqual(['perm-ask-bad'])
+})

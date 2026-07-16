@@ -1606,11 +1606,18 @@ export class SidecarServer {
     connection: Connection,
     rawMessage: unknown,
   ): void {
+    // The requestId is read BEFORE schema validation so a rejected answer still
+    // correlates back to its request — without it the renderer cannot clear its
+    // in-flight guard and an honest over-long answer strands the pending
+    // request forever. Same shape as handleAgentModeSet / handleRunControlVerb.
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
     const parsed = askUserQuestionAnswerMessageSchema.safeParse(rawMessage)
     if (!parsed.success) {
       this.sendError(
         connection,
-        undefined,
+        requestId,
         'bad_request',
         parsed.error.issues[0]?.message ?? 'invalid askUserQuestion.answer',
         false,

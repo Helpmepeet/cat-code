@@ -36,9 +36,15 @@ const MULTI: AskQuestion[] = [
   },
 ]
 
-function render(questions: AskQuestion[]) {
+// `renderToStaticMarkup` never runs effects, so these tests cover MARKUP only —
+// the window keydown handler (and its `isActivePane` gate, which stops one
+// keypress from resolving every flow in a split workspace) is NOT exercised
+// here. The renderer suite is SSR-only by construction; closing that gap needs
+// operator sign-off for a DOM harness. Until then it is a GUI-verified surface.
+function render(questions: AskQuestion[], isActivePane = true) {
   return renderToStaticMarkup(
     <AskQuestionFlow
+      isActivePane={isActivePane}
       onAnswer={() => {}}
       onCancel={() => {}}
       questions={questions}

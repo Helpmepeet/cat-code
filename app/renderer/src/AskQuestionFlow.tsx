@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { MAX_QUESTION_ANSWER_CHARS } from '../../shared/limits.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 import type { AskQuestion } from './askQuestionState.js'
 
@@ -43,6 +44,7 @@ export function AskQuestionFlow({
   questions,
   requestId,
   submitted,
+  isActivePane,
   onAnswer,
   onCancel,
 }: {
@@ -50,6 +52,12 @@ export function AskQuestionFlow({
   requestId: string
   /** True while an answer for this request is in flight (double-submit guard). */
   submitted?: boolean
+  /**
+   * True only for the pane the operator is focused on. The keyboard handler is
+   * a window listener, so in a split workspace only the active pane's flow may
+   * own it — otherwise one keypress resolves every mounted flow at once.
+   */
+  isActivePane: boolean
   onAnswer: (answers: AskUserQuestionAnswer[]) => void
   onCancel: () => void
 }) {
@@ -123,6 +131,11 @@ export function AskQuestionFlow({
   }
 
   useEffect(() => {
+    // A split workspace mounts one flow PER visible pane, so an ungated window
+    // listener would let a single Escape deny every pending request at once.
+    // Keyboard belongs to the active pane only, matching App's own permission
+    // keydown, which acts solely on the activeSessionId's request.
+    if (!isActivePane) return
     function onKeyDown(event: KeyboardEvent) {
       if (event.repeat || event.metaKey || event.altKey) return
       // In flight: the answer is already sent (buttons are disabled too) — the
@@ -327,6 +340,9 @@ export function AskQuestionFlow({
               onBlur={() => {
                 if (!otherText.trim()) setOtherActive(false)
               }}
+              // UX only — the sidecar's schema stays the trust boundary (T6).
+              // Keeps an honest paste from being rejected at the seam.
+              maxLength={MAX_QUESTION_ANSWER_CHARS}
               onChange={event => setOtherText(event.target.value)}
               placeholder="Type your own answer…"
               ref={otherInputRef}

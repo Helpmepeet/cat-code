@@ -141,6 +141,12 @@ redundant for the model + not in the prototype flow) — OPERATOR-APPROVED 2026-
 - **A1 — can a hostile renderer author a question text or an option label?** No. Both are read
   from the sidecar's own pending-request entry by *position/index*; the wire carries only integers
   and the freeform string. The only renderer bytes that reach the model are the freeform answer.
+  **Scope of that guarantee (do not overstate it):** provenance holds for the option-label
+  *components* reconstructed from indices — NOT for the final joined answer string as a whole. A
+  freeform "Other…" answer is arbitrary renderer text and may contain commas, quotes, or text that
+  resembles a real label, so the assembled string is not by itself proof that an option was
+  selected. This is explicit functionality, not a bypass: no privileged action follows from it, and
+  any subsequent tool still faces the normal permission boundary.
 - **A2 — is the freeform answer an escalation?** No. It is model-visible text in a read-only tool's
   result — strictly a subset of what `app.submit` already lets the renderer say to the model. No
   tool executes on it. `AskUserQuestion.isReadOnly()`/`isConcurrencySafe()` both `true`.
@@ -174,11 +180,20 @@ redundant for the model + not in the prototype flow) — OPERATOR-APPROVED 2026-
 - reject: `answers.length` ≠ gated `questions.length` → `bad_request`;
 - reject: single-select with two components → `bad_request`;
 - reject: over-long `other` / extra nested key / non-array `answers` → `bad_request`;
+- reject-and-CORRELATE: a schema-rejected answer's `bad_request` carries the `requestId` (read
+  before validation), so the renderer can clear its in-flight guard and the operator can still
+  answer or decline the still-pending request;
 - **live-path** (`sidecarServer` real controller): a real pending AskUserQuestion request answered
   through the frame drives the engine's actual `respondToPermissionRequest`, and the resolved
   decision carries the real answer — proving real data flows, not a synthetic frame
   (SECURITY-MINIMUM / CLAUDE.md §8.1).
-- renderer: `askQuestionState.test.ts` (selector), `AskQuestionFlow.test.tsx` (flow + keyboard).
+- renderer: `askQuestionState.test.ts` (selector), `AskQuestionFlow.test.tsx` (static markup +
+  payload helper ONLY). **Not covered headlessly:** the keyboard/state machine and the
+  active-pane keyboard gate. The renderer suite is SSR-only (`renderToStaticMarkup` never runs
+  effects; no happy-dom/jsdom/`react-dom/client` in `app/`, and adding one needs operator
+  sign-off), so this whole interaction class is structurally invisible to it — the same blind
+  spot that hid the P4-0 ↑/↓ recall and P4-18a live-frame defects. Verify at the GUI or grant
+  sign-off for a DOM harness.
 
 ## 7. Carry-forwards
 

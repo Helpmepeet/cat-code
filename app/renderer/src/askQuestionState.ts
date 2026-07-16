@@ -113,9 +113,12 @@ export function selectAskQuestion(
   )
   if (!item) return null
   const questions = narrowAskQuestions(item.request.request.input)
-  // A malformed request with zero readable questions has nothing to render; fall
-  // back to null so the generic queue's tolerant path can surface it instead of
-  // an empty flow (display degrades gracefully; inbound still fails closed).
+  // A malformed request with zero readable questions has nothing to render, so
+  // the dedicated flow declines it and `selectGenericPermissionQueue` keeps it
+  // in the generic card instead — the two exclusions use the SAME readability
+  // test, so such a request stays visible and deniable rather than becoming
+  // invisible and permanently pending (display degrades gracefully; inbound
+  // still fails closed).
   if (questions.length === 0) return null
   return { request: item.request, submitted: item.submitted, questions }
 }
@@ -129,5 +132,13 @@ export function selectAskQuestion(
 export function selectGenericPermissionQueue(
   queue: PermissionQueueItem[],
 ): PermissionQueueItem[] {
-  return queue.filter(item => !isAskUserQuestionRequest(item.request))
+  return queue.filter(
+    item =>
+      !isAskUserQuestionRequest(item.request) ||
+      // Only a RENDERABLE AskUserQuestion is owned by the dedicated flow. A
+      // malformed one (no readable questions) has no dedicated renderer, so it
+      // must stay here to remain visible and deniable — mirroring the same
+      // readability test `selectAskQuestion` applies.
+      narrowAskQuestions(item.request.request.input).length === 0,
+  )
 }
