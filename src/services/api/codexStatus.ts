@@ -345,13 +345,17 @@ function quotaResetSeconds(
       ? account.cappedAt
       : null
   if (typeof primaryReset === 'number' && Number.isFinite(primaryReset) && primaryReset > 0) {
-    if (
-      account.status === 'capped' &&
-      account.statusReason === 'usage_cap' &&
-      cappedAt !== null &&
-      primaryReset * 1000 < cappedAt
-    ) {
-      return null
+    // Mirror the pool owner's hard-429 chronology rule
+    // (codexAccountPool.ts getHard429QuotaBelief): a usage cap carries reset
+    // evidence only when the reset provably post-dates the cap. Missing
+    // cappedAt means there is no chronology at all, so the reset cannot be
+    // attributed to this cap; the pool forms no belief and neither may we.
+    // The `>= cappedAt` accept (i.e. reject only when strictly earlier) is
+    // deliberate and matches the pool — do not tighten it to a strict `>`.
+    if (account.status === 'capped' && account.statusReason === 'usage_cap') {
+      if (cappedAt === null || primaryReset * 1000 < cappedAt) {
+        return null
+      }
     }
     return primaryReset
   }

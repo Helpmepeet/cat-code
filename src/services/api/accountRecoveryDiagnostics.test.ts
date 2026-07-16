@@ -37,6 +37,7 @@ import { getClaudeAIOAuthTokens } from '../../utils/auth.js'
 import { _resetKeepAliveForTesting } from '../../utils/proxy.js'
 import {
   CannotRetryError,
+  CodexAccountUnavailableError,
   _resetCodexNetworkOutageDelaysForTest,
   _setCodexNetworkOutageDelaysForTest,
   withRetry,
@@ -917,5 +918,154 @@ describe('account recovery diagnostics', () => {
     expect(diagnostics.map(diagnostic => diagnostic.code)).toContain(
       'account.pool.unavailable',
     )
+    // The emitted diagnostic and the durable classification are two
+    // projections of one verdict; a dead pool needs repair, not a resume.
+    expect((thrown as CodexAccountUnavailableError).terminalCode).toBe(
+      'account_recovery',
+    )
+  })
+
+  test('a network failure during token refresh persists transient_network, not account_recovery', async () => {
+    // The auth path already decides a non-auth refresh failure is a connection
+    // problem and quarantines the account for retry rather than dead-marking
+    // it. The durable classification must agree: calling this `account_recovery`
+    // sends the user to repair credentials that were never rejected.
+    const dir = mkdtempSync(join(tmpdir(), 'codex-refresh-network-'))
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    const accountPath = join(accountsDir, 'account-one.json')
+    writeFileSync(
+      accountPath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: buildCodexToken('account-one'),
+            refresh_token: 'refresh-account-one',
+            account_id: 'account-one',
+          },
+          alias: 'main',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-one',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'account-one',
+          alias: 'main',
+          source: 'vault',
+          vaultFilePath: accountPath,
+          refreshToken: 'refresh-account-one',
+        }),
+        // Dead: leaves nothing to rotate to, so the auth path goes terminal.
+        buildPoolAccount({ accountId: 'account-two', status: 'dead' }),
+      ],
+    })
+
+    globalThis.fetch = (async input => {
+      const url = String(input)
+      if (url.includes('/oauth/token')) {
+        // Backend outage, NOT a credential rejection.
+        return new Response('upstream unavailable', { status: 503 })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as typeof globalThis.fetch
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new CodexAccountAuthError('account-one')
+        },
+        {
+          maxRetries: 0,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    rmSync(dir, { recursive: true, force: true })
+
+    // Precondition: the refresh failure was treated as a connection problem.
+    expect(
+      getPoolStatus().accounts.find(
+        account => account.accountId === 'account-one',
+      )?.status,
+    ).toBe('quarantined')
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).deferredTerminalFailure).toMatchObject({
+      version: 1,
+      provider: 'openai',
+      code: 'transient_network',
+    })
+  })
+
+  test('a Codex-unavailable client failure persists the pool verdict, not transient_network', async () => {
+    // client.ts already knows why no account can serve the request and says so
+    // in the diagnostic. Throwing a bare APIConnectionError let withRetry
+    // re-infer `transient_network` from the error class, so the diagnostic and
+    // the durable envelope disagreed about wait-for-reset vs needs-repair.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-one',
+      accounts: [
+        buildPoolAccount({
+          accountId: 'account-one',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: Date.now(),
+        }),
+        buildPoolAccount({
+          accountId: 'account-two',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: Date.now(),
+        }),
+      ],
+    })
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        () =>
+          getAnthropicClient({
+            maxRetries: 0,
+            model: 'gpt-5.6-luna',
+            provider: 'openai',
+          }),
+        async () => ({}) as never,
+        {
+          maxRetries: 0,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable — the client never resolves
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(diagnostics.map(diagnostic => diagnostic.code)).toContain(
+      'quota.exhausted',
+    )
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).deferredTerminalFailure).toMatchObject({
+      version: 1,
+      provider: 'openai',
+      code: 'quota_exhausted',
+    })
   })
 })

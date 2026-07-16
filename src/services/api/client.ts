@@ -1,7 +1,4 @@
-import Anthropic, {
-  APIConnectionError,
-  type ClientOptions,
-} from '@anthropic-ai/sdk'
+import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import {
   appendAccount,
@@ -57,6 +54,7 @@ import {
   isEnvTruthy,
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
+import { CodexAccountUnavailableError } from './withRetry.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
 import { maybeRefreshAccount, type CodexCoreAccount } from '../../codex-core/accounts.js'
 
@@ -198,7 +196,9 @@ function emitRouteSelectedDiagnostic(options: {
   })
 }
 
-function emitCodexUnavailableDiagnostic(model: string | undefined): void {
+function emitCodexUnavailableDiagnostic(
+  model: string | undefined,
+): 'auth.missing' | 'quota.exhausted' | 'account.pool.unavailable' {
   const poolStatus = getPoolStatus()
   const counts = countStatuses(poolStatus.accounts)
   const capped = counts?.capped ?? 0
@@ -220,13 +220,18 @@ function emitCodexUnavailableDiagnostic(model: string | undefined): void {
     counts,
     reason: 'no healthy Codex account is available for this request',
   })
+  return code
 }
 
 function throwNoHealthyCodexAccount(model: string | undefined): never {
-  emitCodexUnavailableDiagnostic(model)
-  throw new APIConnectionError({
-    message: 'No healthy Codex account is available for this request.',
-  })
+  // The thrown error carries the same verdict the diagnostic just reported, so
+  // the durable terminal classification cannot drift from it: only a fully
+  // capped pool means wait-for-reset; a dead or unconfigured pool needs repair.
+  const code = emitCodexUnavailableDiagnostic(model)
+  throw new CodexAccountUnavailableError(
+    'No healthy Codex account is available for this request.',
+    code === 'quota.exhausted' ? 'quota_exhausted' : 'account_recovery',
+  )
 }
 
 function toCoreAccount(

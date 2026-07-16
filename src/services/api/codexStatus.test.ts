@@ -183,6 +183,58 @@ describe('buildCodexStatus', () => {
     expect(result.decision.not_before).toBeNull()
   })
 
+  test('hard cap without a recorded cappedAt yields no reset evidence', async () => {
+    // The pool owner refuses to form any quota belief for a usage-capped
+    // account with no cappedAt (codexAccountPool.ts getHard429QuotaBelief):
+    // with no cap timestamp there is no chronology proving the reset belongs
+    // to THIS cap rather than an earlier window or a stale poll. Advisory
+    // status must not accept reset evidence the pool itself rejects.
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-no-capped-at',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: undefined,
+          usageResetAt: FUTURE_RESET_SEC,
+        }),
+      ],
+    })
+
+    const result = await buildCodexStatus({ now: NOW, refresh: 'never', loadPool: false })
+
+    expect(result.pool.quota_blocked).toBe(1)
+    expect(result.pool.earliest_known_reset_at).toBeNull()
+    expect(result.decision.action).toBe('recheck')
+    expect(result.decision.reason_code).toBe('quota_blocked_no_reset')
+    expect(result.decision.not_before).toBeNull()
+  })
+
+  test('hard cap keeps reset evidence exactly at cappedAt', async () => {
+    // Equality is intentional and mirrors the pool owner's accept rule
+    // (`resetAt * 1000 >= cappedAt`, codexAccountPool.ts getHard429QuotaBelief).
+    // Tightening this to a strict `>` would break the pool contract.
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-reset-at-cap',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: FUTURE_RESET_SEC * 1000,
+          usageResetAt: FUTURE_RESET_SEC,
+        }),
+      ],
+    })
+
+    const result = await buildCodexStatus({ now: NOW, refresh: 'never', loadPool: false })
+
+    expect(result.pool.earliest_known_reset_at).toBe(
+      new Date(FUTURE_RESET_SEC * 1000).toISOString(),
+    )
+    expect(result.decision.action).toBe('wait')
+    expect(result.decision.reason_code).toBe('quota_blocked_reset_known')
+  })
+
   test('(4) transient/unknown observation → attempt', async () => {
     seedCodexAccountPoolForTest({
       accounts: [

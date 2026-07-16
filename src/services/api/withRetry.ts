@@ -301,6 +301,27 @@ export class CannotRetryError extends Error {
   }
 }
 
+/**
+ * No Codex account could serve the request at all. The credential resolver has
+ * already established WHY (and emitted the matching account diagnostic), so the
+ * verdict travels with the error instead of being re-inferred downstream: the
+ * `APIConnectionError` base class would otherwise be read as `transient_network`
+ * and put the durable classification at odds with the emitted diagnostic over
+ * the wait-for-reset vs needs-repair decision.
+ *
+ * Stays an APIConnectionError so existing retry/`instanceof` handling for an
+ * unreachable API is unchanged.
+ */
+export class CodexAccountUnavailableError extends APIConnectionError {
+  constructor(
+    message: string,
+    public readonly terminalCode: DeferredTerminalFailureV1['code'],
+  ) {
+    super({ message })
+    this.name = 'CodexAccountUnavailableError'
+  }
+}
+
 export class FallbackTriggeredError extends Error {
   constructor(
     public readonly originalModel: string,
@@ -351,18 +372,23 @@ export async function* withRetry<T>(
       options.isCodexRequest === true ||
       originalError instanceof CodexAccountCapError ||
       originalError instanceof CodexAccountAuthError ||
+      originalError instanceof CodexAccountUnavailableError ||
       (options.ownerId !== undefined && poolManagesCredentials())
     const resolvedTerminalCode =
       terminalCode ??
-      (originalError instanceof CodexAccountCapError
-        ? 'quota_exhausted'
-        : originalError instanceof CodexAccountAuthError
-          ? 'account_recovery'
-          : originalError instanceof APIConnectionError
-            ? 'transient_network'
-            : originalError instanceof APIError && originalError.status === 429
-              ? 'ambiguous_rate_limit'
-              : undefined)
+      // Must precede the APIConnectionError arm below: the resolver already
+      // decided this verdict, so carry it instead of re-inferring it.
+      (originalError instanceof CodexAccountUnavailableError
+        ? originalError.terminalCode
+        : originalError instanceof CodexAccountCapError
+          ? 'quota_exhausted'
+          : originalError instanceof CodexAccountAuthError
+            ? 'account_recovery'
+            : originalError instanceof APIConnectionError
+              ? 'transient_network'
+              : originalError instanceof APIError && originalError.status === 429
+                ? 'ambiguous_rate_limit'
+                : undefined)
     const deferredTerminalFailure: DeferredTerminalFailureV1 | undefined =
       isCodexTerminal && resolvedTerminalCode
         ? {
@@ -406,6 +432,15 @@ export async function* withRetry<T>(
           : new Error('Codex lease failover limit reached'),
         attemptCount,
         accountRef,
+        // Budget exhaustion bails BEFORE capping/failing over the current
+        // account, so selectable accounts may remain and pool-wide quota
+        // exhaustion was never established. Class-based inference would read
+        // `quota_exhausted` off the CodexAccountCapError and authorize an
+        // unattended /continue-after-limit resume on evidence we never
+        // gathered. Report the 429 we actually saw, not a verdict we didn't.
+        originalError instanceof CodexAccountCapError
+          ? 'ambiguous_rate_limit'
+          : undefined,
       )
     }
   }
@@ -705,6 +740,14 @@ export async function* withRetry<T>(
           const refreshFailureIsAuth =
             refreshFailure instanceof ReauthenticationRequiredError ||
             (refreshFailure instanceof CodexCoreError && refreshFailure.code === 'auth')
+          // Keep the durable classification aligned with the quarantine-vs-dead
+          // decision made just below. A non-auth refresh failure is a
+          // connection problem, so the credentials were never rejected and
+          // `account_recovery` would send the user to repair nothing.
+          const authTerminalCode: DeferredTerminalFailureV1['code'] =
+            refreshFailure && !refreshFailureIsAuth
+              ? 'transient_network'
+              : 'account_recovery'
           if (refreshFailure && !refreshFailureIsAuth) {
             markPoolAccountQuarantined(
               accountId,
@@ -766,7 +809,7 @@ export async function* withRetry<T>(
                   : new Error(getCodexLeaseExhaustedMessage()),
                 attempt,
                 accountId,
-                'account_recovery',
+                authTerminalCode,
               )
             }
           }
@@ -806,7 +849,7 @@ export async function* withRetry<T>(
             new Error(getCodexLeaseExhaustedMessage()),
             attempt,
             accountId,
-            'account_recovery',
+            authTerminalCode,
           )
         }
       }
