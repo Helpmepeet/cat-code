@@ -309,6 +309,7 @@ import {
   fileHistoryGetDiffStats,
 } from 'src/utils/fileHistory.js'
 import {
+  checkDeferredContinuationResume,
   restoreAgentFromSession,
   restoreSessionStateFromLog,
 } from 'src/utils/sessionRestore.js'
@@ -720,6 +721,21 @@ export async function runHeadless(
     sessionStartHooksPromise: options.sessionStartHooksPromise,
     restoredWorkerState: structuredIO.restoredWorkerState,
   })
+
+  // Headless resume never reaches handlePromptSubmit, so this is the only place
+  // that keeps `--print --resume` off a session a background continuation is
+  // already writing. deferredJobId is set only when this process IS that
+  // continuation (main.tsx routes the worker through headless resume while it
+  // already holds the locks) — probing there would deadlock it against itself.
+  // Nothing is appended before this point, so exiting here leaves no trace.
+  if (!options.deferredJobId) {
+    const deferred = await checkDeferredContinuationResume(getSessionId())
+    if (deferred.action === 'block') {
+      process.stderr.write(`Error: ${deferred.notice}\n`)
+      gracefulShutdownSync(1)
+      return
+    }
+  }
 
   // SessionStart hooks can emit initialUserMessage — the first user turn for
   // headless orchestrator sessions where stdin is empty and additionalContext
