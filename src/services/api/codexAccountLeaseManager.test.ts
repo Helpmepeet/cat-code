@@ -2335,6 +2335,64 @@ describe('codexAccountLeaseManager', () => {
     ).toBe(true)
   })
 
+  test('failover-budget exhaustion does not claim quota exhaustion while accounts remain', async () => {
+    // The budget assert fires BEFORE capping/failing over the current account,
+    // so selectable accounts can still remain — pool-wide quota exhaustion was
+    // never established. Inferring `quota_exhausted` from the CodexAccountCapError
+    // class here would authorize an unattended /continue-after-limit resume on
+    // evidence we never gathered.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-a',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-a', alias: 'a' }),
+        buildPoolAccount({ accountId: 'account-b', alias: 'b' }),
+        buildPoolAccount({ accountId: 'account-c', alias: 'c' }),
+      ],
+    })
+
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'account-a',
+      strategy: 'follow-main',
+    })
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          const currentLease = moduleUnderTest.getCodexLeaseForOwner('main-thread')
+          throw new CodexAccountCapError(currentLease?.accountId ?? 'account-a')
+        },
+        {
+          maxRetries: 1,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          ownerId: 'main-thread',
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // consume retry messages if any
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    // Precondition: the budget ran out with a healthy account still unused.
+    expect(
+      getPoolStatus().accounts.some(account => account.status === 'healthy'),
+    ).toBe(true)
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).deferredTerminalFailure).toMatchObject({
+      version: 1,
+      provider: 'openai',
+      code: 'ambiguous_rate_limit',
+    })
+  })
+
   test('terminal cap failure reports quota exhaustion from the typed decision, not from pool counts', async () => {
     // The diagnostic code and the deferred envelope are projections of one
     // terminal decision: a hard cap that could not be failed over. Neither may
