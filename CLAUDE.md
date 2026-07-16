@@ -5,6 +5,12 @@ agent system. This file is the operating manual for any agent working here.
 Every rule is checkable. If a rule conflicts with what you find in source,
 source wins — finish the task by the source, then flag the drift in your report.
 
+**Expect company.** More than one agent session usually works this repo at the
+same time, sharing one working tree and one set of branches. Files you didn't
+touch change, the branch tip moves between your own commands, and multi-writer
+docs gain rows while you read them. Default assumption for anything you don't
+recognize: it is another session's live work, not yours to clean up (§4).
+
 ## 1. Repo layout — know which world you are in
 
 Three runtimes share this repo. **Which directory you touch decides which
@@ -49,6 +55,13 @@ build/test/typecheck battery applies (§3). Never mix them.**
 
 Run the battery for **every area whose files you changed**. Paste the commands
 and their outcomes in your final report; "should pass" is not a result.
+
+A red result is not automatically yours. Before debugging a failure, check
+`git status` / `git diff` on the failing file: if it's dirty and you didn't
+edit it, another session is mid-change there — report the failure as
+not-yours-and-unfixed rather than "fixing" code you don't own. The same goes
+for baseline counts below; they shift under concurrent work, so re-measure
+instead of assuming.
 
 ### Engine (`src/`, `scripts/`)
 
@@ -108,10 +121,53 @@ custom rules are `createNoopRule()` stubs; the only two entries turn rules
 off) — a lint pass is a parse check. Never cite "lint clean" as meaningful
 evidence; tests and typechecks are the evidence.
 
-## 4. Git
+## 4. Git — one human, many concurrent sessions
 
-- Solo repo. Commit directly to the **current** branch (including `main`). No
-  branches, worktrees, or PRs unless explicitly asked; delete them after merge.
+One human owns this repo, so there are no PRs or review gates; but several agent
+sessions commit to the same branch live (on `migration` especially:
+`worktree-agent-*` merges plus direct commits). Every git rule below exists
+because the tree is shared.
+
+- **Stage explicit paths only** — `git add <path> <path>`. Never `git add -A`,
+  `git add -u`, or `git commit -a`: the diff you're staging contains other
+  sessions' uncommitted edits.
+- **Never destroy what you didn't write.** No `git checkout -- .`, `git clean`,
+  `git stash`, or reverting a file you didn't edit. Uncommitted changes and
+  untracked files that aren't yours are someone's in-flight work, and a stash is
+  indistinguishable from deletion to the session that was mid-edit.
+- **No relative refs, no history rewrites.** Never `HEAD~1`/`HEAD^` for
+  reset/rebase — use an explicit SHA and re-check `git rev-parse HEAD`
+  immediately before the op, because the tip may have moved since you read it.
+  Once anything may sit on top of your commit, don't reset/rebase/amend at all;
+  splitting or reordering a commit here is never worth force-rebasing another
+  session's work. (2026-07-12: a `git reset HEAD~1` intended to undo my own
+  commit undid another session's instead, seconds after they committed.)
+- **Don't push to publish just your work** — your commit sits atop theirs, so
+  pushing publishes theirs too. Let the owning session push, or make an isolated
+  branch off `origin/<branch>`.
+- **Re-read multi-writer files immediately before writing** —
+  `docs/migration/STATUS.md`, `DONE.md`: the copy you read earlier in the
+  session is probably stale. Edit only your own row/entry (§6).
+- Commit directly to the **current** branch (including `main`). No branches,
+  worktrees, or PRs unless explicitly asked; delete them after merge.
+
+**Worktree format and location** — when you are asked for one, these are the
+only correct answers. Both roots are gitignored (`.gitignore:7` and local
+`.git/info/exclude`), so a worktree in the wrong place never shows up in
+`git status` — nothing will catch the mistake for you.
+
+| Created by | Directory | Branch |
+|---|---|---|
+| **You**, on request | `.worktrees/<slug>` | `worktree-<slug>` |
+| **The harness** (`isolation: "worktree"`) | `.claude/worktrees/agent-<hex>` | `worktree-agent-<hex>` |
+
+- Never invent a name or location: past sessions left `context-cost-fixes-20260706`
+  and `account-system-20260706` in ad-hoc spots because this table didn't exist.
+- `.claude/worktrees/` belongs to the harness. Don't hand-roll one there, and
+  don't tidy up what's in it — another session may be live in it.
+- `git worktree list` is the truth, not the directory listing. After merge:
+  `git worktree remove <path>` **and** delete the branch; a bare `rm -rf` leaves
+  a stale admin entry needing `git worktree prune`.
 - Exception: desktop-migration (`app/` + `docs/migration/`) work lives on the
   `migration` branch, never `main` (PROGRAM-PLAN rule).
 - Commit/push only when asked. Never `--no-verify`. Never `git stash` as a
