@@ -13,6 +13,47 @@ export const DEFERRED_CONTINUATION_WORKER_ARGUMENT =
 
 const execFileAsync = promisify(execFile)
 
+// `launchctl bootout` cannot report whether a job was unloaded: a plist that was
+// never loaded and a job that refused to unload both exit non-zero (EIO on
+// current macOS). The loaded state queried afterwards is the only authoritative
+// signal, so the executor reports outcomes instead of throwing.
+export type LaunchctlRunResult =
+  | { outcome: 'ok' }
+  | { outcome: 'exit'; code: number }
+  | { outcome: 'unavailable' }
+
+export type LaunchctlExecutor = (args: string[]) => Promise<LaunchctlRunResult>
+
+// `launchctl print` exits 113 ("Could not find service") when no such job is
+// loaded in the domain.
+const LAUNCHCTL_SERVICE_NOT_FOUND = 113
+
+const defaultLaunchctlExecutor: LaunchctlExecutor = async args => {
+  try {
+    await execFileAsync('launchctl', args)
+    return { outcome: 'ok' }
+  } catch (error) {
+    // execFile reports a numeric exit status, but a string errno when launchctl
+    // could not be spawned at all.
+    const code = (error as { code?: unknown }).code
+    return typeof code === 'number' ? { outcome: 'exit', code } : { outcome: 'unavailable' }
+  }
+}
+
+async function getDeferredContinuationLoadState(
+  run: LaunchctlExecutor,
+): Promise<'loaded' | 'not_loaded' | 'unknown'> {
+  const result = await run([
+    'print',
+    `gui/${process.getuid!()}/${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL}`,
+  ])
+  if (result.outcome === 'ok') return 'loaded'
+  if (result.outcome === 'exit' && result.code === LAUNCHCTL_SERVICE_NOT_FOUND) {
+    return 'not_loaded'
+  }
+  return 'unknown'
+}
+
 export function getDeferredContinuationLaunchAgentPath(
   home = homedir(),
 ): string {
@@ -178,37 +219,33 @@ export async function getDeferredContinuationBackgroundStatus(
 export async function installDeferredContinuationLaunchAgent(
   executablePath: string,
   plistPath = getDeferredContinuationLaunchAgentPath(),
+  run: LaunchctlExecutor = defaultLaunchctlExecutor,
 ): Promise<string> {
   const canonical = await validateStableDeferredContinuationExecutable(executablePath)
   await writeLaunchAgentAtomically(
     plistPath,
     renderDeferredContinuationLaunchAgent(canonical),
   )
-  try {
-    await execFileAsync('launchctl', [
-      'bootout',
-      `gui/${process.getuid!()}`,
-      plistPath,
-    ])
-  } catch {
-    // First install has no loaded job; bootstrap below is authoritative.
-  }
-  try {
-    await execFileAsync('launchctl', [
-      'bootstrap',
-      `gui/${process.getuid!()}`,
-      plistPath,
-    ])
-  } catch (error) {
+  // First install has no loaded job; bootstrap below is authoritative.
+  await run(['bootout', `gui/${process.getuid!()}`, plistPath])
+  const bootstrapped = await run([
+    'bootstrap',
+    `gui/${process.getuid!()}`,
+    plistPath,
+  ])
+  if (bootstrapped.outcome !== 'ok') {
     await unlink(plistPath).catch(() => {})
     await syncDirectory(dirname(plistPath)).catch(() => {})
-    throw error
+    throw new Error(
+      `Background continuation could not be enabled: launchctl bootstrap failed for ${plistPath}.`,
+    )
   }
   return canonical
 }
 
 export async function uninstallDeferredContinuationLaunchAgent(
   plistPath = getDeferredContinuationLaunchAgentPath(),
+  run: LaunchctlExecutor = defaultLaunchctlExecutor,
 ): Promise<boolean> {
   try {
     await lstat(plistPath)
@@ -216,14 +253,18 @@ export async function uninstallDeferredContinuationLaunchAgent(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw error
   }
-  try {
-    await execFileAsync('launchctl', [
-      'bootout',
-      `gui/${process.getuid!()}`,
-      plistPath,
-    ])
-  } catch {
-    // Removing the durable plist is authoritative even if no instance is loaded.
+  await run(['bootout', `gui/${process.getuid!()}`, plistPath])
+  // bootout's status is ambiguous, so the job's own load state decides. Keep the
+  // plist unless the job is confirmed gone: deleting it while the job is still
+  // loaded would leave the timer running with no on-disk record to repair from,
+  // and report that as a successful disable.
+  const state = await getDeferredContinuationLoadState(run)
+  if (state !== 'not_loaded') {
+    throw new Error(
+      state === 'loaded'
+        ? `Background continuation could not be disabled: the launchd job ${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL} is still loaded. ${plistPath} was kept so it stays repairable. Unload it with: launchctl bootout gui/$(id -u) ${plistPath}`
+        : `Background continuation could not be disabled: unable to verify whether the launchd job ${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL} is still loaded. ${plistPath} was kept so it stays repairable.`,
+    )
   }
   await unlink(plistPath)
   await syncDirectory(dirname(plistPath))
