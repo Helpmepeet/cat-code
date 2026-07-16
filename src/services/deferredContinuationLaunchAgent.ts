@@ -250,8 +250,23 @@ export async function uninstallDeferredContinuationLaunchAgent(
   try {
     await lstat(plistPath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-    throw error
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // A missing plist is NOT proof the job is gone. launchd keeps a loaded job
+    // in the domain after its plist is deleted — by hand, or by an install that
+    // failed after bootstrap — until bootout or logout. Returning false here
+    // reports "already disabled" while the timer keeps firing unattended turns:
+    // the same false success the load-state check below exists to prevent.
+    const orphan = await getDeferredContinuationLoadState(run)
+    if (orphan === 'not_loaded') return false
+    // Boot out by label — there is no plist path left to name.
+    await run([
+      'bootout',
+      `gui/${process.getuid!()}/${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL}`,
+    ])
+    if ((await getDeferredContinuationLoadState(run)) === 'not_loaded') return true
+    throw new Error(
+      `Background continuation could not be disabled: the launchd job ${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL} is loaded but ${plistPath} is missing, so it could not be unloaded from its plist. Unload it with: launchctl bootout gui/$(id -u)/${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL}`,
+    )
   }
   await run(['bootout', `gui/${process.getuid!()}`, plistPath])
   // bootout's status is ambiguous, so the job's own load state decides. Keep the

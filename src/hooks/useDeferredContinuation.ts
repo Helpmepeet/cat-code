@@ -36,19 +36,31 @@ export function useDeferredContinuation({ setMessages }: Props): void {
       }
     }
 
+    // Never throws. `takeDeferredContinuationNotice` throws on any non-ENOENT
+    // error (a corrupt notice file is a zod throw), and every caller's only
+    // liveness is the `setTimeout` that follows it — so a throw escaping here
+    // would kill the poll loop for the session's lifetime and raise an
+    // unhandled rejection from `void check()`. Since notices ARE how background
+    // workers report outcomes, that would silently strand every future one.
+    // Display degrades gracefully; the durable history remains the authority
+    // that `/continue-after-limit status` reads.
     const consumeNotice = async () => {
-      const notice = await takeDeferredContinuationNotice(sessionId)
-      if (notice) {
-        let text = formatDeferredContinuationNotice(notice)
-        if (
-          notice.kind === 'network_retry' ||
-          notice.kind === 'quota_rescheduled'
-        ) {
-          text += `\n${formatDeferredContinuationBackground(
-            await getDeferredContinuationBackgroundStatus(),
-          )}`
+      try {
+        const notice = await takeDeferredContinuationNotice(sessionId)
+        if (notice) {
+          let text = formatDeferredContinuationNotice(notice)
+          if (
+            notice.kind === 'network_retry' ||
+            notice.kind === 'quota_rescheduled'
+          ) {
+            text += `\n${formatDeferredContinuationBackground(
+              await getDeferredContinuationBackgroundStatus(),
+            )}`
+          }
+          show(text)
         }
-        show(text)
+      } catch {
+        // Intentionally swallowed — see above.
       }
     }
 

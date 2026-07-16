@@ -417,6 +417,59 @@ export async function moveDeferredContinuationToHistory(
   return history
 }
 
+/**
+ * Discard a pending record that cannot be read back.
+ *
+ * An unreadable record has no exit through the normal paths: it cannot be moved
+ * to history (that needs a parsed job), so cancellation cannot clear it, while
+ * `prepareHumanPromptAgainstDeferredContinuation` refuses every prompt for as
+ * long as it exists. Without this the session is bricked until someone deletes
+ * the file by hand — the same no-exit trap `ambiguous` used to be.
+ *
+ * Guarded by the session lock rather than the job lock: the job ID lives inside
+ * the record we cannot parse, and the session lock is the one that answers the
+ * question that matters — is an owner running this session right now? A worker
+ * that started before the record rotted holds it and still has its own parsed
+ * copy, whose completion unlinks this same path.
+ *
+ * Re-checks readability under the lock and refuses to delete a record that
+ * parses: between the caller's failed read and this call the file may have been
+ * rewritten, and discarding a live schedule the user never cancelled would be
+ * worse than the trap.
+ *
+ * Returns false when nothing was discarded (no record, or it parses now).
+ */
+export async function discardUnreadableDeferredContinuation(
+  sessionId: string,
+  paths = getDeferredContinuationPaths(),
+): Promise<boolean> {
+  if (!uuid.safeParse(sessionId).success) throw new Error('Invalid session ID')
+  await ensureDeferredContinuationStore(paths)
+  const guard = await acquireOneLock(join(paths.locks, `session-${sessionId}`))
+  try {
+    try {
+      // Full read AND schema parse — a record can be perfectly readable JSON and
+      // still fail the schema, which is the case that strands a session.
+      // Returns null for ENOENT, so both "gone" and "parses" land here.
+      await readPendingDeferredContinuation(sessionId, paths)
+      return false
+    } catch {
+      // Still unreadable under the lock — discard it.
+    }
+    guard.assertHealthy()
+    try {
+      await unlink(pendingPath(paths, sessionId))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    }
+    await syncDirectory(paths.pending)
+    return true
+  } finally {
+    await guard.release()
+  }
+}
+
 export async function listDueDeferredContinuations(
   now = Date.now(),
   paths = getDeferredContinuationPaths(),
@@ -675,10 +728,14 @@ export async function prepareHumanPromptAgainstDeferredContinuation(
   try {
     existing = await readPendingDeferredContinuation(sessionId)
   } catch {
+    // Fail closed: an unreadable record cannot prove nothing is running, so the
+    // prompt is refused. But it must name a real exit — `cancel` can discard an
+    // unreadable record under the session lock. The old copy said "continue
+    // manually", which is precisely what this branch forbids.
     return {
       action: 'block',
       notice:
-        'Automatic continuation stopped — needs you. Cat Code could not validate the scheduled continuation safely. Review the latest transcript and continue manually.',
+        'Automatic continuation stopped — needs you. Cat Code could not validate the scheduled continuation safely. Run /continue-after-limit cancel to discard it, then send your message again.',
     }
   }
   if (!existing) return { action: 'allow' }

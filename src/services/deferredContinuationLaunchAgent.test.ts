@@ -130,7 +130,10 @@ describe('deferred continuation LaunchAgent', () => {
     expect(await exists(plistPath)).toBe(false)
   })
 
-  test('reports an absent plist as already disabled without calling launchctl', async () => {
+  // F3: an absent plist is only "already disabled" once the DOMAIN agrees. The
+  // load state must still be queried — this previously returned false without
+  // calling launchctl at all, which is the case below.
+  test('reports an absent plist as already disabled once the domain agrees', async () => {
     const root = await mkdtemp('/tmp/cat-code-launch-agent-absent-')
     cleanup.push(root)
     const { run, calls } = fakeLaunchctl({
@@ -140,7 +143,44 @@ describe('deferred continuation LaunchAgent', () => {
     expect(
       await uninstallDeferredContinuationLaunchAgent(join(root, 'missing.plist'), run),
     ).toBe(false)
-    expect(calls).toEqual([])
+    expect(calls.map(args => args[0])).toEqual(['print'])
+  })
+
+  // F3: launchd keeps a loaded job in the domain after its plist is deleted —
+  // by hand, or by an install that failed after bootstrap. Reporting "already
+  // disabled" there leaves the timer firing unattended turns with no on-disk
+  // record to repair from.
+  test('boots out a loaded job whose plist is already gone', async () => {
+    const root = await mkdtemp('/tmp/cat-code-launch-agent-orphan-')
+    cleanup.push(root)
+    let booted = false
+    const calls: string[][] = []
+    const run: LaunchctlExecutor = async args => {
+      calls.push(args)
+      if (args[0] === 'bootout') {
+        booted = true
+        return { outcome: 'ok' }
+      }
+      return booted ? { outcome: 'exit', code: 113 } : { outcome: 'ok' }
+    }
+    expect(
+      await uninstallDeferredContinuationLaunchAgent(join(root, 'missing.plist'), run),
+    ).toBe(true)
+    // Booted out BY LABEL — there is no plist path left to name.
+    expect(calls.map(args => args[0])).toEqual(['print', 'bootout', 'print'])
+    expect(calls[1]![1]).toContain(DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL)
+  })
+
+  test('refuses to claim a disable when an orphaned job will not unload', async () => {
+    const root = await mkdtemp('/tmp/cat-code-launch-agent-orphan-stuck-')
+    cleanup.push(root)
+    const { run } = fakeLaunchctl({
+      bootout: { outcome: 'exit', code: 5 },
+      print: { outcome: 'ok' },
+    })
+    await expect(
+      uninstallDeferredContinuationLaunchAgent(join(root, 'missing.plist'), run),
+    ).rejects.toThrow(/loaded but .* is missing/)
   })
 
   test('rejects broad-mode and symlinked plist records as needing repair', async () => {

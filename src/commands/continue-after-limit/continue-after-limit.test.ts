@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import command from './index.js'
 import {
   REFUSALS,
@@ -100,11 +101,10 @@ describe('/continue-after-limit copy', () => {
 })
 
 // F1: the command must distinguish "a turn is running" from "I am the turn".
-// The serialized dispatch path reserves the guard (handlePromptSubmit.ts:471)
+// The serialized dispatch path reserves the guard (handlePromptSubmit.ts:500)
 // BEFORE processUserInput builds the command context, so a guard reading that
 // counts `dispatching` as active reports the command's own reservation back to
-// it and it refuses in every state. REPL.tsx builds
-// LocalJSXCommandContext.isQueryActive from the expression asserted here.
+// it and it refuses in every state.
 describe('/continue-after-limit dispatch gate', () => {
   test('a serialized dispatch at idle does not report a running query', () => {
     const guard = new QueryGuard()
@@ -125,6 +125,26 @@ describe('/continue-after-limit dispatch gate', () => {
     const generation = guard.tryStart()
     expect(guard.end(generation!)).toBe(true)
     expect(guard.isRunning).toBe(false)
+  })
+
+  // The three tests above pin QueryGuard's contract; NONE of them observes the
+  // REPL wiring, so reverting REPL.tsx's context construction to `isActive`
+  // leaves them all green. That gap is exactly what let F1 ship: 197 green
+  // tests around a command that refused in every state.
+  //
+  // REPL.tsx is an Ink component with no unit-test seam, so this asserts the
+  // wiring in source — the precedent is src/agent-mode/rolePrompts.test.ts,
+  // which asserts on constant names in implementor source for the same reason.
+  // Weak by construction: it pins the expression, not the behaviour. The
+  // behavioural half of F1 (the immediate dispatch path) is covered in
+  // src/utils/handlePromptSubmit.test.ts.
+  test('REPL builds the command context from isRunning, not isActive', async () => {
+    const source = await readFile(
+      join(import.meta.dir, '../../screens/REPL.tsx'),
+      'utf8',
+    )
+    expect(source).toContain('isQueryActive: queryGuard.isRunning')
+    expect(source).not.toContain('isQueryActive: queryGuard.isActive')
   })
 
   test('the command still refuses while a turn is actually running', async () => {

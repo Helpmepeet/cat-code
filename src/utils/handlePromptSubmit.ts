@@ -316,12 +316,25 @@ export async function handlePromptSubmit(
       setPastedContents({})
       clearBuffer()
 
-      const context = getToolUseContext(
-        messages,
-        [],
-        createAbortController(),
-        mainLoopModel,
-      )
+      const context = {
+        ...getToolUseContext(
+          messages,
+          [],
+          createAbortController(),
+          mainLoopModel,
+        ),
+        // This branch is only entered while ANOTHER submission already holds the
+        // guard (the `isActive` test above) or an external turn is loading, so a
+        // `dispatching` guard here is never ours. `getToolUseContext` reports
+        // `queryGuard.isRunning`, which is correct for the serialized path —
+        // that path reserves the guard for itself before building the context,
+        // so `dispatching` there IS ours. It is wrong here: a submission whose
+        // UserPromptSubmit hook or BashTool call is still awaiting leaves the
+        // guard `dispatching` for an arbitrarily long window, during which
+        // `isRunning` is false and a command would conclude no turn is in
+        // flight.
+        isQueryActive: true,
+      }
 
       const owner = claimImmediateOwner()
       let doneWasCalled = false

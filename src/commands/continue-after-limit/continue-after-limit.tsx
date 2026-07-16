@@ -24,6 +24,7 @@ import {
   evaluateDeferredContinuationEligibility,
   getLatestDeferredContinuationHistory,
   moveDeferredContinuationToHistory,
+  discardUnreadableDeferredContinuation,
   readPendingDeferredContinuation,
   recordDeferredContinuationNotice,
   takeDeferredContinuationNotice,
@@ -168,7 +169,30 @@ async function cancel(sessionId: string): Promise<CancelResult> {
   try {
     existing = await readPendingDeferredContinuation(sessionId)
   } catch {
-    return { text: formatDeferredContinuationStopped('unknown'), cleared: false }
+    // An unreadable record is the one state with no other way out: it cannot be
+    // moved to history (that needs a parsed job), while every human prompt is
+    // refused for as long as it exists. Cancel is the exit the refusal names, so
+    // it has to actually work — discarding under the session lock, which refuses
+    // while an owner is running.
+    try {
+      const discarded = await discardUnreadableDeferredContinuation(sessionId)
+      return discarded
+        ? {
+            text: `Discarded a scheduled continuation that could not be read back. Nothing is
+scheduled for this conversation now.`,
+            cleared: false,
+          }
+        : {
+            text: 'Nothing to cancel — no continuation is scheduled for this conversation.',
+            cleared: false,
+          }
+    } catch {
+      return {
+        text: `Continuation is already running and cannot be canceled safely. Wait for it to
+finish, then check /continue-after-limit status.`,
+        cleared: false,
+      }
+    }
   }
   if (!existing) {
     return {

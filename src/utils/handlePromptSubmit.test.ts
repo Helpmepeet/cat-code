@@ -138,3 +138,61 @@ describe('handlePromptSubmit deferred-continuation gate', () => {
     expect(prepareCalls).toBe(0)
   })
 })
+
+// F1: the immediate path is entered ONLY because another submission already
+// holds the guard, so `dispatching` there is never ours. `getToolUseContext`
+// reports `queryGuard.isRunning` — correct for the serialized path, which
+// reserves the guard for itself — but false during another submission's
+// arbitrarily long `dispatching` window (a slow UserPromptSubmit hook, an
+// awaited BashTool call). A command trusting it would conclude no turn is in
+// flight and act against a live one.
+describe('handlePromptSubmit immediate dispatch', () => {
+  function immediateCommandSeeing(seen: { isQueryActive?: boolean }): Command {
+    return {
+      type: 'local-jsx',
+      name: 'continue-after-limit',
+      description: 'immediate local command',
+      immediate: true,
+      // isCommandEnabled() calls this; the suite's other fixtures never reach
+      // the immediate lookup, so they get away with a bare boolean.
+      isEnabled: () => true,
+      isHidden: false,
+      userFacingName: () => 'continue-after-limit',
+      load: async () => ({
+        call: async (
+          _onDone: unknown,
+          context: { isQueryActive: boolean },
+        ) => {
+          seen.isQueryActive = context.isQueryActive
+          return null
+        },
+      }),
+    } as unknown as Command
+  }
+
+  test('reports the in-flight turn it interrupted, even mid-dispatch', async () => {
+    const seen: { isQueryActive?: boolean } = {}
+    await handlePromptSubmit({
+      input: '/continue-after-limit',
+      commands: [immediateCommandSeeing(seen)],
+      messages: [],
+      // The guard is held by another submission that has reserved but not yet
+      // started its turn — exactly the window `isRunning` cannot see.
+      queryGuard: { isActive: true, isRunning: false },
+      // Stands in for REPL's builder, which reports `queryGuard.isRunning`.
+      getToolUseContext: () => ({ isQueryActive: false }),
+      setToolJSX: () => {},
+      createAbortController: () => new AbortController(),
+      helpers: {
+        setCursorOffset: () => {},
+        clearBuffer: () => {},
+        resetHistory: () => {},
+      },
+      onInputChange: () => {},
+      setPastedContents: () => {},
+      setMessages: () => {},
+    } as never)
+
+    expect(seen.isQueryActive).toBe(true)
+  })
+})

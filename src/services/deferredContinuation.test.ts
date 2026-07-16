@@ -15,6 +15,7 @@ import {
   pruneDeferredContinuationHistory,
   DEFERRED_LOCK_STALE_MS,
   DEFERRED_SCAN_INTERVAL_MS,
+  discardUnreadableDeferredContinuation,
   ensureDeferredContinuationStore,
   getDeferredContinuationLockTargets,
   getDeferredContinuationPaths,
@@ -200,6 +201,106 @@ describe('deferred continuation durable store', () => {
     expect(JSON.stringify(await readPendingDeferredContinuation(job().sessionId, paths))).not.toContain('secret')
     expect((await stat(paths.root)).mode & 0o077).toBe(0)
     expect((await stat(join(paths.pending, `${job().sessionId}.json`))).mode & 0o077).toBe(0)
+  })
+
+  // F2: an unreadable pending record was a one-way trap. It cannot be moved to
+  // history (that needs a parsed job), so cancel could not clear it, while
+  // prepareHumanPromptAgainstDeferredContinuation refused every prompt for as
+  // long as it existed — and the refusal told the user to "continue manually",
+  // the one thing it forbids. Meanwhile the resume guard lets you back INTO the
+  // session. Only deleting the file by hand escaped.
+  describe('unreadable pending record', () => {
+    async function withCorruptRecord(): Promise<{
+      paths: ReturnType<typeof getDeferredContinuationPaths>
+      sessionId: string
+    }> {
+      const root = await mkdtemp('/tmp/cat-code-deferred-unreadable-')
+      cleanup.push(root)
+      const paths = getDeferredContinuationPaths(join(root, 'queue'))
+      await ensureDeferredContinuationStore(paths)
+      const sessionId = job().sessionId
+      // Valid JSON, invalid schema — readable bytes are not a readable record,
+      // which is the case that strands a session.
+      await writeFile(join(paths.pending, `${sessionId}.json`), '{"version":1}\n', {
+        mode: 0o600,
+      })
+      return { paths, sessionId }
+    }
+
+    test('is refused with an exit the user can actually take', async () => {
+      const root = await mkdtemp('/tmp/cat-code-deferred-unreadable-env-')
+      cleanup.push(root)
+      const previous = process.env.CLAUDE_CONFIG_DIR
+      process.env.CLAUDE_CONFIG_DIR = root
+      try {
+        // prepareHumanPrompt takes no paths argument, so the store must be the
+        // one derived from the env.
+        const paths = getDeferredContinuationPaths()
+        await ensureDeferredContinuationStore(paths)
+        const sessionId = job().sessionId
+        await writeFile(join(paths.pending, `${sessionId}.json`), '{"version":1}\n', {
+          mode: 0o600,
+        })
+        const decision = await prepareHumanPromptAgainstDeferredContinuation(sessionId)
+        expect(decision.action).toBe('block')
+        // The refusal must name the exit, not prescribe the impossible.
+        expect(decision.action === 'block' && decision.notice).toContain(
+          '/continue-after-limit cancel',
+        )
+        expect(decision.action === 'block' && decision.notice).not.toContain(
+          'continue manually',
+        )
+      } finally {
+        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+        else process.env.CLAUDE_CONFIG_DIR = previous
+      }
+    })
+
+    test('can be discarded, which reopens the session', async () => {
+      const { paths, sessionId } = await withCorruptRecord()
+      await expect(readPendingDeferredContinuation(sessionId, paths)).rejects.toThrow()
+
+      expect(await discardUnreadableDeferredContinuation(sessionId, paths)).toBe(true)
+
+      // The trap is gone: the record no longer exists and prompts flow again.
+      expect(await readPendingDeferredContinuation(sessionId, paths)).toBeNull()
+      expect(await discardUnreadableDeferredContinuation(sessionId, paths)).toBe(false)
+    })
+
+    test('never discards a record that reads back fine', async () => {
+      const root = await mkdtemp('/tmp/cat-code-deferred-readable-')
+      cleanup.push(root)
+      const paths = getDeferredContinuationPaths(join(root, 'queue'))
+      const pending = job({ notBefore: NOW - 1 })
+      await createPendingDeferredContinuation(pending, paths)
+
+      // Between a caller's failed read and this call the file may have been
+      // rewritten; discarding a live schedule the user never cancelled would be
+      // worse than the trap.
+      expect(await discardUnreadableDeferredContinuation(pending.sessionId, paths)).toBe(false)
+      expect((await readPendingDeferredContinuation(pending.sessionId, paths))?.jobId).toBe(
+        pending.jobId,
+      )
+    })
+
+    test('refuses while an owner is running the session', async () => {
+      const { paths, sessionId } = await withCorruptRecord()
+      // The job ID lives inside the record we cannot parse, so the SESSION lock
+      // is the only one that answers "is an owner running this right now?".
+      const guard = await acquireDeferredContinuationLocks(
+        { jobId: job().jobId, sessionId },
+        paths,
+      )
+      try {
+        await expect(
+          discardUnreadableDeferredContinuation(sessionId, paths),
+        ).rejects.toThrow()
+      } finally {
+        await guard.release()
+      }
+      // Once the owner is gone, the exit works.
+      expect(await discardUnreadableDeferredContinuation(sessionId, paths)).toBe(true)
+    })
   })
 
   test('durable terminal history makes a surviving pending record non-executable', async () => {

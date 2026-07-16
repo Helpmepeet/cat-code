@@ -79,6 +79,9 @@ let beginCalls = 0
 // can place a notice on the poll that follows the mount rather than the mount
 // itself — which is exactly when a background worker publishes one.
 let notices: (DeferredContinuationNoticeV1 | null)[] = []
+// Thrown by the next takeDeferredContinuationNotice() call, then cleared — the
+// real store throws on any non-ENOENT read error, e.g. a corrupt notice file.
+let noticeError: Error | null = null
 
 const actualState = await import('../bootstrap/state.js')
 mock.module('../bootstrap/state.js', () => ({
@@ -98,7 +101,14 @@ const actualStore = await import('../services/deferredContinuation.js')
 mock.module('../services/deferredContinuation.js', () => ({
   ...actualStore,
   readPendingDeferredContinuation: async () => pendingJob,
-  takeDeferredContinuationNotice: async () => notices.shift() ?? null,
+  takeDeferredContinuationNotice: async () => {
+    if (noticeError) {
+      const error = noticeError
+      noticeError = null
+      throw error
+    }
+    return notices.shift() ?? null
+  },
 }))
 
 const actualRunner = await import('../services/deferredContinuationRunner.js')
@@ -138,6 +148,7 @@ beforeEach(() => {
   beginCalls = 0
   pendingJob = null
   notices = []
+  noticeError = null
   runEffect = undefined
   cleanupEffect = undefined
 })
@@ -197,6 +208,21 @@ describe('useDeferredContinuation', () => {
     await mountAndSettle()
 
     expect(messages.map(m => JSON.stringify(m)).join('\n')).toContain('Status: Done')
+  })
+
+  // F5: reading a notice throws on any non-ENOENT error, and the hook's entire
+  // liveness hangs off `void consumeNotice().then(check)` at mount — an escaping
+  // throw skips `.then(check)`, so the loop never starts and the session never
+  // learns anything for its lifetime. Notices ARE how background workers report
+  // outcomes, so the failure silently strands every future one.
+  test('a corrupt notice does not strand the hook at mount', async () => {
+    pendingJob = job()
+    noticeError = new Error('corrupt notice file')
+
+    await mountAndSettle()
+
+    expect(beginCalls).toBe(1)
+    expect(enqueued).toHaveLength(1)
   })
 
   test('does not start a second turn for a job another owner already submitted', async () => {

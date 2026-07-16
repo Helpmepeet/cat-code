@@ -243,19 +243,7 @@ export async function prepareBackgroundDeferredContinuation(
           resolveRequestProvider(current.context.model) !== 'openai'
             ? 'session_restore'
             : 'permission_restore'
-        await recordDeferredContinuationNotice({
-          version: 1,
-          sessionId: current.sessionId,
-          kind: 'needs_attention',
-          reason,
-          observedAt: now,
-        })
-        await moveDeferredContinuationToHistory(
-          current,
-          'needs_attention',
-          reason,
-          now,
-        )
+        await stopDeferredContinuationForAttention(current, reason, now, guard)
         await guard.release()
         return null
       }
@@ -266,18 +254,17 @@ export async function prepareBackgroundDeferredContinuation(
           transcriptRestoreMetadata(current, entries),
         )
       } catch {
-        await recordDeferredContinuationNotice({
-          version: 1,
-          sessionId: current.sessionId,
-          kind: 'needs_attention',
-          reason: 'session_restore',
-          observedAt: now,
-        })
-        await moveDeferredContinuationToHistory(
+        // The widest window in this module: readTrustedDeferredTranscript reads
+        // up to DEFERRED_TRANSCRIPT_MAX_BYTES and the restore touches the
+        // filesystem, so the lock can be lost between the assert at the top of
+        // this block and here. Route through the shared helper rather than
+        // hand-rolling the notice+history pair, so the ownership re-assert comes
+        // by construction.
+        await stopDeferredContinuationForAttention(
           current,
-          'needs_attention',
           'session_restore',
           now,
+          guard,
         )
         await guard.release()
         return null
@@ -287,6 +274,9 @@ export async function prepareBackgroundDeferredContinuation(
         state: 'submitted',
         attempt: { ...current.attempt, submittedAt: now },
       }
+      // Same invariant as every other durable write here: the transcript read
+      // and context restore above are long enough for ownership to change.
+      guard.assertHealthy()
       await writePendingDeferredContinuation(submitted)
       preparedBackgroundAttempt = { job: submitted, guard, completed: false }
       delete process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
