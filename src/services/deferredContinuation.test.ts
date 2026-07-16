@@ -548,7 +548,14 @@ describe('deferred continuation durable store', () => {
     ).toEqual({ action: 'mark_ambiguous' })
   })
 
-  test('foreground result-journal failure stops for attention instead of stranding submitted', async () => {
+  // F17: a TERMINAL barrier failure leaves the job `submitted` (plan line 576) —
+  // the result entry may or may not have reached the transcript, so the runner
+  // must not guess. Startup reconciliation reads the transcript for a terminal
+  // descendant and decides (plan line 604). Only a PRE-PROVIDER barrier failure
+  // stops for attention. This test previously asserted the opposite; its old
+  // name ("instead of stranding submitted") records that the divergence was
+  // deliberate rather than accidental.
+  test('foreground terminal-barrier failure leaves the job submitted for reconciliation', async () => {
     const root = await mkdtemp('/tmp/cat-code-result-journal-failure-')
     cleanup.push(root)
     const previous = process.env.CLAUDE_CONFIG_DIR
@@ -564,9 +571,9 @@ describe('deferred continuation durable store', () => {
       })).toBe(true)
       await attempt!.finished
 
-      expect(await readPendingDeferredContinuation(pending.sessionId)).toBeNull()
-      expect((await getLatestDeferredContinuationHistory(pending.sessionId))?.terminalReason).toBe('transcript_persistence')
-      expect((await takeDeferredContinuationNotice(pending.sessionId))?.kind).toBe('needs_attention')
+      expect((await readPendingDeferredContinuation(pending.sessionId))?.state).toBe('submitted')
+      expect(await getLatestDeferredContinuationHistory(pending.sessionId)).toBeNull()
+      expect(await takeDeferredContinuationNotice(pending.sessionId)).toBeNull()
     } finally {
       if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previous
