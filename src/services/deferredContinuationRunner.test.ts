@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
 import {
   ACCOUNT_AVAILABLE_CONTINUATION,
   RESET_ELAPSED_CONTINUATION,
   _forTest,
   abandonForegroundDeferredAttempt,
+  beginForegroundDeferredContinuation,
   classifyDeferredHeadlessResult,
   classifyForegroundDeferredAttempt,
   getContinuationPrompt,
@@ -11,7 +13,13 @@ import {
   settleForegroundDeferredAttempt,
   validateForegroundDeferredOrigin,
 } from './deferredContinuationRunner.js'
-import type { DeferredContinuationJobV1 } from './deferredContinuation.js'
+import {
+  createPendingDeferredContinuation,
+  getLatestDeferredContinuationHistory,
+  readPendingDeferredContinuation,
+  takeDeferredContinuationNotice,
+  type DeferredContinuationJobV1,
+} from './deferredContinuation.js'
 import {
   formatDeferredContinuationBackground,
   formatDeferredContinuationNotice,
@@ -49,7 +57,24 @@ function submittedJob(
   }
 }
 
-afterEach(() => _forTest.clearForegroundRegistrations())
+function pendingJob(): DeferredContinuationJobV1 {
+  return {
+    ...submittedJob(),
+    notBefore: NOW - 1,
+    state: 'pending',
+    attempt: {
+      number: 1,
+      messageUuid: '33333333-3333-4333-8333-333333333333',
+    },
+  }
+}
+
+const cleanup: string[] = []
+
+afterEach(async () => {
+  _forTest.clearForegroundRegistrations()
+  await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
+})
 
 describe('deferred continuation runner', () => {
   test('fixed prompts are cause-correct and contain the reconciliation/no-repeat contract', () => {
@@ -100,6 +125,49 @@ describe('deferred continuation runner', () => {
     abandonForegroundDeferredAttempt(registration.command.origin)
     expect(validateForegroundDeferredOrigin(registration.command.origin)).toBe(false)
     expect(_forTest.registrationCount()).toBe(0)
+  })
+
+  test('abandonment settles the waiter instead of stranding it and both locks forever', async () => {
+    const registration = registerForegroundDeferredAttempt(submittedJob())
+    abandonForegroundDeferredAttempt(registration.command.origin)
+    const settled = await Promise.race([
+      registration.result,
+      Bun.sleep(100).then(() => 'STRANDED' as const),
+    ])
+    expect(settled).toEqual({ outcome: 'aborted', observedAt: expect.any(Number) })
+    // An abandoned attempt has no terminal evidence, so it must never become
+    // auto-retryable: 'aborted' stops for attention.
+    expect(settled).not.toMatchObject({ outcome: 'completed' })
+  })
+
+  test('terminal-barrier failure leaves the job submitted for reconciliation', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-terminal-barrier-')
+    cleanup.push(root)
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = root
+    try {
+      const pending = pendingJob()
+      await createPendingDeferredContinuation(pending)
+      const attempt = await beginForegroundDeferredContinuation(pending)
+      expect(attempt).not.toBeNull()
+      // No live session storage backs this attempt, so the terminal barrier in
+      // persistAttemptResult fails after the turn already reported success.
+      expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
+        outcome: 'completed',
+        observedAt: NOW,
+      })).toBe(true)
+      await attempt!.finished
+
+      // The result entry may or may not have reached the transcript, so the
+      // runner must not guess. Startup reconciliation reads the transcript for
+      // a terminal descendant and decides.
+      expect((await readPendingDeferredContinuation(pending.sessionId))?.state).toBe('submitted')
+      expect(await getLatestDeferredContinuationHistory(pending.sessionId)).toBeNull()
+      expect(await takeDeferredContinuationNotice(pending.sessionId)).toBeNull()
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
   })
 
   test('typed result policy covers quota, permission, budget, abort, and forged settlement', () => {
