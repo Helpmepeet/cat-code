@@ -1,12 +1,14 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import command from './index.js'
 import {
   REFUSALS,
   backgroundScheduleCopy,
+  call,
   formatDeferredTime,
   historyText,
   scheduledCopy,
 } from './continue-after-limit.js'
+import { QueryGuard } from '../../utils/QueryGuard.js'
 import type { DeferredContinuationJobV1 } from '../../services/deferredContinuation.js'
 
 const NOW = new Date('2026-07-15T00:00:00Z').getTime()
@@ -92,5 +94,79 @@ describe('/continue-after-limit copy', () => {
     expect(historyText({ ...job(), terminalState: 'completed', terminalReason: 'completed', terminalAt: NOW })).toContain('Status: Done')
     expect(historyText({ ...job(), terminalState: 'canceled', terminalReason: 'command', terminalAt: NOW })).toContain('Status: Canceled')
     expect(historyText({ ...job(), terminalState: 'needs_attention', terminalReason: 'transcript_persistence', terminalAt: NOW })).toContain('durably save')
+  })
+})
+
+// F1: the command must distinguish "a turn is running" from "I am the turn".
+// The serialized dispatch path reserves the guard (handlePromptSubmit.ts:471)
+// BEFORE processUserInput builds the command context, so a guard reading that
+// counts `dispatching` as active reports the command's own reservation back to
+// it and it refuses in every state. REPL.tsx builds
+// LocalJSXCommandContext.isQueryActive from the expression asserted here.
+describe('/continue-after-limit dispatch gate', () => {
+  test('a serialized dispatch at idle does not report a running query', () => {
+    const guard = new QueryGuard()
+    // handlePromptSubmit.ts:471 — reserve() precedes context construction.
+    expect(guard.reserve()).toBe(true)
+    expect(guard.isActive).toBe(true)
+    expect(guard.isRunning).toBe(false)
+  })
+
+  test('a real model turn reports a running query', () => {
+    const guard = new QueryGuard()
+    expect(guard.tryStart()).not.toBeNull()
+    expect(guard.isRunning).toBe(true)
+  })
+
+  test('a turn that has ended no longer reports running', () => {
+    const guard = new QueryGuard()
+    const generation = guard.tryStart()
+    expect(guard.end(generation!)).toBe(true)
+    expect(guard.isRunning).toBe(false)
+  })
+
+  test('the command still refuses while a turn is actually running', async () => {
+    let text: string | null = null
+    // Empty args reach the guard check; a non-empty arg hits the usage branch first.
+    await call(
+      result => {
+        text = typeof result === 'string' ? result : null
+      },
+      { isQueryActive: true } as never,
+      '',
+    )
+    expect(text).toBe(
+      'Wait for the current turn to finish before scheduling continuation.',
+    )
+  })
+})
+
+// The uninstall path throws when it cannot verify the launchd job unloaded
+// (it keeps the plist rather than claim a disable it did not achieve). The
+// command must surface that actionable text, not reject unhandled.
+describe('/continue-after-limit disable-background failure', () => {
+  test('surfaces the actionable error instead of rejecting', async () => {
+    const message =
+      'Could not confirm the background job unloaded. Plist kept at /tmp/x.plist. Run: launchctl bootout gui/501/com.catcode.test'
+    mock.module('../../services/deferredContinuationLaunchAgent.js', () => ({
+      uninstallDeferredContinuationLaunchAgent: async () => {
+        throw new Error(message)
+      },
+      installDeferredContinuationLaunchAgent: async () => '/unused',
+      getDeferredContinuationBackgroundStatus: async () => ({
+        state: 'enabled' as const,
+      }),
+    }))
+    const { call: freshCall } = await import('./continue-after-limit.js')
+
+    let text: string | null = null
+    await freshCall(
+      result => {
+        text = typeof result === 'string' ? result : null
+      },
+      { isQueryActive: false } as never,
+      'disable-background',
+    )
+    expect(text).toBe(message)
   })
 })

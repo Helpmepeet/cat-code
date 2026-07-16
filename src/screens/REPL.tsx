@@ -2670,7 +2670,10 @@ export function REPL({
     };
     return {
       abortController,
-      isQueryActive: queryGuard.isActive,
+      // `isRunning`, not `isActive`: the serialized dispatch path reserves the
+      // guard before processUserInput builds this context, so `isActive` would
+      // report the command's own reservation back to it as someone else's turn.
+      isQueryActive: queryGuard.isRunning,
       options: {
         commands,
         tools: computeTools(),

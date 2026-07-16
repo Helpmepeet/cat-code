@@ -262,7 +262,19 @@ export const call: LocalJSXCommandCall = async (onDone, context, rawArgs) => {
     return null
   }
   if (args === 'disable-background') {
-    const removed = await uninstallDeferredContinuationLaunchAgent()
+    let removed: boolean
+    try {
+      removed = await uninstallDeferredContinuationLaunchAgent()
+    } catch (error) {
+      // Uninstall throws when it cannot verify the job unloaded; it deliberately
+      // keeps the plist rather than report a disable it did not achieve. Its
+      // message names the plist and the manual bootout command, so surface that
+      // text instead of a generic failure string.
+      onDone(error instanceof Error ? error.message : String(error), {
+        display: 'system',
+      })
+      return null
+    }
     onDone(
       removed
         ? `Background continuation disabled. Scheduled continuations now wait until their
