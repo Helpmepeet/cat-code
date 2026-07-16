@@ -336,19 +336,14 @@ export async function failPreparedBackgroundDeferredContinuation(
   if (!prepared || prepared.completed) return
   prepared.completed = true
   try {
-    const observedAt = Date.now()
-    await recordDeferredContinuationNotice({
-      version: 1,
-      sessionId: prepared.job.sessionId,
-      kind: 'needs_attention',
-      reason: outcome,
-      observedAt,
-    })
-    await moveDeferredContinuationToHistory(
+    // The abort that ends a compromised attempt lands here, so this transition
+    // must re-assert ownership before writing rather than tombstone a job the
+    // new lock owner may already be running.
+    await stopDeferredContinuationForAttention(
       prepared.job,
-      'needs_attention',
       outcome,
-      observedAt,
+      Date.now(),
+      prepared.guard,
     )
   } finally {
     preparedBackgroundAttempt = null
@@ -464,15 +459,31 @@ export function abandonForegroundDeferredAttempt(origin: unknown): void {
   if (!origin || typeof origin !== 'object') return
   const attemptUuid = (origin as Record<string, unknown>).attemptUuid
   if (typeof attemptUuid !== 'string') return
+  const registration = foregroundRegistrations.get(attemptUuid)
+  if (!registration) return
+  registration.settled = true
   foregroundRegistrations.delete(attemptUuid)
+  // Dropping the registration without resolving would leave
+  // beginForegroundDeferredContinuation's awaiter pending forever, holding both
+  // filesystem locks for the process lifetime. An abandoned attempt produced no
+  // terminal evidence, so it settles as aborted: never auto-retryable.
+  registration.resolve({ outcome: 'aborted', observedAt: Date.now() })
 }
 
 const NETWORK_RETRY_DELAYS = [60_000, 5 * 60_000, 15 * 60_000] as const
 
+// A compromised lock means another process may already own this session, so
+// every durable write below re-asserts ownership immediately before it runs.
+// Aborting the live turn is not enough on its own: the attempt unwinds through
+// persistence and history transitions that would otherwise still write.
+type DeferredWriteAuthority = Pick<DeferredContinuationLockGuard, 'assertHealthy'>
+
 async function persistAttemptResult(
   job: DeferredContinuationJobV1,
   result: DeferredAttemptResult,
+  authority: DeferredWriteAuthority,
 ): Promise<void> {
+  authority.assertHealthy()
   await recordDeferredContinuationResult({
     type: 'deferred-continuation-result',
     version: 1,
@@ -487,23 +498,22 @@ async function persistAttemptResult(
 async function finalizeDeferredAttempt(
   job: DeferredContinuationJobV1,
   result: DeferredAttemptResult,
-  guard: Pick<DeferredContinuationLockGuard, 'assertHealthy'>,
+  authority: DeferredWriteAuthority,
 ): Promise<void> {
   if (result.outcome !== 'transcript_persistence') {
     try {
-      await persistAttemptResult(job, result)
+      await persistAttemptResult(job, result, authority)
     } catch {
-      guard.assertHealthy()
-      await stopDeferredContinuationForAttention(
-        job,
-        'transcript_persistence',
-        Date.now(),
-      )
+      // Terminal-barrier failure: the result entry may or may not have reached
+      // the transcript, so any in-process transition here would be a guess.
+      // Leave the job `submitted` and let startup reconciliation read the
+      // transcript for a terminal descendant and decide (plan §Durability and
+      // crash recovery). A compromised lock still rethrows rather than resolve.
+      authority.assertHealthy()
       return
     }
   }
-  guard.assertHealthy()
-  await applyAttemptResult(job, result)
+  await applyAttemptResult(job, result, authority)
 }
 
 async function stopDeferredContinuationForAttention(
@@ -513,7 +523,9 @@ async function stopDeferredContinuationForAttention(
     'completed' | 'command' | 'human_message'
   >,
   observedAt: number,
+  authority: DeferredWriteAuthority,
 ): Promise<void> {
+  authority.assertHealthy()
   await recordDeferredContinuationNotice({
     version: 1,
     sessionId: job.sessionId,
@@ -521,6 +533,7 @@ async function stopDeferredContinuationForAttention(
     reason,
     observedAt,
   })
+  authority.assertHealthy()
   await moveDeferredContinuationToHistory(
     job,
     'needs_attention',
@@ -532,15 +545,18 @@ async function stopDeferredContinuationForAttention(
 async function applyAttemptResult(
   job: DeferredContinuationJobV1,
   result: DeferredAttemptResult,
+  authority: DeferredWriteAuthority,
 ): Promise<void> {
   switch (result.outcome) {
     case 'completed':
+      authority.assertHealthy()
       await recordDeferredContinuationNotice({
         version: 1,
         sessionId: job.sessionId,
         kind: 'completed',
         observedAt: result.observedAt,
       })
+      authority.assertHealthy()
       await moveDeferredContinuationToHistory(job, 'completed', 'completed', result.observedAt)
       return
     case 'quota_exhausted': {
@@ -552,6 +568,7 @@ async function applyAttemptResult(
           job,
           'quota_reset_unknown',
           result.observedAt,
+          authority,
         )
         return
       }
@@ -562,6 +579,7 @@ async function applyAttemptResult(
         resetAt > (job.resetAt ?? 0)
       ) {
         const notBefore = resetAt + 60_000
+        authority.assertHealthy()
         await recordDeferredContinuationNotice({
           version: 1,
           sessionId: job.sessionId,
@@ -569,6 +587,7 @@ async function applyAttemptResult(
           notBefore,
           observedAt: result.observedAt,
         })
+        authority.assertHealthy()
         await writePendingDeferredContinuation({
           ...job,
           scheduleReason: 'hard_quota_reset',
@@ -585,6 +604,7 @@ async function applyAttemptResult(
           job,
           'quota_reset_unknown',
           result.observedAt,
+          authority,
         )
       }
       return
@@ -593,6 +613,7 @@ async function applyAttemptResult(
       const delay = NETWORK_RETRY_DELAYS[job.transientRetries]
       if (delay !== undefined) {
         const notBefore = result.observedAt + delay
+        authority.assertHealthy()
         await recordDeferredContinuationNotice({
           version: 1,
           sessionId: job.sessionId,
@@ -601,6 +622,7 @@ async function applyAttemptResult(
           retry: job.transientRetries + 1,
           observedAt: result.observedAt,
         })
+        authority.assertHealthy()
         await writePendingDeferredContinuation({
           ...job,
           notBefore,
@@ -616,6 +638,7 @@ async function applyAttemptResult(
           job,
           'network',
           result.observedAt,
+          authority,
         )
       }
       return
@@ -634,6 +657,7 @@ async function applyAttemptResult(
         job,
         result.outcome,
         result.observedAt,
+        authority,
       )
       return
     default: {
@@ -722,11 +746,13 @@ export async function reconcileDeferredContinuationJob(
   if (job.state !== 'submitted') return
   const guard = await acquireDeferredContinuationLocks(job)
   try {
+    guard.assertHealthy()
     const current = await readPendingDeferredContinuation(job.sessionId)
     if (!current || current.jobId !== job.jobId || current.state !== 'submitted') return
     const entries = await readTrustedDeferredTranscript(current)
     const reconciliation = reconcileSubmittedDeferredContinuation(current, entries)
     if (reconciliation.action === 'return_pending') {
+      guard.assertHealthy()
       await writePendingDeferredContinuation({
         ...current,
         state: 'pending',
@@ -736,8 +762,9 @@ export async function reconcileDeferredContinuationJob(
       await applyAttemptResult(current, {
         outcome: reconciliation.result.outcome,
         observedAt: reconciliation.result.observedAt,
-      })
+      }, guard)
     } else {
+      guard.assertHealthy()
       await recordDeferredContinuationNotice({
         version: 1,
         sessionId: current.sessionId,
@@ -745,6 +772,7 @@ export async function reconcileDeferredContinuationJob(
         reason: 'ambiguous',
         observedAt: Date.now(),
       })
+      guard.assertHealthy()
       await writePendingDeferredContinuation({ ...current, state: 'ambiguous' })
     }
   } finally {

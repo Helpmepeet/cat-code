@@ -4,13 +4,25 @@ import { basename, dirname, join } from 'node:path'
 import {
   acquireDeferredContinuationLocks,
   createPendingDeferredContinuation,
+  DEFERRED_LOCK_UPDATE_MS,
   type DeferredContinuationJobV1,
 } from './deferredContinuation.js'
 import {
+  beginForegroundDeferredContinuation,
   failPreparedBackgroundDeferredContinuation,
+  getForegroundDeferredAbortSignal,
   prepareBackgroundDeferredContinuation,
+  settleForegroundDeferredAttempt,
+  _forTest as deferredRunnerForTest,
 } from './deferredContinuationRunner.js'
-import { getProjectDir } from '../utils/sessionStorage.js'
+import {
+  getProjectDir,
+  getTranscriptPath,
+  recordTranscript,
+} from '../utils/sessionStorage.js'
+import { getSessionId, switchSession } from '../bootstrap/state.js'
+import type { SessionId } from '../types/ids.js'
+import type { Message } from '../types/message.js'
 
 const CHILD = join(import.meta.dir, 'deferredContinuation.probe.child.ts')
 const cleanup: string[] = []
@@ -249,4 +261,93 @@ describe('deferred continuation process probes', () => {
       else process.env.CLAUDE_CONFIG_DIR = previous
     }
   })
+
+  // Placed last: it materializes the session-storage singleton against a temp
+  // project, which must not leak into the probes above.
+  test('an owner that lost its lock to another process writes no terminal descendant', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-compromised-write-')
+    cleanup.push(root)
+    const config = join(root, 'config')
+    const cwd = join(root, 'project')
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    const previousPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    const previousSession = getSessionId()
+    process.env.CLAUDE_CONFIG_DIR = config
+    // Transcript writes are suppressed under NODE_ENV=test, which would make
+    // this probe vacuous: it would "pass" because nothing can ever be written.
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await mkdir(cwd, { recursive: true, mode: 0o700 })
+    await mkdir(config, { recursive: true, mode: 0o700 })
+    try {
+      const projectDir = getProjectDir(cwd)
+      await mkdir(projectDir, { recursive: true, mode: 0o700 })
+      const job: DeferredContinuationJobV1 = {
+        ...probeJob(Date.now() - 1),
+        projectStorageKey: basename(projectDir),
+        context: { cwd, model: 'gpt-5.6-terra', permissionMode: 'default' },
+      }
+      switchSession(job.sessionId as SessionId, projectDir)
+      // A real user message materializes the session file. Without it every
+      // append is silently buffered and the probe could not tell a refused
+      // write from an impossible one.
+      await recordTranscript([{
+        type: 'user',
+        uuid: 'b1111111-1111-4111-8111-111111111111',
+        message: { role: 'user', content: 'seed' },
+      } as unknown as Message])
+      await createPendingDeferredContinuation(job)
+      const attempt = await beginForegroundDeferredContinuation(job)
+      expect(attempt).not.toBeNull()
+
+      const stolen = join(root, 'stolen')
+      const release = join(root, 'release')
+      const thief = Bun.spawn({
+        cmd: [process.execPath, 'run', CHILD],
+        env: {
+          ...process.env,
+          CLAUDE_CONFIG_DIR: config,
+          PROBE_MODE: 'steal',
+          PROBE_SESSION_ID: job.sessionId,
+          PROBE_JOB_ID: job.jobId,
+          PROBE_STOLEN: stolen,
+          PROBE_RELEASE: release,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      try {
+        await waitFor(stolen)
+        // proper-lockfile only notices the theft on its next update tick, so
+        // this waits out a real timer rather than simulating a compromise.
+        const signal = getForegroundDeferredAbortSignal(attempt!.command.origin)
+        expect(signal).toBeDefined()
+        const deadline = Date.now() + DEFERRED_LOCK_UPDATE_MS + 30_000
+        while (!signal!.aborted && Date.now() < deadline) await Bun.sleep(100)
+        expect(signal!.aborted).toBe(true)
+
+        expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
+          outcome: 'completed',
+          observedAt: Date.now(),
+        })).toBe(true)
+        await expect(attempt!.finished).rejects.toThrow()
+
+        // Another process owns this session now. Appending a terminal
+        // descendant would let reconciliation treat the attempt as decided on
+        // evidence this process no longer had the authority to record.
+        expect(await readFile(getTranscriptPath(), 'utf8')).not.toContain(
+          'deferred-continuation-result',
+        )
+      } finally {
+        await writeFile(release, 'release')
+        await thief.exited
+      }
+    } finally {
+      deferredRunnerForTest.clearForegroundRegistrations()
+      switchSession(previousSession)
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+      if (previousPersistence === undefined) delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      else process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousPersistence
+    }
+  }, 90_000)
 })
