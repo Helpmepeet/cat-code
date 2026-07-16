@@ -240,13 +240,29 @@ export function isPlanPermissionRequest(request: PermissionRequest): boolean {
 }
 
 /**
+ * The engine tool whose permission request IS an AskUserQuestion answer flow
+ * (`src/tools/AskUserQuestionTool/prompt.ts:3`). A literal, not an engine import
+ * (P0-3). Owned HERE (not `askQuestionState.ts`) so the ACTION path
+ * (`selectVisiblePermission` / keyboard) and the RENDER path
+ * (`askQuestionState.selectAskQuestion` + App's display-queue filter) share ONE
+ * predicate — exactly the ExitPlanMode arrangement above.
+ */
+export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
+
+/** Single source of truth for "is this pending request an AskUserQuestion flow". */
+export function isAskUserQuestionRequest(request: PermissionRequest): boolean {
+  return request.request.tool_name === ASK_USER_QUESTION_TOOL_NAME
+}
+
+/**
  * The card keyboard shortcuts act on: first un-answered, un-snoozed pending.
- * Plan requests are EXCLUDED — the same predicate `selectNonPlanPermissionQueue`
- * uses to keep `ExitPlanMode` out of the render queue. A plan can only be
- * resolved through `PlanPanel`'s two-step `setPermissionMode`-then-allow
- * compose; a bare keyboard `allow` here would send a plain
- * `buildAllowResponse(request, [])`, skipping the mode switch and stranding the
- * session in `plan` mode (decisions/PERMISSION-BOUNDARY.md §3).
+ * Plan AND AskUserQuestion requests are EXCLUDED — both own dedicated renderers
+ * with their OWN keyboard handling (PlanPanel; AskQuestionFlow), so the generic
+ * Enter-allow / N-deny shortcuts must not act on them. A plan can only be
+ * resolved through `PlanPanel`'s two-step `setPermissionMode`-then-allow compose
+ * (decisions/PERMISSION-BOUNDARY.md §3); an AskUserQuestion is answered through
+ * `answerQuestions`, never a bare allow that would submit empty answers
+ * (decisions/ASK-USER-QUESTION-ANSWER.md).
  */
 export function selectVisiblePermission(
   state: PermissionState,
@@ -258,6 +274,7 @@ export function selectVisiblePermission(
     session.pending.find(
       request =>
         !isPlanPermissionRequest(request) &&
+        !isAskUserQuestionRequest(request) &&
         !session.dismissedRequestIds.includes(request.requestId) &&
         !session.submittedRequestIds.includes(request.requestId),
     ) ?? null

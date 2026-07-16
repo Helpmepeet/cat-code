@@ -32,6 +32,12 @@ import {
   type PlanApprovalMode,
   type PlanReview,
 } from './planState.js'
+import {
+  selectAskQuestion,
+  selectGenericPermissionQueue,
+  type AskQuestionReview,
+} from './askQuestionState.js'
+import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './ToastHost.js'
 import {
@@ -247,6 +253,7 @@ import type {
   AccountsSnapshot,
   AccountSwitchMessage,
   AccountVerbMessage,
+  AskUserQuestionAnswer,
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
@@ -1454,9 +1461,19 @@ export function App() {
 	        sessionConnection.status === 'ready'
 	          ? selectPlanReview(permissions, sessionId)
 	          : null
+	      // P4-20: AskQuestionFlow owns the AskUserQuestion request exclusively,
+	      // the same way (its own dedicated renderer + keyboard handler).
+	      const sessionAskQuestion =
+	        sessionConnection.status === 'ready'
+	          ? selectAskQuestion(permissions, sessionId)
+	          : null
+	      // The generic per-tool card queue = the pending queue minus both
+	      // dedicated-renderer families (plan + ask).
 	      const sessionDisplayQueue =
 	        sessionConnection.status === 'ready'
-	          ? selectNonPlanPermissionQueue(permissions, sessionId)
+	          ? selectGenericPermissionQueue(
+	              selectNonPlanPermissionQueue(permissions, sessionId),
+	            )
 	          : []
 	      const descriptor = tabDescriptorsById.get(sessionId)
           const panelPreviewTranscript = selectPreviewTranscript(
@@ -1630,6 +1647,39 @@ export function App() {
 	                buildDenyResponse(message),
 	              )
 	              toast('Sent. The agent will revise the plan.', { tone: 'info' })
+	            }}
+	            askQuestion={sessionAskQuestion}
+	            onAnswerQuestions={answers => {
+	              // P4-20 — the answer round-trips via the dedicated
+	              // `answerQuestions` verb (NOT respondPermission): the renderer
+	              // sends option indices + freeform; the sidecar re-attaches the
+	              // engine's own labels and resolves the pending request as an allow
+	              // (decisions/ASK-USER-QUESTION-ANSWER.md). Track submit like a
+	              // permission response so the flow can show its in-flight state.
+	              if (!sessionAskQuestion) return
+	              const requestId = sessionAskQuestion.request.requestId
+	              dispatchPermission({ type: 'submitted', sessionId, requestId })
+	              try {
+	                getBridge().answerQuestions(sessionId, requestId, answers)
+	                setTransportError(null)
+	              } catch (error) {
+	                dispatchPermission({
+	                  type: 'submissionFailed',
+	                  sessionId,
+	                  requestId,
+	                })
+	                setTransportError(errorMessage(error))
+	              }
+	            }}
+	            onCancelQuestions={() => {
+	              // Decline reuses the existing permission deny path (there is no
+	              // cancel verb — ASK-USER-QUESTION-ANSWER.md §2).
+	              if (!sessionAskQuestion) return
+	              respondToPermission(
+	                sessionId,
+	                sessionAskQuestion.request.requestId,
+	                buildDenyResponse('User declined to answer questions'),
+	              )
 	            }}
 	            partialCount={panelPartialCount}
 	            permissionContext={selectPermissionContext(permissions, sessionId)}
@@ -2012,6 +2062,9 @@ export function SessionPane({
   onPaste,
   onRemovePaste,
   onRevisePlan,
+  askQuestion,
+  onAnswerQuestions,
+  onCancelQuestions,
   orchestratorActive,
   onToggleOrchestrator,
   partialCount,
@@ -2206,7 +2259,7 @@ export function SessionPane({
     activeLog.inputEnabled &&
     activeConnection.status === 'ready' &&
     activeConnection.inputEnabled
-  const paused = permissionQueue.length > 0
+  const paused = permissionQueue.length > 0 || askQuestion !== null
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
@@ -2546,6 +2599,17 @@ export function SessionPane({
       {/* Docked above the composer, in Chat.jsx order — live permission-request
        * cards and any error/notice sit directly above the input, then the
        * in-turn activity row hugs the composer. */}
+      {askQuestion ? (
+        <AskQuestionFlow
+          key={askQuestion.request.requestId}
+          onAnswer={onAnswerQuestions}
+          onCancel={onCancelQuestions}
+          questions={askQuestion.questions}
+          requestId={askQuestion.request.requestId}
+          submitted={askQuestion.submitted}
+        />
+      ) : null}
+
       <PermissionQueue
         items={permissionQueue}
         onAllow={allowPermission}
@@ -3145,6 +3209,12 @@ type SessionPaneProps = {
   onApprovePlan: (mode: PlanApprovalMode) => void
   /** Denies the plan-review request with feedback (real "keep planning"). */
   onRevisePlan: (message: string) => void
+  /** P4-20 — the pending AskUserQuestion request, or `null`; drives AskQuestionFlow. */
+  askQuestion: AskQuestionReview | null
+  /** Sends the answer via the `answerQuestions` verb (index selection + freeform). */
+  onAnswerQuestions: (answers: AskUserQuestionAnswer[]) => void
+  /** Declines the AskUserQuestion request (reuses the permission deny path). */
+  onCancelQuestions: () => void
   prompt: string
   restorePermission: (requestId: string) => void
   setPermissionMode: (mode: PermissionSetModeMode) => void

@@ -1615,6 +1615,339 @@ test('C1 — a selection resolves against ITS OWN request, not another pending o
   expect(controller.getPendingPermissionRequests()[0]!.requestId).toBe('perm-A')
 })
 
+/* ------------------------------------------------------------------------- *
+ * C5 — askUserQuestion.answer (decisions/ASK-USER-QUESTION-ANSWER.md, P4-20)
+ * ------------------------------------------------------------------------- */
+
+const ASK_QUESTIONS = [
+  {
+    question: 'Which date library?',
+    header: 'Library',
+    multiSelect: false,
+    options: [
+      { label: 'date-fns', description: 'lightweight', preview: 'import { format }' },
+      { label: 'luxon', description: 'rich API' },
+    ],
+  },
+  {
+    question: 'Which features?',
+    header: 'Features',
+    multiSelect: true,
+    options: [
+      { label: 'parsing', description: '' },
+      { label: 'formatting', description: '' },
+      { label: 'timezones', description: '' },
+    ],
+  },
+]
+
+/** Adapter that raises exactly one AskUserQuestion request (a real live turn). */
+function askQuestionAdapter(
+  questions: unknown,
+  onResolved: (r: AppPermissionResponse) => void,
+): AppSessionControllerAdapter {
+  return {
+    async *runTurn({ onPermissionRequest }) {
+      const request: AppPermissionRequest = {
+        requestId: 'perm-1',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'AskUserQuestion',
+          input: { questions, metadata: { source: 'test' } },
+          tool_use_id: 'toolu_ask',
+        },
+      }
+      onResolved(await onPermissionRequest(request))
+    },
+  }
+}
+
+function askAnswerFrame(answers: unknown, requestId = 'perm-1'): Buffer {
+  return clientFrame({
+    type: 'askUserQuestion.answer',
+    requestId,
+    answers,
+  } as never)
+}
+
+function answersOf(response: AppPermissionResponse | null): Record<string, string> {
+  return (
+    (allowInput(response) as { answers?: Record<string, string> } | undefined)
+      ?.answers ?? {}
+  )
+}
+
+test('C5 — LIVE PATH: an index answer resolves the real request with engine-labelled answers', async () => {
+  // The renderer sends INDICES + freeform; the sidecar re-attaches the ENGINE's
+  // own option labels and drives the real AppSessionController.respondToPermission
+  // Request — proving real data flows (not a synthetic frame; CLAUDE.md §8.1).
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    askAnswerFrame([
+      { optionIndices: [0] }, // single-select: date-fns
+      { optionIndices: [0, 2], other: 'weekday helpers' }, // multi + freeform
+    ]),
+  )
+
+  await waitFor(() => resolved !== null)
+  expect(resolved!.behavior).toBe('allow')
+  // Labels came from the ENGINE's own options (byte-fidelity); freeform appended;
+  // multi-select joined with ", " exactly as the tool's outputSchema documents.
+  expect(answersOf(resolved)).toEqual({
+    'Which date library?': 'date-fns',
+    'Which features?': 'parsing, timezones, weekday helpers',
+  })
+  // The engine's own gated questions + metadata are preserved (never the wire).
+  const input = allowInput(resolved) as Record<string, unknown>
+  expect(input.questions).toEqual(ASK_QUESTIONS)
+  expect(input.metadata).toEqual({ source: 'test' })
+})
+
+test('C5 — LIVE PATH: a single-select "Other…" freeform answer is the freeform text', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter([ASK_QUESTIONS[0]], r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [], other: 'moment' }]))
+
+  await waitFor(() => resolved !== null)
+  expect(answersOf(resolved)).toEqual({ 'Which date library?': 'moment' })
+})
+
+test('C5 — an answer frame against a NON-AskUserQuestion request is rejected, stays pending', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [0] }]))
+
+  expect(
+    received.some(
+      f =>
+        f.kind === 'error' &&
+        f.code === 'bad_request' &&
+        f.message.includes('AskUserQuestion'),
+    ),
+  ).toBe(true)
+  expect(resolved).toBeNull()
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C5 — an answer for an unknown requestId is permission_not_found', () => {
+  const server = makeServer(new AppSessionController(askQuestionAdapter(ASK_QUESTIONS, () => {})))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [0] }], 'never-minted'))
+  expect(received.some(f => f.kind === 'error' && f.code === 'permission_not_found')).toBe(true)
+})
+
+test('C5 — an out-of-range option index is rejected fail-closed (stays pending)', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  // Q1 has 2 options; index 5 is out of range.
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [5] }, { optionIndices: [0] }]))
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(resolved).toBeNull()
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C5 — an answers array whose length ≠ questions is rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  // Two questions, one answer.
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [0] }]))
+
+  expect(
+    received.some(
+      f => f.kind === 'error' && f.code === 'bad_request' && f.message.includes('length'),
+    ),
+  ).toBe(true)
+  expect(resolved).toBeNull()
+})
+
+test('C5 — a single-select question with two components is rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  // Q1 is single-select but gets an option AND freeform.
+  server.handleData(
+    conn,
+    askAnswerFrame([{ optionIndices: [0], other: 'x' }, { optionIndices: [0] }]),
+  )
+
+  expect(
+    received.some(
+      f =>
+        f.kind === 'error' &&
+        f.code === 'bad_request' &&
+        f.message.includes('single-select'),
+    ),
+  ).toBe(true)
+  expect(resolved).toBeNull()
+})
+
+test('C5 — a question answered with nothing is rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [] }, { optionIndices: [0] }]))
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(resolved).toBeNull()
+})
+
+test('C5 — a duplicate option index is rejected', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => {
+      resolved = r
+    }),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [0] }, { optionIndices: [1, 1] }]))
+
+  expect(
+    received.some(
+      f => f.kind === 'error' && f.code === 'bad_request' && f.message.includes('duplicate'),
+    ),
+  ).toBe(true)
+  expect(resolved).toBeNull()
+})
+
+test('C5 — an over-long freeform "other" is rejected by the schema', async () => {
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, () => {}),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    askAnswerFrame([
+      { optionIndices: [0] },
+      { optionIndices: [0], other: 'x'.repeat(5000) },
+    ]),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C5 — an extra nested key on an answer is rejected (strict inner schema)', async () => {
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, () => {}),
+  )
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(
+    conn,
+    askAnswerFrame([{ optionIndices: [0], evil: 1 }, { optionIndices: [0] }]),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('C5 — an extra TOP-level key on the frame is rejected (checkStrictKeys)', () => {
+  const server = makeServer(new AppSessionController(askQuestionAdapter(ASK_QUESTIONS, () => {})))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'askUserQuestion.answer',
+      requestId: 'perm-1',
+      answers: [{ optionIndices: [0] }],
+      updatedInput: { questions: [] },
+    } as never),
+  )
+  expect(
+    received.some(
+      f => f.kind === 'error' && f.code === 'bad_request' && f.message.includes('unexpected key'),
+    ),
+  ).toBe(true)
+})
+
 test('F10 — a frame with an extra key on an allowlisted type is rejected (not stripped)', () => {
   // The reused Zod schema STRIPS unknown keys; the contract requires rejection.
   // `{type:"app.ping", nonce, runCommand}` must produce bad_request, not a pong.

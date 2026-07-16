@@ -177,6 +177,36 @@ test('selectVisiblePermission never returns a plan request — the keyboard allo
   expect(selectVisiblePermission(both, 'session-1')).toEqual(REQUEST)
 })
 
+const ASK_REQUEST: PermissionRequest = {
+  requestId: 'perm-ask-1',
+  request: {
+    subtype: 'can_use_tool' as const,
+    tool_name: 'AskUserQuestion',
+    input: { questions: [] },
+    tool_use_id: 'toolu-ask-1',
+  },
+}
+
+test('selectVisiblePermission never returns an AskUserQuestion request — AskQuestionFlow owns its own keyboard (P4-20)', () => {
+  // A pending AskUserQuestion alone: the generic Enter-allow/N-deny path must see
+  // nothing (AskQuestionFlow has its OWN keyboard handler; a bare allow would
+  // submit empty answers — decisions/ASK-USER-QUESTION-ANSWER.md).
+  const askOnly = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([ASK_REQUEST]),
+  })
+  expect(askOnly.sessions['session-1']?.pending).toEqual([ASK_REQUEST])
+  expect(selectVisiblePermission(askOnly, 'session-1')).toBeNull()
+
+  // A generic request queued after it is still the keyboard target; the ask
+  // flow is skipped.
+  const both = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([ASK_REQUEST, REQUEST]),
+  })
+  expect(selectVisiblePermission(both, 'session-1')).toEqual(REQUEST)
+})
+
 test('terminal lifecycle clears permissions owned by the dead sidecar', () => {
   const hydrated = reducePermissionState(createPermissionState(), {
     type: 'frame',

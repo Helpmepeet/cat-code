@@ -50,6 +50,17 @@ export const MAX_TEXT_FIELD_CHARS = 4_096
 export const MAX_SUGGESTION_SELECTIONS = 16
 
 /**
+ * C5 (P4-20, decisions/ASK-USER-QUESTION-ANSWER.md) — structural bounds on an
+ * `askUserQuestion.answer` frame. `MAX_ANSWER_QUESTIONS` mirrors the tool's 1–4
+ * `questions` schema bound (`AskUserQuestionTool.tsx`) so an oversized `answers`
+ * array is rejected before the per-question checks; `MAX_QUESTION_ANSWER_CHARS`
+ * caps the built-in "Other…" freeform string. Both are hostile-input bounds, not
+ * policy gates; the whole frame is additionally bounded by `MAX_FRAME_BYTES`.
+ */
+export const MAX_ANSWER_QUESTIONS = 4
+export const MAX_QUESTION_ANSWER_CHARS = 4_096
+
+/**
  * Restored-history replay caps (F2 — decisions/RESTORE-HISTORY.md). On attach,
  * a resumed sidecar replays its restored transcript as `replay: true` event
  * frames; the NEWEST tail is kept under BOTH caps and any omission is signalled

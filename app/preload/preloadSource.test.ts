@@ -10,6 +10,11 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
   )
+  // C5 (P4-20) — AskUserQuestion answer sender rides its own fixed channel.
+  expect(source).toContain(
+    "const CH_ANSWER_QUESTIONS = 'catcode:answer-questions'",
+  )
+  expect(source).toContain('answerQuestions(')
   // P4-5 — account lifecycle verb sender rides its own fixed channel (HC3).
   expect(source).toContain("const CH_ACCOUNT_VERB = 'catcode:account-verb'")
   expect(source).toContain(
@@ -44,14 +49,14 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void',
   )
-  // 13 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
+  // 14 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-13 remoteSettingsVerb + P4-19 settingsVerb + P4-24c
-  // runControlVerb) + 6 payload-bearing control-plane senders + the DEV-only
-  // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
-  // createSession/restoreSession/closeSession/listSessions/previewSession). subscribe /
-  // subscribeHost register a listener and send no payload, so they do NOT (and
-  // must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(20)
+  // runControlVerb + C5/P4-20 answerQuestions) + 6 payload-bearing control-plane
+  // senders + the DEV-only debug-state sender (compiled out of the packaged
+  // preload.cjs). (pickDirectory/createSession/restoreSession/closeSession/
+  // listSessions/previewSession). subscribe / subscribeHost register a listener
+  // and send no payload, so they do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(21)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
