@@ -656,6 +656,12 @@ describe('deferred continuation durable store', () => {
   // stops for attention. This test previously asserted the opposite; its old
   // name ("instead of stranding submitted") records that the divergence was
   // deliberate rather than accidental.
+  //
+  // Mechanism note: no switchSession() here, so persistence actually fails at
+  // the result-entry validator (sessionStorage.ts:1931, sessionId mismatch)
+  // rather than at the durable barrier. The asserted transition is identical for
+  // either failure, which is what this pins — see the sibling test in
+  // deferredContinuationRunner.test.ts.
   test('foreground terminal-barrier failure leaves the job submitted for reconciliation', async () => {
     const root = await mkdtemp('/tmp/cat-code-result-journal-failure-')
     cleanup.push(root)

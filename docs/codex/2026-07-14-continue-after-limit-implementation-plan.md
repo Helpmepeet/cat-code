@@ -442,6 +442,18 @@ If the user submits a new human prompt in the same session before the job fires,
 
 If the background or foreground continuation already holds the job/session locks, do not submit human input concurrently. Show `A scheduled continuation is already in progress. Wait for it to finish, then send your message again.` If crash reconciliation marks the attempt `ambiguous`, show the exact safety-stop notice instead of silently canceling or retrying it.
 
+> **Amended 2026-07-16 — source is authoritative; this paragraph records the
+> original plan, not current behaviour.** Cold review finding F10: as written,
+> `ambiguous` had no exit. Every human prompt was refused and `cancel` never
+> cleared the record, so the notice's instruction to continue manually was
+> impossible without deleting state by hand. `ambiguous` exists to withhold
+> AUTOMATIC retry — replaying could repeat tool actions — but a human taking the
+> conversation back is the resolution the state is waiting for. A human prompt
+> now cancels the job and proceeds (`allow_after_cancel`), and `cancel` clears
+> it; both keep the safety-stop warning that an attempt may already have run.
+> See `src/services/deferredContinuation.ts` and
+> `src/commands/continue-after-limit/continue-after-limit.tsx`.
+
 Merely reopening/resuming the transcript without sending new input does not cancel the job. Resume/adopt must still respect the per-session lock so it cannot read and adopt the transcript while a background attempt is appending it.
 
 ## Dedicated persistence

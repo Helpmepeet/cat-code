@@ -150,8 +150,16 @@ describe('deferred continuation runner', () => {
       await createPendingDeferredContinuation(pending)
       const attempt = await beginForegroundDeferredContinuation(pending)
       expect(attempt).not.toBeNull()
-      // No live session storage backs this attempt, so the terminal barrier in
-      // persistAttemptResult fails after the turn already reported success.
+      // persistAttemptResult fails after the turn already reported success. The
+      // mechanism here is the result-entry validator, NOT the durable barrier:
+      // this test never switchSession()s, so `entry.sessionId !== getSessionId()`
+      // rejects at sessionStorage.ts:1931 — before appendEntry, before
+      // flushCurrentTranscriptDurably. The transition asserted below is the same
+      // either way (any post-turn persistence failure takes this path), which is
+      // what this test pins. Reaching the barrier itself would need
+      // TEST_ENABLE_SESSION_PERSISTENCE=1 plus a materialized session file, the
+      // setup deferredContinuation.probe.test.ts carries; flushCurrentTranscript-
+      // Durably has no coverage here.
       expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
         outcome: 'completed',
         observedAt: NOW,
