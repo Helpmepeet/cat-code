@@ -78,6 +78,11 @@ export function useDeferredContinuation({ setMessages }: Props): void {
         return
       }
       if (!job || job.state !== 'pending') {
+        // A background worker removing the job is how it reports an outcome:
+        // the pending record disappears and a notice takes its place. Polling
+        // without consuming here would drop that outcome on the floor for a
+        // session that is mounted and watching.
+        await consumeNotice()
         timer = setTimeout(() => void check(), 1_000)
         timer.unref?.()
         return

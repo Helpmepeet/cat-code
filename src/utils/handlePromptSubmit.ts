@@ -94,6 +94,35 @@ export type PromptInputHelpers = {
   resetHistory: () => void
 }
 
+/**
+ * Whether this submission is human activity that invalidates a scheduled
+ * continuation.
+ *
+ * Slash input is not exempt as a class. `/continue-after-limit status` must not
+ * cancel the schedule it reports on, but a prompt command runs a model turn and
+ * steers the conversation exactly as typed text does — treating every `/` as
+ * inert let those turns run against a continuation that was still scheduled.
+ * Unknown names never reach the model, so they are not activity either.
+ */
+export function invalidatesDeferredContinuation(
+  input: string,
+  commands: Command[],
+  skipSlashCommands: boolean | undefined,
+): boolean {
+  const trimmed = input.trim()
+  if (skipSlashCommands || !trimmed.startsWith('/')) return true
+  const spaceIndex = trimmed.indexOf(' ')
+  const name =
+    spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex)
+  const command = commands.find(
+    cmd =>
+      cmd.name === name ||
+      cmd.aliases?.includes(name) ||
+      getCommandName(cmd) === name,
+  )
+  return command?.type === 'prompt'
+}
+
 export type HandlePromptSubmitParams = BaseExecutionParams & {
   // Direct user input path (set when called from onSubmit, absent for queue processor)
   input?: string
@@ -194,7 +223,7 @@ export async function handlePromptSubmit(
     return
   }
 
-  if (!input.trim().startsWith('/') || skipSlashCommands) {
+  if (invalidatesDeferredContinuation(input, commands, skipSlashCommands)) {
     const deferredDecision =
       await prepareHumanPromptAgainstDeferredContinuation(getSessionId())
     if (deferredDecision.action !== 'allow') {

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { Message } from '../types/message.js'
 import type { QueuedCommand } from '../types/textInputTypes.js'
-import type { DeferredContinuationJobV1 } from '../services/deferredContinuation.js'
+import type {
+  DeferredContinuationJobV1,
+  DeferredContinuationNoticeV1,
+} from '../services/deferredContinuation.js'
 
 // This repo ships no React test renderer and adding one is out of scope, so the
 // effect body is driven directly through a stubbed useEffect. Everything the
@@ -72,6 +75,10 @@ const continuationCommand: QueuedCommand = {
 let pendingJob: DeferredContinuationJobV1 | null = null
 let enqueued: QueuedCommand[] = []
 let beginCalls = 0
+// Consumed in order, one per takeDeferredContinuationNotice() call, so a test
+// can place a notice on the poll that follows the mount rather than the mount
+// itself — which is exactly when a background worker publishes one.
+let notices: (DeferredContinuationNoticeV1 | null)[] = []
 
 const actualState = await import('../bootstrap/state.js')
 mock.module('../bootstrap/state.js', () => ({
@@ -91,7 +98,7 @@ const actualStore = await import('../services/deferredContinuation.js')
 mock.module('../services/deferredContinuation.js', () => ({
   ...actualStore,
   readPendingDeferredContinuation: async () => pendingJob,
-  takeDeferredContinuationNotice: async () => null,
+  takeDeferredContinuationNotice: async () => notices.shift() ?? null,
 }))
 
 const actualRunner = await import('../services/deferredContinuationRunner.js')
@@ -130,6 +137,7 @@ beforeEach(() => {
   enqueued = []
   beginCalls = 0
   pendingJob = null
+  notices = []
   runEffect = undefined
   cleanupEffect = undefined
 })
@@ -172,6 +180,23 @@ describe('useDeferredContinuation', () => {
 
     expect(beginCalls).toBe(0)
     expect(enqueued).toEqual([])
+  })
+
+  // F12: a background worker can finish the job and publish the outcome while
+  // this session is mounted. The hook consumed notices at mount and after its
+  // own attempt only, so the no-job poll — the exact state a worker leaves
+  // behind — reported nothing and the outcome was never shown.
+  test('shows an outcome a background worker published after mount', async () => {
+    pendingJob = null
+    notices = [
+      // Nothing at mount; the worker publishes before the next poll.
+      null,
+      { version: 1, sessionId: SESSION_ID, kind: 'completed', observedAt: NOW },
+    ]
+
+    await mountAndSettle()
+
+    expect(messages.map(m => JSON.stringify(m)).join('\n')).toContain('Status: Done')
   })
 
   test('does not start a second turn for a job another owner already submitted', async () => {
