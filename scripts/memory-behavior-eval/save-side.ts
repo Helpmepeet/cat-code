@@ -623,9 +623,7 @@ async function main(): Promise<void> {
               readFileSync(evidencePath, 'utf8'),
             ) as ExecutionEvidence,
           )
-        : run.lane === 'extraction'
-          ? ['extraction artifact has no execution evidence']
-          : []
+        : [`${run.lane} artifact has no execution evidence`]
       const reasons = [...scored.reasons, ...executionReasons]
       const verdict =
         scored.verdict === 'PASS' && reasons.length === 0 ? 'PASS' : 'FAIL'

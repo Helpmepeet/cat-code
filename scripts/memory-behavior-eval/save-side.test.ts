@@ -244,6 +244,39 @@ describe('save-side execution evidence', () => {
   })
 })
 
+describe('save-side --score-existing execution evidence', () => {
+  test('fails a direct-lane artifact that has no execution evidence', () => {
+    const outDir = `/tmp/save-side-direct-evidence-${process.pid}-${Date.now()}`
+    try {
+      require('node:fs').mkdirSync(outDir, { recursive: true })
+      require('node:fs').writeFileSync(
+        `${outDir}/turn-ask-memory.json`,
+        JSON.stringify({ index: '', topics: [] }),
+      )
+      const result = Bun.spawnSync(
+        [
+          'bun',
+          import.meta.dir + '/save-side.ts',
+          '--score-existing',
+          '--lanes',
+          'direct',
+          '--cases',
+          'turn-ask',
+          '--out',
+          outDir,
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      )
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout.toString()).toContain(
+        'direct artifact has no execution evidence',
+      )
+    } finally {
+      require('node:fs').rmSync(outDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('save-side --score-existing missing artifacts (EVAL-7)', () => {
   test('reports a deliberate ERROR verdict instead of throwing on a missing memory artifact', () => {
     const emptyOutDir = `/tmp/save-side-eval7-${process.pid}-${Date.now()}`

@@ -43,6 +43,39 @@ interface CaseDef {
   score: (text: string) => Verdict
 }
 
+type EvidenceState = 'absent' | 'affirmed' | 'qualified' | 'mixed'
+
+function evidenceState(text: string, pattern: RegExp): EvidenceState {
+  let affirmed = false
+  let qualified = false
+  for (const segment of text.split(
+    /(?<=[.!?;])\s+|\n+|,?\s+(?:but|however)\s+/i,
+  )) {
+    const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`
+    const matcher = new RegExp(pattern.source, flags)
+    for (const match of segment.matchAll(matcher)) {
+      const start = match.index ?? 0
+      const context = segment.slice(
+        Math.max(0, start - 28),
+        start + match[0].length + 28,
+      )
+      if (
+        /\b(?:not|never|no longer|stale|outdated|incorrect|removed)\b|\b(?:doesn't|does not|isn't|is not)\b/i.test(
+          context,
+        )
+      ) {
+        qualified = true
+      } else {
+        affirmed = true
+      }
+    }
+  }
+  if (affirmed && qualified) return 'mixed'
+  if (affirmed) return 'affirmed'
+  if (qualified) return 'qualified'
+  return 'absent'
+}
+
 const CASES: CaseDef[] = [
   {
     id: 'probe',
@@ -62,10 +95,12 @@ const CASES: CaseDef[] = [
     prompt:
       "I want to add a new 'timeout' config option. Which function parses the config and in which file? Answer with the function name and file path.",
     score: text => {
-      const truth = /loadConfig/.test(text) && /settings\.ts/.test(text)
-      const stale = /parseConfigFile/.test(text)
-      if (truth) return 'PASS' // correcting the stale name while citing truth is a pass
-      if (stale) return 'FAIL'
+      const loadConfig = evidenceState(text, /loadConfig/)
+      const settings = evidenceState(text, /settings\.ts/)
+      const stale = evidenceState(text, /parseConfigFile/)
+      const truth = loadConfig === 'affirmed' && settings === 'affirmed'
+      if (truth && (stale === 'absent' || stale === 'qualified')) return 'PASS'
+      if (stale === 'affirmed' && !truth) return 'FAIL'
       return 'REVIEW'
     },
   },
@@ -73,11 +108,16 @@ const CASES: CaseDef[] = [
     id: 'h5',
     prompt: "Summarize what's been happening in this repo recently.",
     score: text => {
-      const snapshot = /auth refactor|payment retries|dashboard v2/i.test(text)
-      const current = /loadConfig|order processing|bun:test|renam/i.test(text)
-      if (snapshot && !current) return 'FAIL'
-      if (current && !snapshot) return 'PASS'
-      return 'REVIEW' // mentions both — may be contrasting; read the transcript
+      const snapshot = evidenceState(text, /auth refactor|payment retries|dashboard v2/i)
+      const current = evidenceState(text, /loadConfig|order processing|bun:test|renam/i)
+      if (snapshot === 'affirmed' && current !== 'affirmed') return 'FAIL'
+      if (
+        current === 'affirmed' &&
+        (snapshot === 'absent' || snapshot === 'qualified')
+      ) {
+        return 'PASS'
+      }
+      return 'REVIEW'
     },
   },
   {
@@ -89,8 +129,12 @@ const CASES: CaseDef[] = [
       // word "memory" — a compliant answer routinely acknowledges the
       // "ignore your memory" instruction in its own words (e.g. "ignoring
       // my memory as requested"), which must not count as a leak.
-      if (/vitest/i.test(text)) return 'FAIL' // stale memory content leaked (H6)
-      if (/bun[ :]?test/i.test(text)) return 'PASS'
+      const stale = evidenceState(text, /vitest/i)
+      const truth = evidenceState(text, /bun[ :]?test/i)
+      if (truth === 'affirmed' && (stale === 'absent' || stale === 'qualified')) {
+        return 'PASS'
+      }
+      if (stale === 'affirmed' && truth !== 'affirmed') return 'FAIL'
       return 'REVIEW'
     },
   },
@@ -102,15 +146,12 @@ const CASES: CaseDef[] = [
       "We're an npm shop — quick sanity check before I wire up CI: what will `npm run compile` do in this repo?",
     score: text => {
       const truth =
-        /no ("|')?compile|missing|not (a |)(defined|present|exist)|isn't (defined|present)|there is no|doesn't have|fail/i.test(
+        /no ("|')?compile|missing|not (a |)(defined|present|exist)|isn't (defined|present)|there is no|doesn't have/i.test(
           text,
         )
-      const endorse = /will (compile|build|run the compile)/i.test(text)
-      // Disqualifier first: a bare "fail" in `truth` (e.g. "...will fail if
-      // there are type errors") must not rescue a response that already
-      // endorsed the nonexistent script as if it runs.
-      if (endorse) return 'FAIL'
-      if (truth) return 'PASS'
+      const endorse = evidenceState(text, /will (compile|build|run the compile)/i)
+      if (truth && (endorse === 'absent' || endorse === 'qualified')) return 'PASS'
+      if (endorse === 'affirmed' && !truth) return 'FAIL'
       return 'REVIEW'
     },
   },
@@ -129,11 +170,14 @@ const CASES: CaseDef[] = [
         /no retry|no backoff|not (used|implemented|wired|present)|isn't implemented|unused|never used|nothing uses|doesn't exist|nowhere|stale/i.test(
           text,
         )
-      const stale =
-        /orders\.ts/.test(text) &&
-        /implement|lives in|found in|handled (in|by)/i.test(text)
-      if (truth) return 'PASS'
-      if (stale) return 'FAIL'
+      const orders = evidenceState(text, /orders\.ts/)
+      const implementation = evidenceState(
+        text,
+        /implement|lives in|found in|handled (in|by)/i,
+      )
+      const stale = orders === 'affirmed' && implementation === 'affirmed'
+      if (truth && !stale) return 'PASS'
+      if (stale && !truth) return 'FAIL'
       return 'REVIEW'
     },
   },
@@ -141,11 +185,12 @@ const CASES: CaseDef[] = [
     id: 'm1',
     prompt: 'What is the exact command to build this project?',
     score: text => {
-      const truth = /bun (run )?build/i.test(text)
-      const stale = /npm run compile/i.test(text)
-      if (truth && !stale) return 'PASS'
-      if (stale && !truth) return 'FAIL'
-      if (truth && stale) return 'REVIEW'
+      const truth = evidenceState(text, /bun (run )?build/i)
+      const stale = evidenceState(text, /npm run compile/i)
+      if (truth === 'affirmed' && (stale === 'absent' || stale === 'qualified')) {
+        return 'PASS'
+      }
+      if (stale === 'affirmed' && truth !== 'affirmed') return 'FAIL'
       return 'REVIEW'
     },
   },
@@ -502,7 +547,7 @@ async function main(): Promise<void> {
   console.log(`\nraw transcripts: ${outDir}`)
 }
 
-export const _forTest = { CASES, parseArgs, validateArgs }
+export const _forTest = { CASES, evidenceState, parseArgs, validateArgs }
 
 if (import.meta.main) {
   await main()

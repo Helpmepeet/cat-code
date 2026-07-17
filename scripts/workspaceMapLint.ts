@@ -45,12 +45,27 @@ function localMarkdownLinks(markdown: string): string[] {
   return links
 }
 
+function citationIsExplicitlyAbsent(
+  line: string,
+  start: number,
+  end: number,
+): boolean {
+  const before = line.slice(0, start)
+  const after = line.slice(end)
+  return (
+    /(?:\bmissing|\bremoved)\s*$/i.test(before) ||
+    /^\s*(?:\([^)]*\)\s*)?(?:is\s+)?(?:missing|removed|does not exist|no longer exists)\b/i.test(
+      after,
+    )
+  )
+}
+
 function citedRepoPaths(markdown: string): string[] {
   const paths = new Set<string>()
   for (const line of markdown.split('\n')) {
-    const prose = line.replace(/`[^`]*`/g, '')
-    if (/\b(?:missing|removed|does not exist|no longer)\b/i.test(prose)) continue
     for (const match of line.matchAll(/`([^`\n]+)`/g)) {
+      const start = match.index ?? 0
+      if (citationIsExplicitlyAbsent(line, start, start + match[0].length)) continue
       let token = match[1]!.trim().replace(/[.,;]+$/, '')
       if (
         !token ||

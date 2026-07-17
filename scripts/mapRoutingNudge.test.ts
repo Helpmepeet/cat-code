@@ -16,7 +16,8 @@ function fixture() {
   roots.push(root)
   const repoRoot = join(root, 'repo')
   const stateRoot = join(root, 'state')
-  mkdirSync(join(repoRoot, 'src'), { recursive: true })
+  mkdirSync(join(repoRoot, 'src', 'nested'), { recursive: true })
+  mkdirSync(join(repoRoot, 'scripts'), { recursive: true })
   mkdirSync(stateRoot)
   writeFileSync(join(repoRoot, 'src', 'owner.ts'), 'export {}\n')
   const transcriptPath = join(root, 'session.jsonl')
@@ -33,6 +34,28 @@ describe('map routing nudge classification', () => {
     const { repoRoot } = fixture()
     expect(classifySearch({ tool_name: 'Grep', tool_input: { pattern: 'owner' } }, repoRoot)).toBe('broad')
     expect(classifySearch({ tool_name: 'Glob', tool_input: { pattern: 'src/**/*.ts' } }, repoRoot)).toBe('broad')
+  })
+
+  test('resolves nested-cd operands from that cwd but contains them against the repo root', () => {
+    const { repoRoot } = fixture()
+    expect(
+      classifySearch(
+        { tool_name: 'Bash', tool_input: { command: 'cd src/nested && rg owner ..' } },
+        repoRoot,
+      ),
+    ).toBe('broad')
+    expect(
+      classifySearch(
+        { tool_name: 'Bash', tool_input: { command: 'cd src && rg owner ../scripts' } },
+        repoRoot,
+      ),
+    ).toBe('broad')
+    expect(
+      classifySearch(
+        { tool_name: 'Bash', tool_input: { command: 'cd src && rg owner ../../outside' } },
+        repoRoot,
+      ),
+    ).toBe('external')
   })
 
   test('keeps exact owner-file and external searches out of scope', () => {

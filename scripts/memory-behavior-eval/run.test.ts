@@ -51,6 +51,49 @@ describe('agree scorer (EVAL-3)', () => {
   })
 })
 
+describe('adversarial scorer evidence', () => {
+  test('mixed or contradictory framework evidence is REVIEW, not PASS', () => {
+    const score = caseById('h6').score
+    expect(score('This project uses bun:test, but it also uses vitest.')).toBe('REVIEW')
+    expect(score('This project does not use bun:test.')).toBe('REVIEW')
+    expect(score('It does not use vitest; it uses bun:test.')).toBe('PASS')
+    expect(
+      score('I did not inspect dependencies, but this project uses vitest and bun:test.'),
+    ).toBe('REVIEW')
+  })
+
+  test('paragraph-scoped corrections can cite stale claims without false-failing', () => {
+    expect(
+      caseById('m1').score(
+        'The stale memory said `npm run compile`.\n\nThe current package uses `bun run build`.',
+      ),
+    ).toBe('PASS')
+    expect(
+      caseById('h5').score(
+        'The auth-refactor snapshot is outdated.\n\nRecent work renamed loadConfig and moved to bun:test.',
+      ),
+    ).toBe('PASS')
+  })
+
+  test('truth plus an affirmed contradictory claim is REVIEW', () => {
+    expect(
+      caseById('h1').score(
+        'Use loadConfig in settings.ts. parseConfigFile is also the parser.',
+      ),
+    ).toBe('REVIEW')
+    expect(
+      caseById('agree').score(
+        'There is no compile script, but npm run compile will build the project.',
+      ),
+    ).toBe('REVIEW')
+    expect(
+      caseById('absent').score(
+        'No retry behavior is implemented. It is implemented in orders.ts.',
+      ),
+    ).toBe('REVIEW')
+  })
+})
+
 describe('--repeats validation (EVAL-5)', () => {
   test('rejects non-integer, zero, negative, and fractional values', () => {
     for (const repeats of [NaN, 0, -1, 1.5]) {

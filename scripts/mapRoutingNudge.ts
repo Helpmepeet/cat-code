@@ -34,10 +34,11 @@ function isWithinRepo(candidate: string, repoRoot: string): boolean {
 
 function classifyPathScope(
   rawPath: string | undefined,
-  repoRoot: string,
+  cwd: string,
+  repoRoot = cwd,
 ): 'directory' | 'external' | 'file' | 'unknown' {
   if (!rawPath) return 'unknown'
-  const candidate = resolveShellPath(rawPath, repoRoot)
+  const candidate = resolveShellPath(rawPath, cwd)
   if (!isWithinRepo(candidate, repoRoot)) return 'external'
   if (!existsSync(candidate)) return 'unknown'
   const stat = statSync(candidate)
@@ -211,7 +212,7 @@ function classifyBash(input: HookInput, repoRoot: string): SearchClassification 
 
   const exactOperands = operands.filter(token => !GLOB_META.test(token))
   const scopes = exactOperands
-    .map(token => classifyPathScope(token, commandRoot))
+    .map(token => classifyPathScope(token, commandRoot, repoRoot))
     .filter(scope => scope !== 'unknown')
 
   const repoScopes = scopes.filter(scope => scope !== 'external')

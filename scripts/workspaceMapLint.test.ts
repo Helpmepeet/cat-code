@@ -48,6 +48,17 @@ describe('workspace map lint', () => {
     expect(result.warnings).toHaveLength(3)
   })
 
+  test('does not exempt a citation because unrelated same-line prose says it was removed', () => {
+    const root = fixture()
+    writeFileSync(
+      join(root, 'docs', 'maps', 'domain.md'),
+      '# Domain\n\nLast refreshed: 2026-07-14\n\n## First Files To Inspect\n\n- The old command was removed; inspect `src/missing.ts`.\n\n## Tests And Validation\n\n- Read it.\n\n## Traps And Stale Assumptions\n\n- None.\n',
+    )
+    expect(validateWorkspaceMaps(root).errors).toContain(
+      'docs/maps/domain.md: cited path does not exist: src/missing.ts',
+    )
+  })
+
   test('reports malformed URI links instead of crashing', () => {
     const root = fixture()
     const mapPath = join(root, 'docs', 'maps', 'domain.md')
