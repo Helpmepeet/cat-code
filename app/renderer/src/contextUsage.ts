@@ -20,9 +20,9 @@ import type { SDKMessage } from '@cat-code/engine/sdk'
  *  - `contextWindow` = `modelUsage[model].contextWindow`, already computed by the
  *    engine's real `getContextWindowForModel` (`src/cost-tracker.ts:107`, incl. the
  *    `[1m]` beta + model-capability + env-override logic — valid for gpt/Codex too).
- *    The renderer REUSES that value instead of re-deriving it (§10). The main
- *    conversation model owns the largest window, so the max across `modelUsage`
- *    entries is the conversation window (a small-fast side model carries a smaller one).
+ *    The renderer REUSES that value instead of re-deriving it (§10). The live
+ *    run-controls snapshot supplies the current main-loop model, so historical
+ *    model entries cannot leave the gauge on a stale larger window after a switch.
  *
  * Before a turn completes (or a frame that omits `contextWindow`), the window falls
  * back to `DEFAULT_CONTEXT_WINDOW`, exactly like the prototype's
@@ -51,6 +51,7 @@ function readNum(value: unknown): number {
 
 export function selectContextUsage(
   messages: readonly SDKMessage[],
+  currentModel?: string | null,
 ): ContextUsage {
   let usedTokens = 0
   let contextWindow = 0
@@ -69,9 +70,13 @@ export function selectContextUsage(
 
     const modelUsage = isRecord(message.modelUsage) ? message.modelUsage : null
     if (modelUsage) {
-      for (const entry of Object.values(modelUsage)) {
-        if (isRecord(entry)) {
-          contextWindow = Math.max(contextWindow, readNum(entry.contextWindow))
+      const currentEntry = currentModel ? modelUsage[currentModel] : undefined
+      if (isRecord(currentEntry)) {
+        contextWindow = readNum(currentEntry.contextWindow)
+      } else if (!currentModel) {
+        const entries = Object.values(modelUsage).filter(isRecord)
+        if (entries.length === 1) {
+          contextWindow = readNum(entries[0]?.contextWindow)
         }
       }
     }

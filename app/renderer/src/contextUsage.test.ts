@@ -35,18 +35,24 @@ test('ignores modelUsage cumulative token fields — uses the per-turn usage onl
   expect(usage?.percentUsed).toBe(5)
 })
 
-test('takes the MAX contextWindow across models (the main conversation window)', () => {
-  const usage = selectContextUsage([
-    result(
-      { input_tokens: 100_000 },
-      {
-        'small-fast': { contextWindow: 200_000 },
-        'claude-opus-4-8[1m]': { contextWindow: 1_000_000 },
-      },
-    ),
-  ])
-  expect(usage?.contextWindow).toBe(1_000_000)
-  expect(usage?.percentUsed).toBe(10)
+test('uses the current model window after switching away from a historical 1M model', () => {
+  const usage = selectContextUsage(
+    [
+      result(
+        { input_tokens: 100_000, cache_read_input_tokens: 20_000 },
+        {
+          'claude-opus-4-8[1m]': { contextWindow: 1_000_000, inputTokens: 900_000 },
+          'gpt-5.6-terra': { contextWindow: 200_000, inputTokens: 100_000 },
+        },
+      ),
+    ],
+    'gpt-5.6-terra',
+  )
+  expect(usage).toEqual({
+    usedTokens: 120_000,
+    contextWindow: 200_000,
+    percentUsed: 60,
+  })
 })
 
 test('clamps to 100% when the context exceeds the window', () => {

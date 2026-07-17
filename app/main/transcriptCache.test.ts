@@ -82,7 +82,10 @@ function eventFrame(i: number, id: SessionId = SID): ServerFrame {
     sessionId: id,
     event: {
       type: 'message',
-      message: { role: 'user', content: `msg ${i}` },
+      message: {
+        type: 'user',
+        message: { role: 'user', content: `msg ${i}` },
+      },
     } as never,
   }
 }
@@ -249,6 +252,33 @@ test('a corrupt (non-JSON) cache file is discarded and deleted', () => {
   writeFileSync(path, '{ not json ')
   expect(readCache(dir, SID)).toBeNull()
   expect(fileExists(path)).toBe(false)
+})
+
+test('an allowlisted event kind with a malformed event payload is discarded and deleted', () => {
+  const dir = tempDir()
+  const path = cachePath(dir)
+  const bad = {
+    header: header(),
+    frames: [
+      {
+        kind: 'event',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: SID,
+        event: null,
+      },
+    ],
+  }
+  writeFileSync(path, JSON.stringify(bad))
+  expect(readCache(dir, SID)).toBeNull()
+  expect(fileExists(path)).toBe(false)
+})
+
+test('a valid raw message event retains its full payload through the cache', () => {
+  const dir = tempDir()
+  const frame = eventFrame(7)
+  writeCache(dir, distill([readyFrame(), frame]))
+  const cached = readCache(dir, SID)
+  expect(cached?.frames).toEqual([frame])
 })
 
 test('a schema-drift cache (a non-allowlisted frame kind) is discarded and deleted', () => {

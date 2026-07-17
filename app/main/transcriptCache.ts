@@ -98,7 +98,12 @@ function isUuid(value: unknown): value is string {
  * DROPPED so a replayed cache can touch nothing but transcript rows.
  */
 function isTranscriptCacheFrame(frame: ServerFrame): boolean {
-  if (frame.kind === 'event') return true
+  if (frame.kind === 'event') {
+    const event: unknown = frame.event
+    if (!isRecord(event) || event.type !== 'message') return false
+    const message = event.message
+    return isRecord(message) && typeof message.type === 'string'
+  }
   // The two visible-lossiness boundary idioms (both error frames): main's own
   // replay-buffer truncation and the sidecar's history-replay truncation. Keeping
   // them preserves the "this transcript is incomplete" marker; every OTHER error

@@ -2286,8 +2286,8 @@ export function SessionPane({
   // always returns — real result-frame usage once a turn provides it, a 0%
   // default-window gauge before then (never hidden).
   const contextUsage = useMemo(
-    () => selectContextUsage(activeLog.messages),
-    [activeLog.messages],
+    () => selectContextUsage(activeLog.messages, model),
+    [activeLog.messages, model],
   )
   // Dev-only raw-frame inspector (not a shipped surface, not in the Chat.jsx
   // design): hidden even in dev UNLESS a developer opts in via

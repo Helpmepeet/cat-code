@@ -1258,6 +1258,34 @@ export class SidecarServer {
     }
 
     const verb = parsed.data as RunControlVerbMessage
+    const snapshot = this.runControls.getSnapshot()
+    let unsupportedMessage: string | null = null
+    if (
+      verb.type === 'model.set' &&
+      verb.model !== snapshot.model.current &&
+      !snapshot.model.options.some(option => option.value === verb.model)
+    ) {
+      unsupportedMessage = `unsupported model: ${verb.model}`
+    } else if (
+      verb.type === 'effort.set' &&
+      verb.effort !== 'auto' &&
+      verb.effort !== 'unset' &&
+      verb.effort !== snapshot.effort.current &&
+      !snapshot.effort.options.includes(verb.effort)
+    ) {
+      unsupportedMessage = `unsupported effort: ${verb.effort}`
+    }
+    if (unsupportedMessage) {
+      this.sendError(
+        connection,
+        verb.requestId,
+        'bad_request',
+        unsupportedMessage,
+        false,
+      )
+      return
+    }
+
     let result: { ok: boolean; message: string; changed: boolean }
     switch (verb.type) {
       case 'model.set':

@@ -147,9 +147,13 @@ export type SidecarRunControlsDomain = {
 
 export function createSidecarRunControlsDomain(
   store: Store<AppState>,
-  options: { executor?: RunControlExecutor } = {},
+  options: {
+    executor?: RunControlExecutor
+    buildSnapshot?: (state: AppState) => RunControlsSnapshot
+  } = {},
 ): SidecarRunControlsDomain {
   const executor = options.executor ?? createRealRunControlExecutor(store)
+  const buildSnapshot = options.buildSnapshot ?? buildRunControlsSnapshot
 
   function runWrite(
     run: () => void,
@@ -174,9 +178,20 @@ export function createSidecarRunControlsDomain(
 
   return {
     getSnapshot() {
-      return buildRunControlsSnapshot(store.getState())
+      return buildSnapshot(store.getState())
     },
     setModel(model) {
+      const snapshot = buildSnapshot(store.getState())
+      const supported =
+        model === snapshot.model.current ||
+        snapshot.model.options.some(option => option.value === model)
+      if (!supported) {
+        return {
+          ok: false,
+          message: `Unsupported model: ${model}.`,
+          changed: false,
+        }
+      }
       return runWrite(
         () => executor.setModel(model),
         `Model set to ${model}.`,
@@ -184,8 +199,21 @@ export function createSidecarRunControlsDomain(
       )
     },
     setEffort(effort) {
-      // Capture the engine's outcome message (auto/level validation lives in
-      // `executeEffort`), but keep the throw-free wrapper's `changed` accounting.
+      const snapshot = buildSnapshot(store.getState())
+      const supported =
+        effort === 'auto' ||
+        effort === 'unset' ||
+        effort === snapshot.effort.current ||
+        snapshot.effort.options.includes(effort)
+      if (!supported) {
+        return {
+          ok: false,
+          message: `Unsupported effort: ${effort}.`,
+          changed: false,
+        }
+      }
+      // Capture the engine's outcome message after membership validation against
+      // the same engine-owned effort options exposed by the live snapshot.
       let message = effort === 'auto' || effort === 'unset'
         ? 'Effort set to auto.'
         : `Effort set to ${effort}.`

@@ -1050,6 +1050,52 @@ test('P4-24c — a valid effort.set + fast.set both round-trip through the domai
   expect(snaps[snaps.length - 1]?.runControls.fast.active).toBe(true)
 })
 
+test('P4-24c — rejects a well-typed unsupported model at the sidecar boundary', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'model.set',
+        requestId: 'rc-unsupported-model',
+        model: 'forged-model',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-24c — rejects a well-typed unsupported effort at the sidecar boundary', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'effort.set',
+        requestId: 'rc-unsupported-effort',
+        effort: 'forged-effort',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
 test('P4-24c — rejects model.set with a NON-string model (Zod boundary), no domain call', () => {
   const { server, calls } = makeRunControlsServer()
   const { socket, received } = makeSocket()

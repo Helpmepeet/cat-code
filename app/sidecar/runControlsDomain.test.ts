@@ -23,6 +23,20 @@ function makeStore(over: Partial<AppState> = {}): Store<AppState> {
 
 /** A fake executor that only mutates the store — proves the domain's set → store →
  * snapshot → change-detected-subscribe wiring without touching real process globals. */
+function snapshotWithTerra(state: AppState) {
+  const snapshot = buildRunControlsSnapshot(state)
+  return {
+    ...snapshot,
+    model: {
+      ...snapshot.model,
+      options: [
+        ...snapshot.model.options,
+        { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' as const },
+      ],
+    },
+  }
+}
+
 function fakeExecutor(store: Store<AppState>): {
   executor: RunControlExecutor
   calls: string[]
@@ -55,9 +69,11 @@ function fakeExecutor(store: Store<AppState>): {
 }
 
 test('setModel via the executor mutates the store, reports changed, and notifies subscribers (idempotent no-op)', () => {
+  const previousProvider = getSessionProvider()
+  setSessionProvider('openai')
   const store = makeStore()
   const { executor, calls } = fakeExecutor(store)
-  const domain = createSidecarRunControlsDomain(store, { executor })
+  const domain = createSidecarRunControlsDomain(store, { executor, buildSnapshot: snapshotWithTerra })
 
   let notified = 0
   const unsub = domain.subscribe(() => {
@@ -77,12 +93,13 @@ test('setModel via the executor mutates the store, reports changed, and notifies
   expect(notified).toBe(1)
 
   unsub()
+  setSessionProvider(previousProvider)
 })
 
 test('setEffort and setFast route through the executor and reflect in the snapshot', () => {
   const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
   const { executor, calls } = fakeExecutor(store)
-  const domain = createSidecarRunControlsDomain(store, { executor })
+  const domain = createSidecarRunControlsDomain(store, { executor, buildSnapshot: snapshotWithTerra })
 
   const effortResult = domain.setEffort('high')
   expect(effortResult).toMatchObject({ ok: true, changed: true })
@@ -93,6 +110,16 @@ test('setEffort and setFast route through the executor and reflect in the snapsh
   expect(store.getState().fastMode).toBe(true)
 
   expect(calls).toEqual(['effort:high', 'fast:true'])
+})
+
+test('rejects unsupported model and effort values without calling the executor', () => {
+  const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+  const { executor, calls } = fakeExecutor(store)
+  const domain = createSidecarRunControlsDomain(store, { executor })
+
+  expect(domain.setModel('forged-model')).toMatchObject({ ok: false, changed: false })
+  expect(domain.setEffort('forged-effort')).toMatchObject({ ok: false, changed: false })
+  expect(calls).toEqual([])
 })
 
 test('buildRunControlsSnapshot degrades gracefully and reflects the store effort/fast', () => {
@@ -116,9 +143,12 @@ test('LIVE: the real executor wires the engine setters — model override flips,
   const prevEffortEnv = process.env.CLAUDE_CODE_EFFORT_LEVEL
   try {
     delete process.env.CLAUDE_CODE_EFFORT_LEVEL
+    setSessionProvider('openai')
     const store = makeStore()
     // Default (real) executor → the engine's OWN setters.
-    const domain = createSidecarRunControlsDomain(store)
+    const domain = createSidecarRunControlsDomain(store, {
+      buildSnapshot: snapshotWithTerra,
+    })
 
     // model.set → `setMainLoopModelOverride` so `getMainLoopModel()` (the SAME
     // resolver QueryEngine reads per turn) returns it; gpt-* → openai provider.
