@@ -482,7 +482,9 @@ async function persistAttemptResult(
     outcome: result.outcome,
     observedAt: result.observedAt,
   })
+  authority.assertHealthy()
   await flushCurrentTranscriptDurably()
+  authority.assertHealthy()
 }
 
 async function finalizeDeferredAttempt(
@@ -529,6 +531,8 @@ async function stopDeferredContinuationForAttention(
     'needs_attention',
     reason,
     observedAt,
+    undefined,
+    authority,
   )
 }
 
@@ -547,7 +551,14 @@ async function applyAttemptResult(
         observedAt: result.observedAt,
       })
       authority.assertHealthy()
-      await moveDeferredContinuationToHistory(job, 'completed', 'completed', result.observedAt)
+      await moveDeferredContinuationToHistory(
+        job,
+        'completed',
+        'completed',
+        result.observedAt,
+        undefined,
+        authority,
+      )
       return
     case 'quota_exhausted': {
       let status
@@ -678,6 +689,7 @@ export async function runDeferredContinuationAttempt(options: {
       state: 'submitted',
       attempt: { ...current.attempt, submittedAt: now },
     }
+    guard.assertHealthy()
     await writePendingDeferredContinuation(submitted)
     guard.assertHealthy()
     const result = await options.execute(submitted, getContinuationPrompt(submitted))
@@ -713,7 +725,9 @@ export async function beginForegroundDeferredContinuation(
       state: 'submitted',
       attempt: { ...current.attempt, submittedAt: now },
     }
+    guard.assertHealthy()
     await writePendingDeferredContinuation(submitted)
+    guard.assertHealthy()
     const registration = registerForegroundDeferredAttempt(submitted, guard.signal)
     const finished = (async () => {
       try {

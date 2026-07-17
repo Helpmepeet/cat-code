@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { access, chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL,
   DEFERRED_CONTINUATION_WORKER_ARGUMENT,
   getDeferredContinuationBackgroundStatus,
+  installDeferredContinuationLaunchAgent,
   renderDeferredContinuationLaunchAgent,
   uninstallDeferredContinuationLaunchAgent,
   type LaunchctlExecutor,
@@ -44,6 +45,26 @@ async function writePlist(): Promise<string> {
   return plistPath
 }
 
+async function installFixture(withExistingPlist = true): Promise<{
+  oldContents: string
+  oldExecutable: string
+  newExecutable: string
+  plistPath: string
+}> {
+  const root = await mkdtemp('/tmp/cat-code-launch-agent-install-')
+  cleanup.push(root)
+  const oldExecutable = join(root, 'cat-code-old')
+  const newExecutable = join(root, 'cat-code-new')
+  await writeFile(oldExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  await writeFile(newExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  const plistPath = join(root, 'agent.plist')
+  const oldContents = renderDeferredContinuationLaunchAgent(oldExecutable)
+  if (withExistingPlist) {
+    await writeFile(plistPath, oldContents, { mode: 0o600 })
+  }
+  return { oldContents, oldExecutable, newExecutable, plistPath }
+}
+
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
@@ -78,6 +99,84 @@ describe('deferred continuation LaunchAgent', () => {
     expect(await getDeferredContinuationBackgroundStatus(plistPath)).toEqual({ state: 'disabled' })
     await writeFile(plistPath, renderDeferredContinuationLaunchAgent('/missing/cat-code'), { mode: 0o600 })
     expect(await getDeferredContinuationBackgroundStatus(plistPath)).toEqual({ state: 'needs_repair', executablePath: '/missing/cat-code' })
+  })
+
+  test('install keeps the previous plist when unload cannot be confirmed', async () => {
+    const fixture = await installFixture()
+    const calls: string[][] = []
+    const run: LaunchctlExecutor = async args => {
+      calls.push(args)
+      if (args[0] === 'bootout') return { outcome: 'exit', code: 5 }
+      if (args[0] === 'print') return { outcome: 'ok' }
+      throw new Error('bootstrap must not run while the old job is loaded')
+    }
+
+    await expect(
+      installDeferredContinuationLaunchAgent(
+        fixture.newExecutable,
+        fixture.plistPath,
+        run,
+      ),
+    ).rejects.toThrow(/still loaded/)
+    expect(await readFile(fixture.plistPath, 'utf8')).toBe(fixture.oldContents)
+    expect(calls.map(args => args[0])).toEqual(['bootout', 'print'])
+  })
+
+  test('install restores and reloads the previous plist when new bootstrap fails', async () => {
+    const fixture = await installFixture()
+    const calls: string[][] = []
+    let bootstrapCalls = 0
+    const run: LaunchctlExecutor = async args => {
+      calls.push(args)
+      if (args[0] === 'bootout') return { outcome: 'ok' }
+      if (args[0] === 'print') return { outcome: 'exit', code: 113 }
+      bootstrapCalls++
+      return bootstrapCalls === 1
+        ? { outcome: 'exit', code: 5 }
+        : { outcome: 'ok' }
+    }
+
+    await expect(
+      installDeferredContinuationLaunchAgent(
+        fixture.newExecutable,
+        fixture.plistPath,
+        run,
+      ),
+    ).rejects.toThrow(/previous plist was restored and reloaded/)
+    expect(await readFile(fixture.plistPath, 'utf8')).toBe(fixture.oldContents)
+    expect(calls.map(args => args[0])).toEqual([
+      'bootout',
+      'print',
+      'bootstrap',
+      'bootstrap',
+    ])
+  })
+
+  test('first-install bootstrap failure keeps the new plist for repair', async () => {
+    const fixture = await installFixture(false)
+    const calls: string[][] = []
+    const run: LaunchctlExecutor = async args => {
+      calls.push(args)
+      if (args[0] === 'bootout') return { outcome: 'exit', code: 5 }
+      if (args[0] === 'print') return { outcome: 'exit', code: 113 }
+      return { outcome: 'exit', code: 5 }
+    }
+
+    await expect(
+      installDeferredContinuationLaunchAgent(
+        fixture.newExecutable,
+        fixture.plistPath,
+        run,
+      ),
+    ).rejects.toThrow(/new plist was kept on disk for repair/)
+    expect(await readFile(fixture.plistPath, 'utf8')).toContain(
+      fixture.newExecutable,
+    )
+    expect(calls.map(args => args[0])).toEqual([
+      'bootout',
+      'print',
+      'bootstrap',
+    ])
   })
 
   // F6: a swallowed bootout failure used to delete the plist and report success,

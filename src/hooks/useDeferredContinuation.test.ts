@@ -75,6 +75,7 @@ const continuationCommand: QueuedCommand = {
 let pendingJob: DeferredContinuationJobV1 | null = null
 let enqueued: QueuedCommand[] = []
 let beginCalls = 0
+let finishAttempt: (() => void) | null = null
 // Consumed in order, one per takeDeferredContinuationNotice() call, so a test
 // can place a notice on the poll that follows the mount rather than the mount
 // itself — which is exactly when a background worker publishes one.
@@ -116,7 +117,10 @@ mock.module('../services/deferredContinuationRunner.js', () => ({
   ...actualRunner,
   beginForegroundDeferredContinuation: async () => {
     beginCalls++
-    return { command: continuationCommand, finished: new Promise(() => {}) }
+    const finished = new Promise<void>(resolve => {
+      finishAttempt = resolve
+    })
+    return { command: continuationCommand, finished }
   },
   reconcileDeferredContinuationJob: async () => {},
 }))
@@ -149,6 +153,7 @@ beforeEach(() => {
   pendingJob = null
   notices = []
   noticeError = null
+  finishAttempt = null
   runEffect = undefined
   cleanupEffect = undefined
 })
@@ -173,6 +178,32 @@ describe('useDeferredContinuation', () => {
     const rendered = messages.map(m => JSON.stringify(m)).join('\n')
     expect(rendered).toContain('Status: Running')
     expect(rendered).toContain('will not be replayed')
+  })
+
+  test('restarts polling after a successful attempt is rescheduled', async () => {
+    pendingJob = job()
+    await mountAndSettle()
+    expect(beginCalls).toBe(1)
+
+    pendingJob = job({
+      attempt: {
+        number: 2,
+        messageUuid: '44444444-4444-4444-8444-444444444444',
+      },
+    })
+    notices.push({
+      version: 1,
+      sessionId: SESSION_ID,
+      kind: 'quota_rescheduled',
+      notBefore: NOW - 1,
+      observedAt: NOW,
+    })
+    finishAttempt?.()
+    await new Promise(resolve => setTimeout(resolve, 1_100))
+    for (let i = 0; i < 12; i++) await Promise.resolve()
+
+    expect(beginCalls).toBe(2)
+    expect(enqueued).toHaveLength(2)
   })
 
   test('does not submit a job whose scheduled time has not arrived', async () => {

@@ -128,13 +128,20 @@ export function useDeferredContinuation({ setMessages }: Props): void {
           : 'Status: Running\nThe scheduled time has arrived. Continuing now with a new reconciliation message; the failed request will not be replayed.',
       )
       enqueue(attempt.command)
-      void attempt.finished.then(consumeNotice, () => {
-        show(
-          'Status: Stopped — needs you\nAutomatic continuation could not finish safely. Review the latest transcript and continue manually.',
-        )
-        timer = setTimeout(() => void check(), 1_000)
-        timer.unref?.()
-      })
+      void attempt.finished.then(
+        async () => {
+          await consumeNotice()
+          timer = setTimeout(() => void check(), 1_000)
+          timer.unref?.()
+        },
+        () => {
+          show(
+            'Status: Stopped — needs you\nAutomatic continuation could not finish safely. Review the latest transcript and continue manually.',
+          )
+          timer = setTimeout(() => void check(), 1_000)
+          timer.unref?.()
+        },
+      )
     }
 
     void consumeNotice().then(check)

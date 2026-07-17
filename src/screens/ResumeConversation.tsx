@@ -29,7 +29,7 @@ import { checkCrossProjectResume } from '../utils/crossProjectResume.js';
 import type { FileHistorySnapshot } from '../utils/fileHistory.js';
 import { logError } from '../utils/log.js';
 import { createSystemMessage } from '../utils/messages.js';
-import { checkDeferredContinuationResume, computeStandaloneAgentContext, restoreAgentFromSession, restoreWorktreeForResume } from '../utils/sessionRestore.js';
+import { checkDeferredContinuationResume, computeStandaloneAgentContext, restoreAgentFromSession, restoreWorktreeForResume, withDeferredContinuationResumeAuthority } from '../utils/sessionRestore.js';
 import { adoptResumedSessionFile, enrichLogs, isCustomTitleEnabled, loadAllProjectsMessageLogsProgressive, loadSameRepoMessageLogsProgressive, recordContentReplacement, resetSessionFilePointer, restoreSessionMetadata, type SessionLogResult } from '../utils/sessionStorage.js';
 import type { ThinkingConfig } from '../utils/thinking.js';
 import type { ContentReplacementRecord } from '../utils/toolResultStorage.js';
@@ -275,9 +275,16 @@ export function ResumeConversation({
         worktreeSession: undefined
       } : result_3);
       if (!forkSession) {
-        restoreWorktreeForResume(result_3.worktreeSession);
+        const adopt = () => {
+          restoreWorktreeForResume(result_3.worktreeSession);
+          if (result_3.sessionId) {
+            adoptResumedSessionFile();
+          }
+        };
         if (result_3.sessionId) {
-          adoptResumedSessionFile();
+          await withDeferredContinuationResumeAuthority(result_3.sessionId, adopt);
+        } else {
+          adopt();
         }
       }
       if (feature('CONTEXT_COLLAPSE')) {

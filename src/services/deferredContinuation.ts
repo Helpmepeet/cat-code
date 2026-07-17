@@ -404,6 +404,7 @@ export async function moveDeferredContinuationToHistory(
   terminalReason: DeferredContinuationTerminalReason,
   now = Date.now(),
   paths = getDeferredContinuationPaths(),
+  authority?: Pick<DeferredContinuationLockGuard, 'assertHealthy'>,
 ): Promise<DeferredContinuationHistoryV1> {
   const history = deferredContinuationHistorySchema.parse({
     ...job,
@@ -411,8 +412,11 @@ export async function moveDeferredContinuationToHistory(
     terminalReason,
     terminalAt: now,
   }) as DeferredContinuationHistoryV1
+  authority?.assertHealthy()
   await atomicWriteJson(join(paths.history, `${job.jobId}.json`), history, paths)
+  authority?.assertHealthy()
   await unlink(pendingPath(paths, job.sessionId))
+  authority?.assertHealthy()
   await syncDirectory(paths.pending)
   return history
 }

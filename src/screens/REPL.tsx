@@ -52,7 +52,7 @@ import { useLogMessages } from '../hooks/useLogMessages.js';
 import { useReplBridge } from '../hooks/useReplBridge.js';
 import { usePtcloveBridge } from '../hooks/usePtcloveBridge.js';
 import { type Command, type CommandResultDisplay, type ResumeEntrypoint, clearCommandsCache, getCommandName, getCommands, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js';
-import { claimImmediateOwner, isCurrentImmediateOwner, isSerializedLocalJsxPending, resolveToolJsxUpdate } from '../utils/immediateCommand.js';
+import { claimImmediateOwner, getImmediateCommandQueryState, isCurrentImmediateOwner, isSerializedLocalJsxPending, resolveToolJsxUpdate } from '../utils/immediateCommand.js';
 import type { PromptInputMode, QueuedCommand, VimMode } from '../types/textInputTypes.js';
 import { MessageSelector, selectableUserMessagesFilter, messagesAfterAreOnlySynthetic } from '../components/MessageSelector.js';
 import { useIdeLogging } from '../hooks/useIdeLogging.js';
@@ -3655,7 +3655,11 @@ export function REPL({
       // turn, foregrounded task) also queues submissions, so a matched-but-
       // unavailable command must be consumed here in that state too — not
       // only under an active local query guard.
-      const shouldTreatAsImmediate = (queryGuard.isActive || isExternalLoading) && (matchingCommand?.immediate || options?.fromKeybinding);
+      const immediateQueryActive = getImmediateCommandQueryState(
+        queryGuard.isActive,
+        isExternalLoading
+      );
+      const shouldTreatAsImmediate = immediateQueryActive && (matchingCommand?.immediate || options?.fromKeybinding);
       const immediateEligible = Boolean(matchingCommand && shouldTreatAsImmediate && matchingCommand.type === 'local-jsx');
       if (immediateEligible && matchingCommand && !meetsAvailabilityRequirement(matchingCommand)) {
         // Consume instead of falling through: fallthrough would enqueue the
@@ -3771,7 +3775,10 @@ export function REPL({
           // Read messages via ref to keep onSubmit stable across message
           // updates — matches the pattern at L2384/L2400/L2662 and avoids
           // pinning stale REPL render scopes in downstream closures.
-          const context = getToolUseContext(messagesRef.current, [], createAbortController(), mainLoopModel);
+          const context = {
+            ...getToolUseContext(messagesRef.current, [], createAbortController(), mainLoopModel),
+            isQueryActive: immediateQueryActive
+          };
           const mod = await matchingCommand.load();
           const jsx = await mod.call(onDone, context, commandArgs);
 
@@ -3801,7 +3808,7 @@ export function REPL({
       // would be QUEUED, consume it: the queue path's onInputChange('') would
       // wipe the user's real draft, and the synthetic string would surface an
       // unknown-skill message when it drains.
-      if (options?.fromKeybinding && (queryGuard.isActive || isExternalLoading)) {
+      if (options?.fromKeybinding && immediateQueryActive) {
         addNotification({
           key: `immediate-keybinding-blocked-${commandName}`,
           text: `/${commandName} can't run right now`,

@@ -222,22 +222,60 @@ export async function installDeferredContinuationLaunchAgent(
   run: LaunchctlExecutor = defaultLaunchctlExecutor,
 ): Promise<string> {
   const canonical = await validateStableDeferredContinuationExecutable(executablePath)
+  let previousContents: string | null = null
+  try {
+    const info = await lstat(plistPath)
+    if (
+      info.isFile() &&
+      !info.isSymbolicLink() &&
+      (info.mode & 0o077) === 0 &&
+      (typeof process.getuid !== 'function' || info.uid === process.getuid())
+    ) {
+      previousContents = await readFile(plistPath, 'utf8')
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  // Never replace the only repairable plist until launchd confirms the old job
+  // is gone. bootout's exit code alone is ambiguous on macOS.
+  await run(['bootout', `gui/${process.getuid!()}`, plistPath])
+  const unloaded = await getDeferredContinuationLoadState(run)
+  if (unloaded !== 'not_loaded') {
+    throw new Error(
+      unloaded === 'loaded'
+        ? `Background continuation could not be enabled: the previous launchd job is still loaded. ${plistPath} was kept for recovery.`
+        : `Background continuation could not be enabled: unable to verify that the previous launchd job unloaded. ${plistPath} was kept for recovery.`,
+    )
+  }
+
   await writeLaunchAgentAtomically(
     plistPath,
     renderDeferredContinuationLaunchAgent(canonical),
   )
-  // First install has no loaded job; bootstrap below is authoritative.
-  await run(['bootout', `gui/${process.getuid!()}`, plistPath])
   const bootstrapped = await run([
     'bootstrap',
     `gui/${process.getuid!()}`,
     plistPath,
   ])
   if (bootstrapped.outcome !== 'ok') {
-    await unlink(plistPath).catch(() => {})
-    await syncDirectory(dirname(plistPath)).catch(() => {})
+    let recovery: string
+    if (previousContents !== null) {
+      await writeLaunchAgentAtomically(plistPath, previousContents)
+      const restored = await run([
+        'bootstrap',
+        `gui/${process.getuid!()}`,
+        plistPath,
+      ])
+      recovery =
+        restored.outcome === 'ok'
+          ? ' The previous plist was restored and reloaded.'
+          : ' The previous plist was restored on disk but could not be reloaded.'
+    } else {
+      recovery = ' The new plist was kept on disk for repair.'
+    }
     throw new Error(
-      `Background continuation could not be enabled: launchctl bootstrap failed for ${plistPath}.`,
+      `Background continuation could not be enabled: launchctl bootstrap failed for ${plistPath}.${recovery}`,
     )
   }
   return canonical

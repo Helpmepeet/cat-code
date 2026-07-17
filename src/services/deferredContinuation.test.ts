@@ -21,6 +21,7 @@ import {
   getDeferredContinuationPaths,
   getLatestDeferredContinuationHistory,
   listDueDeferredContinuations,
+  moveDeferredContinuationToHistory,
   prepareHumanPromptAgainstDeferredContinuation,
   readPendingDeferredContinuation,
   readTrustedDeferredTranscript,
@@ -301,6 +302,34 @@ describe('deferred continuation durable store', () => {
       // Once the owner is gone, the exit works.
       expect(await discardUnreadableDeferredContinuation(sessionId, paths)).toBe(true)
     })
+  })
+
+  test('authority loss after history write cannot unlink the pending record', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-history-authority-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const pending = job({ notBefore: NOW - 1 })
+    await createPendingDeferredContinuation(pending, paths)
+    let checks = 0
+
+    await expect(
+      moveDeferredContinuationToHistory(
+        pending,
+        'completed',
+        'completed',
+        NOW,
+        paths,
+        {
+          assertHealthy() {
+            checks++
+            if (checks > 1) throw new Error('authority lost between substeps')
+          },
+        },
+      ),
+    ).rejects.toThrow('authority lost between substeps')
+
+    expect(await stat(join(paths.pending, `${pending.sessionId}.json`))).toBeDefined()
+    expect(await stat(join(paths.history, `${pending.jobId}.json`))).toBeDefined()
   })
 
   test('durable terminal history makes a surviving pending record non-executable', async () => {

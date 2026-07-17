@@ -11,9 +11,11 @@ import {
 } from '../services/deferredContinuation.js'
 import {
   checkDeferredContinuationResume,
+  DeferredContinuationBusyError,
   DEFERRED_RESUME_BUSY_NOTICE,
   processResumedConversation,
   restoreTrustedDeferredContinuationContext,
+  withDeferredContinuationResumeAuthority,
 } from './sessionRestore.js'
 import { setCwd } from './Shell.js'
 
@@ -163,6 +165,40 @@ describe('resume against a deferred continuation session lock', () => {
         ).rejects.toThrow(DEFERRED_RESUME_BUSY_NOTICE)
       } finally {
         await attempt.release()
+      }
+    })
+  })
+
+  test('holds session authority through the transcript-adoption substep', async () => {
+    await withStore(async () => {
+      const scheduled = deferredJob()
+      await createPendingDeferredContinuation(scheduled)
+
+      await withDeferredContinuationResumeAuthority(SESSION_ID, async () => {
+        await expect(acquireDeferredContinuationLocks(scheduled)).rejects.toThrow()
+      })
+
+      const after = await acquireDeferredContinuationLocks(scheduled)
+      await after.release()
+    })
+  })
+
+  test('startup-picker adoption is not entered when session authority cannot be reacquired', async () => {
+    await withStore(async () => {
+      const scheduled = deferredJob()
+      await createPendingDeferredContinuation(scheduled)
+      const held = await acquireDeferredContinuationLocks(scheduled)
+      let adopted = false
+
+      try {
+        await expect(
+          withDeferredContinuationResumeAuthority(SESSION_ID, () => {
+            adopted = true
+          }),
+        ).rejects.toBeInstanceOf(DeferredContinuationBusyError)
+        expect(adopted).toBe(false)
+      } finally {
+        await held.release()
       }
     })
   })

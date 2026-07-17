@@ -461,9 +461,9 @@ export class DeferredContinuationBusyError extends Error {
  * Staleness is deliberately left to the store: acquire reclaims a lock left by a
  * crashed worker, so a dead attempt never bricks resume.
  */
-export async function checkDeferredContinuationResume(
+async function acquireDeferredContinuationResumeAuthority(
   sessionId: string,
-): Promise<DeferredResumeDecision> {
+): Promise<DeferredContinuationLockGuard | null> {
   let job: DeferredContinuationJobV1 | null
   try {
     job = await readPendingDeferredContinuation(sessionId)
@@ -471,18 +471,58 @@ export async function checkDeferredContinuationResume(
     // An unreadable record cannot be driving a live attempt — the runner parses
     // the same file — and refusing to open the transcript would contradict the
     // safety-stop notice that tells the user to review it manually.
-    return { action: 'allow' }
+    return null
   }
-  if (!job) return { action: 'allow' }
+  if (!job) return null
 
   let guard: DeferredContinuationLockGuard
   try {
     guard = await acquireDeferredContinuationLocks(job)
   } catch {
-    return { action: 'block', notice: DEFERRED_RESUME_BUSY_NOTICE }
+    throw new DeferredContinuationBusyError(DEFERRED_RESUME_BUSY_NOTICE)
   }
-  await guard.release()
-  return { action: 'allow' }
+  try {
+    guard.assertHealthy()
+    const current = await readPendingDeferredContinuation(sessionId)
+    if (!current || current.jobId !== job.jobId) {
+      await guard.release()
+      return null
+    }
+    return guard
+  } catch (error) {
+    await guard.release().catch(() => {})
+    throw error
+  }
+}
+
+export async function withDeferredContinuationResumeAuthority<T>(
+  sessionId: string,
+  adopt: () => T | Promise<T>,
+): Promise<T> {
+  const guard = await acquireDeferredContinuationResumeAuthority(sessionId)
+  try {
+    guard?.assertHealthy()
+    const result = await adopt()
+    guard?.assertHealthy()
+    return result
+  } finally {
+    await guard?.release()
+  }
+}
+
+export async function checkDeferredContinuationResume(
+  sessionId: string,
+): Promise<DeferredResumeDecision> {
+  try {
+    const guard = await acquireDeferredContinuationResumeAuthority(sessionId)
+    await guard?.release()
+    return { action: 'allow' }
+  } catch (error) {
+    if (error instanceof DeferredContinuationBusyError) {
+      return { action: 'block', notice: error.message }
+    }
+    throw error
+  }
 }
 
 /**
@@ -679,19 +719,30 @@ export async function processResumedConversation(
   )
 
   if (!opts.forkSession) {
-    // Cd back into the worktree the session was in when it last exited.
-    // Done after restoreSessionMetadata (which caches the worktree state
-    // from the transcript) so if the directory is gone we can override
-    // the cache before adoptResumedSessionFile writes it.
-    restoreWorktreeForResume(result.worktreeSession)
+    // Re-acquire immediately around adoption. The early check above prevents
+    // partial state changes on an already-busy session; this second acquisition
+    // closes the after-probe window where a worker could start before the
+    // transcript pointer is adopted.
+    const adopt = () => {
+      // Cd back into the worktree the session was in when it last exited.
+      // Done after restoreSessionMetadata (which caches the worktree state
+      // from the transcript) so if the directory is gone we can override
+      // the cache before adoptResumedSessionFile writes it.
+      restoreWorktreeForResume(result.worktreeSession)
 
-    // Point sessionFile at the resumed transcript and re-append metadata
-    // now. resetSessionFilePointer above nulled it (so the old fresh-session
-    // path doesn't leak), but that blocks reAppendSessionMetadata — which
-    // bails on null — from running in the exit cleanup handler. For fork,
-    // useLogMessages populates a *new* file via recordTranscript on REPL
-    // mount; the normal lazy-materialize path is correct there.
-    adoptResumedSessionFile()
+      // Point sessionFile at the resumed transcript and re-append metadata
+      // now. resetSessionFilePointer above nulled it (so the old fresh-session
+      // path doesn't leak), but that blocks reAppendSessionMetadata — which
+      // bails on null — from running in the exit cleanup handler. For fork,
+      // useLogMessages populates a *new* file via recordTranscript on REPL
+      // mount; the normal lazy-materialize path is correct there.
+      adoptResumedSessionFile()
+    }
+    if (adoptedSessionId) {
+      await withDeferredContinuationResumeAuthority(adoptedSessionId, adopt)
+    } else {
+      adopt()
+    }
   }
 
   // Restore context-collapse commit log + staged snapshot. The interactive

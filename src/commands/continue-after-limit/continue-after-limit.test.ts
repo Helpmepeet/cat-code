@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
 import command from './index.js'
 import {
   REFUSALS,
@@ -11,6 +10,7 @@ import {
   scheduledCopy,
 } from './continue-after-limit.js'
 import { QueryGuard } from '../../utils/QueryGuard.js'
+import { getImmediateCommandQueryState } from '../../utils/immediateCommand.js'
 import type { DeferredContinuationJobV1 } from '../../services/deferredContinuation.js'
 
 const NOW = new Date('2026-07-15T00:00:00Z').getTime()
@@ -127,24 +127,11 @@ describe('/continue-after-limit dispatch gate', () => {
     expect(guard.isRunning).toBe(false)
   })
 
-  // The three tests above pin QueryGuard's contract; NONE of them observes the
-  // REPL wiring, so reverting REPL.tsx's context construction to `isActive`
-  // leaves them all green. That gap is exactly what let F1 ship: 197 green
-  // tests around a command that refused in every state.
-  //
-  // REPL.tsx is an Ink component with no unit-test seam, so this asserts the
-  // wiring in source — the precedent is src/agent-mode/rolePrompts.test.ts,
-  // which asserts on constant names in implementor source for the same reason.
-  // Weak by construction: it pins the expression, not the behaviour. The
-  // behavioural half of F1 (the immediate dispatch path) is covered in
-  // src/utils/handlePromptSubmit.test.ts.
-  test('REPL builds the command context from isRunning, not isActive', async () => {
-    const source = await readFile(
-      join(import.meta.dir, '../../screens/REPL.tsx'),
-      'utf8',
-    )
-    expect(source).toContain('isQueryActive: queryGuard.isRunning')
-    expect(source).not.toContain('isQueryActive: queryGuard.isActive')
+  test('the primary immediate dispatch window reports a reserved query as active', () => {
+    const guard = new QueryGuard()
+    expect(guard.reserve()).toBe(true)
+    expect(guard.isRunning).toBe(false)
+    expect(getImmediateCommandQueryState(guard.isActive, false)).toBe(true)
   })
 
   test('the command still refuses while a turn is actually running', async () => {
