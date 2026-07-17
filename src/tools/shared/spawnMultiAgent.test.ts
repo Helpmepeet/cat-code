@@ -89,7 +89,6 @@ describe('spawnTeammate allocation lifecycle', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'researcher@review-team',
       sessionId: 'session-1',
     })
 
@@ -122,7 +121,6 @@ describe('spawnTeammate allocation lifecycle', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'researcher@review-team',
       sessionId: 'session-1',
     })
     nextSpawnResult = { success: false, agentId: 'unused@unused', error: 'boom' }

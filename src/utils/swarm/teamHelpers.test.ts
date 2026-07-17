@@ -94,7 +94,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'researcher@review-team',
       sessionId: 'session-1',
     })
 
@@ -105,7 +104,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'error',
         forbiddenKeys: new Set(),
-        agentId: 'researcher-dup@review-team',
         sessionId: 'session-1',
       }),
     ).rejects.toBeInstanceOf(RecipientConflictError)
@@ -119,7 +117,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'suffix',
       forbiddenKeys: new Set(),
-      agentId: 'researcher@review-team',
       sessionId: 'session-1',
     })
     const second = await allocateTeamRecipient({
@@ -128,12 +125,13 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'suffix',
       forbiddenKeys: new Set(),
-      agentId: 'researcher-2@review-team',
       sessionId: 'session-1',
     })
 
     expect(first.name).toBe('researcher')
+    expect(first.agentId).toBe('researcher@review-team')
     expect(second.name).toBe('researcher-2')
+    expect(second.agentId).toBe('researcher-2@review-team')
     expect(first.allocationId).not.toBe(second.allocationId)
   })
 
@@ -147,7 +145,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'suffix',
         forbiddenKeys: new Set(),
-        agentId: 'researcher@review-team',
         sessionId: 'session-1',
       }),
       allocateTeamRecipient({
@@ -156,7 +153,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'suffix',
         forbiddenKeys: new Set(),
-        agentId: 'researcher-2@review-team',
         sessionId: 'session-1',
       }),
     ])
@@ -182,7 +178,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'alice@review-team',
       sessionId: 'session-1',
     })
     await transitionTeamRecipient({
@@ -199,7 +194,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'error',
         forbiddenKeys: new Set(),
-        agentId: 'alice-again@review-team',
         sessionId: 'session-1',
       }),
     ).rejects.toBeInstanceOf(RecipientConflictError)
@@ -210,7 +204,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'suffix',
       forbiddenKeys: new Set(),
-      agentId: 'alice-2@review-team',
       sessionId: 'session-1',
     })
     expect(bySuffix.name).toBe('alice-2')
@@ -225,7 +218,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'bob@review-team',
       sessionId: 'session-1',
     })
 
@@ -265,7 +257,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'carol@review-team',
       sessionId: 'session-1',
     })
     await transitionTeamRecipient({
@@ -274,9 +265,9 @@ describe('teamHelpers versioned transactions', () => {
       from: 'reserved',
       to: 'active',
       member: {
-        agentId: 'carol@review-team',
-        allocationId: allocated.allocationId,
-        name: 'carol',
+        agentId: 'stale@review-team',
+        allocationId: 'stale-allocation',
+        name: 'stale-name',
         joinedAt: Date.now(),
         tmuxPaneId: 'pane-1',
         cwd: tempDir,
@@ -290,8 +281,13 @@ describe('teamHelpers versioned transactions', () => {
       r => r.allocationId === allocated.allocationId,
     )
     expect(record?.status).toBe('active')
+    expect(record?.agentId).toBe('carol@review-team')
     const member = snapshot.members.find(m => m.agentId === 'carol@review-team')
-    expect(member?.tmuxPaneId).toBe('pane-1')
+    expect(member).toMatchObject({
+      allocationId: allocated.allocationId,
+      name: 'carol',
+      tmuxPaneId: 'pane-1',
+    })
   })
 
   test('recoverStartingRecipient tombstones a starting allocation whose launcher is confirmed dead', async () => {
@@ -375,7 +371,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'error',
         forbiddenKeys: new Set(),
-        agentId: 'foo@review-team',
         sessionId: 'session-1',
       }),
     ).rejects.toThrow('Invalid teammate name')
@@ -390,7 +385,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'long@review-team',
       sessionId: 'session-1',
     })
 
@@ -403,7 +397,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'suffix',
       forbiddenKeys: new Set(),
-      agentId: 'long-2@review-team',
       sessionId: 'session-1',
     })
     expect(suffixed.name.endsWith('-2')).toBe(true)
@@ -418,7 +411,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'local',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'aabc123',
       sessionId: 'session-1',
     })
 
@@ -429,7 +421,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'error',
         forbiddenKeys: new Set(),
-        agentId: 'researcher@review-team',
         sessionId: 'session-1',
       }),
     ).rejects.toBeInstanceOf(RecipientConflictError)
@@ -443,7 +434,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'frank@review-team',
       sessionId: 'session-1',
     })
 
@@ -466,7 +456,6 @@ describe('teamHelpers versioned transactions', () => {
         kind: 'teammate',
         conflict: 'error',
         forbiddenKeys: new Set(),
-        agentId: 'frank-again@review-team',
         sessionId: 'session-1',
       }),
     ).rejects.toBeInstanceOf(RecipientConflictError)
@@ -480,7 +469,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'grace@review-team',
       sessionId: 'session-1',
     })
     await transitionTeamRecipient({
@@ -507,7 +495,6 @@ describe('teamHelpers versioned transactions', () => {
       kind: 'teammate',
       conflict: 'error',
       forbiddenKeys: new Set(),
-      agentId: 'henry@review-team',
       sessionId: 'session-1',
     })
     await transitionTeamRecipient({

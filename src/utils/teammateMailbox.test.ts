@@ -27,6 +27,7 @@ import {
   type MailboxControlPayload,
   MailboxWriteError,
   markMessagesAsRead,
+  TeamPrincipalResolutionError,
   type PendingControlRecord,
   readMailbox,
   readMailboxIfChanged,
@@ -757,6 +758,70 @@ describe('writeControlToMailbox / writeControlRequestToMailbox authority', () =>
         teamName: 'review-team',
       }),
     ).rejects.toBeInstanceOf(MailboxControlAuthorityError)
+  })
+
+  test('an unknown nonempty runtime identity cannot inherit leader authority', async () => {
+    await seedTeam('review-team')
+    setDynamicTeamContext({
+      agentId: 'mallory@review-team',
+      agentName: 'mallory',
+      teamName: 'review-team',
+      planModeRequired: false,
+    })
+
+    await expect(
+      writeControlToMailbox({
+        recipient: {
+          kind: 'teammate',
+          agentId: 'alice@review-team',
+          name: 'alice',
+          allocationId: 'allocation-alice',
+        },
+        control: createShutdownRequestMessage({
+          requestId: 'shutdown-unknown',
+          from: TEAM_LEAD_NAME,
+        }),
+        teamName: 'review-team',
+      }),
+    ).rejects.toBeInstanceOf(TeamPrincipalResolutionError)
+  })
+
+  test('a stale terminated runtime identity cannot inherit leader authority', async () => {
+    await seedTeam('review-team')
+    const { transactTeamFile } = await import('./swarm/teamHelpers.js')
+    await transactTeamFile('review-team', teamFile => ({
+      teamFile: {
+        ...teamFile,
+        recipientRecords: teamFile.recipientRecords!.map(record =>
+          record.agentId === 'alice@review-team'
+            ? { ...record, status: 'terminated' as const }
+            : record,
+        ),
+      },
+      result: undefined,
+    }))
+    setDynamicTeamContext({
+      agentId: 'alice@review-team',
+      agentName: 'alice',
+      teamName: 'review-team',
+      planModeRequired: false,
+    })
+
+    await expect(
+      writeControlToMailbox({
+        recipient: {
+          kind: 'teammate',
+          agentId: 'alice@review-team',
+          name: 'alice',
+          allocationId: 'allocation-alice',
+        },
+        control: createShutdownRequestMessage({
+          requestId: 'shutdown-stale',
+          from: TEAM_LEAD_NAME,
+        }),
+        teamName: 'review-team',
+      }),
+    ).rejects.toBeInstanceOf(TeamPrincipalResolutionError)
   })
 
   test('the team lead can send an authorized shutdown_request to a rostered teammate', async () => {

@@ -355,6 +355,13 @@ export type MailboxWrittenResult = {
   warning?: string
 }
 
+export class TeamPrincipalResolutionError extends Error {
+  constructor(teamName: string, agentId: string) {
+    super(`Runtime agent identity "${agentId}" is not an active recipient in team "${teamName}"`)
+    this.name = 'TeamPrincipalResolutionError'
+  }
+}
+
 /**
  * Plain-chat mailbox input. Statically excludes `control`/`notification` so
  * a caller can never smuggle a privileged control payload through the chat
@@ -437,11 +444,12 @@ export async function resolveCurrentTeamPrincipal(
 ): Promise<TeamPrincipal> {
   const records = snapshot.recipientRecords ?? []
   const agentId = getAgentId()
-  if (agentId) {
-    const record = records.find(r => r.agentId === agentId)
-    if (record) return recipientRecordToPrincipal(record)
-  }
-  return resolveLeaderPrincipal(snapshot)
+  if (!agentId) return resolveLeaderPrincipal(snapshot)
+  const record = records.find(
+    r => r.agentId === agentId && r.status !== 'terminated',
+  )
+  if (record) return recipientRecordToPrincipal(record)
+  throw new TeamPrincipalResolutionError(teamName, agentId)
 }
 
 /**

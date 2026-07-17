@@ -338,7 +338,6 @@ export async function resolveSystemSubagentName({
         kind: 'local',
         conflict: 'error',
         forbiddenKeys,
-        agentId,
         sessionId,
       })
       if (!tryReserveWorkerName(record.name)) {
@@ -374,7 +373,6 @@ export async function resolveSystemSubagentName({
           kind: 'local',
           conflict: 'error',
           forbiddenKeys,
-          agentId,
           sessionId,
         })
         tryReserveWorkerName(record.name)
@@ -670,7 +668,6 @@ export const AgentTool = buildTool({
         kind: 'teammate',
         conflict: 'suffix',
         forbiddenKeys: new Set(reservedLocalNames.map(recipientNameKey)),
-        agentId: formatAgentId(recipientNameKey(name), teamName),
         sessionId: getSessionId(),
       });
       let result;

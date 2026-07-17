@@ -4,6 +4,7 @@ import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
 import { getSessionCreatedTeams } from '../../bootstrap/state.js'
+import { formatAgentId } from '../agentId.js'
 import { logForDebugging } from '../debug.js'
 import { getTeamsDir } from '../envUtils.js'
 import { errorMessage, getErrnoCode } from '../errors.js'
@@ -422,7 +423,6 @@ export async function allocateTeamRecipient(args: {
   kind: 'local' | 'teammate'
   conflict: 'error' | 'suffix'
   forbiddenKeys: ReadonlySet<string>
-  agentId: string
   sessionId: string
   backendType?: BackendType
 }): Promise<TeamRecipientRecord> {
@@ -473,7 +473,7 @@ export async function allocateTeamRecipient(args: {
       key: candidate.key,
       name: candidate.name,
       kind: args.kind,
-      agentId: args.agentId,
+      agentId: formatAgentId(candidate.name, args.teamName),
       sessionId: args.sessionId,
       status: 'reserved',
       launcherPid: process.pid,
@@ -528,19 +528,35 @@ export async function transitionTeamRecipient(args: {
       )
     }
 
+    const canonicalAgentId = formatAgentId(record.name, args.teamName)
     const updatedRecords = recipientRecords.map((r, i) =>
-      i === index ? { ...r, status: args.to, updatedAt: Date.now() } : r,
+      i === index
+        ? {
+            ...r,
+            agentId: canonicalAgentId,
+            status: args.to,
+            updatedAt: Date.now(),
+          }
+        : r,
     )
 
     let members = teamFile.members
     if (args.member) {
+      const member = {
+        ...args.member,
+        agentId: canonicalAgentId,
+        allocationId: record.allocationId,
+        name: record.name,
+      }
       const memberIndex = members.findIndex(
-        m => m.agentId === args.member!.agentId,
+        m =>
+          m.allocationId === record.allocationId ||
+          m.agentId === canonicalAgentId,
       )
       members =
         memberIndex === -1
-          ? [...members, args.member]
-          : members.map((m, i) => (i === memberIndex ? args.member! : m))
+          ? [...members, member]
+          : members.map((m, i) => (i === memberIndex ? member : m))
     }
 
     return {
