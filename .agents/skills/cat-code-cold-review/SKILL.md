@@ -1,6 +1,6 @@
 ---
 name: cat-code-cold-review
-description: Use when asked to review completed work in the cat-code repository — a session's implementation, a plan's execution, a phase/tranche/by-layer integration review, or an audit of claims in STATUS/DONE/report docs. Do not use for reviewing external codebases, for pre-implementation plan review, or for writing new plans.
+description: Use when asked to review completed work or test confidence in the cat-code repository — a session's implementation, a recent-test audit, a plan's execution, a phase/tranche/by-layer integration review, or an audit of claims in STATUS/DONE/report docs. Do not use for reviewing external codebases, for pre-implementation plan review, or for writing new plans.
 ---
 
 # Cat Code Cold Review
@@ -51,6 +51,31 @@ per-commit review lanes plus one integration lane.
   cross-process read-modify-write without lock+fresh-read; tests that assert
   shape but never exercise the live path; docs updated but code not (or vice
   versa); pre-computed state applied under a later lock.
+
+### Test-confidence gate
+
+When tests support a material acceptance claim, verify the proof rather than
+grading test style. For each claim, identify:
+
+1. The production entry point exercised. A helper-only test does not prove its
+   caller, and a source-string assertion is only a wiring tripwire.
+2. The exact pre-fix failure the test would catch. A fixture the public caller
+   cannot create, or an “unchanged” assertion against state the operation never
+   receives, does not count.
+3. A pairwise interaction when two independently valid states can compose
+   (model switch + cumulative usage, settlement + authority loss, and similar
+   seams), not only one-axis examples.
+4. Every unverified GUI, live-client, process, timing, or concurrency layer.
+   Missing proof is `UNVERIFIED`, never an implied pass.
+5. The correlation matrix for identity/concurrency work: missing, unknown,
+   stale, and duplicate identities where applicable; two actors plus
+   out-of-order or same-batch delivery for correlated results.
+
+For regex or heuristic evaluators, adversarially check negated, contradictory,
+mixed, and paragraph-scoped answers. Ambiguous evidence must route to review,
+not pass. Do not demand blanket test rewrites: classify each gap as **react
+now**, **named owner or explicit waiver**, or **no action**, based on the
+reachable consequence and the confidence the project actually needs.
 
 ## Step 4 — Verdict and findings
 
