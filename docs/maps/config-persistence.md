@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-07-13
+Last refreshed: 2026-07-17
 
 ## Purpose
 
@@ -16,15 +16,12 @@ for the config and persistence slice.
 
 | Need | Inspect first | Then inspect |
 |---|---|---|
-| Broad routing fallback | `docs/maps/WORKSPACE_MAP.md` | Relevant focused sub-map under `docs/maps/` |
-| Settings merge behavior | `src/utils/settings/settings.ts` | `src/utils/settings/constants.ts`, `src/utils/settings/settingsCache.ts` |
-| Global config and project-keyed user state | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/envUtils.ts` |
+| Settings, global config, and project-keyed user state | `src/utils/settings/settings.ts` | `src/utils/config.ts`, `src/utils/env.ts`, `src/utils/settings/settingsCache.ts` |
 | Environment application from config/settings | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/utils/sessionEnvVars.ts` |
 | Instruction memory and rule discovery | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/settings/constants.ts` |
 | Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
-| Deferred continuation queue | `src/services/deferredContinuation.ts` | `src/services/deferredContinuationRunner.ts`, `src/types/logs.ts`, and `src/utils/sessionStorage.ts`; user-private, fsync-backed queue/history/locks live under `${CLAUDE_CONFIG_DIR:-~/.cat-code}/deferred-continuations/`. Jobs never persist prompts, credentials, account identity, transcript paths, or temporary permission grants. |
-| Persistent memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/memdir/memoryTypes.ts`, `src/services/extractMemories/prompts.ts` |
-| Session memory summaries | `src/services/SessionMemory/sessionMemory.ts` | `src/services/SessionMemory/sessionMemoryUtils.ts`, `src/utils/permissions/filesystem.ts` |
+| Deferred continuation queue and resume safety | `src/services/deferredContinuation.ts` | `src/services/deferredContinuationRunner.ts`, `src/utils/sessionRestore.ts`, `src/types/logs.ts`, and `src/utils/sessionStorage.ts`; user-private, fsync-backed queue/history/locks live under `${CLAUDE_CONFIG_DIR:-~/.cat-code}/deferred-continuations/`. Jobs never persist prompts, credentials, account identity, transcript paths, or temporary permission grants. |
+| Persistent and session memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/memdir/memoryTypes.ts`, `src/services/extractMemories/prompts.ts`, `src/services/SessionMemory/sessionMemory.ts` |
 | Admin/remote policy | `src/services/remoteManagedSettings/index.ts`, `src/services/policyLimits/index.ts` | `src/utils/settings/mdm/`, `src/utils/settings/managedPath.ts` |
 
 ## Routing Table
@@ -172,6 +169,11 @@ Do not treat `src/history.ts` or prompt input history as transcript truth.
   than rebuilding paths by hand.
 - Progress entries are UI state and should not participate in transcript parent
   chains.
+- Deferred continuation history is terminal authority, not disposable logging:
+  it suppresses surviving pending work after an interrupted transition. Resume
+  probes its per-session lock without canceling a pending job; only a model-turn
+  human submission may cancel it. An unreadable pending record fails closed, but
+  `/continue-after-limit cancel` is the source-validated escape hatch.
 - Session memory, auto memory, team memory, CLAUDE.md instruction memory, and
   transcript JSONL files are separate persistence systems.
 - Auto-memory path overrides do not get the default silent write permission

@@ -1,15 +1,18 @@
 # Terminal UI And State Routing Map
 
-Last refreshed: 2026-07-14
+Last refreshed: 2026-07-17
 
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
 
 ## First Files To Inspect
 
-1. `docs/maps/WORKSPACE_MAP.md`
-2. `src/screens/REPL.tsx`
-3. The focused owner surface for the area you are changing below
+1. `src/screens/REPL.tsx` for terminal session assembly and query ownership.
+2. `src/utils/handlePromptSubmit.ts` and `src/utils/immediateCommand.ts` for submission and command dispatch.
+3. `src/commands/continue-after-limit/continue-after-limit.tsx` and `src/services/deferredContinuationRunner.ts` for deferred continuation UX and execution.
+4. `src/utils/sessionRestore.ts` and `src/utils/sessionStorage.ts` for resume/adoption and transcript persistence.
+5. `src/components/PromptInput/` and `src/hooks/useCommandQueue.ts` for input-shell behavior.
+6. `src/state/AppStateStore.ts` and `src/state/selectors.ts` for shared state and active-agent input routing.
 
 Use `docs/maps/tasks-workers.md` for task lifecycle details and
 `docs/maps/tools-permissions.md` for approval and permission routing.
@@ -23,7 +26,7 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | Shared terminal/app state | `src/state/AppStateStore.ts` | `src/state/AppState.tsx`, `src/state/store.ts`, `src/state/onChangeAppState.ts` | Shared state shape lives in `AppStateStore.ts`; selector subscriptions and store access live in `AppState.tsx`. |
 | Derived routing for viewed agents | `src/state/selectors.ts` | `src/state/teammateViewHelpers.ts`, `src/screens/REPL.tsx` | `getActiveAgentForInput()` decides whether input targets the leader, a viewed teammate, or a named local agent. |
 | Query and prompt submission | `src/screens/REPL.tsx` | `src/utils/handlePromptSubmit.ts`, `src/utils/immediateCommand.ts`, `src/query.ts`, `src/utils/processUserInput/` | `REPL.tsx` handles immediate command paths, queue handoff, history/paste preparation, and main-thread query start. Immediate local-JSX commands have an owner-scoped slot and must re-check availability at dispatch. |
-| Continue after a confirmed Codex limit | `src/commands/continue-after-limit/continue-after-limit.tsx` | `src/services/deferredContinuationPresentation.ts`, `src/hooks/useDeferredContinuation.ts`, `src/services/deferredContinuationRunner.ts`, `src/screens/REPL.tsx`, `src/utils/handlePromptSubmit.ts` | The command owns schedule/status/cancel/background UX. Shared presentation helpers keep status and one-shot notice mapping aligned. The hook only wakes due work; the runner owns locks/state/result policy. REPL validates the closed origin and durable UUID gate, while human input cancels pending work or visibly blocks during an owned attempt. |
+| Continue after a confirmed Codex limit | `src/commands/continue-after-limit/continue-after-limit.tsx` | `src/services/deferredContinuationPresentation.ts`, `src/hooks/useDeferredContinuation.ts`, `src/services/deferredContinuationRunner.ts`, `src/screens/REPL.tsx`, `src/utils/handlePromptSubmit.ts`, `src/utils/sessionRestore.ts` | The command owns schedule/status/cancel/background UX. The hook only wakes due work; the runner owns the fsync-backed queue, locks, and result policy. Only model-turn human input cancels a pending job; a resume probes the per-session lock without canceling it, while an owned attempt blocks the resume. Unreadable pending records fail closed but `cancel` can discard one under that session lock. |
 | Codex reasoning display | `src/utils/reasoningDisplay.ts` | `src/utils/messages.ts`, `src/components/Messages.tsx`, `src/components/Message.tsx` | Normalization preserves provider raw-reasoning availability across a turn. The display setting selects summary, raw, or neither; raw blocks without content remain hidden, and the message list selects the latest visible thinking block. |
 | Prompt input shell | `src/components/PromptInput/PromptInput.tsx` | `src/components/PromptInput/PromptInputFooter.tsx`, `src/components/PromptInput/`, `src/hooks/useCommandQueue.ts`, `src/state/selectors.ts` | Owns prompt composition, footer pills, stash/queued-command UX, history-search entry, and submit routing to leader or viewed agent. |
 | Footer notifications and transient task notices | `src/components/PromptInput/Notifications.tsx` | `src/components/tasks/taskStatusUtils.tsx`, `src/tasks/LocalAgentTask/LocalAgentTask.tsx`, `src/state/AppStateStore.ts` | Notifications now surface terminal local-agent outcomes when you are not viewing that agent, including blocked handoffs and verification verdicts. |
