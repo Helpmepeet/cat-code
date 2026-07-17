@@ -17,6 +17,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AccountVerbMessage,
+  AskUserQuestionAnswer,
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
@@ -44,6 +45,7 @@ declare const __CATCODE_DEV_HARNESS__: boolean
 const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
+const CH_ANSWER_QUESTIONS = 'catcode:answer-questions'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
@@ -91,6 +93,19 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, mode }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SET_MODE, payload)
+  },
+  answerQuestions(
+    sessionId: SessionId,
+    requestId: string,
+    answers: AskUserQuestionAnswer[],
+  ): void {
+    // C5 (P4-20) — same posture as `respondPermission`: the renderer supplies the
+    // engine-minted `requestId` + a decided answer payload (option indices +
+    // freeform); main light-coerces and the SIDECAR is the trust boundary (T5a +
+    // tool gate + Zod + label re-attach). No engine object, no cwd, no token.
+    const payload = { sessionId, requestId, answers }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_ANSWER_QUESTIONS, payload)
   },
   accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void {
     // P4-5 — HC3 fixed sender. The renderer supplies only a decided verb payload;

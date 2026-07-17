@@ -232,6 +232,7 @@ async function runProductionHardeningSmoke(
       // Frame plane (engine commands + attachment).
       'abort',
       'accountVerb',
+      'answerQuestions',
       'ping',
       'workspaceTrustVerb',
       'remoteSettingsVerb',

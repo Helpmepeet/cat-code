@@ -279,9 +279,10 @@ test('control plane adds ZERO new socket frame types (stays off the wire in v1)'
   expect(source).not.toContain("type: 'app.createSession'")
   expect(source).not.toContain("type: 'host.")
   // The only forward() targets that construct a `type:` literal are the engine
-  // commands + the two app-owned scalar verbs main mints a requestId for
-  // (permission.setMode, agent-mode.set). Object-forwarded verbs (account.*,
-  // workspace.*, remoteSettings.*, settings.*) pass `arg.verb` and never match.
+  // commands + the app-owned frames main mints/relays a literal for
+  // (permission.setMode, agent-mode.set, C5/P4-20 askUserQuestion.answer).
+  // Object-forwarded verbs (account.*, workspace.*, remoteSettings.*, settings.*)
+  // pass `arg.verb` and never match.
   const forwardTypes = [...source.matchAll(/forward\([^,]+,\s*\{\s*\n?\s*type:\s*'([^']+)'/g)].map(
     m => m[1],
   )
@@ -292,6 +293,7 @@ test('control plane adds ZERO new socket frame types (stays off the wire in v1)'
       'permission.response',
       'permission.setMode',
       'agent-mode.set',
+      'askUserQuestion.answer',
       'app.ping',
     ]).toContain(t)
   }

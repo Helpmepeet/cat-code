@@ -33,6 +33,11 @@ import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
+// C5 (P4-20) — the wire tool-name literal, imported from the ENGINE source the
+// runtime mints permission requests with (appRuntimeCanUseTool.ts sets
+// `tool_name: tool.name`), so the sidecar's tool gate can never drift from the
+// real name. `prompt.js` is a constants-only module (no React graph).
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../src/tools/AskUserQuestionTool/prompt.js'
 import type {
   AppClientMessage,
   AppSubmitMessage,
@@ -46,12 +51,14 @@ import {
 } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  MAX_QUESTION_ANSWER_CHARS,
   MAX_SUGGESTION_SELECTIONS,
   MAX_TEXT_FIELD_CHARS,
   RATE_WINDOW_MS,
@@ -62,6 +69,7 @@ import {
   PROTOCOL_VERSION,
   RUN_CONTROL_VERB_TYPES,
   type AccountVerbMessage,
+  type AskUserQuestionAnswerMessage,
   type ClientFrame,
   type PermissionContextSnapshot,
   type RemoteVerbMessage,
@@ -714,6 +722,18 @@ export class SidecarServer {
       'permission.setMode'
     ) {
       this.handleSetMode(connection, frame.message)
+      return
+    }
+
+    // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — the AskUserQuestion answer is
+    // app-owned vocabulary validated by a sidecar-LOCAL schema (like C2), then
+    // resolved through the engine's OWN `respondToPermissionRequest` allow path.
+    // The engine's shared `appClientMessageSchema` is deliberately NOT extended.
+    if (
+      (frame.message as { type?: unknown } | null | undefined)?.type ===
+      'askUserQuestion.answer'
+    ) {
+      this.handleAskUserQuestionAnswer(connection, frame.message)
       return
     }
 
@@ -1599,6 +1619,94 @@ export class SidecarServer {
     }
   }
 
+  /**
+   * C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — resolve a pending AskUserQuestion
+   * request from a renderer answer frame. The renderer authors ONLY option
+   * INDICES + the built-in "Other…" freeform string; this handler re-reads the
+   * gated `questions` from the ENGINE's own pending request, re-attaches the
+   * engine's own option labels (C1 selection-by-index), and resolves the request
+   * as an allow whose `updatedInput.answers` the engine's tool reads. The answer
+   * response is built server-side, so it never passes through the T6 renderer-echo
+   * check (T6 guards renderer-SUPPLIED updatedInput; the renderer supplies none).
+   * Fail-closed at every step: an invalid frame leaves the request pending.
+   */
+  private handleAskUserQuestionAnswer(
+    connection: Connection,
+    rawMessage: unknown,
+  ): void {
+    // The requestId is read BEFORE schema validation so a rejected answer still
+    // correlates back to its request — without it the renderer cannot clear its
+    // in-flight guard and an honest over-long answer strands the pending
+    // request forever. Same shape as handleAgentModeSet / handleRunControlVerb.
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+    const parsed = askUserQuestionAnswerMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid askUserQuestion.answer',
+        false,
+      )
+      return
+    }
+    const message: AskUserQuestionAnswerMessage = parsed.data
+
+    // T5a — the requestId MUST match a currently-pending engine-minted request
+    // (identical lookup to handlePermissionResponse).
+    const pending = this.controller
+      .getPendingPermissionRequests()
+      .find(request => request.requestId === message.requestId)
+    if (!pending) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'permission_not_found',
+        'Permission request is no longer pending',
+        false,
+      )
+      return
+    }
+
+    // Tool gate — this frame is valid ONLY for an AskUserQuestion request. A
+    // forged answer against any other gate (Bash, file write) is bad_request.
+    if (pending.request.tool_name !== ASK_USER_QUESTION_TOOL_NAME) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'bad_request',
+        'askUserQuestion.answer is only valid for an AskUserQuestion request',
+        false,
+      )
+      return
+    }
+
+    const gatedInput = extractGatedToolInput(pending.request)
+    const reconstructed = reconstructAskUserQuestionAnswers(
+      gatedInput,
+      message.answers,
+    )
+    if (!reconstructed.ok) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'bad_request',
+        reconstructed.reason,
+        false,
+      )
+      return
+    }
+
+    // Resolve through the engine's OWN decision path. `questions`/`metadata` are
+    // the engine's gated fields (never the wire); only `answers` is attached.
+    this.controller.respondToPermissionRequest(message.requestId, {
+      behavior: 'allow',
+      updatedInput: { ...gatedInput, answers: reconstructed.answers },
+    })
+  }
+
   /* --------------------------------------------------------------------- *
    * Outbound (engine → client): raw-forward, JSON-safe, clone-on-serialize.
    * --------------------------------------------------------------------- */
@@ -2377,6 +2485,11 @@ function checkStrictKeys(message: unknown): string | null {
     // pinned to `session` at the sidecar; a renderer that tries to send one
     // is rejected here.
     ['permission.setMode', new Set(['type', 'requestId', 'mode'])],
+    // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md). The renderer authors ONLY the
+    // per-question `answers` (option indices + built-in "Other…" freeform); the
+    // inner `{optionIndices, other}` shape is closed by the sidecar-local Zod
+    // schema below (checkStrictKeys guards only top-level keys).
+    ['askUserQuestion.answer', new Set(['type', 'requestId', 'answers'])],
     // P4-5 account verbs (app-owned; see ACCOUNT_VERB_TYPES). Each key set is the
     // exact renderer-facing contract; anything else is rejected before the Zod
     // parse. `account.delete` requires `confirm` (destructive → fail-closed).
@@ -2476,6 +2589,30 @@ const permissionSetModeMessageSchema = z.object({
   type: z.literal('permission.setMode'),
   requestId: z.string().min(1),
   mode: z.enum(PERMISSION_SET_MODE_MODES),
+})
+
+/**
+ * C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — sidecar-LOCAL schema for the
+ * AskUserQuestion answer frame. App-owned, NOT part of the engine's shared
+ * schema. Structural only: the renderer authors option INDICES + a bounded
+ * "Other…" freeform string; the sidecar re-attaches the engine's own option
+ * labels and re-reads the gated questions (handleAskUserQuestionAnswer), so the
+ * semantic checks (index in range, cardinality vs multiSelect, question count)
+ * are done against the LIVE pending request, never trusted from the frame. The
+ * inner `{optionIndices, other}` object is `.strict()` so an extra nested key is
+ * rejected, not stripped (checkStrictKeys guards only the top level).
+ */
+const askUserQuestionAnswerSchema = z
+  .object({
+    optionIndices: z.array(z.number().int().nonnegative()),
+    other: z.string().max(MAX_QUESTION_ANSWER_CHARS).optional(),
+  })
+  .strict()
+
+const askUserQuestionAnswerMessageSchema = z.object({
+  type: z.literal('askUserQuestion.answer'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  answers: z.array(askUserQuestionAnswerSchema).min(1).max(MAX_ANSWER_QUESTIONS),
 })
 
 /**
@@ -2762,6 +2899,122 @@ function extractGatedToolInput(
     return candidate.input as Record<string, unknown>
   }
   return undefined
+}
+
+type AskUserQuestionReconstructResult =
+  | { ok: true; answers: Record<string, string> }
+  | { ok: false; reason: string }
+
+/** One engine-minted question, defensively narrowed from the gated input. */
+type NarrowedGatedQuestion = {
+  question: string
+  options: string[] // option labels, in engine order
+  multiSelect: boolean
+}
+
+/**
+ * Narrow the gated AskUserQuestion input's `questions` into the minimal shape
+ * the answer reconstruction needs, defensively (the request came from the
+ * engine, but the boundary stays defensive about shape — same posture as
+ * `extractGatedToolInput`). Returns undefined if the shape is unexpected.
+ */
+function narrowGatedQuestions(
+  gatedInput: Record<string, unknown> | undefined,
+): NarrowedGatedQuestion[] | undefined {
+  const raw = gatedInput?.questions
+  if (!Array.isArray(raw)) return undefined
+  const questions: NarrowedGatedQuestion[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) return undefined
+    const record = entry as Record<string, unknown>
+    if (typeof record.question !== 'string') return undefined
+    if (!Array.isArray(record.options)) return undefined
+    const options: string[] = []
+    for (const option of record.options) {
+      if (typeof option !== 'object' || option === null) return undefined
+      const label = (option as Record<string, unknown>).label
+      if (typeof label !== 'string') return undefined
+      options.push(label)
+    }
+    questions.push({
+      question: record.question,
+      options,
+      multiSelect: record.multiSelect === true,
+    })
+  }
+  return questions
+}
+
+/**
+ * C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — reconstruct the tool's
+ * `answers: Record<questionText, answerString>` from a renderer answer frame,
+ * validated against the ENGINE's own gated questions. Option indices are
+ * resolved to the engine's own labels (C1 byte-fidelity); the built-in "Other…"
+ * freeform text is the only renderer-authored byte (bounded, model-visible text
+ * only). Fail-closed on any structural mismatch; the request stays pending.
+ */
+function reconstructAskUserQuestionAnswers(
+  gatedInput: Record<string, unknown> | undefined,
+  answers: AskUserQuestionAnswerMessage['answers'],
+): AskUserQuestionReconstructResult {
+  const questions = narrowGatedQuestions(gatedInput)
+  if (!questions) {
+    return { ok: false, reason: 'gated AskUserQuestion input has no questions' }
+  }
+  if (answers.length !== questions.length) {
+    return {
+      ok: false,
+      reason: 'answers length does not match the questions asked',
+    }
+  }
+
+  const map: Record<string, string> = {}
+  for (let qi = 0; qi < questions.length; qi++) {
+    const question = questions[qi]!
+    const answer = answers[qi]!
+    const other = answer.other?.trim()
+    const hasOther = other !== undefined && other.length > 0
+    const indices = answer.optionIndices
+
+    // Every index must select a real, distinct engine-minted option.
+    const seen = new Set<number>()
+    for (const index of indices) {
+      if (index >= question.options.length) {
+        return {
+          ok: false,
+          reason: `option index ${index} is out of range for question ${qi}`,
+        }
+      }
+      if (seen.has(index)) {
+        return {
+          ok: false,
+          reason: `duplicate option index ${index} for question ${qi}`,
+        }
+      }
+      seen.add(index)
+    }
+
+    const componentCount = indices.length + (hasOther ? 1 : 0)
+    if (componentCount === 0) {
+      return { ok: false, reason: `question ${qi} has no answer` }
+    }
+    // Single-select accepts at most one component total (one option OR the
+    // freeform), mirroring the tool's own UI cardinality; multi-select joins.
+    if (!question.multiSelect && componentCount > 1) {
+      return {
+        ok: false,
+        reason: `question ${qi} is single-select but got multiple answers`,
+      }
+    }
+
+    // Labels from the ENGINE (index selection), freeform from the bounded wire,
+    // joined ", " per the tool's outputSchema (multi answers comma-separated).
+    const parts = indices.map(index => question.options[index]!)
+    if (hasOther) parts.push(other)
+    map[question.question] = parts.join(', ')
+  }
+
+  return { ok: true, answers: map }
 }
 
 /** Structural deep equality for JSON-shaped values (T6 echo check). */

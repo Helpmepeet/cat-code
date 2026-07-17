@@ -83,6 +83,7 @@ import {
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountVerbMessage,
   type AccountVerbType,
+  type AskUserQuestionAnswerMessage,
   type PermissionSetModeMode,
   type RemoteVerbMessage,
   type RemoteVerbType,
@@ -103,6 +104,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const CH_SUBMIT = 'catcode:submit'
 const CH_ABORT = 'catcode:abort'
 const CH_PERMISSION = 'catcode:permission'
+const CH_ANSWER_QUESTIONS = 'catcode:answer-questions'
 const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
@@ -672,6 +674,29 @@ function registerIpcHandlers(): void {
         type: 'permission.response',
         requestId: arg.requestId,
         response,
+      })
+    },
+  )
+
+  ipcMain.on(
+    CH_ANSWER_QUESTIONS,
+    (_e, arg: { sessionId: SessionId; requestId: string; answers: unknown }) => {
+      // C5 (P4-20) — light UX shape coercion only; the SIDECAR is the trust
+      // boundary (T5a + tool gate + Zod + engine-label re-attach). Drop a frame
+      // whose `answers` is not an array fail-closed rather than forward one
+      // guaranteed to be rejected. The renderer authors the engine-minted
+      // `requestId` (T5a) + option indices + freeform — no engine object crosses.
+      if (
+        typeof arg?.sessionId !== 'string' ||
+        typeof arg?.requestId !== 'string' ||
+        !Array.isArray(arg.answers)
+      ) {
+        return
+      }
+      forward(arg.sessionId, {
+        type: 'askUserQuestion.answer',
+        requestId: arg.requestId,
+        answers: arg.answers as AskUserQuestionAnswerMessage['answers'],
       })
     },
   )

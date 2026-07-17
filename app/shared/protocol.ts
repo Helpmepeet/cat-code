@@ -105,6 +105,40 @@ export type PermissionSetModeMessage = {
   mode: PermissionSetModeMode
 }
 
+/**
+ * C5 — one AskUserQuestion answer, per question, position-aligned to the gated
+ * `questions` array (decisions/ASK-USER-QUESTION-ANSWER.md). Two channels:
+ *
+ *  - `optionIndices` — indices into THIS question's engine-minted `options[]`.
+ *    The sidecar re-attaches the engine's own `options[i].label` (C1
+ *    selection-by-index, PERMISSION-BOUNDARY.md §2); no renderer byte becomes an
+ *    option label. A single-select question accepts at most one component total.
+ *  - `other` — the built-in "Other…" freeform answer. Genuine user-authored text,
+ *    the one part index-selection cannot reach; model-visible text only, never a
+ *    privileged action, so it is security-equivalent to an `app.submit` prompt.
+ */
+export type AskUserQuestionAnswer = {
+  optionIndices: number[]
+  other?: string
+}
+
+/**
+ * C5 inbound frame (decisions/ASK-USER-QUESTION-ANSWER.md). App-owned vocabulary
+ * (NOT part of the engine's shared `appClientMessageSchema`); the sidecar
+ * validates it with a sidecar-LOCAL schema, re-reads the gated `questions` from
+ * the ENGINE's own pending request, reconstructs `updatedInput.answers` from
+ * engine-minted labels + the bounded freeform text, and resolves the pending
+ * request through the engine's existing `respondToPermissionRequest` allow path
+ * (zero `src/` changes). `requestId` is the pending engine-minted permission
+ * requestId (T5a); the frame is valid ONLY for an `AskUserQuestion` request.
+ * Cancel/decline reuses `permission.response` deny — there is no verb for it.
+ */
+export type AskUserQuestionAnswerMessage = {
+  type: 'askUserQuestion.answer'
+  requestId: string
+  answers: AskUserQuestionAnswer[]
+}
+
 /* ------------------------------------------------------------------------- *
  * P4-5 — account lifecycle verbs (app-owned inbound; sidecar-LOCAL schema)
  * ------------------------------------------------------------------------- *
@@ -307,6 +341,7 @@ export type SettingsVerbMessage = SettingsSetValueMessage
 export type SidecarClientMessage =
   | AppClientMessage
   | PermissionSetModeMessage
+  | AskUserQuestionAnswerMessage
   | AccountVerbMessage
   | WorkspaceTrustMessage
   | RemoteVerbMessage
@@ -1777,6 +1812,21 @@ export type CatCodeBridge = {
    * The updated `permission.context` snapshot frame is the acknowledgement.
    */
   setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void
+  /**
+   * C5 (P4-20) — answer a pending `AskUserQuestion` request on the addressed
+   * session. `requestId` is the engine-minted permission requestId (T5a); the
+   * renderer authors ONLY option INDICES + the built-in "Other…" freeform text
+   * (decisions/ASK-USER-QUESTION-ANSWER.md). The sidecar re-reads the gated
+   * questions from the ENGINE, re-attaches its own option labels, and resolves
+   * the request as an allow carrying the reconstructed answers. No renderer byte
+   * becomes a question text or an option label. Decline is a `respondPermission`
+   * deny, not a verb.
+   */
+  answerQuestions(
+    sessionId: SessionId,
+    requestId: string,
+    answers: AskUserQuestionAnswer[],
+  ): void
   /**
    * P4-5 — request an account lifecycle verb on the addressed session's sidecar.
    * The renderer NAMES a target (`accountId`/`alias`); the sidecar re-resolves it
