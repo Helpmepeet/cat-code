@@ -1,8 +1,13 @@
 # ChatGPT Bridge live validation — 2026-07-16
 
-Status: **In progress.** Gates 1, 2, 4, 5, 6, 8, 9 PASS; gate 3 resolved
-ONE-CLICK (conservative). **Gate 7 is the only one outstanding.** The bridge
-remains **disabled** (`enabled: false`); no `enable` until all nine pass.
+Status: **COMPLETE — bridge enabled 2026-07-18T07:11:16Z.** All nine gates have
+live evidence: gates 1, 2, 4, 5, 6, 8, 9 (original run, with 1/2/4/5/8 re-confirmed
+live on a fresh from-zero setup 2026-07-18), gate 3 ONE-CLICK (conservative), and
+**gate 7a PASS live 2026-07-18** (7b N/A for a manually-run tunnel; 7c lock-safety
+covered by gates 6 + 7a). See the **2026-07-18 closeout** section at the end.
+
+Original status (2026-07-16, historical): In progress — gate 7 outstanding, bridge
+disabled. Superseded by the closeout below.
 
 Live validation earned its keep three times over:
 
@@ -147,3 +152,56 @@ approval state.
 - Fixture run/pending records under `~/.cat-code/chatgpt-bridge/{runs,pending}/`
   (`orbitpr1-*`) are validation leftovers.
 - A setup-serve listener from 2026-07-16 is still bound to port 8977.
+
+(All three 2026-07-16 cleanup items were confirmed done before the 2026-07-18 run:
+PR #1 closed + branch deleted, `runs/`/`pending/` empty, port 8977 free.)
+
+## 2026-07-18 closeout — gate 7 completed, bridge enabled
+
+Ran as a **fresh from-zero bring-up** (manual ngrok tunnel + `serve` for app
+creation + ChatGPT app recreated after a capability rotation). Gate 7 finished and
+the operator enabled the bridge.
+
+- **Gate 7a (server crash + lock recovery) — PASS (live).** A real run was launched
+  (`launchTask.ts launch`, per-run server model); the launch/server process was
+  `kill -9`'d mid-run; `bridgeSetup.ts status` then showed `activeLineageLocks: 1`
+  (stranded). `bun launchReview.ts --abandon-lineage <lineageId> --force` recovered it
+  (`status: force-abandoned`, pid matched the killed process) → `activeLineageLocks: 0`.
+  The model correctly returned `TOOLS UNAVAILABLE` once the endpoint died. First live
+  exercise of the shared-lock recovery command added this session; it recovers both v1
+  and bridge crashes (shared SQLite DB), **including the crash-with-record case the
+  runId-based `reconcile`/`abandon` cannot reach** — they require a `timed-out` record,
+  and a hard crash leaves a non-`timed-out` hold state (or no record at all).
+- **Gate 7b (LaunchAgent recovery) — N/A.** Tunnel was run manually (`ngrok http`),
+  `launchAgentPresent: false`; no agent to bounce. Revisit if moving to the
+  LaunchAgent-managed persistent tunnel.
+- **Gate 7c (tunnel restart mid-run) — covered.** Lock-safety is covered by gate 6
+  (timeout → reconcile/abandon) + 7a; the only untested residue is auto-resume after a
+  tunnel blip — a resilience nicety, not a safety gate.
+- **Re-confirmed live on the fresh setup:** gate 1 (app + four tools, `noauth`), gate 2
+  (one fresh chat drove all four tools → `received`), gate 4 (attachment fetch), gate 5
+  (happy path: schema-valid APPROVED, `verdictInconsistent: false`,
+  `staleAgainstCurrent: false`, persisted `round-1.{json,md}`), gate 8 (rotate →
+  recreate app → run).
+- **Enabled:** `bun bridgeSetup.ts enable --acknowledge-live-validation` →
+  `enabled: true`, `liveValidatedAt: 2026-07-18T07:11:16.449Z`. B-5 (v2 SKILL.md
+  bridge-primary + preserved legacy lane) landed and published to all three runtimes.
+
+### New finding (2026-07-18): serve/launch registry conflict — footgun
+
+`bridgeSetup.ts serve` starts the control server with an **empty** profile registry
+(`defaultStartSetupSession` → `new TaskRunRegistry([])`, `setupServe: true`); it is a
+setup-only warm-endpoint mode for creating/connecting the ChatGPT app. When `serve` is
+left running, a `launch` **joins** its control server and every registration fails with
+`"taskType is not in the closed profile registry"` — with nothing warning the operator.
+Intended model (gate 9's "per-run server model stands"): `launch` brings up its own
+server for the run; do not run `serve` during a launch. Now documented in the v2
+SKILL.md "Run and recover" note. **Follow-up (not done):** have `launch` detect a
+setup-serve control server and refuse with a clear message, or give setup-serve the
+real registry.
+
+### Cleanup owed (2026-07-18)
+
+The capability secret was pasted into the session transcript twice during this run;
+`rotate` invalidated the first. A **final rotate + ChatGPT-app recreate** is owed to
+invalidate the second before ongoing use.
