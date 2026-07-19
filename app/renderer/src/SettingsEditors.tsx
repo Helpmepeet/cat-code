@@ -31,6 +31,7 @@ import {
 } from '../../shared/settingsEditable.js'
 import { Field, PaneSection } from './SettingsField.js'
 import {
+  selectAvailableOptions,
   selectEditableValue,
   selectLayerOrigin,
   selectSettingField,
@@ -138,6 +139,29 @@ function SettingEditor({
         onChange={next => write(next)}
         optionLabels={control.optionLabels}
         options={control.options}
+        value={value}
+      />
+    )
+  } else if (control.kind === 'dynamic-enum') {
+    // Options are engine truth from the snapshot (captured at spawn); reuse the
+    // same SelectControl grammar as the static enum. If the current on-disk value
+    // is not in the live set (e.g. a style whose dir was removed), still show it
+    // so the field reflects truth. No live options ⇒ render disabled (honest).
+    const available = selectAvailableOptions(snapshot, spec.key)
+    const value = typeof current === 'string' ? current : control.default
+    const optionValues = available.map(option => option.value)
+    const options = optionValues.includes(value)
+      ? optionValues
+      : [value, ...optionValues]
+    const optionLabels: Record<string, string> = {}
+    for (const option of available) optionLabels[option.value] = option.label
+    controlNode = (
+      <SelectControl
+        disabled={disabled || available.length === 0}
+        label={spec.label}
+        onChange={next => write(next)}
+        optionLabels={optionLabels}
+        options={options}
         value={value}
       />
     )

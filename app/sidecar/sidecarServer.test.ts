@@ -3098,6 +3098,35 @@ test('P4-19 — a valid settings.setValue produces an ok result and re-broadcast
   expect(received.filter(f => f.kind === 'settings.snapshot').length).toBeGreaterThan(before)
 })
 
+test('P4-19 — a dynamic-enum (outputStyle) string value passes the boundary to the domain', () => {
+  // outputStyle rides the SAME settings.setValue verb (no new verb): the boundary
+  // accepts a bounded string; the closed membership check is the domain's job.
+  let seen: SettingsVerbMessage | null = null
+  const server = makeSettingsServer(verb => {
+    seen = verb
+    return { ok: true, message: `Updated ${verb.key}.`, changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'settings.setValue',
+        requestId: 'os1',
+        source: 'userSettings',
+        key: 'outputStyle',
+        value: 'Explanatory',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  const result = received.find(f => f.kind === 'settings.result')
+  expect(result && result.kind === 'settings.result' && result.ok).toBe(true)
+  expect(seen).toMatchObject({ key: 'outputStyle', value: 'Explanatory' })
+})
+
 test('P4-19 — rejects a settings verb carrying an unexpected key (checkStrictKeys)', () => {
   const server = makeSettingsServer()
   const { socket, received } = makeSocket()

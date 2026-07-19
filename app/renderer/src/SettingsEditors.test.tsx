@@ -123,6 +123,79 @@ test('the int (retention) editor renders the current value', () => {
   expect(html).toContain('value="7"')
 })
 
+test('a dynamic-enum (output style) renders the live options and selects the current value', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      onWrite={noop}
+      pane="theme"
+      snapshot={snapshot({
+        resolved: [
+          { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'outputStyle', value: 'Explanatory', source: 'userSettings' },
+        ],
+        availableOptions: [
+          {
+            key: 'outputStyle',
+            options: [
+              { value: 'default', label: 'Default' },
+              { value: 'Explanatory', label: 'Explanatory' },
+              { value: 'Learning', label: 'Learning' },
+            ],
+          },
+        ],
+      })}
+    />,
+  )
+  expect(html).toContain('Output style')
+  expect(html).toContain('Default')
+  expect(html).toContain('Explanatory')
+  expect(html).toContain('Learning')
+})
+
+test('a dynamic-enum with no live options renders disabled (honest degrade)', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      onWrite={noop}
+      pane="theme"
+      snapshot={snapshot({
+        resolved: [
+          { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'outputStyle', value: 'default', source: 'userSettings' },
+        ],
+        // availableOptions omitted → no live registry.
+      })}
+    />,
+  )
+  expect(html).toContain('Output style')
+  expect(html).toContain('disabled')
+})
+
+test('a dynamic-enum shows an on-disk value that is not in the live option set', () => {
+  // A style whose dir was removed: the value must still display (reflect truth).
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      onWrite={noop}
+      pane="theme"
+      snapshot={snapshot({
+        resolved: [
+          { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'outputStyle', value: 'my-removed-style', source: 'userSettings' },
+        ],
+        availableOptions: [
+          { key: 'outputStyle', options: [{ value: 'default', label: 'Default' }] },
+        ],
+      })}
+    />,
+  )
+  expect(html).toContain('my-removed-style')
+})
+
 test('a null snapshot renders every pane at its defaults without throwing', () => {
   for (const pane of ['general', 'model', 'privacy', 'theme'] as const) {
     const html = renderToStaticMarkup(

@@ -58,6 +58,20 @@ export type EditableSettingControl =
       default: string
     }
   | { kind: 'int'; min: number; max?: number; default: number }
+  | {
+      /**
+       * A string chosen from a LIVE option set the sidecar captures at spawn and
+       * carries on `SettingsSnapshot.availableOptions` (keyed by the setting
+       * `key`). Unlike `enum`, the option set is genuinely dynamic (built-in +
+       * user/project/plugin, e.g. output styles) so it cannot be a static list.
+       * This engine-free pure validator only BOUNDS the string (type + length, a
+       * T7 guard); the CLOSED membership check (value ∈ the captured live options)
+       * is enforced at the sidecar, which holds the list — never in the renderer.
+       */
+      kind: 'dynamic-enum'
+      maxLength: number
+      default: string
+    }
 
 export type EditableSettingSpec = {
   /** The exact `SettingsSchema` key this editor writes. */
@@ -71,9 +85,11 @@ export type EditableSettingSpec = {
 /**
  * The core value-editors P4-19 wires. Each key is real (`SettingsSchema`); the
  * `default` mirrors the engine's documented default so an unset key renders at
- * its true default. Keybindings / IDE / LSP / model-list / output-style /
- * accent-swatch are DEFERRED (they need their own live-status read-seams or an
- * available-options seam) — see the P4-19 report §deferred.
+ * its true default. `outputStyle` is a `dynamic-enum` whose live options ride
+ * `SettingsSnapshot.availableOptions` (the sidecar captures the real style
+ * registry at spawn). Keybindings / IDE / LSP / default-model / accent-swatch /
+ * code-theme+font remain DEFERRED (separate config file, live-status read-seams,
+ * provider-routing, or no engine key) — see the P4-19 report §deferred.
  */
 export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
   // ── General ──────────────────────────────────────────────────────────────
@@ -192,6 +208,17 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     description: 'Show tips in the working spinner (default: on).',
     control: { kind: 'boolean', default: true },
   },
+  {
+    key: 'outputStyle',
+    pane: 'theme',
+    label: 'Output style',
+    description:
+      'System-prompt style for assistant responses. Options come from the live registry (built-in default/Explanatory/Learning plus any custom or plugin styles).',
+    // `default` mirrors DEFAULT_OUTPUT_STYLE_NAME (src/constants/outputStyles.ts:39);
+    // the option list is dynamic, so this is a dynamic-enum (bounded string here,
+    // membership-checked at the sidecar against the captured registry).
+    control: { kind: 'dynamic-enum', maxLength: 120, default: 'default' },
+  },
 ]
 
 export const EDITABLE_SETTINGS_BY_KEY: ReadonlyMap<string, EditableSettingSpec> =
@@ -251,6 +278,21 @@ export function validateEditableSettingValue(
           error:
             `${key} expects an integer in [${control.min}, ` +
             `${control.max ?? '∞'}]`,
+        }
+      }
+      return { ok: true, value }
+    case 'dynamic-enum':
+      // Shape/length only. This module is engine-free and has no option list;
+      // the closed membership check (value ∈ the captured live options) runs at
+      // the sidecar in `applySettingsVerb`.
+      if (
+        typeof value !== 'string' ||
+        value.length < 1 ||
+        value.length > control.maxLength
+      ) {
+        return {
+          ok: false,
+          error: `${key} expects a non-empty string (≤ ${control.maxLength} chars)`,
         }
       }
       return { ok: true, value }

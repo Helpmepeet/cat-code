@@ -561,6 +561,22 @@ export type SettingsSnapshot = {
     value: EditableSettingValue
     source: SettingSourceId
   }>
+  /**
+   * P4-19 — the live option set for each `dynamic-enum` editable key (e.g.
+   * `outputStyle`), captured ONCE at spawn from the engine's real registry
+   * (`getAllOutputStyles`). The renderer's select renders these; the sidecar
+   * membership-checks a write against them (the closed gate for a genuinely
+   * dynamic option set). Bounded + non-secret by construction: only option
+   * NAMES + short human descriptions ride here (no `env`, token, or credential
+   * value), so `secretGuard` still scans it purely as defense-in-depth. Optional
+   * + tolerant-read (`availableOptions ?? []`): a snapshot that predates the
+   * field, or a spawn where the registry read failed, simply carries no options
+   * and the affected select renders disabled rather than throwing.
+   */
+  availableOptions?: Array<{
+    key: string
+    options: Array<{ value: string; label: string; description?: string }>
+  }>
 }
 
 // Compile-time guard: an editable source must be a real settings layer.
