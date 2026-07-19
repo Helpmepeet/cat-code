@@ -337,6 +337,15 @@ export class SidecarServer {
   private sessionsCatalogRefreshTimer: ReturnType<typeof setInterval> | null = null
   /** Guards against overlapping catalog re-enumerations if a read runs long. */
   private sessionsCatalogRefreshInFlight = false
+  /**
+   * Skip-if-unchanged (#16 review, MINOR) — a stable serialization of the last
+   * BROADCAST catalog, so the 30s periodic re-enumeration re-broadcasts only when
+   * the snapshot actually changed (an unchanged re-broadcast forces the renderer
+   * reducer to replace state → a needless re-render per attached session). null
+   * until the first broadcast. Not touched by the per-attach send (a new
+   * connection always needs its snapshot).
+   */
+  private lastBroadcastSessionsCatalogJson: string | null = null
 
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
@@ -563,9 +572,21 @@ export class SidecarServer {
     // mutating `remoteSettings.*` verb.
     this.sendRemoteSettingsSnapshot(connection)
     // P4-6a — read-only cross-workspace sessions catalog (engine transcript
-    // history), after the other snapshots and before replay. Spawn-frozen,
-    // secretGuard-clean by construction (display metadata only).
+    // history), after the other snapshots and before replay. secretGuard-clean by
+    // construction (display metadata only). The snapshot may be null on the very
+    // first attach (MAJOR-2 — the enumeration is deferred off the listen critical
+    // path); the kick just below fills it and re-broadcasts once ready.
     this.sendSessionsSnapshot(connection)
+    // MAJOR-2 — kick the FIRST catalog enumeration now that a client is attached.
+    // Construction no longer enumerates (so the socket opens without waiting on the
+    // ~430ms/600-session read); `refreshSessionsCatalog` enumerates asynchronously
+    // and broadcasts to every connection (this one included) once ready. Guarded on
+    // a null snapshot, so it fires only for the initial fill (or a retry after a
+    // failed spawn read) — a reconnect after the snapshot is populated just replays
+    // the stored snapshot via the attach send above.
+    if (this.sessionsCatalog && this.sessionsCatalog.getSnapshot() === null) {
+      void this.refreshSessionsCatalog()
+    }
     // The rich slash-command catalog (name + arg-hint + description), before
     // history + any live event so the composer picker renders prototype-parity
     // rows on a fresh session's very first keystroke. Single-socket ordering
@@ -2187,13 +2208,22 @@ export class SidecarServer {
 
   /**
    * P4-6a — build the read-only sessions-catalog frame (engine transcript
-   * history). Display metadata only (titles/tags/branches/PRs — no message
-   * bodies, no credentials), so it is secretGuard-clean by construction; a stray
-   * secret in a session title would only cause `prepareOutboundPayload` to drop
-   * the WHOLE frame (fail-closed, never a leak). Returns null when there is no
-   * catalog or the payload check dropped it.
+   * history: titles/tags/branches/PRs). It carries no credential-bearing FIELDS,
+   * so the outbound `secretGuard` in `send()` has nothing to strip — but note the
+   * real posture precisely (#16 review): `prepareOutboundPayload` only does
+   * structuredClone + omit-undefined + JSON-safe checks (NO redaction), and
+   * `secretGuard` (`secretGuard.ts`) matches known secret KEY NAMES, not string
+   * VALUES. So a secret is NOT scrubbed from a title: B2 routes `firstPrompt` (the
+   * user's own first message, ≤200 chars) into `title`, meaning a secret a user
+   * TYPED into a first prompt rides to the renderer as title text unredacted.
+   * Accepted residual, not a leak of engine-held secrets: it is the user's own
+   * data over a local Unix socket to their own renderer — the same exposure
+   * `/resume` already has in the TUI. Returns null when there is no catalog or the
+   * payload check dropped the whole frame.
    */
-  private prepareSessionsSnapshotFrame(): ServerFrame | null {
+  private prepareSessionsSnapshotFrame():
+    | Extract<ServerFrame, { kind: 'sessions.snapshot' }>
+    | null {
     if (!this.sessionsCatalog) {
       return null
     }
@@ -2249,6 +2279,15 @@ export class SidecarServer {
       if (!frame) {
         return
       }
+      // Skip-if-unchanged (MINOR): the 30s refresh re-enumerates on a timer, but
+      // when nothing changed since the last broadcast, re-sending the SAME snapshot
+      // would needlessly re-render every attached session. Compare a stable
+      // serialization of the catalog and skip an identical re-broadcast.
+      const serialized = JSON.stringify(frame.catalog)
+      if (serialized === this.lastBroadcastSessionsCatalogJson) {
+        return
+      }
+      this.lastBroadcastSessionsCatalogJson = serialized
       for (const connection of this.connections) {
         this.send(connection, frame)
       }

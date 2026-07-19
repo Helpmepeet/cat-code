@@ -23,6 +23,15 @@
  * de-staled catalog (a session created after this sidecar spawned then appears
  * without a new inbound verb — `sidecarServer.ts` owns the timer + broadcast).
  *
+ * Construction is NON-BLOCKING (#16 review, MAJOR-2): raising the enrich cap to
+ * 600 made the enumeration ~10× costlier (~430ms), and it used to run inside the
+ * controller builder that `index.ts` awaits BEFORE `Bun.listen`, so every session
+ * open waited the full enumeration before the socket was attachable. The domain
+ * now constructs with a null snapshot (the renderer already shows a load state)
+ * and the first enumeration runs asynchronously via `refresh()`, kicked by the
+ * server right after a connection attaches and re-broadcast once ready — the
+ * socket opens without waiting on it.
+ *
  * Read-only, display-metadata only — no message bodies, no credentials — so the
  * outbound frame is `secretGuard`-clean by construction (§`sidecarServer.ts`
  * prepareOutboundPayload/send). Mirrors `agentConfigDomain.ts`'s pure-builder +
@@ -53,7 +62,11 @@ export const SESSIONS_CATALOG_STAT_LIMIT = 1000
 export const SESSIONS_CATALOG_ENRICH_LIMIT = 600
 
 export type SidecarSessionsCatalogDomain = {
-  /** Latest catalog snapshot (spawn-time, then updated by `refresh`). null when the enumeration failed. */
+  /**
+   * Latest catalog snapshot. null until the first `refresh()` completes (the
+   * enumeration is deferred off the construction/listen critical path — MAJOR-2)
+   * and still null if that first enumeration failed (a later `refresh()` recovers).
+   */
   getSnapshot(): SessionsCatalogSnapshot | null
   /**
    * B4 — re-enumerate transcripts and update the stored snapshot so a session
@@ -83,7 +96,11 @@ export async function createSidecarSessionsCatalogDomain(
   // (the real path reads the filesystem); production always uses the default.
   enumerate: () => Promise<SessionsCatalogSnapshot | null> = enumerateSessionsCatalog,
 ): Promise<SidecarSessionsCatalogDomain> {
-  let snapshot: SessionsCatalogSnapshot | null = await enumerate()
+  // MAJOR-2 — do NOT enumerate here: the controller builder that calls this is
+  // awaited before `Bun.listen`, so awaiting the ~430ms enumeration would block
+  // every session open on it. Start null; the server kicks the first `refresh()`
+  // on attach and re-broadcasts once it lands (see `refresh()` / `sidecarServer.ts`).
+  let snapshot: SessionsCatalogSnapshot | null = null
   return {
     getSnapshot() {
       return snapshot
@@ -99,8 +116,17 @@ export async function createSidecarSessionsCatalogDomain(
 }
 
 export function buildSessionsCatalogSnapshot(result: SessionLogResult): SessionsCatalogSnapshot {
+  // MAJOR-1 — reconcile workspace grouping before mapping. A storage dir
+  // (`…/projects/-Users-me-proj`) is the sanitized form of exactly ONE real cwd,
+  // but only ~60% of sessions recorded that cwd (`projectPath`). Learn each
+  // dir→cwd mapping from the sessions that DID record it so the sessions in the
+  // same dir that DIDN'T can borrow the real cwd — otherwise one workspace splits
+  // into two `groupByWorkspace` groups (it keys on the exact cwd string), the
+  // second headed by the undecodable sanitized name and never reconciling with
+  // the registry rows (which always carry the real cwd).
+  const storageDirToCwd = buildStorageDirToCwd(result.logs)
   const entries = result.logs
-    .map(mapLogOptionToCatalogEntry)
+    .map(log => mapLogOptionToCatalogEntry(log, storageDirToCwd))
     .filter((entry): entry is SessionCatalogEntry => entry !== null)
   const truncated = result.allStatLogs.length > result.logs.length
   const notes = [
@@ -112,11 +138,17 @@ export function buildSessionsCatalogSnapshot(result: SessionLogResult): Sessions
   return { entries, truncated, notes }
 }
 
-export function mapLogOptionToCatalogEntry(log: LogOption): SessionCatalogEntry | null {
+export function mapLogOptionToCatalogEntry(
+  log: LogOption,
+  // MAJOR-1 — the storage-dir → real-cwd reconciliation map built by
+  // `buildSessionsCatalogSnapshot`. Optional: called standalone (a lone log)
+  // with no map, a `projectPath`-less entry resolves to an empty cwd.
+  storageDirToCwd?: ReadonlyMap<string, string>,
+): SessionCatalogEntry | null {
   if (!log.sessionId) return null
   // enrichLogs already drops sidechains, but guard defensively.
   if (log.isSidechain) return null
-  const cwd = resolveEntryCwd(log)
+  const cwd = resolveEntryCwd(log, storageDirToCwd)
   return {
     sessionId: log.sessionId,
     cwd,
@@ -134,20 +166,49 @@ export function mapLogOptionToCatalogEntry(log: LogOption): SessionCatalogEntry 
 }
 
 /**
- * B3 — a usable cwd for grouping. The loader records `projectPath` only when
- * the transcript's head window carried a `cwd` field (~60% of sessions here);
- * the rest fall back to the transcript's own project directory
- * (`dirname(fullPath)`, e.g. `…/projects/-Users-me-proj`) so the row still
- * groups by workspace and never carries an empty cwd. (The sanitized dir name
- * is lossy — `sessionStoragePortable.ts:311` maps every non-alnum char to `-`,
- * so it can't be decoded back to the literal path — but it is stable + non-empty,
- * which is all grouping needs.)
+ * B3 / MAJOR-1 — a usable cwd for grouping, reconciled across a workspace. The
+ * loader records `projectPath` (the real cwd) only when the transcript's head
+ * window carried a `cwd` field (~60% of sessions here). The rest USED to fall
+ * back to the transcript's sanitized storage dir (`dirname(fullPath)`, e.g.
+ * `…/projects/-Users-me-proj`) — but that FRAGMENTS the workspace: `groupByWorkspace`
+ * keys on the exact cwd string, so a session grouped by the sanitized dir splits
+ * off from its siblings (and from the registry rows, which always carry the real
+ * cwd) under an ugly, undecodable header (`sessionStoragePortable.ts:311` maps
+ * every non-alnum char to `-`, so the sanitized name can't be decoded back).
+ * Instead: borrow a sibling's real cwd for this storage dir (`storageDirToCwd`)
+ * so the whole workspace groups as one. Only when NO session in this storage dir
+ * recorded a cwd is it unresolved — prefer an EMPTY cwd (the renderer's "Unknown
+ * workspace" bucket) over the lossy sanitized path.
  */
-function resolveEntryCwd(log: LogOption): string {
+function resolveEntryCwd(
+  log: LogOption,
+  storageDirToCwd?: ReadonlyMap<string, string>,
+): string {
   const explicit = nonEmpty(log.projectPath)
   if (explicit) return explicit
-  if (log.fullPath) return dirname(log.fullPath)
+  if (log.fullPath && storageDirToCwd) {
+    const real = storageDirToCwd.get(dirname(log.fullPath))
+    if (real) return real
+  }
   return ''
+}
+
+/**
+ * MAJOR-1 — map each transcript storage dir (`dirname(fullPath)`) to the ONE real
+ * cwd recorded by any session in it (via `projectPath`). First writer wins (all
+ * sessions in a storage dir share one workspace, so the value is consistent);
+ * dirs with no cwd-carrying session are simply absent (their sessions stay
+ * unresolved → empty cwd).
+ */
+function buildStorageDirToCwd(logs: readonly LogOption[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const log of logs) {
+    const explicit = nonEmpty(log.projectPath)
+    if (!explicit || !log.fullPath) continue
+    const dir = dirname(log.fullPath)
+    if (!map.has(dir)) map.set(dir, explicit)
+  }
+  return map
 }
 
 /**

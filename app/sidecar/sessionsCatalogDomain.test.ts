@@ -122,8 +122,8 @@ describe('mapLogOptionToCatalogEntry', () => {
     })
   })
 
-  describe('B3 — cwd fallback when the transcript recorded no projectPath', () => {
-    test('falls back to the transcript project directory so rows still group', () => {
+  describe('B3 / MAJOR-1 — cwd resolution when the transcript recorded no projectPath', () => {
+    test('no projectPath and no reconciliation sibling ⇒ empty cwd, never the sanitized storage dir', () => {
       const entry = mapLogOptionToCatalogEntry(
         makeLog({
           sessionId: 's',
@@ -131,17 +131,34 @@ describe('mapLogOptionToCatalogEntry', () => {
           fullPath: '/Users/me/.cat-code/projects/-Users-me-proj/abc.jsonl',
         }),
       )
-      // Non-empty + stable grouping key (the transcript's own project dir).
-      expect(entry?.cwd).toBe('/Users/me/.cat-code/projects/-Users-me-proj')
+      // Was previously the ugly sanitized dir; now empty so it never fragments a
+      // workspace under an undecodable header (falls into the "Unknown workspace"
+      // bucket). Reconciliation to a real cwd happens in buildSessionsCatalogSnapshot.
+      expect(entry?.cwd).toBe('')
     })
 
-    test('an explicit projectPath still wins over the fullPath fallback', () => {
+    test('reconciles to a sibling storage-dir cwd when a map is supplied', () => {
+      const map = new Map([['/Users/me/.cat-code/projects/-Users-me-proj', '/Users/me/proj']])
+      const entry = mapLogOptionToCatalogEntry(
+        makeLog({
+          sessionId: 's',
+          projectPath: undefined,
+          fullPath: '/Users/me/.cat-code/projects/-Users-me-proj/abc.jsonl',
+        }),
+        map,
+      )
+      expect(entry?.cwd).toBe('/Users/me/proj')
+    })
+
+    test('an explicit projectPath still wins over the reconciliation map', () => {
+      const map = new Map([['/Users/me/.cat-code/projects/-Users-me-proj', '/Users/me/borrowed']])
       const entry = mapLogOptionToCatalogEntry(
         makeLog({
           sessionId: 's',
           projectPath: '/Users/me/real-cwd',
           fullPath: '/Users/me/.cat-code/projects/-Users-me-proj/abc.jsonl',
         }),
+        map,
       )
       expect(entry?.cwd).toBe('/Users/me/real-cwd')
     })
@@ -185,6 +202,38 @@ describe('buildSessionsCatalogSnapshot', () => {
     expect(snapshot.entries.every(e => e.title != null && e.title.length > 0)).toBe(true)
   })
 
+  test('MAJOR-1 — same-workspace sessions group under the real cwd even when some lack projectPath', () => {
+    const dir = '/Users/me/.cat-code/projects/-Users-me-proj'
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([
+        // One session recorded the real cwd…
+        makeLog({ sessionId: 'has-cwd', projectPath: '/Users/me/proj', fullPath: `${dir}/a.jsonl` }),
+        // …its sibling in the same storage dir did not.
+        makeLog({ sessionId: 'no-cwd', projectPath: undefined, fullPath: `${dir}/b.jsonl` }),
+      ]),
+    )
+    const byId = new Map(snapshot.entries.map(e => [e.sessionId, e.cwd]))
+    // The projectPath-less session borrows its sibling's real cwd — one workspace,
+    // not two (and it reconciles with the registry rows that carry the real cwd).
+    expect(byId.get('has-cwd')).toBe('/Users/me/proj')
+    expect(byId.get('no-cwd')).toBe('/Users/me/proj')
+    // groupByWorkspace keys on cwd, so a single shared cwd ⇒ exactly ONE group.
+    expect(new Set(snapshot.entries.map(e => e.cwd)).size).toBe(1)
+  })
+
+  test('MAJOR-1 — a storage dir with NO projectPath sibling stays unresolved (empty cwd), not a sanitized path', () => {
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([
+        makeLog({
+          sessionId: 'orphan',
+          projectPath: undefined,
+          fullPath: '/Users/me/.cat-code/projects/-Users-me-orphan/x.jsonl',
+        }),
+      ]),
+    )
+    expect(snapshot.entries[0]?.cwd).toBe('')
+  })
+
   test('the built frame is secretGuard-clean (display metadata only)', () => {
     const snapshot = buildSessionsCatalogSnapshot(
       result([
@@ -224,11 +273,28 @@ describe('B4 — createSidecarSessionsCatalogDomain refresh / de-stale', () => {
     }
   }
 
+  test('MAJOR-2 — construction is non-blocking: the snapshot is null until the first refresh', async () => {
+    let calls = 0
+    const domain = await createSidecarSessionsCatalogDomain(async () => {
+      calls++
+      return snap(['a'])
+    })
+    // Construction did NOT enumerate (off the listen critical path).
+    expect(calls).toBe(0)
+    expect(domain.getSnapshot()).toBeNull()
+    // The server kicks the first enumeration via refresh().
+    const first = await domain.refresh()
+    expect(calls).toBe(1)
+    expect(first?.entries.map(e => e.sessionId)).toEqual(['a'])
+    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
+  })
+
   test('refresh re-enumerates so a session created after spawn appears', async () => {
     const states = [snap(['a']), snap(['a', 'b'])]
     let call = 0
     const domain = await createSidecarSessionsCatalogDomain(async () => states[Math.min(call++, states.length - 1)]!)
-    // Spawn snapshot = first enumeration.
+    // First refresh = first enumeration (construction deferred it).
+    await domain.refresh()
     expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
     // A new session ('b') landed; refresh surfaces it.
     const refreshed = await domain.refresh()
@@ -240,8 +306,20 @@ describe('B4 — createSidecarSessionsCatalogDomain refresh / de-stale', () => {
     const results: Array<SessionsCatalogSnapshot | null> = [snap(['a']), null]
     let call = 0
     const domain = await createSidecarSessionsCatalogDomain(async () => results[Math.min(call++, results.length - 1)]!)
+    await domain.refresh() // first enumeration succeeds
     expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
     await domain.refresh() // enumeration returned null
+    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
+  })
+
+  test('MAJOR-2 — a failed FIRST enumeration leaves the snapshot null; a later refresh recovers', async () => {
+    const results: Array<SessionsCatalogSnapshot | null> = [null, snap(['a'])]
+    let call = 0
+    const domain = await createSidecarSessionsCatalogDomain(async () => results[Math.min(call++, results.length - 1)]!)
+    expect(domain.getSnapshot()).toBeNull()
+    await domain.refresh() // spawn-time enumeration failed (getSnapshot stays null)
+    expect(domain.getSnapshot()).toBeNull()
+    await domain.refresh() // the retry succeeds
     expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
   })
 })

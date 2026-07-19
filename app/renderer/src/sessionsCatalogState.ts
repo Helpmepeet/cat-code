@@ -296,7 +296,10 @@ export type WorkspaceGroup = {
 /**
  * Group rows by workspace (cwd), the active session's workspace first, then the
  * rest alphabetically by basename — the real analog of the prototype's
- * `groupByWorkspace` (which keyed on a mock workspace name).
+ * `groupByWorkspace` (which keyed on a mock workspace name). Rows with an empty
+ * cwd (a transcript whose workspace couldn't be reconciled — MAJOR-1) collect in
+ * a single clearly-labeled "Unknown workspace" bucket rather than under a blank
+ * or fragmented header.
  */
 export function groupByWorkspace(
   rows: readonly MergedSessionRow[],
@@ -311,7 +314,7 @@ export function groupByWorkspace(
   return [...groups.entries()]
     .map(([cwd, groupRows]) => ({
       cwd,
-      name: basename(cwd) || cwd,
+      name: cwd ? basename(cwd) || cwd : 'Unknown workspace',
       current: activeCwd != null && cwd === activeCwd,
       rows: groupRows,
     }))

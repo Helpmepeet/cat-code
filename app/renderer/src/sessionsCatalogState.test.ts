@@ -238,6 +238,31 @@ describe('browse selectors', () => {
     expect(groups[0]?.current).toBe(true)
   })
 
+  test('MAJOR-1 — two same-workspace sessions (reconciled to one real cwd) form ONE group', () => {
+    // The sidecar reconciles a projectPath-less transcript onto its sibling's real
+    // cwd, so both rows share the SAME cwd here — they must land in one group.
+    const groups = groupByWorkspace(
+      [
+        row({ sessionId: 'has-cwd', cwd: '/Users/me/proj' }),
+        row({ sessionId: 'no-cwd', cwd: '/Users/me/proj' }),
+      ],
+      null,
+    )
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.name).toBe('proj')
+    expect(groups[0]?.rows.map(r => r.sessionId).sort()).toEqual(['has-cwd', 'no-cwd'])
+  })
+
+  test('MAJOR-1 — an empty cwd collects under a clearly-labeled "Unknown workspace" bucket', () => {
+    const groups = groupByWorkspace(
+      [row({ sessionId: 'orphan', cwd: '' }), row({ sessionId: 'known', cwd: '/w/proj' })],
+      null,
+    )
+    const names = groups.map(g => g.name)
+    expect(names).toContain('Unknown workspace')
+    expect(names).toContain('proj')
+  })
+
   test('bucket by date into today/older, empty buckets dropped', () => {
     const now = new Date('2026-07-10T12:00:00Z').getTime()
     const today = now - 60_000

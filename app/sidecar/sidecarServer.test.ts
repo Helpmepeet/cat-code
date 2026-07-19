@@ -482,6 +482,168 @@ test('#16 (B4) — a catalog refresh re-broadcasts a fresh sessions.snapshot to 
   expect(catalogFrames[1]!.catalog.entries.map(e => e.sessionId)).toEqual(['new-1'])
 })
 
+/** A minimal catalog snapshot carrying one entry with the given id. */
+function catalogSnapshotWith(id: string): SessionsCatalogSnapshot {
+  return {
+    entries: [
+      {
+        sessionId: id,
+        cwd: '/w/proj',
+        title: id,
+        modifiedAtMs: 1,
+        createdAtMs: 1,
+        messageCount: 0,
+        gitBranch: null,
+        tag: null,
+        mode: null,
+        agentSetting: null,
+        prNumber: null,
+        prRepository: null,
+      },
+    ],
+    truncated: false,
+    notes: [],
+  }
+}
+
+function makeCatalogServer(sessionsCatalog: SidecarSessionsCatalogDomain): SidecarServer {
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    sessionsCatalog,
+    log: () => {},
+  })
+  servers.push(server)
+  return server
+}
+
+const asRefresher = (server: SidecarServer) =>
+  server as unknown as { refreshSessionsCatalog(): Promise<void> }
+
+test('#16 (MAJOR-2) — construction defers enumeration; the first attach kicks it and broadcasts once ready', async () => {
+  // The domain starts null (the ~430ms enumeration is off the listen critical
+  // path). The attach send is a no-op (null snapshot); the server then kicks the
+  // first refresh, which enumerates async and broadcasts the first real snapshot
+  // to the already-attached connection.
+  let snapshot: SessionsCatalogSnapshot | null = null
+  let refreshCount = 0
+  const sessionsCatalog: SidecarSessionsCatalogDomain = {
+    getSnapshot: () => snapshot,
+    refresh: async () => {
+      refreshCount++
+      snapshot = catalogSnapshotWith('kicked')
+      return snapshot
+    },
+  }
+  const server = makeCatalogServer(sessionsCatalog)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  await waitFor(() => received.some(f => f.kind === 'sessions.snapshot'))
+  expect(refreshCount).toBe(1)
+  const frames = received.filter(f => f.kind === 'sessions.snapshot')
+  // No frame from the (null) attach send; exactly one from the post-attach kick.
+  expect(frames).toHaveLength(1)
+  expect(frames[0]!.catalog.entries.map(e => e.sessionId)).toEqual(['kicked'])
+})
+
+test('#16 (MAJOR-2) — a failed spawn enumeration keeps the snapshot null; a later refresh recovers + broadcasts', async () => {
+  const outcomes: Array<SessionsCatalogSnapshot | null> = [null, catalogSnapshotWith('later')]
+  let call = 0
+  let snapshot: SessionsCatalogSnapshot | null = null
+  const sessionsCatalog: SidecarSessionsCatalogDomain = {
+    getSnapshot: () => snapshot,
+    refresh: async () => {
+      const next = outcomes[Math.min(call++, outcomes.length - 1)]!
+      if (next) snapshot = next
+      return snapshot
+    },
+  }
+  const server = makeCatalogServer(sessionsCatalog)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  // Attach kicked refresh #1 (returned null → snapshot stays null, nothing to send).
+  await waitFor(() => call >= 1)
+  expect(snapshot).toBeNull()
+  expect(received.filter(f => f.kind === 'sessions.snapshot')).toHaveLength(0)
+
+  // A later refresh (the 30s timer, or a re-attach) recovers.
+  await asRefresher(server).refreshSessionsCatalog()
+  const frames = received.filter(f => f.kind === 'sessions.snapshot')
+  expect(frames).toHaveLength(1)
+  expect(frames[0]!.catalog.entries.map(e => e.sessionId)).toEqual(['later'])
+})
+
+test('#16 — the refresh timer is unref\'d + cleared on close, and overlapping refreshes are guarded', async () => {
+  // A non-null spawn snapshot ⇒ NO attach kick, so refreshCount tracks only the
+  // manual calls below (the interval callback that the timer would fire).
+  let release: (() => void) | null = null
+  let refreshCount = 0
+  const sessionsCatalog: SidecarSessionsCatalogDomain = {
+    getSnapshot: () => ({ entries: [], truncated: false, notes: [] }),
+    refresh: async () => {
+      refreshCount++
+      await new Promise<void>(res => {
+        release = res
+      })
+      return { entries: [], truncated: false, notes: [] }
+    },
+  }
+  const server = makeCatalogServer(sessionsCatalog)
+  const { socket } = makeSocket()
+  server.addConnection(socket)
+
+  // The interval timer exists and was `.unref()`d (hasRef()===false proves it).
+  const timer = (
+    server as unknown as { sessionsCatalogRefreshTimer: { hasRef(): boolean } | null }
+  ).sessionsCatalogRefreshTimer
+  expect(timer).not.toBeNull()
+  expect(timer!.hasRef()).toBe(false)
+
+  const priv = asRefresher(server)
+  const first = priv.refreshSessionsCatalog() // enters, awaits `release`
+  expect(refreshCount).toBe(1)
+  const second = priv.refreshSessionsCatalog() // overlap guard → returns at once
+  await second
+  expect(refreshCount).toBe(1) // the in-flight guard blocked the second enumeration
+
+  release!()
+  await first
+  // Guard released: a subsequent refresh proceeds.
+  const third = priv.refreshSessionsCatalog()
+  await waitFor(() => refreshCount === 2)
+  release!()
+  await third
+
+  server.close()
+  expect(
+    (server as unknown as { sessionsCatalogRefreshTimer: unknown }).sessionsCatalogRefreshTimer,
+  ).toBeNull()
+})
+
+test('#16 (MINOR) — an unchanged catalog is not re-broadcast', async () => {
+  const stable = catalogSnapshotWith('same')
+  const sessionsCatalog: SidecarSessionsCatalogDomain = {
+    getSnapshot: () => stable,
+    refresh: async () => stable,
+  }
+  const server = makeCatalogServer(sessionsCatalog)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket) // non-null snapshot ⇒ attach sends one frame, no kick
+  expect(received.filter(f => f.kind === 'sessions.snapshot')).toHaveLength(1)
+
+  const priv = asRefresher(server)
+  await priv.refreshSessionsCatalog() // first broadcast (last-broadcast seeded null) sends
+  await priv.refreshSessionsCatalog() // identical ⇒ skipped
+  await priv.refreshSessionsCatalog() // identical ⇒ skipped
+
+  // attach(1) + the one non-skipped broadcast(1); the two identical re-broadcasts
+  // are suppressed (no needless per-session re-render).
+  expect(received.filter(f => f.kind === 'sessions.snapshot')).toHaveLength(2)
+})
+
 test('P4-6 title-rider — after a fresh session first turn, broadcasts a session-title frame', async () => {
   const controller = new AppSessionController({
     async *runTurn() {
