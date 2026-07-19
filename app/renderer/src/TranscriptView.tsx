@@ -261,7 +261,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
 
     case 'thinking':
       return (
-        <ThinkingBlock content={row.content} reasoningKind={row.reasoningKind} />
+        <ThinkingBlock content={row.content} />
       )
 
     case 'redacted-thinking':
@@ -1206,27 +1206,18 @@ function UserImageRowView({ source }: { source: UserImageSource }) {
  * prose. The prototype's expand/collapse is an interactive polish affordance
  * (18c); 18a renders the block expanded (flagged) so the reasoning is visible.
  */
-function ThinkingBlock({
-  content,
-  reasoningKind,
-}: {
-  content: string
-  reasoningKind?: string
-}) {
+function ThinkingBlock({ content }: { content: string }) {
   return (
     <div className="rounded-lg border border-accent/15 bg-accent/[0.04]">
       <div className="flex items-center gap-2 px-3.5 py-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-accent">
           Thinking
         </span>
-        {reasoningKind ? (
-          <span className="font-mono text-[10px] text-text-subtle">
-            {reasoningKind}
-          </span>
-        ) : null}
       </div>
-      <div className="whitespace-pre-wrap border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle">
-        {content}
+      <div className="border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle [&>*+*]:mt-2">
+        <MarkdownErrorBoundary fallback={content}>
+          <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
+        </MarkdownErrorBoundary>
       </div>
     </div>
   )
@@ -1302,6 +1293,10 @@ function ResultSeam({
   durationMs?: number
   totalCostUsd?: number
 }) {
+  // #6 (operator, 2026-07-19): the success turn-footer was removed — a completed
+  // turn shows no seam. Only error/abort turns (isError) still surface a seam so
+  // a broken turn stays visible. `isError` is the same signal that drives tone.
+  if (!isError) return null
   const label = isError
     ? subtype === 'error_max_turns'
       ? 'Stopped · max turns reached'
