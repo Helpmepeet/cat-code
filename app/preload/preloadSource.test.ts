@@ -64,12 +64,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // 16 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
-  // answerQuestions) + 6 payload-bearing control-plane senders + the DEV-only
+  // answerQuestions) + 7 payload-bearing control-plane senders + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
-  // createSession/restoreSession/closeSession/listSessions/previewSession).
-  // subscribe / subscribeHost register a listener and send no payload, so they do
-  // NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(23)
+  // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
+  // previewSession). subscribe / subscribeHost register a listener and send no
+  // payload, so they do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(24)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
@@ -78,8 +78,11 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
 test('control-plane senders are fixed per-method channels (HC3), no generic invoke', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
 
-  // The six host/control-plane methods each ride a FIXED channel constant.
+  // The seven host/control-plane methods each ride a FIXED channel constant.
   expect(source).toContain("const CH_HOST_CREATE = 'catcode:host:create'")
+  expect(source).toContain(
+    "const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'",
+  )
   expect(source).toContain("const CH_HOST_RESTORE = 'catcode:host:restore'")
   expect(source).toContain("const CH_HOST_CLOSE = 'catcode:host:close'")
   expect(source).toContain("const CH_HOST_LIST = 'catcode:host:list'")
@@ -93,9 +96,10 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(6)
+  expect(invokeChannels.length).toBe(7)
   const allowed = new Set([
     'CH_HOST_CREATE',
+    'CH_HOST_CREATE_IN_WORKSPACE',
     'CH_HOST_RESTORE',
     'CH_HOST_CLOSE',
     'CH_HOST_LIST',

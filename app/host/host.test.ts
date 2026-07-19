@@ -991,6 +991,116 @@ test('restartSession rejects an unknown/non-live id (session_not_found)', async 
 })
 
 /* ------------------------------------------------------------------------- *
+ * #15 — createSessionInWorkspace: the per-workspace "+" spawns a FRESH session
+ * in an existing workspace named by a REGISTRY id. HC1 BOUNDARY: the renderer
+ * names an id, never a path; the host re-derives + re-validates the cwd from its
+ * OWN registry row and spawns with NO resume.
+ * ------------------------------------------------------------------------- */
+
+test('createSessionInWorkspace ACCEPTS a known registry id: fresh session in the row cwd, no resume', async () => {
+  const h = makeHost()
+  // Seed a workspace: a registry row rooted at h.cwd (the "representative" the
+  // renderer would name from the group's active/first row).
+  const repId = randomUUID()
+  await h.registry.upsertOnSpawn({ appSessionId: repId, cwd: h.cwd })
+
+  const result = await h.host.createSessionInWorkspace(repId)
+  expect(result.ok).toBe(true)
+  if (!result.ok) return
+
+  // A FRESH session: a NEW appSessionId (not the named one), rooted at the row's
+  // host-validated cwd, spawned with NO resume (blank engine context).
+  expect(result.value.appSessionId).not.toBe(repId)
+  expect(result.value.cwd).toBe(h.cwd)
+  expect(result.value.engineSessionId).toBeNull()
+  const spawned = h.supervisor.records.get(result.value.appSessionId)
+  expect(spawned?.cwd).toBe(h.cwd)
+  expect(spawned?.resumeEngineSessionId).toBeUndefined()
+  expect(
+    h.events.some(
+      e =>
+        e.type === 'session-added' &&
+        e.session.appSessionId === result.value.appSessionId,
+    ),
+  ).toBe(true)
+})
+
+test('createSessionInWorkspace RE-DERIVES the cwd from validateCwd, not the stored row string (HC1)', async () => {
+  // A host whose validateCwd canonicalizes the row cwd to a DIFFERENT realpath
+  // (symlink skew): the spawn must use the re-derived realpath, proving the host
+  // never trusts the raw stored value.
+  const storageDir = tempDir()
+  const rowCwd = join(storageDir, 'link')
+  const realCwd = join(storageDir, 'real')
+  mkdirSync(realCwd, { recursive: true })
+  const logs: string[] = []
+  const registry = new SessionRegistry({
+    storageDir,
+    log: line => logs.push(line),
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
+  const supervisor = new FakeSupervisor()
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (c: string): CwdValidation =>
+      c === rowCwd ? { ok: true, realpath: realCwd } : { ok: false },
+    log: line => logs.push(line),
+  })
+  const repId = randomUUID()
+  await registry.upsertOnSpawn({ appSessionId: repId, cwd: rowCwd })
+
+  const result = await host.createSessionInWorkspace(repId)
+  expect(result.ok).toBe(true)
+  if (!result.ok) return
+  // The re-derived realpath — never the raw row string — is what got spawned.
+  expect(result.value.cwd).toBe(realCwd)
+  expect(supervisor.records.get(result.value.appSessionId)?.cwd).toBe(realCwd)
+})
+
+test('createSessionInWorkspace REJECTS a renderer-supplied raw path (session_not_found, nothing spawned)', async () => {
+  const h = makeHost()
+  // The argument is typed `SessionId` (a string id) — the renderer is
+  // structurally unable to pass a cwd object. Even a raw filesystem-path string
+  // smuggled across the boundary is not a UUID, so it is rejected before any
+  // lookup: the renderer can NEVER author a cwd through this method.
+  const before = h.supervisor.records.size
+  const rawPath = '/etc' as SessionId
+  const result = await h.host.createSessionInWorkspace(rawPath)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('session_not_found')
+  // No session spawned, and the path never became a cwd anywhere.
+  expect(h.supervisor.records.size).toBe(before)
+  expect(
+    [...h.supervisor.records.values()].some(r => r.cwd === '/etc'),
+  ).toBe(false)
+})
+
+test('createSessionInWorkspace REJECTS a well-formed id absent from the registry (session_not_found)', async () => {
+  const h = makeHost()
+  // A syntactically valid UUID that names no registry row — the renderer cannot
+  // conjure a workspace the host does not already own.
+  const result = await h.host.createSessionInWorkspace(randomUUID())
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('session_not_found')
+  expect(h.supervisor.records.size).toBe(0)
+})
+
+test('createSessionInWorkspace RE-VALIDATES a stale row cwd and refuses (invalid_cwd, nothing spawned)', async () => {
+  // A row whose directory was moved/deleted since it was written: validateCwd now
+  // rejects it. The host must not spawn into a stale cwd (HC1 defense in depth).
+  const h = makeHost({ validateCwd: () => ({ ok: false }) })
+  const repId = randomUUID()
+  await h.registry.upsertOnSpawn({ appSessionId: repId, cwd: h.cwd })
+
+  const result = await h.host.createSessionInWorkspace(repId)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('invalid_cwd')
+  expect(h.supervisor.records.size).toBe(0)
+})
+
+/* ------------------------------------------------------------------------- *
  * B3 — shutdownAll marks every live row CLEAN (die-with-window ≠ crash)
  * ------------------------------------------------------------------------- */
 

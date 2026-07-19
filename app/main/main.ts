@@ -129,6 +129,7 @@ const CH_RENDERER_READY = 'catcode:renderer-ready'
 // channels return a typed HostResult; `pick-directory` returns a realpath or
 // null (the native picker, HC1); the host-event channel is a one-way stream.
 const CH_HOST_CREATE = 'catcode:host:create'
+const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
 const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
@@ -1041,6 +1042,19 @@ function registerHostControlPlane(): void {
         },
         String(appSessionId),
       )
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_CREATE_IN_WORKSPACE,
+    (_e, appSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
+      if (!host) return Promise.resolve(noHost<SessionDescriptor>())
+      // #15 — the renderer names an EXISTING registry id (a representative session
+      // in the target workspace); it authors NO cwd and NO resume id. The host
+      // re-derives + re-validates the row's cwd from its own registry (HC1/T8),
+      // exactly as restoreSession sources a cwd, and spawns a FRESH session there.
+      // A fresh create takes no replay-coalescing (no transcript to replay).
+      return host.createSessionInWorkspace(String(appSessionId))
     },
   )
 }

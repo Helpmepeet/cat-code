@@ -158,6 +158,21 @@ export const MAX_SESSION_TITLE_CHARS = 200
 export type HostApi = {
   createSession(req: CreateSessionRequest): Promise<HostResult<SessionDescriptor>>
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
+  /**
+   * Create a FRESH session in an existing workspace, named by a REGISTRY id (a
+   * representative session already rooted at that workspace's cwd) — the
+   * per-workspace "+" (#15). The renderer authors NO path: the host looks the id
+   * up in its OWN registry, RE-VALIDATES the row's cwd (realpath / exists /
+   * isDirectory — never trusting a stale row), and spawns a brand-new session
+   * there with NO resume (a new `appSessionId`, no `resumeEngineSessionId`). The
+   * cwd is sourced from the registry exactly as `restoreSession` sources it, so a
+   * compromised renderer can neither author nor smuggle a filesystem path
+   * (HC1/T8). Unlike restore this needs neither a transcript nor an
+   * engineSessionId on the row.
+   */
+  createSessionInWorkspace(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>>
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
   listSessions(): SessionDescriptor[]
   /**
