@@ -11,7 +11,7 @@ import type {
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 // P4-24 empty-state Welcome fixtures — a real `AccountsSnapshot` shape (mirrors
-// reauthBannerState.test.ts / WelcomeScreen.test.ts) so the empty transcript is
+// WelcomeScreen.test.ts) so the empty transcript is
 // proven to flow a REAL pool row into the Codex table, not a mock.
 function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
   return {

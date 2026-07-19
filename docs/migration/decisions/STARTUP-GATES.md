@@ -131,6 +131,20 @@ whether even that blocks or just disables submit is §5-Q2.
 > session switches (the pool is global) but a genuinely new dead-set re-surfaces. The
 > loud-failure guarantee is intact: `selectAuthSubmitBlocked` is unchanged and the block reason
 > stays on screen (collapsed, not hidden). Still a UI change, not architecture.
+
+> **Revision (2026-07-20 — operator GUI-acceptance, #12).** REMOVES the reauth alert surface
+> entirely, superseding the merged-wall revision above. There is no longer a wall, a per-account
+> reauth banner, or a collapsed chip, and zero-healthy no longer blocks submit — the composer
+> send is never disabled by account health. A send attempt at zero-healthy simply proceeds and
+> fails naturally at request time, where the engine surfaces its own typed pool error (`No healthy
+> Codex account…`, the request-time fallthrough this section already relies on). Deleted:
+> `ReauthWall.tsx`, `reauthBannerState.ts` (`selectReauthWall` / `selectVisibleReauthBanners` /
+> `selectAuthSubmitBlocked` and the banner/wall state), their `App.tsx` render + derivation +
+> submit-gate sites, and the `localStorage['catcode:dismissedReauth']` /
+> `['catcode:acknowledgedReauthWall']` keys. The reauth OAuth-progress card (`ReauthOAuthProgress`,
+> the in-flight re-link surface) is a different thing and stays. A nicer proactive treatment is
+> deferred (out of scope). Operator GUI eyeball owed at the all-accounts-dead stage: confirm
+> nothing renders and a send proceeds to the request-time pool error.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics
