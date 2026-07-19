@@ -78,6 +78,22 @@ describe('reduce / select', () => {
     expect(selectSessionsCatalog(state, null)).toBeNull()
   })
 
+  test('B4 — a re-broadcast snapshot replaces the stored catalog (de-stale)', () => {
+    let state = createSessionsCatalogState()
+    // Spawn-time catalog: one session.
+    state = reduceSessionsCatalogState(state, {
+      type: 'frame',
+      frame: catalogFrame([entry({ sessionId: 'a' })], 's1'),
+    })
+    expect(selectSessionsCatalog(state, 's1')?.entries.map(e => e.sessionId)).toEqual(['a'])
+    // The sidecar re-enumerates and re-broadcasts with a newly-created session.
+    state = reduceSessionsCatalogState(state, {
+      type: 'frame',
+      frame: catalogFrame([entry({ sessionId: 'a' }), entry({ sessionId: 'b' })], 's1'),
+    })
+    expect(selectSessionsCatalog(state, 's1')?.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
+  })
+
   test('lifecycle clears the emitting session catalog', () => {
     let state = createSessionsCatalogState()
     state = reduceSessionsCatalogState(state, {
