@@ -79,6 +79,7 @@ import {
   PROTOCOL_VERSION,
   REMOTE_VERB_TYPES,
   RUN_CONTROL_VERB_TYPES,
+  SESSION_ACTION_VERB_TYPES,
   SETTINGS_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountVerbMessage,
@@ -90,6 +91,8 @@ import {
   type RunControlVerbMessage,
   type RunControlVerbType,
   type ServerFrame,
+  type SessionActionVerbMessage,
+  type SessionActionVerbType,
   type SessionId,
   type SettingsVerbMessage,
   type SettingsVerbType,
@@ -110,6 +113,7 @@ const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -799,6 +803,26 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as RunControlVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_SESSION_ACTION_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-6b — light UX coercion only; the SIDECAR is the trust boundary and fully
+      // re-validates (Zod schema + the engine's own op). Drop any frame whose `type`
+      // is not a session-action verb fail-closed, rather than forwarding a message
+      // guaranteed to be rejected. The renderer authors the `requestId` for result
+      // correlation (a UX field, not a security one; the sidecar bounds it).
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !SESSION_ACTION_VERB_TYPES.includes(verb.type as SessionActionVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as SessionActionVerbMessage)
     },
   )
 

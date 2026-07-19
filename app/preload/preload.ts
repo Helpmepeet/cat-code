@@ -23,6 +23,7 @@ import type {
   PermissionSetModeMode,
   RemoteVerbMessage,
   RunControlVerbMessage,
+  SessionActionVerbMessage,
   ServerFrame,
   SessionId,
   SettingsVerbMessage,
@@ -51,6 +52,7 @@ const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
 const CH_PING = 'catcode:ping'
@@ -143,6 +145,16 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_RUN_CONTROL_VERB, payload)
+  },
+  sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void {
+    // P4-6b — HC3 fixed sender for the Sessions ⋯ mutating verbs (rename / export /
+    // branch). Same posture as `runControlVerb`: the renderer supplies only a decided
+    // verb payload (intent + requestId); main light-coerces the type and the sidecar
+    // is the trust boundary (Zod schema + the engine's own op). No engine object, no
+    // path, no token crosses in either direction.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_SESSION_ACTION_VERB, payload)
   },
   remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void {
     // P4-13 — HC3 fixed sender. Same posture as `accountVerb`: the renderer

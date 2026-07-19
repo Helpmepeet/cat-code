@@ -68,6 +68,7 @@ import {
   PERMISSION_SET_MODE_MODES,
   PROTOCOL_VERSION,
   RUN_CONTROL_VERB_TYPES,
+  SESSION_ACTION_VERB_TYPES,
   type AccountVerbMessage,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
@@ -75,6 +76,7 @@ import {
   type RemoteVerbMessage,
   type RunControlVerbMessage,
   type ServerFrame,
+  type SessionActionVerbMessage,
   type SessionId,
   type SettingsVerbMessage,
   type SlashCatalogEntry,
@@ -91,6 +93,7 @@ import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
+import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import {
   createSessionTitleGenerator,
   type SessionTitleDeps,
@@ -164,6 +167,13 @@ export type SidecarServerOptions = {
    * no run-controls frame is emitted and the verbs fail closed.
    */
   runControls?: SidecarRunControlsDomain
+  /**
+   * Session-action write verbs (P4-6b) — Rename / Export / Branch over the
+   * engine's OWN `saveCustomTitle` / `renderMessagesToPlainText` / `createFork`.
+   * Optional because the P1-0 probe fixture has no engine; when absent, the three
+   * verbs fail closed with an internal_error.
+   */
+  sessionActions?: SidecarSessionActionsDomain
   /**
    * Accounts read-seam + lifecycle verbs (P4-5). Optional because the P1-0 probe
    * fixture has no engine; when absent, no `accounts.snapshot` frame is emitted
@@ -275,6 +285,7 @@ export class SidecarServer {
   private readonly tasks: SidecarTasksDomain | null
   private readonly agentMode: SidecarAgentModeDomain | null
   private readonly runControls: SidecarRunControlsDomain | null
+  private readonly sessionActions: SidecarSessionActionsDomain | null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
@@ -314,6 +325,7 @@ export class SidecarServer {
     this.tasks = options.tasks ?? null
     this.agentMode = options.agentMode ?? null
     this.runControls = options.runControls ?? null
+    this.sessionActions = options.sessionActions ?? null
     this.accounts = options.accounts ?? null
     this.workspaceTrust = options.workspaceTrust ?? null
     this.diagnostics = options.diagnostics ?? null
@@ -796,6 +808,20 @@ export class SidecarServer {
       (RUN_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
     ) {
       this.handleRunControlVerb(connection, frame.message)
+      return
+    }
+
+    // P4-6b — the session-action WRITE verbs (session.rename / session.export /
+    // session.branch) are app-owned vocabulary (like the account/settings/workspace/
+    // agent-mode/run-control verbs), validated by a sidecar-LOCAL schema and
+    // dispatched to the engine's OWN saveCustomTitle / renderMessagesToPlainText /
+    // createFork. NOT part of the engine's shared schema. Membership test (three
+    // distinct `session.*` verbs) rather than a broad `session.` prefix.
+    if (
+      typeof messageType === 'string' &&
+      (SESSION_ACTION_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      this.handleSessionActionVerb(connection, frame.message)
       return
     }
 
@@ -1330,6 +1356,130 @@ export class SidecarServer {
     })
     // No explicit snapshot re-broadcast here — the setter's store mutation drives
     // the change-detected subscription, which re-emits `run-controls.snapshot`.
+  }
+
+  /**
+   * P4-6b — the session-action WRITE verbs (protocol.ts: SESSION_ACTION_VERB_TYPES).
+   * Same fail-closed order as the other verbs: sidecar-LOCAL structural schema →
+   * domain presence → dispatch to the engine's OWN op (saveCustomTitle /
+   * renderMessagesToPlainText / createFork) → `session-action.result` frame echoing
+   * the requestId (T5a-analog). The domain ops are async (disk reads/writes), so the
+   * ack fires after the promise resolves; the domain degrades every failure to an
+   * `{ok:false, message}` result rather than throwing. On a successful RENAME the
+   * server ALSO reuses the existing `session-title` outbound frame
+   * (`broadcastSessionTitle` → main tap → `host.setTitle` → registry) so the
+   * sidebar/tab relabel live — no new registry seam. The renderer authors ONLY the
+   * intent (a title string on rename); no engine object, path, or token crosses.
+   */
+  private handleSessionActionVerb(
+    connection: Connection,
+    rawMessage: unknown,
+  ): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = sessionActionVerbMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid session-action verb',
+        false,
+      )
+      return
+    }
+    if (!this.sessionActions) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'session-actions domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    const verb: SessionActionVerbMessage = parsed.data
+    const domain = this.sessionActions
+    // The op verb short name echoed on the result frame (protocol.ts).
+    const verbName =
+      verb.type === 'session.rename'
+        ? 'rename'
+        : verb.type === 'session.export'
+          ? 'export'
+          : 'branch'
+
+    const run =
+      verb.type === 'session.rename'
+        ? domain.rename(verb.title)
+        : verb.type === 'session.export'
+          ? domain.export()
+          : domain.branch()
+
+    void run
+      .then(result => {
+        // Export can produce a very large transcript. The outbound size cap
+        // (`send`) would DROP an over-cap frame silently → a hung UI; instead fail
+        // closed with an honest ok:false. Bound the text alone, leaving headroom for
+        // the rest of the frame + framing overhead (F3, MAX_OUTBOUND_FRAME_BYTES).
+        if (
+          result.ok &&
+          result.exportText !== undefined &&
+          Buffer.byteLength(result.exportText, 'utf8') >
+            MAX_OUTBOUND_FRAME_BYTES - 64 * 1024
+        ) {
+          this.send(connection, {
+            kind: 'session-action.result',
+            protocolVersion: PROTOCOL_VERSION,
+            sessionId: this.sessionId,
+            requestId: verb.requestId,
+            verb: verbName,
+            ok: false,
+            message:
+              'Transcript is too large to export over the desktop transport — use the terminal /export.',
+          })
+          return
+        }
+
+        this.send(connection, {
+          kind: 'session-action.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbName,
+          ok: result.ok,
+          message: result.message,
+          ...(result.exportText !== undefined
+            ? { exportText: result.exportText }
+            : {}),
+          ...(result.branchEngineSessionId !== undefined
+            ? { branchEngineSessionId: result.branchEngineSessionId }
+            : {}),
+        })
+
+        // A successful rename relabels the sidebar/tab live by reusing the existing
+        // one-shot title outbound path (main taps it → host.setTitle → registry).
+        if (verb.type === 'session.rename' && result.ok) {
+          this.broadcastSessionTitle(verb.title.trim())
+        }
+      })
+      .catch(error => {
+        // Defense in depth: the domain already degrades failures to ok:false, but a
+        // rejected promise here still owes the renderer a correlated result.
+        this.send(connection, {
+          kind: 'session-action.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbName,
+          ok: false,
+          message: `Session action failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        })
+      })
   }
 
   /**
@@ -2151,11 +2301,13 @@ export class SidecarServer {
   }
 
   /**
-   * P4-6 title-rider — push the one-shot AI title to every attached connection.
+   * P4-6 title-rider — push a session title to every attached connection.
    * `send` applies the clone/JSON checks, the outbound secretGuard, and the size
    * cap (the title is plain display text, guard-clean by construction). Main taps
-   * this frame → `host.setTitle`; it is deliberately NOT part of attach/replay —
-   * it fires once, after the first turn, only when a title was actually generated.
+   * this frame → `host.setTitle` → registry, relabelling the sidebar/tab. Two
+   * callers: the one-shot AI-title generator (after a fresh session's first turn),
+   * and the P4-6b `session.rename` verb (a user rename, on success). Deliberately
+   * NOT part of attach/replay.
    */
   private broadcastSessionTitle(title: string): void {
     if (this.connections.size === 0) {
@@ -2510,6 +2662,12 @@ function checkStrictKeys(message: unknown): string | null {
     ['model.set', new Set(['type', 'requestId', 'model'])],
     ['effort.set', new Set(['type', 'requestId', 'effort'])],
     ['fast.set', new Set(['type', 'requestId', 'active'])],
+    // P4-6b session-action verbs (app-owned; see SESSION_ACTION_VERB_TYPES). The
+    // renderer authors ONLY intent — a title on rename; export/branch carry no
+    // params (the op targets THIS session). Any other key is rejected fail-closed.
+    ['session.rename', new Set(['type', 'requestId', 'title'])],
+    ['session.export', new Set(['type', 'requestId'])],
+    ['session.branch', new Set(['type', 'requestId'])],
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
@@ -2708,6 +2866,31 @@ const runControlVerbMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('fast.set'),
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
     active: z.boolean(),
+  }),
+])
+
+/**
+ * P4-6b — sidecar-LOCAL schema for the session-action verbs (protocol.ts:
+ * SESSION_ACTION_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + a bounded `requestId` + (rename) a bounded `title`. The
+ * SEMANTIC checks (title non-empty after trim; the fork/render succeed) are the
+ * domain's concern — the boundary checks shape only, never trusting the frame. A
+ * non-string or over-long title, or a missing requestId, is rejected here
+ * fail-closed before the domain runs any engine op. Export/branch carry no params.
+ */
+const sessionActionVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('session.rename'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    title: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('session.export'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('session.branch'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   }),
 ])
 

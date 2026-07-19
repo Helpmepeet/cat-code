@@ -49,14 +49,22 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void',
   )
-  // 14 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
+  // P4-6b — session-action verb sender rides its own fixed channel (HC3).
+  expect(source).toContain(
+    "const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'",
+  )
+  expect(source).toContain(
+    'sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void',
+  )
+  // 15 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-13 remoteSettingsVerb + P4-19 settingsVerb + P4-24c
-  // runControlVerb + C5/P4-20 answerQuestions) + 6 payload-bearing control-plane
-  // senders + the DEV-only debug-state sender (compiled out of the packaged
-  // preload.cjs). (pickDirectory/createSession/restoreSession/closeSession/
-  // listSessions/previewSession). subscribe / subscribeHost register a listener
-  // and send no payload, so they do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(21)
+  // runControlVerb + P4-6b sessionActionVerb + C5/P4-20 answerQuestions) + 6
+  // payload-bearing control-plane senders + the DEV-only debug-state sender
+  // (compiled out of the packaged preload.cjs). (pickDirectory/createSession/
+  // restoreSession/closeSession/listSessions/previewSession). subscribe /
+  // subscribeHost register a listener and send no payload, so they do NOT (and
+  // must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(22)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
