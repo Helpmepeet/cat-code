@@ -18,6 +18,7 @@ function descriptor(over: Partial<SessionDescriptor>): SessionDescriptor {
     restorable: false,
     createdAt: 1,
     lastAttachedAt: 1,
+    lastMessageSentAt: null,
     ...over,
   }
 }

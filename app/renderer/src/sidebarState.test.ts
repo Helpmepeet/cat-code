@@ -24,6 +24,7 @@ function descriptor(
     restorable: false,
     createdAt: 0,
     lastAttachedAt: 0,
+    lastMessageSentAt: null,
     ...overrides,
   }
 }
@@ -168,6 +169,23 @@ test('rows are in stable creation order, NOT reordered by lastAttachedAt', () =>
   state = reduceShellState(state, added(descriptor('old', { createdAt: 1, lastAttachedAt: 100 })))
   state = reduceShellState(state, added(descriptor('new', { createdAt: 2, lastAttachedAt: 300 })))
   state = reduceShellState(state, added(descriptor('mid', { createdAt: 3, lastAttachedAt: 200 })))
+
+  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
+    'old',
+    'new',
+    'mid',
+  ])
+})
+
+test('CC-2: lastMessageSentAt drives the displayed time but NOT row order (float-to-top still deferred)', () => {
+  // The subtitle recency now reads lastMessageSentAt (Sidebar.tsx), but row
+  // ORDER must stay the immutable createdAt sort — floating a row to the top on
+  // send is a separate deferred piece (see the module doc). A newer message must
+  // never jump a row ahead of one created earlier.
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('old', { createdAt: 1, lastMessageSentAt: 999 })))
+  state = reduceShellState(state, added(descriptor('new', { createdAt: 2, lastMessageSentAt: 1 })))
+  state = reduceShellState(state, added(descriptor('mid', { createdAt: 3, lastMessageSentAt: 500 })))
 
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
     'old',

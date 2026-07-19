@@ -81,6 +81,7 @@ function descriptorFor(m: SessionModel): SessionDescriptor {
     title: null,
     createdAt: m.createdAt,
     lastAttachedAt: m.lastAttachedAt,
+    lastMessageSentAt: null,
   }
   switch (m.phase) {
     case 'spawning':
@@ -245,6 +246,7 @@ test('explicit P3-5b shape: ready→crash keeps tab, restore relives it, close r
     title: null,
     createdAt: 1,
     lastAttachedAt: 1,
+    lastMessageSentAt: null,
   }
 
   // spawn → ready

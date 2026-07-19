@@ -34,6 +34,7 @@ function descriptor(id: string, lastAttachedAt: number): SessionDescriptor {
     restorable: true,
     createdAt: lastAttachedAt,
     lastAttachedAt,
+    lastMessageSentAt: null,
   }
 }
 

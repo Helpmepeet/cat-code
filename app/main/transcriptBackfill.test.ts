@@ -40,6 +40,7 @@ function descriptor(restorable: boolean): SessionDescriptor {
     restorable,
     createdAt: 1,
     lastAttachedAt: 2,
+    lastMessageSentAt: null,
   }
 }
 

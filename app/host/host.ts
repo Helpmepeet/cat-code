@@ -160,6 +160,25 @@ export class Host implements HostApi {
           event.frame.engineSessionId,
         )
         this.emitStatus(appSessionId)
+      } else if (event.frame.kind === 'event') {
+        // CC-2 (app/renderer/src/sidebarState.ts deferred spec): the sidebar row
+        // time must track a real message SENT this run, not an attach/open. A
+        // `replay:true` EventFrame is history the resumed sidecar re-emits at
+        // OPEN/restore (protocol.ts EventFrame.replay) — it must NEVER bump the
+        // recency. Among live frames, a `result` message is the once-per-turn
+        // turn-end signal: it fires exactly once after a user turn actually runs
+        // and, being a `type:'result'` SDKMessage, can never be a tool_result
+        // echo (those ride `type:'user'` frames). Non-`event` snapshot frames
+        // (ready/settings/accounts/goal/…) never enter this branch at all.
+        const { frame } = event
+        if (
+          !frame.replay &&
+          frame.event.type === 'message' &&
+          frame.event.message.type === 'result'
+        ) {
+          await this.registry.markMessageSent(appSessionId)
+          this.emitStatus(appSessionId)
+        }
       }
       return
     }
@@ -694,6 +713,9 @@ export class Host implements HostApi {
       restorable: this.isRestorable(row, liveStatus),
       createdAt: row?.createdAt ?? 0,
       lastAttachedAt: row?.lastAttachedAt ?? 0,
+      // CC-2: the sidebar reads this for its recency text; null → the row falls
+      // back to `createdAt`, never to `lastAttachedAt` (the bug this fixes).
+      lastMessageSentAt: row?.lastMessageSentAt ?? null,
     }
   }
 
