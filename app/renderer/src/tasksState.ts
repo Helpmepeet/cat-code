@@ -58,6 +58,21 @@ export function isTerminalTaskStatus(status: TaskSnapshotItem['status']): boolea
   return TERMINAL_STATUSES.has(status)
 }
 
+/**
+ * P4-8b — the `K → stop` target: the id of the task at `index` IF it is a
+ * non-terminal (stoppable) row, else null. The prototype gates `K` on
+ * `!isTerminal(t)` (`TasksPage.jsx:109`); this is that gate, pure so the keyboard
+ * decision is unit-testable despite the SSR-only renderer harness.
+ */
+export function stoppableTaskIdAt(
+  items: readonly TaskSnapshotItem[],
+  index: number,
+): string | null {
+  const target = items[index]
+  if (!target || isTerminalTaskStatus(target.status)) return null
+  return target.id
+}
+
 /** Running-first, then newest — mirrors `BackgroundTasksDialog.tsx`'s sort. */
 export function sortTaskItems(items: readonly TaskSnapshotItem[]): TaskSnapshotItem[] {
   return [...items].sort((a, b) => {

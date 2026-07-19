@@ -55,6 +55,10 @@ import {
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
 import {
+  createSidecarTaskControlDomain,
+  type SidecarTaskControlDomain,
+} from './taskControlDomain.js'
+import {
   createSidecarRunControlsDomain,
   type SidecarRunControlsDomain,
 } from './runControlsDomain.js'
@@ -384,6 +388,12 @@ export type SidecarSession = {
    */
   agentMode: SidecarAgentModeDomain | null
   /**
+   * Task-control write-seam (P4-8b) — the deferred worker Stop/kill verb over the
+   * engine's own `stopTask`, against the SAME app-state store the runtime mutates.
+   * Read-only capability (no snapshot); null in probe mode (no engine app-state).
+   */
+  taskControl: SidecarTaskControlDomain | null
+  /**
    * Composer run-controls domain (P4-24c) — the live Model/effort/fast read seam +
    * the per-session `/model`, `/effort`, `/fast` write verbs over the engine's own
    * setters. Over the SAME app-state store the runtime enforces. Null in probe mode.
@@ -449,6 +459,7 @@ export async function createSidecarSessionController({
       remoteSettings: null,
       sessionsCatalog: null,
       agentMode: null,
+      taskControl: null,
       runControls: null,
       sessionActions: null,
       slashCatalog: [],
@@ -489,6 +500,7 @@ export async function createSidecarSessionController({
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
     sessionsCatalog: await createSidecarSessionsCatalogDomain(),
     agentMode: createSidecarAgentModeDomain(appStateStore),
+    taskControl: createSidecarTaskControlDomain(appStateStore),
     runControls: createSidecarRunControlsDomain(appStateStore),
     sessionActions: createSidecarSessionActionsDomain({ tools }),
     slashCatalog,

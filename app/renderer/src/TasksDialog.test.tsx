@@ -77,3 +77,26 @@ test('a needs-input local_agent row surfaces the real handoffStatus-derived stat
   expect(html).toContain('Fix the flaky test')
   expect(html).toContain('Needs you')
 })
+
+test('P4-8b — the "K stop" footer hint appears ONLY when a stop handler is wired (no dead affordance)', () => {
+  const snapshot: TasksSnapshot = {
+    items: [item({ id: 'a1', type: 'local_agent', status: 'running', label: 'Wire the auth flow' })],
+  }
+  const withStop = renderToStaticMarkup(
+    <TasksDialog
+      hasActiveSession={true}
+      onClose={noop}
+      open={true}
+      snapshot={snapshot}
+      onStopTask={noop}
+    />,
+  )
+  expect(withStop).toContain('stop')
+  // ↑↓ select and esc close are always present; K stop only with a handler.
+  const withoutStop = renderToStaticMarkup(
+    <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={snapshot} />,
+  )
+  expect(withoutStop).toContain('select')
+  expect(withoutStop).toContain('close')
+  expect(withoutStop).not.toContain('stop')
+})

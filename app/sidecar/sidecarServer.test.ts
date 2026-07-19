@@ -45,6 +45,10 @@ import {
 import { createSidecarGoalDomain, type SidecarGoalDomain } from './goalDomain.js'
 import { createSidecarTasksDomain, type SidecarTasksDomain } from './tasksDomain.js'
 import {
+  createSidecarTaskControlDomain,
+  type SidecarTaskControlDomain,
+} from './taskControlDomain.js'
+import {
   createSidecarAgentModeDomain,
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
@@ -166,6 +170,7 @@ function makeServer(
   settings?: SidecarSettingsDomain,
   runControls?: SidecarRunControlsDomain,
   sessionActions?: SidecarSessionActionsDomain,
+  taskControl?: SidecarTaskControlDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -183,6 +188,7 @@ function makeServer(
     ...(settings ? { settings } : {}),
     ...(runControls ? { runControls } : {}),
     ...(sessionActions ? { sessionActions } : {}),
+    ...(taskControl ? { taskControl } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -875,6 +881,249 @@ test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKe
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
   expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
   expect(calls).toEqual([])
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-8b — task-control STOP verb (the deferred worker Stop/kill) boundary
+ * ------------------------------------------------------------------------- *
+ * Exercises the SERVER boundary (checkStrictKeys + Zod schema + dispatch + result
+ * frame) with a FAKE domain, so the engine `stopTask` round-trip is not touched
+ * here (that is proven live in taskControlDomain.test.ts). One live-path test wires
+ * the REAL task-control + tasks domains over a shared store to prove a real stop
+ * drives a fresh `tasks.snapshot`.
+ */
+function fakeTaskControlDomain(
+  override?: (taskId: string) => { ok: boolean; message: string },
+): { domain: SidecarTaskControlDomain; calls: string[] } {
+  const calls: string[] = []
+  const domain: SidecarTaskControlDomain = {
+    async stop(taskId: string) {
+      calls.push(taskId)
+      return override ? override(taskId) : { ok: true, message: 'Stopped worker.' }
+    },
+  }
+  return { domain, calls }
+}
+
+function makeTaskControlServer(
+  override?: (taskId: string) => { ok: boolean; message: string },
+): { server: SidecarServer; calls: string[] } {
+  const { domain, calls } = fakeTaskControlDomain(override)
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    undefined, // tasks
+    undefined, // extensions
+    undefined, // agentMode
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    domain, // taskControl
+  )
+  return { server, calls }
+}
+
+test('P4-8b — a valid task.stop dispatches the domain + acks task-control.result (echoes requestId)', async () => {
+  const { server, calls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'task.stop',
+        requestId: 'ts1',
+        taskId: 'agent-1',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  // The handler awaits the async domain, so poll for the result ack.
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'task-control.result' && result.verb).toBe('task.stop')
+  expect(result && result.kind === 'task-control.result' && result.requestId).toBe('ts1')
+  expect(calls).toEqual(['agent-1'])
+})
+
+test('P4-8b — an unknown/terminal task acks ok:false (fail-closed), no crash', async () => {
+  const { server, calls } = makeTaskControlServer(() => ({
+    ok: false,
+    message: 'That task is no longer running.',
+  }))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.stop', requestId: 'ts2', taskId: 'gone' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(false)
+  expect(calls).toEqual(['gone'])
+})
+
+test('P4-8b — rejects task.stop with a NON-string taskId (Zod boundary), no domain call', () => {
+  const { server, calls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.stop', requestId: 'ts3', taskId: 42 } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-8b — rejects task.stop missing requestId at the schema boundary, no domain call', () => {
+  const { server, calls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.stop', taskId: 'agent-1' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-8b — rejects task.stop carrying an unexpected key (checkStrictKeys), no domain call', () => {
+  const { server, calls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      // A renderer-supplied extra key (e.g. a forged engine handle) is rejected
+      // before the verb reaches the domain.
+      message: { type: 'task.stop', requestId: 'ts4', taskId: 'agent-1', kill: true } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-8b — task.stop with NO task-control domain fails closed (internal_error), no result frame', () => {
+  // A server without a taskControl domain — the verb routes but the domain is absent.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.stop', requestId: 'ts5', taskId: 'agent-1' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+})
+
+test('P4-8b — LIVE PATH: a real task.stop kills the worker AND drives a fresh tasks.snapshot', async () => {
+  const store = createStore(getDefaultAppState())
+  const runningWorker = {
+    ...createTaskStateBase('a1', 'local_agent', 'Wire the auth flow'),
+    type: 'local_agent' as const,
+    status: 'running' as const,
+    agentId: 'agent-live',
+    agentType: 'implementor',
+    agentName: 'Turing',
+    isBackgrounded: true,
+    abortController: new AbortController(),
+  }
+  store.setState(prev => ({ ...prev, tasks: { a1: runningWorker } as never }))
+
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    createSidecarTasksDomain(store), // tasks — its store-subscription re-broadcasts
+    undefined, // extensions
+    undefined, // agentMode
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    createSidecarTaskControlDomain(store), // taskControl — REAL stopTask
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'tasks.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.stop', requestId: 'ts6', taskId: 'a1' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (!received.some(f => f.kind === 'task-control.result') ||
+      received.filter(f => f.kind === 'tasks.snapshot').length <= before);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  // The REAL stopTask flipped the store — proven by the store, not a stub.
+  expect(store.getState().tasks.a1?.status).toBe('killed')
+  // The store mutation drove a fresh tasks.snapshot re-broadcast (NOT synthetic).
+  const snaps = received.filter(
+    (f): f is Extract<ServerFrame, { kind: 'tasks.snapshot' }> => f.kind === 'tasks.snapshot',
+  )
+  expect(snaps.length).toBeGreaterThan(before)
+  const item = snaps[snaps.length - 1]?.tasks.items.find(i => i.id === 'a1')
+  expect(item?.status).toBe('killed')
 })
 
 /* ------------------------------------------------------------------------- *

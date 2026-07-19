@@ -963,6 +963,24 @@ export function App() {
     })
   }, [activeSessionId])
 
+  // P4-8b — stop/kill a running task in the active session (the deferred worker
+  // Stop/kill action; primary case: an orchestrator `local_agent` worker). The
+  // renderer NAMES only the target taskId; the sidecar re-resolves it against the
+  // live store and dispatches the engine's own `stopTask`. The kill's store
+  // mutation drives the `tasks.snapshot` re-broadcast, which re-renders the row as
+  // stopped; the `task-control.result` frame is the (redacted) ack.
+  const sendStopTask = useCallback(
+    (taskId: string) => {
+      if (!activeSessionId) return
+      getBridge().taskControlVerb(activeSessionId, {
+        type: 'task.stop',
+        requestId: crypto.randomUUID(),
+        taskId,
+      })
+    },
+    [activeSessionId],
+  )
+
   // P4-13 — dispatch a RemoteSettings verb (bridge toggle / direct-connect) to
   // the active session's sidecar. The outcome returns as a
   // `remoteSettings.result` frame (→ remoteSettings.lastResult).
@@ -1995,6 +2013,7 @@ export function App() {
         onClose={() => setTasksOpen(false)}
         snapshot={selectTasksSnapshot(tasks, activeSessionId)}
         hasActiveSession={activeSessionId !== null}
+        onStopTask={activeSessionId ? sendStopTask : undefined}
       />
     </div>
   )
