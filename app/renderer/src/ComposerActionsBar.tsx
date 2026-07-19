@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type Ref,
+} from 'react'
 import {
   formatResetLabel,
   statusDotTone,
@@ -55,6 +62,44 @@ import type {
  * `text-[…]` — the v4 dynamic-class trap); the model's cyan echo is a STATIC
  * arbitrary class (`text-[#22d3ee]`, allowed — only interpolation no-ops).
  */
+
+/**
+ * Feature #4 — roving-tabindex props applied to one action-bar face (its trigger
+ * button). Per the ARIA toolbar pattern, exactly one visible face is the toolbar's
+ * single tab stop (`tabIndex 0`); the others are `-1` and reached with the arrow
+ * keys (Left/Right/Home/End) or Tab/Shift+Tab. `data-composer-face` marks the
+ * roving triggers so the toolbar keydown + {@link focusFirstComposerFace} can
+ * enumerate them; `onFocus` keeps the tab stop on whichever face was focused last.
+ */
+export type ComposerFaceProps = {
+  'data-composer-face': string
+  tabIndex: number
+  onFocus: () => void
+}
+
+/**
+ * Feature #4 — focus the first enabled face of a composer action bar (pass its
+ * `toolbarRef` node). This is the keyboard ENTRY POINT from the composer textarea:
+ * `App.tsx`'s composer keydown calls it for Tab and for ArrowDown-when-empty to
+ * move focus into the chip row. Skips disabled / `aria-disabled` faces (a disabled
+ * attach or fast toggle is not a landing spot); returns whether a face actually
+ * took focus so the caller only swallows the key when the move happened.
+ */
+export function focusFirstComposerFace(container: HTMLElement | null): boolean {
+  if (!container) return false
+  const faces = container.querySelectorAll<HTMLElement>('[data-composer-face]')
+  for (const face of faces) {
+    if (
+      face.hasAttribute('disabled') ||
+      face.getAttribute('aria-disabled') === 'true'
+    ) {
+      continue
+    }
+    face.focus()
+    return document.activeElement === face
+  }
+  return false
+}
 
 // The prototype's `ColumnChipFace` face (Surfaces.jsx:228-244): quiet inline
 // text, no border/background, 12.5px medium, ellipsised, brightening on hover.
@@ -166,17 +211,20 @@ function ModelChip({
   selected,
   options,
   onSelect,
+  faceProps,
 }: {
   current: string | null
   selected: string | null
   options: RunControlModelOption[]
   onSelect: (value: string) => void
+  faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   return (
     <div ref={ref} className="relative shrink-0">
       <button
         ref={triggerRef}
+        {...faceProps}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -231,10 +279,12 @@ function ReasoningChip({
   current,
   options,
   onSelect,
+  faceProps,
 }: {
   current: string | null
   options: string[]
   onSelect: (effort: string) => void
+  faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
@@ -246,6 +296,7 @@ function ReasoningChip({
     <div ref={ref} className="relative shrink-0">
       <button
         ref={triggerRef}
+        {...faceProps}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -294,12 +345,14 @@ function FastChip({
   available,
   unavailableReason,
   onToggle,
+  faceProps,
 }: {
   active: boolean
   supportedByModel: boolean
   available: boolean
   unavailableReason: string | null
   onToggle: (active: boolean) => void
+  faceProps?: ComposerFaceProps
 }) {
   if (!active && !supportedByModel) return null
   const canEnable = supportedByModel && available
@@ -311,6 +364,7 @@ function FastChip({
       : (unavailableReason ?? 'Fast mode unavailable')
   return (
     <button
+      {...faceProps}
       type="button"
       aria-pressed={active}
       aria-label={title}
@@ -484,11 +538,13 @@ function AccountChip({
   accounts,
   onSwitch,
   onManage,
+  faceProps,
 }: {
   active: AccountStatus
   accounts: AccountStatus[]
   onSwitch: (accountId: string) => void
   onManage?: () => void
+  faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   const pool = accounts.length > 0 ? accounts : [active]
@@ -497,6 +553,7 @@ function AccountChip({
     <div ref={ref} className="relative shrink-0">
       <button
         ref={triggerRef}
+        {...faceProps}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -638,15 +695,18 @@ export function ContextUsagePanel({
 function ContextChip({
   usage,
   account,
+  faceProps,
 }: {
   usage: ContextUsage
   account: AccountStatus | null
+  faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, ref, triggerRef } = usePopover()
   return (
     <div ref={ref} className="relative flex shrink-0">
       <button
         ref={triggerRef}
+        {...faceProps}
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -678,6 +738,8 @@ export function ComposerActionsBar({
   onSwitchAccount,
   onManageAccounts,
   contextUsage,
+  toolbarRef,
+  onFocusComposer,
 }: {
   attachDisabled: boolean
   onAttach: () => void
@@ -710,6 +772,12 @@ export function ComposerActionsBar({
   onManageAccounts?: () => void
   /** Real context-window fullness, or null before the first result frame. */
   contextUsage: ContextUsage | null
+  /** Feature #4 — the toolbar's DOM node, so the composer keydown (App.tsx) can
+   * move focus into the first face via {@link focusFirstComposerFace}. */
+  toolbarRef?: Ref<HTMLDivElement>
+  /** Feature #4 — return focus to the composer textarea (Escape, or Shift+Tab off
+   * the first face). Owned by App.tsx, which holds the textarea ref. */
+  onFocusComposer?: () => void
 }) {
   // Interactive when the live snapshot AND the setter handler are both present;
   // otherwise the P4-24 read-only faces render unchanged.
@@ -723,13 +791,113 @@ export function ComposerActionsBar({
   // Interactive switcher when the active account AND a switch handler are both
   // present; otherwise the P4-24 read-only alias face (mirrors the ModelChip gate).
   const accountInteractive = account != null && onSwitchAccount != null
+
+  // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
+  // follows the last-focused face; when nothing in the bar is focused it rests on
+  // the first face ('attach', always rendered), so Tab from the textarea has a
+  // deterministic landing spot. Faces read their tabIndex from `faceProps(id)`.
+  const [activeFace, setActiveFace] = useState<string | null>(null)
+  const faceProps = (id: string): ComposerFaceProps => ({
+    'data-composer-face': id,
+    tabIndex: id === (activeFace ?? 'attach') ? 0 : -1,
+    onFocus: () => setActiveFace(id),
+  })
+  const exitToComposer = () => onFocusComposer?.()
+
+  // Roving navigation among the faces. Runs at the toolbar level, so it also fires
+  // for keydowns bubbling out of an open popover — those are guarded out and left
+  // to the popover's own machinery (usePopover: first-item focus + Escape-to-close).
+  const onToolbarKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    if (target.closest('[role="menu"], [role="dialog"]')) return
+    const current = target.closest<HTMLElement>('[data-composer-face]')
+    if (!current) return
+    const faces = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[data-composer-face]'),
+    ).filter(
+      el =>
+        !el.hasAttribute('disabled') &&
+        el.getAttribute('aria-disabled') !== 'true',
+    )
+    const index = faces.indexOf(current)
+    if (index === -1) return
+    const move = (to: number) => {
+      const el = faces[to]
+      if (!el) return
+      el.focus()
+      setActiveFace(el.getAttribute('data-composer-face'))
+    }
+    switch (event.key) {
+      case 'ArrowRight':
+        event.preventDefault()
+        move((index + 1) % faces.length)
+        return
+      case 'ArrowLeft':
+        event.preventDefault()
+        move((index - 1 + faces.length) % faces.length)
+        return
+      case 'Home':
+        event.preventDefault()
+        move(0)
+        return
+      case 'End':
+        event.preventDefault()
+        move(faces.length - 1)
+        return
+      case 'Tab':
+        // Tab/Shift+Tab also walk the faces (the operator's request). Shift+Tab off
+        // the first face returns to the textarea; Tab off the last face falls
+        // through to the browser so focus can leave the bar forward.
+        if (event.shiftKey) {
+          event.preventDefault()
+          if (index === 0) exitToComposer()
+          else move(index - 1)
+        } else if (index < faces.length - 1) {
+          event.preventDefault()
+          move(index + 1)
+        }
+        return
+      case 'ArrowDown':
+        // Enter/Space already open a popover via the button's native click;
+        // ArrowDown matches by activating the trigger, reusing usePopover's open +
+        // first-item focus. Faces without a popover (no aria-haspopup) ignore it.
+        if (current.getAttribute('aria-haspopup')) {
+          event.preventDefault()
+          current.click()
+        }
+        return
+      case 'Escape':
+        event.preventDefault()
+        exitToComposer()
+        return
+      default:
+    }
+  }
+
+  // Focus left the whole bar (its popovers live inside, so this excludes those) →
+  // drop the tab stop back to the first face for a predictable next Tab entry.
+  const onToolbarBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setActiveFace(null)
+    }
+  }
+
   return (
-    <div className="mt-3 flex items-center gap-4 px-1">
+    <div
+      ref={toolbarRef}
+      role="toolbar"
+      aria-label="Composer actions"
+      aria-orientation="horizontal"
+      onKeyDown={onToolbarKeyDown}
+      onBlur={onToolbarBlur}
+      className="mt-3 flex items-center gap-4 px-1"
+    >
       {/* Attach (§10 ❓, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
        * #a1a1aa on hover — a real file picker needs an engine attachment
        * capability that is NOT on the wire; the working attach path today is a
        * large paste, which the toast + title spell out. */}
       <button
+        {...faceProps('attach')}
         aria-label="Add attachment"
         title="Add attachment — paste a large block to attach it as a collapsed chip"
         className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-[#3f3f46] transition-colors hover:text-text-muted disabled:opacity-50"
@@ -763,6 +931,7 @@ export function ComposerActionsBar({
               selected={runControls.model.selected}
               options={runControls.model.options}
               onSelect={onSetModel}
+              faceProps={faceProps('model')}
             />
             <RailSep />
           </>
@@ -783,6 +952,7 @@ export function ComposerActionsBar({
               current={runControls.effort.current ?? reasoningEffort}
               options={runControls.effort.options}
               onSelect={onSetEffort}
+              faceProps={faceProps('effort')}
             />
             <RailSep />
           </>
@@ -797,7 +967,11 @@ export function ComposerActionsBar({
             <RailSep />
           </>
         ) : null}
-        <PermissionModeChip context={permissionContext} onSetMode={onSetMode} />
+        <PermissionModeChip
+          context={permissionContext}
+          onSetMode={onSetMode}
+          faceProps={faceProps('mode')}
+        />
         {fastInteractive && runControls && onSetFast ? (
           <FastChip
             active={runControls.fast.active}
@@ -805,6 +979,7 @@ export function ComposerActionsBar({
             available={runControls.fast.available}
             unavailableReason={runControls.fast.unavailableReason}
             onToggle={onSetFast}
+            faceProps={faceProps('fast')}
           />
         ) : fastMode ? (
           <FastFace />
@@ -817,6 +992,7 @@ export function ComposerActionsBar({
               accounts={accounts ?? []}
               onSwitch={onSwitchAccount}
               onManage={onManageAccounts}
+              faceProps={faceProps('account')}
             />
           ) : showAccount ? (
             <span
@@ -828,7 +1004,11 @@ export function ComposerActionsBar({
           ) : null}
           {(accountInteractive || showAccount) && contextUsage ? <RailSep /> : null}
           {contextUsage ? (
-            <ContextChip usage={contextUsage} account={account} />
+            <ContextChip
+              usage={contextUsage}
+              account={account}
+              faceProps={faceProps('context')}
+            />
           ) : null}
         </div>
       </div>

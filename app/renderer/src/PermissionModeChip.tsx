@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ComposerFaceProps } from './ComposerActionsBar.js'
 import {
   PERMISSION_SET_MODE_MODES,
   type PermissionContextSnapshot,
@@ -104,9 +105,14 @@ function isKnownMode(mode: string): mode is PermissionSetModeMode {
 export function PermissionModeChip({
   context,
   onSetMode,
+  faceProps,
 }: {
   context: PermissionContextSnapshot | null
   onSetMode: (mode: PermissionSetModeMode) => void
+  /** Feature #4 — roving-tabindex props from the composer action bar's toolbar
+   * (data-composer-face + tabIndex + onFocus). Spread on the trigger so the chip
+   * joins the arrow-key roving group; absent (standalone use) → an unmanaged face. */
+  faceProps?: ComposerFaceProps
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -138,6 +144,7 @@ export function PermissionModeChip({
        * Surfaces.jsx:222): the mode's short label tinted by tone, no dot, no
        * pill — brightening to text-primary on hover like the rest of the rail. */}
       <button
+        {...faceProps}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}

@@ -495,3 +495,67 @@ test('the attach button reflects the disabled gate (echo-only stub)', () => {
   const disabled = render({ attachDisabled: true })
   expect(disabled).toContain('disabled=""')
 })
+
+// ── Feature #4: keyboard entry + roving faces ─────────────────────────────────
+// Static-markup only (this package has no keydown-simulation harness): assert the
+// faces are focusable with correct roles + roving tabindex. Live keyboard behavior
+// (arrow roving, ArrowDown-to-open, Escape-to-textarea, the App.tsx entry points)
+// is operator-GUI verified — SSR cannot fire a keydown.
+
+test('the action bar is an ARIA toolbar (keyboard-navigable face group)', () => {
+  const html = render()
+  expect(html).toContain('role="toolbar"')
+  expect(html).toContain('aria-label="Composer actions"')
+  expect(html).toContain('aria-orientation="horizontal"')
+})
+
+test('roving tabindex: the first face (attach) is the single tab stop; others are -1', () => {
+  // Default render → two interactive faces: the attach glyph + the permission chip.
+  const html = render()
+  // The attach glyph is always first and rests as the toolbar's single tab stop.
+  expect(html).toContain('data-composer-face="attach" tabindex="0"')
+  // Every other face is out of the tab order (-1); reached with the arrow keys.
+  expect(html).toContain('data-composer-face="mode" tabindex="-1"')
+  // Exactly one tab stop across the whole bar (the roving invariant).
+  expect(countOccurrences(html, 'tabindex="0"')).toBe(1)
+})
+
+test('every interactive face carries a data-composer-face marker for roving + entry', () => {
+  // A maximal bar: attach + model + effort + mode + fast + account + context.
+  const html = render({
+    model: 'gpt-5.6-terra',
+    runControls: runControls(),
+    onSetModel: () => {},
+    onSetEffort: () => {},
+    onSetFast: () => {},
+    account: account({ alias: 'hiby' }),
+    onSwitchAccount: () => {},
+    contextUsage: USAGE,
+  })
+  for (const id of [
+    'attach',
+    'model',
+    'effort',
+    'mode',
+    'fast',
+    'account',
+    'context',
+  ]) {
+    expect(html).toContain(`data-composer-face="${id}"`)
+  }
+  // Still exactly one tab stop (attach); the other six faces are all -1.
+  expect(html).toContain('data-composer-face="attach" tabindex="0"')
+  expect(countOccurrences(html, 'tabindex="0"')).toBe(1)
+  expect(countOccurrences(html, 'tabindex="-1"')).toBe(6)
+})
+
+test('read-only faces (no handlers) are not roving triggers', () => {
+  // Read-only model/effort/account render as <span> display faces, not buttons,
+  // so they never join the roving group — only attach + the perm chip do.
+  const html = render({ model: 'gpt-5.6-terra', reasoningEffort: 'high' })
+  expect(countOccurrences(html, 'data-composer-face')).toBe(2)
+  expect(html).toContain('data-composer-face="attach"')
+  expect(html).toContain('data-composer-face="mode"')
+  expect(html).not.toContain('data-composer-face="model"')
+  expect(html).not.toContain('data-composer-face="effort"')
+})
