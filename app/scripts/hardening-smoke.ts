@@ -246,6 +246,7 @@ async function runProductionHardeningSmoke(
       'settingsVerb',
       'submit',
       'subscribe',
+      'taskControlVerb',
       // Control plane (P3-3 — HC3 fixed per-method senders).
       'closeSession',
       'createSession',

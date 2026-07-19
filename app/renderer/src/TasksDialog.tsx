@@ -1,10 +1,16 @@
 /**
- * TasksDialog (P4-9) — the desktop port of `BackgroundTasksDialog`
+ * TasksDialog (P4-9 + P4-8b) — the desktop port of `BackgroundTasksDialog`
  * (`src/components/tasks/BackgroundTasksDialog.tsx`, opened by the real `/tasks`
- * command, `src/commands/tasks/tasks.tsx`). Read-only v1: kill/stop and the
- * real per-type detail dialogs (`ShellDetailDialog` + 4 siblings) are deferred
- * to a future write-boundary session (P4-10 precedent) — no fake toasts, no
- * demo actions wired to nothing.
+ * command, `src/commands/tasks/tasks.tsx`).
+ *
+ * P4-8b adds the `K → stop` worker-control action the prototype's BgTasksDialog
+ * has (`TasksPage.jsx:109` keyboard `K`/`k` on a non-terminal row; footer hint
+ * `:227`) — deferred in P4-9's read-only v1 for lack of an inbound write verb
+ * (PARITY-LEDGER §21 rows "Keyboard: K → stop" / footer-hint strip). It rides the
+ * new `task.stop` verb (`decisions/AGENT-CHROME.md` §2 WorkerDetail Stop); the
+ * renderer only NAMES the target `taskId`, the sidecar re-resolves it against the
+ * live store and runs the engine's own `stopTask`. The per-type detail dialogs
+ * (`ShellDetailDialog` + 4 siblings) stay deferred — no fake toasts.
  *
  * Visual grammar adapted from `~/catcode_prototype/cat-app/TasksPage.jsx`
  * (`BgTasksDialog`), rebuilt on the P0-2 tokens, zero ported code.
@@ -15,6 +21,7 @@ import { agentStateMeta } from './agentIdentity.js'
 import {
   groupTaskItems,
   isTerminalTaskStatus,
+  stoppableTaskIdAt,
   taskColorClass,
   taskDisplayState,
   taskKindMeta,
@@ -25,6 +32,7 @@ export function TasksDialog({
   onClose,
   snapshot,
   hasActiveSession,
+  onStopTask,
 }: {
   open: boolean
   onClose: () => void
@@ -32,6 +40,13 @@ export function TasksDialog({
   snapshot: TasksSnapshot | null
   /** Whether an active session exists — gates the "This session" scope option. */
   hasActiveSession: boolean
+  /**
+   * P4-8b — stop/kill the task with this id (the `task.stop` verb). Undefined when
+   * there is no active session, in which case the `K → stop` control is inert and
+   * its footer hint is hidden (no dead affordance). The prototype's BgTasksDialog
+   * gates `K` on a non-terminal row (`TasksPage.jsx:109`); we match that.
+   */
+  onStopTask?: (taskId: string) => void
 }) {
   const [selected, setSelected] = useState(0)
 
@@ -62,11 +77,23 @@ export function TasksDialog({
       if (event.key === 'ArrowUp') {
         event.preventDefault()
         setSelected(index => Math.max(0, index - 1))
+        return
+      }
+      // P4-8b — `K`/`k` stops the selected task, but ONLY a non-terminal one
+      // (`TasksPage.jsx:109` gates on `!isTerminal(t)`); a terminal row / absent
+      // handler is a no-op, never a dead action. The gate is the pure
+      // `stoppableTaskIdAt` selector (unit-tested — the SSR harness can't press K).
+      if (event.key === 'k' || event.key === 'K') {
+        const targetId = onStopTask ? stoppableTaskIdAt(flat, selected) : null
+        if (onStopTask && targetId) {
+          event.preventDefault()
+          onStopTask(targetId)
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, flat.length, onClose])
+  }, [open, flat, selected, onClose, onStopTask])
 
   if (!open) return null
 
@@ -129,6 +156,11 @@ export function TasksDialog({
           <span>
             <span className="text-text-muted">↑↓</span> select
           </span>
+          {onStopTask ? (
+            <span>
+              <span className="text-text-muted">K</span> stop
+            </span>
+          ) : null}
           <span>
             <span className="text-text-muted">esc</span> close
           </span>

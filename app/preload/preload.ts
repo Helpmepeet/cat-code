@@ -28,6 +28,7 @@ import type {
   SessionId,
   SettingsVerbMessage,
   SubmitOptions,
+  TaskControlVerbMessage,
   TranscriptCache,
   WorkspaceTrustMessage,
 } from '../shared/protocol.js'
@@ -51,6 +52,7 @@ const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
+const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
@@ -135,6 +137,16 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, active }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_AGENT_MODE_SET, payload)
+  },
+  taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void {
+    // P4-8b — HC3 fixed sender for the worker Stop/kill action. Same posture as
+    // `accountVerb`: the renderer supplies only a decided verb payload (a target
+    // taskId + requestId); main light-coerces the type and the sidecar is the trust
+    // boundary (Zod schema + the engine's own `stopTask` re-resolving the id against
+    // the live store). No engine object, no path, no token crosses in either direction.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_TASK_CONTROL_VERB, payload)
   },
   runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void {
     // P4-24c — HC3 fixed sender for the composer run-controls (Model / Reasoning /

@@ -347,6 +347,7 @@ export type SidecarClientMessage =
   | RemoteVerbMessage
   | SettingsVerbMessage
   | AgentModeSetMessage
+  | TaskControlVerbMessage
   | RunControlVerbMessage
   | SessionActionVerbMessage
 
@@ -949,6 +950,68 @@ export type AgentModeSetResultFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   requestId: string
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries token material. */
+  message: string
+}
+
+/* ------------------------------------------------------------------------- *
+ * P4-8b — task/worker STOP verb (the deferred worker-control action)
+ * ------------------------------------------------------------------------- *
+ *
+ * P4-8's orchestrator roster/detail/focus surfaces landed READ-ONLY; the
+ * `WorkerDetail` Stop button (`decisions/AGENT-CHROME.md` §2 keep/adapt +
+ * PARITY-LEDGER §20 row "`WorkerDetail` Stop button", and the TasksPage
+ * `K → stop` deferral in PARITY-LEDGER §21) was DEFERRED as "needs an inbound
+ * write verb". This is that verb. Like the P4-5 account verbs, the P4-8b
+ * agent-mode set, the P4-15 workspace-trust accept, the P4-19 settings write,
+ * and the P4-24c run-controls, it is app-owned inbound vocabulary the engine's
+ * shared `appClientMessageSchema` does NOT carry — validated by a sidecar-LOCAL
+ * Zod schema at the trust boundary and dispatched to the engine's OWN task-abort
+ * machinery `stopTask` (`src/tasks/stopTask.ts:58` — the SAME function
+ * `TaskStopTool` and the SDK `stop_task` control use). `stopTask` looks the task
+ * up by id in THIS session's `AppState.tasks`, validates it is running, and calls
+ * the per-type `Task.kill` (a `local_agent` worker → `killAsyncAgent`,
+ * `LocalAgentTask.tsx:368` — aborts the worker + releases its Codex lease). A
+ * `local_agent` worker is the primary case; the verb is generic over the task
+ * types the `/tasks` surface shows, mirroring the real `stopTask`/`TaskStopTool`.
+ *
+ *  - The renderer authors ONLY the target `taskId` (the `TaskSnapshotItem.id`
+ *    already on the wire, `tasksDomain.ts:71`); the sidecar re-resolves it against
+ *    the LIVE store and stops only what exists there (T6-analog). An unknown /
+ *    already-terminal task fails closed with `ok:false` — no side effect, no
+ *    crash. No path, no engine object, no token crosses either way.
+ *  - T5a-analog — the verb carries a `requestId` echoed on `task-control.result`.
+ *  - T7 — the existing inbound size/rate caps apply unchanged.
+ *  - No new snapshot frame: `stopTask`'s store mutation drives the existing
+ *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
+ *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
+ */
+export const TASK_CONTROL_VERB_TYPES = ['task.stop'] as const
+
+export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
+
+/** Stop/kill a running task in the addressed session (primary case: a worker). */
+export type TaskStopMessage = {
+  type: 'task.stop'
+  requestId: string
+  /** The target `AppState.tasks` key (a `TaskSnapshotItem.id` from the wire). */
+  taskId: string
+}
+
+export type TaskControlVerbMessage = TaskStopMessage
+
+/**
+ * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
+ * `tasks.snapshot` / `agent-mode.snapshot` follow from the store subscription, not
+ * from here. `ok:false` when the task was gone or already terminal (fail-closed).
+ */
+export type TaskControlResultFrame = {
+  kind: 'task-control.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: TaskControlVerbType
   ok: boolean
   /** Redacted, human-readable outcome; NEVER carries token material. */
   message: string
@@ -1851,6 +1914,7 @@ export type ServerFrame =
   | TasksSnapshotFrame
   | AgentModeSnapshotFrame
   | AgentModeSetResultFrame
+  | TaskControlResultFrame
   | RunControlsSnapshotFrame
   | RunControlResultFrame
   | SessionActionResultFrame
@@ -1970,6 +2034,17 @@ export type CatCodeBridge = {
    * `requestId`; the outcome arrives as an `agent-mode.set.result` frame.
    */
   setAgentMode(sessionId: SessionId, active: boolean): void
+  /**
+   * P4-8b — stop/kill a running task on the addressed session's sidecar (the
+   * deferred worker-control action; primary case: an orchestrator `local_agent`
+   * worker). The renderer authors ONLY the target `taskId` (a `TaskSnapshotItem.id`
+   * already on the wire) + a `requestId`; the sidecar re-resolves it against the
+   * LIVE `AppState.tasks` and dispatches the engine's OWN `stopTask` — no path, no
+   * engine object, no token crosses. The outcome arrives as a `task-control.result`
+   * frame echoing `requestId` (`ok:false` when the task was gone/terminal), and the
+   * kill's store mutation drives the existing `tasks.snapshot` re-broadcast.
+   */
+  taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**
    * P4-24c — set one composer run-control (model / reasoning effort / fast) on the
    * addressed session's sidecar. The renderer authors ONLY a value/selection (a

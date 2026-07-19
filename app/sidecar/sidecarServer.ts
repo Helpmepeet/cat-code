@@ -69,6 +69,7 @@ import {
   PROTOCOL_VERSION,
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
+  TASK_CONTROL_VERB_TYPES,
   type AccountVerbMessage,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
@@ -80,6 +81,7 @@ import {
   type SessionId,
   type SettingsVerbMessage,
   type SlashCatalogEntry,
+  type TaskControlVerbMessage,
 } from '../shared/protocol.js'
 import {
   EDITABLE_SETTING_SOURCES,
@@ -92,6 +94,7 @@ import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
+import type { SidecarTaskControlDomain } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import {
@@ -160,6 +163,13 @@ export type SidecarServerOptions = {
    * change; when absent, no orchestrator frame is emitted.
    */
   agentMode?: SidecarAgentModeDomain
+  /**
+   * Task-control write-seam (P4-8b) — the deferred worker Stop/kill verb. When
+   * present, a `task.stop` verb dispatches the engine's own `stopTask`; when
+   * absent, the verb fails closed (`internal_error`). Read-only, no snapshot of its
+   * own — the kill's store mutation drives the `tasks`/`agent-mode` re-broadcasts.
+   */
+  taskControl?: SidecarTaskControlDomain
   /**
    * Composer run-controls read-seam + write verbs (P4-24c). When present, a
    * `run-controls.snapshot` frame is emitted on attach and re-broadcast on the
@@ -284,6 +294,7 @@ export class SidecarServer {
   private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
   private readonly agentMode: SidecarAgentModeDomain | null
+  private readonly taskControl: SidecarTaskControlDomain | null
   private readonly runControls: SidecarRunControlsDomain | null
   private readonly sessionActions: SidecarSessionActionsDomain | null
   private readonly accounts: SidecarAccountsDomain | null
@@ -324,6 +335,7 @@ export class SidecarServer {
     this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
     this.agentMode = options.agentMode ?? null
+    this.taskControl = options.taskControl ?? null
     this.runControls = options.runControls ?? null
     this.sessionActions = options.sessionActions ?? null
     this.accounts = options.accounts ?? null
@@ -797,6 +809,18 @@ export class SidecarServer {
       return
     }
 
+    // P4-8b — the task-control STOP verb (the deferred worker Stop/kill action) is
+    // app-owned vocabulary (like the account/agent-mode/run-control verbs),
+    // validated by a sidecar-LOCAL schema and dispatched to the engine's OWN
+    // `stopTask` (a live per-session kill, no respawn). NOT in the shared schema.
+    if (
+      typeof messageType === 'string' &&
+      (TASK_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      void this.handleTaskControlVerb(connection, frame.message)
+      return
+    }
+
     // P4-24c — the composer run-control set verbs (model.set / effort.set /
     // fast.set) are app-owned vocabulary (like C2 and the account/RemoteSettings/
     // settings/workspace/agent-mode verbs), validated by a sidecar-LOCAL schema and
@@ -1262,6 +1286,66 @@ export class SidecarServer {
     if (result.changed) {
       void this.broadcastAgentModeSnapshot()
     }
+  }
+
+  /**
+   * P4-8b — the task-control STOP verb (protocol.ts: TASK_CONTROL_VERB_TYPES;
+   * `decisions/AGENT-CHROME.md` §2 / PARITY-LEDGER §20 "WorkerDetail Stop"). Same
+   * fail-closed order as the other verbs: sidecar-LOCAL structural schema → domain
+   * presence → dispatch to the domain (which runs the engine's OWN `stopTask`
+   * against THIS session's store — a live kill, no respawn) → `task-control.result`
+   * frame. The `tasks.snapshot` / `agent-mode.snapshot` re-broadcast is NOT emitted
+   * here: `stopTask` mutates the app-state store, whose subscription (constructor)
+   * re-broadcasts the fresh snapshots to every connection — the SAME live path any
+   * engine-side kill takes, not an action-driven synthetic one. Async because
+   * `stopTask` is async; the result frame follows the awaited kill. The renderer
+   * authors ONLY the target `taskId`; the engine re-resolves it against the live
+   * store, so an unknown/terminal target fails closed with `ok:false` (no crash).
+   */
+  private async handleTaskControlVerb(
+    connection: Connection,
+    rawMessage: unknown,
+  ): Promise<void> {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = taskControlVerbMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid task-control verb',
+        false,
+      )
+      return
+    }
+    if (!this.taskControl) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'internal_error',
+        'task-control domain unavailable for this session',
+        false,
+      )
+      return
+    }
+
+    const verb = parsed.data as TaskControlVerbMessage
+    const result = await this.taskControl.stop(verb.taskId)
+    this.send(connection, {
+      kind: 'task-control.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: verb.requestId,
+      verb: verb.type,
+      ok: result.ok,
+      message: result.message,
+    })
+    // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
+    // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
+    // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
   }
 
   /**
@@ -2657,6 +2741,9 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-8b agent-mode set verb (app-owned; see AGENT_MODE_VERB_TYPES). The
     // renderer authors ONLY the boolean intent — any other key is rejected.
     ['agent-mode.set', new Set(['type', 'requestId', 'active'])],
+    // P4-8b task-control STOP verb (app-owned; see TASK_CONTROL_VERB_TYPES). The
+    // renderer authors ONLY the target taskId — any other key is rejected.
+    ['task.stop', new Set(['type', 'requestId', 'taskId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -2840,6 +2927,21 @@ const agentModeSetMessageSchema = z.object({
   type: z.literal('agent-mode.set'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   active: z.boolean(),
+})
+
+/**
+ * P4-8b — sidecar-LOCAL schema for the task-control STOP verb (protocol.ts:
+ * TASK_CONTROL_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * Structural only: shape + a bounded `requestId` + a bounded `taskId`. The
+ * BUSINESS validation (does the task exist, is it running, is its type stoppable)
+ * is the engine `stopTask`'s own concern in the domain — the boundary checks shape
+ * only, never trusting the frame. A non-string/absent `taskId` is rejected here
+ * fail-closed before the domain runs any kill.
+ */
+const taskControlVerbMessageSchema = z.object({
+  type: z.literal('task.stop'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
 })
 
 /**

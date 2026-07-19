@@ -6,6 +6,7 @@ import {
   reduceTasksState,
   selectTasksSnapshot,
   sortTaskItems,
+  stoppableTaskIdAt,
   TASK_COLOR_CLASS,
   TASK_KIND_META,
   taskColorClass,
@@ -152,4 +153,26 @@ test('every TaskType has a kind badge', () => {
   for (const type of types) {
     expect(taskKindMeta(type).label.length).toBeGreaterThan(0)
   }
+})
+
+function taskItem(over: Partial<TaskSnapshotItem> = {}): TaskSnapshotItem {
+  return { id: 'x', type: 'local_agent', status: 'running', label: 'work', startTime: 1, ...over }
+}
+
+test('P4-8b stoppableTaskIdAt — a non-terminal selected row returns its id (the K→stop target)', () => {
+  const items = [taskItem({ id: 'a1', status: 'running' }), taskItem({ id: 'p1', status: 'pending' })]
+  expect(stoppableTaskIdAt(items, 0)).toBe('a1')
+  expect(stoppableTaskIdAt(items, 1)).toBe('p1')
+})
+
+test('P4-8b stoppableTaskIdAt — a terminal selected row returns null (K is a no-op)', () => {
+  for (const status of ['completed', 'failed', 'killed'] as const) {
+    expect(stoppableTaskIdAt([taskItem({ id: 't', status })], 0)).toBeNull()
+  }
+})
+
+test('P4-8b stoppableTaskIdAt — an out-of-range / empty selection returns null', () => {
+  expect(stoppableTaskIdAt([], 0)).toBeNull()
+  expect(stoppableTaskIdAt([taskItem()], 5)).toBeNull()
+  expect(stoppableTaskIdAt([taskItem()], -1)).toBeNull()
 })

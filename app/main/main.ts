@@ -81,6 +81,7 @@ import {
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
   SETTINGS_VERB_TYPES,
+  TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountVerbMessage,
   type AccountVerbType,
@@ -96,6 +97,8 @@ import {
   type SessionId,
   type SettingsVerbMessage,
   type SettingsVerbType,
+  type TaskControlVerbMessage,
+  type TaskControlVerbType,
   type SidecarClientMessage,
   type TranscriptCache,
   type WorkspaceTrustMessage,
@@ -112,6 +115,7 @@ const CH_SET_MODE = 'catcode:set-mode'
 const CH_ACCOUNT_VERB = 'catcode:account-verb'
 const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
+const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
@@ -823,6 +827,27 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as SessionActionVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_TASK_CONTROL_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // P4-8b — light UX coercion only; the SIDECAR is the trust boundary and
+      // fully re-validates (Zod schema + the engine's own `stopTask` re-resolving
+      // the id against the live store). Drop any frame whose `type` is not the
+      // task-control verb fail-closed, rather than forwarding a message guaranteed
+      // to be rejected. The renderer authors the `requestId` for result correlation
+      // (a UX field, not a security one; the sidecar bounds it structurally).
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !TASK_CONTROL_VERB_TYPES.includes(verb.type as TaskControlVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as TaskControlVerbMessage)
     },
   )
 
