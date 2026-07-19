@@ -13,6 +13,7 @@ import {
   resultToastTone,
   selectAccountMenuItems,
   statusDotTone,
+  statusLabelTone,
   switchVerb,
   usageTone,
 } from './AccountsPage.js'
@@ -217,6 +218,83 @@ test('statusDotTone mirrors the prototype POOL_STATUS colours (capped/dead not s
   expect(statusDotTone(account({ status: 'quarantined', isDefault: false }))).toBe(
     'default',
   )
+})
+
+test('statusLabelTone follows pure status colour with NO default→accent override', () => {
+  // The active/default account's LABEL reads its status, not pink — decoupled from
+  // the DOT (prototype Pages.jsx:417 label vs :409 dot).
+  expect(statusLabelTone(account({ status: 'healthy', isDefault: true }))).toBe('good')
+  expect(statusLabelTone(account({ status: 'capped', isDefault: true }))).toBe('danger')
+  expect(statusLabelTone(account({ status: 'dead', isDefault: false }))).toBe('warn')
+  expect(statusLabelTone(account({ status: 'quarantined', isDefault: false }))).toBe(
+    'default',
+  )
+  // pressured (healthy + usage-capped) still leads to warn
+  expect(
+    statusLabelTone(account({ status: 'healthy', usageLimitReached: true })),
+  ).toBe('warn')
+})
+
+test('the active/default account label follows status colour, not the pink dot tone', () => {
+  // #14 minor: the availability label reused the dot tone, so the active account
+  // read PINK. It must follow pure status (green healthy) while the dot stays pink.
+  const snap = snapshot([
+    account({ id: 'acc-1', alias: 'primary', isDefault: true, availabilityLabel: 'Ready' }),
+  ])
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  // Label 'Ready' is painted status-good (green), NOT accent-pink.
+  expect(html).toContain('text-tone-good">Ready')
+  expect(html).not.toContain('text-accent">Ready')
+  // The hero dot keeps the pink-for-default override.
+  expect(html).toMatch(/h-\[9px\] w-\[9px\][^"]*bg-accent/)
+})
+
+test('a capped account that is ALSO the default renders a pink dot (precedence) with a red label', () => {
+  // Precedence: isDefault beats status for the DOT (pink), while the LABEL follows
+  // pure status (red = capped). Both in one capped+default hero row.
+  const snap = snapshot([
+    account({
+      id: 'acc-1',
+      alias: 'burned',
+      status: 'capped',
+      isDefault: true,
+      switchable: false,
+      usageLimitReached: true,
+      availabilityLabel: 'Usage limit hit',
+    }),
+  ])
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  // Hero dot is pink (accent) even though the account is capped.
+  expect(html).toMatch(/h-\[9px\] w-\[9px\][^"]*bg-accent/)
+  // The availability label reads its true status (danger/red), not pink.
+  expect(html).toContain('text-tone-danger">Usage limit hit')
+})
+
+test('the weekly headroom bar is blank while the 5h bar shows the ↺ reset (single usageResetAt)', () => {
+  // §0 DATA GAP: the wire carries ONE usageResetAt (the 5h window), so the ↺-reset
+  // indicator shows on the 5h bar and is left blank on the weekly bar — never faked.
+  const snap = snapshot([
+    account({
+      id: 'acc-1',
+      alias: 'primary',
+      // non-default so no hero / ActiveHeadroom header ↺ pollutes the count.
+      isDefault: false,
+      usagePrimary: 42,
+      usageWeekly: 70,
+      usageResetAt: Math.floor(Date.now() / 1000) + 3 * 3600,
+      availabilityLabel: 'Ready',
+    }),
+  ])
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  // Exactly one ↺: the 5h bar. The weekly bar's reset slot is blank.
+  expect((html.match(/↺/g) ?? []).length).toBe(1)
+  expect(html).toContain('↺ in')
 })
 
 test('usageTone thresholds: ≥90 danger, ≥65 warn, else good', () => {

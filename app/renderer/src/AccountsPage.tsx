@@ -112,8 +112,8 @@ export function usageTone(pct: number | null): Tone {
 }
 
 /**
- * Status-dot / status-label tone for a pool row (redacted fields only). Mirrors
- * the prototype's `POOL_STATUS` colour mapping (Pages.jsx:347-352,409):
+ * Status-DOT tone for a pool row (redacted fields only). Mirrors the prototype's
+ * DOT colour (Pages.jsx:409 `pressured ? yellow : (isDflt ? pink : sc.color)`):
  * pressured(healthy+usageLimitReached)=warn > default(active)=accent > healthy=
  * good > capped=danger(#f87171) > dead=warn(#fbbf24) > quarantined=grey. The
  * previous build swapped capped/dead and painted quarantined yellow.
@@ -125,6 +125,23 @@ export function statusDotTone(account: AccountStatus): Tone {
   if (account.status === 'capped') return 'danger'
   if (account.status === 'dead') return 'warn'
   return 'default' // quarantined — transient, shown as a (pulsing) grey dot
+}
+
+/**
+ * Status-LABEL tone — the availability label follows PURE status colour with NO
+ * default→accent override, decoupled from `statusDotTone`. Mirrors the prototype's
+ * LABEL colour (Pages.jsx:417 `pressured ? yellow : sc.color`), which — unlike the
+ * DOT at :409 — has no `isDflt ? pink` branch: pressured(healthy+usageLimitReached)
+ * =warn > healthy=good > capped=danger > dead=warn > quarantined=grey. So the
+ * active account's dot keeps its pink-for-default glow while its label reads its
+ * true status (green healthy / red capped / yellow dead).
+ */
+export function statusLabelTone(account: AccountStatus): Tone {
+  if (account.status === 'healthy' && account.usageLimitReached) return 'warn'
+  if (account.status === 'healthy') return 'good'
+  if (account.status === 'capped') return 'danger'
+  if (account.status === 'dead') return 'warn'
+  return 'default' // quarantined — transient grey
 }
 
 export type AccountMenuKey = 'switch' | 'rename' | 'logout' | 'delete'
@@ -661,6 +678,10 @@ function PoolRow({
   const pressured = usable && account.usageLimitReached
   const dimmed = account.status === 'dead'
   const t = toneClasses(statusDotTone(account))
+  // The availability LABEL follows pure STATUS colour (no default→pink); only the
+  // DOT carries the pink-for-default override — decoupled per the prototype
+  // (Pages.jsx:409 dot vs :417 label).
+  const labelTone = toneClasses(statusLabelTone(account))
   const alias = account.alias ?? account.id
   return (
     <div
@@ -689,7 +710,7 @@ function PoolRow({
           ) : null}
         </div>
         <div className="mt-[1px] truncate text-[11px]">
-          <span className={pressured ? 'text-tone-warn' : t.text}>
+          <span className={pressured ? 'text-tone-warn' : labelTone.text}>
             {pressured ? 'Near limit' : account.availabilityLabel}
           </span>
           {account.lastError ? (
@@ -880,7 +901,7 @@ export function AccountsPage({
                 {(capAccount.alias ?? capAccount.id)}: usage limit reached
               </div>
               <div className="mt-[1px] text-[11.5px] text-text-muted">
-                This account is capped (hit its 5-hour limit). Switch to another
+                This account has hit its usage limit. Switch to another
                 account or wait for the reset.
               </div>
             </div>
