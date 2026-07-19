@@ -16,6 +16,27 @@
  * `codexAccountPool.ts`). Reason surfaced honestly from the redacted
  * `statusReason` / `lastError` the pool already computed — the renderer invents
  * no error text.
+ *
+ * P4-15 revision (operator findings #1/#2/#8 — revises `decisions/STARTUP-GATES.md
+ * §3` and its 2026-07-12 P4-24 revision note). Three defects, one redesign:
+ *   (1) MERGE — when EVERY account is dead the old code emitted one banner per
+ *       dead account, each repeating the identical pool-level "no healthy account
+ *       remains" sentence (five stacked walls). The all-dead case now derives a
+ *       SINGLE consolidated wall (`selectReauthWall`): the pool sentence stated
+ *       ONCE, then a row per dead account keeping its OWN real reason + a
+ *       per-account re-authenticate affordance. `selectReauthBanners` now covers
+ *       only the NON-blocking (per-account, dismissable) case.
+ *   (2) PERSIST-ACKNOWLEDGE — the Codex pool is process-global, so every session
+ *       re-derives the same wall; the wall id is keyed to the pool-dead STATE
+ *       (the sorted dead-account id set), never a session, so a persisted
+ *       acknowledge (caller-owned, mirroring the dismissed-id set) survives
+ *       session switches and does not re-nag — yet a genuinely different dead set
+ *       re-nags.
+ *   (3) COLLAPSE, not hide — acknowledging COLLAPSES the wall to a minimal
+ *       persistent indicator (caller presentation) rather than hiding it; turns
+ *       are genuinely still blocked, so the reason must stay discoverable.
+ * `selectAuthSubmitBlocked` is UNCHANGED: submit stays blocked at zero-healthy
+ * regardless of acknowledge/collapse.
  */
 
 import type { BannerNotice } from './BannerStack.js'
@@ -24,21 +45,35 @@ import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 /** Stable id prefix so re-deriving the same dead account updates in place. */
 export const REAUTH_BANNER_PREFIX = 'reauth:'
 
+/**
+ * Stable id prefix for the merged all-dead wall (P4-15 revision). The rest of
+ * the id is the sorted dead-account id set, so the id is keyed to the pool-dead
+ * STATE and NOT a session: the global pool re-derives the same wall id in every
+ * session (a persisted acknowledge suppresses the re-nag) while a different dead
+ * set produces a different id (a genuinely new episode re-nags).
+ */
+export const REAUTH_WALL_PREFIX = 'reauth:wall:'
+
 /** Stable action key the caller switches on to launch the OAuth flow. */
 export const REAUTH_ACTION_KEY = 'reauthenticate'
 
 /**
- * Human copy for a dead account's reason. Falls back to the pool's own
- * `lastError`, then its `statusReason`, then a generic line — never a
- * renderer-fabricated cause.
+ * The pool's own reason for an account's death — `lastError`, else the
+ * normalized `statusReason`, else a generic line. Never a renderer-fabricated
+ * cause.
  */
-function reasonDetail(account: AccountStatus): string {
-  const label = account.alias ?? account.id
-  const reason =
+function reasonText(account: AccountStatus): string {
+  return (
     account.lastError ??
     (account.statusReason ? account.statusReason.replace(/_/g, ' ') : null) ??
     'the stored token can no longer be refreshed'
-  return `${label} · ${reason}`
+  )
+}
+
+/** Human copy for a dead account's reason, prefixed with its label. */
+function reasonDetail(account: AccountStatus): string {
+  const label = account.alias ?? account.id
+  return `${label} · ${reasonText(account)}`
 }
 
 /**
@@ -72,57 +107,116 @@ export function selectAuthSubmitBlocked(
 }
 
 /**
- * Derive the reauth banners for the active session's pool. One banner per dead
- * account (its alias + real reason); when the pool is fully exhausted
- * (`selectAuthSubmitBlocked`) the copy also says submit is blocked.
+ * Derive the NON-blocking reauth banners: one dismissable banner per dead
+ * account while at least one healthy account remains. The engine pool simply
+ * fails over, so each is an independent "never show again"-able nudge (the
+ * caller persists dismissals and filters via `selectVisibleReauthBanners`).
  *
- * Dismissability (P4-15 revision of `STARTUP-GATES.md §3`'s Dismiss-cut): a
- * BLOCKING banner (all accounts dead → new turns walled) stays non-dismissable —
- * you must reauth, so hiding it would only confuse. A NON-blocking banner (one
- * dead account while others are healthy) IS dismissable: the engine pool just
- * fails over, so nagging is the wrong behavior. The caller persists dismissals
- * ("never show again") and filters via `selectVisibleReauthBanners`.
+ * The BLOCKING (all-dead) case returns `[]` here — it is MERGED into a single
+ * consolidated surface by `selectReauthWall` (P4-15 revision, finding #1), so
+ * the pool-level "new turns are blocked" sentence is stated once, not once per
+ * dead account.
  */
 export function selectReauthBanners(
   snapshot: AccountsSnapshot | null,
 ): BannerNotice[] {
+  if (selectAuthSubmitBlocked(snapshot)) return []
   const dead = selectDeadAccounts(snapshot)
   if (dead.length === 0) return []
-  const blocked = selectAuthSubmitBlocked(snapshot)
   return dead.map(account => {
     const label = account.alias ?? account.id
     return {
       id: `${REAUTH_BANNER_PREFIX}${account.id}`,
       tone: 'danger',
-      title: blocked
-        ? `Sign in again to continue — ${label} can’t be refreshed`
-        : `${label} needs re-authentication`,
-      detail: blocked
-        ? `${reasonDetail(account)}. No healthy account remains, so new turns are blocked until you re-link.`
-        : reasonDetail(account),
+      title: `${label} needs re-authentication`,
+      detail: reasonDetail(account),
       actions: [
         { key: REAUTH_ACTION_KEY, label: 'Re-authenticate', primary: true },
       ],
-      // Non-blocking (failover covers you) → dismissable; fully-dead (walled) →
-      // persistent, because you must act.
-      dismissable: !blocked,
+      // Non-blocking (failover covers you) → dismissable.
+      dismissable: true,
     }
   })
 }
 
 /**
- * The reauth banners MINUS any the operator has dismissed. A dismissed banner id
- * is hidden permanently ("never show again" — the caller persists the id set).
- * The BLOCKING banner (`dismissable === false`) is NEVER filtered: even if its
- * account was dismissed while healthy accounts remained, once the pool is fully
- * dead the wall must surface. So a dismissed id only suppresses a still-
- * dismissable (non-blocking) banner.
+ * The NON-blocking reauth banners MINUS any the operator dismissed for good
+ * ("never show again" — the caller persists the id set). Only dismissable
+ * per-account banners reach here now; the all-dead wall is a separate merged
+ * surface (`selectReauthWall`) that is never in this list, so a dismissed id
+ * simply hides its per-account banner.
  */
 export function selectVisibleReauthBanners(
   snapshot: AccountsSnapshot | null,
   dismissedIds: ReadonlySet<string>,
 ): BannerNotice[] {
   return selectReauthBanners(snapshot).filter(
-    banner => banner.dismissable === false || !dismissedIds.has(banner.id),
+    banner => !dismissedIds.has(banner.id),
   )
+}
+
+/** One dead account's row inside the merged all-dead wall. */
+export type ReauthWallAccountRow = {
+  /** Account id — stable React key + honest per-account identity. */
+  id: string
+  /** `alias ?? id`. */
+  label: string
+  /** The pool's own reason for this account's death (never fabricated). */
+  reason: string
+  /** Per-account re-authenticate action key (`reauthenticate:<id>`). */
+  actionKey: string
+}
+
+/**
+ * The merged all-dead wall (P4-15 revision, findings #1/#2/#8). Present only when
+ * `selectAuthSubmitBlocked` — one consolidated surface stating the pool-level
+ * block ONCE plus a row per dead account carrying its OWN preserved reason.
+ */
+export type ReauthWall = {
+  /**
+   * Stable id keyed to the pool-dead STATE (sorted dead-account ids), NOT a
+   * session — so a persisted acknowledge survives session switches without
+   * re-nagging, yet a genuinely different dead set re-nags. See
+   * `REAUTH_WALL_PREFIX`.
+   */
+  id: string
+  /** The pool-level headline, stated ONCE. */
+  title: string
+  /** The pool-level "new turns are blocked" sentence, stated ONCE (not per row). */
+  summary: string
+  /** Each dead account with its own preserved reason + re-auth affordance. */
+  accounts: ReauthWallAccountRow[]
+  /** Compact label for the collapsed (acknowledged) minimal indicator. */
+  collapsedLabel: string
+}
+
+/**
+ * Derive the merged wall for the fully-exhausted pool, or `null` when the pool
+ * is not blocked (`selectAuthSubmitBlocked === false`). `selectAuthSubmitBlocked`
+ * guarantees at least one dead account, so `accounts` is non-empty. The pool
+ * sentence lives on the wall itself (once); each row carries only its account's
+ * own reason.
+ */
+export function selectReauthWall(
+  snapshot: AccountsSnapshot | null,
+): ReauthWall | null {
+  if (!selectAuthSubmitBlocked(snapshot)) return null
+  const dead = selectDeadAccounts(snapshot)
+  const sortedIds = dead.map(a => a.id).sort()
+  return {
+    id: `${REAUTH_WALL_PREFIX}${sortedIds.join(',')}`,
+    title: 'Sign in again to continue',
+    summary:
+      'No healthy account remains — new turns are blocked until you re-link.',
+    accounts: dead.map(account => ({
+      id: account.id,
+      label: account.alias ?? account.id,
+      reason: reasonText(account),
+      actionKey: `${REAUTH_ACTION_KEY}:${account.id}`,
+    })),
+    collapsedLabel:
+      dead.length === 1
+        ? 'New turns blocked — re-authenticate to continue'
+        : `New turns blocked — ${dead.length} accounts need re-authentication`,
+  }
 }
