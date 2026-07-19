@@ -8,8 +8,11 @@
  *  - `ReadOnlyModeGate` + the "Open read-only" button — Q1 TUI parity: decline
  *    trust = don't open the session (there is no restricted mode).
  *  - `WorkspaceSwitchPrompt` — G4: one-cwd-per-session dissolves it.
- *  - the blocking `ReauthGate` modal — Q2: token death is the non-blocking
- *    `BannerStack` banner (`reauthBannerState.ts`), never a wall.
+ *  - the blocking `ReauthGate` modal — Q2: token death never walls the window.
+ *    The interim non-blocking reauth banner/wall was itself REMOVED entirely
+ *    (#12, 2026-07-20 — `decisions/STARTUP-GATES.md`); the pool error now
+ *    surfaces inline at request time. The reauth OAuth-progress card below is a
+ *    different surface (it drives an in-flight re-link), and stays.
  *
  * Real backing:
  *  - Trust: `isPathTrusted(cwd)` / `hasTrustDialogAccepted`

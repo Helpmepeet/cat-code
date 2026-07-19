@@ -245,14 +245,6 @@ import {
   resultToastTone,
   switchVerb,
 } from './AccountsPage.js'
-import { BannerStack } from './BannerStack.js'
-import { ReauthWall } from './ReauthWall.js'
-import {
-  REAUTH_ACTION_KEY,
-  selectAuthSubmitBlocked,
-  selectReauthWall,
-  selectVisibleReauthBanners,
-} from './reauthBannerState.js'
 import {
   ReauthOAuthProgress,
   StartupOAuth,
@@ -328,65 +320,6 @@ const reduceSessionActionRuntimeStateBatched = withBatch(
   reduceSessionActionRuntimeState,
 )
 
-/** Reauth banners the operator dismissed for good ("never show again"),
- * persisted across launches. A dismissed id suppresses only a still-dismissable
- * (non-blocking) banner — the all-dead wall always resurfaces
- * (`selectVisibleReauthBanners`). */
-const DISMISSED_REAUTH_KEY = 'catcode:dismissedReauth'
-
-function loadDismissedReauth(): ReadonlySet<string> {
-  try {
-    const raw = globalThis.localStorage?.getItem(DISMISSED_REAUTH_KEY)
-    const parsed: unknown = raw ? JSON.parse(raw) : null
-    return Array.isArray(parsed)
-      ? new Set(parsed.filter((x): x is string => typeof x === 'string'))
-      : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function persistDismissedReauth(ids: ReadonlySet<string>): void {
-  try {
-    globalThis.localStorage?.setItem(
-      DISMISSED_REAUTH_KEY,
-      JSON.stringify([...ids]),
-    )
-  } catch {
-    // no storage (private mode / headless) — dismissal is then session-only
-  }
-}
-
-/** The merged all-dead reauth wall ids the operator ACKNOWLEDGED (collapsed to a
- * minimal persistent indicator — NOT hidden; turns are still blocked). Keyed to
- * the pool-dead state (`selectReauthWall`), NOT a session, so switching sessions
- * does not re-nag. Mirrors the dismissed-reauth mechanism; persisted across
- * launches (P4-15 revision, findings #2/#8). */
-const ACKNOWLEDGED_REAUTH_WALL_KEY = 'catcode:acknowledgedReauthWall'
-
-function loadAcknowledgedReauthWall(): ReadonlySet<string> {
-  try {
-    const raw = globalThis.localStorage?.getItem(ACKNOWLEDGED_REAUTH_WALL_KEY)
-    const parsed: unknown = raw ? JSON.parse(raw) : null
-    return Array.isArray(parsed)
-      ? new Set(parsed.filter((x): x is string => typeof x === 'string'))
-      : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function persistAcknowledgedReauthWall(ids: ReadonlySet<string>): void {
-  try {
-    globalThis.localStorage?.setItem(
-      ACKNOWLEDGED_REAUTH_WALL_KEY,
-      JSON.stringify([...ids]),
-    )
-  } catch {
-    // no storage (private mode / headless) — acknowledge is then session-only
-  }
-}
-
 export function App() {
   const [state, dispatch] = useReducer(
     reduceServerFrameBatched,
@@ -420,10 +353,6 @@ export function App() {
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
   const [transportError, setTransportError] = useState<string | null>(null)
   const [shellError, setShellError] = useState<string | null>(null)
-  const [dismissedReauthIds, setDismissedReauthIds] =
-    useState<ReadonlySet<string>>(loadDismissedReauth)
-  const [acknowledgedReauthWallIds, setAcknowledgedReauthWallIds] =
-    useState<ReadonlySet<string>>(loadAcknowledgedReauthWall)
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
@@ -1418,10 +1347,6 @@ export function App() {
     // with `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
     const pasteEntries = selectSessionPasteState(pasteState, sessionId).entries
     const text = expandPasteRefs(sessionPrompt, pasteEntries).trim()
-    // Q2 ruling (`decisions/STARTUP-GATES.md §5-Q2`): a dead account never walls
-    // the window, but with ZERO healthy accounts left every turn would fail —
-    // block submit here so the reauth banner is the only way forward.
-    if (selectAuthSubmitBlocked(selectAccountsSnapshot(accounts, sessionId))) return
     if (
       !sessionLog.inputEnabled ||
       !sessionConnection.inputEnabled ||
@@ -1961,11 +1886,6 @@ export function App() {
   // first-run OAuth (no credentialed account → pool initialized but empty),
   // mirroring the engine's trust→auth startup order (`init.ts`).
   const activeAccountsSnapshot = selectAccountsSnapshot(accounts, activeSessionId)
-  // P4-15 revision — the merged all-dead wall (findings #1/#2/#8), non-null only
-  // when the pool is fully exhausted (`selectAuthSubmitBlocked`). Replaces the N
-  // stacked per-account walls; the non-blocking per-account banners still flow
-  // through `selectVisibleReauthBanners` / `BannerStack`.
-  const reauthWall = selectReauthWall(activeAccountsSnapshot)
   const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
     workspaceTrust,
     activeSessionId,
@@ -2196,70 +2116,19 @@ export function App() {
           </div>
         ) : null}
 
-        {/* P4-15 reauth surface (Q2): derived from the P4-5 pool snapshot, never
-         * pushed. It FLOATS as an overlay just below the TabBar (`top-10`)
-         * instead of reflowing the panels — good alert behavior, not a layout
-         * shove. Two mutually-exclusive shapes: the all-dead MERGED wall
-         * (`selectReauthWall`, findings #1/#2/#8 — one surface, per-account rows,
-         * acknowledge→collapse persisted per pool-dead state) and, when NOT
-         * blocked, the per-account non-blocking banners that carry a × dismissing
-         * them for good (`selectVisibleReauthBanners` + persisted ids).
-         * `pointer-events-none` lets clicks pass through any gutter; the bars
-         * themselves re-enable them. */}
+        {/* Reauth OAuth-progress overlay (Q2). The all-dead wall, per-account
+         * reauth banners, and the collapsed chip were REMOVED entirely (#12,
+         * 2026-07-20 — `decisions/STARTUP-GATES.md`): zero-healthy no longer
+         * renders a surface or blocks submit; the pool error surfaces inline at
+         * request time. Only the reauth OAuth flow's live progress remains here.
+         * It FLOATS just below the TabBar (`top-10`) rather than reflowing the
+         * panels; `pointer-events-none` lets clicks pass through any gutter, the
+         * card itself re-enables them. */}
         <div className="pointer-events-none absolute inset-x-0 top-10 z-40">
           <div className="pointer-events-auto">
-            {/* All-dead wall: MERGED (one surface, per-account reasons preserved),
-             * acknowledge COLLAPSES it to a minimal persistent chip (never hidden —
-             * turns are still blocked), and the acknowledge is keyed to the
-             * pool-dead state so a session switch does not re-nag. */}
-            {reauthWall ? (
-              <ReauthWall
-                wall={reauthWall}
-                collapsed={acknowledgedReauthWallIds.has(reauthWall.id)}
-                // The pool is global — re-linking any account revives it; the
-                // shared reauth OAuth flow ignores the per-row account id.
-                onReauth={() => beginOAuth('reauth')}
-                onAcknowledge={() => {
-                  setAcknowledgedReauthWallIds(prev => {
-                    const next = new Set(prev)
-                    next.add(reauthWall.id)
-                    persistAcknowledgedReauthWall(next)
-                    return next
-                  })
-                }}
-                onExpand={() => {
-                  setAcknowledgedReauthWallIds(prev => {
-                    const next = new Set(prev)
-                    next.delete(reauthWall.id)
-                    persistAcknowledgedReauthWall(next)
-                    return next
-                  })
-                }}
-              />
-            ) : null}
-            <BannerStack
-              banners={selectVisibleReauthBanners(
-                activeAccountsSnapshot,
-                dismissedReauthIds,
-              )}
-              onAction={(_banner, action) => {
-                // P4-15 — begin the SHARED OAuth flow, tagged `reauth` so its live
-                // progress surfaces in the non-blocking card below (not the
-                // first-run full-screen surface). The blocking modal is CUT.
-                if (action.key === REAUTH_ACTION_KEY) beginOAuth('reauth')
-              }}
-              onDismiss={banner => {
-                setDismissedReauthIds(prev => {
-                  const next = new Set(prev)
-                  next.add(banner.id)
-                  persistDismissedReauth(next)
-                  return next
-                })
-              }}
-            />
-            {/* P4-15 — the reauth flow's live progress, NON-BLOCKING (the
-             * prototype's blocking ReauthGate modal is CUT). Reuses the shared
-             * OAuth waiting/paste-code UX; `success` is the toast + banner clear. */}
+            {/* The reauth flow's live progress, NON-BLOCKING (the prototype's
+             * blocking ReauthGate modal is CUT). Reuses the shared OAuth
+             * waiting/paste-code UX; `success` is the toast. */}
             {reauthOAuthView ? (
               <ReauthOAuthProgress
                 view={reauthOAuthView}
