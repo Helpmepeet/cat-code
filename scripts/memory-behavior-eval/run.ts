@@ -27,8 +27,47 @@
  * gates are live) is exercised — no prompt mocking.
  */
 
-import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs'
+import { homedir } from 'os'
 import { join, resolve } from 'path'
+
+/**
+ * Delete the session transcript a `-p` eval run wrote to the real config dir.
+ * The harness isolates memory (CLAUDE_COWORK_MEMORY_PATH_OVERRIDE) but NOT the
+ * session store, so without this every run leaks a transcript into the operator's
+ * ~/.cat-code/projects catalog — the root cause of accumulated eval sessions.
+ * Keyed on the run's unique session id from the `-p --output-format json` result.
+ */
+function deleteSessionTranscript(sessionId: string): void {
+  if (!/^[0-9a-f-]{8,}$/i.test(sessionId)) return
+  const projects = join(
+    process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+    'projects',
+  )
+  let dirs: string[]
+  try {
+    dirs = readdirSync(projects)
+  } catch {
+    return
+  }
+  for (const d of dirs) {
+    const f = join(projects, d, `${sessionId}.jsonl`)
+    if (existsSync(f)) {
+      try {
+        unlinkSync(f)
+      } catch {
+        // best-effort cleanup; a locked/removed transcript is not fatal here
+      }
+    }
+  }
+}
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..')
 const CLI = join(REPO_ROOT, 'cli-dev')
@@ -399,6 +438,10 @@ async function runOne(
     const parsed = JSON.parse(stdout)
     text = typeof parsed.result === 'string' ? parsed.result : stdout
     if (parsed.is_error) isError = true
+    // Clean up the transcript this run wrote to the real session catalog — the
+    // harness isolates memory but not session storage (see deleteSessionTranscript).
+    if (typeof parsed.session_id === 'string')
+      deleteSessionTranscript(parsed.session_id)
   } catch {
     text = stdout
     isError = true

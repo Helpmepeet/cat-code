@@ -6,11 +6,43 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs'
+import { homedir } from 'os'
 import { basename, join, resolve, sep } from 'path'
 import { createHash } from 'crypto'
 import { getGlobalClaudeFile } from '../../src/utils/env.js'
+
+/**
+ * Delete the session transcript a `-p` run wrote to the real config dir. The
+ * harness isolates memory (CLAUDE_COWORK_MEMORY_PATH_OVERRIDE) but NOT session
+ * storage, so without this every run leaks a transcript into the operator's
+ * ~/.cat-code/projects catalog. Keyed on the run's unique session id.
+ */
+function deleteSessionTranscript(sessionId: string): void {
+  if (!/^[0-9a-f-]{8,}$/i.test(sessionId)) return
+  const projects = join(
+    process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+    'projects',
+  )
+  let dirs: string[]
+  try {
+    dirs = readdirSync(projects)
+  } catch {
+    return
+  }
+  for (const d of dirs) {
+    const f = join(projects, d, `${sessionId}.jsonl`)
+    if (existsSync(f)) {
+      try {
+        unlinkSync(f)
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+}
 
 /**
  * Live save-behavior evaluator. Direct lanes force background extraction off;
@@ -752,6 +784,15 @@ async function main(): Promise<void> {
       proc.exited,
     ])
     clearTimeout(killer)
+
+    // Clean up the transcript this run wrote to the real session catalog — the
+    // harness isolates memory but not session storage (deleteSessionTranscript).
+    try {
+      const sid = JSON.parse(stdout)?.session_id
+      if (typeof sid === 'string') deleteSessionTranscript(sid)
+    } catch {
+      // non-JSON stdout (error path) — no session id to clean up
+    }
 
     const debugLog = existsSync(debugFile)
       ? readFileSync(debugFile, 'utf8')
