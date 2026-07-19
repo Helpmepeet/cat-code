@@ -582,18 +582,22 @@ test('P4-18a: a pasted user image renders an img with the data URI', () => {
   expect(html).toContain('data:image/png;base64,AAAA')
 })
 
-test('P4-18a: a thinking row renders its reasoning body and eyebrow', () => {
+test('P4-18a/#7: a thinking row renders its reasoning body as markdown, no summary label', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:thinking',
     kind: 'thinking',
-    content: 'weighing the socket options',
+    content: 'weighing the **socket** options',
     reasoningKind: 'summary',
   })
 
   expect(html).toContain('Thinking')
-  expect(html).toContain('weighing the socket options')
-  expect(html).toContain('summary')
+  // #7: the reasoning body renders through the markdown path — **bold** becomes
+  // <strong>, not literal asterisks.
+  expect(html).toContain('<strong>socket</strong>')
+  expect(html).not.toContain('**socket**')
+  // #7: the "summary" reasoningKind sub-label was removed.
+  expect(html).not.toContain('summary')
 })
 
 test('P4-18a: a redacted-thinking row renders a redacted placeholder', () => {
@@ -614,7 +618,7 @@ test('P4-18a: a redacted-thinking row renders a redacted placeholder', () => {
 // transcriptProjector.test.ts) but emits no transcript row, so there is no
 // SessionInitBanner render case to test here anymore.
 
-test('P4-18a: a completed result row renders a Completed seam with duration', () => {
+test('#6: a successful result row renders no turn-footer', () => {
   const html = render({
     ...frameSource,
     id: 's:f:result',
@@ -626,11 +630,14 @@ test('P4-18a: a completed result row renders a Completed seam with duration', ()
     totalCostUsd: 0.0123,
   })
 
-  expect(html).toContain('Completed')
-  expect(html).toContain('4.2s')
+  // #6 (operator, 2026-07-19): the success `Completed · Ns · $…` footer was
+  // removed entirely — a completed turn surfaces no seam.
+  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('4.2s')
+  expect(html).not.toContain('$0.0123')
 })
 
-test('P4-18a: an errored result row renders an Errored seam', () => {
+test('P4-18a/#6: an errored result row still renders an Errored seam', () => {
   const html = render({
     ...frameSource,
     id: 's:f:result',
@@ -641,6 +648,19 @@ test('P4-18a: an errored result row renders an Errored seam', () => {
   })
 
   expect(html).toContain('Errored')
+})
+
+test('#6: an aborted/max-turns result row still renders its seam', () => {
+  const html = render({
+    ...frameSource,
+    id: 's:f:result',
+    kind: 'result',
+    subtype: 'error_max_turns',
+    isError: true,
+    errors: [],
+  })
+
+  expect(html).toContain('Stopped · max turns reached')
 })
 
 test('P4-18a: a compact-boundary row renders the compaction seam', () => {
