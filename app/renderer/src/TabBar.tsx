@@ -27,6 +27,7 @@ export function TabBar({
   onClose,
   onRestart,
   onNewTab,
+  onOpenActions,
   panelCount = 1,
   canAddPanel = false,
   onAddPanel,
@@ -38,6 +39,17 @@ export function TabBar({
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
   onNewTab: () => void
+  /**
+   * P4-6b — open the session-actions ⋯ overflow for the active tab (the
+   * prototype's chat-header actions menu, whose title now lives in the TabBar).
+   * Optional + additive: the ⋯ renders only when this is wired, so headless
+   * TabBar tests that omit it are untouched. App owns the SessionActionsMenu +
+   * MetadataInspector overlays; the tab only raises the anchor (the button rect).
+   */
+  onOpenActions?: (
+    sessionId: SessionId,
+    anchor: { top: number; left: number },
+  ) => void
   /**
    * Split-view controls (P4-4 fidelity — the prototype's TabBar.jsx owns the
    * Split/Unsplit cluster). Optional + additive: the cluster renders only when
@@ -118,6 +130,7 @@ export function TabBar({
             onSelect={onSelect}
             onClose={onClose}
             onRestart={onRestart}
+            onOpenActions={onOpenActions}
             onKeyDown={event => onTabKeyDown(event, index)}
           />
         ))}
@@ -206,6 +219,7 @@ function Tab({
   onSelect,
   onClose,
   onRestart,
+  onOpenActions,
   onKeyDown,
 }: {
   ref: (element: HTMLDivElement | null) => void
@@ -216,6 +230,10 @@ function Tab({
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
+  onOpenActions?: (
+    sessionId: SessionId,
+    anchor: { top: number; left: number },
+  ) => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }) {
   const { descriptor, visual } = tab
@@ -285,6 +303,32 @@ function Tab({
           type="button"
         >
           restart
+        </button>
+      ) : null}
+
+      {isActive && onOpenActions ? (
+        <button
+          className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-text-subtle/70 transition-colors hover:bg-white/10 hover:text-text-primary"
+          onClick={event => {
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            // Anchor the menu below the button, right-aligned to its width
+            // (SessionActionsMenu is w-[232px]); clamp so it never leaves the
+            // viewport when the active tab sits near the left edge.
+            onOpenActions(id, {
+              top: rect.bottom + 4,
+              left: Math.max(8, rect.right - 232),
+            })
+          }}
+          title="Session actions"
+          aria-label={`Session actions for ${title}`}
+          type="button"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="12" cy="5" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="12" cy="19" r="1.6" />
+          </svg>
         </button>
       ) : null}
 

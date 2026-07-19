@@ -136,6 +136,31 @@ test('every tab exposes a close affordance', () => {
   expect(html.match(/aria-label="Close session/g)).toHaveLength(2)
 })
 
+test('the active tab exposes a session-actions ⋯ only when wired', () => {
+  // P4-6b: the ⋯ overflow (host for the MetadataInspector) renders on the active
+  // tab exactly once, and only when App wires `onOpenActions`.
+  const wired = renderToStaticMarkup(
+    <TabBar
+      tabs={[tab('a'), tab('b')]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+      onOpenActions={noop}
+    />,
+  )
+  expect(wired.match(/aria-label="Session actions for/g)).toHaveLength(1)
+  expect(wired).toContain('title="Session actions"')
+})
+
+test('no session-actions ⋯ renders when the TabBar is not wired for it', () => {
+  // The default `render` helper omits `onOpenActions` — the affordance is absent,
+  // keeping the additive prop from leaking into unrelated tabs.
+  const html = render([tab('a'), tab('b')], 'a')
+  expect(html).not.toContain('Session actions for')
+})
+
 test('the first nine tabs advertise a ⌘<n> jump hint', () => {
   const html = render([tab('a'), tab('b')], 'a')
   expect(html).toContain('⌘1')

@@ -245,6 +245,13 @@ import {
   type StartupOAuthPhase,
 } from './StartupSurfaces.js'
 import { SessionsPage } from './SessionsPage.js'
+import { MetadataInspector } from './MetadataInspector.js'
+import { buildSessionMetadataView } from './messageMetadata.js'
+import {
+  SessionActionsMenu,
+  type SessionActionsAnchor,
+} from './SessionActionsMenu.js'
+import { resolveSessionActions } from './sessionActions.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
@@ -362,6 +369,13 @@ export function App() {
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
+  // P4-6b — the tab ⋯ actions overflow (SessionActionsMenu) + its MetadataInspector
+  // drawer. Both act on the OPEN+attached session only — the prototype's chat-header
+  // entry point (Chat.jsx:1237 opens the inspector over the header session); no new
+  // wire frame (sessionActions.ts recon: every live verb is a renderer-only read).
+  const [sessionActionsAnchor, setSessionActionsAnchor] =
+    useState<SessionActionsAnchor | null>(null)
+  const [metadataOpen, setMetadataOpen] = useState(false)
   const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
   const [workspaceLayout, setWorkspaceLayoutState] =
     useState<WorkspaceLayoutState>(
@@ -782,6 +796,16 @@ export function App() {
       ),
     [sidebarRows, sessionCatalogSnapshot],
   )
+
+  // The active session's merged catalog row — feeds the tab ⋯ actions menu and
+  // the MetadataInspector. Matched by `appSessionId` (the live address that equals
+  // `activeSessionId`); `row.sessionId` is the engineSessionId once assigned
+  // (sessionsCatalogState.ts:143), so matching on it would miss a resumed session.
+  const activeSessionRow =
+    activeSessionId != null
+      ? sessionCatalogRows.find(row => row.appSessionId === activeSessionId) ??
+        null
+      : null
 
   // P4-17 Welcome launcher — derived inputs, read from the SAME domain seams as
   // the other surfaces (no new feed, D5/WELCOME-LAUNCHER §6). Recents = a
@@ -1816,11 +1840,49 @@ export function App() {
           onClose={closeTab}
           onRestart={restartTab}
           onNewTab={newSession}
+          onOpenActions={(_sessionId, anchor) => setSessionActionsAnchor(anchor)}
           panelCount={workspaceLayout.panels.length}
           canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
           onAddPanel={addWorkspacePanel}
           onRemovePanel={removeWorkspacePanel}
         />
+
+        {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer.
+         * Both are global overlays (fixed-positioned) acting on the active
+         * session; deferred verbs (rename/branch/rewind/export) render disabled
+         * with their honest source-cited reasons (sessionActions.ts). No new wire
+         * frame: metadata + copy read state the renderer already holds. */}
+        {sessionActionsAnchor && activeSessionRow ? (
+          <SessionActionsMenu
+            items={resolveSessionActions(activeSessionRow, {
+              isActiveOpen: true,
+            })}
+            anchor={sessionActionsAnchor}
+            onAction={kind => {
+              if (kind === 'metadata') setMetadataOpen(true)
+              else if (kind === 'copy' && activeSessionId)
+                copyForLlm(activeSessionId)
+              else if (kind === 'open' && activeSessionId)
+                selectTab(activeSessionId)
+            }}
+            onClose={() => setSessionActionsAnchor(null)}
+          />
+        ) : null}
+
+        {metadataOpen && activeSessionId ? (
+          <MetadataInspector
+            session={buildSessionMetadataView({
+              sessionId: activeSessionId,
+              row: activeSessionRow,
+              permissionMode:
+                selectPermissionContext(permissions, activeSessionId)?.mode ??
+                null,
+              threadGoal: selectThreadGoalSnapshot(goalMemory, activeSessionId),
+            })}
+            log={selectRawMessageLog(state, activeSessionId)}
+            onClose={() => setMetadataOpen(false)}
+          />
+        ) : null}
 
         {shellError ? (
           <div className="border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
