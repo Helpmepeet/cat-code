@@ -1,7 +1,8 @@
 /**
- * Sidebar projection (CC-2 fix, 2026-07-14) — the FULL roster (live ∪
- * restorable) the left rail renders, in a STABLE order keyed on each session's
- * immutable `createdAt`.
+ * Sidebar projection (CC-2 fix, 2026-07-14; float-to-top 2026-07-20) — the FULL
+ * roster (live ∪ restorable) the left rail renders, ordered by last-message
+ * activity (`lastMessageSentAt`, falling back to the immutable `createdAt`),
+ * MOST-RECENT FIRST.
  *
  * Why NOT `state.order` (the TabBar's order): `reorderOnArrival`
  * (`shellState.ts`) deliberately moves a session to the END of `state.order`
@@ -9,17 +10,17 @@
  * session opens it as a fresh tab at the end), but the Sidebar is the PERSISTENT
  * roster, where that same move reads as the row "warping" to a new spot on every
  * restore/open (operator, 2026-07-14: hard to track the row you just clicked).
- * `createdAt` is written once on the first spawn and preserved across every
- * restart/restore (`registry.ts` `upsertOnSpawn` sets it only for a NEW row), so
- * ordering by it keeps each row FIXED regardless of clicks or restores — matching
- * the prototype, whose `groupByWorkspace` never re-sorts rows within a group by
- * any interaction (only the GROUPS reorder, current-workspace-first).
+ * The sort key `lastMessageSentAt` moves ONLY on a real message-send (never on
+ * attach/open/restore — CC-2, `host.ts`), so clicks and restores keep every row
+ * FIXED; only sending a message floats a row up. That is the warp-free behavior
+ * the createdAt-only order was a placeholder for — matching the prototype, whose
+ * `groupByWorkspace` never re-sorts rows within a group on mere interaction (only
+ * the GROUPS reorder, current-workspace-first).
  *
- * An earlier version sorted rows by `lastAttachedAt` (recency); the prototype
- * does not, and restore bumps `lastAttachedAt`, so that ALSO jumped a restored
- * row. The displayed recency text (`Sidebar.tsx` `formatRecency`) now reads
- * `descriptor.lastMessageSentAt` (falling back to `createdAt`), NOT
- * `lastAttachedAt` — but neither ever drives row ORDER.
+ * An earlier version sorted rows by `lastAttachedAt` (recency) — but restore
+ * bumps `lastAttachedAt`, so that jumped a restored row. The same
+ * `lastMessageSentAt` now drives BOTH the displayed recency (`Sidebar.tsx`
+ * `formatRecency`) and this order, so the two are consistent.
  *
  * DONE (CC-2 message-sent signal, 2026-07-19): the data model now carries
  * `lastMessageSentAt` — a persisted registry field bumped ONLY by the host's
@@ -28,10 +29,9 @@
  * the DISPLAYED recency (above), which was the bug: merely opening a session
  * used to read "now".
  *
- * Deferred (the operator's fuller CC-2 spec, 2026-07-07): float a row to the top
- * ONLY when its session SENDS a message. That row-ORDER change is still deferred
- * — order stays stable-by-creation (which removes the warp and matches the
- * prototype's static order); `lastMessageSentAt` is the signal it would use.
+ * DONE (float-to-top, 2026-07-20): the operator's fuller CC-2 spec — a row floats
+ * to the top ONLY when its session SENDS a message — is now the actual order
+ * (descending `lastMessageSentAt`), buildable once the signal existed.
  *
  * Pure (no React) so the descriptor → row-visual mapping is unit-testable,
  * and it reuses `TabTone` so both panels share one status vocabulary.
@@ -175,11 +175,17 @@ export function selectSidebarRows(state: ShellState): SidebarRow[] {
     // Stable order by the immutable `createdAt` (see module doc): a click or
     // restore never moves a row, because `createdAt` never changes. Ties (same
     // creation ms) break on the immutable id so the order is fully deterministic.
-    .sort((a, b) =>
-      a.createdAt !== b.createdAt
-        ? a.createdAt - b.createdAt
-        : a.appSessionId.localeCompare(b.appSessionId),
-    )
+    .sort((a, b) => {
+      // Order by activity — `lastMessageSentAt` (falling back to `createdAt`),
+      // DESCENDING — so the most-recently-messaged session is at the top and the
+      // order matches the recency each row displays. `lastMessageSentAt` never
+      // bumps on attach/open/restore (CC-2, `host.ts`), so a row floats up ONLY
+      // when its session sends a message — no warp on click/restore. Ties break
+      // on the immutable id for a fully deterministic order.
+      const at = a.lastMessageSentAt ?? a.createdAt
+      const bt = b.lastMessageSentAt ?? b.createdAt
+      return at !== bt ? bt - at : a.appSessionId.localeCompare(b.appSessionId)
+    })
     .map(descriptor => ({
       descriptor,
       visual: deriveSidebarRowVisual(descriptor),

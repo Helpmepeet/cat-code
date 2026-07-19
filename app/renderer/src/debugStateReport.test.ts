@@ -89,10 +89,10 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
       needsAttention: false,
     },
   ])
-  // Sidebar rows are stable arrival order (prototype parity — sidebarState.ts),
-  // not recency: sessionA arrived first, so it's sidebar[0] despite sessionB's
-  // higher lastAttachedAt.
-  expect(snapshot.renderer.sidebar[1]).toMatchObject({
+  // Sidebar rows order by lastMessageSentAt→createdAt DESC (sidebarState.ts):
+  // sessionB (createdAt 3) sorts ahead of sessionA (createdAt 1), so B is
+  // sidebar[0]; lastAttachedAt never drives order.
+  expect(snapshot.renderer.sidebar[0]).toMatchObject({
     appSessionId: sessionB.appSessionId,
     title: 'other',
     subtitle: 'other',

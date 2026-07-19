@@ -161,36 +161,36 @@ test('selectSidebarRows lists the full roster (live ∪ restorable)', () => {
   expect(ids.sort()).toEqual(['dead', 'live'])
 })
 
-test('rows are in stable creation order, NOT reordered by lastAttachedAt', () => {
-  // CC-2 / prototype parity (see module doc): rows order by the immutable
-  // createdAt and are never re-sorted by recency — a row with a MORE recent
-  // lastAttachedAt does not jump ahead of one created earlier.
+test('rows are NOT reordered by lastAttachedAt (falls back to createdAt desc)', () => {
+  // Order is by lastMessageSentAt (null here) → createdAt, DESCENDING; a more
+  // recent lastAttachedAt never drives order, so it cannot jump a row ahead.
   let state = createShellState()
-  state = reduceShellState(state, added(descriptor('old', { createdAt: 1, lastAttachedAt: 100 })))
-  state = reduceShellState(state, added(descriptor('new', { createdAt: 2, lastAttachedAt: 300 })))
-  state = reduceShellState(state, added(descriptor('mid', { createdAt: 3, lastAttachedAt: 200 })))
+  state = reduceShellState(state, added(descriptor('c1', { createdAt: 1, lastAttachedAt: 100 })))
+  state = reduceShellState(state, added(descriptor('c2', { createdAt: 2, lastAttachedAt: 300 })))
+  state = reduceShellState(state, added(descriptor('c3', { createdAt: 3, lastAttachedAt: 200 })))
 
+  // createdAt-desc (newest-created first); c2's larger lastAttachedAt is ignored.
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
-    'old',
-    'new',
-    'mid',
+    'c3',
+    'c2',
+    'c1',
   ])
 })
 
-test('CC-2: lastMessageSentAt drives the displayed time but NOT row order (float-to-top still deferred)', () => {
-  // The subtitle recency now reads lastMessageSentAt (Sidebar.tsx), but row
-  // ORDER must stay the immutable createdAt sort — floating a row to the top on
-  // send is a separate deferred piece (see the module doc). A newer message must
-  // never jump a row ahead of one created earlier.
+test('float-to-top: rows order by lastMessageSentAt, most-recent message first', () => {
+  // The message-sent time now drives BOTH the displayed recency (Sidebar.tsx) and
+  // row ORDER: a session floats to the top when it sends a message, regardless of
+  // creation order. (createdAt is only the fallback when nothing has been sent.)
   let state = createShellState()
-  state = reduceShellState(state, added(descriptor('old', { createdAt: 1, lastMessageSentAt: 999 })))
-  state = reduceShellState(state, added(descriptor('new', { createdAt: 2, lastMessageSentAt: 1 })))
-  state = reduceShellState(state, added(descriptor('mid', { createdAt: 3, lastMessageSentAt: 500 })))
+  state = reduceShellState(state, added(descriptor('a', { createdAt: 1, lastMessageSentAt: 999 })))
+  state = reduceShellState(state, added(descriptor('b', { createdAt: 2, lastMessageSentAt: 1 })))
+  state = reduceShellState(state, added(descriptor('c', { createdAt: 3, lastMessageSentAt: 500 })))
 
+  // by lastMessageSentAt desc: a(999) > c(500) > b(1) — newest-created 'c' is NOT first.
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
-    'old',
-    'new',
-    'mid',
+    'a',
+    'c',
+    'b',
   ])
 })
 
@@ -198,26 +198,27 @@ test('CC-2: restoring a closed session does NOT move its Sidebar row', () => {
   // The warp this fix targets: restoreSession fires session-added for a known id
   // regaining tab membership, which shellState's reorderOnArrival moves to the
   // END of state.order (correct for the TabBar's fresh tab). The Sidebar must NOT
-  // follow that — ordering by the immutable createdAt keeps 'a' in place across
-  // the close→restore round-trip, so the row the operator just clicked stays put.
+  // follow that — its order (lastMessageSentAt→createdAt desc; nothing sent here)
+  // keeps 'a' in its slot across the close→restore round-trip. 'a' is created
+  // LATER (createdAt 2) so it sorts FIRST — the opposite of the state.order warp
+  // that would push it last, so the two genuinely diverge.
   let state = createShellState()
-  state = reduceShellState(state, added(descriptor('a', { createdAt: 1, status: 'ready' })))
-  state = reduceShellState(state, added(descriptor('b', { createdAt: 2, status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('a', { createdAt: 2, status: 'ready' })))
+  state = reduceShellState(state, added(descriptor('b', { createdAt: 1, status: 'ready' })))
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
 
   // 'a' closes → a restorable row.
   state = reduceShellState(state, {
     type: 'session-status',
-    session: descriptor('a', { createdAt: 1, status: 'exited', restorable: true }),
+    session: descriptor('a', { createdAt: 2, status: 'exited', restorable: true }),
   })
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
 
-  // 'a' is restored → regains tab membership → shellState moves it to the END of
-  // state.order. The Sidebar row STAYS put (this is the fix; the old test asserted
-  // the warp — ['b','a']).
+  // 'a' restored → regains tab membership → shellState moves it to the END of
+  // state.order. The Sidebar row STAYS first (the fix): it does not follow the warp.
   state = reduceShellState(
     state,
-    added(descriptor('a', { createdAt: 1, status: 'spawning', restorable: false })),
+    added(descriptor('a', { createdAt: 2, status: 'spawning', restorable: false })),
   )
   expect(state.order).toEqual(['b', 'a']) // TabBar order DID move (unchanged behavior)
   expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
