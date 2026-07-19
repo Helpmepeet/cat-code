@@ -86,16 +86,34 @@ describe('resolveSessionActions', () => {
     expect(inactive.get('metadata')!.enabled).toBe(false)
   })
 
-  test('Branch / Rewind / Rename / Export are always deferred (disabled) with cited seams', () => {
+  test('Rename / Export / Branch are ENABLED for a LIVE row (P4-6b wired verbs)', () => {
+    const items = byKind(resolveSessionActions(row({ live: true }), { isActiveOpen: true }))
+    expect(items.get('rename')!.enabled).toBe(true)
+    expect(items.get('rename')!.reason).toBeUndefined()
+    expect(items.get('export')!.enabled).toBe(true)
+    expect(items.get('export')!.reason).toBeUndefined()
+    expect(items.get('branch')!.enabled).toBe(true)
+    expect(items.get('branch')!.label).toBe('Branch from HEAD…')
+    expect(items.get('branch')!.reason).toBeUndefined()
+  })
+
+  test('Rename / Export / Branch are DISABLED with a reason for a NON-live row', () => {
+    const items = byKind(
+      resolveSessionActions(
+        row({ live: false, restorable: true, status: 'exited' }),
+        { isActiveOpen: false },
+      ),
+    )
+    for (const kind of ['rename', 'export', 'branch'] as const) {
+      expect(items.get(kind)!.enabled).toBe(false)
+      expect(items.get(kind)!.reason).toContain('live engine')
+    }
+  })
+
+  test('Rewind stays deferred (disabled) — no engine conversation-rewind verb', () => {
     const items = byKind(resolveSessionActions(row(), { isActiveOpen: true }))
-    expect(items.get('branch')!.enabled).toBe(false)
-    expect(items.get('branch')!.reason).toContain('branch.ts:61')
     expect(items.get('rewind')!.enabled).toBe(false)
     expect(items.get('rewind')!.reason).toContain('REPL.tsx:4034')
-    expect(items.get('rename')!.enabled).toBe(false)
-    expect(items.get('rename')!.reason).toContain('saveCustomTitle')
-    expect(items.get('export')!.enabled).toBe(false)
-    expect(items.get('export')!.reason).toContain('exportRenderer.tsx:91')
   })
 
   test('every item belongs to a known section', () => {

@@ -58,6 +58,10 @@ import {
   type SidecarRunControlsDomain,
 } from './runControlsDomain.js'
 import {
+  createSidecarSessionActionsDomain,
+  type SidecarSessionActionsDomain,
+} from './sessionActionsDomain.js'
+import {
   createSidecarAccountsDomain,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
@@ -260,6 +264,12 @@ export async function createNormalSidecarQueryEngineConfig(
     extensionsSnapshot,
     slashCatalog,
     /**
+     * The session's REAL model-visible tool list (same array wired into the query
+     * engine below) — returned so the P4-6b session-actions domain can render an
+     * export with the engine's actual tools, never `[]` (the P1-3 defect).
+     */
+    tools,
+    /**
      * The real command catalog for this cwd (same array wired into the query
      * engine above) — returned so the RemoteSettings domain (P4-13) can derive
      * its command-filter truth from THIS session's actual commands, never a
@@ -379,6 +389,12 @@ export type SidecarSession = {
    */
   runControls: SidecarRunControlsDomain | null
   /**
+   * Session-action write domain (P4-6b) — the Rename / Export / Branch verbs over
+   * the engine's OWN `saveCustomTitle` / `renderMessagesToPlainText` / `createFork`.
+   * Null in probe mode (no engine session to rename/export/fork).
+   */
+  sessionActions: SidecarSessionActionsDomain | null
+  /**
    * The session's real user-invocable slash commands WITH display metadata (name
    * + description + optional arg hint), built at spawn from the SAME `getCommands`
    * catalog that feeds `slash_commands`. The server pushes it on connect as a
@@ -433,6 +449,7 @@ export async function createSidecarSessionController({
       sessionsCatalog: null,
       agentMode: null,
       runControls: null,
+      sessionActions: null,
       slashCatalog: [],
     }
   }
@@ -450,6 +467,7 @@ export async function createSidecarSessionController({
     commands,
     queryEngineConfig,
     slashCatalog,
+    tools,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
 
   return {
@@ -471,6 +489,7 @@ export async function createSidecarSessionController({
     sessionsCatalog: await createSidecarSessionsCatalogDomain(),
     agentMode: createSidecarAgentModeDomain(appStateStore),
     runControls: createSidecarRunControlsDomain(appStateStore),
+    sessionActions: createSidecarSessionActionsDomain({ tools }),
     slashCatalog,
   }
 }

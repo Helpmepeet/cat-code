@@ -49,6 +49,7 @@ import {
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
+import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
 import { createTaskStateBase } from '../../src/Task.js'
 import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.js'
@@ -164,6 +165,7 @@ function makeServer(
   agentMode?: SidecarAgentModeDomain,
   settings?: SidecarSettingsDomain,
   runControls?: SidecarRunControlsDomain,
+  sessionActions?: SidecarSessionActionsDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -180,6 +182,7 @@ function makeServer(
     ...(agentMode ? { agentMode } : {}),
     ...(settings ? { settings } : {}),
     ...(runControls ? { runControls } : {}),
+    ...(sessionActions ? { sessionActions } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -3619,4 +3622,232 @@ test('P4-14 — absent domains (probe mode) emit neither snapshot, without throw
 
   expect(received.some(f => f.kind === 'workspace-trust.snapshot')).toBe(false)
   expect(received.some(f => f.kind === 'diagnostics.snapshot')).toBe(false)
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-6b — session-action WRITE verbs (Rename / Export / Branch) boundary
+ * ------------------------------------------------------------------------- *
+ * Exercises the SERVER boundary (checkStrictKeys + Zod schema + dispatch + async
+ * result frame) with a FAKE domain — the engine-op round-trip is proven in
+ * sessionActionsDomain.test.ts. `flush` (declared above) drains the microtask/
+ * timer queue so the async result ack (the handler fires it after the domain
+ * promise resolves) is observable.
+ */
+function fakeSessionActionsDomain(): {
+  domain: SidecarSessionActionsDomain
+  calls: string[]
+} {
+  const calls: string[] = []
+  const domain: SidecarSessionActionsDomain = {
+    async rename(title) {
+      calls.push(`rename:${title}`)
+      return { ok: true, message: `Renamed to ${title}.` }
+    },
+    async export() {
+      calls.push('export')
+      return { ok: true, message: 'Transcript exported.', exportText: 'HELLO' }
+    },
+    async branch() {
+      calls.push('branch')
+      return {
+        ok: true,
+        message: 'Branched.',
+        branchEngineSessionId: 'fork-id',
+      }
+    },
+  }
+  return { domain, calls }
+}
+
+function makeSessionActionsServer(): {
+  server: SidecarServer
+  calls: string[]
+} {
+  const { domain, calls } = fakeSessionActionsDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  return { server, calls }
+}
+
+test('P4-6b — a valid session.rename dispatches + acks ok + relabels via session-title', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.rename',
+        requestId: 'sr1',
+        title: 'Renamed Title',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'session-action.result')
+  expect(result && result.kind === 'session-action.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'session-action.result' && result.verb).toBe('rename')
+  expect(result && result.kind === 'session-action.result' && result.requestId).toBe('sr1')
+  expect(calls).toEqual(['rename:Renamed Title'])
+  // The rename reuses the outbound session-title frame → host.setTitle (registry).
+  expect(
+    received.some(f => f.kind === 'session-title' && f.title === 'Renamed Title'),
+  ).toBe(true)
+})
+
+test('P4-6b — a valid session.export returns the rendered text on the result', async () => {
+  const { server } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.export',
+        requestId: 'se1',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'session-action.result')
+  expect(result && result.kind === 'session-action.result' && result.verb).toBe('export')
+  expect(result && result.kind === 'session-action.result' && result.exportText).toBe('HELLO')
+})
+
+test('P4-6b — a valid session.branch returns the new fork engine session id', async () => {
+  const { server } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.branch',
+        requestId: 'sb1',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'session-action.result')
+  expect(result && result.kind === 'session-action.result' && result.verb).toBe('branch')
+  expect(
+    result && result.kind === 'session-action.result' && result.branchEngineSessionId,
+  ).toBe('fork-id')
+})
+
+test('P4-6b — rejects session.rename missing requestId at the schema boundary, no domain call', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.rename',
+        title: 'x',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-6b — rejects session.rename with a NON-string title (Zod boundary), no domain call', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.rename',
+        requestId: 'sr2',
+        title: 123,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-6b — rejects session.export carrying an unexpected key (checkStrictKeys), no domain call', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.export',
+        requestId: 'se2',
+        format: 'markdown',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-6b — a session-action verb with NO domain (probe) fails closed with internal_error', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.branch',
+        requestId: 'sb2',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
+  expect(
+    received.some(f => f.kind === 'error' && f.requestId === 'sb2'),
+  ).toBe(true)
 })

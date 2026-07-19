@@ -9,31 +9,32 @@
  * Why this shape (the P4-6b security/parity posture, recorded here so nobody
  * re-adds a Potemkin button):
  *
- *  - **Zero inbound vocabulary.** 6b adds NO client→sidecar frame. Every verb
- *    below is either a renderer-only read (Open reuses the host control plane;
- *    Copy/Inspect read transcript state the `EventFrame` stream already
- *    populated) or an honest disable. The recon that grounds each disable:
- *      · Export — clean text/md/json + file download need
- *        `renderMessagesToPlainText` (`src/utils/exportRenderer.tsx:91`), which
- *        is engine-graph-bound and NOT renderer-importable; deferred.
- *      · Branch — `createFork` forks the whole conversation at HEAD
- *        (`src/commands/branch/branch.ts:61`, no from-message-N) and then RESUMES
- *        into the fork, which in the N-process model is a new sidecar = a host
- *        control-plane spawn. History/fork rows have no host restore path today
- *        (`sessionsCatalogState.ts` MergedSessionRow doc) — a branch verb would
- *        mint a fork nobody could open. Deferred, not faked.
- *      · Rewind — `rewindConversationTo` (`src/screens/REPL.tsx:4034`) is
- *        in-memory REPL truncation; the only engine `rewind_files` verb is a git
- *        file-checkpoint, not conversation truncation, and is not in the sidecar
- *        vocabulary. No clean seam → deferred.
- *      · Rename — a title WRITE exists (`saveCustomTitle`,
- *        `src/utils/sessionStorage.ts:2938`) but needs a new inbound
- *        `session.rename` verb, and the spawn-frozen `sessions.snapshot` would
- *        not reflect it without a re-emit. Deferred (documented seam).
+ *  - **Three WIRED mutating verbs (P4-6b).** Rename / Export / Branch are now
+ *    real, each an app-owned inbound frame validated at the sidecar and dispatched
+ *    to the engine's OWN machinery (protocol.ts SESSION_ACTION_VERB_TYPES):
+ *      · Rename → `saveCustomTitle` (`src/utils/sessionStorage.ts:3009`); the
+ *        sidecar also reuses the `session-title` outbound frame → `host.setTitle`
+ *        so the sidebar/tab relabel live.
+ *      · Export → `renderMessagesToPlainText` (`src/utils/exportRenderer.tsx:91`,
+ *        TEXT-only — md/json have no engine render path → §0-deferred); the
+ *        rendered text rides back on the result frame.
+ *      · Branch → `createFork` (`src/commands/branch/branch.ts:61`, forks the whole
+ *        conversation at HEAD — no from-message-N, so the label ADAPTS to "Branch
+ *        from HEAD…"). The fork is written for real; AUTO-OPENING it is §0-DEFERRED
+ *        (a fork has no registry row and the sidecar has no host control-plane
+ *        channel — `sessionActionRuntimeState.ts` / protocol.ts record the gap).
+ *    All three run inside the session's OWN live engine, so they are enabled ONLY
+ *    for a LIVE row (a running sidecar to receive the verb); a restorable/history
+ *    row shows them DISABLED with the reason (open/restore it first).
+ *  - **Still disabled (no engine seam):** Rewind — `rewindConversationTo`
+ *    (`src/screens/REPL.tsx:4034`) is in-memory REPL truncation; the only engine
+ *    `rewind_files` verb is a git file-checkpoint, not conversation truncation, and
+ *    is not in the sidecar vocabulary. No clean seam → deferred.
  *  - **Cut, not disabled:** Tag / Archive / Delete have NO local engine backing
  *    (`archiveSession` is remote-bridge only; there is no `deleteSession` in
  *    `src/`). They are omitted from the menu entirely (a §0 CUT), never shown as
- *    dead controls.
+ *    dead controls. (Fidelity note: the prototype SHOWS these; a follow-on may
+ *    prefer a visible-disabled row with a reason over an omission.)
  *  - **Active-open gating.** Copy and Inspect-metadata read the CURRENT session's
  *    transcript, which the renderer only holds for the session open+attached in a
  *    tab. For any other row they are shown DISABLED with the reason (opening a
@@ -76,14 +77,10 @@ export type SessionActionsContext = {
 }
 
 const DEFER = {
-  export:
-    'Export deferred — clean text/Markdown/JSON + file download need the engine renderer (renderMessagesToPlainText, src/utils/exportRenderer.tsx:91), not reachable from the renderer.',
-  branch:
-    'Branch deferred — fork-at-HEAD (src/commands/branch/branch.ts:61) needs a host restore path for the fork; none exists yet.',
   rewind:
     'Rewind deferred — no engine conversation-rewind verb (REPL-only, src/screens/REPL.tsx:4034).',
-  rename:
-    'Rename deferred — needs a session.rename write verb over saveCustomTitle (src/utils/sessionStorage.ts:2938).',
+  notLive:
+    'Open or restore this session first — Rename, Export, and Branch run in the session’s live engine, which a closed row has stopped.',
   notOpen:
     'Open this session first — its transcript is only available while it is the attached tab (cross-session read seam deferred).',
 } as const
@@ -98,6 +95,9 @@ export function resolveSessionActions(
   ctx: SessionActionsContext,
 ): SessionActionItem[] {
   const openable = row.appSessionId != null
+  // Rename / Export / Branch run inside the session's OWN live engine (the verb is
+  // dispatched to its sidecar), so they are reachable ONLY for a LIVE row.
+  const live = row.live === true
   return [
     {
       kind: 'open',
@@ -115,15 +115,15 @@ export function resolveSessionActions(
       kind: 'rename',
       label: 'Rename',
       section: 'primary',
-      enabled: false,
-      reason: DEFER.rename,
+      enabled: live,
+      ...(live ? {} : { reason: DEFER.notLive }),
     },
     {
       kind: 'branch',
       label: 'Branch from HEAD…',
       section: 'history',
-      enabled: false,
-      reason: DEFER.branch,
+      enabled: live,
+      ...(live ? {} : { reason: DEFER.notLive }),
     },
     {
       kind: 'rewind',
@@ -150,8 +150,8 @@ export function resolveSessionActions(
       kind: 'export',
       label: 'Export…',
       section: 'transfer',
-      enabled: false,
-      reason: DEFER.export,
+      enabled: live,
+      ...(live ? {} : { reason: DEFER.notLive }),
     },
   ]
 }

@@ -55,13 +55,29 @@ test('active-open row: Copy + Inspect render as live menuitem buttons', () => {
   expect(html).toContain('<button')
 })
 
-test('deferred verbs render disabled with a "soon" tag and the reason as a tooltip', () => {
+test('a still-deferred verb (Rewind) renders disabled with a "soon" tag and the reason as a tooltip', () => {
   const html = render(true)
   expect(html).toContain('aria-disabled="true"')
   expect(html).toContain('soon')
-  // The Branch reason (source-cited) rides the disabled row's title attribute.
-  expect(html).toContain('branch.ts:61')
-  expect(html).toContain('exportRenderer.tsx:91')
+  // Rewind stays deferred (no engine conversation-rewind verb); its source-cited
+  // reason rides the disabled row's title attribute.
+  expect(html).toContain('REPL.tsx:4034')
+})
+
+test('P4-6b wired verbs (Rename/Export/Branch) render as live buttons for a LIVE row', () => {
+  const html = render(true)
+  expect(html).toContain('Rename')
+  expect(html).toContain('Export…')
+  expect(html).toContain('Branch from HEAD…')
+  // None of the three carries a "soon"-tagged deferral title on a live row.
+  expect(html).not.toContain('exportRenderer.tsx:91')
+  expect(html).not.toContain('branch.ts:61')
+})
+
+test('non-live row: Rename/Export/Branch render disabled with the live-engine reason', () => {
+  const html = render(false, row({ live: false, restorable: true, status: 'exited' }))
+  expect(html).toContain('aria-disabled="true"')
+  expect(html).toContain('live engine')
 })
 
 test('inactive row: Copy + Inspect are disabled with the open-first reason', () => {

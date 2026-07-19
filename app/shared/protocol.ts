@@ -348,6 +348,7 @@ export type SidecarClientMessage =
   | SettingsVerbMessage
   | AgentModeSetMessage
   | RunControlVerbMessage
+  | SessionActionVerbMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -1076,6 +1077,104 @@ export type RunControlsSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * P4-6b — session-action WRITE verbs (Rename / Export / Branch)
+ * ------------------------------------------------------------------------- *
+ *
+ * The Sessions `⋯` menu's three MUTATING verbs become interactive. Like the P4-5
+ * account verbs, the P4-8b agent-mode set, the P4-15 workspace-trust accept, the
+ * P4-19 settings write, and the P4-24c run-controls, these are app-owned inbound
+ * vocabulary the engine's shared `appClientMessageSchema` does NOT carry — each is
+ * validated by a sidecar-LOCAL Zod schema at the trust boundary + the closed
+ * `checkStrictKeys` allowlist, then dispatched to the engine's OWN machinery for
+ * THIS session (the sidecar is one process per session, N-process LOCKED):
+ *
+ *  - `session.rename` → `saveCustomTitle` (`src/utils/sessionStorage.ts:3009`),
+ *    the SAME custom-title write the `/rename` command (`src/commands/rename/`)
+ *    and VS Code use; a `custom-title` JSONL entry that readers prefer over an
+ *    AI title (user rename always wins). On success the sidecar ALSO reuses the
+ *    existing `session-title` outbound frame (→ `host.setTitle` → registry) so the
+ *    sidebar/tab relabel live — no new registry seam.
+ *  - `session.export` → the engine's OWN renderer `renderMessagesToPlainText`
+ *    (`src/utils/exportRenderer.tsx:91`, TEXT-only — the engine has no md/json
+ *    render path, so those variants are §0-deferred, not hand-rolled). The
+ *    transcript is re-read from disk via `loadConversationForResume`
+ *    (`src/utils/conversationRecovery.ts:469`, the SAME loader the sidecar's
+ *    resume uses) → `Message[]`, rendered with the session's REAL `tools`
+ *    (`getTools`, not `[]` — the P1-3 defect). The rendered text rides BACK on the
+ *    result frame (`exportText`); the renderer offers a download/clipboard.
+ *  - `session.branch` → the engine's OWN `createFork` (`src/commands/branch/branch.ts:61`,
+ *    forks the whole conversation at HEAD — no from-message-N, so the menu label
+ *    ADAPTS to "Branch from HEAD…"). It writes a real fork transcript on disk and
+ *    the result carries its new engine session id. AUTO-OPENING the fork is
+ *    §0-DEFERRED: a fork has no registry row/`appSessionId`, and the sidecar has
+ *    no channel to the host control plane (`host.createSession` with
+ *    `resumeEngineSessionId` is main-supplied only, HC1) — opening it needs
+ *    net-new cross-plane plumbing that would touch the locked frame vocabulary.
+ *
+ * Security posture (all preserved): the renderer authors ONLY intent — a session
+ * id + (rename) a title string. It NEVER authors an engine object, a path (HC1),
+ * a permission rule (T6/T6b), or a token. Every field is re-validated at the
+ * sidecar (structural Zod + closed `checkStrictKeys`) and the op runs engine-side.
+ * T5a-analog — each verb carries a renderer-minted `requestId` echoed on
+ * `session-action.result`. T7 — the existing inbound size/rate caps apply
+ * unchanged; the outbound `exportText` rides the trusted-engine outbound path
+ * (`secretGuard` scans it; `MAX_OUTBOUND_FRAME_BYTES` bounds it — an over-cap
+ * transcript fails closed with an honest `ok:false`, never a silent drop).
+ */
+export const SESSION_ACTION_VERB_TYPES = [
+  'session.rename',
+  'session.export',
+  'session.branch',
+] as const
+
+export type SessionActionVerbType = (typeof SESSION_ACTION_VERB_TYPES)[number]
+
+/** Rename this session (write a user `custom-title`; relabel sidebar/tab live). */
+export type SessionRenameMessage = {
+  type: 'session.rename'
+  requestId: string
+  title: string
+}
+
+/** Export this session's transcript to plain text (rendered engine-side). */
+export type SessionExportMessage = {
+  type: 'session.export'
+  requestId: string
+}
+
+/** Fork the whole conversation at HEAD into a new engine session (real on disk). */
+export type SessionBranchMessage = {
+  type: 'session.branch'
+  requestId: string
+}
+
+export type SessionActionVerbMessage =
+  | SessionRenameMessage
+  | SessionExportMessage
+  | SessionBranchMessage
+
+/**
+ * P4-6b outbound result echoing the verb's `requestId` (T5a-analog). ONE frame
+ * for all three verbs, discriminated by `verb` (mirrors `run-control.result`):
+ *  - `exportText` present iff `verb === 'export' && ok` — the engine-rendered
+ *    plain-text transcript (trusted-engine outbound; secretGuard-scanned).
+ *  - `branchEngineSessionId` present iff `verb === 'branch' && ok` — the new
+ *    fork's engine session id (for the honest toast / a future open path).
+ * `message` is a redacted, human-readable outcome; it NEVER carries a token.
+ */
+export type SessionActionResultFrame = {
+  kind: 'session-action.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: 'rename' | 'export' | 'branch'
+  ok: boolean
+  message: string
+  exportText?: string
+  branchEngineSessionId?: string
+}
+
+/* ------------------------------------------------------------------------- *
  * Accounts read-seam (P4-5) — the CANONICAL domain read-seam recipe
  * ------------------------------------------------------------------------- *
  *
@@ -1738,6 +1837,7 @@ export type ServerFrame =
   | AgentModeSetResultFrame
   | RunControlsSnapshotFrame
   | RunControlResultFrame
+  | SessionActionResultFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
   | WorkspaceTrustSnapshotFrame
@@ -1864,6 +1964,16 @@ export type CatCodeBridge = {
    * No engine object, no path, no token crosses.
    */
   runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void
+  /**
+   * P4-6b — request a session-action verb (rename / export / branch) on the
+   * addressed session's sidecar. The renderer authors ONLY intent (a title string
+   * on rename; export/branch carry no params); the sidecar re-validates and runs
+   * the engine's OWN saveCustomTitle / renderMessagesToPlainText / createFork. The
+   * outcome arrives as a `session-action.result` frame echoing `requestId` — a
+   * successful export carries the rendered text; a successful branch, the new
+   * engine session id. No engine object, no path, no token crosses.
+   */
+  sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void
   /**
    * P4-13 — request a RemoteSettings verb (bridge toggle or direct-connect) on
    * the addressed session's sidecar. The outcome arrives as a
