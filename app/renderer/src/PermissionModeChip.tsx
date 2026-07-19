@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
 import type { ComposerFaceProps } from './ComposerActionsBar.js'
+import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import {
   PERMISSION_SET_MODE_MODES,
   type PermissionContextSnapshot,
@@ -114,26 +114,11 @@ export function PermissionModeChip({
    * joins the arrow-key roving group; absent (standalone use) → an unmanaged face. */
   faceProps?: ComposerFaceProps
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false)
-      }
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  // Feature #13 — the shared composer popover lifecycle (open flag +
+  // outside-click/Escape dismiss + first-item focus on open + focus-restore to the
+  // trigger via `close`), identical to the run-control chips. Previously this chip
+  // had bespoke state with NO first-item focus and NO in-panel roving.
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
 
   const current =
     context && isKnownMode(context.mode) ? MODE_META[context.mode] : null
@@ -144,6 +129,7 @@ export function PermissionModeChip({
        * Surfaces.jsx:222): the mode's short label tinted by tone, no dot, no
        * pill — brightening to text-primary on hover like the rest of the rail. */}
       <button
+        ref={triggerRef}
         {...faceProps}
         type="button"
         aria-haspopup="menu"
@@ -160,6 +146,7 @@ export function PermissionModeChip({
         <div
           role="menu"
           aria-label="Permission mode"
+          onKeyDown={handleMenuRovingKeyDown}
           className="absolute bottom-full right-0 z-40 mb-2 w-60 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg"
         >
           <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
@@ -187,7 +174,7 @@ export function PermissionModeChip({
                 }
                 onClick={() => {
                   onSetMode(mode)
-                  setOpen(false)
+                  close()
                 }}
                 className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors ${
                   unavailable
