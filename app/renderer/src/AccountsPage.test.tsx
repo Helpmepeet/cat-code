@@ -12,6 +12,7 @@ import {
   renameError,
   resultToastTone,
   selectAccountMenuItems,
+  statusDotTone,
   switchVerb,
   usageTone,
 } from './AccountsPage.js'
@@ -199,6 +200,23 @@ test('renders the usage-limit cap banner for a capped account', () => {
   )
   expect(html).toContain('usage limit reached')
   expect(html).toContain('Switch to another account or wait for the reset')
+})
+
+test('statusDotTone mirrors the prototype POOL_STATUS colours (capped/dead not swapped)', () => {
+  // pressured (healthy + usage-capped) → warn, before any status/default check
+  expect(statusDotTone(account({ status: 'healthy', usageLimitReached: true }))).toBe(
+    'warn',
+  )
+  // active/default account → accent (pink), regardless of a healthy status
+  expect(statusDotTone(account({ isDefault: true }))).toBe('accent')
+  expect(statusDotTone(account({ status: 'healthy', isDefault: false }))).toBe('good')
+  // the previously-swapped pair: capped is red (danger), dead is yellow (warn)
+  expect(statusDotTone(account({ status: 'capped', isDefault: false }))).toBe('danger')
+  expect(statusDotTone(account({ status: 'dead', isDefault: false }))).toBe('warn')
+  // quarantined is a transient grey, not yellow
+  expect(statusDotTone(account({ status: 'quarantined', isDefault: false }))).toBe(
+    'default',
+  )
 })
 
 test('usageTone thresholds: ≥90 danger, ≥65 warn, else good', () => {
