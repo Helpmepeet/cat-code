@@ -22,12 +22,16 @@
 
 import {
   Component,
+  isValidElement,
   memo,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from 'react'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import {
@@ -314,19 +318,34 @@ const TranscriptRowView = memo(function TranscriptRowView({
 })
 
 /**
- * P4-18c assistant prose. react-markdown for the core GFM-less set (headings,
- * bold/italic, inline code, lists, links, hr, blockquote) wrapped in a
- * render-error boundary (a throw degrades to the plain source, never a React
- * crash — display = degrade gracefully). Fenced code blocks render in a framed
- * panel with a per-block copy button. Long bodies (>60 lines) collapse behind a
- * "Show N more lines" control. A streaming body carries a blinking caret.
+ * P4-18c assistant prose. react-markdown for the GFM set (headings, bold/italic,
+ * inline code, lists, links, hr, blockquote, and — via `remark-gfm` — pipe
+ * TABLES) wrapped in a render-error boundary (a throw degrades to the plain
+ * source, never a React crash — display = degrade gracefully). Fenced code
+ * blocks render in a framed panel with a per-block copy button and
+ * `rehype-highlight` syntax tokens (highlight.js `hljs-*` classes, colored by the
+ * FIXED Dracula stylesheet in `theme.css` — never dynamic Tailwind). Long bodies
+ * (>60 lines) collapse behind a "Show N more lines" control. A streaming body
+ * carries a blinking caret.
  *
- * §5 deferrals (need a new dep, gated on operator approval — CLAUDE.md §7 "no
- * new deps without asking"): GFM pipe TABLES (`remark-gfm`) and fenced-code
- * SYNTAX-TOKEN highlighting (a highlighter). Code renders framed + copyable but
- * un-colorized; tables render as raw text until the deps are approved.
+ * Raw HTML stays OFF (react-markdown v10 default — no `rehype-raw`,
+ * no `allowDangerousHtml`): a transcript can carry untrusted model/tool output.
+ * `rehype-highlight` emits React <span> elements (not injected HTML), so
+ * highlighting adds no raw-HTML surface.
  */
 const PROSE_COLLAPSE_LINES = 60
+
+// Stable module-scope plugin config. `remark-gfm` adds pipe tables (+ autolinks/
+// strikethrough). `rehype-highlight` tokenizes fenced ```lang blocks into
+// highlight.js `hljs-*` spans: `detect:false` colors ONLY explicitly-languaged
+// blocks (no noisy auto-detect of plain text); `ignoreMissing:true` degrades an
+// unknown language to plain text instead of throwing (display = degrade
+// gracefully, and safe under SSR where the error boundary can't catch).
+const REMARK_PLUGINS = [remarkGfm]
+const REHYPE_PLUGINS: [
+  typeof rehypeHighlight,
+  { detect: boolean; ignoreMissing: boolean },
+][] = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
 
 function AssistantProse({
   content,
@@ -346,7 +365,13 @@ function AssistantProse({
     <div>
       <MarkdownErrorBoundary fallback={content}>
         <div className="font-sans font-light text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
-          <Markdown components={MARKDOWN_COMPONENTS}>{shown}</Markdown>
+          <Markdown
+            remarkPlugins={REMARK_PLUGINS}
+            rehypePlugins={REHYPE_PLUGINS}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {shown}
+          </Markdown>
         </div>
       </MarkdownErrorBoundary>
       {streaming ? (
@@ -394,11 +419,19 @@ class MarkdownErrorBoundary extends Component<
   }
 }
 
-/** Flatten react-markdown code children (string, or node array) to raw text. */
+/** Flatten react-markdown code children (a string, a node array, or the
+ * highlight.js <span> element tree `rehype-highlight` wraps tokens in) to raw
+ * text — the copy button needs the un-tokenized source. */
 function childrenToText(children: ReactNode): string {
   if (typeof children === 'string') return children
-  if (Array.isArray(children)) return children.map(childrenToText).join('')
   if (typeof children === 'number') return String(children)
+  if (Array.isArray(children)) return children.map(childrenToText).join('')
+  if (isValidElement(children)) {
+    const props: unknown = children.props
+    if (props !== null && typeof props === 'object' && 'children' in props) {
+      return childrenToText((props as { children?: ReactNode }).children)
+    }
+  }
   return ''
 }
 
@@ -409,19 +442,67 @@ const MARKDOWN_COMPONENTS = {
   code: ({ className, children }: ComponentPropsWithoutRef<'code'>) => {
     const match = /language-(\w+)/.exec(className ?? '')
     const text = childrenToText(children)
+    // Inline code (single backtick, no language, no newline) stays inline.
     if (!match && !text.includes('\n')) {
       return <code className={className}>{children}</code>
     }
-    return <CodeBlock lang={match?.[1] ?? ''} code={text.replace(/\n$/, '')} />
+    // Fenced block: `children` carries rehype-highlight's colored <span> tree for
+    // DISPLAY; `text` is the raw source used by the copy button.
+    return (
+      <CodeBlock
+        lang={match?.[1] ?? ''}
+        code={text.replace(/\n$/, '')}
+        highlighted={children}
+      />
+    )
   },
+  // GFM pipe tables (remark-gfm). Exact prototype ProseTable values
+  // (Messages.jsx:1890-1906): rounded 8px scroll wrapper w/ a 0.08 white border,
+  // horizontal-only rules (header 0.12, body 0.05), a 0.03 header wash, 13px, and
+  // the prototype's #e4e4e7 / #c4c4c8 cell text. Column alignment (remark-gfm's
+  // per-cell `style`) is intentionally not forwarded — the prototype is
+  // left-aligned throughout and this keeps zero inline style. Static arbitrary
+  // classes only (the FAMILY_STYLE precedent for palette values with no token).
+  table: ({ children }: ComponentPropsWithoutRef<'table'>) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-white/[0.08]">
+      <table className="w-full border-collapse text-[13px]">{children}</table>
+    </div>
+  ),
+  th: ({ children }: ComponentPropsWithoutRef<'th'>) => (
+    <th className="whitespace-nowrap border-b border-white/[0.12] bg-white/[0.03] px-3 py-[7px] text-left font-semibold text-[#e4e4e7]">
+      {children}
+    </th>
+  ),
+  td: ({ children }: ComponentPropsWithoutRef<'td'>) => (
+    <td className="border-b border-white/[0.05] px-3 py-[7px] align-top text-[#c4c4c8]">
+      {children}
+    </td>
+  ),
 }
 
 /**
- * Fenced code block: framed panel + language label + per-block copy button.
- * Syntax-token highlighting is a §5 dep-gated deferral (no highlighter in
- * `app/`) — the code renders plain but framed and copyable.
+ * Fenced code block — exact prototype ProseCode grammar (Messages.jsx:1795-1828):
+ * a page-black (#09090b = app-bg) panel with an 8px radius + 0.06 white border,
+ * a FLOATING top-left accent `</>` + language label, a floating top-right copy
+ * control, and 38px top padding so the pre clears the floating chrome. Syntax
+ * tokens come from `rehype-highlight` (`hljs-*` <span>s colored by the fixed
+ * Dracula stylesheet in theme.css). `highlighted` is the colored span tree for
+ * DISPLAY; `code` is the raw source the copy button writes.
+ *
+ * ADAPTED (§0): the prototype's clipboard/check SVG icons are dropped for a
+ * text-only "copy"/"copied" affordance — the app carries no icon library and
+ * uses text-glyph chrome throughout. The 5-theme Settings picker is a separate
+ * §5 ledger deferral (owner P4-18; needs the Settings code-theme sync seam).
  */
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
+function CodeBlock({
+  lang,
+  code,
+  highlighted,
+}: {
+  lang: string
+  code: string
+  highlighted: ReactNode
+}) {
   const [copied, setCopied] = useState(false)
   const copy = (): void => {
     const clipboard =
@@ -436,21 +517,22 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
       .catch(() => {})
   }
   return (
-    <div className="my-2 overflow-hidden rounded-md border border-shell-seam bg-black/30">
-      <div className="flex items-center justify-between border-b border-shell-seam px-3 py-1">
-        <span className="font-mono text-[10px] uppercase tracking-wide text-text-subtle">
-          {lang || 'code'}
-        </span>
-        <button
-          type="button"
-          onClick={copy}
-          className="font-mono text-[10px] text-text-subtle transition-colors hover:text-text-primary"
-        >
-          {copied ? 'copied' : 'copy'}
-        </button>
-      </div>
-      <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
-        <code>{code}</code>
+    <div className="relative my-2 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
+      <span className="absolute left-3.5 top-2 z-[1] inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-accent">
+        <span className="opacity-70">&lt;/&gt;</span>
+        {lang || 'code'}
+      </span>
+      <button
+        type="button"
+        onClick={copy}
+        className={`absolute right-2.5 top-1.5 z-[1] font-mono text-[11px] transition-colors ${
+          copied ? 'text-[#86efac]' : 'text-text-subtle hover:text-text-primary'
+        }`}
+      >
+        {copied ? 'copied' : 'copy'}
+      </button>
+      <pre className="overflow-x-auto px-3.5 pb-3.5 pt-[38px] font-mono text-[12.5px] leading-[1.65]">
+        <code className="hljs">{highlighted}</code>
       </pre>
     </div>
   )
@@ -1343,16 +1425,165 @@ function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
 
 type DiffLineKind = 'add' | 'del' | 'ctx'
 
+// Exact prototype DiffView line grammar (Messages.jsx:182-186): a del/add row
+// tints red-500/green-500 at 0.1 with #fca5a5/#86efac (red-300/green-300) body
+// text; the sign glyph is the brighter tone-danger/tone-success (#f87171/#4ade80)
+// and context stays in the ghost/faint greys the prototype uses (#52525b body,
+// #3f3f46 sign). Static classes only.
 const DIFF_ROW_CLASS: Record<DiffLineKind, string> = {
-  add: 'bg-tone-success/10 text-tone-success',
-  del: 'bg-tone-danger/10 text-tone-danger',
-  ctx: 'text-text-subtle',
+  // Exact prototype row washes rgba(34,197,94,0.1) / rgba(239,68,68,0.1). NOT the
+  // green-500/red-500 utilities — Tailwind v4's oklch palette drifted those to
+  // #00c758 / #fb2c36, so a literal hex keeps the prototype value exact.
+  add: 'bg-[#22c55e]/10 text-[#86efac]',
+  del: 'bg-[#ef4444]/10 text-[#fca5a5]',
+  ctx: 'text-text-faint',
 }
 
 const DIFF_SIGN_CLASS: Record<DiffLineKind, string> = {
   add: 'text-tone-success',
   del: 'text-tone-danger',
-  ctx: 'text-text-subtle/50',
+  ctx: 'text-text-ghost',
+}
+
+// Word-level intra-line highlight (prototype DiffView, Messages.jsx:160-168): a
+// CHANGED word carries the exact rgba(248,113,113,0.28) / rgba(74,222,128,0.26)
+// wash (= tone-danger/28, tone-success/26) with a 2px radius + 1px x-pad; an
+// UNCHANGED word dims to the prototype's #fca5a5 / #86efac at 0.55 alpha.
+const WORD_EMPH_CLASS: Record<'del' | 'add', string> = {
+  del: 'rounded-[2px] bg-tone-danger/28 px-px',
+  add: 'rounded-[2px] bg-tone-success/26 px-px',
+}
+const WORD_DIM_CLASS: Record<'del' | 'add', string> = {
+  del: 'text-[#fca5a5]/55',
+  add: 'text-[#86efac]/55',
+}
+
+type WordDiffSide = { value: string; changed: boolean }[]
+type DiffHunkModel = ToolDiffProjection['hunks'][number]
+
+/**
+ * Word-level intra-line highlight for a replaced line pair (prototype DiffView,
+ * Messages.jsx:132-151). `diffWordsWithSpace` tokenizes old vs new; the prototype
+ * only word-highlights when < 90% of the line changed (a near-total rewrite reads
+ * better line-level). Returns null (→ line-level fallback) on that guard, on an
+ * empty diff, or on ANY throw — DiffView is not under the prose error boundary
+ * and SSR would not catch a throw here, so this must degrade in-place, never
+ * bubble (display = degrade gracefully).
+ */
+function wordDiffPair(
+  oldLine: string,
+  newLine: string,
+): { del: WordDiffSide; add: WordDiffSide } | null {
+  try {
+    const parts = diffWordsWithSpace(oldLine, newLine)
+    let changed = 0
+    let total = 0
+    for (const part of parts) {
+      total += part.value.length
+      if (part.added || part.removed) changed += part.value.length
+    }
+    if (total === 0 || changed / total >= 0.9) return null
+    const del: WordDiffSide = []
+    const add: WordDiffSide = []
+    for (const part of parts) {
+      if (!part.added) del.push({ value: part.value, changed: part.removed === true })
+      if (!part.removed) add.push({ value: part.value, changed: part.added === true })
+    }
+    return { del, add }
+  } catch {
+    return null
+  }
+}
+
+/** One word-diffed line body: changed words get the emphasis wash, unchanged
+ * words dim (prototype `renderLine`). */
+function WordDiffBody({ side, segments }: { side: 'del' | 'add'; segments: WordDiffSide }) {
+  return (
+    <>
+      {segments.map((seg, index) => (
+        <span
+          key={index}
+          className={seg.changed ? WORD_EMPH_CLASS[side] : WORD_DIM_CLASS[side]}
+        >
+          {seg.value}
+        </span>
+      ))}
+    </>
+  )
+}
+
+/**
+ * One hunk: classify each line, walk the dual old/new gutters from the hunk's
+ * `oldStart`/`newStart`, and pair consecutive del-runs with add-runs for the
+ * word-level intra-line highlight (prototype pairing, Messages.jsx:134-150).
+ */
+function DiffHunk({ hunk, hunkIndex }: { hunk: DiffHunkModel; hunkIndex: number }) {
+  let oldNo = hunk.oldStart
+  let newNo = hunk.newStart
+  const rows = hunk.lines.map(line => {
+    const kind: DiffLineKind = line.startsWith('+')
+      ? 'add'
+      : line.startsWith('-')
+        ? 'del'
+        : 'ctx'
+    const body = kind === 'ctx' ? line : line.slice(1)
+    const oldLabel = kind === 'add' ? '' : String(oldNo)
+    const newLabel = kind === 'del' ? '' : String(newNo)
+    if (kind !== 'add') oldNo++
+    if (kind !== 'del') newNo++
+    return { kind, body, oldLabel, newLabel }
+  })
+  // Pair each consecutive run of removes with the following run of adds; a
+  // successful pair carries the per-side word segments for that row index.
+  const wordInfo: Record<number, WordDiffSide> = {}
+  let i = 0
+  while (i < rows.length) {
+    if (rows[i].kind !== 'del') {
+      i++
+      continue
+    }
+    const dels: number[] = []
+    while (i < rows.length && rows[i].kind === 'del') dels.push(i++)
+    const adds: number[] = []
+    while (i < rows.length && rows[i].kind === 'add') adds.push(i++)
+    const pairs = Math.min(dels.length, adds.length)
+    for (let p = 0; p < pairs; p++) {
+      const seg = wordDiffPair(rows[dels[p]].body, rows[adds[p]].body)
+      if (seg) {
+        wordInfo[dels[p]] = seg.del
+        wordInfo[adds[p]] = seg.add
+      }
+    }
+  }
+  return (
+    <>
+      {rows.map((row, lineIndex) => {
+        const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
+        const segments = wordInfo[lineIndex]
+        return (
+          <div
+            key={`${hunkIndex}:${lineIndex}`}
+            className={`flex whitespace-pre ${DIFF_ROW_CLASS[row.kind]}`}
+          >
+            <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
+              {row.oldLabel}
+            </span>
+            <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
+              {row.newLabel}
+            </span>
+            <span className="min-w-0 flex-1 border-l border-white/[0.05] pl-2.5 pr-3.5">
+              <span className={DIFF_SIGN_CLASS[row.kind]}>{sign}</span>{' '}
+              {segments ? (
+                <WordDiffBody side={row.kind === 'del' ? 'del' : 'add'} segments={segments} />
+              ) : (
+                row.body
+              )}
+            </span>
+          </div>
+        )
+      })}
+    </>
+  )
 }
 
 /**
@@ -1361,52 +1592,22 @@ const DIFF_SIGN_CLASS: Record<DiffLineKind, string> = {
  * in the SAME file (`FileEditTool`'s own multi-edit input) render as successive
  * blocks under one header — there is no seam shape for one result spanning many
  * separate files (`ToolDiffProjection` doc). Gutter numbers walk each hunk from
- * its `oldStart`/`newStart`. Word-level intra-line highlight (`Diff.diffWords`)
- * is a §5 deferral — it needs a diff-tokenizer dep not in `app/`.
+ * its `oldStart`/`newStart`. P4-18c adds the word-level intra-line highlight
+ * (`DiffHunk`/`wordDiffPair`, prototype `Diff.diffWordsWithSpace`).
  */
 function DiffView({ diff }: { diff: ToolDiffProjection }) {
   const { adds, dels } = countDiff(diff)
   return (
     <div className="font-mono text-xs leading-[1.65]">
-      <div className="flex items-center gap-2.5 border-b border-shell-seam pb-1.5 text-[11.5px] text-text-muted">
+      <div className="flex items-center gap-2.5 border-b border-white/[0.05] pb-1.5 text-[11.5px] text-text-muted">
         <span className="min-w-0 flex-1 truncate">{diff.filePath}</span>
-        {adds > 0 ? <span className="shrink-0 text-tone-success">+{adds}</span> : null}
-        {dels > 0 ? <span className="shrink-0 text-tone-danger">−{dels}</span> : null}
+        {adds > 0 ? <span className="shrink-0 text-[#86efac]">+{adds}</span> : null}
+        {dels > 0 ? <span className="shrink-0 text-[#fca5a5]">−{dels}</span> : null}
       </div>
       <div className="overflow-x-auto">
-        {diff.hunks.map((hunk, hunkIndex) => {
-          let oldNo = hunk.oldStart
-          let newNo = hunk.newStart
-          return hunk.lines.map((line, lineIndex) => {
-            const kind: DiffLineKind = line.startsWith('+')
-              ? 'add'
-              : line.startsWith('-')
-                ? 'del'
-                : 'ctx'
-            const body = kind === 'ctx' ? line : line.slice(1)
-            const oldLabel = kind === 'add' ? '' : String(oldNo)
-            const newLabel = kind === 'del' ? '' : String(newNo)
-            if (kind !== 'add') oldNo++
-            if (kind !== 'del') newNo++
-            const sign = kind === 'add' ? '+' : kind === 'del' ? '−' : ' '
-            return (
-              <div
-                key={`${hunkIndex}:${lineIndex}`}
-                className={`flex whitespace-pre ${DIFF_ROW_CLASS[kind]}`}
-              >
-                <span className="w-8 shrink-0 select-none pr-2 text-right tabular-nums text-text-subtle/50">
-                  {oldLabel}
-                </span>
-                <span className="w-8 shrink-0 select-none pr-2 text-right tabular-nums text-text-subtle/50">
-                  {newLabel}
-                </span>
-                <span className="min-w-0 flex-1 border-l border-shell-seam pl-2.5">
-                  <span className={DIFF_SIGN_CLASS[kind]}>{sign}</span> {body}
-                </span>
-              </div>
-            )
-          })
-        })}
+        {diff.hunks.map((hunk, hunkIndex) => (
+          <DiffHunk key={hunkIndex} hunk={hunk} hunkIndex={hunkIndex} />
+        ))}
       </div>
     </div>
   )

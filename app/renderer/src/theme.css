@@ -133,3 +133,79 @@
       drop-shadow(0 0 26px rgb(244 114 182 / 0.24));
   }
 }
+
+/* ── P4-18c fenced-code syntax theme (highlight.js / rehype-highlight) ─────────
+ * A FIXED stylesheet for the `hljs-*` token classes rehype-highlight emits — NOT
+ * dynamic Tailwind (CLAUDE.md app rule: an interpolated `text-[${hex}]` silently
+ * no-ops, and jsdom can't see it). Colors are the EXACT prototype `CODE_THEMES.
+ * dracula` palette (Messages.jsx:1761), the prototype's default code theme; the
+ * block background stays page-black via `bg-app-bg` on the CodeBlock container,
+ * so only the token/fg colors carry the theme. The 5-theme Settings picker is a
+ * separate §5 ledger deferral (owner P4-18). Unlayered so token colors win. */
+.hljs {
+  color: #f8f8f2;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #6272a4;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-operator,
+.hljs-tag,
+.hljs-name,
+.hljs-meta,
+.hljs-meta-keyword {
+  color: #ff79c6;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string,
+.hljs-char.escape_ {
+  color: #f1fa8c;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: #bd93f9;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-doctag {
+  color: #50fa7b;
+}
+.hljs-built_in,
+.hljs-type,
+.hljs-title.class_,
+.hljs-class .hljs-title,
+.hljs-selector-class {
+  color: #8be9fd;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-id {
+  color: #66d9ef;
+}
+.hljs-addition {
+  color: #50fa7b;
+}
+.hljs-deletion {
+  color: #ff5555;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+.hljs-link {
+  color: #8be9fd;
+  text-decoration: underline;
+}

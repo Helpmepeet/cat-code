@@ -91,7 +91,7 @@ test('renders an assistant text row as markdown, not raw source', () => {
   expect(html).not.toContain('**package.json**')
 })
 
-test('P4-18c: a fenced code block renders framed with a per-block copy button', () => {
+test('P4-18c: a fenced code block renders framed + copyable with syntax highlight tokens', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:code',
@@ -100,9 +100,12 @@ test('P4-18c: a fenced code block renders framed with a per-block copy button', 
     content: 'Here:\n\n```ts\nconst x = 1\n```\n',
   })
 
-  expect(html).toContain('const x = 1')
+  // rehype-highlight tokenizes the block — the code is split across hljs spans
+  // (so it is no longer one contiguous string), but every token still renders.
+  expect(html).toContain('hljs-keyword') // `const` colored as a keyword token
+  expect(html).toContain('const') // code content still present, tokenized
   expect(html).toContain('copy') // per-block copy control
-  expect(html).toContain('ts') // language label
+  expect(html).toContain('ts') // floating language label
 })
 
 test('P4-18c: a streaming assistant row renders a caret', () => {
@@ -365,7 +368,11 @@ test('P4-18b: an edit card renders a dual-gutter diff with +adds/−dels counts'
   expect(html).toContain('/repo/app.ts')
   expect(html).toContain('+1') // one addition
   expect(html).toContain('−1') // one deletion
-  expect(html).toContain('const b = 3')
+  // P4-18c word-level intra-line highlight: the replaced token (2 → 3) is washed
+  // per side; the shared prefix dims. The line is no longer one contiguous string.
+  expect(html).toContain('bg-tone-danger/28') // removed word wash
+  expect(html).toContain('bg-tone-success/26') // added word wash
+  expect(html).toContain('const b = ') // shared, dimmed prefix
 })
 
 test('P4-18b: an MCP card frames the target as server › tool', () => {
@@ -710,4 +717,96 @@ test('P4-REVIEW B3: resolveToolCardExpanded defaults to defaultExpanded until th
 test('P4-REVIEW B3: resolveToolCardExpanded lets a user override win over either default', () => {
   expect(resolveToolCardExpanded(true, false)).toBe(true)
   expect(resolveToolCardExpanded(false, true)).toBe(false)
+})
+
+// ── P4-18c dep-gated deferrals resolved: GFM tables + syntax highlight + word-diff
+
+function proseRow(content: string, id: string): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: `s:m:0:${id}`,
+    kind: 'assistant-text',
+    role: 'assistant',
+    content,
+  }
+}
+
+test('P4-18c: a GFM pipe table renders a real <table> with header + body cells', () => {
+  const html = render(
+    proseRow('| Name | Role |\n|------|------|\n| cat | agent |\n', 'table'),
+  )
+
+  expect(html).toContain('<table') // real table element (remark-gfm), not raw text
+  expect(html).toContain('<th') // header cells
+  expect(html).toContain('<td') // body cells
+  expect(html).toContain('Name')
+  expect(html).toContain('agent')
+  // Prototype ProseTable grammar reaches the DOM (exact header wash + rules).
+  expect(html).toContain('bg-white/[0.03]')
+  expect(html).toContain('border-white/[0.12]')
+})
+
+test('P4-18c: a malformed pipe table degrades tolerantly, never throws', () => {
+  // Ragged columns (header 3 / delimiter 1) — GFM declines it as a table and it
+  // falls back to text; the point is the prose subtree must not crash.
+  const render0 = () =>
+    render(proseRow('| A | B | C |\n|---|\n| 1 |\n', 'badtable'))
+  expect(render0).not.toThrow()
+  expect(render0()).toContain('A') // content still surfaces
+})
+
+test('P4-18c: an explicitly-languaged fenced block gets highlight.js token classes', () => {
+  const html = render(
+    proseRow('```python\ndef greet(name):\n    return name\n```\n', 'py'),
+  )
+
+  expect(html).toContain('hljs') // highlight.js base class on the <code>
+  expect(html).toContain('hljs-keyword') // `def`/`return` keyword tokens
+  expect(html).toContain('python') // floating language label
+  expect(html).toContain('greet') // code content still present
+})
+
+test('P4-18c: an unknown code language degrades to plain framed code, never throws', () => {
+  const render0 = () =>
+    render(proseRow('```notalang\nsome plain content\n```\n', 'unklang'))
+  expect(render0).not.toThrow()
+  const html = render0()
+  // ignoreMissing → no highlight, so the body stays a contiguous, legible string.
+  expect(html).toContain('some plain content')
+  expect(html).toContain('copy') // still framed + copyable
+  expect(html).toContain('notalang') // language label passthrough
+})
+
+function diffToolRow(lines: string[], filePath: string, id: string): NestedTranscriptRow {
+  return toolRow({
+    toolName: `Edit_${id}`,
+    toolFamily: 'edit',
+    input: { file_path: filePath },
+    status: 'error', // expand so the diff body renders
+    result: { isError: true, content: '', diff: { filePath, hunks: [
+      { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines },
+    ] } },
+  })
+}
+
+test('P4-18c: a replaced diff line shows word-level intra-line highlighting', () => {
+  const html = render(
+    diffToolRow(['-const timeout = 30', '+const timeout = 60'], '/repo/x.ts', 'word'),
+  )
+
+  // The differing token (30 → 60) is washed per side; the shared prefix dims.
+  expect(html).toContain('bg-tone-danger/28') // removed word wash (exact prototype 0.28)
+  expect(html).toContain('bg-tone-success/26') // added word wash (exact prototype 0.26)
+  expect(html).toContain('text-[#fca5a5]/55') // unchanged del word dims (exact)
+  expect(html).toContain('const timeout = ') // shared prefix present
+})
+
+test('P4-18c: a near-total line rewrite skips word-highlight (line-level), no throw', () => {
+  // >90% of the line changed → the prototype guard falls back to line-level.
+  const render0 = () =>
+    render(diffToolRow(['-aaaaaaaa', '+zzzzzzzzzz'], '/repo/y.ts', 'rewrite'))
+  expect(render0).not.toThrow()
+  const html = render0()
+  expect(html).toContain('zzzzzzzzzz') // whole line intact (not word-split)
+  expect(html).not.toContain('bg-tone-success/26') // no word wash — guard tripped
 })

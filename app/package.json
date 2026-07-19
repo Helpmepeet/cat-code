@@ -21,10 +21,13 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "diff": "^8.0.4",
     "electron": "^33.2.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "4.2.2",
     "vite": "7.3.2"
   }
