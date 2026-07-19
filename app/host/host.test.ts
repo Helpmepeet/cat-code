@@ -1100,6 +1100,44 @@ test('createSessionInWorkspace RE-VALIDATES a stale row cwd and refuses (invalid
   expect(h.supervisor.records.size).toBe(0)
 })
 
+test('createSessionInWorkspace REJECTS a non-string payload coerced by main to a non-UUID (session_not_found, nothing spawned)', async () => {
+  const h = makeHost()
+  // main's IPC handler coerces the renderer arg with `String(appSessionId)`
+  // (main.ts:1057) before it reaches the host. A non-string / object / array /
+  // null payload stringifies to a non-UUID, so the host rejects it at the
+  // id-shape gate (HC2) before any registry lookup — nothing is ever spawned.
+  const payloads: unknown[] = [null, undefined, 123, true, {}, ['a', 'b'], []]
+  for (const payload of payloads) {
+    const coerced = String(payload) as SessionId
+    const result = await h.host.createSessionInWorkspace(coerced)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('session_not_found')
+  }
+  expect(h.supervisor.records.size).toBe(0)
+})
+
+test('createSessionInWorkspace is subject to the HC4 spawn cap (refuses past the rate limit → session_limit)', async () => {
+  const h = makeHost()
+  // A representative workspace row the per-workspace "+" names.
+  const repId = randomUUID()
+  await h.registry.upsertOnSpawn({ appSessionId: repId, cwd: h.cwd })
+
+  // Fill the spawn-rate window: each "+" mints a FRESH session in that workspace.
+  for (let i = 0; i < MAX_SPAWNS_PER_WINDOW; i++) {
+    const r = await h.host.createSessionInWorkspace(repId)
+    expect(r.ok).toBe(true)
+  }
+  // The next "+" is refused by checkSpawnLimits, exactly like createSession.
+  const overflow = await h.host.createSessionInWorkspace(repId)
+  expect(overflow.ok).toBe(false)
+  if (!overflow.ok) expect(overflow.error.code).toBe('session_limit')
+
+  // Advancing past the window frees the cap again (same checkSpawnLimits path).
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const next = await h.host.createSessionInWorkspace(repId)
+  expect(next.ok).toBe(true)
+})
+
 /* ------------------------------------------------------------------------- *
  * B3 — shutdownAll marks every live row CLEAN (die-with-window ≠ crash)
  * ------------------------------------------------------------------------- */
