@@ -36,6 +36,7 @@ test('PL-B cache is admitted by PL-A and the later click stays store-first', asy
     restorable: true,
     createdAt: 1,
     lastAttachedAt: 2,
+    lastMessageSentAt: null,
   }
   const result: TranscriptBackfillSessionResult = {
     type: 'session',

@@ -24,6 +24,7 @@ function descriptor(
     restorable: false,
     createdAt: 0,
     lastAttachedAt: 0,
+    lastMessageSentAt: null,
     ...overrides,
   }
 }

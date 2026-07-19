@@ -23,6 +23,7 @@ function descriptor(
     restorable: false,
     createdAt: 0,
     lastAttachedAt: 0,
+    lastMessageSentAt: null,
     ...overrides,
   }
 }
@@ -104,6 +105,36 @@ test('no ⋮ kebab renders when the row is not wired for actions', () => {
   const html = renderRow(row('a', { title: 'Alpha' }))
   expect(html).not.toContain('Session actions for')
   expect(html).not.toContain('title="Session actions"')
+})
+
+test('CC-2: row recency derives from lastMessageSentAt (createdAt fallback), never lastAttachedAt', () => {
+  const now = Date.now()
+  const hour = 60 * 60 * 1000
+
+  // Just opened (lastAttachedAt ≈ now) but the last message was 2h ago: the
+  // subtitle must read the message time, NOT the attach time (the CC-2 bug).
+  const sent = renderRow(
+    row('a', {
+      title: 'Alpha',
+      lastAttachedAt: now,
+      lastMessageSentAt: now - 2 * hour,
+      createdAt: now - 72 * hour,
+    }),
+  )
+  expect(sent).toContain('<span class="shrink-0">2h</span>')
+  expect(sent).not.toContain('<span class="shrink-0">now</span>')
+
+  // Never sent → fall back to createdAt (3d ago), still never lastAttachedAt.
+  const neverSent = renderRow(
+    row('b', {
+      title: 'Beta',
+      lastAttachedAt: now,
+      lastMessageSentAt: null,
+      createdAt: now - 72 * hour,
+    }),
+  )
+  expect(neverSent).toContain('<span class="shrink-0">3d</span>')
+  expect(neverSent).not.toContain('<span class="shrink-0">now</span>')
 })
 
 test('every row in a group gets its own action kebab (target-session-bound)', () => {

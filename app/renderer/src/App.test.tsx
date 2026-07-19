@@ -100,6 +100,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
         restorable: false,
         createdAt: 0,
         lastAttachedAt: 0,
+        lastMessageSentAt: null,
       }}
       activeLog={{
         inputEnabled: true,
@@ -198,6 +199,7 @@ test('IS-B preview paints cached rows and keeps the composer focusable-readOnly'
         restorable: true,
         createdAt: 0,
         lastAttachedAt: 0,
+        lastMessageSentAt: null,
       }}
       activeLog={{
         inputEnabled: true,
@@ -398,6 +400,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
         restorable: false,
         createdAt: 0,
         lastAttachedAt: 0,
+        lastMessageSentAt: null,
       }}
       activeLog={{
         inputEnabled: false,
@@ -556,6 +559,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
         restorable: false,
         createdAt: 0,
         lastAttachedAt: 0,
+        lastMessageSentAt: null,
       }}
       activeLog={{
         inputEnabled: true,
@@ -619,6 +623,7 @@ test('P4-24: collapsed-paste pills render with token label, remove control, and 
         restorable: false,
         createdAt: 0,
         lastAttachedAt: 0,
+        lastMessageSentAt: null,
       }}
       activeLog={{
         inputEnabled: true,

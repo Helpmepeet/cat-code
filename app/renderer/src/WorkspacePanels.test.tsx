@@ -141,6 +141,7 @@ function descriptor(id: string, title: string): SessionDescriptor {
     restorable: false,
     createdAt: 1,
     lastAttachedAt: 2,
+    lastMessageSentAt: null,
   }
 }
 

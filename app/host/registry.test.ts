@@ -104,6 +104,7 @@ function baseRow(overrides: Partial<RegistrySession>): RegistrySession {
     cwd: overrides.cwd ?? '/Users/pt/cat-code',
     createdAt: overrides.createdAt ?? 1_700_000_000_000,
     lastAttachedAt: overrides.lastAttachedAt ?? 1_700_000_000_000,
+    lastMessageSentAt: overrides.lastMessageSentAt ?? null,
     // Preserve an explicit `null` (orphan/live row) — `?? 'clean'` would mangle it.
     shutdown: 'shutdown' in overrides ? overrides.shutdown! : 'clean',
     ...(overrides.title !== undefined ? { title: overrides.title } : {}),
@@ -668,8 +669,73 @@ test('write points that reference an unknown appSessionId are no-ops that log', 
   await registry.fillEngineSessionId('nope', 'engine-x')
   await registry.setTitle('nope', 't')
   await registry.markClean('nope')
+  await registry.markMessageSent('nope')
   expect(registry.sessions.length).toBe(0)
-  expect(logs.filter(l => l.includes('no row for')).length).toBe(3)
+  expect(logs.filter(l => l.includes('no row for')).length).toBe(4)
+})
+
+test('markMessageSent is the ONLY write point that touches lastMessageSentAt (CC-2)', async () => {
+  const { registry, registryPath } = makeRegistry()
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a' })
+  // A fresh spawn has SENT nothing — attach/open must never fabricate recency.
+  expect(readDoc(registryPath).sessions[0]!.lastMessageSentAt).toBeNull()
+
+  // None of attach, the two-id bridge, advisory refresh, or a re-spawn/restore
+  // (upsertOnSpawn on an existing id) may stamp it.
+  await registry.touchAttached('app-1')
+  await registry.fillEngineSessionId('app-1', 'engine-1')
+  await registry.setAdvisoryRuntime('app-1', { enginePid: 9, socketPath: '/s9' })
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', enginePid: 7 })
+  expect(readDoc(registryPath).sessions[0]!.lastMessageSentAt).toBeNull()
+
+  // Only markMessageSent stamps it.
+  const before = Date.now()
+  await registry.markMessageSent('app-1')
+  const stamped = readDoc(registryPath).sessions[0]!.lastMessageSentAt
+  expect(typeof stamped).toBe('number')
+  expect(stamped as number).toBeGreaterThanOrEqual(before)
+
+  // A LATER attach / re-spawn (restore) must NOT clobber the stamp back to null.
+  await registry.touchAttached('app-1')
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', enginePid: 8 })
+  expect(readDoc(registryPath).sessions[0]!.lastMessageSentAt).toBe(stamped)
+})
+
+test('lastMessageSentAt persists across restart and defaults null for pre-field rows (CC-2)', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  writeTranscript(storageDir, 'engine-stamped')
+  writeTranscript(storageDir, 'engine-legacy')
+
+  const stamped = baseRow({
+    appSessionId: 'app-stamped',
+    engineSessionId: 'engine-stamped',
+    shutdown: 'clean',
+    lastMessageSentAt: 1_700_000_500_000,
+  })
+  // A legacy row whose on-disk JSON omits the field entirely (written before it
+  // existed) — validateRow must default it to null, not drop the row.
+  const legacyRaw = {
+    appSessionId: 'app-legacy',
+    engineSessionId: 'engine-legacy',
+    cwd: '/Users/pt/cat-code',
+    createdAt: 1_700_000_000_000,
+    lastAttachedAt: 1_700_000_000_000,
+    shutdown: 'clean',
+  }
+  const doc = {
+    registryVersion: REGISTRY_VERSION,
+    hostPid: 999999,
+    updatedAt: Date.now(),
+    sessions: [stamped, legacyRaw],
+  }
+  writeFileSync(registryPath, `${JSON.stringify(doc, null, 2)}\n`)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+
+  expect(registry.findSession('app-stamped')?.lastMessageSentAt).toBe(1_700_000_500_000)
+  expect(registry.findSession('app-legacy')?.lastMessageSentAt).toBeNull()
 })
 
 /* ------------------------------------------------------------------------- *

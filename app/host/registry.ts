@@ -78,6 +78,16 @@ export type RegistrySession = {
   createdAt: number
   /** [D] recency for restore-ordering / reaping. */
   lastAttachedAt: number
+  /**
+   * [D] Wall-clock of the last MESSAGE SENT this session (i.e. a turn actually
+   * ran), or null if none since the row was created. The CC-2 sidebar-recency
+   * signal (`app/renderer/src/sidebarState.ts` deferred spec): unlike
+   * `lastAttachedAt`, attach/restore/spawn must NEVER bump it — only
+   * `markMessageSent` does, driven off a live (non-replay) turn-end frame in
+   * `host.ts`. Persisted so it survives restart; parsed with a null default for
+   * pre-existing rows.
+   */
+  lastMessageSentAt: number | null
   /** [D] "clean" | "crashed" | null (=currently live). */
   shutdown: ShutdownState
   /** [A] for the crash sweep only. */
@@ -620,6 +630,9 @@ export class SessionRegistry {
         ...(input.title !== undefined ? { title: input.title } : {}),
         createdAt: now,
         lastAttachedAt: now,
+        // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
+        // recency. Bumped only by `markMessageSent` on a real turn.
+        lastMessageSentAt: null,
         shutdown: null,
         enginePid: input.enginePid,
         socketPath: input.socketPath,
@@ -683,6 +696,24 @@ export class SessionRegistry {
       return
     }
     row.lastAttachedAt = Date.now()
+    await this.persist()
+  }
+
+  /**
+   * Stamp `lastMessageSentAt` when this session actually SENT a message this run
+   * (CC-2, `app/renderer/src/sidebarState.ts` deferred spec). This is the ONLY
+   * write point for the field — deliberately NOT reached by `upsertOnSpawn`,
+   * `touchAttached`, `setAdvisoryRuntime`, or any restore/attach path, so merely
+   * OPENING a session never bumps the sidebar's recency. Called by `host.ts` off
+   * a live (non-replay) turn-end frame.
+   */
+  async markMessageSent(appSessionId: string): Promise<void> {
+    const row = this.find(appSessionId)
+    if (!row) {
+      this.log(`[registry] markMessageSent: no row for ${appSessionId}`)
+      return
+    }
+    row.lastMessageSentAt = Date.now()
     await this.persist()
   }
 
@@ -866,6 +897,9 @@ function validateRow(candidate: unknown): RegistrySession | null {
     createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : Date.now(),
     lastAttachedAt:
       typeof candidate.lastAttachedAt === 'number' ? candidate.lastAttachedAt : Date.now(),
+    // CC-2: null default for pre-existing rows written before the field existed.
+    lastMessageSentAt:
+      typeof candidate.lastMessageSentAt === 'number' ? candidate.lastMessageSentAt : null,
     shutdown,
   }
   if (typeof candidate.title === 'string') row.title = candidate.title

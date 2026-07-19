@@ -17,14 +17,21 @@
  *
  * An earlier version sorted rows by `lastAttachedAt` (recency); the prototype
  * does not, and restore bumps `lastAttachedAt`, so that ALSO jumped a restored
- * row. `lastAttachedAt` still drives the displayed recency text (`Sidebar.tsx`
- * `formatRecency`) — never row ORDER.
+ * row. The displayed recency text (`Sidebar.tsx` `formatRecency`) now reads
+ * `descriptor.lastMessageSentAt` (falling back to `createdAt`), NOT
+ * `lastAttachedAt` — but neither ever drives row ORDER.
+ *
+ * DONE (CC-2 message-sent signal, 2026-07-19): the data model now carries
+ * `lastMessageSentAt` — a persisted registry field bumped ONLY by the host's
+ * `markMessageSent` on a live (non-replay) turn-end frame, never by
+ * attach/restore/spawn (`registry.ts`, `host.ts onSupervisorEvent`). It drives
+ * the DISPLAYED recency (above), which was the bug: merely opening a session
+ * used to read "now".
  *
  * Deferred (the operator's fuller CC-2 spec, 2026-07-07): float a row to the top
- * ONLY when its session SENDS a message. That needs a `lastMessageSentAt` signal
- * the data model does not carry yet (attach/restore must NOT bump it, so
- * `lastAttachedAt` cannot stand in). Until then the order is stable-by-creation,
- * which removes the warp and matches the prototype's static order.
+ * ONLY when its session SENDS a message. That row-ORDER change is still deferred
+ * — order stays stable-by-creation (which removes the warp and matches the
+ * prototype's static order); `lastMessageSentAt` is the signal it would use.
  *
  * Pure (no React) so the descriptor → row-visual mapping is unit-testable,
  * and it reuses `TabTone` so both panels share one status vocabulary.

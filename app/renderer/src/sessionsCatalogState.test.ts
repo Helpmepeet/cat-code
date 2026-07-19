@@ -53,6 +53,7 @@ function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string
     restorable: false,
     createdAt: 100,
     lastAttachedAt: 2000,
+    lastMessageSentAt: null,
     ...partial,
   }
 }

@@ -495,7 +495,11 @@ export function SidebarRowItem({
   const { descriptor, visual } = row
   const id = descriptor.appSessionId
   const title = tabLabel(descriptor)
-  const recency = formatRecency(descriptor.lastAttachedAt)
+  // CC-2: the subtitle time tracks the last MESSAGE SENT, falling back to the
+  // session's creation time when it has sent nothing yet — NEVER `lastAttachedAt`
+  // (every open/attach bumps that, which made merely opening a session read as
+  // "now"; see `sidebarState.ts` deferred spec).
+  const recency = formatRecency(descriptor.lastMessageSentAt ?? descriptor.createdAt)
   const restorable = visual.kind === 'restorable'
   // The prototype's subtitle is `time · model` (Sidebar.jsx:271, model's last
   // hyphen-segment). Shown when the session's model is known (attached this run);
@@ -688,8 +692,9 @@ function NavItemRail({
   )
 }
 
-/** Relative recency from `lastAttachedAt` — the real, source-backed subtitle
- * (the prototype's `time`); model/cost are NOT rendered (no real backing, C3). */
+/** Relative recency from `lastMessageSentAt` (the CC-2 message-sent signal),
+ * falling back to `createdAt` — the real, source-backed subtitle (the
+ * prototype's `time`); model/cost are NOT rendered (no real backing, C3). */
 function formatRecency(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return ''
   const diff = Date.now() - ms

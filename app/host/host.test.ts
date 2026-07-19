@@ -150,6 +150,29 @@ class FakeSupervisor {
     })
   }
 
+  /**
+   * Drive an outbound engine `EventFrame` (the CC-2 message-sent path). `event`
+   * is the raw `AppSessionEvent` the engine forwards; `replay:true` marks a
+   * history frame the resumed sidecar re-emits at OPEN/restore.
+   */
+  emitEventFrame(
+    sessionId: SessionId,
+    event: unknown,
+    opts: { replay?: true } = {},
+  ): void {
+    this.emit({
+      type: 'frame',
+      sessionId,
+      frame: {
+        kind: 'event',
+        protocolVersion: 1,
+        sessionId,
+        ...(opts.replay ? { replay: true } : {}),
+        event,
+      } as never,
+    })
+  }
+
   setStatus(sessionId: SessionId, status: SidecarStatus): void {
     const record = this.records.get(sessionId)
     if (record) record.status = status
@@ -327,6 +350,59 @@ test('ready frame bridges engineSessionId into the row and emits session-status'
     // when no process is live (app/shared/hostApi.ts:74). It becomes restorable
     // on close/crash (see the closeSession test), never while ready.
     expect(statusEvent.session.restorable).toBe(false)
+  }
+})
+
+test('CC-2: a live result event frame stamps lastMessageSentAt and surfaces it; replay/user/non-message frames do NOT', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-1')
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-1')
+
+  // Opening/attaching a session (create + ready frame) has SENT nothing.
+  expect(h.registry.findSession(appSessionId)?.lastMessageSentAt).toBeNull()
+
+  // NONE of: a replayed turn-end (open/restore history), a live user/tool_result
+  // frame (we key on `result`, not `user`), or a live non-message event frame
+  // (goal snapshot) may stamp recency.
+  h.supervisor.emitEventFrame(
+    appSessionId,
+    { type: 'message', message: { type: 'result', subtype: 'success' } },
+    { replay: true },
+  )
+  h.supervisor.emitEventFrame(appSessionId, {
+    type: 'message',
+    message: { type: 'user', message: { role: 'user', content: [] } },
+  })
+  h.supervisor.emitEventFrame(appSessionId, { type: 'goal.snapshot', snapshot: null })
+  // Let any (erroneous) async bump drain, then assert it never happened.
+  await settle(() => false, 25)
+  expect(h.registry.findSession(appSessionId)?.lastMessageSentAt).toBeNull()
+
+  // A live (non-replay) `result` frame = a turn actually ran → stamp + surface
+  // the refreshed descriptor so the sidebar's recency updates live.
+  h.events.length = 0
+  const before = Date.now()
+  h.supervisor.emitEventFrame(appSessionId, {
+    type: 'message',
+    message: { type: 'result', subtype: 'success' },
+  })
+  // Settle on the EMITTED event, not the in-memory field: markMessageSent sets
+  // the field before its persist resolves and before emitStatus fires, so the
+  // event is the later, complete signal.
+  await settle(() => h.events.some(e => e.type === 'session-status'))
+
+  const stamped = h.registry.findSession(appSessionId)?.lastMessageSentAt
+  expect(typeof stamped).toBe('number')
+  expect(stamped as number).toBeGreaterThanOrEqual(before)
+  // The descriptor carries the field through to the renderer (mapping wired).
+  const statusEvent = h.events.find(e => e.type === 'session-status')
+  expect(statusEvent).toBeDefined()
+  if (statusEvent?.type === 'session-status') {
+    expect(statusEvent.session.lastMessageSentAt).toBe(stamped ?? null)
   }
 })
 
