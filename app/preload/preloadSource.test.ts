@@ -64,12 +64,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // 16 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
-  // answerQuestions) + 7 payload-bearing control-plane senders + the DEV-only
+  // answerQuestions) + 8 payload-bearing control-plane senders + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
   // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
-  // previewSession). subscribe / subscribeHost register a listener and send no
-  // payload, so they do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(24)
+  // previewSession/readSessionsCatalog). subscribe / subscribeHost register a
+  // listener and send no payload, so they do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(25)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
@@ -88,6 +88,10 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   expect(source).toContain("const CH_HOST_LIST = 'catcode:host:list'")
   expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
   expect(source).toContain("const CH_HOST_PREVIEW = 'catcode:host:preview'")
+  // F2 — read-only cold-launch sessions-catalog baseline rides its own fixed channel.
+  expect(source).toContain(
+    "const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'",
+  )
   expect(source).toContain("const CH_HOST_EVENT = 'catcode:host:event'")
 
   // Every invoke targets one of those FIXED constants — never a renderer-supplied
@@ -96,7 +100,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(7)
+  expect(invokeChannels.length).toBe(8)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -105,6 +109,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_LIST',
     'CH_HOST_PICK_DIR',
     'CH_HOST_PREVIEW',
+    'CH_HOST_SESSIONS_CATALOG',
   ])
   for (const channel of invokeChannels) {
     expect(allowed.has(channel)).toBe(true)

@@ -2241,6 +2241,17 @@ export type CatCodeBridge = {
   /** Snapshot of live ∪ restorable sessions. */
   listSessions(): Promise<SessionDescriptor[]>
   /**
+   * F2 — the cold-launch sessions-catalog baseline: the global engine-history
+   * enumeration a sidecar last persisted to disk, read WITHOUT a live session so
+   * the Sessions page shows the operator's real terminal history at startup (when
+   * every registry row is merely restorable and nobody has emitted a
+   * `sessions.snapshot` frame yet). Read-only, id-less, HC3 fixed-sender — main
+   * reads its own registry-dir cache, size-bounds + schema-validates it fail-
+   * closed, and returns the parsed snapshot or `null` (missing / corrupt cache).
+   * Any live `sessions.snapshot` supersedes this baseline in the renderer.
+   */
+  readSessionsCatalog(): Promise<SessionsCatalogSnapshot | null>
+  /**
    * Subscribe to the host's row-change stream (the session list is a projection
    * of this, never a poll loop). Returns an unsubscribe function.
    */

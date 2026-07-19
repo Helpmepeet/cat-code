@@ -89,6 +89,36 @@ test('shows the empty state (no rows) and the loading state (catalog not loaded)
   expect(loading).toContain('Loading sessions')
 })
 
+test('F3 — shows the terminal-history-loading notice above rows when the catalog is not loaded', () => {
+  const loadingWithRows = renderToStaticMarkup(
+    <SessionsPage
+      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, displayLabel: 'Registry one' })]}
+      activeCwd={null}
+      catalogLoaded={false}
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+    />,
+  )
+  // The registry row still renders (page is not empty)...
+  expect(loadingWithRows).toContain('Registry one')
+  // ...but the honesty notice makes clear the list is not the full history.
+  expect(loadingWithRows).toContain('Terminal-session history is still loading')
+
+  // Once a catalog (live or baseline) is present, the notice is gone.
+  const loaded = renderToStaticMarkup(
+    <SessionsPage
+      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, displayLabel: 'Registry one' })]}
+      activeCwd={null}
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+    />,
+  )
+  expect(loaded).not.toContain('Terminal-session history is still loading')
+})
+
 test('shows the truncation / registry-eviction note when truncated', () => {
   const html = renderToStaticMarkup(
     <SessionsPage

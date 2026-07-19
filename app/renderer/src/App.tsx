@@ -711,6 +711,30 @@ export function App() {
     }
   }, [queueTranscriptPreload])
 
+  // F2 — fold the cold-launch sessions-catalog baseline (the global engine-history
+  // enumeration a sidecar last persisted to disk) as the lowest-precedence catalog
+  // source, so the Sessions page shows the operator's real terminal history at
+  // startup even when every registry row is merely restorable and no live sidecar
+  // has emitted a `sessions.snapshot` frame yet. Read-only host-API call, once on
+  // mount; a null result (no cache) is a no-op, and any live snapshot supersedes it
+  // (reduceSessionsCatalogState keeps the baseline strictly lowest-precedence).
+  useEffect(() => {
+    let cancelled = false
+    void getBridge()
+      .readSessionsCatalog()
+      .then(snapshot => {
+        if (!cancelled && snapshot) {
+          dispatchSessionsCatalog({ type: 'baseline', snapshot })
+        }
+      })
+      .catch(() => {
+        /* no cache / read failed — the live frame path still delivers */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // Focus correction runs after the roster commits against pane membership:
   // live tabs union cached previews. A preview remains a valid owner until it is
   // closed, reaped, or swapped to the same-id live projection.

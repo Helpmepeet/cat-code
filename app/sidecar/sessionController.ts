@@ -91,6 +91,7 @@ import {
   createSidecarSessionsCatalogDomain,
   type SidecarSessionsCatalogDomain,
 } from './sessionsCatalogDomain.js'
+import { writeSessionsCatalogCache } from './sessionsCatalogCache.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -501,7 +502,10 @@ export async function createSidecarSessionController({
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
-    sessionsCatalog: await createSidecarSessionsCatalogDomain(),
+    sessionsCatalog: await createSidecarSessionsCatalogDomain(
+      undefined,
+      writeSessionsCatalogCache,
+    ),
     agentMode: createSidecarAgentModeDomain(appStateStore),
     taskControl: createSidecarTaskControlDomain(appStateStore),
     runControls: createSidecarRunControlsDomain(appStateStore),

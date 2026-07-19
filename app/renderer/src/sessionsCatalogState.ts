@@ -36,29 +36,57 @@ export type SessionsCatalogState = {
    * page reads the ACTIVE session's (freshest for that sidecar).
    */
   sessions: Record<SessionId, SessionsCatalogSnapshot | null>
+  /**
+   * The freshest live `sessions.snapshot` from ANY session — retained so the page
+   * still has the global catalog when the ACTIVE session never emitted one (a
+   * restored preview pane has no sidecar). A `lifecycle` frame NEVER clears this:
+   * a stale catalog is still useful, a blank one is a regression — the same
+   * doctrine the sidecar domain holds (`app/sidecar/sessionsCatalogDomain.ts:110`).
+   */
+  latestGood: SessionsCatalogSnapshot | null
+  /**
+   * The cold-launch persisted baseline (host cache, read once at startup). Lowest
+   * precedence: any live snapshot supersedes it, and it never overwrites
+   * `latestGood`. Present so a launch with zero live sidecars still shows history.
+   */
+  baseline: SessionsCatalogSnapshot | null
 }
 
-export type SessionsCatalogAction = { type: 'frame'; frame: ServerFrame }
+export type SessionsCatalogAction =
+  | { type: 'frame'; frame: ServerFrame }
+  | { type: 'baseline'; snapshot: SessionsCatalogSnapshot }
 
 export function createSessionsCatalogState(): SessionsCatalogState {
-  return { sessions: {} }
+  return { sessions: {}, latestGood: null, baseline: null }
 }
 
 export function reduceSessionsCatalogState(
   state: SessionsCatalogState,
   action: SessionsCatalogAction,
 ): SessionsCatalogState {
+  if (action.type === 'baseline') {
+    // Fold the startup cache as the lowest-precedence source only — never touch
+    // `sessions`/`latestGood`, so a baseline arriving after a live snapshot can
+    // never clobber it (select prefers active > latestGood > baseline).
+    if (state.baseline === action.snapshot) return state
+    return { ...state, baseline: action.snapshot }
+  }
+
   const { frame } = action
 
   if (frame.kind === 'sessions.snapshot') {
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: frame.catalog },
+      // Retain the freshest live enumeration as the cross-session fallback.
+      latestGood: frame.catalog,
     }
   }
 
   if (frame.kind === 'lifecycle') {
     if (!(frame.sessionId in state.sessions)) return state
+    // Null only THIS session's slot; `latestGood`/`baseline` survive so the last
+    // live session dying never blanks a catalog we already have.
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: null },
@@ -72,8 +100,11 @@ export function selectSessionsCatalog(
   state: SessionsCatalogState,
   sessionId: SessionId | null,
 ): SessionsCatalogSnapshot | null {
-  const snapshot = sessionId ? state.sessions[sessionId] : undefined
-  return snapshot ?? null
+  // Active session's snapshot (freshest for its sidecar) > the retained latest-
+  // good live snapshot > the cold-launch baseline. The catalog is a global point-
+  // in-time enumeration, so any of these is a valid source for the whole page.
+  const active = sessionId ? state.sessions[sessionId] : undefined
+  return active ?? state.latestGood ?? state.baseline ?? null
 }
 
 /**

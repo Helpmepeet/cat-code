@@ -95,6 +95,10 @@ export async function createSidecarSessionsCatalogDomain(
   // `enumerate` is injectable ONLY so tests can drive refresh/de-stale hermetically
   // (the real path reads the filesystem); production always uses the default.
   enumerate: () => Promise<SessionsCatalogSnapshot | null> = enumerateSessionsCatalog,
+  // F2 — persist each successful enumeration as the cold-launch baseline cache.
+  // Injected (default no-op) so hermetic tests never touch the real config home;
+  // production passes `writeSessionsCatalogCache` (see `sessionController.ts`).
+  persist: (snapshot: SessionsCatalogSnapshot) => void = () => {},
 ): Promise<SidecarSessionsCatalogDomain> {
   // MAJOR-2 — do NOT enumerate here: the controller builder that calls this is
   // awaited before `Bun.listen`, so awaiting the ~430ms enumeration would block
@@ -109,7 +113,16 @@ export async function createSidecarSessionsCatalogDomain(
       const next = await enumerate()
       // Keep the last good snapshot on a transient re-read failure — a stale
       // catalog is still useful; a blank one is a regression.
-      if (next) snapshot = next
+      if (next) {
+        snapshot = next
+        // F2 — refresh the persisted baseline. Best-effort: a failed cache write
+        // must never fail the refresh (the live frame path still delivers).
+        try {
+          persist(next)
+        } catch {
+          // Baseline is a convenience; the session is unaffected.
+        }
+      }
       return snapshot
     },
   }

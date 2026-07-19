@@ -254,6 +254,8 @@ async function runProductionHardeningSmoke(
       'listSessions',
       'pickDirectory',
       'previewSession',
+      // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
+      'readSessionsCatalog',
       'restoreSession',
       'subscribeHost',
     ].sort()

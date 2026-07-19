@@ -68,14 +68,26 @@ function catalogFrame(entries: SessionCatalogEntry[], sessionId = 's1'): Session
 }
 
 describe('reduce / select', () => {
-  test('stores the catalog keyed by the emitting session', () => {
+  test('stores the catalog keyed by the emitting session (map), select falls back', () => {
     let state = createSessionsCatalogState()
     state = reduceSessionsCatalogState(state, {
       type: 'frame',
       frame: catalogFrame([entry({ sessionId: 'a' })], 's1'),
     })
+    // The per-session map is keyed by the emitting session only...
+    expect(state.sessions['s1']?.entries).toHaveLength(1)
+    expect(state.sessions['s2']).toBeUndefined()
+    // ...and select reads the active session's slot when present.
     expect(selectSessionsCatalog(state, 's1')?.entries).toHaveLength(1)
-    expect(selectSessionsCatalog(state, 's2')).toBeNull()
+    // ...but for a non-emitting (or nil) active session it falls back to the
+    // latest-good global catalog rather than blanking (F1).
+    expect(selectSessionsCatalog(state, 's2')?.entries).toHaveLength(1)
+    expect(selectSessionsCatalog(state, null)?.entries).toHaveLength(1)
+  })
+
+  test('with nothing stored at all, select returns null', () => {
+    const state = createSessionsCatalogState()
+    expect(selectSessionsCatalog(state, 's1')).toBeNull()
     expect(selectSessionsCatalog(state, null)).toBeNull()
   })
 
@@ -95,7 +107,7 @@ describe('reduce / select', () => {
     expect(selectSessionsCatalog(state, 's1')?.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
   })
 
-  test('lifecycle clears the emitting session catalog', () => {
+  test('lifecycle nulls the emitting slot but the retained catalog survives (defect 5)', () => {
     let state = createSessionsCatalogState()
     state = reduceSessionsCatalogState(state, {
       type: 'frame',
@@ -108,7 +120,57 @@ describe('reduce / select', () => {
       status: 'exited',
     }
     state = reduceSessionsCatalogState(state, { type: 'frame', frame: lifecycle })
-    expect(selectSessionsCatalog(state, 's1')).toBeNull()
+    // The per-session slot is cleared...
+    expect(state.sessions['s1']).toBeNull()
+    // ...but the last live snapshot is retained, so a session dying never blanks a
+    // catalog we already had (a stale catalog beats a blank one).
+    expect(selectSessionsCatalog(state, 's1')?.entries.map(e => e.sessionId)).toEqual(['a'])
+  })
+
+  test('F1 — active session missing a snapshot falls back to the latest-good', () => {
+    let state = createSessionsCatalogState()
+    // A live session 's1' delivered the global catalog.
+    state = reduceSessionsCatalogState(state, {
+      type: 'frame',
+      frame: catalogFrame([entry({ sessionId: 'a' })], 's1'),
+    })
+    // The ACTIVE session ('preview', a restored pane) never emitted one, yet the
+    // page still reads the global catalog via the latest-good fallback.
+    expect(state.sessions['preview']).toBeUndefined()
+    expect(selectSessionsCatalog(state, 'preview')?.entries.map(e => e.sessionId)).toEqual(['a'])
+  })
+
+  test('F2 — a baseline is used when no live snapshot exists, and a live one supersedes it', () => {
+    let state = createSessionsCatalogState()
+    // Cold launch: only the persisted baseline is available.
+    state = reduceSessionsCatalogState(state, {
+      type: 'baseline',
+      snapshot: snapshot([entry({ sessionId: 'base' })]),
+    })
+    expect(selectSessionsCatalog(state, 'preview')?.entries.map(e => e.sessionId)).toEqual(['base'])
+    // A live session attaches and delivers a fresher catalog — it supersedes the
+    // baseline for every reader (active or not).
+    state = reduceSessionsCatalogState(state, {
+      type: 'frame',
+      frame: catalogFrame([entry({ sessionId: 'live' })], 's1'),
+    })
+    expect(selectSessionsCatalog(state, 'preview')?.entries.map(e => e.sessionId)).toEqual(['live'])
+  })
+
+  test('F2 — a baseline arriving AFTER a live snapshot never clobbers it', () => {
+    let state = createSessionsCatalogState()
+    state = reduceSessionsCatalogState(state, {
+      type: 'frame',
+      frame: catalogFrame([entry({ sessionId: 'live' })], 's1'),
+    })
+    // A late baseline read lands after the live snapshot — it only fills the
+    // lowest-precedence slot, so the live catalog still wins.
+    state = reduceSessionsCatalogState(state, {
+      type: 'baseline',
+      snapshot: snapshot([entry({ sessionId: 'base' })]),
+    })
+    expect(state.baseline?.entries.map(e => e.sessionId)).toEqual(['base'])
+    expect(selectSessionsCatalog(state, 'preview')?.entries.map(e => e.sessionId)).toEqual(['live'])
   })
 })
 

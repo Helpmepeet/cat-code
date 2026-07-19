@@ -26,6 +26,7 @@ import type {
   SessionActionVerbMessage,
   ServerFrame,
   SessionId,
+  SessionsCatalogSnapshot,
   SettingsVerbMessage,
   SubmitOptions,
   TaskControlVerbMessage,
@@ -70,6 +71,7 @@ const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
+const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const sendGuard = createRendererIpcGuard()
@@ -272,6 +274,15 @@ const bridge: CatCodeBridge = {
   listSessions(): Promise<SessionDescriptor[]> {
     sendGuard.assertAllowed({ listSessions: true })
     return ipcRenderer.invoke(CH_HOST_LIST) as Promise<SessionDescriptor[]>
+  },
+  readSessionsCatalog(): Promise<SessionsCatalogSnapshot | null> {
+    // F2 — read-only, id-less cold-launch baseline. Same fixed-channel posture as
+    // listSessions (no renderer input at all); main reads its registry-dir cache,
+    // validates it fail-closed, and returns the snapshot or null. Never file bytes.
+    sendGuard.assertAllowed({ readSessionsCatalog: true })
+    return ipcRenderer.invoke(CH_HOST_SESSIONS_CATALOG) as Promise<
+      SessionsCatalogSnapshot | null
+    >
   },
   subscribeHost(listener: (event: HostEvent) => void): () => void {
     const handler = (_event: unknown, event: HostEvent) => listener(event)

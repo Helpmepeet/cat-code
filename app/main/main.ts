@@ -53,6 +53,7 @@ import {
   transcriptCacheDir,
   writeCache,
 } from './transcriptCache.js'
+import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -95,6 +96,7 @@ import {
   type SessionActionVerbMessage,
   type SessionActionVerbType,
   type SessionId,
+  type SessionsCatalogSnapshot,
   type SettingsVerbMessage,
   type SettingsVerbType,
   type TaskControlVerbMessage,
@@ -135,6 +137,7 @@ const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
+const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
@@ -1023,6 +1026,18 @@ function registerHostControlPlane(): void {
   ipcMain.handle(CH_HOST_LIST, (): SessionDescriptor[] => {
     return host ? host.listSessions() : []
   })
+
+  ipcMain.handle(
+    CH_HOST_SESSIONS_CATALOG,
+    (): SessionsCatalogSnapshot | null => {
+      // F2 — the cold-launch sessions-catalog baseline. Read-only, id-less: main
+      // reads the sidecar-written cache beside its own registry (the SAME dir
+      // `defaultRegistryDir()` gives the registry) and validates it fail-closed
+      // (size / schema), returning null on a missing / corrupt file. No renderer
+      // input, no engine call, no file bytes returned — a parsed display snapshot.
+      return readSessionsCatalogCache(defaultRegistryDir())
+    },
+  )
 
   ipcMain.handle(
     CH_HOST_PREVIEW,

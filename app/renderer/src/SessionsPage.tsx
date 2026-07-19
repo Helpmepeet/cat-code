@@ -210,6 +210,19 @@ export function SessionsPage({
           <div className="mb-4" />
         )}
 
+        {/* Completeness honesty (§0 adapted — no prototype counterpart): with no
+         * live catalog AND no persisted baseline, the rows below are the desktop
+         * registry ONLY, not the full terminal history. Surface that even when
+         * registry rows are present, so the list never looks complete when it is
+         * not (the silent-completeness defect). Cleared once any snapshot/baseline
+         * arrives (`catalogLoaded`). */}
+        {!catalogLoaded ? (
+          <div className="mb-3 rounded-lg border border-shell-seam bg-white/[0.02] px-3 py-2 text-[11.5px] text-text-subtle">
+            Terminal-session history is still loading — only desktop-tracked
+            sessions are shown so far.
+          </div>
+        ) : null}
+
         {/* List */}
         {visible.length === 0 ? (
           <EmptyState
