@@ -107,6 +107,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     dispatchRemoteSettings: count('remoteSettings') as never,
     dispatchSessionsCatalog: count('sessionsCatalog') as never,
     dispatchSlashCatalog: count('slashCatalog') as never,
+    dispatchSessionActionRuntime: count('sessionActionRuntime') as never,
     dispatchTranscript: action => {
       calls.transcript = (calls.transcript ?? 0) + 1
       transcriptBatchLen = action.actions.length
@@ -136,6 +137,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'remoteSettings',
     'sessionsCatalog',
     'slashCatalog',
+    'sessionActionRuntime',
     'transcript',
   ]) {
     expect(calls[store]).toBe(1)
@@ -168,6 +170,7 @@ test('an empty delivery dispatches nothing', () => {
     dispatchRemoteSettings: mark as never,
     dispatchSessionsCatalog: mark as never,
     dispatchSlashCatalog: mark as never,
+    dispatchSessionActionRuntime: mark as never,
     dispatchTranscript: mark as never,
   })
   expect(touched).toBe(false)

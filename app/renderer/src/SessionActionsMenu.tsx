@@ -10,7 +10,7 @@
  * SessionsPage sort-dropdown idiom (scrim + fixed panel).
  */
 
-import { useEffect, Fragment, type ReactNode } from 'react'
+import { useEffect, useRef, useState, Fragment, type ReactNode } from 'react'
 import {
   SESSION_ACTION_SECTIONS,
   type SessionActionItem,
@@ -74,6 +74,64 @@ export function SessionActionsMenu({
             ))}
           </Fragment>
         ))}
+      </div>
+    </>
+  )
+}
+
+/**
+ * P4-6b — the inline title editor the `rename` verb opens. Anchored like the menu
+ * (same scrim + fixed-panel idiom, P0-2 tokens, no inline styles): the parent owns
+ * the effect — Enter commits the trimmed title (→ `session.rename`), Esc/scrim
+ * cancels. Presentation only; the actual write runs engine-side at the sidecar.
+ */
+export function SessionRenamePopover({
+  anchor,
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  anchor: SessionActionsAnchor
+  initial: string
+  onCommit: (title: string) => void
+  onCancel: () => void
+}): ReactNode {
+  const [value, setValue] = useState(initial)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-[70]"
+        aria-hidden="true"
+        onClick={onCancel}
+      />
+      <div
+        role="dialog"
+        aria-label="Rename session"
+        className="fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        style={{ top: anchor.top, left: anchor.left }}
+      >
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={event => setValue(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              onCommit(value)
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              onCancel()
+            }
+          }}
+          placeholder="Session name"
+          aria-label="Session name"
+          className="w-full rounded-md border border-shell-seam bg-transparent px-2.5 py-1.5 text-[12.5px] text-text-primary outline-none focus:border-accent"
+        />
       </div>
     </>
   )

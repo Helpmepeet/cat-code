@@ -260,9 +260,15 @@ import { MetadataInspector } from './MetadataInspector.js'
 import { buildSessionMetadataView } from './messageMetadata.js'
 import {
   SessionActionsMenu,
+  SessionRenamePopover,
   type SessionActionsAnchor,
 } from './SessionActionsMenu.js'
 import { resolveSessionActions } from './sessionActions.js'
+import {
+  createSessionActionRuntimeState,
+  reduceSessionActionRuntimeState,
+  selectLatestSessionActionResult,
+} from './sessionActionRuntimeState.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
@@ -277,6 +283,7 @@ import type {
   PermissionSetModeMode,
   RemoteVerbMessage,
   RunControlsSnapshot,
+  SessionActionVerbMessage,
   SessionId,
   SlashCatalogEntry,
 } from '../../shared/protocol.js'
@@ -312,6 +319,9 @@ const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 const newRequestId = (): string => crypto.randomUUID()
 const reduceRemoteSettingsStateBatched = withBatch(reduceRemoteSettingsState)
 const reduceSessionsCatalogStateBatched = withBatch(reduceSessionsCatalogState)
+const reduceSessionActionRuntimeStateBatched = withBatch(
+  reduceSessionActionRuntimeState,
+)
 
 /** Reauth banners the operator dismissed for good ("never show again"),
  * persisted across launches. A dismissed id suppresses only a still-dismissable
@@ -381,11 +391,18 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
   // P4-6b — the tab ⋯ actions overflow (SessionActionsMenu) + its MetadataInspector
-  // drawer. Both act on the OPEN+attached session only — the prototype's chat-header
-  // entry point (Chat.jsx:1237 opens the inspector over the header session); no new
-  // wire frame (sessionActions.ts recon: every live verb is a renderer-only read).
-  const [sessionActionsAnchor, setSessionActionsAnchor] =
-    useState<SessionActionsAnchor | null>(null)
+  // drawer + the inline rename editor. The menu is bound to the session it was
+  // OPENED for (the clicked tab's `sessionId`, NOT `activeSessionId`), so it never
+  // retargets if the active tab changes while the overlay is open.
+  const [sessionActionsTarget, setSessionActionsTarget] = useState<{
+    sessionId: SessionId
+    anchor: SessionActionsAnchor
+  } | null>(null)
+  const [renamingSession, setRenamingSession] = useState<{
+    sessionId: SessionId
+    anchor: SessionActionsAnchor
+    initial: string
+  } | null>(null)
   const [metadataOpen, setMetadataOpen] = useState(false)
   const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
   const [workspaceLayout, setWorkspaceLayoutState] =
@@ -467,6 +484,13 @@ export function App() {
     reduceSessionsCatalogStateBatched,
     undefined,
     createSessionsCatalogState,
+  )
+  // P4-6b — the WRITE half of the ⋯ menu: the sidecar's `session-action.result`
+  // per session (A's reducer, previously unwired). Read by the outcome toast below.
+  const [sessionActionRuntime, dispatchSessionActionRuntime] = useReducer(
+    reduceSessionActionRuntimeStateBatched,
+    undefined,
+    createSessionActionRuntimeState,
   )
   const [orchestrator, dispatchOrchestrator] = useReducer(
     reduceOrchestratorStateBatched,
@@ -632,6 +656,7 @@ export function App() {
         dispatchSlashCatalog,
         dispatchRemoteSettings,
         dispatchSessionsCatalog,
+        dispatchSessionActionRuntime,
         dispatchTranscript: dispatchSessionEvent,
       })
       for (const sessionId of swapSessions) {
@@ -1078,6 +1103,45 @@ export function App() {
     },
     [activeSessionId],
   )
+
+  // P4-6b — dispatch a session-action WRITE verb (rename / export / branch) to the
+  // TARGET session's sidecar. The renderer names only intent (a session id + a
+  // rename title); the sidecar re-validates and runs the engine's own machinery.
+  // The outcome returns as a `session-action.result` frame (→ the toast effect).
+  const sendSessionActionVerb = useCallback(
+    (sessionId: SessionId, verb: SessionActionVerbMessage) => {
+      getBridge().sessionActionVerb(sessionId, verb)
+    },
+    [],
+  )
+
+  // P4-6b — surface the sidecar's real outcome (never an optimistic guess): toast
+  // the redacted `message`, and on a successful export copy the engine-rendered
+  // transcript to the clipboard. Deduped by `requestId` so a re-render never
+  // re-toasts. (rename's live relabel rides the existing `session-title` outbound
+  // frame — no extra renderer work.)
+  // Deduped by requestId across ALL sessions (a globally-unique id toasts once,
+  // ever) so switching back to a tab that already ran an action never re-surfaces
+  // its stale outcome.
+  const toastedActionRequestsRef = useRef<Set<string>>(new Set())
+  const latestSessionActionResult = selectLatestSessionActionResult(
+    sessionActionRuntime,
+    activeSessionId,
+  )
+  useEffect(() => {
+    const result = latestSessionActionResult
+    if (!result) return
+    if (toastedActionRequestsRef.current.has(result.requestId)) return
+    toastedActionRequestsRef.current.add(result.requestId)
+    if (result.verb === 'export' && result.ok && result.exportText) {
+      void navigator.clipboard
+        .writeText(result.exportText)
+        .then(() => toast('Transcript copied to clipboard', { tone: 'success' }))
+        .catch(() => toast(result.message, { tone: 'warn' }))
+      return
+    }
+    toast(result.message, { tone: result.ok ? 'success' : 'danger' })
+  }, [latestSessionActionResult, toast])
 
   const focusWorkspacePanelSession = useCallback(
     (index: number, sessionId: SessionId) => {
@@ -1992,32 +2056,76 @@ export function App() {
           onClose={closeTab}
           onRestart={restartTab}
           onNewTab={newSession}
-          onOpenActions={(_sessionId, anchor) => setSessionActionsAnchor(anchor)}
+          onOpenActions={(sessionId, anchor) =>
+            setSessionActionsTarget({ sessionId, anchor })
+          }
           panelCount={workspaceLayout.panels.length}
           canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
           onAddPanel={addWorkspacePanel}
           onRemovePanel={removeWorkspacePanel}
         />
 
-        {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer.
-         * Both are global overlays (fixed-positioned) acting on the active
-         * session; deferred verbs (rename/branch/rewind/export) render disabled
-         * with their honest source-cited reasons (sessionActions.ts). No new wire
-         * frame: metadata + copy read state the renderer already holds. */}
-        {sessionActionsAnchor && activeSessionRow ? (
-          <SessionActionsMenu
-            items={resolveSessionActions(activeSessionRow, {
-              isActiveOpen: true,
-            })}
-            anchor={sessionActionsAnchor}
-            onAction={kind => {
-              if (kind === 'metadata') setMetadataOpen(true)
-              else if (kind === 'copy' && activeSessionId)
-                copyForLlm(activeSessionId)
-              else if (kind === 'open' && activeSessionId)
-                selectTab(activeSessionId)
+        {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
+         * inline rename editor. The menu resolves and acts against the row it was
+         * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
+         * rename/export/branch dispatch the real WRITE verbs to that session's
+         * sidecar; metadata + copy + open read state the renderer already holds. */}
+        {sessionActionsTarget
+          ? (() => {
+              const targetRow = sessionCatalogRows.find(
+                row => row.appSessionId === sessionActionsTarget.sessionId,
+              )
+              if (!targetRow) return null
+              const targetId = sessionActionsTarget.sessionId
+              return (
+                <SessionActionsMenu
+                  items={resolveSessionActions(targetRow, {
+                    isActiveOpen: targetId === activeSessionId,
+                  })}
+                  anchor={sessionActionsTarget.anchor}
+                  onAction={kind => {
+                    if (kind === 'metadata') setMetadataOpen(true)
+                    else if (kind === 'copy') copyForLlm(targetId)
+                    else if (kind === 'open') selectTab(targetId)
+                    else if (kind === 'rename')
+                      setRenamingSession({
+                        sessionId: targetId,
+                        anchor: sessionActionsTarget.anchor,
+                        initial: targetRow.title ?? '',
+                      })
+                    else if (kind === 'export')
+                      sendSessionActionVerb(targetId, {
+                        type: 'session.export',
+                        requestId: newRequestId(),
+                      })
+                    else if (kind === 'branch')
+                      sendSessionActionVerb(targetId, {
+                        type: 'session.branch',
+                        requestId: newRequestId(),
+                      })
+                  }}
+                  onClose={() => setSessionActionsTarget(null)}
+                />
+              )
+            })()
+          : null}
+
+        {renamingSession ? (
+          <SessionRenamePopover
+            anchor={renamingSession.anchor}
+            initial={renamingSession.initial}
+            onCancel={() => setRenamingSession(null)}
+            onCommit={title => {
+              const trimmed = title.trim()
+              if (trimmed && trimmed !== renamingSession.initial) {
+                sendSessionActionVerb(renamingSession.sessionId, {
+                  type: 'session.rename',
+                  requestId: newRequestId(),
+                  title: trimmed,
+                })
+              }
+              setRenamingSession(null)
             }}
-            onClose={() => setSessionActionsAnchor(null)}
           />
         ) : null}
 

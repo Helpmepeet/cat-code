@@ -2,7 +2,10 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 import { resolveSessionActions } from './sessionActions.js'
-import { SessionActionsMenu } from './SessionActionsMenu.js'
+import {
+  SessionActionsMenu,
+  SessionRenamePopover,
+} from './SessionActionsMenu.js'
 
 const noop = () => {}
 
@@ -95,4 +98,18 @@ test('cut verbs never render (no Tag/Archive/Delete)', () => {
 test('history-only row: Open is disabled, not a clickable button label', () => {
   const html = render(false, row({ appSessionId: null, inRegistry: false, live: false, status: 'history' }))
   expect(html).toContain('host-API gap')
+})
+
+test('SessionRenamePopover prefills the input with the current title', () => {
+  const html = renderToStaticMarkup(
+    <SessionRenamePopover
+      anchor={{ top: 40, left: 80 }}
+      initial="Refactor auth"
+      onCommit={noop}
+      onCancel={noop}
+    />,
+  )
+  expect(html).toContain('role="dialog"')
+  expect(html).toContain('aria-label="Rename session"')
+  expect(html).toContain('value="Refactor auth"')
 })
