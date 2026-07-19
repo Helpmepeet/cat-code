@@ -14,7 +14,10 @@ import { buildDebugShellStateSnapshot } from './debugStateReport.js'
 import { permissionActionForKey } from './PermissionPrompt.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { selectContextUsage } from './contextUsage.js'
-import { ComposerActionsBar } from './ComposerActionsBar.js'
+import {
+  ComposerActionsBar,
+  focusFirstComposerFace,
+} from './ComposerActionsBar.js'
 import {
   buildAllowResponse,
   buildDenyResponse,
@@ -2633,6 +2636,9 @@ export function SessionPane({
   // history); `isComposingRef` guards Enter/arrows during IME composition
   // (parity `Chat.jsx:716`, `src/hooks/useTextInput.ts`).
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  // Feature #4 — the composer action bar's toolbar node, so Tab / ArrowDown-when-
+  // empty can move focus from the textarea into the first chip face.
+  const actionBarRef = useRef<HTMLDivElement>(null)
   const isComposingRef = useRef(false)
   const [previewEngaged, setPreviewEngaged] = useState(false)
   const previewEngageRef = useRef(onPreviewEngage)
@@ -2827,6 +2833,11 @@ export function SessionPane({
     // IME guard: a composition-commit Enter/arrow must never submit, recall, or
     // drive a picker — it belongs to the input method (parity `Chat.jsx:716`).
     if (isComposingRef.current || event.nativeEvent.isComposing) return
+    // Feature #4 — keydowns bubbling from the composer action bar (a focused chip
+    // face) are owned by that toolbar's own handler; never treat them as textarea
+    // input here (Enter on a face must not submit, Backspace must not edit the
+    // draft, ↑/↓ must not recall). This form handler is textarea-only.
+    if (event.target !== composerRef.current) return
     if (slashOpen) {
       switch (event.key) {
         case 'ArrowDown':
@@ -2894,6 +2905,13 @@ export function SessionPane({
       stopTurn()
       return
     }
+    // Feature #4, keyboard ENTRY POINT #1 — Tab hands focus from the textarea to
+    // the composer action bar's first chip face (the bar is the next focusable
+    // region). Shift+Tab keeps native behavior (returns to the previous focusable).
+    if (event.key === 'Tab' && !event.shiftKey) {
+      if (focusFirstComposerFace(actionBarRef.current)) event.preventDefault()
+      return
+    }
     // Enter submits; Shift/Alt/Meta+Enter insert a newline (the multi-line
     // textarea does NOT submit a form on Enter the way the old `<input>` did, so
     // submit is driven explicitly via the form's own `requestSubmit`). Parity:
@@ -2932,6 +2950,14 @@ export function SessionPane({
         setHistoryNav(result.nav)
         // history-nav: this draft swap must not prune the live paste held aside.
         setPrompt(result.value, 'history-nav')
+        return
+      }
+      // Feature #4, keyboard ENTRY POINT #2 — ArrowDown on an EMPTY draft with
+      // nothing newer to recall (navigateHistory returned null) hands focus to the
+      // action bar, honoring the operator's "down arrow" request. A non-empty draft
+      // keeps its caret/recall behavior (handled above), untouched.
+      if (direction === 'down' && prompt.length === 0) {
+        if (focusFirstComposerFace(actionBarRef.current)) event.preventDefault()
       }
     }
   }
@@ -3242,6 +3268,8 @@ export function SessionPane({
           onSwitchAccount={handleSwitchAccount}
           onManageAccounts={onManageAccounts}
           contextUsage={contextUsage}
+          toolbarRef={actionBarRef}
+          onFocusComposer={() => composerRef.current?.focus()}
         />
       </form>
       </div>
