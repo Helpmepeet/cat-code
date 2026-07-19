@@ -25,10 +25,13 @@
  *    to its single already-rendered menu instance (target-session-bound; the menu's
  *    `resolveSessionActions` auto-disables live-gated verbs on non-active/restorable
  *    rows with honest reasons). No new inbound frame / preload channel is added.
- *  - Per-workspace "+" (#10): each group header carries a "+" wired to the GENERIC
- *    new-session flow (`onNewSession` = App's `newSession`, the same ⌘T / TabBar "+"
- *    native picker). HC1 holds — the button never authors a cwd nor targets the
- *    workspace path; the per-workspace placement is purely cosmetic.
+ *  - Per-workspace "+" (#10/#15): each group header carries a "+" that spawns a
+ *    fresh session DIRECTLY in THAT workspace — no native picker. It calls
+ *    `onNewSessionInWorkspace(repId)` with the group's active row id (else its
+ *    first row) — a REGISTRY id, never a path. The host looks that id up, re-derives
+ *    + re-validates the row's cwd from its OWN registry (exactly as restore does),
+ *    and spawns there (HC1/T8 — the renderer authors no cwd). The whole-app ⌘T /
+ *    TabBar "+" still uses the native picker (`onNewSession`), unchanged.
  *  - Session-row drag-to-panel is omitted; the built split model is drag-tab-to-
  *    edge (P3-6), which stays intact.
  */
@@ -87,7 +90,7 @@ export function Sidebar({
   onSelectLive,
   onRestore,
   onOpenRowActions,
-  onNewSession,
+  onNewSessionInWorkspace,
   modelForSession,
 }: {
   rows: SidebarRow[]
@@ -108,13 +111,14 @@ export function Sidebar({
     anchor: { top: number; left: number },
   ) => void
   /**
-   * #10 — the per-workspace "+" (new session in this workspace). Wired to App's
-   * GENERIC new-session flow (⌘T / TabBar "+"): the native picker, never a
-   * renderer-authored cwd (HC1). Optional + additive: the "+" renders only when
-   * wired. The per-workspace placement is cosmetic — every group's "+" calls the
-   * same callback.
+   * #10/#15 — the per-workspace "+" (new session DIRECTLY in this workspace, no
+   * picker). Called with a REGISTRY id representing the group (its active row if
+   * present, else its first row); the host re-derives + re-validates that row's
+   * cwd from its OWN registry and spawns a fresh session there (HC1/T8 — the
+   * renderer never authors a cwd). Optional + additive: the "+" renders only when
+   * wired.
    */
-  onNewSession?: () => void
+  onNewSessionInWorkspace?: (repId: SessionId) => void
   /** Resolved model for a session (the subtitle's "· model", prototype grammar);
    * null when unknown — e.g. a restorable row that never attached this run. */
   modelForSession?: (id: SessionId) => string | null
@@ -256,7 +260,7 @@ export function Sidebar({
                     onSelectLive={onSelectLive}
                     onRestore={onRestore}
                     onOpenRowActions={onOpenRowActions}
-                    onNewSession={onNewSession}
+                    onNewSessionInWorkspace={onNewSessionInWorkspace}
                     modelForSession={modelForSession}
                   />
                 ))
@@ -354,7 +358,7 @@ export function SessionGroup({
   onSelectLive,
   onRestore,
   onOpenRowActions,
-  onNewSession,
+  onNewSessionInWorkspace,
   modelForSession,
 }: {
   group: WorkspaceGroup
@@ -367,7 +371,7 @@ export function SessionGroup({
     sessionId: SessionId,
     anchor: { top: number; left: number },
   ) => void
-  onNewSession?: () => void
+  onNewSessionInWorkspace?: (repId: SessionId) => void
   modelForSession?: (id: SessionId) => string | null
 }) {
   // "Show more" cap — a long single-project session list buries the rest of the
@@ -413,10 +417,20 @@ export function SessionGroup({
             {group.label}
           </span>
         </button>
-        {onNewSession ? (
+        {onNewSessionInWorkspace ? (
           <button
             type="button"
-            onClick={onNewSession}
+            onClick={() => {
+              // #15 — name a REGISTRY id representing this workspace (the active
+              // row if it lives here, else the first row); the host re-derives +
+              // re-validates the cwd from that row. The renderer authors no path.
+              const repId =
+                group.rows.find(
+                  r => r.descriptor.appSessionId === activeSessionId,
+                )?.descriptor.appSessionId ??
+                group.rows[0]?.descriptor.appSessionId
+              if (repId) onNewSessionInWorkspace(repId)
+            }}
             title="New session in this workspace"
             aria-label="New session in this workspace"
             className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:text-accent"

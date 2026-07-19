@@ -2216,6 +2216,16 @@ export type CatCodeBridge = {
   /** Restore a registry row's session by id (registry-mediated; HC2). */
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   /**
+   * Create a FRESH session in an existing workspace named by a REGISTRY id (#15).
+   * The renderer passes only a representative session id already rooted at that
+   * workspace; the host re-derives + re-validates the cwd from its OWN registry
+   * (exactly like `restoreSession`) and spawns a new session there with NO resume.
+   * The renderer never authors a cwd (HC1/T8) — this is the per-workspace "+".
+   */
+  createSessionInWorkspace(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>>
+  /**
    * Instant session open (M2) — fetch a dead session's cached transcript by id,
    * read-only, WITHOUT spawning a sidecar. Modeled exactly on `restoreSession`:
    * id-only, rate/size-guarded, fixed channel. Main validates the id against the

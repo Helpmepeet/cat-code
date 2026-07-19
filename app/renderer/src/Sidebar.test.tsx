@@ -68,10 +68,10 @@ function renderRow(
 function renderGroup(
   rows: SidebarRow[],
   {
-    onNewSession,
+    onNewSessionInWorkspace,
     onOpenRowActions,
   }: {
-    onNewSession?: () => void
+    onNewSessionInWorkspace?: (repId: SessionId) => void
     onOpenRowActions?: (
       sessionId: SessionId,
       anchor: { top: number; left: number },
@@ -86,7 +86,7 @@ function renderGroup(
       onToggle={noop}
       onSelectLive={noop}
       onRestore={noop}
-      onNewSession={onNewSession}
+      onNewSessionInWorkspace={onNewSessionInWorkspace}
       onOpenRowActions={onOpenRowActions}
     />,
   )
@@ -122,8 +122,10 @@ test('every row in a group gets its own action kebab (target-session-bound)', ()
 
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────
 
-test('a workspace group header exposes a "+" only when onNewSession is wired', () => {
-  const html = renderGroup([row('a', { title: 'Alpha' })], { onNewSession: noop })
+test('a workspace group header exposes a "+" only when onNewSessionInWorkspace is wired', () => {
+  const html = renderGroup([row('a', { title: 'Alpha' })], {
+    onNewSessionInWorkspace: noop,
+  })
   expect(html.match(/aria-label="New session in this workspace"/g)).toHaveLength(
     1,
   )

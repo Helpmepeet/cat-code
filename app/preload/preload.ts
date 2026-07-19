@@ -64,6 +64,7 @@ const CH_RENDERER_READY = 'catcode:renderer-ready'
 
 // Control-plane channels (HC3 — fixed, per-method; must match main.ts).
 const CH_HOST_CREATE = 'catcode:host:create'
+const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
 const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
@@ -236,6 +237,19 @@ const bridge: CatCodeBridge = {
   ): Promise<HostResult<SessionDescriptor>> {
     sendGuard.assertAllowed({ appSessionId })
     return ipcRenderer.invoke(CH_HOST_RESTORE, appSessionId) as Promise<
+      HostResult<SessionDescriptor>
+    >
+  },
+  createSessionInWorkspace(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>> {
+    // #15 — the renderer names an EXISTING registry id (a representative session
+    // in the target workspace), NEVER a path. Same id-only posture as
+    // restoreSession; main passes the id through and the HOST re-derives +
+    // re-validates the cwd from its own registry (HC1/T8). A fresh session, no
+    // resume — the renderer cannot author or smuggle a cwd.
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_CREATE_IN_WORKSPACE, appSessionId) as Promise<
       HostResult<SessionDescriptor>
     >
   },

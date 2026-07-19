@@ -155,14 +155,18 @@ test('control-plane cwd never trusts the renderer: HC1 native picker + host reva
   expect(source).toContain('realpathSync(cwd)')
   expect(source).toContain('.isDirectory()')
 
-  // The six control-plane methods ride fixed per-method channels (HC3).
+  // The seven control-plane methods ride fixed per-method channels (HC3).
   expect(source).toContain("const CH_HOST_CREATE = 'catcode:host:create'")
+  expect(source).toContain(
+    "const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'",
+  )
   expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
   expect(source).toContain("const CH_HOST_PREVIEW = 'catcode:host:preview'")
   // Each fixed channel is served by an ipcMain.handle (arg may wrap to the next
   // line, so match the constant near a handle, not a glued string).
   for (const channel of [
     'CH_HOST_CREATE',
+    'CH_HOST_CREATE_IN_WORKSPACE',
     'CH_HOST_RESTORE',
     'CH_HOST_CLOSE',
     'CH_HOST_LIST',

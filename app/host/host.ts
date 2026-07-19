@@ -306,6 +306,54 @@ export class Host implements HostApi {
   }
 
   /* --------------------------------------------------------------------- *
+   * createSessionInWorkspace — a FRESH session in an existing workspace (#15).
+   * The per-workspace "+" names a REGISTRY id (a representative session already
+   * rooted at the target cwd); the host re-derives + re-validates that row's cwd
+   * from its OWN registry (HC1/T8 — the renderer authors NO path), exactly as
+   * `restoreSession` sources a cwd. Unlike restore this mints a NEW appSessionId
+   * with NO resume (a blank engine context), so it needs neither a transcript nor
+   * an engineSessionId on the row.
+   * --------------------------------------------------------------------- */
+
+  async createSessionInWorkspace(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>> {
+    await this.launched
+    // HC2 — validate id shape before any lookup; unknown → session_not_found. A
+    // renderer-supplied raw path is not a UUID and is rejected HERE, so the
+    // renderer is structurally unable to author a cwd through this method.
+    if (!isUuid(appSessionId)) {
+      return hostError('session_not_found', 'malformed session id')
+    }
+    const row = this.registry.findSession(appSessionId)
+    if (!row) {
+      return hostError(
+        'session_not_found',
+        `no workspace for session ${appSessionId}`,
+      )
+    }
+    // HC1 — re-derive + re-validate the cwd from the host's own row (never a
+    // renderer string, never a stale value: a row can go stale if its directory
+    // was moved/deleted between launches). This is the load-bearing trust point.
+    const validated = this.validateCwd(row.cwd)
+    if (!validated.ok) {
+      return hostError('invalid_cwd', `workspace cwd no longer exists: ${row.cwd}`)
+    }
+
+    const limit = this.checkSpawnLimits()
+    if (limit) return limit
+
+    // FRESH session in that workspace: a NEW appSessionId + NO
+    // resumeEngineSessionId (this is a new session, not a restore of the named one).
+    return this.spawn({
+      appSessionId: randomUUID(),
+      cwd: validated.realpath,
+      title: undefined,
+      resumeEngineSessionId: undefined,
+    })
+  }
+
+  /* --------------------------------------------------------------------- *
    * Shared spawn path (create + restore) — upsert row, spawn sidecar, record
    * advisory fields, emit session-added.
    * --------------------------------------------------------------------- */

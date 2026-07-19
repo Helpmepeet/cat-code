@@ -934,6 +934,26 @@ export function App() {
     }
   }, [activeSessionId])
 
+  const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
+    const bridge = getBridge()
+    try {
+      // #15 — the per-workspace "+": the renderer names an EXISTING registry id
+      // (a representative session in that workspace), NEVER a path. The host
+      // re-derives + re-validates the cwd from its own registry (HC1) and spawns
+      // a fresh session — no native picker, no renderer-authored cwd.
+      const result = await bridge.createSessionInWorkspace(repId)
+      if (result.ok) {
+        setActiveSessionId(result.value.appSessionId)
+        setActiveView('chat')
+        setShellError(null)
+      } else {
+        setShellError(hostErrorMessage(result.error))
+      }
+    } catch (error) {
+      setShellError(errorMessage(error))
+    }
+  }, [])
+
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const bridge = getBridge()
@@ -2007,7 +2027,7 @@ export function App() {
         onOpenRowActions={(sessionId, anchor) =>
           setSessionActionsTarget({ sessionId, anchor })
         }
-        onNewSession={newSession}
+        onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
         modelForSession={id =>
           selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
           null
