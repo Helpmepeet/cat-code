@@ -31,6 +31,7 @@ import {
 } from './permissionDomain.js'
 import {
   createSidecarSettingsDomain,
+  loadAvailableSettingOptions,
   type SidecarSettingsDomain,
 } from './settingsDomain.js'
 import {
@@ -455,7 +456,7 @@ export async function createSidecarSessionController({
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
     permissions: createSidecarPermissionDomain(appStateStore),
-    settings: createSidecarSettingsDomain(),
+    settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd)),
     agentConfig: createSidecarAgentConfigDomain({
       agentDefinitions,
       availableMcpServers,

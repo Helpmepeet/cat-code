@@ -20,6 +20,8 @@ import type {
 import {
   buildSettingsSnapshot,
   createSidecarSettingsDomain,
+  loadAvailableSettingOptions,
+  type AvailableSettingOptions,
   type SettingsSourceLayer,
 } from './settingsDomain.js'
 
@@ -361,4 +363,97 @@ test('runVerb rejects a non-editable key, a mistyped value, and a non-editable s
   })
   expect(managed.ok).toBe(false)
   expect(managed.changed).toBe(false)
+})
+
+/* ── P4-19 dynamic-enum (output style) — availableOptions read-seam ──────────── */
+
+const OUTPUT_STYLE_OPTIONS: AvailableSettingOptions = [
+  {
+    key: 'outputStyle',
+    options: [
+      { value: 'default', label: 'Default' },
+      { value: 'Explanatory', label: 'Explanatory', description: 'Explains choices' },
+    ],
+  },
+]
+
+test('buildSettingsSnapshot carries availableOptions through (default [])', () => {
+  expect(buildSettingsSnapshot([], null).availableOptions).toEqual([])
+  const snapshot = buildSettingsSnapshot([], null, OUTPUT_STYLE_OPTIONS)
+  expect(snapshot.availableOptions).toEqual(OUTPUT_STYLE_OPTIONS)
+})
+
+test('a dynamic-enum write is membership-checked against the captured options', () => {
+  useTempConfigHome()
+  const domain = createSidecarSettingsDomain(OUTPUT_STYLE_OPTIONS)
+
+  // In the captured live set → accepted.
+  expect(domain.runVerb(write('userSettings', 'outputStyle', 'Explanatory')).ok).toBe(
+    true,
+  )
+  // Not in the set → rejected at the closed gate, never written.
+  const bad = domain.runVerb(write('userSettings', 'outputStyle', 'Nope'))
+  expect(bad.ok).toBe(false)
+  expect(bad.changed).toBe(false)
+})
+
+test('a dynamic-enum write fails closed when no options were captured', () => {
+  useTempConfigHome()
+  // Domain built WITHOUT options (e.g. the registry read failed at spawn).
+  const domain = createSidecarSettingsDomain()
+  const result = domain.runVerb(write('userSettings', 'outputStyle', 'default'))
+  expect(result.ok).toBe(false)
+  expect(result.changed).toBe(false)
+})
+
+test('runVerb persists an output-style write and the re-read reflects value + provenance', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain(OUTPUT_STYLE_OPTIONS)
+
+  expect(domain.runVerb(write('userSettings', 'outputStyle', 'Explanatory')).ok).toBe(
+    true,
+  )
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect(onDisk.outputStyle).toBe('Explanatory')
+
+  const snapshot = domain.getSnapshot()
+  const value = snapshot?.editableValues.find(e => e.key === 'outputStyle')
+  expect(value).toEqual({
+    key: 'outputStyle',
+    value: 'Explanatory',
+    source: 'userSettings',
+  })
+})
+
+test('availableOptions carries no secret material (secretGuard-clean)', () => {
+  const frame: SettingsSnapshotFrame = {
+    kind: 'settings.snapshot',
+    protocolVersion: 1,
+    sessionId: 'sess-1',
+    settings: buildSettingsSnapshot([], null, OUTPUT_STYLE_OPTIONS),
+  }
+  // The new field passes the same outbound guard as every other snapshot field:
+  // it carries only option names + short descriptions, never a credential.
+  const scan = scanForSecrets(frame)
+  expect(scan.ok).toBe(true)
+  // Option values ride as data on the frame.
+  expect(JSON.stringify(frame)).toContain('Explanatory')
+})
+
+test('loadAvailableSettingOptions reads the REAL output-style registry (live path)', async () => {
+  // Live path — not a fixture: this exercises the engine's own
+  // `getAllOutputStyles`, the SAME registry the running engine resolves
+  // `settings.outputStyle` from (outputStyles.ts:183-213).
+  const available = await loadAvailableSettingOptions(process.cwd())
+  const bucket = available.find(entry => entry.key === 'outputStyle')
+  expect(bucket).toBeDefined()
+  const values = new Set(bucket!.options.map(option => option.value))
+  // The three engine built-ins are always present (outputStyles.ts:43-137).
+  expect(values.has('default')).toBe(true)
+  expect(values.has('Explanatory')).toBe(true)
+  expect(values.has('Learning')).toBe(true)
+  // 'default' is labeled "Default" (Settings.jsx:364 parity).
+  expect(bucket!.options.find(option => option.value === 'default')?.label).toBe(
+    'Default',
+  )
 })

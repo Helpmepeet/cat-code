@@ -101,6 +101,28 @@ export function selectEditableValue(
   )
 }
 
+export type SettingOption = NonNullable<
+  SettingsSnapshot['availableOptions']
+>[number]['options'][number]
+
+/**
+ * P4-19 — the live option list for a `dynamic-enum` editable key (e.g.
+ * `outputStyle`), from the snapshot's bounded `availableOptions`. Empty when the
+ * snapshot predates / omits the field or the sidecar's registry read failed, in
+ * which case the select renders disabled (display = degrade gracefully). The
+ * options are engine truth, captured at spawn — never a renderer-side list.
+ */
+export function selectAvailableOptions(
+  snapshot: SettingsSnapshot | null,
+  key: string,
+): readonly SettingOption[] {
+  if (!snapshot) return []
+  return (
+    (snapshot.availableOptions ?? []).find(entry => entry.key === key)?.options ??
+    []
+  )
+}
+
 /**
  * Precedence order for DISPLAY, high → low (policy wins) — the reverse of the
  * ascending `SETTING_SOURCES` layering, matching the prototype's "Resolution

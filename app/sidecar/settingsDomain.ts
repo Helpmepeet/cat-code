@@ -48,9 +48,11 @@ import {
   getSettingsForSource,
   updateSettingsForSource,
 } from '../../src/utils/settings/settings.js'
+import { getAllOutputStyles } from '../../src/constants/outputStyles.js'
 import type { EditableSettingSource } from '../shared/settingsEditable.js'
 import {
   EDITABLE_SETTING_KEYS,
+  EDITABLE_SETTINGS_BY_KEY,
   isEditableSettingSource,
   validateEditableSettingValue,
 } from '../shared/settingsEditable.js'
@@ -59,6 +61,15 @@ import type {
   SettingsSnapshot,
   SettingsVerbMessage,
 } from '../shared/protocol.js'
+
+/**
+ * The live option sets for `dynamic-enum` editable keys — captured ONCE at spawn
+ * (the option set is spawn-frozen like the settings layers) and carried on
+ * `SettingsSnapshot.availableOptions`. Bounded + non-secret by construction.
+ */
+export type AvailableSettingOptions = NonNullable<
+  SettingsSnapshot['availableOptions']
+>
 
 /** The outcome of one settings write verb. `changed` tells the server whether
  * to re-broadcast the (now-updated) snapshot. */
@@ -119,6 +130,7 @@ const READ_ONLY_SOURCES: ReadonlySet<SettingSourceId> = new Set<SettingSourceId>
 export function buildSettingsSnapshot(
   layers: readonly SettingsSourceLayer[],
   policyOrigin: SettingsSnapshot['policyOrigin'],
+  availableOptions: AvailableSettingOptions = [],
 ): SettingsSnapshot {
   const snapshotLayers = layers.map(layer => ({
     source: layer.source,
@@ -158,7 +170,13 @@ export function buildSettingsSnapshot(
   resolved.sort((a, b) => a.key.localeCompare(b.key))
   editableValues.sort((a, b) => a.key.localeCompare(b.key))
 
-  return { layers: snapshotLayers, resolved, policyOrigin, editableValues }
+  return {
+    layers: snapshotLayers,
+    resolved,
+    policyOrigin,
+    editableValues,
+    availableOptions,
+  }
 }
 
 /**
@@ -175,22 +193,26 @@ function describeOrigin(source: SettingSource): string {
   )
 }
 
-export function createSidecarSettingsDomain(): SidecarSettingsDomain {
+export function createSidecarSettingsDomain(
+  availableOptions: AvailableSettingOptions = [],
+): SidecarSettingsDomain {
   // Read ONCE at spawn (see the module header for why: the attach path must do no
   // disk I/O and must not reset the engine's global settings cache). getSnapshot()
   // then just returns the captured value — a pure read that cannot throw or
   // strand an attaching connection (review MED#1 + MED#2). A successful runVerb()
   // write refreshes this in place (the engine writer already reset the cache, so
-  // the re-read reflects the just-written file).
-  let snapshot = readSettingsSnapshotOnce()
+  // the re-read reflects the just-written file). `availableOptions` is spawn-frozen
+  // like the layers (the option registries do not change on a settings write), so
+  // the SAME captured list is reused on every refresh + membership check.
+  let snapshot = readSettingsSnapshotOnce(availableOptions)
   return {
     getSnapshot() {
       return snapshot
     },
     runVerb(verb: SettingsVerbMessage): SettingsWriteResult {
-      const result = applySettingsVerb(verb)
+      const result = applySettingsVerb(verb, availableOptions)
       if (result.changed) {
-        snapshot = readSettingsSnapshotOnce()
+        snapshot = readSettingsSnapshotOnce(availableOptions)
       }
       return result
     },
@@ -204,7 +226,10 @@ export function createSidecarSettingsDomain(): SidecarSettingsDomain {
  * engine-touching path can never write a non-editable source, an unknown key, or
  * a mistyped value even if the boundary were bypassed.
  */
-function applySettingsVerb(verb: SettingsVerbMessage): SettingsWriteResult {
+function applySettingsVerb(
+  verb: SettingsVerbMessage,
+  availableOptions: AvailableSettingOptions,
+): SettingsWriteResult {
   if (!isEditableSettingSource(verb.source)) {
     return { ok: false, message: `not an editable settings source`, changed: false }
   }
@@ -216,6 +241,19 @@ function applySettingsVerb(verb: SettingsVerbMessage): SettingsWriteResult {
     return { ok: false, message: validation.error, changed: false }
   }
   const value = validation.value
+  // The closed membership gate for a `dynamic-enum` key (the static validator
+  // above only bounds the string): the value must be one of the options the
+  // sidecar captured at spawn. Fail closed — no captured options ⇒ no write.
+  if (EDITABLE_SETTINGS_BY_KEY.get(verb.key)?.control.kind === 'dynamic-enum') {
+    const options = availableOptions.find(entry => entry.key === verb.key)?.options
+    if (!options?.some(option => option.value === value)) {
+      return {
+        ok: false,
+        message: `not an available option for ${verb.key}: ${String(value)}`,
+        changed: false,
+      }
+    }
+  }
   const source: EditableSettingSource = verb.source
   // The SettingsUpdater FUNCTION form (settings.ts:461/480): the engine invokes
   // this under the cross-process lock with the FRESH on-disk settings, and writes
@@ -239,7 +277,9 @@ function applySettingsVerb(verb: SettingsVerbMessage): SettingsWriteResult {
  * flag. Returns null (and logs) on any read failure so the caller degrades
  * gracefully instead of crashing a session.
  */
-function readSettingsSnapshotOnce(): SettingsSnapshot | null {
+function readSettingsSnapshotOnce(
+  availableOptions: AvailableSettingOptions,
+): SettingsSnapshot | null {
   try {
     const layers: SettingsSourceLayer[] = []
     for (const source of SETTING_SOURCES) {
@@ -253,7 +293,7 @@ function readSettingsSnapshotOnce(): SettingsSnapshot | null {
         })
       }
     }
-    return buildSettingsSnapshot(layers, getPolicySettingsOrigin())
+    return buildSettingsSnapshot(layers, getPolicySettingsOrigin(), availableOptions)
   } catch (error) {
     process.stderr.write(
       `[sidecar] settings snapshot read failed (session runs without a settings snapshot): ${
@@ -262,4 +302,40 @@ function readSettingsSnapshotOnce(): SettingsSnapshot | null {
     )
     return null
   }
+}
+
+/**
+ * Load the live option sets for `dynamic-enum` editable keys ONCE at spawn, from
+ * the engine's own registries — the SAME source the running engine resolves the
+ * value from (no fixture, no renderer-side list). Today: `outputStyle` from
+ * `getAllOutputStyles(cwd)` (built-in default/Explanatory/Learning + any custom
+ * dir + plugin styles), rooted at the session cwd so project/plugin styles are
+ * the SESSION's. The option `value` is the style NAME, which is exactly what
+ * `settings.outputStyle` stores (outputStyles.ts:209). Fails soft: on any read
+ * error the key simply carries no options (its select renders disabled).
+ */
+export async function loadAvailableSettingOptions(
+  cwd: string,
+): Promise<AvailableSettingOptions> {
+  const available: AvailableSettingOptions = []
+  try {
+    const styles = await getAllOutputStyles(cwd)
+    const options = Object.entries(styles).map(([name, config]) => ({
+      value: name,
+      // The built-in 'default' style has a null config; the prototype labels it
+      // "Default" (Settings.jsx:364). Every other style uses its real name.
+      label: name === 'default' ? 'Default' : (config?.name ?? name),
+      ...(config?.description ? { description: config.description } : {}),
+    }))
+    if (options.length > 0) {
+      available.push({ key: 'outputStyle', options })
+    }
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] output-style options read failed (the output-style select renders disabled): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
+  return available
 }
