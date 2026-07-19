@@ -184,6 +184,7 @@ import {
   selectAccountsSnapshot,
   selectActiveAccount,
   selectFirstAccountsSnapshot,
+  selectOAuthProgress,
 } from './accountsState.js'
 import {
   createWorkspaceTrustState,
@@ -232,7 +233,15 @@ import {
   selectAgentModeSnapshot,
 } from './orchestratorState.js'
 import { GoalsPage } from './GoalsPage.js'
-import { AccountsPage, loginVerb, resultToastTone, switchVerb } from './AccountsPage.js'
+import {
+  AccountsPage,
+  loginVerb,
+  oauthAliasVerb,
+  oauthCancelVerb,
+  oauthPasteCodeVerb,
+  resultToastTone,
+  switchVerb,
+} from './AccountsPage.js'
 import { BannerStack } from './BannerStack.js'
 import {
   REAUTH_ACTION_KEY,
@@ -240,9 +249,11 @@ import {
   selectVisibleReauthBanners,
 } from './reauthBannerState.js'
 import {
+  ReauthOAuthProgress,
   StartupOAuth,
   WorkspaceTrustGate,
-  type StartupOAuthPhase,
+  type ReauthOAuthView,
+  type StartupOAuthView,
 } from './StartupSurfaces.js'
 import { SessionsPage } from './SessionsPage.js'
 import { SettingsShell } from './SettingsShell.js'
@@ -449,9 +460,16 @@ export function App() {
     createOrchestratorState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
-  // P4-15 first-run OAuth phase (renderer-visible sub-states only; the live
-  // waiting→alias→success transitions are the coordinated operator step, §0).
-  const [oauthPhase, setOauthPhase] = useState<StartupOAuthPhase>('ready')
+  // P4-15 OAuth flow-local state. The sub-states themselves are DRIVEN by the
+  // `oauth.login.progress` back-channel (`accountsState.oauthProgress`); these two
+  // are the renderer-local framing: `oauthContext` distinguishes the first-run
+  // full-screen surface from the non-blocking reauth card (both begin the SAME
+  // `account.login` flow), and `oauthStarting` is the optimistic gap between the
+  // begin click and the first progress frame.
+  const [oauthContext, setOauthContext] = useState<'first-run' | 'reauth' | null>(
+    null,
+  )
+  const [oauthStarting, setOauthStarting] = useState(false)
   const [activeView, setActiveView] = useState<
     'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   >('chat')
@@ -940,15 +958,43 @@ export function App() {
     [activeSessionId],
   )
 
-  // P4-15 — the reauth banner's "Re-authenticate" action and the first-run
-  // OAuth surface both begin the SAME engine OAuth flow: the existing P4-5
-  // `account.login` verb (browser handoff; the engine owns the token write). The
-  // re-linked/added account re-appears on the next `accounts.snapshot`, which
-  // clears the banner / unmounts the first-run surface — no renderer token path.
-  const beginOAuth = useCallback(() => {
-    setOauthPhase('waiting')
-    sendAccountVerb(loginVerb())
-  }, [sendAccountVerb])
+  // P4-15 — the reauth banner's "Re-authenticate" action and the first-run OAuth
+  // surface both begin the SAME engine OAuth flow (the `account.login` verb;
+  // browser handoff, the engine owns the token write). Progress flows back on the
+  // `oauth.login.progress` frame, driving the sub-states below; the account lands
+  // on the `accounts.snapshot` re-broadcast the sidecar fires on `success` — no
+  // renderer token path. `context` tags which surface owns the flow.
+  const beginOAuth = useCallback(
+    (context: 'first-run' | 'reauth') => {
+      setOauthContext(context)
+      setOauthStarting(true)
+      if (activeSessionId) {
+        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
+      }
+      sendAccountVerb(loginVerb())
+    },
+    [sendAccountVerb, activeSessionId],
+  )
+
+  // Clear the OAuth surface locally (cancel / back / dwell timeout) AND tell the
+  // sidecar to abandon the in-flight attempt (drops its late progress).
+  const clearOAuth = useCallback(() => {
+    setOauthStarting(false)
+    setOauthContext(null)
+    if (activeSessionId) {
+      dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
+    }
+    sendAccountVerb(oauthCancelVerb())
+  }, [sendAccountVerb, activeSessionId])
+
+  const submitOAuthPasteCode = useCallback(
+    (code: string) => sendAccountVerb(oauthPasteCodeVerb(code)),
+    [sendAccountVerb],
+  )
+  const submitOAuthAlias = useCallback(
+    (alias: string) => sendAccountVerb(oauthAliasVerb(alias)),
+    [sendAccountVerb],
+  )
 
   // P4-15 — accept trust for the active session's cwd (the trust-gate's primary
   // action). The renderer NAMES no path (HC1): the sidecar persists trust for
@@ -1784,12 +1830,100 @@ export function App() {
     activeAccountsSnapshot.initialized &&
     activeAccountsSnapshot.poolCount === 0
 
-  // P4-15 — a completed first-run login unmounts the OAuth surface; reset the
-  // phase so a later re-entry (pool emptied) shows the sign-in CTA, not a dead
-  // spinner stranded on 'waiting'.
+  // P4-15 — the live OAuth progress (the back-channel) + the sub-state VIEWS
+  // derived from it. The first-run surface owns starting/waiting_for_login/
+  // waiting_for_alias/success/error; the reauth card owns waiting/error only (its
+  // success is a toast + banner clear — the blocking modal is CUT).
+  const oauthProgress = selectOAuthProgress(accounts, activeSessionId)
+  const firstRunOAuthView: StartupOAuthView = oauthProgress
+    ? oauthProgress.state === 'waiting_for_login'
+      ? { phase: 'waiting', url: oauthProgress.url }
+      : oauthProgress.state === 'waiting_for_alias'
+        ? { phase: 'alias' }
+        : oauthProgress.state === 'success'
+          ? { phase: 'success' }
+          : oauthProgress.state === 'error'
+            ? { phase: 'error', message: oauthProgress.message }
+            : { phase: 'waiting', url: null } // 'starting' — url not minted yet
+    : oauthStarting
+      ? { phase: 'waiting', url: null }
+      : { phase: 'ready' }
+
+  // Keep the first-run surface mounted through its `success` dwell even once the
+  // account has landed (pool no longer empty), so the "Signed in" beat is seen.
+  const showFirstRunOAuthSurface =
+    showFirstRunOAuth ||
+    (oauthContext === 'first-run' && oauthProgress?.state === 'success')
+
+  // An OAuth flow with NO owning context, on a non-empty pool, was started by the
+  // P4-5 AddAccountDialog ("add account"). Adopt it into the SAME shared OAuth
+  // surface (as a top-level overlay) so its sub-states — crucially the alias step
+  // a new account needs — are reachable, rather than stranding the flow with no
+  // UI. Reuses `account.login`'s back-channel; no second login path.
+  const adoptOrphanOAuth =
+    !showTrustGate &&
+    !showFirstRunOAuthSurface &&
+    oauthContext === null &&
+    oauthProgress != null &&
+    oauthProgress.state !== 'success'
+
+  // The reauth progress card (non-blocking). Live only while the reauth flow owns
+  // the shared progress and it is a waiting/error state; `success` → toast below.
+  const reauthOAuthView: ReauthOAuthView | null =
+    oauthContext === 'reauth' && oauthProgress && !showFirstRunOAuthSurface
+      ? oauthProgress.state === 'error'
+        ? { phase: 'error', message: oauthProgress.message }
+        : oauthProgress.state === 'success'
+          ? null
+          : {
+              phase: 'waiting',
+              url:
+                oauthProgress.state === 'waiting_for_login'
+                  ? oauthProgress.url
+                  : null,
+            }
+      : null
+
+  // Reset flow-local framing once the first-run surface should no longer show and
+  // its progress has cleared (e.g. an account was added out of band), so a later
+  // re-entry starts at the sign-in CTA rather than a stranded spinner.
   useEffect(() => {
-    if (!showFirstRunOAuth && oauthPhase !== 'ready') setOauthPhase('ready')
-  }, [showFirstRunOAuth, oauthPhase])
+    if (
+      !showFirstRunOAuthSurface &&
+      oauthContext === 'first-run' &&
+      oauthProgress == null
+    ) {
+      setOauthStarting(false)
+      setOauthContext(null)
+    }
+  }, [showFirstRunOAuthSurface, oauthContext, oauthProgress])
+
+  // First-run `success`: brief dwell on the "Signed in" card, then clear so the
+  // now-populated pool advances to the normal UI (the real flow completes on the
+  // token write; this is a short presentation beat, not a scripted auth timer).
+  useEffect(() => {
+    if (oauthContext !== 'first-run' || oauthProgress?.state !== 'success') return
+    const timer = window.setTimeout(() => {
+      setOauthStarting(false)
+      setOauthContext(null)
+      if (activeSessionId) {
+        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
+      }
+    }, 900)
+    return () => window.clearTimeout(timer)
+  }, [oauthContext, oauthProgress, activeSessionId])
+
+  // Reauth `success`: surface a toast and clear the flow; the dead-account banner
+  // clears itself on the account re-link (`accounts.snapshot` re-broadcast).
+  useEffect(() => {
+    if (oauthContext !== 'reauth' || oauthProgress?.state !== 'success') return
+    toast('You’re back in — account re-linked.', { tone: 'success' })
+    setOauthStarting(false)
+    setOauthContext(null)
+    if (activeSessionId) {
+      dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
+    }
+  }, [oauthContext, oauthProgress, activeSessionId, toast])
 
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
@@ -1843,7 +1977,10 @@ export function App() {
                 dismissedReauthIds,
               )}
               onAction={(_banner, action) => {
-                if (action.key === REAUTH_ACTION_KEY) sendAccountVerb(loginVerb())
+                // P4-15 — begin the SHARED OAuth flow, tagged `reauth` so its live
+                // progress surfaces in the non-blocking card below (not the
+                // first-run full-screen surface). The blocking modal is CUT.
+                if (action.key === REAUTH_ACTION_KEY) beginOAuth('reauth')
               }}
               onDismiss={banner => {
                 setDismissedReauthIds(prev => {
@@ -1854,8 +1991,36 @@ export function App() {
                 })
               }}
             />
+            {/* P4-15 — the reauth flow's live progress, NON-BLOCKING (the
+             * prototype's blocking ReauthGate modal is CUT). Reuses the shared
+             * OAuth waiting/paste-code UX; `success` is the toast + banner clear. */}
+            {reauthOAuthView ? (
+              <ReauthOAuthProgress
+                view={reauthOAuthView}
+                onPasteCode={submitOAuthPasteCode}
+                onCancel={clearOAuth}
+                onRetry={() => beginOAuth('reauth')}
+              />
+            ) : null}
           </div>
         </div>
+
+        {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
+         * owning surface: adopt it into the shared OAuth surface as a top-level
+         * overlay so it can complete (incl. the alias step), regardless of the
+         * active view. First-run + reauth own their own surfaces above. */}
+        {adoptOrphanOAuth ? (
+          <div className="absolute inset-0 z-50">
+            <StartupOAuth
+              view={firstRunOAuthView}
+              onBegin={() => beginOAuth('first-run')}
+              onCancel={clearOAuth}
+              onPasteCode={submitOAuthPasteCode}
+              onSubmitAlias={submitOAuthAlias}
+              onRetry={() => beginOAuth('first-run')}
+            />
+          </div>
+        ) : null}
 
         {/* The workspace panels are renderer-owned layout over the P3-4
          * session-keyed stores. Each panel reads its own session slice, so visible
@@ -1926,15 +2091,20 @@ export function App() {
               errorMessage={selectWorkspaceTrustError(workspaceTrust, activeSessionId)}
             />
           </div>
-        ) : showFirstRunOAuth ? (
+        ) : showFirstRunOAuthSurface ? (
           // First-run: no credentialed Codex account exists. Surface the OAuth
-          // flow (begins the engine's real `account.login`; the engine owns the
-          // token). Unmounts when the pool gains an account on the next snapshot.
+          // flow — its sub-states (waiting/paste-code/alias/success/error) are
+          // DRIVEN by the real `oauth.login.progress` back-channel; the engine
+          // owns the token. Unmounts after the success dwell once the pool gains
+          // the account (the snapshot re-broadcast on `success`).
           <div className="relative flex min-h-0 flex-1">
             <StartupOAuth
-              phase={oauthPhase}
-              onBegin={beginOAuth}
-              onCancel={() => setOauthPhase('ready')}
+              view={firstRunOAuthView}
+              onBegin={() => beginOAuth('first-run')}
+              onCancel={clearOAuth}
+              onPasteCode={submitOAuthPasteCode}
+              onSubmitAlias={submitOAuthAlias}
+              onRetry={() => beginOAuth('first-run')}
             />
           </div>
         ) : workspacePanels.length === 0 || !activeSessionId ? (

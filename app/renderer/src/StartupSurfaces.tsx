@@ -26,7 +26,7 @@
  *    coordinated operator step — see the P4-15 report §0.
  */
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── shared chrome ─────────────────────────────────────────────────────────── */
@@ -183,38 +183,240 @@ export function WorkspaceTrustGate({
 
 /* ── first-run Codex OAuth ─────────────────────────────────────────────────── */
 
-/** The renderer-visible OAuth phase. Live sub-states are the operator step (§0). */
-export type StartupOAuthPhase = 'ready' | 'waiting'
+/**
+ * The renderer-visible OAuth sub-states — a projection of the engine's real
+ * `OAuthStatus` flow delivered on the `oauth.login.progress` back-channel
+ * (`accountsDomain.ts`). `waiting` covers `starting`+`waiting_for_login` (`url`
+ * is null until the engine mints it); the live run is the operator's step.
+ */
+export type StartupOAuthView =
+  | { phase: 'ready' }
+  | { phase: 'waiting'; url: string | null }
+  | { phase: 'alias' }
+  | { phase: 'success' }
+  | { phase: 'error'; message: string }
+
+/** Pink spinner shared by every OAuth waiting affordance (auth + reauth). */
+function OAuthSpinner(): ReactNode {
+  return (
+    <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent/20 border-t-accent" />
+  )
+}
+
+/** Green check shared by the success affordances (matches the prototype tick). */
+function OAuthCheck(): ReactNode {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0 text-tone-good"
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  )
+}
+
+/**
+ * The paste-code fallback — the engine-minted authorize `url` plus an input that
+ * dispatches the pasted code (the `account.oauthPasteCode` verb; the engine
+ * exchanges it, the renderer never retains a token). Rendered only once the url
+ * has arrived (`waiting_for_login`), matching the prototype's "Visit … and paste
+ * the code you get back" affordance (`Startup.jsx:216`, `ConsoleOAuthFlow.tsx:672`).
+ */
+function PasteCodeFallback({
+  url,
+  onPasteCode,
+}: {
+  url: string
+  onPasteCode: (code: string) => void
+}): ReactNode {
+  const [code, setCode] = useState('')
+  return (
+    <div className="mb-3.5">
+      <div className="mb-2 text-[11px] leading-relaxed text-text-faint">
+        Browser didn&apos;t open? Visit{' '}
+        <code className="break-all font-mono text-[10.5px] text-text-subtle">{url}</code>{' '}
+        and paste the code you get back.
+      </div>
+      <form
+        className="flex gap-2"
+        onSubmit={e => {
+          e.preventDefault()
+          const trimmed = code.trim()
+          if (!trimmed) return
+          onPasteCode(trimmed)
+          setCode('')
+        }}
+      >
+        <input
+          value={code}
+          onChange={e => setCode(e.target.value)}
+          placeholder="Paste authorization code"
+          className="min-w-0 flex-1 rounded-lg border border-shell-seam bg-app-bg px-3 py-2 font-mono text-[12px] text-text-primary outline-none focus:border-accent/40"
+        />
+        <button
+          type="submit"
+          className="rounded-lg border border-shell-seam px-3 py-2 text-[12px] text-text-muted transition-colors hover:bg-shell-hover"
+        >
+          Submit
+        </button>
+      </form>
+    </div>
+  )
+}
+
+/**
+ * The waiting affordance body (spinner + status label + paste-code fallback),
+ * shared by the first-run surface and the reauth progress card so both read
+ * identically (`Startup.jsx:198-221` auth / `:427-430` reauth).
+ */
+function OAuthWaitingBody({
+  url,
+  onPasteCode,
+}: {
+  url: string | null
+  onPasteCode: (code: string) => void
+}): ReactNode {
+  return (
+    <>
+      <div className="mb-3.5 flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
+        <OAuthSpinner />
+        <span className="text-[12.5px] text-text-muted">
+          Waiting for browser authorization…
+        </span>
+      </div>
+      {url ? <PasteCodeFallback url={url} onPasteCode={onPasteCode} /> : null}
+    </>
+  )
+}
+
+/** The Codex `waiting_for_alias` naming step (`Startup.jsx:129`, `ConsoleOAuthFlow.tsx:48`). */
+function AliasForm({ onSubmitAlias }: { onSubmitAlias: (alias: string) => void }): ReactNode {
+  const [alias, setAlias] = useState('')
+  return (
+    <StartupShell step="auth">
+      <div className="mb-5">
+        <Pill tone="good" label="Authorized" />
+      </div>
+      <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
+        Name this account
+      </h1>
+      <p className="mb-[18px] max-w-[420px] text-[13px] leading-relaxed text-text-muted">
+        Optional alias to tell this Codex account apart in the pool. Leave blank
+        to use the account email.
+      </p>
+      <form
+        onSubmit={e => {
+          e.preventDefault()
+          onSubmitAlias(alias)
+        }}
+      >
+        <input
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          value={alias}
+          onChange={e => setAlias(e.target.value)}
+          placeholder="work · personal · team-a"
+          className="mb-3.5 w-full rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-2.5 font-mono text-[13px] text-text-primary outline-none focus:border-accent/40"
+        />
+        <button
+          type="submit"
+          className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-app-bg"
+        >
+          Continue <span className="ml-1.5 text-[11px] opacity-60">↵</span>
+        </button>
+      </form>
+    </StartupShell>
+  )
+}
 
 export function StartupOAuth({
-  phase,
+  view,
   onBegin,
   onCancel,
+  onPasteCode,
+  onSubmitAlias,
+  onRetry,
 }: {
-  phase: StartupOAuthPhase
+  view: StartupOAuthView
   onBegin: () => void
   onCancel: () => void
+  onPasteCode: (code: string) => void
+  onSubmitAlias: (alias: string) => void
+  onRetry: () => void
 }): ReactNode {
-  if (phase === 'waiting') {
+  if (view.phase === 'waiting') {
     return (
       <StartupShell step="auth">
         <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
           Continue in your browser
         </h1>
         <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-          Opening your browser to sign in — authorize the request, then return
-          here. Your Codex account appears once the engine captures the callback.
+          Opening browser to sign in… authorize the request, then return here.
+          Your Codex account appears once the engine captures the callback.
         </p>
-        <div className="mb-3.5 flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent/20 border-t-accent" />
-          <span className="text-[12.5px] text-text-muted">
-            Waiting for browser authorization…
-          </span>
-        </div>
+        <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
         <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
       </StartupShell>
     )
   }
+
+  if (view.phase === 'success') {
+    return (
+      <StartupShell step="auth">
+        <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
+          Signed in
+        </h1>
+        <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
+          Account linked. Setting up your workspace…
+        </p>
+        <div className="flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
+          <OAuthCheck />
+          <span className="text-[12.5px] text-text-muted">Authorized</span>
+        </div>
+      </StartupShell>
+    )
+  }
+
+  if (view.phase === 'alias') {
+    return <AliasForm onSubmitAlias={onSubmitAlias} />
+  }
+
+  if (view.phase === 'error') {
+    return (
+      <StartupShell step="auth">
+        <div className="mb-5">
+          <Pill tone="danger" label="OAuth error" />
+        </div>
+        <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
+          Sign-in didn&apos;t complete
+        </h1>
+        <p className="mb-4 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
+          The browser flow was cancelled or timed out before authorization came
+          back.
+        </p>
+        <div className="mb-[22px] rounded-lg border border-tone-danger/20 bg-tone-danger/[0.06] px-3 py-2.5">
+          <code className="break-all font-mono text-[12px] text-tone-danger">
+            OAuth error: {view.message}
+          </code>
+        </div>
+        <div className="flex gap-2">
+          <PrimaryButton autoFocus onClick={onRetry}>
+            Retry <span className="ml-1.5 text-[11px] opacity-60">↵</span>
+          </PrimaryButton>
+          <SecondaryButton onClick={onCancel}>Back</SecondaryButton>
+        </div>
+      </StartupShell>
+    )
+  }
+
   return (
     <StartupShell step="auth">
       <div className="mb-5">
@@ -245,5 +447,65 @@ export function StartupOAuth({
         Open browser to sign in
       </PrimaryButton>
     </StartupShell>
+  )
+}
+
+/* ── reauth OAuth progress (non-blocking; the blocking modal is CUT) ─────────── */
+
+/**
+ * The reauth flow's live progress, surfaced NON-BLOCKING (the prototype's
+ * blocking `ReauthGate` modal is CUT — `STARTUP-GATES.md §5-Q2`). Reuses the
+ * shared OAuth waiting UX (`Startup.jsx:423-430`); `success` is NOT rendered here
+ * — it surfaces as a toast + the banner clearing on the account re-link
+ * (`STARTUP-GATES.md` ledger §27 rows 1882-1883). A compact card (not a full
+ * shell) so it floats below the banner rather than covering the window.
+ */
+export type ReauthOAuthView =
+  | { phase: 'waiting'; url: string | null }
+  | { phase: 'error'; message: string }
+
+export function ReauthOAuthProgress({
+  view,
+  onPasteCode,
+  onCancel,
+  onRetry,
+}: {
+  view: ReauthOAuthView
+  onPasteCode: (code: string) => void
+  onCancel: () => void
+  onRetry: () => void
+}): ReactNode {
+  return (
+    <div className="mx-auto mt-2 w-full max-w-[520px] rounded-xl border border-shell-seam bg-surface-panel px-5 py-4 shadow-[0_16px_48px_rgba(0,0,0,0.5)]">
+      {view.phase === 'error' ? (
+        <>
+          <div className="mb-3">
+            <Pill tone="danger" label="OAuth error" />
+          </div>
+          <div className="mb-3 rounded-lg border border-tone-danger/20 bg-tone-danger/[0.06] px-3 py-2.5">
+            <code className="break-all font-mono text-[12px] text-tone-danger">
+              OAuth error: {view.message}
+            </code>
+          </div>
+          <div className="flex gap-2">
+            <PrimaryButton autoFocus onClick={onRetry}>
+              Retry <span className="ml-1.5 text-[11px] opacity-60">↵</span>
+            </PrimaryButton>
+            <SecondaryButton onClick={onCancel}>Dismiss</SecondaryButton>
+          </div>
+        </>
+      ) : (
+        <>
+          <h2 className="mb-2 text-[15px] font-semibold tracking-tight text-text-primary">
+            Continue in your browser
+          </h2>
+          <p className="mb-3.5 text-[12.5px] leading-relaxed text-text-muted">
+            Authorize the request to re-link your account, then return here.
+          </p>
+          <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
+          <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+        </>
+      )}
+    </div>
   )
 }
