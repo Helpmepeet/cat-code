@@ -375,10 +375,13 @@ export type SidecarSession = {
    */
   remoteSettings: SidecarRemoteSettingsDomain | null
   /**
-   * Sessions catalog read-seam (P4-6a) — a spawn-frozen, cross-workspace
-   * enumeration of the engine's transcript history (title/tag/branch/PR), the
-   * engine-side half of the Sessions page catalog. Read-only; null in probe
-   * mode (no config home to enumerate).
+   * Sessions catalog read-seam (P4-6a) — a cross-workspace enumeration of the
+   * engine's transcript history (title/tag/branch/PR), the engine-side half of
+   * the Sessions page catalog. The enumeration is DEFERRED (MAJOR-2): this domain
+   * constructs empty (no filesystem read on the listen critical path) and the
+   * server kicks the first async enumeration on attach, then re-broadcasts on a
+   * timer (`sidecarServer.ts`). Read-only; null in probe mode (no config home to
+   * enumerate).
    */
   sessionsCatalog: SidecarSessionsCatalogDomain | null
   /**
