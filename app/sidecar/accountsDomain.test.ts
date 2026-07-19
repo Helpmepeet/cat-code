@@ -5,13 +5,19 @@ import {
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { AccountsSnapshotFrame } from '../shared/protocol.js'
+import type {
+  AccountsSnapshotFrame,
+  OAuthLoginProgress,
+  OAuthLoginProgressFrame,
+} from '../shared/protocol.js'
 import {
   buildAccountsSnapshot,
   buildAccountStatus,
   createSidecarAccountsDomain,
   type AccountsCommandExecutor,
   type AccountVerbResult,
+  type OAuthLoginRunner,
+  type OAuthPendingLogin,
 } from './accountsDomain.js'
 
 /**
@@ -133,9 +139,44 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
     delete: () => ok('deleted'),
     logout: () => ok('signed out'),
     touchAll: async () => ({ ok: true, message: 'done', touchAllResults: [] }),
-    login: () => ({ ok: false, message: 'deferred' }),
     refreshUsage: async () => false,
     ...over,
+  }
+}
+
+/** Flush the async OAuth-controller microtask chain (begin → pending → emit). */
+const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+/**
+ * A FAKE OAuth runner — never opens a browser, binds port 1455, or writes the
+ * vault (the real run is the operator's live step). Drives the controller's state
+ * machine deterministically for headless assertions.
+ */
+function fakeOAuthRunner(
+  opts: {
+    url?: string
+    isExistingAccount?: boolean
+    failWith?: string
+    requireManualCode?: boolean
+    validateAlias?: OAuthPendingLogin['validateAlias']
+    onPersist?: (alias: string | undefined) => void
+    onPasteReceived?: (code: string) => void
+  } = {},
+): OAuthLoginRunner {
+  return {
+    async begin({ onWaitingForLogin, waitForManualCode }) {
+      onWaitingForLogin(opts.url ?? 'https://auth.example/authorize?code_challenge=abc&state=xyz')
+      if (opts.requireManualCode) {
+        const code = await waitForManualCode()
+        opts.onPasteReceived?.(code)
+      }
+      if (opts.failWith) throw new Error(opts.failWith)
+      return {
+        isExistingAccount: opts.isExistingAccount ?? false,
+        validateAlias: opts.validateAlias ?? (() => ({ ok: true })),
+        persist: alias => opts.onPersist?.(alias),
+      }
+    },
   }
 }
 
@@ -241,18 +282,155 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(out.poolChanged).toBe(true)
   })
 
-  test('login is deferred (coordinated with P4-15) and does not change the pool', async () => {
-    const domain = createSidecarAccountsDomain({ executor: createRealForLogin() })
-    const out = await domain.runVerb({ type: 'account.login', requestId: 'r' })
-    expect(out.result.ok).toBe(false)
-    expect(out.poolChanged).toBe(false)
-  })
 })
 
-// The real executor's login is the deferred arm; use it verbatim so the test
-// pins the shipped behavior (browser/token install is P4-15's OAuth surface).
-function createRealForLogin(): AccountsCommandExecutor {
-  return fakeExecutor({
-    login: () => ({ ok: false, message: 'Sign-in runs through the engine OAuth flow (P4-15).' }),
+describe('P4-15 OAuth login controller — the live sign-in back-channel', () => {
+  function makeDomain(runner: OAuthLoginRunner, captured: OAuthLoginProgress[]) {
+    const domain = createSidecarAccountsDomain({ executor: fakeExecutor(), oauthRunner: runner })
+    domain.setOAuthProgressSink(p => captured.push(p))
+    return domain
+  }
+
+  test('new account: waiting_for_login {url} → waiting_for_alias → success + persists the alias', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const persisted: (string | undefined)[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({ url: 'https://auth.example/authz?state=xyz', onPersist: a => persisted.push(a) }),
+      captured,
+    )
+
+    const begin = await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    expect(begin.result.ok).toBe(true)
+    expect(begin.poolChanged).toBe(false) // the account lands on the success re-broadcast
+    await flush()
+
+    expect(captured.map(p => p.state)).toEqual(['starting', 'waiting_for_login', 'waiting_for_alias'])
+    const wl = captured.find(p => p.state === 'waiting_for_login')
+    expect(wl?.state === 'waiting_for_login' && wl.url).toBe('https://auth.example/authz?state=xyz')
+
+    const alias = await domain.runVerb({ type: 'account.oauthAlias', requestId: 'r2', alias: 'work' })
+    expect(alias.result.ok).toBe(true)
+    expect(persisted).toEqual(['work'])
+    expect(captured.at(-1)?.state).toBe('success')
   })
-}
+
+  test('empty alias = skip: persists undefined (anonymous / account email)', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const persisted: (string | undefined)[] = []
+    const domain = makeDomain(fakeOAuthRunner({ onPersist: a => persisted.push(a) }), captured)
+    await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    await flush()
+    await domain.runVerb({ type: 'account.oauthAlias', requestId: 'r2', alias: '   ' })
+    expect(persisted).toEqual([undefined])
+    expect(captured.at(-1)?.state).toBe('success')
+  })
+
+  test('existing account (reauth): auto-persists keeping the name, skips the alias step', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const persisted: (string | undefined)[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({ isExistingAccount: true, onPersist: a => persisted.push(a) }),
+      captured,
+    )
+    await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    await flush()
+    expect(captured.map(p => p.state)).toEqual(['starting', 'waiting_for_login', 'success'])
+    expect(persisted).toEqual([undefined]) // undefined = appendAccount preserves the existing alias
+  })
+
+  test('error path surfaces the real engine message (retryable), does not persist', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const persisted: (string | undefined)[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({ failWith: 'authorization_request_timed_out', onPersist: a => persisted.push(a) }),
+      captured,
+    )
+    await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    await flush()
+    expect(captured.at(-1)).toEqual({ state: 'error', message: 'authorization_request_timed_out' })
+    expect(persisted).toEqual([])
+  })
+
+  test('paste-code feeds the manual input and advances to the alias step', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const received: string[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({ requireManualCode: true, onPasteReceived: c => received.push(c) }),
+      captured,
+    )
+    const begin = await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    expect(begin.result.ok).toBe(true)
+    // The flow is now blocked on the manual-code wait (waiting_for_login emitted).
+    const paste = await domain.runVerb({
+      type: 'account.oauthPasteCode',
+      requestId: 'r2',
+      code: 'AUTH-CODE-123',
+    })
+    expect(paste.result.ok).toBe(true)
+    await flush()
+    expect(received).toEqual(['AUTH-CODE-123'])
+    expect(captured.some(p => p.state === 'waiting_for_alias')).toBe(true)
+  })
+
+  test('paste-code with no login in flight fails closed', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const domain = makeDomain(fakeOAuthRunner(), captured)
+    const paste = await domain.runVerb({ type: 'account.oauthPasteCode', requestId: 'r', code: 'x' })
+    expect(paste.result.ok).toBe(false)
+  })
+
+  test('alias validation failure keeps the alias step (no persist, no success)', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const persisted: (string | undefined)[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({
+        validateAlias: () => ({ ok: false, message: 'Invalid alias "bad name!".' }),
+        onPersist: a => persisted.push(a),
+      }),
+      captured,
+    )
+    await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    await flush()
+    const bad = await domain.runVerb({ type: 'account.oauthAlias', requestId: 'r2', alias: 'bad name!' })
+    expect(bad.result.ok).toBe(false)
+    expect(bad.result.message).toContain('Invalid alias')
+    expect(persisted).toEqual([])
+    expect(captured.at(-1)?.state).toBe('waiting_for_alias') // still naming, never succeeded
+  })
+
+  test('cancel drops later progress and rejects a subsequent paste', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const persisted: (string | undefined)[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({ requireManualCode: true, onPersist: a => persisted.push(a) }),
+      captured,
+    )
+    await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    const cancel = await domain.runVerb({ type: 'account.oauthCancel', requestId: 'rc' })
+    expect(cancel.result.ok).toBe(true)
+    await flush()
+    // The abandoned attempt must not emit a late alias/success or persist.
+    expect(captured.some(p => p.state === 'waiting_for_alias' || p.state === 'success')).toBe(false)
+    expect(persisted).toEqual([])
+    const paste = await domain.runVerb({ type: 'account.oauthPasteCode', requestId: 'rp', code: 'x' })
+    expect(paste.result.ok).toBe(false)
+  })
+
+  test('every emitted progress frame is secretGuard-clean (no token rides the back-channel)', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const domain = makeDomain(fakeOAuthRunner({ url: 'https://auth.example/authz?state=xyz' }), captured)
+    await domain.runVerb({ type: 'account.login', requestId: 'r1' })
+    await flush()
+    await domain.runVerb({ type: 'account.oauthAlias', requestId: 'r2', alias: 'work' })
+    expect(captured.length).toBeGreaterThan(0)
+    for (const progress of captured) {
+      const frame: OAuthLoginProgressFrame = {
+        kind: 'oauth.login.progress',
+        protocolVersion: 1,
+        sessionId: 's1',
+        progress,
+      }
+      expect(scanForSecrets(frame).ok).toBe(true)
+    }
+  })
+})

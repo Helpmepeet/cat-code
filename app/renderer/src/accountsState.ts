@@ -2,6 +2,7 @@ import type {
   AccountResultFrame,
   AccountsSnapshot,
   AccountStatus,
+  OAuthLoginProgress,
   ServerFrame,
   SessionId,
 } from '../../shared/protocol.js'
@@ -18,24 +19,49 @@ import type {
 export type AccountsState = {
   sessions: Record<SessionId, AccountsSnapshot | null>
   lastResult: AccountResultFrame | null
+  /**
+   * P4-15 — the live OAuth login progress per session (the first-run surface +
+   * reauth banner drive their sub-states from it). Transient: set by the
+   * `oauth.login.progress` frame, cleared by `oauthReset` (cancel/back) and when
+   * the session tears down.
+   */
+  oauthProgress: Record<SessionId, OAuthLoginProgress | null>
 }
 
-export type AccountsAction = { type: 'frame'; frame: ServerFrame }
+export type AccountsAction =
+  | { type: 'frame'; frame: ServerFrame }
+  /** Cancel/back cleared the OAuth surface locally (also sends the cancel verb). */
+  | { type: 'oauthReset'; sessionId: SessionId }
 
 export function createAccountsState(): AccountsState {
-  return { sessions: {}, lastResult: null }
+  return { sessions: {}, lastResult: null, oauthProgress: {} }
 }
 
 export function reduceAccountsState(
   state: AccountsState,
   action: AccountsAction,
 ): AccountsState {
+  if (action.type === 'oauthReset') {
+    if (state.oauthProgress[action.sessionId] == null) return state
+    return {
+      ...state,
+      oauthProgress: { ...state.oauthProgress, [action.sessionId]: null },
+    }
+  }
+
   const { frame } = action
 
   if (frame.kind === 'accounts.snapshot') {
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: frame.accounts },
+    }
+  }
+
+  if (frame.kind === 'oauth.login.progress') {
+    return {
+      ...state,
+      oauthProgress: { ...state.oauthProgress, [frame.sessionId]: frame.progress },
     }
   }
 
@@ -48,6 +74,7 @@ export function reduceAccountsState(
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: null },
+      oauthProgress: { ...state.oauthProgress, [frame.sessionId]: null },
     }
   }
 
@@ -60,6 +87,15 @@ export function selectAccountsSnapshot(
 ): AccountsSnapshot | null {
   const snapshot = sessionId ? state.sessions[sessionId] : undefined
   return snapshot ?? null
+}
+
+/** The active session's live OAuth login progress, or null when no flow is running. */
+export function selectOAuthProgress(
+  state: AccountsState,
+  sessionId: SessionId | null,
+): OAuthLoginProgress | null {
+  const progress = sessionId ? state.oauthProgress[sessionId] : undefined
+  return progress ?? null
 }
 
 /**

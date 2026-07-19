@@ -73,6 +73,7 @@ import {
   type AccountVerbMessage,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
+  type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type RemoteVerbMessage,
   type RunControlVerbMessage,
@@ -339,6 +340,14 @@ export class SidecarServer {
     this.runControls = options.runControls ?? null
     this.sessionActions = options.sessionActions ?? null
     this.accounts = options.accounts ?? null
+    // P4-15 — the OAuth login controller pushes progress through this sink; the
+    // server frames it as an `oauth.login.progress` broadcast (and re-broadcasts
+    // the accounts snapshot on `success`, so a completed login clears the
+    // first-run surface / reauth banner). The domain keeps ZERO transport
+    // knowledge — it emits an `OAuthLoginProgress`, the server owns framing.
+    this.accounts?.setOAuthProgressSink(progress =>
+      this.broadcastOAuthLoginProgress(progress),
+    )
     this.workspaceTrust = options.workspaceTrust ?? null
     this.diagnostics = options.diagnostics ?? null
     this.extensions = options.extensions ?? null
@@ -2452,6 +2461,33 @@ export class SidecarServer {
   }
 
   /**
+   * P4-15 — broadcast one `oauth.login.progress` frame (the live sign-in
+   * back-channel). Carries non-secret state only; `send()`'s secretGuard is the
+   * proof (a token-keyed field would drop the whole frame). On `success` the
+   * account has just been written engine-side, so re-broadcast the accounts
+   * snapshot too — the SAME mechanism that clears the first-run OAuth surface and
+   * the reauth banner (both derive from `accounts.snapshot`), for BOTH the
+   * new-account (alias-submit) and re-link (auto-persist) paths uniformly.
+   */
+  private broadcastOAuthLoginProgress(progress: OAuthLoginProgress): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    const frame: ServerFrame = {
+      kind: 'oauth.login.progress',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      progress,
+    }
+    for (const connection of this.connections) {
+      this.send(connection, frame)
+    }
+    if (progress.state === 'success') {
+      this.broadcastAccountsSnapshot()
+    }
+  }
+
+  /**
    * One-shot: populate the pool's usage hints (accounts domain `refreshUsage` →
    * engine `fetchPoolUsage`, read-only) and re-broadcast the snapshot when real
    * usage lands. Guarded so it runs once per sidecar; the fetch itself is
@@ -2735,6 +2771,11 @@ function checkStrictKeys(message: unknown): string | null {
     ['account.logout', new Set(['type', 'requestId'])],
     ['account.touchAll', new Set(['type', 'requestId'])],
     ['account.login', new Set(['type', 'requestId'])],
+    // P4-15 OAuth login sub-protocol. The renderer authors ONLY the user-typed
+    // code/alias string — never a token; the engine owns every credential write.
+    ['account.oauthPasteCode', new Set(['type', 'requestId', 'code'])],
+    ['account.oauthAlias', new Set(['type', 'requestId', 'alias'])],
+    ['account.oauthCancel', new Set(['type', 'requestId'])],
     // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
     // HC1: no path key — the sidecar trusts only its own spawn cwd.
     ['workspace.trust', new Set(['type', 'requestId'])],
@@ -2901,6 +2942,24 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('account.login'),
+    requestId: accountRequestIdSchema,
+  }),
+  // P4-15 — OAuth login sub-protocol. Structural only (shape + bounds); the
+  // engine re-validates the alias and consumes the code. `code`/`alias` are
+  // length-bounded like every renderer-controlled string. `alias` may be empty
+  // (the "leave blank" skip); `code` must be non-empty to be worth submitting.
+  z.object({
+    type: z.literal('account.oauthPasteCode'),
+    requestId: accountRequestIdSchema,
+    code: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('account.oauthAlias'),
+    requestId: accountRequestIdSchema,
+    alias: z.string().max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('account.oauthCancel'),
     requestId: accountRequestIdSchema,
   }),
 ])

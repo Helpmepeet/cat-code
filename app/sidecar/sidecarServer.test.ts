@@ -60,6 +60,7 @@ import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.
 import {
   createSidecarAccountsDomain,
   type AccountsCommandExecutor,
+  type OAuthLoginRunner,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
 import {
@@ -2987,9 +2988,32 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
     delete: () => ({ ok: true, message: 'deleted' }),
     logout: () => ({ ok: true, message: 'signed out' }),
     touchAll: async () => ({ ok: true, message: 'done', touchAllResults: [] }),
-    login: () => ({ ok: false, message: 'deferred' }),
     refreshUsage: async () => false,
     ...over,
+  }
+}
+
+/**
+ * A FAKE OAuth runner for the boundary tests — never opens a browser / writes the
+ * vault. `begin` emits `waiting_for_login` then (unless a manual code is required)
+ * resolves to a pending login the alias verb persists. Deterministic + headless.
+ */
+function fakeOAuthRunner(
+  opts: { requireManualCode?: boolean; onPasteReceived?: (code: string) => void } = {},
+): OAuthLoginRunner {
+  return {
+    async begin({ onWaitingForLogin, waitForManualCode }) {
+      onWaitingForLogin('https://auth.example/authorize?code_challenge=abc&state=xyz')
+      if (opts.requireManualCode) {
+        const code = await waitForManualCode()
+        opts.onPasteReceived?.(code)
+      }
+      return {
+        isExistingAccount: false,
+        validateAlias: () => ({ ok: true }),
+        persist: () => {},
+      }
+    },
   }
 }
 
@@ -3115,6 +3139,105 @@ test('P4-5 — an account verb with no accounts domain fails closed (internal_er
   const conn = server.addConnection(socket)
   server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-15 — OAuth login sub-protocol boundary tests (progress frame + verbs)
+ * ------------------------------------------------------------------------- */
+
+test('P4-15 — account.login emits an oauth.login.progress waiting_for_login carrying the url (secretGuard-clean through send)', async () => {
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
+  await flush()
+
+  const ack = received.find(f => f.kind === 'account.result')
+  expect(ack && ack.kind === 'account.result' && ack.ok).toBe(true)
+  const progress = received.filter(f => f.kind === 'oauth.login.progress')
+  const waiting = progress.find(
+    f => f.kind === 'oauth.login.progress' && f.progress.state === 'waiting_for_login',
+  )
+  // Its arrival is itself the proof it passed send()'s secretGuard (a token-keyed
+  // field would have dropped the whole frame).
+  expect(waiting?.kind).toBe('oauth.login.progress')
+  expect(
+    waiting?.kind === 'oauth.login.progress' &&
+      waiting.progress.state === 'waiting_for_login' &&
+      waiting.progress.url,
+  ).toBe('https://auth.example/authorize?code_challenge=abc&state=xyz')
+  expect(JSON.stringify(progress)).not.toContain('SECRET')
+})
+
+test('P4-15 — paste-code then alias completes the flow (success) and re-broadcasts the accounts snapshot', async () => {
+  const received_codes: string[] = []
+  const accounts = createSidecarAccountsDomain({
+    executor: fakeExecutor(),
+    oauthRunner: fakeOAuthRunner({ requireManualCode: true, onPasteReceived: c => received_codes.push(c) }),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
+  await flush()
+  const beforeSnapshots = received.filter(f => f.kind === 'accounts.snapshot').length
+
+  server.handleData(
+    conn,
+    accountFrame({ type: 'account.oauthPasteCode', requestId: 'r2', code: 'AUTH-CODE-XYZ' }),
+  )
+  await flush()
+  expect(received_codes).toEqual(['AUTH-CODE-XYZ'])
+
+  server.handleData(conn, accountFrame({ type: 'account.oauthAlias', requestId: 'r3', alias: 'work' }))
+  await flush()
+
+  const success = received.find(
+    f => f.kind === 'oauth.login.progress' && f.progress.state === 'success',
+  )
+  expect(success?.kind).toBe('oauth.login.progress')
+  // success drives an accounts re-broadcast (clears the first-run surface / banner).
+  expect(received.filter(f => f.kind === 'accounts.snapshot').length).toBeGreaterThan(beforeSnapshots)
+})
+
+test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStrictKeys)', () => {
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'account.oauthAlias',
+        requestId: 'r',
+        alias: 'work',
+        updatedPermissions: [],
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('P4-15 — rejects account.oauthPasteCode with a missing code (schema)', () => {
+  const accounts = createSidecarAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'account.oauthPasteCode', requestId: 'r' } as unknown as ClientFrame['message'],
+    }),
+  )
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
 /* ------------------------------------------------------------------------- *

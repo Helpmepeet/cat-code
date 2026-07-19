@@ -31,6 +31,9 @@ import type {
   AccountDeleteMessage,
   AccountLoginMessage,
   AccountLogoutMessage,
+  AccountOAuthAliasMessage,
+  AccountOAuthCancelMessage,
+  AccountOAuthPasteCodeMessage,
   AccountRenameMessage,
   AccountResultFrame,
   AccountsSnapshot,
@@ -71,6 +74,18 @@ export function touchAllVerb(): AccountTouchAllMessage {
 }
 export function loginVerb(): AccountLoginMessage {
   return { type: 'account.login', requestId: newRequestId() }
+}
+/** P4-15 — paste-code fallback: the user-typed authorization code/URL (never a token). */
+export function oauthPasteCodeVerb(code: string): AccountOAuthPasteCodeMessage {
+  return { type: 'account.oauthPasteCode', requestId: newRequestId(), code }
+}
+/** P4-15 — submit the post-login account alias (empty = skip). */
+export function oauthAliasVerb(alias: string): AccountOAuthAliasMessage {
+  return { type: 'account.oauthAlias', requestId: newRequestId(), alias }
+}
+/** P4-15 — abandon the in-flight OAuth attempt. */
+export function oauthCancelVerb(): AccountOAuthCancelMessage {
+  return { type: 'account.oauthCancel', requestId: newRequestId() }
 }
 
 /** Toast tone for a verb outcome (success on ok, danger otherwise). */

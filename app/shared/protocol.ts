@@ -189,6 +189,14 @@ export const ACCOUNT_VERB_TYPES = [
   'account.logout',
   'account.touchAll',
   'account.login',
+  // P4-15 — the OAuth login sub-protocol (paste-code fallback, alias step,
+  // cancel). Same secret-owner + T5a + T7 posture as the other account verbs:
+  // the renderer authors only the user-typed code/alias string, never a token,
+  // and the engine owns every credential write. Progress flows back on the
+  // `oauth.login.progress` outbound frame (non-secret state only).
+  'account.oauthPasteCode',
+  'account.oauthAlias',
+  'account.oauthCancel',
 ] as const
 
 export type AccountVerbType = (typeof ACCOUNT_VERB_TYPES)[number]
@@ -234,6 +242,40 @@ export type AccountLoginMessage = {
   requestId: string
 }
 
+/**
+ * P4-15 — the OAuth paste-code fallback. When the browser callback does not land
+ * (port 1455 busy, browser blocked), the user pastes the authorization code/URL
+ * shown by the provider; the ENGINE (`codex-client.ts` `onManualInput`) consumes
+ * it and exchanges it for tokens. The renderer authors ONLY the user-typed
+ * string — never a token. Bounded like every renderer-controlled string.
+ */
+export type AccountOAuthPasteCodeMessage = {
+  type: 'account.oauthPasteCode'
+  requestId: string
+  /** The raw pasted authorization code or full redirect URL (engine parses it). */
+  code: string
+}
+
+/**
+ * P4-15 — submit the post-login account alias (Codex `waiting_for_alias` step).
+ * `alias` MAY be empty (the prototype's "leave blank to use the account email"
+ * skip); the ENGINE re-validates a non-empty alias against its OWN rule
+ * (`validateCodexAccountAlias`) before the token write. Renderer authors only the
+ * name string.
+ */
+export type AccountOAuthAliasMessage = {
+  type: 'account.oauthAlias'
+  requestId: string
+  /** The user-typed alias; empty = skip (anonymous / account email). */
+  alias: string
+}
+
+/** P4-15 — abandon the in-flight OAuth attempt (returns the surface to ready). */
+export type AccountOAuthCancelMessage = {
+  type: 'account.oauthCancel'
+  requestId: string
+}
+
 export type AccountVerbMessage =
   | AccountSwitchMessage
   | AccountRenameMessage
@@ -241,6 +283,9 @@ export type AccountVerbMessage =
   | AccountLogoutMessage
   | AccountTouchAllMessage
   | AccountLoginMessage
+  | AccountOAuthPasteCodeMessage
+  | AccountOAuthAliasMessage
+  | AccountOAuthCancelMessage
 
 /* ------------------------------------------------------------------------- *
  * P4-13 — RemoteSettings verbs (app-owned inbound; sidecar-LOCAL schema)
@@ -1372,6 +1417,49 @@ export type AccountResultFrame = {
   }>
 }
 
+/**
+ * P4-15 — the live OAuth login progress states, surfaced to the renderer so the
+ * first-run sign-in surface and the reauth banner can drive their sub-states off
+ * the REAL engine flow (`ConsoleOAuthFlow.tsx:35-55` `OAuthStatus`), not a
+ * scripted timer. Mirrors the engine states the renderer needs, dropping the
+ * ones that are engine-internal (`creating_api_key`, `about_to_retry`).
+ *
+ * SECRET POSTURE (SECURITY-MINIMUM §4 — proven by `secretGuard` on every
+ * outbound frame): this carries NON-secret state ONLY. `url` is the OAuth
+ * AUTHORIZE url the user must SEE to paste-fall-back — it holds the public PKCE
+ * `code_challenge` + one-time `state`, NEVER the `code_verifier` or any token
+ * (`codex-client.ts:140` builds it; the verifier stays engine-side). `message`
+ * is the redacted human error text. The tokens themselves never leave the
+ * engine: they are captured inside the sidecar's OAuth controller and written by
+ * the engine's own `saveCodexOAuthTokens`/vault path — the `waiting_for_alias`
+ * and `success` states carry no token field at all.
+ */
+export type OAuthLoginProgress =
+  /** Flow kicked off; browser opening, url not yet minted. */
+  | { state: 'starting' }
+  /** Browser handoff live; `url` is the engine-minted authorize url (paste fallback). */
+  | { state: 'waiting_for_login'; url: string }
+  /** Tokens captured engine-side; awaiting the optional account alias (new account). */
+  | { state: 'waiting_for_alias' }
+  /** Token written; the account appears on the next `accounts.snapshot`. */
+  | { state: 'success' }
+  /** The flow failed; `message` is the redacted engine error (retryable). */
+  | { state: 'error'; message: string }
+
+/**
+ * P4-15 outbound frame — pushed as the engine OAuth flow advances (begun by the
+ * `account.login` verb, driven by the paste-code/alias verbs). Broadcast to every
+ * connection like a snapshot; carries non-secret state only (secretGuard-clean by
+ * construction). NOT a snapshot: it is the transient flow progress, cleared when
+ * the account lands (`accounts.snapshot` re-broadcast) or the attempt is cancelled.
+ */
+export type OAuthLoginProgressFrame = {
+  kind: 'oauth.login.progress'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  progress: OAuthLoginProgress
+}
+
 /* ------------------------------------------------------------------------- *
  * Settings extensions read-seam (P4-12) — read-only config snapshots
  * ------------------------------------------------------------------------- *
@@ -1920,6 +2008,7 @@ export type ServerFrame =
   | SessionActionResultFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
+  | OAuthLoginProgressFrame
   | WorkspaceTrustSnapshotFrame
   | WorkspaceTrustResultFrame
   | DiagnosticsSnapshotFrame

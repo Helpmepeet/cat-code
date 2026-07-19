@@ -43,11 +43,13 @@
  */
 
 import {
+  appendAccount,
   describeCodexAccountAvailability,
   getCodexAccountAvailability,
   getPoolStatus,
   isCodexAccountSwitchable,
   removeCodexAccount,
+  saveCodexTokenToVault,
   setAccountAlias,
   switchToAccount,
   validateCodexAccountAlias,
@@ -55,13 +57,15 @@ import {
 } from '../../src/services/api/codexAccountPool.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
-import { clearCodexOAuthTokens } from '../../src/utils/auth.js'
+import { runCodexOAuthFlow, type CodexTokens } from '../../src/services/oauth/codex-client.js'
+import { clearCodexOAuthTokens, saveCodexOAuthTokens } from '../../src/utils/auth.js'
 import type {
   AccountResultFrame,
   AccountsSnapshot,
   AccountStatus,
   AccountVerbMessage,
   AccountVerbType,
+  OAuthLoginProgress,
 } from '../shared/protocol.js'
 
 /** Pure — the redacted outcome payload a verb produces (no transport, no secret). */
@@ -88,8 +92,6 @@ export type AccountsCommandExecutor = {
   logout(): AccountVerbResult
   /** Refresh OAuth tokens for every unlocked vault account. */
   touchAll(): Promise<AccountVerbResult>
-  /** Begin the engine's real OAuth login flow. */
-  login(): AccountVerbResult
   /**
    * Fetch soft usage hints (5h/weekly used-percent + reset) for every pool
    * account from the ChatGPT wham/usage endpoint and apply them to the live
@@ -122,6 +124,102 @@ export type SidecarAccountsDomain = {
    * when usage changed and the sidecar should re-broadcast the snapshot.
    */
   refreshUsage(): Promise<boolean>
+  /**
+   * P4-15 — register the sink the OAuth login controller pushes progress through.
+   * The server sets it once and broadcasts each `OAuthLoginProgress` as an
+   * `oauth.login.progress` frame (the domain keeps ZERO transport knowledge). An
+   * unset sink silently drops progress (e.g. a test that only asserts the ack).
+   */
+  setOAuthProgressSink(sink: (progress: OAuthLoginProgress) => void): void
+}
+
+/* ------------------------------------------------------------------------- *
+ * OAuth login controller seam (P4-15) — the live sign-in back-channel
+ * ------------------------------------------------------------------------- *
+ *
+ * The engine's real Codex OAuth flow (`runCodexOAuthFlow`, `codex-client.ts:603`)
+ * already exposes its progress as callbacks — `onUrlReady(url)` (the
+ * `waiting_for_login` signal, url is non-secret) and `onManualInput()` (the
+ * paste-code race) — and RETURNS the `CodexTokens` (secret) or throws. This seam
+ * wraps that so the sidecar consumes the REAL flow, and so a headless test can
+ * inject a FAKE runner that never opens a browser, binds port 1455, or writes the
+ * vault (§10 — the real run is the operator's live step). The captured tokens
+ * live ONLY inside the returned handle — the domain (and the wire) never sees a
+ * token; `persist` performs the engine's own credential write.
+ */
+
+/** The captured-but-not-yet-persisted login. Holds the secret tokens internally. */
+export type OAuthPendingLogin = {
+  /**
+   * TRUE when the authenticated `accountId` is already in the pool (a re-link /
+   * reauth). The controller then AUTO-persists (keeping the existing alias) and
+   * skips the naming step — mirrors the engine's own existing-vs-new alias
+   * branch (`getCodexAliasPrompt`, `ConsoleOAuthFlow.tsx:96`).
+   */
+  readonly isExistingAccount: boolean
+  /** Validate a proposed alias with the engine's OWN rule; empty = skip (ok). */
+  validateAlias(alias: string): { ok: true } | { ok: false; message: string }
+  /** Persist the captured tokens (engine credential write). Empty alias = keep/anon. */
+  persist(alias: string | undefined): void
+}
+
+/** Begins the real OAuth flow; the captured tokens stay inside the returned handle. */
+export type OAuthLoginRunner = {
+  begin(callbacks: {
+    /** The engine-minted authorize url arrived (drives `waiting_for_login`). */
+    onWaitingForLogin: (url: string) => void
+    /** Resolves when the user pastes a code (fed by the paste-code verb). */
+    waitForManualCode: () => Promise<string>
+  }): Promise<OAuthPendingLogin>
+}
+
+/**
+ * The REAL runner — consumes the engine's `runCodexOAuthFlow` and performs the
+ * engine's own token persistence (`saveCodexOAuthTokens` + vault + `appendAccount`,
+ * the identical writes `ConsoleOAuthFlow.persistCodexLogin` performs,
+ * `ConsoleOAuthFlow.tsx:213`). Only exercised by a LIVE login (the operator step);
+ * headless tests inject a fake so no browser/port/vault is ever touched.
+ */
+export function createRealOAuthLoginRunner(): OAuthLoginRunner {
+  return {
+    async begin({ onWaitingForLogin, waitForManualCode }) {
+      const tokens: CodexTokens = await runCodexOAuthFlow(
+        async url => {
+          onWaitingForLogin(url)
+        },
+        () => waitForManualCode(),
+      )
+      const existing = getPoolStatus().accounts.find(
+        a => a.accountId === tokens.accountId,
+      )
+      return {
+        isExistingAccount: existing !== undefined,
+        validateAlias(alias) {
+          const trimmed = alias.trim()
+          if (!trimmed) return { ok: true }
+          return validateCodexAccountAlias(trimmed, tokens.accountId)
+        },
+        persist(alias) {
+          const trimmed = alias?.trim() || undefined
+          // The engine's OWN credential writes — NOT a re-implementation.
+          saveCodexOAuthTokens(tokens)
+          const saved = saveCodexTokenToVault(
+            { ...tokens, alias: trimmed },
+            { writer: 'accountsDomain.oauthPersist' },
+          )
+          appendAccount(
+            { ...tokens, alias: trimmed },
+            {
+              writer: 'accountsDomain.oauthPersist',
+              source: saved ? 'vault' : 'config',
+              vaultFilePath: saved?.filePath,
+              activate: true,
+            },
+          )
+        },
+      }
+    },
+  }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -235,16 +333,6 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
       }))
       return { ok: true, message: 'Refresh complete.', touchAllResults }
     },
-    login() {
-      // The live OAuth flow (browser + localhost:1455 callback + token install)
-      // is coordinated with P4-15's first-run auth, which owns the shared OAuth
-      // surface + the progress back-channel. Deferred here — see the P4-5 report.
-      return {
-        ok: false,
-        message:
-          'Sign-in runs through the engine OAuth flow (coordinated with first-run auth, P4-15).',
-      }
-    },
     async refreshUsage() {
       // updateRoutingHints applies the fetched 5h/weekly percents onto the live
       // pool accounts, which `buildAccountStatus` then reads. A total failure
@@ -260,12 +348,120 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
  * ------------------------------------------------------------------------- */
 
 export function createSidecarAccountsDomain(
-  options: { executor?: AccountsCommandExecutor } = {},
+  options: {
+    executor?: AccountsCommandExecutor
+    /** Injected in tests so a headless round-trip never opens a browser / writes the vault. */
+    oauthRunner?: OAuthLoginRunner
+  } = {},
 ): SidecarAccountsDomain {
   const executor = options.executor ?? createRealAccountsExecutor()
+  const oauthRunner = options.oauthRunner ?? createRealOAuthLoginRunner()
 
   function resolveAccount(accountId: string): PoolAccount | undefined {
     return getPoolStatus().accounts.find(a => a.accountId === accountId)
+  }
+
+  /* ── OAuth login controller (P4-15) ──────────────────────────────────────
+   * One in-flight attempt per session. `generation` guards every async update
+   * so a cancelled/superseded attempt can never emit a stale progress frame or
+   * persist late. The captured tokens live inside `pending` (never on the wire).
+   */
+  let progressSink: ((progress: OAuthLoginProgress) => void) | null = null
+  let generation = 0
+  let phase: 'idle' | 'waiting_for_login' | 'waiting_for_alias' = 'idle'
+  let pending: OAuthPendingLogin | null = null
+  let resolveManualCode: ((code: string) => void) | null = null
+
+  function emit(gen: number, progress: OAuthLoginProgress): void {
+    if (gen !== generation) return
+    progressSink?.(progress)
+  }
+
+  function beginLogin(): AccountVerbResult {
+    const gen = ++generation
+    pending = null
+    resolveManualCode = null
+    phase = 'idle'
+    emit(gen, { state: 'starting' })
+    void (async () => {
+      try {
+        const login = await oauthRunner.begin({
+          onWaitingForLogin: url => {
+            phase = 'waiting_for_login'
+            emit(gen, { state: 'waiting_for_login', url })
+          },
+          waitForManualCode: () =>
+            new Promise<string>(resolve => {
+              resolveManualCode = resolve
+            }),
+        })
+        if (gen !== generation) return // cancelled/superseded mid-flow
+        resolveManualCode = null
+        if (login.isExistingAccount) {
+          // Reauth / re-link: keep the existing name, no naming step. `success`
+          // drives the accounts re-broadcast (server), which clears the banner.
+          login.persist(undefined)
+          pending = null
+          phase = 'idle'
+          emit(gen, { state: 'success' })
+        } else {
+          pending = login
+          phase = 'waiting_for_alias'
+          emit(gen, { state: 'waiting_for_alias' })
+        }
+      } catch (error) {
+        if (gen !== generation) return
+        pending = null
+        resolveManualCode = null
+        phase = 'idle'
+        emit(gen, {
+          state: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    })()
+    return { ok: true, message: 'Sign-in started.' }
+  }
+
+  function submitPasteCode(code: string): AccountVerbResult {
+    if (!resolveManualCode) {
+      return { ok: false, message: 'No sign-in is waiting for a code.' }
+    }
+    const resolve = resolveManualCode
+    resolveManualCode = null
+    resolve(code)
+    return { ok: true, message: 'Code submitted.' }
+  }
+
+  function submitAlias(alias: string): AccountVerbResult {
+    if (phase !== 'waiting_for_alias' || !pending) {
+      return { ok: false, message: 'No sign-in is waiting for a name.' }
+    }
+    const check = pending.validateAlias(alias)
+    if (!check.ok) {
+      // Stay in the alias step so the user can correct it (the engine's own rule).
+      return { ok: false, message: check.message }
+    }
+    const gen = generation
+    pending.persist(alias.trim() || undefined)
+    pending = null
+    phase = 'idle'
+    emit(gen, { state: 'success' })
+    return { ok: true, message: 'Signed in.' }
+  }
+
+  function cancelLogin(): AccountVerbResult {
+    generation++ // drop any late progress from the abandoned attempt
+    if (resolveManualCode) {
+      // Unblock the real flow's manual-code wait so its callback server tears
+      // down (the empty code makes the flow throw, which we then drop by gen).
+      const resolve = resolveManualCode
+      resolveManualCode = null
+      resolve('')
+    }
+    pending = null
+    phase = 'idle'
+    return { ok: true, message: 'Sign-in cancelled.' }
   }
 
   return {
@@ -279,6 +475,10 @@ export function createSidecarAccountsDomain(
 
     refreshUsage() {
       return executor.refreshUsage()
+    },
+
+    setOAuthProgressSink(sink) {
+      progressSink = sink
     },
 
     async runVerb(verb) {
@@ -342,8 +542,27 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.touchAll', result, poolChanged: true }
         }
         case 'account.login': {
-          const result = executor.login()
-          return { verb: 'account.login', result, poolChanged: result.ok }
+          // Begin the REAL OAuth flow; progress flows on the `oauth.login.progress`
+          // frame, the account appears on the `accounts.snapshot` re-broadcast the
+          // server fires on the `success` progress — never via this verb result.
+          return { verb: 'account.login', result: beginLogin(), poolChanged: false }
+        }
+        case 'account.oauthPasteCode': {
+          return {
+            verb: 'account.oauthPasteCode',
+            result: submitPasteCode(verb.code),
+            poolChanged: false,
+          }
+        }
+        case 'account.oauthAlias': {
+          return {
+            verb: 'account.oauthAlias',
+            result: submitAlias(verb.alias),
+            poolChanged: false,
+          }
+        }
+        case 'account.oauthCancel': {
+          return { verb: 'account.oauthCancel', result: cancelLogin(), poolChanged: false }
         }
         default: {
           // Exhaustiveness tripwire — a new verb must extend this switch.
