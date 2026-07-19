@@ -118,6 +118,19 @@ whether even that blocks or just disables submit is §5-Q2.
 > is intact. Mechanism: `selectVisibleReauthBanners` + persisted ids (`reauthBannerState.ts`
 > / `App.tsx`, `localStorage['catcode:dismissedReauth']`). This is the "UI tweak, not
 > architecture change" the bullet above anticipated.
+
+> **Revision (2026-07-19 — operator GUI-acceptance, merge `54d5e45`).** Supersedes the
+> BLOCKING-case behavior above. The all-dead wall no longer renders N per-account banners
+> (each repeating the pool sentence) and no longer re-nags on every session switch. It is now
+> ONE merged wall (`selectReauthWall` / `ReauthWall.tsx`): the pool-level "no healthy account /
+> turns blocked" reason stated ONCE, with one row per dead account keeping its own real reason
+> (e.g. `refresh_token_invalidated` vs "token expired"). The wall is **acknowledge→collapse**,
+> never hide: acknowledging minimizes it to a persistent chip (still says blocked, "Show
+> details" re-expands), and the acknowledge is keyed to the *sorted dead-account set*
+> (`localStorage['catcode:acknowledgedReauthWall']`) — session-free, so it persists across
+> session switches (the pool is global) but a genuinely new dead-set re-surfaces. The
+> loud-failure guarantee is intact: `selectAuthSubmitBlocked` is unchanged and the block reason
+> stays on screen (collapsed, not hidden). Still a UI change, not architecture.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics
