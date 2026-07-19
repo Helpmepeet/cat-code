@@ -19,12 +19,16 @@
  *    still surfaces on the TabBar.
  *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
  *    Accounts (P4-5), and Settings. None are mocked.
- *  - The prototype's per-row actions menu (rename/branch/rewind/export/delete) is
- *    omitted — those verbs are the P4-6b `SessionActionsMenu`; the restore-offer
- *    is the only row action here (the Sessions page is where the catalog lives).
- *  - The prototype's per-workspace "+" (new session in this workspace) is omitted:
- *    HC1 forbids the renderer authoring a cwd, so new sessions go through the
- *    native picker (⌘T / TabBar "+"), never a renderer-chosen workspace path.
+ *  - Per-row actions (#11): each session row raises the SAME P4-6b
+ *    `SessionActionsMenu` as the TabBar — a hover-revealed ⋮ kebab and a
+ *    right-click both call `onOpenRowActions(sessionId, anchor)`, which App routes
+ *    to its single already-rendered menu instance (target-session-bound; the menu's
+ *    `resolveSessionActions` auto-disables live-gated verbs on non-active/restorable
+ *    rows with honest reasons). No new inbound frame / preload channel is added.
+ *  - Per-workspace "+" (#10): each group header carries a "+" wired to the GENERIC
+ *    new-session flow (`onNewSession` = App's `newSession`, the same ⌘T / TabBar "+"
+ *    native picker). HC1 holds — the button never authors a cwd nor targets the
+ *    workspace path; the per-workspace placement is purely cosmetic.
  *  - Session-row drag-to-panel is omitted; the built split model is drag-tab-to-
  *    edge (P3-6), which stays intact.
  */
@@ -82,6 +86,8 @@ export function Sidebar({
   onSelectView,
   onSelectLive,
   onRestore,
+  onOpenRowActions,
+  onNewSession,
   modelForSession,
 }: {
   rows: SidebarRow[]
@@ -90,6 +96,25 @@ export function Sidebar({
   onSelectView: (view: SidebarView) => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  /**
+   * #11 — open the SAME target-session-bound `SessionActionsMenu` the TabBar uses,
+   * for THIS row's session (mirrors TabBar's `onOpenActions`). Optional + additive:
+   * the ⋮ kebab + right-click render only when wired, so headless tests that omit
+   * it are untouched. App owns the single menu instance; the row only raises the
+   * anchor (the kebab's rect, or the pointer coords on right-click).
+   */
+  onOpenRowActions?: (
+    sessionId: SessionId,
+    anchor: { top: number; left: number },
+  ) => void
+  /**
+   * #10 — the per-workspace "+" (new session in this workspace). Wired to App's
+   * GENERIC new-session flow (⌘T / TabBar "+"): the native picker, never a
+   * renderer-authored cwd (HC1). Optional + additive: the "+" renders only when
+   * wired. The per-workspace placement is cosmetic — every group's "+" calls the
+   * same callback.
+   */
+  onNewSession?: () => void
   /** Resolved model for a session (the subtitle's "· model", prototype grammar);
    * null when unknown — e.g. a restorable row that never attached this run. */
   modelForSession?: (id: SessionId) => string | null
@@ -230,6 +255,8 @@ export function Sidebar({
                     }
                     onSelectLive={onSelectLive}
                     onRestore={onRestore}
+                    onOpenRowActions={onOpenRowActions}
+                    onNewSession={onNewSession}
                     modelForSession={modelForSession}
                   />
                 ))
@@ -315,13 +342,19 @@ function groupByWorkspace(
     })
 }
 
-function SessionGroup({
+// Exported for SSR tests: the sidebar collapses to the rail by default
+// (`open = pinned || hovering`, both false under renderToStaticMarkup), so the
+// expanded group header (#10 "+") and rows (#11 ⋮) are only reachable by
+// rendering these subcomponents directly (SessionActionsMenu.test idiom).
+export function SessionGroup({
   group,
   activeSessionId,
   collapsed,
   onToggle,
   onSelectLive,
   onRestore,
+  onOpenRowActions,
+  onNewSession,
   modelForSession,
 }: {
   group: WorkspaceGroup
@@ -330,6 +363,11 @@ function SessionGroup({
   onToggle: () => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  onOpenRowActions?: (
+    sessionId: SessionId,
+    anchor: { top: number; left: number },
+  ) => void
+  onNewSession?: () => void
   modelForSession?: (id: SessionId) => string | null
 }) {
   // "Show more" cap — a long single-project session list buries the rest of the
@@ -353,25 +391,40 @@ function SessionGroup({
 
   return (
     <div className="mb-4">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={!collapsed}
-        title={group.cwd}
-        className="flex w-full items-center gap-1 px-1 pb-1.5 pt-0.5"
-      >
-        <span
-          className={
-            'flex shrink-0 text-text-faint transition-transform ' +
-            (collapsed ? '-rotate-90' : '')
-          }
+      {/* Header row: collapse toggle (flex-1) + the #10 per-workspace "+" so the
+       * "+" sits flush-right of the workspace label (prototype Sidebar.jsx:219). */}
+      <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          title={group.cwd}
+          className="flex min-w-0 flex-1 items-center gap-1"
         >
-          <ChevronIcon />
-        </span>
-        <span className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
-          {group.label}
-        </span>
-      </button>
+          <span
+            className={
+              'flex shrink-0 text-text-faint transition-transform ' +
+              (collapsed ? '-rotate-90' : '')
+            }
+          >
+            <ChevronIcon />
+          </span>
+          <span className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+            {group.label}
+          </span>
+        </button>
+        {onNewSession ? (
+          <button
+            type="button"
+            onClick={onNewSession}
+            title="New session in this workspace"
+            aria-label="New session in this workspace"
+            className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            <PlusIcon />
+          </button>
+        ) : null}
+      </div>
 
       {collapsed ? null : (
         <>
@@ -382,6 +435,7 @@ function SessionGroup({
               isActive={row.descriptor.appSessionId === activeSessionId}
               onSelectLive={onSelectLive}
               onRestore={onRestore}
+              onOpenRowActions={onOpenRowActions}
               modelForSession={modelForSession}
             />
           ))}
@@ -405,17 +459,23 @@ function SessionGroup({
   )
 }
 
-function SidebarRowItem({
+// Exported for SSR tests (see SessionGroup note): the #11 ⋮ kebab lives here.
+export function SidebarRowItem({
   row,
   isActive,
   onSelectLive,
   onRestore,
+  onOpenRowActions,
   modelForSession,
 }: {
   row: SidebarRow
   isActive: boolean
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  onOpenRowActions?: (
+    sessionId: SessionId,
+    anchor: { top: number; left: number },
+  ) => void
   modelForSession?: (id: SessionId) => string | null
 }) {
   const { descriptor, visual } = row
@@ -448,6 +508,17 @@ function SidebarRowItem({
       aria-label={`session ${title} — ${visual.label}${restorable ? ', restorable' : ''}`}
       title={`${descriptor.cwd}${restorable ? ' · restore' : ''}`}
       onClick={activate}
+      onContextMenu={
+        onOpenRowActions
+          ? event => {
+              // #11 — right-click opens the row's actions menu at the pointer
+              // (prototype Sidebar.jsx:245); suppress the native context menu.
+              event.preventDefault()
+              event.stopPropagation()
+              onOpenRowActions(id, { top: event.clientY, left: event.clientX })
+            }
+          : undefined
+      }
       onKeyDown={event => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
@@ -477,6 +548,31 @@ function SidebarRowItem({
         ) : null}
       </div>
 
+      {/* #11 — hover-revealed ⋮ kebab: opens the SAME target-session-bound
+       * SessionActionsMenu the TabBar uses (App owns the instance). Anchored
+       * below-right of the button, clamped to the menu width (232px) so it stays
+       * on-screen when the rail sits at the left edge (mirrors TabBar). */}
+      {onOpenRowActions ? (
+        <button
+          type="button"
+          className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={event => {
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            onOpenRowActions(id, {
+              top: rect.bottom + 4,
+              left: Math.max(8, rect.right - 232),
+            })
+          }}
+          // Keep key events off the row's activate handler (Enter/Space on the
+          // kebab opens the menu, it must not also fire the row's onKeyDown).
+          onKeyDown={event => event.stopPropagation()}
+          title="Session actions"
+          aria-label={`Session actions for ${title}`}
+        >
+          <KebabIcon />
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -744,6 +840,36 @@ function ChevronIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+
+/** #10 per-workspace "+" glyph (prototype Sidebar.jsx:233). */
+function PlusIcon() {
+  return (
+    <svg
+      width="8"
+      height="8"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
+      <line x1="5" y1="1" x2="5" y2="9" />
+      <line x1="1" y1="5" x2="9" y2="5" />
+    </svg>
+  )
+}
+
+/** #11 per-row actions ⋮ glyph — three vertically-stacked dots (prototype
+ * Sidebar.jsx:282, same grammar as the TabBar's ⋯ button). */
+function KebabIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="12" cy="19" r="1.5" />
     </svg>
   )
 }
