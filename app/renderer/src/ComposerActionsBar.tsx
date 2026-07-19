@@ -1,6 +1,4 @@
 import {
-  useEffect,
-  useRef,
   useState,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -11,6 +9,7 @@ import {
   statusDotTone,
   usageTone,
 } from './AccountsPage.js'
+import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
 import type { ContextUsage } from './contextUsage.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
@@ -146,54 +145,10 @@ function FastFace() {
  * P4-24c — INTERACTIVE run-control chips (the prototype's `RunChip` :99 /
  * `ReasoningChip` :137 / `FastChip` :694 popovers). Borderless faces driving the
  * REAL values + the real sidecar setters (via the app-owned `*.set` verbs). The
- * popover pattern (open state + outside-click/Escape dismiss, upward panel) mirrors
- * `PermissionModeChip`. Tailwind v4: only STATIC arbitrary classes.
+ * popover pattern (open state + outside-click/Escape dismiss, upward panel, in-panel
+ * arrow roving) lives in `composerPopover.ts` (shared with `PermissionModeChip`).
+ * Tailwind v4: only STATIC arbitrary classes.
  * --------------------------------------------------------------------------- */
-
-/**
- * Shared upward-popover state: open flag + a ref that dismisses on outside
- * click/Escape, plus the ACCT-2 focus lifecycle a `role="menu"` panel owes its
- * items: focus moves into the panel's first menu item on open; Escape or a
- * selection (via {@link close}) restores focus to the trigger BEFORE the panel
- * unmounts, instead of falling back to `<body>`. Plain outside-click leaves
- * focus wherever the user clicked — only Escape/selection force it back.
- */
-function usePopover() {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-
-  const close = () => {
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close()
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const firstItem = ref.current?.querySelector<HTMLElement>(
-      '[role="menuitem"]:not([aria-disabled="true"]), [role="menuitemradio"]',
-    )
-    firstItem?.focus()
-  }, [open])
-
-  return { open, setOpen, close, ref, triggerRef }
-}
 
 const POPOVER_PANEL =
   'absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
@@ -238,6 +193,7 @@ function ModelChip({
         <div
           role="menu"
           aria-label="Model"
+          onKeyDown={handleMenuRovingKeyDown}
           className={`${POPOVER_PANEL} max-h-[320px] w-64 overflow-auto`}
         >
           <div className={POPOVER_HEADING}>Model</div>
@@ -307,7 +263,12 @@ function ReasoningChip({
         {current ? formatEffort(current) : 'Auto'}
       </button>
       {open ? (
-        <div role="menu" aria-label="Reasoning effort" className={`${POPOVER_PANEL} w-48`}>
+        <div
+          role="menu"
+          aria-label="Reasoning effort"
+          onKeyDown={handleMenuRovingKeyDown}
+          className={`${POPOVER_PANEL} w-48`}
+        >
           <div className={POPOVER_HEADING}>Reasoning effort</div>
           {items.map(item => {
             const active =
@@ -431,7 +392,12 @@ export function AccountSwitcherPanel({
   // status is still 'healthy'.
   const ready = pool.filter(a => a.status === 'healthy' && !a.usageLimitReached).length
   return (
-    <div role="menu" aria-label="Accounts" className={`${POPOVER_PANEL_RIGHT} w-[336px]`}>
+    <div
+      role="menu"
+      aria-label="Accounts"
+      onKeyDown={handleMenuRovingKeyDown}
+      className={`${POPOVER_PANEL_RIGHT} w-[336px]`}
+    >
       <div className="flex items-center justify-between px-3.5 pb-2 pt-2.5">
         <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-text-subtle">
           Accounts
@@ -805,8 +771,9 @@ export function ComposerActionsBar({
   const exitToComposer = () => onFocusComposer?.()
 
   // Roving navigation among the faces. Runs at the toolbar level, so it also fires
-  // for keydowns bubbling out of an open popover — those are guarded out and left
-  // to the popover's own machinery (usePopover: first-item focus + Escape-to-close).
+  // for keydowns bubbling out of an open popover — those are guarded out and left to
+  // the popover's own machinery (usePopover: first-item focus + Escape-to-close;
+  // handleMenuRovingKeyDown: in-panel ArrowUp/Down/Home/End roving, Feature #13).
   const onToolbarKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
     if (target.closest('[role="menu"], [role="dialog"]')) return

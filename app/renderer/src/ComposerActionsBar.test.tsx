@@ -6,6 +6,7 @@ import {
   ComposerActionsBar,
   ContextUsagePanel,
 } from './ComposerActionsBar.js'
+import { handleMenuRovingKeyDown } from './composerPopover.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
@@ -558,4 +559,32 @@ test('read-only faces (no handlers) are not roving triggers', () => {
   expect(html).toContain('data-composer-face="mode"')
   expect(html).not.toContain('data-composer-face="model"')
   expect(html).not.toContain('data-composer-face="effort"')
+})
+
+// ── Feature #13: in-panel arrow roving inside the popovers ────────────────────
+// The pure roving math (wrap-around, Home/End, non-roving-key fall-through) is
+// unit-tested in composerPopover.test.ts. Here we prove the shared handler is
+// actually WIRED onto a real menu panel — the account switcher is the one open
+// panel reachable without a DOM (AccountSwitcherPanel is exported + pure). The
+// Model / Reasoning / Permission-mode panels only mount on client open-state, so
+// their identical `onKeyDown={handleMenuRovingKeyDown}` wiring + the live key
+// behaviour of ALL four are operator-GUI owed (SSR cannot fire a keydown).
+
+test('AccountSwitcherPanel wires the shared in-panel roving handler onto its menu (Feature #13)', () => {
+  const rows = pool()
+  const element = AccountSwitcherPanel({ active: rows[0]!, pool: rows, onSwitch: () => {} })
+  expect(element.props.role).toBe('menu')
+  expect(element.props.onKeyDown).toBe(handleMenuRovingKeyDown)
+})
+
+test('AccountSwitcherPanel rows carry no native `disabled`, so roving includes the aria-disabled active/capped rows (ACCT-6)', () => {
+  // The roving selector excludes only natively `disabled` items; aria-disabled
+  // rows stay focusable landing spots. Proven here by the absence of any native
+  // `disabled=""` on the account rows (they are aria-disabled instead).
+  const rows = pool()
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).not.toContain('disabled=""')
+  expect(countOccurrences(html, 'aria-disabled="true"')).toBe(2)
 })

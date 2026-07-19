@@ -67,3 +67,27 @@ test('an unrecognized mode falls back to its raw name (no crash)', () => {
   )
   expect(html).toContain('someFutureMode')
 })
+
+// ── Feature #13: adopting the shared usePopover lifecycle + in-panel roving ────
+// The chip now shares the run-control chips' popover machinery (composerPopover):
+// first-item focus on open, Escape/selection focus-restore to the trigger, and
+// ArrowUp/Down/Home/End roving over the mode rows (bypass is natively `disabled`
+// and skipped). The pure roving math is in composerPopover.test.ts; the live key
+// behaviour is operator-GUI owed — SSR renders only the CLOSED face (the popover
+// is client open-state, and the component uses hooks so it can't be called as a
+// plain function). These guard that the refactor kept the closed-face contract.
+
+test('the trigger stays a menu button and still spreads the roving-tabindex faceProps (Feature #4/#13)', () => {
+  // `ref={triggerRef}` now precedes the faceProps spread — assert the spread still
+  // wins so the chip keeps joining the toolbar roving group.
+  const html = renderToStaticMarkup(
+    <PermissionModeChip
+      context={ctx('plan')}
+      onSetMode={() => {}}
+      faceProps={{ 'data-composer-face': 'mode', tabIndex: 0, onFocus: () => {} }}
+    />,
+  )
+  expect(html).toContain('aria-haspopup="menu"')
+  expect(html).toContain('data-composer-face="mode"')
+  expect(html).toContain('tabindex="0"')
+})
