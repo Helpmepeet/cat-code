@@ -2042,6 +2042,10 @@ export function App() {
         onSelectView={setActiveView}
         onSelectLive={selectTab}
         onRestore={sessionId => void performRestore(sessionId)}
+        onOpenRowActions={(sessionId, anchor) =>
+          setSessionActionsTarget({ sessionId, anchor })
+        }
+        onNewSession={newSession}
         modelForSession={id =>
           selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
           null
