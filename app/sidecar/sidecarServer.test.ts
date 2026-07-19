@@ -35,9 +35,11 @@ import {
   type ClientFrame,
   type PermissionContextFrame,
   type ServerFrame,
+  type SessionsCatalogSnapshot,
   type SettingsVerbMessage,
   type SlashCatalogEntry,
 } from '../shared/protocol.js'
+import type { SidecarSessionsCatalogDomain } from './sessionsCatalogDomain.js'
 import {
   createSidecarPermissionDomain,
   type SidecarPermissionDomain,
@@ -411,6 +413,73 @@ test('fresh-session slash catalog — rich slash-catalog.snapshot is delivered o
   let state = createSlashCatalogState()
   state = reduceSlashCatalogState(state, { type: 'frame', frame: catalogFrames[0]! })
   expect(selectSlashCatalog(state, SESSION)).toEqual(slashCatalog)
+})
+
+test('#16 (B4) — a catalog refresh re-broadcasts a fresh sessions.snapshot to attached connections (de-stale)', async () => {
+  // The catalog was spawn-frozen, so a session created after this sidecar
+  // spawned never appeared. The periodic refresh re-enumerates + re-broadcasts
+  // the SAME read-only frame kind (no new inbound verb). Prove: refresh is a
+  // no-op with nobody attached, and re-broadcasts the latest snapshot once a
+  // connection exists.
+  let current: SessionsCatalogSnapshot = { entries: [], truncated: false, notes: [] }
+  let refreshCount = 0
+  const sessionsCatalog: SidecarSessionsCatalogDomain = {
+    getSnapshot: () => current,
+    refresh: async () => {
+      refreshCount++
+      return current
+    },
+  }
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    sessionsCatalog,
+    log: () => {},
+  })
+  servers.push(server)
+  const refresh = () =>
+    (server as unknown as { refreshSessionsCatalog(): Promise<void> }).refreshSessionsCatalog()
+
+  // No connection yet → refresh must not enumerate or broadcast (a detached
+  // sidecar has no one to notify and may be TTL'ing out).
+  await refresh()
+  expect(refreshCount).toBe(0)
+
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  // Attach delivered the spawn snapshot (empty).
+  expect(received.filter(f => f.kind === 'sessions.snapshot')).toHaveLength(1)
+
+  // A new session lands on disk; the refresh picks it up and re-broadcasts.
+  current = {
+    entries: [
+      {
+        sessionId: 'new-1',
+        cwd: '/w/proj',
+        title: 'A brand new session',
+        modifiedAtMs: 2,
+        createdAtMs: 2,
+        messageCount: 0,
+        gitBranch: null,
+        tag: null,
+        mode: null,
+        agentSetting: null,
+        prNumber: null,
+        prRepository: null,
+      },
+    ],
+    truncated: false,
+    notes: [],
+  }
+  await refresh()
+  expect(refreshCount).toBe(1)
+
+  const catalogFrames = received.filter(
+    (f): f is Extract<ServerFrame, { kind: 'sessions.snapshot' }> => f.kind === 'sessions.snapshot',
+  )
+  expect(catalogFrames).toHaveLength(2)
+  expect(catalogFrames[1]!.catalog.entries.map(e => e.sessionId)).toEqual(['new-1'])
 })
 
 test('P4-6 title-rider — after a fresh session first turn, broadcasts a session-title frame', async () => {
