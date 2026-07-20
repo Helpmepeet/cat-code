@@ -2,14 +2,19 @@ import { describe, expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { createShellState, reduceShellState } from './shellState.js'
 import {
+  compareSidebarActivity,
+  deriveMergedRowVisual,
   deriveSidebarRowVisual,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
   selectSidebarRows,
   selectVisibleSidebarRows,
   shouldShowSidebarGroupExpansionToggle,
+  sidebarActivityKey,
+  sortSidebarSessionRows,
   type SidebarRow,
 } from './sidebarState.js'
+import type { MergedSessionRow } from './sessionsCatalogState.js'
 
 function descriptor(
   id: string,
@@ -42,14 +47,14 @@ const rows10 = Array.from({ length: 10 }, (_, i) => row(`r${i}`))
 
 test('selectVisibleSidebarRows shows every row at/under the cap (no toggle)', () => {
   const rows = rows10.slice(0, 6)
-  const result = selectVisibleSidebarRows(rows, null, 6, false)
+  const result = selectVisibleSidebarRows(rows, () => false, 6, false)
   expect(result.overLimit).toBe(false)
   expect(result.hiddenCount).toBe(0)
   expect(result.visible).toHaveLength(6)
 })
 
 test('selectVisibleSidebarRows caps to the first N when collapsed', () => {
-  const result = selectVisibleSidebarRows(rows10, null, 6, false)
+  const result = selectVisibleSidebarRows(rows10, () => false, 6, false)
   expect(result.overLimit).toBe(true)
   expect(result.visible.map(r => r.descriptor.appSessionId)).toEqual([
     'r0',
@@ -63,7 +68,7 @@ test('selectVisibleSidebarRows caps to the first N when collapsed', () => {
 })
 
 test('selectVisibleSidebarRows expanded shows all, toggle still offered', () => {
-  const result = selectVisibleSidebarRows(rows10, null, 6, true)
+  const result = selectVisibleSidebarRows(rows10, () => false, 6, true)
   expect(result.overLimit).toBe(true)
   expect(result.visible).toHaveLength(10)
   expect(result.hiddenCount).toBe(0)
@@ -71,7 +76,12 @@ test('selectVisibleSidebarRows expanded shows all, toggle still offered', () => 
 
 test('selectVisibleSidebarRows keeps the active session visible past the cap', () => {
   // Active 'r8' is in the hidden tail → appended so it never disappears.
-  const result = selectVisibleSidebarRows(rows10, 'r8', 6, false)
+  const result = selectVisibleSidebarRows(
+    rows10,
+    r => r.descriptor.appSessionId === 'r8',
+    6,
+    false,
+  )
   expect(result.visible.map(r => r.descriptor.appSessionId)).toEqual([
     'r0',
     'r1',
@@ -85,7 +95,12 @@ test('selectVisibleSidebarRows keeps the active session visible past the cap', (
 })
 
 test('selectVisibleSidebarRows does not duplicate an active session already in the head', () => {
-  const result = selectVisibleSidebarRows(rows10, 'r2', 6, false)
+  const result = selectVisibleSidebarRows(
+    rows10,
+    r => r.descriptor.appSessionId === 'r2',
+    6,
+    false,
+  )
   expect(result.visible).toHaveLength(6)
   expect(
     result.visible.filter(r => r.descriptor.appSessionId === 'r2'),
@@ -99,7 +114,12 @@ test('selectVisibleSidebarRows does not duplicate an active session already in t
 
 test('selectVisibleSidebarRows at the limit+1 boundary with the active row as the sole overflow reports zero hidden', () => {
   const rows7 = rows10.slice(0, 7)
-  const result = selectVisibleSidebarRows(rows7, 'r6', 6, false)
+  const result = selectVisibleSidebarRows(
+    rows7,
+    r => r.descriptor.appSessionId === 'r6',
+    6,
+    false,
+  )
   expect(result.overLimit).toBe(true)
   expect(result.hiddenCount).toBe(0)
   expect(result.visible).toHaveLength(7)
@@ -300,4 +320,127 @@ test('resolveNavSelection routes every enabled Sidebar.tsx NAV id to itself', ()
 
 test('resolveNavSelection returns null for a disabled item, never the id', () => {
   expect(resolveNavSelection({ id: 'sessions', enabled: false })).toBeNull()
+})
+
+/* ── SESSIONS-UNIFICATION: merged-row visual + warp-free activity order ──────── */
+
+function mergedRow(over: Partial<MergedSessionRow> = {}): MergedSessionRow {
+  return {
+    sessionId: 'engine-x',
+    appSessionId: 'app-x',
+    cwd: '/tmp/proj',
+    title: null,
+    displayLabel: 'X',
+    live: true,
+    restorable: false,
+    status: 'ready',
+    inRegistry: true,
+    modifiedAtMs: 0,
+    createdAtMs: 0,
+    lastMessageSentAt: null,
+    messageCount: 0,
+    gitBranch: null,
+    tag: null,
+    mode: null,
+    agentSetting: null,
+    prNumber: null,
+    prRepository: null,
+    ...over,
+  }
+}
+
+describe('deriveMergedRowVisual', () => {
+  test('a live registry row → select intent, no restore', () => {
+    const v = deriveMergedRowVisual(mergedRow({ status: 'ready', live: true }))
+    expect(v.kind).toBe('live')
+    expect(v.intent).toBe('select')
+    expect(v.openable).toBe(true)
+  })
+
+  test('a restorable registry row → restore intent, dead tone', () => {
+    const v = deriveMergedRowVisual(
+      mergedRow({ status: 'exited', live: false, restorable: true }),
+    )
+    expect(v.kind).toBe('restorable')
+    expect(v.intent).toBe('restore')
+    expect(v.label).toBe('closed')
+  })
+
+  test('a history row WITH a cwd → open-history intent, history kind', () => {
+    const v = deriveMergedRowVisual(
+      mergedRow({ inRegistry: false, appSessionId: null, status: 'history', cwd: '/tmp/w' }),
+    )
+    expect(v.kind).toBe('history')
+    expect(v.intent).toBe('open-history')
+    expect(v.openable).toBe(true)
+    expect(v.label).toBe('history')
+  })
+
+  test('a history row with an EMPTY cwd → not openable, none intent (browse-only)', () => {
+    const v = deriveMergedRowVisual(
+      mergedRow({ inRegistry: false, appSessionId: null, status: 'history', cwd: '   ' }),
+    )
+    expect(v.kind).toBe('history')
+    expect(v.openable).toBe(false)
+    expect(v.intent).toBe('none')
+  })
+})
+
+describe('sidebarActivityKey / compareSidebarActivity (CC-2 warp-free)', () => {
+  test('a registry row keys on lastMessageSentAt, NOT modifiedAtMs (no warp on open)', () => {
+    // modifiedAtMs folds in lastAttachedAt (bumps on open); the key ignores it.
+    const row = mergedRow({
+      inRegistry: true,
+      lastMessageSentAt: 100,
+      createdAtMs: 5,
+      modifiedAtMs: 999_999,
+    })
+    expect(sidebarActivityKey(row)).toBe(100)
+  })
+
+  test('a registry row that never messaged falls back to createdAtMs (never modifiedAtMs)', () => {
+    const row = mergedRow({
+      inRegistry: true,
+      lastMessageSentAt: null,
+      createdAtMs: 42,
+      modifiedAtMs: 999_999,
+    })
+    expect(sidebarActivityKey(row)).toBe(42)
+  })
+
+  test('a history row keys on modifiedAtMs (its real last-activity)', () => {
+    const row = mergedRow({
+      inRegistry: false,
+      appSessionId: null,
+      status: 'history',
+      lastMessageSentAt: null,
+      modifiedAtMs: 700,
+    })
+    expect(sidebarActivityKey(row)).toBe(700)
+  })
+
+  test('sort orders by activity desc; a stale open does NOT jump a registry row', () => {
+    const rows = [
+      mergedRow({ sessionId: 'a', lastMessageSentAt: 10, modifiedAtMs: 9_999 }),
+      mergedRow({ sessionId: 'b', lastMessageSentAt: 500, modifiedAtMs: 1 }),
+      mergedRow({
+        sessionId: 'c',
+        inRegistry: false,
+        appSessionId: null,
+        status: 'history',
+        lastMessageSentAt: null,
+        modifiedAtMs: 300,
+      }),
+    ]
+    // b(500) > c(300 history mtime) > a(10) — a's big modifiedAtMs is ignored.
+    expect(sortSidebarSessionRows(rows).map(r => r.sessionId)).toEqual([
+      'b',
+      'c',
+      'a',
+    ])
+    // Comparator is deterministic on ties (immutable sessionId).
+    const tieA = mergedRow({ sessionId: 'z', lastMessageSentAt: 1 })
+    const tieB = mergedRow({ sessionId: 'y', lastMessageSentAt: 1 })
+    expect(compareSidebarActivity(tieA, tieB)).toBeGreaterThan(0)
+  })
 })

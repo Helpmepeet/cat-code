@@ -162,6 +162,10 @@ test('control-plane cwd never trusts the renderer: HC1 native picker + host reva
   )
   expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
   expect(source).toContain("const CH_HOST_PREVIEW = 'catcode:host:preview'")
+  // SESSIONS-UNIFICATION (2026-07-20) — open-from-history rides its own channel.
+  expect(source).toContain(
+    "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
+  )
   // Each fixed channel is served by an ipcMain.handle (arg may wrap to the next
   // line, so match the constant near a handle, not a glued string).
   for (const channel of [
@@ -172,6 +176,7 @@ test('control-plane cwd never trusts the renderer: HC1 native picker + host reva
     'CH_HOST_LIST',
     'CH_HOST_PICK_DIR',
     'CH_HOST_PREVIEW',
+    'CH_HOST_OPEN_HISTORY',
   ]) {
     expect(new RegExp(`ipcMain\\.handle\\(\\s*${channel}\\b`).test(source)).toBe(true)
   }

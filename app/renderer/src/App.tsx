@@ -1378,6 +1378,42 @@ export function App() {
     [openPreviewPane, restoreLiveSession],
   )
 
+  // SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-created
+  // session (a history row with no desktop registry row) as a real desktop
+  // session, by its ENGINE session id. HC1: the renderer authors NO cwd — it
+  // passes only the engine id; main resolves the workspace from the engine-written
+  // baseline cache and spawns a resume through the same machinery as restore.
+  //
+  // Main dedups: if the id is ALREADY a desktop registry row (a stale-snapshot
+  // race — a genuine history row is by definition not in the registry), the
+  // returned descriptor is that existing row. Route it like a row click: a
+  // restorable existing row goes through `performRestore` (spawn), not a bare
+  // focus of an empty pane; a live/fresh-spawned one is focused directly. An
+  // unresolvable id returns a typed error rendered honestly.
+  const openHistorySession = useCallback(
+    async (engineSessionId: string) => {
+      const bridge = getBridge()
+      try {
+        const result = await bridge.openHistorySession(engineSessionId)
+        if (!result.ok) {
+          setShellError(hostErrorMessage(result.error))
+          return
+        }
+        const descriptor = result.value
+        setShellError(null)
+        if (descriptor.restorable) {
+          performRestore(descriptor.appSessionId)
+          return
+        }
+        setActiveSessionId(descriptor.appSessionId)
+        setActiveView('chat')
+      } catch (error) {
+        setShellError(errorMessage(error))
+      }
+    },
+    [performRestore],
+  )
+
   function submitSession(
     sessionId: SessionId,
     event: FormEvent<HTMLFormElement>,
@@ -2042,12 +2078,13 @@ export function App() {
       {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
        * restore-offer, alongside the TabBar's live ∪ preview view. */}
       <Sidebar
-        rows={sidebarRows}
+        rows={sessionCatalogRows}
         activeSessionId={activeSessionId}
         activeView={activeView}
         onSelectView={setActiveView}
         onSelectLive={selectTab}
         onRestore={sessionId => void performRestore(sessionId)}
+        onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
         onOpenRowActions={(sessionId, anchor) =>
           setSessionActionsTarget({ sessionId, anchor })
         }
@@ -2252,9 +2289,15 @@ export function App() {
             truncated={sessionCatalogSnapshot?.truncated ?? false}
             catalogLoaded={sessionCatalogSnapshot !== null}
             onOpenRow={row => {
-              if (row.appSessionId == null) return
-              if (row.live) selectTab(row.appSessionId)
-              else void performRestore(row.appSessionId)
+              if (row.appSessionId != null) {
+                if (row.live) selectTab(row.appSessionId)
+                else void performRestore(row.appSessionId)
+                return
+              }
+              // History-only (terminal) row: open it by its engine id when the
+              // workspace is resolvable; empty-cwd rows stay browse-only (the
+              // SessionsPage RowItem already renders those non-openable).
+              if (row.cwd.trim().length > 0) void openHistorySession(row.sessionId)
             }}
             onNewSession={() => void newSession()}
           />

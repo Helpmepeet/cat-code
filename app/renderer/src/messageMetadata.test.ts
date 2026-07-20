@@ -122,6 +122,7 @@ describe('buildSessionMetadataView', () => {
     inRegistry: true,
     modifiedAtMs: 1,
     createdAtMs: 0,
+    lastMessageSentAt: null,
     messageCount: 3,
     gitBranch: null,
     tag: 'auth',

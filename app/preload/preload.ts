@@ -72,6 +72,7 @@ const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
+const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const sendGuard = createRendererIpcGuard()
@@ -282,6 +283,19 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ readSessionsCatalog: true })
     return ipcRenderer.invoke(CH_HOST_SESSIONS_CATALOG) as Promise<
       SessionsCatalogSnapshot | null
+    >
+  },
+  openHistorySession(
+    engineSessionId: string,
+  ): Promise<HostResult<SessionDescriptor>> {
+    // SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-created
+    // session by its ENGINE session id. Same id-only posture as restoreSession:
+    // the renderer carries ONLY the engine id (HC1 — no cwd, no path, no token);
+    // main resolves the cwd from the engine-written baseline cache and spawns via
+    // the same resume machinery. Rate/size-guarded, fixed channel.
+    sendGuard.assertAllowed({ engineSessionId })
+    return ipcRenderer.invoke(CH_HOST_OPEN_HISTORY, engineSessionId) as Promise<
+      HostResult<SessionDescriptor>
     >
   },
   subscribeHost(listener: (event: HostEvent) => void): () => void {

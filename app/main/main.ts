@@ -54,6 +54,7 @@ import {
   writeCache,
 } from './transcriptCache.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
+import { resolveOpenHistorySession } from './openHistorySession.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -138,6 +139,7 @@ const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
+const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
@@ -1070,6 +1072,66 @@ function registerHostControlPlane(): void {
       // exactly as restoreSession sources a cwd, and spawns a FRESH session there.
       // A fresh create takes no replay-coalescing (no transcript to replay).
       return host.createSessionInWorkspace(String(appSessionId))
+    },
+  )
+
+  // SESSIONS-UNIFICATION: coalesce concurrent open-history spawns of the SAME
+  // transcript. The resolver's dedup catches a registry row that ALREADY has its
+  // `engineSessionId` (filled only on the ready frame). During the pre-ready spawn
+  // window (~1–3s for a resume) that row's engineSessionId is still null, so a
+  // rapid second activation would miss dedup and spawn a SECOND sidecar onto the
+  // same JSONL. This map makes a second open of an in-flight id return the SAME
+  // promise (→ the same session), never a duplicate; cleared on completion. (A
+  // much narrower residual — a click in the sub-ms gap between createSession
+  // resolving and the ready frame filling the id — collapses to the already-
+  // accepted unguarded-concurrent-resume decision; SESSIONS-UNIFICATION.md.)
+  const openHistoryInFlight = new Map<
+    string,
+    Promise<HostResult<SessionDescriptor>>
+  >()
+  ipcMain.handle(
+    CH_HOST_OPEN_HISTORY,
+    (_e, engineSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
+      if (!host) return Promise.resolve(noHost<SessionDescriptor>())
+      // SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-
+      // created session (a transcript with no desktop registry row) as a real
+      // desktop session. HC1: the renderer supplies ONLY an ENGINE session id; it
+      // authors no cwd. Validation + dedup + cwd resolution are the pure resolver's
+      // job — the cwd comes from the sidecar-written baseline cache (engine-derived
+      // data, `defaultRegistryDir()`), never from the renderer, and a missing /
+      // empty-cwd id fails closed with a typed error (resolveOpenHistorySession).
+      const resolution = resolveOpenHistorySession(
+        engineSessionId,
+        host.listSessions(),
+        readSessionsCatalogCache(defaultRegistryDir()),
+      )
+      if (resolution.kind === 'reject') {
+        return Promise.resolve({ ok: false, error: resolution.error })
+      }
+      if (resolution.kind === 'existing') {
+        // Already a ready app row — the renderer switches/restores it; no spawn.
+        return Promise.resolve({ ok: true, value: resolution.descriptor })
+      }
+      const engineId = resolution.resumeEngineSessionId
+      const inflight = openHistoryInFlight.get(engineId)
+      if (inflight) return inflight
+      // Spawn a resume through the SAME machinery restore uses: createSession with
+      // a MAIN-resolved cwd + resumeEngineSessionId → supervisor sets
+      // CATCODE_SIDECAR_RESUME_SESSION_ID → sessionResume.ts (the engine's real
+      // resume path). The workspace-trust gate still fail-closes the first turn at
+      // that cwd (sidecarServer.ts:987); concurrent-resume of a terminal-live
+      // transcript is unguarded here exactly as the engine's own /resume is
+      // (SESSIONS-UNIFICATION.md, engine-precedent flag).
+      const promise = host
+        .createSession({
+          cwd: resolution.cwd,
+          resumeEngineSessionId: engineId,
+        })
+        .finally(() => {
+          openHistoryInFlight.delete(engineId)
+        })
+      openHistoryInFlight.set(engineId, promise)
+      return promise
     },
   )
 }

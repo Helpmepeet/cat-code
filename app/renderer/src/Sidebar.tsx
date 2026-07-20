@@ -4,15 +4,26 @@
  * shadow, easing), a paw logo, session search, workspace grouping (by cwd), and
  * a nav destination rail — replacing P3-5b's static 240px roster.
  *
- * Data is unchanged: it renders the real `SidebarRow[]` (`selectSidebarRows`,
- * live ∪ restorable, stable arrival order — see `sidebarState.ts`) and raises
- * the SAME intent callbacks
- * (`onSelectLive` reuses App's `selectTab`; `onRestore` calls the host
- * `restoreSession`). Only real data is rendered — the `SessionDescriptor`
- * title/cwd/recency plus the live diagnostics model (the subtitle's `· model`);
- * no cost/tags fixtures (C3).
+ * Data (SESSIONS-UNIFICATION — operator ruling 2026-07-20): it renders the
+ * MERGED roster — desktop registry rows ∪ terminal-created history — via the
+ * D5-blessed shared selector `selectMergedSessionRows` (App computes it as
+ * `sessionCatalogRows`; no second merge). This is the ruling that a session
+ * created in the terminal is the SAME session as one created in the app: the
+ * whole enumeration is listed and grouped by workspace, exactly as the prototype
+ * `Sidebar.jsx` receives the entire session list. A registry row raises the same
+ * switch/restore intents as before; a terminal-history row with a resolvable
+ * workspace raises `onOpenHistory` (the Part-A host path, opening it by engine
+ * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
  * §0 fidelity flags (divergences from the prototype, by design):
+ *  - History rows carry a subdued `history` chip and (when browse-only) a
+ *    non-interactive style, so live/restorable/history read distinctly — the
+ *    prototype has no history/restorable states in its mock, so there is no
+ *    prototype grammar to match here (🔁 adapted).
+ *  - The per-workspace "+" renders only for a group that has at least one
+ *    registry row to name (HC1: createSessionInWorkspace needs a registry id,
+ *    not a path); a pure-terminal-history workspace has no such id, so its "+"
+ *    is hidden (🔁 adapted — a fresh session there still goes via ⌘T / picker).
  *  - No per-row status dot: the prototype's sidebar rows carry none (title +
  *    `time · model` only), so the earlier real-added health dot was removed
  *    2026-07-14 to match the prototype (operator decision). Live/dead/busy state
@@ -37,16 +48,21 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { basename } from './pathUtils.js'
 import type { SessionId } from '../../shared/protocol.js'
 import {
+  deriveMergedRowVisual,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
   selectVisibleSidebarRows,
   shouldShowSidebarGroupExpansionToggle,
-  type SidebarRow,
+  sidebarActivityKey,
+  sortSidebarSessionRows,
 } from './sidebarState.js'
-import { tabLabel } from './TabBar.js'
+import {
+  groupByWorkspace,
+  type MergedSessionRow,
+  type WorkspaceGroup,
+} from './sessionsCatalogState.js'
 
 // Rail geometry + hover timing, matching the prototype (RAIL_W/FULL_W/delays).
 const HOVER_DELAY = 120
@@ -89,16 +105,23 @@ export function Sidebar({
   onSelectView,
   onSelectLive,
   onRestore,
+  onOpenHistory,
   onOpenRowActions,
   onNewSessionInWorkspace,
   modelForSession,
 }: {
-  rows: SidebarRow[]
+  rows: MergedSessionRow[]
   activeSessionId: SessionId | null
   activeView: SidebarView
   onSelectView: (view: SidebarView) => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  /**
+   * SESSIONS-UNIFICATION — open a terminal-created history row by its ENGINE
+   * session id (the Part-A host path). Called only for a history row whose
+   * workspace is resolvable; the renderer authors no cwd (HC1).
+   */
+  onOpenHistory: (engineSessionId: string) => void
   /**
    * #11 — open the SAME target-session-bound `SessionActionsMenu` the TabBar uses,
    * for THIS row's session (mirrors TabBar's `onOpenActions`). Optional + additive:
@@ -151,19 +174,30 @@ export function Sidebar({
   )
 
   const query = search.trim().toLowerCase()
-  // Grouping (filter → group → sort) recomputes only when the roster, the query,
-  // or the active session changes — not on every hover / pin / group-collapse
-  // re-render (all of which are frequent and leave the grouping identical).
+  // Sort (CC-2 warp-free activity order) → filter → group. Recomputes only when
+  // the roster, the query, or the active session changes — not on every hover /
+  // pin / group-collapse re-render (frequent, and leaving the grouping identical).
+  // The active session's cwd puts its workspace group first (shared
+  // `groupByWorkspace`, which also collects empty-cwd rows under one clearly
+  // labeled "Unknown workspace" bucket rather than a blank header).
+  const activeCwd = useMemo(
+    () =>
+      activeSessionId == null
+        ? null
+        : rows.find(row => row.appSessionId === activeSessionId)?.cwd ?? null,
+    [rows, activeSessionId],
+  )
   const groups = useMemo(() => {
+    const ordered = sortSidebarSessionRows(rows)
     const filtered = query
-      ? rows.filter(
+      ? ordered.filter(
           row =>
-            tabLabel(row.descriptor).toLowerCase().includes(query) ||
-            row.descriptor.cwd.toLowerCase().includes(query),
+            row.displayLabel.toLowerCase().includes(query) ||
+            row.cwd.toLowerCase().includes(query),
         )
-      : rows
-    return groupByWorkspace(filtered, activeSessionId)
-  }, [rows, query, activeSessionId])
+      : ordered
+    return groupByWorkspace(filtered, activeCwd)
+  }, [rows, query, activeCwd])
 
   return (
     <>
@@ -259,6 +293,7 @@ export function Sidebar({
                     }
                     onSelectLive={onSelectLive}
                     onRestore={onRestore}
+                    onOpenHistory={onOpenHistory}
                     onOpenRowActions={onOpenRowActions}
                     onNewSessionInWorkspace={onNewSessionInWorkspace}
                     modelForSession={modelForSession}
@@ -303,48 +338,9 @@ export function Sidebar({
   )
 }
 
-type WorkspaceGroup = {
-  /** The full cwd — the stable group key. */
-  cwd: string
-  /** Display label: the cwd's basename (its "workspace" name). */
-  label: string
-  rows: SidebarRow[]
-}
-
-/**
- * Group rows by their session's cwd (the derivable "workspace"), preserving the
- * incoming stable arrival order within each group (matches the prototype's
- * `Sidebar.jsx` `groupByWorkspace`, which never re-sorts within a group either).
- * Group order mirrors the prototype's "current workspace first, then
- * alphabetical": the group holding the active session leads, the rest sort
- * alphabetically by label, ties broken by cwd.
- */
-function groupByWorkspace(
-  rows: SidebarRow[],
-  activeSessionId: SessionId | null,
-): WorkspaceGroup[] {
-  const map = new Map<string, SidebarRow[]>()
-  for (const row of rows) {
-    const key = row.descriptor.cwd
-    const bucket = map.get(key)
-    if (bucket) bucket.push(row)
-    else map.set(key, [row])
-  }
-
-  const activeCwd = activeSessionId
-    ? rows.find(row => row.descriptor.appSessionId === activeSessionId)?.descriptor
-        .cwd ?? null
-    : null
-
-  return [...map.entries()]
-    .map(([cwd, groupRows]) => ({ cwd, label: basename(cwd) || cwd, rows: groupRows }))
-    .sort((a, b) => {
-      if (a.cwd === activeCwd) return -1
-      if (b.cwd === activeCwd) return 1
-      const byLabel = a.label.localeCompare(b.label)
-      return byLabel !== 0 ? byLabel : a.cwd.localeCompare(b.cwd)
-    })
-}
+// Workspace grouping (current-first, then alpha, empty-cwd last) is the shared
+// `groupByWorkspace` from `sessionsCatalogState` — the SAME selector the Sessions
+// page uses, so both surfaces group the unified roster identically (no local dup).
 
 // Exported for SSR tests: the sidebar collapses to the rail by default
 // (`open = pinned || hovering`, both false under renderToStaticMarkup), so the
@@ -357,6 +353,7 @@ export function SessionGroup({
   onToggle,
   onSelectLive,
   onRestore,
+  onOpenHistory,
   onOpenRowActions,
   onNewSessionInWorkspace,
   modelForSession,
@@ -367,6 +364,7 @@ export function SessionGroup({
   onToggle: () => void
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  onOpenHistory: (engineSessionId: string) => void
   onOpenRowActions?: (
     sessionId: SessionId,
     anchor: { top: number; left: number },
@@ -384,7 +382,7 @@ export function SessionGroup({
     overLimit,
   } = selectVisibleSidebarRows(
     group.rows,
-    activeSessionId,
+    row => row.appSessionId != null && row.appSessionId === activeSessionId,
     SIDEBAR_GROUP_ROW_LIMIT,
     expanded,
   )
@@ -392,6 +390,14 @@ export function SessionGroup({
   useEffect(() => {
     setExpanded(value => normalizeSidebarGroupExpansion(value, overLimit))
   }, [overLimit])
+
+  // #15 — the per-workspace "+" needs a REGISTRY id to name (HC1: the host
+  // re-derives the cwd from a registry row, never a renderer path). A
+  // pure-terminal-history group has no such id, so its "+" is hidden.
+  const repId =
+    group.rows.find(r => r.appSessionId === activeSessionId)?.appSessionId ??
+    group.rows.find(r => r.appSessionId != null)?.appSessionId ??
+    null
 
   return (
     <div className="mb-4">
@@ -402,7 +408,7 @@ export function SessionGroup({
           type="button"
           onClick={onToggle}
           aria-expanded={!collapsed}
-          title={group.cwd}
+          title={group.cwd || 'Sessions with no recorded workspace'}
           className="flex min-w-0 flex-1 items-center gap-1"
         >
           <span
@@ -414,23 +420,13 @@ export function SessionGroup({
             <ChevronIcon />
           </span>
           <span className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
-            {group.label}
+            {group.name}
           </span>
         </button>
-        {onNewSessionInWorkspace ? (
+        {onNewSessionInWorkspace && repId ? (
           <button
             type="button"
-            onClick={() => {
-              // #15 — name a REGISTRY id representing this workspace (the active
-              // row if it lives here, else the first row); the host re-derives +
-              // re-validates the cwd from that row. The renderer authors no path.
-              const repId =
-                group.rows.find(
-                  r => r.descriptor.appSessionId === activeSessionId,
-                )?.descriptor.appSessionId ??
-                group.rows[0]?.descriptor.appSessionId
-              if (repId) onNewSessionInWorkspace(repId)
-            }}
+            onClick={() => onNewSessionInWorkspace(repId)}
             title="New session in this workspace"
             aria-label="New session in this workspace"
             className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:text-accent"
@@ -444,11 +440,15 @@ export function SessionGroup({
         <>
           {visibleRows.map(row => (
             <SidebarRowItem
-              key={row.descriptor.appSessionId}
+              key={row.sessionId}
               row={row}
-              isActive={row.descriptor.appSessionId === activeSessionId}
+              isActive={
+                row.appSessionId != null &&
+                row.appSessionId === activeSessionId
+              }
               onSelectLive={onSelectLive}
               onRestore={onRestore}
+              onOpenHistory={onOpenHistory}
               onOpenRowActions={onOpenRowActions}
               modelForSession={modelForSession}
             />
@@ -479,81 +479,137 @@ export function SidebarRowItem({
   isActive,
   onSelectLive,
   onRestore,
+  onOpenHistory,
   onOpenRowActions,
   modelForSession,
 }: {
-  row: SidebarRow
+  row: MergedSessionRow
   isActive: boolean
   onSelectLive: (sessionId: SessionId) => void
   onRestore: (sessionId: SessionId) => void
+  onOpenHistory: (engineSessionId: string) => void
   onOpenRowActions?: (
     sessionId: SessionId,
     anchor: { top: number; left: number },
   ) => void
   modelForSession?: (id: SessionId) => string | null
 }) {
-  const { descriptor, visual } = row
-  const id = descriptor.appSessionId
-  const title = tabLabel(descriptor)
-  // CC-2: the subtitle time tracks the last MESSAGE SENT, falling back to the
-  // session's creation time when it has sent nothing yet — NEVER `lastAttachedAt`
-  // (every open/attach bumps that, which made merely opening a session read as
-  // "now"; see `sidebarState.ts` deferred spec).
-  const recency = formatRecency(descriptor.lastMessageSentAt ?? descriptor.createdAt)
-  const restorable = visual.kind === 'restorable'
-  // The prototype's subtitle is `time · model` (Sidebar.jsx:271, model's last
-  // hyphen-segment). Shown when the session's model is known (attached this run);
-  // omitted otherwise — never fabricated.
-  const model = modelForSession?.(id) ?? null
+  const visual = deriveMergedRowVisual(row)
+  const title = row.displayLabel
+  const appSessionId = row.appSessionId
+  // CC-2 recency: last MESSAGE SENT for a registry row (falling back to createdAt),
+  // the transcript mtime for a history row — `sidebarActivityKey` folds both, and
+  // never `lastAttachedAt` (open/attach bumps that; see `sidebarState.ts`).
+  const recency = formatRecency(sidebarActivityKey(row))
+  // The prototype's subtitle is `time · model` (Sidebar.jsx:271). Only a registry
+  // row that attached this run has a known model; a history row shows none.
+  const model = appSessionId != null ? modelForSession?.(appSessionId) ?? null : null
   const shortModel = model ? model.split('-').slice(-1)[0] : null
 
-  // A LIVE row focuses its tab (reuse App's selectTab); a RESTORABLE row goes
-  // through restoreSession — re-spawns the engine, becomes a live tab with its
-  // replayed transcript.
-  const activate = () => (restorable ? onRestore(id) : onSelectLive(id))
+  const openable = visual.openable
+  const showActions = onOpenRowActions != null && appSessionId != null
+
+  // A live registry row focuses its tab; a restorable row re-spawns via restore;
+  // a resolvable history row opens by its ENGINE id (Part-A host path); a
+  // browse-only row (no recorded workspace) does nothing.
+  const activate = () => {
+    if (visual.intent === 'open-history') {
+      onOpenHistory(row.sessionId)
+      return
+    }
+    if (appSessionId == null) return
+    if (visual.intent === 'restore') onRestore(appSessionId)
+    else if (visual.intent === 'select') onSelectLive(appSessionId)
+  }
+
+  // A subdued status chip so live / restorable / history read distinctly (the
+  // ruling requires it; the prototype mock had no such states). A live/ready row
+  // stays clean (no chip) to match the prototype's bare row.
+  const chip = visual.kind === 'live' && visual.label === 'live' ? null : visual.label
 
   return (
     <div
       className={
-        'group relative flex cursor-pointer select-none items-center gap-2 rounded-md border px-2 py-1.5 transition-colors ' +
+        'group relative flex select-none items-center gap-2 rounded-md border px-2 py-1.5 transition-colors ' +
+        (openable ? 'cursor-pointer ' : 'cursor-default ') +
         (isActive
           ? 'border-accent/[0.18] bg-accent/[0.09]'
-          : 'border-transparent hover:border-accent/[0.22] hover:bg-accent/[0.07]')
+          : openable
+            ? 'border-transparent hover:border-accent/[0.22] hover:bg-accent/[0.07]'
+            : 'border-transparent')
       }
       role="button"
-      tabIndex={0}
+      tabIndex={openable ? 0 : -1}
       aria-current={isActive ? 'true' : undefined}
-      aria-label={`session ${title} — ${visual.label}${restorable ? ', restorable' : ''}`}
-      title={`${descriptor.cwd}${restorable ? ' · restore' : ''}`}
-      onClick={activate}
+      aria-disabled={openable ? undefined : 'true'}
+      aria-label={`session ${title} — ${visual.label}${openable ? '' : ', open from terminal'}`}
+      title={
+        openable
+          ? `${row.cwd || title}${
+              visual.kind === 'restorable'
+                ? ' · restore'
+                : visual.kind === 'history'
+                  ? ' · open'
+                  : ''
+            }`
+          : 'This session has no recorded workspace — open it from the terminal.'
+      }
+      onClick={openable ? activate : undefined}
       onContextMenu={
-        onOpenRowActions
+        showActions
           ? event => {
               // #11 — right-click opens the row's actions menu at the pointer
               // (prototype Sidebar.jsx:245); suppress the native context menu.
               event.preventDefault()
               event.stopPropagation()
-              onOpenRowActions(id, { top: event.clientY, left: event.clientX })
+              if (onOpenRowActions && appSessionId != null) {
+                onOpenRowActions(appSessionId, {
+                  top: event.clientY,
+                  left: event.clientX,
+                })
+              }
             }
           : undefined
       }
-      onKeyDown={event => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          activate()
-        }
-      }}
+      onKeyDown={
+        openable
+          ? event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                activate()
+              }
+            }
+          : undefined
+      }
     >
       <div className="min-w-0 flex-1">
-        <div
-          className={
-            'truncate text-xs font-medium ' +
-            (isActive
-              ? 'text-[#fce7f3]'
-              : 'text-[#c4c4c8] group-hover:text-text-primary')
-          }
-        >
-          {title}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={
+              'truncate text-xs font-medium ' +
+              (isActive
+                ? 'text-[#fce7f3]'
+                : openable
+                  ? 'text-[#c4c4c8] group-hover:text-text-primary'
+                  : 'text-text-subtle')
+            }
+          >
+            {title}
+          </span>
+          {chip ? (
+            <span
+              className={
+                // Theme tokens only (no `amber-*` — not in the @theme palette, so
+                // it would silently no-op; the Tailwind-v4 dynamic-class trap).
+                'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide ' +
+                (visual.tone === 'warn'
+                  ? 'bg-tone-warn/15 text-tone-warn'
+                  : 'bg-white/[0.06] text-text-faint')
+              }
+            >
+              {chip}
+            </span>
+          ) : null}
         </div>
         {recency || shortModel ? (
           <div className="flex items-center gap-[5px] text-[10px] text-text-faint">
@@ -567,20 +623,21 @@ export function SidebarRowItem({
       </div>
 
       {/* #11 — hover-revealed ⋮ kebab: opens the SAME target-session-bound
-       * SessionActionsMenu the TabBar uses (App owns the instance). Anchored
-       * below-right of the button, clamped to the menu width (232px) so it stays
-       * on-screen when the rail sits at the left edge (mirrors TabBar). */}
-      {onOpenRowActions ? (
+       * SessionActionsMenu the TabBar uses (App owns the instance). Registry rows
+       * only — a history row has no desktop session to act on. */}
+      {showActions ? (
         <button
           type="button"
           className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft group-hover:opacity-100 focus-visible:opacity-100"
           onClick={event => {
             event.stopPropagation()
             const rect = event.currentTarget.getBoundingClientRect()
-            onOpenRowActions(id, {
-              top: rect.bottom + 4,
-              left: Math.max(8, rect.right - 232),
-            })
+            if (onOpenRowActions && appSessionId != null) {
+              onOpenRowActions(appSessionId, {
+                top: rect.bottom + 4,
+                left: Math.max(8, rect.right - 232),
+              })
+            }
           }}
           // Keep key events off the row's activate handler (Enter/Space on the
           // kebab opens the menu, it must not also fire the row's onKeyDown).

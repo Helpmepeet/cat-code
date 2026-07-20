@@ -108,9 +108,12 @@ export function selectSessionsCatalog(
 }
 
 /**
- * One merged catalog row. `inRegistry` rows carry an `appSessionId` and can be
- * opened/restored; `history`-only rows are browse/inspect-only (no registry row
- * → no host restore path today — flagged as a P4-6b host-API gap).
+ * One merged catalog row. `inRegistry` rows carry an `appSessionId` and are
+ * opened/restored directly; a `history`-only row has no registry row but is now
+ * openable by its ENGINE session id (`sessionId`) via the `openHistorySession`
+ * host path (SESSIONS-UNIFICATION, operator ruling 2026-07-20 — the former
+ * P4-6b browse-only gap), UNLESS its cwd is empty (MAJOR-1, unreconcilable
+ * workspace), in which case it stays browse-only.
  */
 export type MergedSessionRow = {
   /** The transcript session id (the merge key). */
@@ -131,6 +134,16 @@ export type MergedSessionRow = {
   inRegistry: boolean
   modifiedAtMs: number
   createdAtMs: number
+  /**
+   * Wall-clock of the last MESSAGE SENT by this session's registry descriptor, or
+   * null (history-only rows, and registry rows that have sent nothing). Carried so
+   * the Sidebar can order registry rows warp-free (CC-2: a row floats up ONLY on a
+   * real message-send, never on open/restore — `lastMessageSentAt` never bumps on
+   * attach). NOT the same as `modifiedAtMs`, which folds in `lastAttachedAt` for a
+   * transcript-less row and would reintroduce the warp. The mtime-desc sort of
+   * `selectMergedSessionRows` (Sessions page / Welcome recents) is unchanged.
+   */
+  lastMessageSentAt: number | null
   messageCount: number
   gitBranch: string | null
   tag: string | null
@@ -189,6 +202,7 @@ export function selectMergedSessionRows(
       inRegistry: true,
       modifiedAtMs: entry?.modifiedAtMs ?? descriptor.lastAttachedAt,
       createdAtMs: entry?.createdAtMs ?? descriptor.createdAt,
+      lastMessageSentAt: descriptor.lastMessageSentAt,
       messageCount: entry?.messageCount ?? 0,
       gitBranch: entry?.gitBranch ?? null,
       tag: entry?.tag ?? null,
@@ -214,6 +228,7 @@ export function selectMergedSessionRows(
       inRegistry: false,
       modifiedAtMs: entry.modifiedAtMs,
       createdAtMs: entry.createdAtMs,
+      lastMessageSentAt: null,
       messageCount: entry.messageCount,
       gitBranch: entry.gitBranch,
       tag: entry.tag,
@@ -368,10 +383,13 @@ export type RecentWorkspace = {
   /** basename(cwd) for the label. */
   name: string
   /**
-   * The most-recent OPENABLE session in this workspace (a registry row carrying
-   * an app id), or null when every row here is history-only. HC1: only an
-   * `appSessionId` is openable — a bare cwd can never be authored back into a
-   * spawn, so a history-only project is browse-only (the P4-6b gap).
+   * The most-recent registry-backed session in this workspace (a row carrying an
+   * app id), or null when every row here is history-only. The Welcome launcher
+   * opens recents by `appSessionId` (select/restore); a purely-history project
+   * has none, so the launcher shows it browse-only. NOTE: the sidebar/Sessions
+   * page now open a history row by its ENGINE id via `openHistorySession`
+   * (SESSIONS-UNIFICATION 2026-07-20) — the launcher could adopt that same path,
+   * a follow-on not wired here (out of the sessions-unification scope).
    */
   appSessionId: string | null
   /** True when the openable row is live (select), false ⇒ restore. */

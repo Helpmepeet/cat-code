@@ -1,55 +1,66 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import { SessionGroup, SidebarRowItem } from './Sidebar.js'
-import type { SidebarRow } from './sidebarState.js'
+import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
 
-// The Sidebar collapses to the rail by default under renderToStaticMarkup
-// (`open = pinned || hovering`), so the expanded group header (#10 "+") and rows
-// (#11 ⋮) are exercised by rendering the exported subcomponents directly — the
-// same idiom SessionActionsMenu.test uses for a floating surface.
+// The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
+// SESSIONS-UNIFICATION). It collapses to the rail by default under
+// renderToStaticMarkup (`open = pinned || hovering`), so the expanded group
+// header (#10 "+") and rows (#11 ⋮ / open-from-history) are exercised by
+// rendering the exported subcomponents directly.
 
-function descriptor(
+function registryRow(
   id: string,
-  overrides: Partial<SessionDescriptor> = {},
-): SessionDescriptor {
+  over: Partial<MergedSessionRow> = {},
+): MergedSessionRow {
   return {
+    sessionId: `engine-${id}`,
     appSessionId: id as SessionId,
-    engineSessionId: `engine-${id}`,
-    cwd: `/tmp/${id}`,
-    title: null,
-    status: 'ready',
+    cwd: '/tmp/proj',
+    title: 'Alpha',
+    displayLabel: 'Alpha',
+    live: true,
     restorable: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
+    status: 'ready',
+    inRegistry: true,
+    modifiedAtMs: 0,
+    createdAtMs: 0,
     lastMessageSentAt: null,
-    ...overrides,
+    messageCount: 0,
+    gitBranch: null,
+    tag: null,
+    mode: null,
+    agentSetting: null,
+    prNumber: null,
+    prRepository: null,
+    ...over,
   }
 }
 
-function row(
+/** A terminal-created history row (no desktop registry row). */
+function historyRow(
   id: string,
-  descriptorOverrides: Partial<SessionDescriptor> = {},
-  visual: Partial<SidebarRow['visual']> = {},
-): SidebarRow {
-  const d = descriptor(id, descriptorOverrides)
-  return {
-    descriptor: d,
-    visual: {
-      kind: d.restorable ? 'restorable' : 'live',
-      tone: 'live',
-      label: 'ready',
-      restorable: d.restorable,
-      ...visual,
-    },
-  }
+  over: Partial<MergedSessionRow> = {},
+): MergedSessionRow {
+  return registryRow(id, {
+    appSessionId: null,
+    inRegistry: false,
+    live: false,
+    restorable: false,
+    status: 'history',
+    ...over,
+  })
 }
 
 const noop = () => {}
 
+function group(rows: MergedSessionRow[]): WorkspaceGroup {
+  return { cwd: '/tmp/proj', name: 'proj', current: false, rows }
+}
+
 function renderRow(
-  r: SidebarRow,
+  r: MergedSessionRow,
   onOpenRowActions?: (
     sessionId: SessionId,
     anchor: { top: number; left: number },
@@ -61,13 +72,14 @@ function renderRow(
       isActive={false}
       onSelectLive={noop}
       onRestore={noop}
+      onOpenHistory={noop}
       onOpenRowActions={onOpenRowActions}
     />,
   )
 }
 
 function renderGroup(
-  rows: SidebarRow[],
+  rows: MergedSessionRow[],
   {
     onNewSessionInWorkspace,
     onOpenRowActions,
@@ -81,12 +93,13 @@ function renderGroup(
 ): string {
   return renderToStaticMarkup(
     <SessionGroup
-      group={{ cwd: '/tmp/proj', label: 'proj', rows }}
+      group={group(rows)}
       activeSessionId={null}
       collapsed={false}
       onToggle={noop}
       onSelectLive={noop}
       onRestore={noop}
+      onOpenHistory={noop}
       onNewSessionInWorkspace={onNewSessionInWorkspace}
       onOpenRowActions={onOpenRowActions}
     />,
@@ -95,54 +108,55 @@ function renderGroup(
 
 // ── #11 per-row actions kebab ────────────────────────────────────────────────
 
-test('a row exposes a session-actions ⋮ kebab only when onOpenRowActions is wired', () => {
-  const wired = renderRow(row('a', { title: 'Alpha' }), noop)
+test('a registry row exposes a session-actions ⋮ kebab only when onOpenRowActions is wired', () => {
+  const wired = renderRow(registryRow('a', { displayLabel: 'Alpha' }), noop)
   expect(wired).toContain('aria-label="Session actions for Alpha"')
   expect(wired).toContain('title="Session actions"')
 })
 
 test('no ⋮ kebab renders when the row is not wired for actions', () => {
-  const html = renderRow(row('a', { title: 'Alpha' }))
+  const html = renderRow(registryRow('a', { displayLabel: 'Alpha' }))
   expect(html).not.toContain('Session actions for')
   expect(html).not.toContain('title="Session actions"')
 })
 
-test('CC-2: row recency derives from lastMessageSentAt (createdAt fallback), never lastAttachedAt', () => {
+test('a history row never renders a ⋮ kebab (no desktop session to act on)', () => {
+  const html = renderRow(historyRow('h', { displayLabel: 'Old terminal run' }), noop)
+  expect(html).not.toContain('Session actions for')
+})
+
+test('CC-2: registry-row recency derives from lastMessageSentAt (createdAt fallback)', () => {
   const now = Date.now()
   const hour = 60 * 60 * 1000
 
-  // Just opened (lastAttachedAt ≈ now) but the last message was 2h ago: the
-  // subtitle must read the message time, NOT the attach time (the CC-2 bug).
+  // Last message 2h ago: the subtitle reads the message time (never an attach —
+  // the merged row carries no lastAttachedAt at all).
   const sent = renderRow(
-    row('a', {
-      title: 'Alpha',
-      lastAttachedAt: now,
+    registryRow('a', {
+      displayLabel: 'Alpha',
       lastMessageSentAt: now - 2 * hour,
-      createdAt: now - 72 * hour,
+      createdAtMs: now - 72 * hour,
     }),
   )
   expect(sent).toContain('<span class="shrink-0">2h</span>')
-  expect(sent).not.toContain('<span class="shrink-0">now</span>')
 
-  // Never sent → fall back to createdAt (3d ago), still never lastAttachedAt.
+  // Never sent → fall back to createdAt (3d ago).
   const neverSent = renderRow(
-    row('b', {
-      title: 'Beta',
-      lastAttachedAt: now,
+    registryRow('b', {
+      displayLabel: 'Beta',
       lastMessageSentAt: null,
-      createdAt: now - 72 * hour,
+      createdAtMs: now - 72 * hour,
     }),
   )
   expect(neverSent).toContain('<span class="shrink-0">3d</span>')
-  expect(neverSent).not.toContain('<span class="shrink-0">now</span>')
 })
 
-test('every row in a group gets its own action kebab (target-session-bound)', () => {
+test('every registry row in a group gets its own action kebab (target-session-bound)', () => {
   const html = renderGroup(
     [
-      row('a', { title: 'Alpha' }),
-      row('b', { title: 'Beta' }),
-      row('c', { title: 'Gamma', restorable: true }),
+      registryRow('a', { displayLabel: 'Alpha' }),
+      registryRow('b', { displayLabel: 'Beta' }),
+      registryRow('c', { displayLabel: 'Gamma', restorable: true, live: false, status: 'exited' }),
     ],
     { onOpenRowActions: noop },
   )
@@ -151,10 +165,45 @@ test('every row in a group gets its own action kebab (target-session-bound)', ()
   expect(html).toContain('aria-label="Session actions for Gamma"')
 })
 
+// ── SESSIONS-UNIFICATION: history rows (open-from-history vs browse-only) ─────
+
+test('a history row WITH a resolvable workspace is openable (open-from-history)', () => {
+  const html = renderRow(
+    historyRow('h', { displayLabel: 'Terminal session', cwd: '/tmp/proj' }),
+  )
+  // Openable: focusable, not disabled, labeled + titled for opening.
+  expect(html).toContain('tabindex="0"')
+  expect(html).not.toContain('aria-disabled="true"')
+  expect(html).toContain('session Terminal session — history')
+  expect(html).toContain('· open')
+})
+
+test('a history row with NO recorded workspace is browse-only (degrades, never dead-looking)', () => {
+  const html = renderRow(
+    historyRow('h', { displayLabel: 'Orphan session', cwd: '' }),
+  )
+  expect(html).toContain('aria-disabled="true"')
+  expect(html).toContain('tabindex="-1"')
+  expect(html).toContain('open from terminal')
+  expect(html).toContain('no recorded workspace')
+})
+
+test('status reads distinctly: live has no chip, restorable shows closed, history shows history', () => {
+  expect(renderRow(registryRow('live', { displayLabel: 'L' }))).not.toContain(
+    '>history<',
+  )
+  const restorable = renderRow(
+    registryRow('r', { displayLabel: 'R', live: false, restorable: true, status: 'exited' }),
+  )
+  expect(restorable).toContain('>closed<')
+  const history = renderRow(historyRow('h', { displayLabel: 'H', cwd: '/tmp/proj' }))
+  expect(history).toContain('>history<')
+})
+
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────
 
-test('a workspace group header exposes a "+" only when onNewSessionInWorkspace is wired', () => {
-  const html = renderGroup([row('a', { title: 'Alpha' })], {
+test('a workspace group with a registry row exposes a "+" when onNewSessionInWorkspace is wired', () => {
+  const html = renderGroup([registryRow('a', { displayLabel: 'Alpha' })], {
     onNewSessionInWorkspace: noop,
   })
   expect(html.match(/aria-label="New session in this workspace"/g)).toHaveLength(
@@ -164,6 +213,14 @@ test('a workspace group header exposes a "+" only when onNewSessionInWorkspace i
 })
 
 test('no "+" renders when the group is not wired for new sessions', () => {
-  const html = renderGroup([row('a', { title: 'Alpha' })])
+  const html = renderGroup([registryRow('a', { displayLabel: 'Alpha' })])
+  expect(html).not.toContain('New session in this workspace')
+})
+
+test('a pure-terminal-history group hides the "+" (HC1: no registry id to name)', () => {
+  const html = renderGroup(
+    [historyRow('h1', { displayLabel: 'One', cwd: '/tmp/proj' })],
+    { onNewSessionInWorkspace: noop },
+  )
   expect(html).not.toContain('New session in this workspace')
 })

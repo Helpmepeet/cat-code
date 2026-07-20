@@ -61,15 +61,21 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void',
   )
+  // SESSIONS-UNIFICATION (2026-07-20) — open-from-history sender rides its own
+  // fixed channel (HC3). The renderer carries only an engine session id.
+  expect(source).toContain(
+    "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
+  )
+  expect(source).toContain('openHistorySession(')
   // 16 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
-  // answerQuestions) + 8 payload-bearing control-plane senders + the DEV-only
+  // answerQuestions) + 9 payload-bearing control-plane senders + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
   // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
-  // previewSession/readSessionsCatalog). subscribe / subscribeHost register a
-  // listener and send no payload, so they do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(25)
+  // previewSession/readSessionsCatalog/openHistorySession). subscribe / subscribeHost
+  // register a listener and send no payload, so they do NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(26)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
@@ -92,6 +98,9 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   expect(source).toContain(
     "const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'",
   )
+  expect(source).toContain(
+    "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
+  )
   expect(source).toContain("const CH_HOST_EVENT = 'catcode:host:event'")
 
   // Every invoke targets one of those FIXED constants — never a renderer-supplied
@@ -100,7 +109,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(8)
+  expect(invokeChannels.length).toBe(9)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -110,6 +119,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_PICK_DIR',
     'CH_HOST_PREVIEW',
     'CH_HOST_SESSIONS_CATALOG',
+    'CH_HOST_OPEN_HISTORY',
   ])
   for (const channel of invokeChannels) {
     expect(allowed.has(channel)).toBe(true)

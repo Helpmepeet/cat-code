@@ -39,6 +39,7 @@
 
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
+import type { MergedSessionRow } from './sessionsCatalogState.js'
 import type { ShellState } from './shellState.js'
 import type { TabTone } from './tabStatus.js'
 
@@ -96,9 +97,9 @@ export function resolveNavSelection<Id extends string>(item: {
   return item.enabled ? item.id : null
 }
 
-export type VisibleSidebarRows = {
+export type VisibleRows<T> = {
   /** Rows to render now. */
-  visible: SidebarRow[]
+  visible: T[]
   /**
    * Rows hidden behind the "Show more" toggle — 0 when expanded, under cap, OR
    * (SIDEBAR-1 boundary) the group is exactly `limit + 1` over and the sole
@@ -117,22 +118,23 @@ export type VisibleSidebarRows = {
  * row if it falls in the hidden tail — so a long project list never buries the
  * session you are actually on. The head keeps the caller's stable order; a kept
  * active row is appended (it is highlighted, so its exact slot does not matter).
+ *
+ * Generic over the row type via an `isActive` predicate so both the registry
+ * `SidebarRow` and the unified `MergedSessionRow` (SESSIONS-UNIFICATION) share
+ * one tested cap implementation.
  */
-export function selectVisibleSidebarRows(
-  rows: SidebarRow[],
-  activeSessionId: SessionId | null,
+export function selectVisibleSidebarRows<T>(
+  rows: T[],
+  isActive: (row: T) => boolean,
   limit: number,
   expanded: boolean,
-): VisibleSidebarRows {
+): VisibleRows<T> {
   const overLimit = rows.length > limit
   if (!overLimit || expanded) {
     return { visible: rows, hiddenCount: 0, overLimit }
   }
   const head = rows.slice(0, limit)
-  const activeHidden = rows.find(
-    row =>
-      row.descriptor.appSessionId === activeSessionId && !head.includes(row),
-  )
+  const activeHidden = rows.find(row => isActive(row) && !head.includes(row))
   const visible = activeHidden ? [...head, activeHidden] : head
   return { visible, hiddenCount: rows.length - visible.length, overLimit }
 }
@@ -241,4 +243,126 @@ export function deriveSidebarRowVisual(
   }
 
   return { kind, tone, label, restorable: descriptor.restorable }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Unified sidebar (SESSIONS-UNIFICATION — operator ruling 2026-07-20)
+ *
+ * The sidebar now renders the MERGED roster (desktop registry ∪ terminal
+ * history), reusing `selectMergedSessionRows` (the D5-blessed shared selector —
+ * no second merge). These pure helpers fold one `MergedSessionRow` into its
+ * sidebar visual + click intent, and give the CC-2 warp-free activity order.
+ * ------------------------------------------------------------------------- */
+
+/** A merged sidebar row's kind — registry rows split live/restorable as before;
+ * a terminal-history row (no registry) is its own kind. */
+export type MergedRowKind = 'live' | 'restorable' | 'history'
+
+/** What a click on a merged row should do. `select` focuses a live tab;
+ * `restore` re-spawns a registry row; `open-history` opens a terminal session by
+ * its engine id (the Part-A host path); `none` is a browse-only row whose
+ * workspace is unresolvable (MAJOR-1) — clickable-looking would be a lie. */
+export type MergedRowIntent = 'select' | 'restore' | 'open-history' | 'none'
+
+export type MergedRowVisual = {
+  kind: MergedRowKind
+  tone: TabTone
+  label: string
+  /** True when a click opens something (registry rows always; history rows only
+   * when their workspace is resolvable). */
+  openable: boolean
+  intent: MergedRowIntent
+}
+
+/**
+ * Fold a merged row into its sidebar visual + click intent. Registry rows reuse
+ * the exact status→tone/label vocabulary the TabBar/`deriveSidebarRowVisual`
+ * use (live/starting/crashed/closed/disconnected), so live/restorable state
+ * reads identically. A history row paints a subdued `history` chip and is
+ * openable ONLY when it carries a resolvable cwd — an empty-cwd row degrades to
+ * a non-interactive `none` intent (browse-only), never a dead-looking button.
+ */
+export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
+  if (!row.inRegistry) {
+    const openable = row.cwd.trim().length > 0
+    return {
+      kind: 'history',
+      // A terminal-history row is a not-live session — `dead` tone, but its
+      // distinct `history` label (subdued chip in Sidebar.tsx) reads apart from a
+      // restorable row's `closed`/`crashed` and a live row's no-chip.
+      tone: 'dead',
+      label: 'history',
+      openable,
+      intent: openable ? 'open-history' : 'none',
+    }
+  }
+
+  const kind: MergedRowKind = row.restorable ? 'restorable' : 'live'
+  let tone: TabTone
+  let label: string
+  switch (row.status) {
+    case 'spawning':
+      tone = 'warn'
+      label = 'starting'
+      break
+    case 'ready':
+      tone = 'live'
+      label = 'live'
+      break
+    case 'disconnected':
+      // Overloaded (hostApi.ts status doc): a crash-marked DEAD row is
+      // restorable; a live socket-drop is not. Only the dead one is a crash.
+      tone = 'dead'
+      label = row.restorable ? 'crashed' : 'disconnected'
+      break
+    case 'exited':
+      tone = 'dead'
+      label = 'closed'
+      break
+    default:
+      tone = 'warn'
+      label = 'unknown'
+      break
+  }
+  return {
+    kind,
+    tone,
+    label,
+    openable: true,
+    intent: row.restorable ? 'restore' : 'select',
+  }
+}
+
+/**
+ * The CC-2 warp-free activity key for a merged sidebar row. Registry rows order
+ * by `lastMessageSentAt` (falling back to the immutable `createdAtMs`) so a row
+ * floats up ONLY on a real message-send — never on open/restore, which bump
+ * `lastAttachedAt`/`modifiedAtMs`. History rows order by their transcript mtime
+ * (`modifiedAtMs`), their genuine last-activity signal (a terminal session has
+ * no descriptor to carry `lastMessageSentAt`).
+ */
+export function sidebarActivityKey(row: MergedSessionRow): number {
+  return row.inRegistry
+    ? row.lastMessageSentAt ?? row.createdAtMs
+    : row.modifiedAtMs
+}
+
+/** Comparator: most-recent activity first, ties broken on the immutable merge
+ * key so the order is fully deterministic (matches `selectSidebarRows`). */
+export function compareSidebarActivity(
+  a: MergedSessionRow,
+  b: MergedSessionRow,
+): number {
+  const ak = sidebarActivityKey(a)
+  const bk = sidebarActivityKey(b)
+  return ak !== bk ? bk - ak : a.sessionId.localeCompare(b.sessionId)
+}
+
+/** Sort merged rows into the sidebar's warp-free activity order (does not
+ * mutate the input; the shared `selectMergedSessionRows` mtime order stands for
+ * the Sessions page / Welcome recents). */
+export function sortSidebarSessionRows(
+  rows: readonly MergedSessionRow[],
+): MergedSessionRow[] {
+  return [...rows].sort(compareSidebarActivity)
 }

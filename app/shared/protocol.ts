@@ -2252,6 +2252,22 @@ export type CatCodeBridge = {
    */
   readSessionsCatalog(): Promise<SessionsCatalogSnapshot | null>
   /**
+   * SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-created
+   * session (a transcript with no desktop registry row) as a real desktop
+   * session, by its ENGINE session id. The renderer authors NO cwd or path
+   * (HC1): it passes only the engine id; main validates it (strict UUID shape),
+   * resolves the cwd from the sidecar-written baseline cache (engine-derived,
+   * never renderer-supplied), and spawns a resume through the SAME machinery
+   * `restoreSession` uses. An id already open in the app returns that row
+   * (switch, no re-spawn); an id absent from the cache or with an empty recorded
+   * cwd fails closed with a typed error the renderer renders honestly. HC3 fixed
+   * sender. This is the load-bearing half of the unified-sessions ruling — the
+   * companion to `restoreSession` for sessions the app never tracked.
+   */
+  openHistorySession(
+    engineSessionId: string,
+  ): Promise<HostResult<SessionDescriptor>>
+  /**
    * Subscribe to the host's row-change stream (the session list is a projection
    * of this, never a poll loop). Returns an unsubscribe function.
    */

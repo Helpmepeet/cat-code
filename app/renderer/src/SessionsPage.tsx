@@ -346,7 +346,14 @@ function SessionRow({
   grouped: boolean
   onOpen: (row: MergedSessionRow) => void
 }) {
-  const openable = row.appSessionId != null
+  // SESSIONS-UNIFICATION (operator ruling 2026-07-20): a terminal-created history
+  // row is now openable too — by its engine id, if its workspace is resolvable.
+  // A registry row opens via switch/restore; a history row with a recorded cwd
+  // opens via the open-from-history host path; only a history row with NO recorded
+  // workspace (MAJOR-1, unreconcilable) stays browse-only.
+  const historyOpenable =
+    row.appSessionId == null && !row.inRegistry && row.cwd.trim().length > 0
+  const openable = row.appSessionId != null || historyOpenable
   const crossProject = !grouped && activeCwd != null && row.cwd !== activeCwd
   const rowClass =
     'flex w-full items-start gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ' +
@@ -416,7 +423,7 @@ function SessionRow({
   return (
     <div
       className={rowClass}
-      title="Open this session from the terminal — desktop restore needs a registry row (P4-6b)."
+      title="This session has no recorded workspace, so it can only be opened from the terminal."
     >
       {inner}
     </div>
