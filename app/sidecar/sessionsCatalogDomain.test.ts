@@ -170,6 +170,35 @@ describe('mapLogOptionToCatalogEntry', () => {
       mapLogOptionToCatalogEntry(makeLog({ sessionId: 's-3', isSidechain: true })),
     ).toBeNull()
   })
+
+  // Every catalog row is openable: a transcript with no conversation fails to
+  // resume in the engine AFTER the app minted a registry row for it, which then
+  // evicts a real restorable session at MAX_REGISTRY_SESSIONS. Observed live
+  // 2026-07-20 as repeated `resume-failed: no conversation found` + `reaped 1
+  // over-bound terminal row(s)` on Codex telemetry-only transcripts.
+  test('drops transcripts with no conversation (unresumable)', () => {
+    expect(
+      mapLogOptionToCatalogEntry(makeLog({ sessionId: 's-4', hasConversation: false })),
+    ).toBeNull()
+  })
+
+  // The title fallback is NOT the predicate: the engine stamps '(session)' on a
+  // real session whose first prompt outgrew the read window, and that session is
+  // resumable. Only the content flag may drop a row.
+  test('keeps a "(session)"-titled row that HAS a conversation', () => {
+    const entry = mapLogOptionToCatalogEntry(
+      makeLog({ sessionId: 's-5', firstPrompt: '(session)', hasConversation: true }),
+    )
+    expect(entry).not.toBeNull()
+    expect(entry?.title).toBe('(session)')
+  })
+
+  // An unscanned lite row carries `undefined`, which must not be read as "empty".
+  test('keeps a row whose conversation flag is unknown', () => {
+    expect(
+      mapLogOptionToCatalogEntry(makeLog({ sessionId: 's-6', hasConversation: undefined })),
+    ).not.toBeNull()
+  })
 })
 
 describe('buildSessionsCatalogSnapshot', () => {
@@ -187,6 +216,25 @@ describe('buildSessionsCatalogSnapshot', () => {
       result([makeLog({ sessionId: 'a' })], 1),
     )
     expect(snapshot.truncated).toBe(false)
+  })
+
+  // Rows DROPPED by the loader (sidechains, team sessions, no-conversation
+  // transcripts) are not omitted history: the whole list was still scanned. A
+  // count comparison would call this truncated and tell the operator older
+  // sessions are missing when none are — `nextIndex` is the honest signal.
+  test('filtered-out rows do NOT flag truncation when the whole list was scanned', () => {
+    const snapshot = buildSessionsCatalogSnapshot({
+      logs: [makeLog({ sessionId: 'a' })],
+      allStatLogs: Array.from({ length: 40 }, (_, i) =>
+        makeLog({ sessionId: `stat-${i}` }),
+      ),
+      // Enrichment reached the END of the discovered list; the other 39 rows were
+      // dropped by the loader's filters, not left unscanned.
+      nextIndex: 40,
+    })
+    expect(snapshot.entries).toHaveLength(1)
+    expect(snapshot.truncated).toBe(false)
+    expect(snapshot.notes.join(' ')).toContain('All discovered sessions are enriched')
   })
 
   test('B1 — carries far more than the old 50-row cap (older work sessions appear)', () => {

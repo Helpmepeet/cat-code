@@ -334,16 +334,25 @@ export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
 }
 
 /**
- * The CC-2 warp-free activity key for a merged sidebar row. Registry rows order
- * by `lastMessageSentAt` (falling back to the immutable `createdAtMs`) so a row
- * floats up ONLY on a real message-send — never on open/restore, which bump
- * `lastAttachedAt`/`modifiedAtMs`. History rows order by their transcript mtime
- * (`modifiedAtMs`), their genuine last-activity signal (a terminal session has
- * no descriptor to carry `lastMessageSentAt`).
+ * The CC-2 warp-free activity key for a merged sidebar row. A row floats up ONLY
+ * on a real message-send — never on open/restore, which bump `lastAttachedAt`/
+ * `modifiedAtMs`.
+ *
+ * Registry rows order by `lastMessageSentAt`, then by the transcript's own last
+ * activity, then by `createdAtMs`. The transcript step is what keeps opening a
+ * TERMINAL session warp-free: opening one mints a registry row whose `createdAt`
+ * is the moment it was clicked, so falling straight through to `createdAtMs`
+ * would float every opened session to the top of the sidebar without a single
+ * message being sent. Its transcript activity is the real answer, and it is only
+ * absent for a session created in the app and not yet enumerated — for which
+ * `createdAtMs` genuinely IS the last activity.
+ *
+ * History rows order by their transcript mtime (a terminal session has no
+ * descriptor to carry `lastMessageSentAt`).
  */
 export function sidebarActivityKey(row: MergedSessionRow): number {
   return row.inRegistry
-    ? row.lastMessageSentAt ?? row.createdAtMs
+    ? row.lastMessageSentAt ?? row.transcriptActivityAtMs ?? row.createdAtMs
     : row.modifiedAtMs
 }
 

@@ -144,6 +144,16 @@ export type MergedSessionRow = {
    * `selectMergedSessionRows` (Sessions page / Welcome recents) is unchanged.
    */
   lastMessageSentAt: number | null
+  /**
+   * Last activity recorded in the TRANSCRIPT itself, or null when this row has no
+   * catalog entry (a session created in the app that has not been enumerated yet).
+   * Unlike `modifiedAtMs` this never folds in `lastAttachedAt`, so ordering can
+   * fall back to real prior work instead of a spawn/attach time: a terminal
+   * session opened in the app is minted with `createdAt = the moment it was
+   * clicked`, and using that would float it to the top of the sidebar on open —
+   * the exact warp CC-2 removed.
+   */
+  transcriptActivityAtMs: number | null
   messageCount: number
   gitBranch: string | null
   tag: string | null
@@ -203,6 +213,7 @@ export function selectMergedSessionRows(
       modifiedAtMs: entry?.modifiedAtMs ?? descriptor.lastAttachedAt,
       createdAtMs: entry?.createdAtMs ?? descriptor.createdAt,
       lastMessageSentAt: descriptor.lastMessageSentAt,
+      transcriptActivityAtMs: entry?.modifiedAtMs ?? null,
       messageCount: entry?.messageCount ?? 0,
       gitBranch: entry?.gitBranch ?? null,
       tag: entry?.tag ?? null,
@@ -229,6 +240,7 @@ export function selectMergedSessionRows(
       modifiedAtMs: entry.modifiedAtMs,
       createdAtMs: entry.createdAtMs,
       lastMessageSentAt: null,
+      transcriptActivityAtMs: entry.modifiedAtMs,
       messageCount: entry.messageCount,
       gitBranch: entry.gitBranch,
       tag: entry.tag,

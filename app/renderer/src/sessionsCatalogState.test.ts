@@ -358,6 +358,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     modifiedAtMs: 0,
     createdAtMs: 0,
     lastMessageSentAt: null,
+    transcriptActivityAtMs: null,
     messageCount: 0,
     gitBranch: null,
     tag: null,

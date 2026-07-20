@@ -141,7 +141,14 @@ export function buildSessionsCatalogSnapshot(result: SessionLogResult): Sessions
   const entries = result.logs
     .map(log => mapLogOptionToCatalogEntry(log, storageDirToCwd))
     .filter((entry): entry is SessionCatalogEntry => entry !== null)
-  const truncated = result.allStatLogs.length > result.logs.length
+  // "Truncated" must mean the enrich cap stopped us BEFORE the end of the
+  // discovered list — not merely that fewer logs came back than were stat-listed.
+  // A count comparison conflates the two: the loader also drops sidechains, team
+  // sessions and (since the no-conversation filter) diagnostic-only transcripts,
+  // so every dropped row would falsely read as "older sessions are omitted".
+  // `nextIndex` is where enrichment actually stopped scanning, which is the honest
+  // signal (`sessionStorage.ts` enrichLogs).
+  const truncated = result.nextIndex < result.allStatLogs.length
   const notes = [
     'Message counts and mode require a full transcript read and are not carried on this bounded catalog.',
     truncated
@@ -161,6 +168,14 @@ export function mapLogOptionToCatalogEntry(
   if (!log.sessionId) return null
   // enrichLogs already drops sidechains, but guard defensively.
   if (log.isSidechain) return null
+  // A transcript with no conversation cannot be resumed: opening it fails in the
+  // engine ("no conversation found") after the app has already minted a registry
+  // row, which then counts against `MAX_REGISTRY_SESSIONS` and evicts a real
+  // restorable session. Every row this catalog emits is openable, so these are
+  // dropped here rather than rendered as rows that fail on click. The engine
+  // computes the flag from the window it already reads (`sessionStorage.ts`
+  // readLiteMetadata); `undefined` (unscanned lite row) is NOT treated as empty.
+  if (log.hasConversation === false) return null
   const cwd = resolveEntryCwd(log, storageDirToCwd)
   return {
     sessionId: log.sessionId,

@@ -16,10 +16,9 @@
  * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
  * §0 fidelity flags (divergences from the prototype, by design):
- *  - History rows carry a subdued `history` chip and (when browse-only) a
- *    non-interactive style, so live/restorable/history read distinctly — the
- *    prototype has no history/restorable states in its mock, so there is no
- *    prototype grammar to match here (🔁 adapted).
+ *  - Rows render NO visible status chip: the prototype's rows are bare, and the
+ *    operator ruled out per-row status labels (2026-07-20). Status stays in the
+ *    `aria-label` only. A browse-only history row is still non-interactive.
  *  - The per-workspace "+" renders only for a group that has at least one
  *    registry row to name (HC1: createSessionInWorkspace needs a registry id,
  *    not a path); a pure-terminal-history workspace has no such id, so its "+"
@@ -522,11 +521,6 @@ export function SidebarRowItem({
     else if (visual.intent === 'select') onSelectLive(appSessionId)
   }
 
-  // A subdued status chip so live / restorable / history read distinctly (the
-  // ruling requires it; the prototype mock had no such states). A live/ready row
-  // stays clean (no chip) to match the prototype's bare row.
-  const chip = visual.kind === 'live' && visual.label === 'live' ? null : visual.label
-
   return (
     <div
       className={
@@ -596,20 +590,6 @@ export function SidebarRowItem({
           >
             {title}
           </span>
-          {chip ? (
-            <span
-              className={
-                // Theme tokens only (no `amber-*` — not in the @theme palette, so
-                // it would silently no-op; the Tailwind-v4 dynamic-class trap).
-                'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide ' +
-                (visual.tone === 'warn'
-                  ? 'bg-tone-warn/15 text-tone-warn'
-                  : 'bg-white/[0.06] text-text-faint')
-              }
-            >
-              {chip}
-            </span>
-          ) : null}
         </div>
         {recency || shortModel ? (
           <div className="flex items-center gap-[5px] text-[10px] text-text-faint">

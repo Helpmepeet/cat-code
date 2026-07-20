@@ -338,6 +338,7 @@ function mergedRow(over: Partial<MergedSessionRow> = {}): MergedSessionRow {
     modifiedAtMs: 0,
     createdAtMs: 0,
     lastMessageSentAt: null,
+    transcriptActivityAtMs: null,
     messageCount: 0,
     gitBranch: null,
     tag: null,
@@ -403,9 +404,42 @@ describe('sidebarActivityKey / compareSidebarActivity (CC-2 warp-free)', () => {
       inRegistry: true,
       lastMessageSentAt: null,
       createdAtMs: 42,
+      transcriptActivityAtMs: null,
       modifiedAtMs: 999_999,
     })
     expect(sidebarActivityKey(row)).toBe(42)
+  })
+
+  // Opening a TERMINAL session mints a registry row whose createdAt is the click
+  // instant. Keying on that floats every opened session to the top of the sidebar
+  // with no message sent — the warp CC-2 removed. Its transcript activity wins.
+  test('an opened terminal session keys on transcript activity, NOT its click-time createdAt', () => {
+    const clickedNow = 1_800_000_000_000
+    const row = mergedRow({
+      inRegistry: true,
+      lastMessageSentAt: null,
+      createdAtMs: clickedNow,
+      transcriptActivityAtMs: 700,
+    })
+    expect(sidebarActivityKey(row)).toBe(700)
+  })
+
+  test('opening an old terminal session does not jump it above a recently-messaged row', () => {
+    const opened = mergedRow({
+      sessionId: 'opened-from-history',
+      inRegistry: true,
+      lastMessageSentAt: null,
+      createdAtMs: 1_800_000_000_000, // clicked just now
+      transcriptActivityAtMs: 100, // but last real work was long ago
+    })
+    const messaged = mergedRow({
+      sessionId: 'recently-messaged',
+      inRegistry: true,
+      lastMessageSentAt: 900,
+    })
+    expect(
+      sortSidebarSessionRows([opened, messaged]).map(r => r.sessionId),
+    ).toEqual(['recently-messaged', 'opened-from-history'])
   })
 
   test('a history row keys on modifiedAtMs (its real last-activity)', () => {

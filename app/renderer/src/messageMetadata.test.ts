@@ -123,6 +123,7 @@ describe('buildSessionMetadataView', () => {
     modifiedAtMs: 1,
     createdAtMs: 0,
     lastMessageSentAt: null,
+    transcriptActivityAtMs: null,
     messageCount: 3,
     gitBranch: null,
     tag: 'auth',

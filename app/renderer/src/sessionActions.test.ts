@@ -21,6 +21,7 @@ function row(overrides: Partial<MergedSessionRow> = {}): MergedSessionRow {
     modifiedAtMs: 1,
     createdAtMs: 0,
     lastMessageSentAt: null,
+    transcriptActivityAtMs: null,
     messageCount: 4,
     gitBranch: null,
     tag: null,

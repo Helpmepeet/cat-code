@@ -27,6 +27,7 @@ function registryRow(
     modifiedAtMs: 0,
     createdAtMs: 0,
     lastMessageSentAt: null,
+    transcriptActivityAtMs: null,
     messageCount: 0,
     gitBranch: null,
     tag: null,
@@ -188,16 +189,19 @@ test('a history row with NO recorded workspace is browse-only (degrades, never d
   expect(html).toContain('no recorded workspace')
 })
 
-test('status reads distinctly: live has no chip, restorable shows closed, history shows history', () => {
-  expect(renderRow(registryRow('live', { displayLabel: 'L' }))).not.toContain(
-    '>history<',
-  )
+// Operator ruling 2026-07-20: NO visible per-row status label in the sidebar.
+// Status stays in the aria-label (assistive tech) only — the rows render bare,
+// matching the prototype. This test is the tripwire against re-adding a chip.
+test('no row renders a visible status label; status stays in aria-label only', () => {
   const restorable = renderRow(
     registryRow('r', { displayLabel: 'R', live: false, restorable: true, status: 'exited' }),
   )
-  expect(restorable).toContain('>closed<')
+  expect(restorable).not.toContain('>closed<')
+  expect(restorable).toContain('aria-label="session R — closed"')
+
   const history = renderRow(historyRow('h', { displayLabel: 'H', cwd: '/tmp/proj' }))
-  expect(history).toContain('>history<')
+  expect(history).not.toContain('>history<')
+  expect(history).toContain('aria-label="session H — history"')
 })
 
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────
