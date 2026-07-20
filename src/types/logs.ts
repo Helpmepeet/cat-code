@@ -28,6 +28,10 @@ export type LogOption = {
   messageCount: number
   fileSize?: number // File size in bytes (for display)
   isSidechain: boolean
+  // Whether the enrich scan saw any user/assistant entry. Undefined on the lite
+  // path (not scanned yet). False means the transcript holds only bookkeeping or
+  // diagnostic entries and has no conversation to resume.
+  hasConversation?: boolean
   isLite?: boolean // True for lite logs (messages not loaded)
   sessionId?: string // Session ID for lite logs
   teamName?: string // Team name if this is a spawned agent session

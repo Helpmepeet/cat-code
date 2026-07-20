@@ -5069,6 +5069,17 @@ type LiteMetadata = {
   prUrl?: string
   prRepository?: string
   lastTimestamp?: string
+  /**
+   * Whether the scanned window holds any real conversation entry (`user` /
+   * `assistant`). False for a transcript that carries only bookkeeping or
+   * diagnostic entries — e.g. the `codex_stream_surface`/`codex_send_path`
+   * telemetry `recordCodexStreamSurface` appends when no real session owns the
+   * write. Distinct from an empty `firstPrompt`: a session whose first message
+   * exceeds the read window has no extractable prompt but DOES have the entry,
+   * so consumers that want "is there a conversation here" must read this rather
+   * than test for the `'(session)'` title fallback below.
+   */
+  hasConversation?: boolean
 }
 
 /**
@@ -5286,8 +5297,22 @@ async function readLiteMetadata(
   // no timestamp at all (then enrichLog keeps the mtime fallback).
   const lastTimestamp = extractLastJsonStringField(tail, 'timestamp')
 
+  // Does this transcript hold any conversation at all? Both windows are already
+  // in memory, so this costs no extra IO. Checked in head AND tail because a
+  // long diagnostic preamble can fill the head window of a file that does go on
+  // to hold real messages. Both spacing variants are matched: the transcript
+  // writer emits compact JSON while the diagnostic appenders emit spaced JSON.
+  const hasConversation = [head, tail].some(
+    chunk =>
+      chunk.includes('"type":"user"') ||
+      chunk.includes('"type": "user"') ||
+      chunk.includes('"type":"assistant"') ||
+      chunk.includes('"type": "assistant"'),
+  )
+
   return {
     firstPrompt,
+    hasConversation,
     gitBranch,
     isSidechain,
     projectPath,
@@ -5544,6 +5569,7 @@ async function enrichLog(
     prUrl: meta.prUrl,
     prRepository: meta.prRepository,
     projectPath: meta.projectPath ?? log.projectPath,
+    hasConversation: meta.hasConversation,
   }
 
   // Provide a fallback title for sessions where we couldn't extract the first
@@ -5563,6 +5589,19 @@ async function enrichLog(
   if (enriched.teamName) {
     logForDebugging(
       `Session ${log.sessionId} filtered from /resume: teamName=${enriched.teamName}`,
+    )
+    return null
+  }
+  // A transcript with no user/assistant entry has nothing to resume: selecting it
+  // fails with "no conversation found". These are files written by the diagnostic
+  // appenders (`recordCodexSendPath`/`recordCodexStreamSurface`) when no real
+  // session owned the write — 162 of 514 transcripts on one machine, listed as
+  // '(session)' rows. Note this is NOT the same as the '(session)' title above: a
+  // real session whose first prompt outgrew the read window also gets that title
+  // and IS resumable, so the content flag decides, never the label.
+  if (enriched.hasConversation === false) {
+    logForDebugging(
+      `Session ${log.sessionId} filtered from /resume: no conversation entries`,
     )
     return null
   }
