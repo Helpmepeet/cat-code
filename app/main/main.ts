@@ -1127,6 +1127,31 @@ function registerHostControlPlane(): void {
           cwd: resolution.cwd,
           resumeEngineSessionId: engineId,
         })
+        .then(result => {
+          // Bootstrap coalescing, the same guard `CH_HOST_RESTORE` arms: this
+          // create RESUMES a transcript, so `ready` (sent first) must not reach
+          // the renderer ahead of the history replay (sent last). Delivered
+          // alone, `ready.payload.inputEnabled` trips the preview→live swap
+          // (`previewTranscriptState.ts:146`), which resets the live transcript
+          // and drops the cached preview — blanking a pane that was showing the
+          // conversation until the replay lands (operator-observed 2026-07-20).
+          // The ruling at CH_HOST_RESTORE ("only a renderer-requested lazy
+          // restore") predates open-from-history, when a create could never
+          // resume; a resuming create belongs on the restore side of it.
+          //
+          // Armed here rather than before the spawn because the app session id
+          // does not exist until `createSession` mints it. The race that would
+          // defeat it is a sidecar attaching before this microtask runs — it
+          // must first cold-start Bun, build the engine session and load the
+          // transcript, so it cannot; failing it would merely reproduce the
+          // pre-fix behavior, never something worse. No flush is scheduled here:
+          // the supervisor frame path already arms the timer on the first held
+          // frame, so a resume that replays nothing still goes live.
+          if (result.ok) {
+            attachmentGate.startReplayCoalescing(result.value.appSessionId)
+          }
+          return result
+        })
         .finally(() => {
           openHistoryInFlight.delete(engineId)
         })

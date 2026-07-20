@@ -199,6 +199,29 @@ test('IS-B lazy restore enables replay coalescing on the real host handler', () 
   )
 })
 
+// A create that RESUMES needs the same guard as restore: the sidecar sends
+// `ready` first and the history replay last, and a lone `ready` trips the
+// preview→live swap, blanking a pane that was showing the conversation until
+// the replay lands (operator-observed 2026-07-20). Open-from-history reaches the
+// engine through createSession, which sits on the "fresh create" side of the
+// IS-B/M4 ruling and therefore skipped coalescing entirely.
+test('open-from-history arms replay coalescing on the session createSession minted', () => {
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('ipcMain.handle(\n    CH_HOST_OPEN_HISTORY')
+  expect(start).toBeGreaterThan(-1)
+  const body = source.slice(start, source.indexOf('\n}', start))
+
+  // Armed on the MINTED id — the app session id does not exist until
+  // createSession resolves, so it cannot be armed on a renderer-supplied one.
+  expect(body).toContain(
+    'attachmentGate.startReplayCoalescing(result.value.appSessionId)',
+  )
+  // Only on success: a failed spawn must not leave an entry holding frames.
+  expect(body.indexOf('if (result.ok) {')).toBeLessThan(
+    body.indexOf('attachmentGate.startReplayCoalescing(result.value.appSessionId)'),
+  )
+})
+
 test('PL-B starts one bounded serialized worker only after first paint; main stays engine-free', () => {
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   const readyStart = source.indexOf("window.once('ready-to-show'")

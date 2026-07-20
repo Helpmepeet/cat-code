@@ -217,10 +217,13 @@ export class Host implements HostApi {
     await this.launched
     // HC1 — the host re-validates the cwd regardless of origin. The renderer
     // CANNOT author a path: main resolves a native-picker TOKEN to the realpath
-    // before this is called (`req.cwd` is main-supplied, never a renderer string),
-    // and `req.resumeEngineSessionId` is only ever set by `restoreSession` from a
-    // registry row — the renderer create surface carries neither. This
-    // canonicalize + existence check is the defense-in-depth backstop.
+    // before this is called (`req.cwd` is main-supplied, never a renderer string).
+    // `req.resumeEngineSessionId` is set by `restoreSession` from a registry row
+    // and by main's open-from-history path, which resolves BOTH the id and the
+    // cwd from the sidecar-written catalog cache (SESSIONS-UNIFICATION) — still
+    // never a renderer-authored value. Note a create can therefore RESUME: main
+    // arms replay coalescing for that case so `ready` cannot outrun the history
+    // replay. This canonicalize + existence check is the defense-in-depth backstop.
     if (typeof req?.cwd !== 'string' || req.cwd.length === 0) {
       return hostError('invalid_cwd', 'cwd must be a non-empty string')
     }
