@@ -29,6 +29,7 @@ import type {
 import { AgentsPage } from './AgentsPage.js'
 import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
+import { PermissionRulesEditor } from './PermissionRulesEditor.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import { SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
@@ -127,7 +128,6 @@ const CAT_DESC: Record<string, string> = {
 const CAT_OWNER: Record<string, string> = {
   general: 'a later Phase-4 settings session',
   model: 'a later Phase-4 settings session',
-  permissions: 'the Permissions domain (P2-4 — rules editor)',
   memory: 'Goals + Memory (P4-10)',
   privacy: 'a later Phase-4 settings session',
   keybindings: 'a later Phase-4 settings session',
@@ -143,6 +143,7 @@ const CAT_OWNER: Record<string, string> = {
 export function SettingsShell({
   snapshot,
   additionalWorkingDirectories,
+  permissionContext,
   agentsSnapshot,
   cwd,
   diagnosticsSnapshot,
@@ -158,6 +159,10 @@ export function SettingsShell({
   snapshot: SettingsSnapshot | null
   /** C3 — reused from `permission.context`, not a second seam (§10). */
   additionalWorkingDirectories?: PermissionContextSnapshot['additionalWorkingDirectories']
+  /** C3 — the active session's live permission context; feeds the read-only
+   * Permissions rules pane (`PermissionRulesEditor`). Same `permission.context`
+   * snapshot the composer mode chip reads — no second seam. */
+  permissionContext?: PermissionContextSnapshot | null
   agentsSnapshot?: AgentConfigSnapshot | null
   /** The active session's cwd (already known via the host roster; not re-plumbed). */
   cwd?: string | null
@@ -253,6 +258,7 @@ export function SettingsShell({
           </header>
           <CategoryBody
             additionalWorkingDirectories={additionalWorkingDirectories ?? []}
+            permissionContext={permissionContext ?? null}
             agentsSnapshot={agentsSnapshot ?? null}
             category={active}
             cwd={cwd ?? null}
@@ -274,6 +280,7 @@ export function SettingsShell({
 
 function CategoryBody({
   additionalWorkingDirectories,
+  permissionContext,
   agentsSnapshot,
   category,
   cwd,
@@ -288,6 +295,7 @@ function CategoryBody({
   workspaceTrustSnapshot,
 }: {
   additionalWorkingDirectories: PermissionContextSnapshot['additionalWorkingDirectories']
+  permissionContext: PermissionContextSnapshot | null
   agentsSnapshot: AgentConfigSnapshot | null
   category: string
   cwd: string | null
@@ -331,6 +339,22 @@ function CategoryBody({
   }
   if (category === 'managed') {
     return <ManagedPanel snapshot={snapshot} />
+  }
+  if (category === 'permissions') {
+    // P2-4 C3 read-only rules view (PERMISSION-BOUNDARY.md §4, ledger row 787).
+    // `showModes={false}`: the renderer never authors rules (T6b) and mode
+    // switching lives on the composer `PermissionModeChip` — this pane is a
+    // pure read-only display of the engine's live `permission.context`, so
+    // `onSetMode` is never invoked (the mode buttons are not rendered).
+    return (
+      <PaneSection title="Permission rules">
+        <PermissionRulesEditor
+          context={permissionContext}
+          onSetMode={() => {}}
+          showModes={false}
+        />
+      </PaneSection>
+    )
   }
   if (category === 'workspace') {
     return (
