@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ExtensionsSnapshot, SettingsSnapshot } from '../../shared/protocol.js'
+import type {
+  ExtensionsSnapshot,
+  PermissionContextSnapshot,
+  SettingsSnapshot,
+} from '../../shared/protocol.js'
 import { SettingsShell } from './SettingsShell.js'
 
 const SNAPSHOT: SettingsSnapshot = {
@@ -125,6 +129,55 @@ test('extension categories render the P4-12 panels over the real snapshot, not s
   )
   expect(hooks).toContain('PreToolUse')
   expect(hooks).toContain('run-check')
+})
+
+const PERMISSION_CONTEXT: PermissionContextSnapshot = {
+  mode: 'default',
+  alwaysAllowRules: { userSettings: ['Bash(ls)', 'Read'] },
+  alwaysDenyRules: { localSettings: ['Bash(rm -rf /tmp)'] },
+  alwaysAskRules: {},
+  additionalWorkingDirectories: [{ path: '/tmp/work', source: 'cliArg' }],
+  isBypassPermissionsModeAvailable: false,
+}
+
+test('the Permissions pane embeds the P2-4 read-only rules view over the real C3 context', () => {
+  const html = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="permissions"
+      permissionContext={PERMISSION_CONTEXT}
+      snapshot={SNAPSHOT}
+    />,
+  )
+  // Not the deferred stub any more.
+  expect(html).not.toContain('coming soon')
+  // Real engine rule strings + behavior group headings from the C3 snapshot.
+  expect(html).toContain('Always allow')
+  expect(html).toContain('Always deny')
+  expect(html).toContain('Bash(ls)')
+  expect(html).toContain('Bash(rm -rf /tmp)')
+  expect(html).toContain('(userSettings)')
+  // C3 additional working directories.
+  expect(html).toContain('/tmp/work')
+  expect(html).toContain('(cliArg)')
+  // Read-only: no mode-switch buttons (showModes=false → no aria-pressed
+  // control) and no rule-CRUD affordances (T6b — renderer never authors rules).
+  expect(html).not.toContain('aria-pressed')
+  expect(html).not.toContain('Add rule')
+  expect(html).not.toContain('Save to')
+})
+
+test('the Permissions pane shows the waiting state before the first C3 snapshot', () => {
+  const html = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="permissions"
+      permissionContext={null}
+      snapshot={SNAPSHOT}
+    />,
+  )
+  expect(html).not.toContain('coming soon')
+  // Apostrophe is HTML-escaped in the SSR markup, so match around it.
+  expect(html).toContain('Waiting for the engine')
+  expect(html).toContain('permission context')
 })
 
 test('renders without a snapshot (waiting state)', () => {

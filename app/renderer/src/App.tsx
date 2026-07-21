@@ -2242,6 +2242,7 @@ export function App() {
               permissions,
               activeSessionId,
             )}
+            permissionContext={selectPermissionContext(permissions, activeSessionId)}
             agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
             cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
             diagnosticsSnapshot={selectDiagnosticsSnapshot(diagnostics, activeSessionId)}
