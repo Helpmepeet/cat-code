@@ -142,6 +142,42 @@ async function waitForSocket(socketPath: string, timeoutMs = 30_000): Promise<vo
   }
 }
 
+// ---- Lifecycle safety: never leak the spawned sidecar (review F2) ----
+// A SIGTERM/SIGINT/SIGHUP during the dwell would otherwise bypass run()'s
+// `finally` and orphan the sidecar. Register handlers that synchronously kill the
+// whole process tree before exiting; `cleaned` makes it idempotent so a signal
+// and the finally cannot double-run.
+let activeProc: ReturnType<typeof bunSpawn> | null = null
+let activeSock: Socket | null = null
+let cleaned = false
+
+/** Every descendant pid of `pid`, gathered before any kill (dead parents lose theirs). */
+function descendantPids(pid: number): number[] {
+  const kids = childPids(pid)
+  return [...kids, ...kids.flatMap(descendantPids)]
+}
+
+/** Kill `pid` and all descendants, leaves first so a dead parent can't re-fork. */
+function killTree(pid: number): void {
+  for (const kid of childPids(pid)) killTree(kid)
+  try { execFileSync('kill', ['-9', String(pid)]) } catch { /* already gone */ }
+}
+
+function emergencyCleanup(): void {
+  if (cleaned) return
+  cleaned = true
+  try { activeSock?.destroy() } catch { /* ignore */ }
+  const pid = activeProc?.pid
+  if (pid) killTree(pid)
+}
+
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(sig, () => {
+    emergencyCleanup()
+    process.exit(1)
+  })
+}
+
 async function run(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   const configDir = args['config-dir']
@@ -231,6 +267,7 @@ async function run(): Promise<void> {
     })
     // Record the PID the instant it exists.
     writeFileSync(pidFile, `${proc.pid}\n`)
+    activeProc = proc
 
     // Drain stderr for diagnostics (READY line, resume/fatal).
     void (async () => {
@@ -255,6 +292,7 @@ async function run(): Promise<void> {
 
     if (doAttach && attach) {
       sock = connect({ path: socketPath })
+      activeSock = sock
       sock.on('error', () => { /* the process may exit under teardown */ })
       sock.on('data', () => { /* drain attach snapshots + refresh broadcasts */ })
       await new Promise<void>((resolve, reject) => {
@@ -282,19 +320,19 @@ async function run(): Promise<void> {
       sample('boot-settled')
     }
   } finally {
-    // ---- Kill + verify (lifecycle safety) ----
+    // ---- Kill + verify the FULL process tree (lifecycle safety, review F2) ----
+    cleaned = true // a late signal must not re-run cleanup on top of this
     try { sock?.destroy() } catch { /* ignore */ }
     const pid = proc?.pid
     if (pid) {
-      const kids = childPids(pid)
-      try { proc!.kill('SIGKILL') } catch { /* already gone */ }
-      for (const k of kids) { try { execFileSync('kill', ['-9', String(k)]) } catch { /* gone */ } }
+      const tree = descendantPids(pid) // gather BEFORE killing — dead parents lose their children
+      killTree(pid)
       // Wait for the OS to reap.
       const waitStart = Date.now()
-      while ((isAlive(pid) || kids.some(isAlive)) && Date.now() - waitStart < 5000) {
+      while ([pid, ...tree].some(isAlive) && Date.now() - waitStart < 5000) {
         await sleep(100)
       }
-      survivors = [pid, ...kids].filter(isAlive)
+      survivors = [pid, ...tree].filter(isAlive)
       killVerified = survivors.length === 0
       appendFileSync(pidFile, `killVerified=${killVerified} survivors=${survivors.join(',') || 'none'}\n`)
     }
@@ -319,6 +357,8 @@ async function run(): Promise<void> {
     stderrTail: stderrChunks.join('').split('\n').slice(-6).join('\n'),
   }
   process.stdout.write(JSON.stringify(result, null, 2) + '\n')
+  // A surviving sidecar is a cleanup failure, not a valid measurement (review F2).
+  if (!killVerified) process.exitCode = 3
 }
 
 run().catch(err => {

@@ -150,6 +150,10 @@ function main(): void {
     const num = (xs: Array<number | null | undefined>) => xs.filter((x): x is number => typeof x === 'number')
     agg[name] = {
       reps: rs.length,
+      // Attempted (reps) vs runs that produced usable samples (review F3): a
+      // failed/leaked run is counted in `reps` but excluded from `validReps` and
+      // from the medians below, so `reps: 3` never implies a 3-observation median.
+      validReps: rs.filter(r => r.reachedReady && r.killVerified && r.samples.length > 0).length,
       allKillVerified: rs.every(r => r.killVerified),
       allReady: rs.every(r => r.reachedReady),
       boot: {

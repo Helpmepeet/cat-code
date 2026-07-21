@@ -76,6 +76,25 @@ const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | n
 )
 
 /**
+ * Re-derive the inspected tool row from the CURRENT rows by id (review F1). The
+ * inspector stores only the id; deriving the row each render means a late-arriving
+ * tool_result updates the open drawer instead of pinning the stale open-time
+ * snapshot, and a vanished id (row pruned / session switched) resolves to null →
+ * the drawer closes.
+ */
+export function findNestedToolUseRow(
+  rows: NestedTranscriptRow[],
+  id: string,
+): ToolUseNestedRow | null {
+  for (const row of rows) {
+    if (row.kind === 'tool-use' && row.id === id) return row
+    const nested = findNestedToolUseRow(row.children, id)
+    if (nested) return nested
+  }
+  return null
+}
+
+/**
  * IS-C (M5) — how a restore reads while it is NOT yet a live session. App
  * derives this from the preview flag + connection status (never a frame):
  * - `preview` — cached transcript shown, not engaged.
@@ -148,9 +167,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
   // overlay is a sibling of the transcript column, not nested in a scrolling row.
-  const [inspected, setInspected] = useState<ToolUseNestedRow | null>(null)
-  const openInspector = useCallback((row: ToolUseNestedRow) => setInspected(row), [])
-  const closeInspector = useCallback(() => setInspected(null), [])
+  const [inspectedId, setInspectedId] = useState<string | null>(null)
+  const openInspector = useCallback((row: ToolUseNestedRow) => setInspectedId(row.id), [])
+  const closeInspector = useCallback(() => setInspectedId(null), [])
+  // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
+  // vanished row closes it, instead of pinning the open-time snapshot (F1).
+  const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
 
   let content: ReactNode
   if (rows.length === 0) {

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
+  findNestedToolUseRow,
   resolveToolCardExpanded,
   ToolInspectorOverlay,
   TranscriptRowsView,
@@ -941,4 +942,17 @@ test('P4-1: the inspector overlay renders nothing when closed (null row)', () =>
   expect(
     renderToStaticMarkup(<ToolInspectorOverlay row={null} onClose={() => {}} />),
   ).toBe('')
+})
+
+test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone', () => {
+  const row = projectedBashRow()
+  // Found at the top level.
+  expect(findNestedToolUseRow([row], row.id)).toBe(row)
+  // A vanished id resolves to null → the drawer closes instead of pinning a snapshot.
+  expect(findNestedToolUseRow([row], 'no-such-id')).toBeNull()
+  // Re-derivation reads from the PASSED rows: a freshly-projected row object with
+  // the same id supersedes an earlier open-time snapshot (the F1 staleness fix).
+  const updated: NestedToolUseRow = { ...row }
+  expect(findNestedToolUseRow([updated], row.id)).toBe(updated)
+  expect(findNestedToolUseRow([updated], row.id)).not.toBe(row)
 })
