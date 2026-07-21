@@ -1,14 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { LogOption } from '../../src/types/logs.js'
 import type { SessionLogResult } from '../../src/utils/sessionStorage.js'
-import type {
-  SessionsCatalogSnapshot,
-  SessionsCatalogSnapshotFrame,
-} from '../shared/protocol.js'
+import type { SessionsCatalogSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   buildSessionsCatalogSnapshot,
-  createSidecarSessionsCatalogDomain,
   mapLogOptionToCatalogEntry,
 } from './sessionsCatalogDomain.js'
 
@@ -296,78 +292,5 @@ describe('buildSessionsCatalogSnapshot', () => {
       catalog: snapshot,
     }
     expect(scanForSecrets(frame).ok).toBe(true)
-  })
-})
-
-describe('B4 — createSidecarSessionsCatalogDomain refresh / de-stale', () => {
-  function snap(ids: string[]): SessionsCatalogSnapshot {
-    return {
-      entries: ids.map(id => ({
-        sessionId: id,
-        cwd: '/w/proj',
-        title: id,
-        modifiedAtMs: 1,
-        createdAtMs: 1,
-        messageCount: 0,
-        gitBranch: null,
-        tag: null,
-        mode: null,
-        agentSetting: null,
-        prNumber: null,
-        prRepository: null,
-      })),
-      truncated: false,
-      notes: [],
-    }
-  }
-
-  test('MAJOR-2 — construction is non-blocking: the snapshot is null until the first refresh', async () => {
-    let calls = 0
-    const domain = await createSidecarSessionsCatalogDomain(async () => {
-      calls++
-      return snap(['a'])
-    })
-    // Construction did NOT enumerate (off the listen critical path).
-    expect(calls).toBe(0)
-    expect(domain.getSnapshot()).toBeNull()
-    // The server kicks the first enumeration via refresh().
-    const first = await domain.refresh()
-    expect(calls).toBe(1)
-    expect(first?.entries.map(e => e.sessionId)).toEqual(['a'])
-    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
-  })
-
-  test('refresh re-enumerates so a session created after spawn appears', async () => {
-    const states = [snap(['a']), snap(['a', 'b'])]
-    let call = 0
-    const domain = await createSidecarSessionsCatalogDomain(async () => states[Math.min(call++, states.length - 1)]!)
-    // First refresh = first enumeration (construction deferred it).
-    await domain.refresh()
-    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
-    // A new session ('b') landed; refresh surfaces it.
-    const refreshed = await domain.refresh()
-    expect(refreshed?.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
-    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
-  })
-
-  test('a transient re-read failure keeps the last good snapshot (degrade, not blank)', async () => {
-    const results: Array<SessionsCatalogSnapshot | null> = [snap(['a']), null]
-    let call = 0
-    const domain = await createSidecarSessionsCatalogDomain(async () => results[Math.min(call++, results.length - 1)]!)
-    await domain.refresh() // first enumeration succeeds
-    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
-    await domain.refresh() // enumeration returned null
-    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
-  })
-
-  test('MAJOR-2 — a failed FIRST enumeration leaves the snapshot null; a later refresh recovers', async () => {
-    const results: Array<SessionsCatalogSnapshot | null> = [null, snap(['a'])]
-    let call = 0
-    const domain = await createSidecarSessionsCatalogDomain(async () => results[Math.min(call++, results.length - 1)]!)
-    expect(domain.getSnapshot()).toBeNull()
-    await domain.refresh() // spawn-time enumeration failed (getSnapshot stays null)
-    expect(domain.getSnapshot()).toBeNull()
-    await domain.refresh() // the retry succeeds
-    expect(domain.getSnapshot()?.entries.map(e => e.sessionId)).toEqual(['a'])
   })
 })

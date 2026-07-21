@@ -1875,21 +1875,21 @@ export type DiagnosticsSnapshotFrame = {
  * mode, agent setting, PR number and message count for EVERY session ever run
  * (TUI + desktop), across every workspace.
  *
- * This is the sidecar-owned engine-history half of the catalog (the host plane
- * is deliberately engine-free — `registry.ts:19` — so it cannot enumerate
- * transcripts). The renderer MERGES it with the registry rows via a shared
- * selector (`sessionsCatalogState.ts` — reused by P4-17 Welcome recents, D5).
+ * This is the engine-history half of the catalog (the host plane is deliberately
+ * engine-free — `registry.ts:19` — so it cannot enumerate transcripts). The
+ * renderer MERGES it with the registry rows via a shared selector
+ * (`sessionsCatalogState.ts` — reused by P4-17 Welcome recents, D5).
  *
- * Read-only, capped at `SESSIONS_CATALOG_LIMIT`, and re-enumerated on a periodic
- * refresh while a sidecar is attached (~30 s,
- * `sidecarServer.ts SESSIONS_CATALOG_REFRESH_INTERVAL_MS`) so a session created
- * after this sidecar spawned still appears — NOT the spawn-frozen snapshot an
- * earlier note claimed. It carries display metadata only — no message bodies, no
- * credentials — so it is
- * `secretGuard`-clean by construction. It ALSO carries the winning display
- * title (custom-title > ai-title) so the catalog/sidebar can show real session
- * names instead of the cwd-basename fallback (the P4-6 title rider, surface
- * half; title GENERATION for fresh app sessions is deferred — see STATUS).
+ * Catalog owner (decision #4, `docs/migration/decisions/CATALOG-OWNERSHIP.md`):
+ * a single main-supervised disposable worker enumerates this off any sidecar and
+ * delivers it to the renderer as a `sessions-catalog` host event on a ~30 s timer
+ * (`sessionsCatalogRunner.ts SESSIONS_CATALOG_REFRESH_INTERVAL_MS`), so a session
+ * created after launch still appears (same freshness contract as the old
+ * per-sidecar refresh). Read-only display metadata only — no message bodies, no
+ * credentials — so it is `secretGuard`-clean by construction. It ALSO carries the
+ * winning display title (custom-title > ai-title) so the catalog/sidebar can show
+ * real session names instead of the cwd-basename fallback (the P4-6 title rider,
+ * surface half; title GENERATION for fresh app sessions is deferred — see STATUS).
  */
 export type SessionCatalogEntry = {
   /** The transcript session id (matches a live row's `engineSessionId`). */
@@ -1930,12 +1930,14 @@ export type SessionsCatalogSnapshot = {
 }
 
 /**
- * P4-6a outbound frame. Emitted on attach (after the other snapshots, before
- * history replay) and re-broadcast on the periodic catalog refresh (~30 s,
- * `sidecarServer.ts`) — so a session created after spawn is not frozen out (the
- * enumeration is re-run, not once-at-spawn). Every session's sidecar carries the
- * SAME global catalog; the renderer keys it by `sessionId` and merges it with
- * the host registry rows.
+ * P4-6a outbound frame — SUPERSEDED by catalog owner decision #4
+ * (`docs/migration/decisions/CATALOG-OWNERSHIP.md`) and NO LONGER EMITTED. The
+ * sessions catalog is now enumerated by a single main-supervised worker off any
+ * sidecar and delivered to the renderer as a `sessions-catalog` host event
+ * (`hostApi.ts`), so no sidecar broadcasts this. Retained as additive wire
+ * vocabulary (removing a `ServerFrame` variant is a breaking protocol change);
+ * a future protocol version bump may drop it. Nothing on the wire produces or
+ * consumes it today.
  */
 export type SessionsCatalogSnapshotFrame = {
   kind: 'sessions.snapshot'

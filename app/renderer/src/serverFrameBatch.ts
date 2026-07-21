@@ -61,7 +61,6 @@ export type ServerFrameBatchHandlers = {
   dispatchDiagnostics: (action: BatchAction<FrameReducerAction>) => void
   dispatchRunControls: (action: BatchAction<FrameReducerAction>) => void
   dispatchRemoteSettings: (action: BatchAction<FrameReducerAction>) => void
-  dispatchSessionsCatalog: (action: BatchAction<FrameReducerAction>) => void
   dispatchSlashCatalog: (action: BatchAction<FrameReducerAction>) => void
   dispatchSessionActionRuntime: (action: BatchAction<FrameReducerAction>) => void
 }
@@ -106,7 +105,6 @@ export function applyServerFrameBatch(
   h.dispatchDiagnostics(batch(frameActions))
   h.dispatchRunControls(batch(frameActions))
   h.dispatchRemoteSettings(batch(frameActions))
-  h.dispatchSessionsCatalog(batch(frameActions))
   h.dispatchSlashCatalog(batch(frameActions))
   h.dispatchSessionActionRuntime(batch(frameActions))
   h.dispatchTranscript(batch(frames))

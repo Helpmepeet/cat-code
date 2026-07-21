@@ -1,14 +1,16 @@
 /**
- * Sidecar write-half of the cold-launch sessions-catalog baseline (F2).
+ * Engine-side write-half of the cold-launch sessions-catalog baseline (F2).
  *
- * After each successful transcript enumeration the sidecar drops the global
- * `SessionsCatalogSnapshot` to a single cache file so a launch with ZERO live
- * sidecars (every registry row restorable, nobody emitting a `sessions.snapshot`
- * frame) still has the catalog available to the renderer at startup.
+ * After each successful enumeration the catalog owner (decision #4) — the
+ * disposable `sessionsCatalogWorker` — drops the global `SessionsCatalogSnapshot`
+ * to a single cache file so a launch that has not yet completed its first catalog
+ * worker run still has the catalog available to the renderer at startup (and so
+ * `openHistorySession` can resolve a terminal-created transcript's cwd).
  *
- * Multiple sidecars may write concurrently — but each writes a COMPLETE fresh
- * global enumeration, so last-writer-wins is correct: no lock, no merge, no
- * read-modify-write (that would be the DR-2 trap in reverse). Writes are atomic
+ * Only one catalog worker runs at a time (main's single-flight driver), but even
+ * a concurrent write is correct: each writes a COMPLETE fresh global enumeration,
+ * so last-writer-wins holds — no lock, no merge, no read-modify-write (that would
+ * be the DR-2 trap in reverse). Writes are atomic
  * (temp + fsync + rename, 0700 dir / 0600 file — the `registry.ts` /
  * `transcriptCache.ts` idiom) so a reader never sees a torn file.
  *
@@ -46,8 +48,8 @@ export function sessionsCatalogCacheDir(): string {
 /**
  * Write the global sessions-catalog snapshot atomically. `dir` is injected only
  * so tests write to a tmpdir; production uses `sessionsCatalogCacheDir()`. Throws
- * on an IO failure — the caller (the domain's `refresh()`) swallows it, since a
- * failed cache write must never fail a session (best-effort baseline).
+ * on an IO failure — the caller (the catalog worker) swallows it, since a failed
+ * cache write must never fail the run (best-effort baseline).
  */
 export function writeSessionsCatalogCache(
   snapshot: SessionsCatalogSnapshot,

@@ -108,7 +108,6 @@ import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
-import type { SidecarSessionsCatalogDomain } from './sessionsCatalogDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -216,12 +215,6 @@ export type SidecarServerOptions = {
    */
   remoteSettings?: SidecarRemoteSettingsDomain
   /**
-   * Sessions catalog read-seam (P4-6a). Optional because the P1-0 probe fixture
-   * has no config home to enumerate; when absent, no `sessions.snapshot` frame
-   * is emitted.
-   */
-  sessionsCatalog?: SidecarSessionsCatalogDomain
-  /**
    * The session's user-invocable slash commands WITH display metadata (name +
    * description + optional arg hint), built at spawn from the sidecar's
    * `getCommands` catalog (`sessionController.ts`). Sent to each attaching
@@ -278,15 +271,6 @@ export type SidecarServerOptions = {
 }
 
 /**
- * #16 (B4) — how often each connected sidecar re-enumerates the engine
- * transcript history and re-broadcasts a fresh `sessions.snapshot`, so a session
- * created (TUI or another window) after this sidecar spawned appears in the
- * Sessions catalog without a new inbound verb. Bounded head+tail reads (see
- * `sessionsCatalogDomain.ts`); skipped entirely when no client is attached.
- */
-const SESSIONS_CATALOG_REFRESH_INTERVAL_MS = 30_000
-
-/**
  * Wires a controller to a connection-handling façade. The transport (Bun's
  * `Bun.listen({ unix })`) is created by the caller and delivers raw byte chunks
  * to `handleData`; this class owns framing, validation, and forwarding. Keeping
@@ -312,7 +296,6 @@ export class SidecarServer {
   private readonly diagnostics: SidecarDiagnosticsDomain | null
   private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
-  private readonly sessionsCatalog: SidecarSessionsCatalogDomain | null
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
@@ -333,19 +316,6 @@ export class SidecarServer {
   private usageRefreshStarted = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
-  /** #16 (B4) — periodic sessions-catalog re-enumerate + re-broadcast timer. */
-  private sessionsCatalogRefreshTimer: ReturnType<typeof setInterval> | null = null
-  /** Guards against overlapping catalog re-enumerations if a read runs long. */
-  private sessionsCatalogRefreshInFlight = false
-  /**
-   * Skip-if-unchanged (#16 review, MINOR) — a stable serialization of the last
-   * BROADCAST catalog, so the 30s periodic re-enumeration re-broadcasts only when
-   * the snapshot actually changed (an unchanged re-broadcast forces the renderer
-   * reducer to replace state → a needless re-render per attached session). null
-   * until the first broadcast. Not touched by the per-attach send (a new
-   * connection always needs its snapshot).
-   */
-  private lastBroadcastSessionsCatalogJson: string | null = null
 
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
@@ -374,7 +344,6 @@ export class SidecarServer {
     this.diagnostics = options.diagnostics ?? null
     this.extensions = options.extensions ?? null
     this.remoteSettings = options.remoteSettings ?? null
-    this.sessionsCatalog = options.sessionsCatalog ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
@@ -440,17 +409,11 @@ export class SidecarServer {
     // supervisor attach cancels it well within the (generous) TTL.
     this.armIdleTimer()
 
-    // #16 (B4) — de-stale the sessions catalog: a session created after this
-    // sidecar spawned would otherwise never appear (the catalog was a
-    // spawn-frozen snapshot). Re-enumerate + re-broadcast on an interval; the
-    // refresh is a no-op when nobody is attached. `.unref()` so this timer never
-    // keeps the process alive on its own (`close()` clears it either way).
-    if (this.sessionsCatalog) {
-      this.sessionsCatalogRefreshTimer = setInterval(() => {
-        void this.refreshSessionsCatalog()
-      }, SESSIONS_CATALOG_REFRESH_INTERVAL_MS)
-      this.sessionsCatalogRefreshTimer.unref?.()
-    }
+    // Catalog owner (decision #4): the sidecar no longer enumerates or broadcasts
+    // the sessions catalog. A single main-supervised worker owns it and delivers
+    // it to the renderer as a `sessions-catalog` host event
+    // (`docs/migration/decisions/CATALOG-OWNERSHIP.md`), so no attached sidecar
+    // pays the per-session enumeration plateau (the RAM-3.1 win).
   }
 
   /* --------------------------------------------------------------------- *
@@ -571,22 +534,9 @@ export class SidecarServer {
     // after accounts and before replay. Read-only; re-broadcast after a
     // mutating `remoteSettings.*` verb.
     this.sendRemoteSettingsSnapshot(connection)
-    // P4-6a — read-only cross-workspace sessions catalog (engine transcript
-    // history), after the other snapshots and before replay. secretGuard-clean by
-    // construction (display metadata only). The snapshot may be null on the very
-    // first attach (MAJOR-2 — the enumeration is deferred off the listen critical
-    // path); the kick just below fills it and re-broadcasts once ready.
-    this.sendSessionsSnapshot(connection)
-    // MAJOR-2 — kick the FIRST catalog enumeration now that a client is attached.
-    // Construction no longer enumerates (so the socket opens without waiting on the
-    // ~430ms/600-session read); `refreshSessionsCatalog` enumerates asynchronously
-    // and broadcasts to every connection (this one included) once ready. Guarded on
-    // a null snapshot, so it fires only for the initial fill (or a retry after a
-    // failed spawn read) — a reconnect after the snapshot is populated just replays
-    // the stored snapshot via the attach send above.
-    if (this.sessionsCatalog && this.sessionsCatalog.getSnapshot() === null) {
-      void this.refreshSessionsCatalog()
-    }
+    // Catalog owner (decision #4): the cross-workspace sessions catalog is no
+    // longer sent on attach — a single main-supervised worker owns it and pushes
+    // it to the renderer as a `sessions-catalog` host event.
     // The rich slash-command catalog (name + arg-hint + description), before
     // history + any live event so the composer picker renders prototype-parity
     // rows on a fresh session's very first keystroke. Single-socket ordering
@@ -724,10 +674,6 @@ export class SidecarServer {
   /** Tear down the controller + permission-context subscriptions. */
   close(): void {
     this.clearIdleTimer()
-    if (this.sessionsCatalogRefreshTimer) {
-      clearInterval(this.sessionsCatalogRefreshTimer)
-      this.sessionsCatalogRefreshTimer = null
-    }
     this.unsubscribe?.()
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
@@ -2203,132 +2149,6 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         })`,
       )
-    }
-  }
-
-  /**
-   * P4-6a — build the read-only sessions-catalog frame (engine transcript
-   * history: titles/tags/branches/PRs). It carries no credential-bearing FIELDS,
-   * so the outbound `secretGuard` in `send()` has nothing to strip — but note the
-   * real posture precisely (#16 review): `prepareOutboundPayload` only does
-   * structuredClone + omit-undefined + JSON-safe checks (NO redaction), and
-   * `secretGuard` (`secretGuard.ts`) matches known secret KEY NAMES, not string
-   * VALUES. So a secret is NOT scrubbed from a title: B2 routes `firstPrompt` (the
-   * user's own first message, ≤200 chars) into `title`, meaning a secret a user
-   * TYPED into a first prompt rides to the renderer as title text unredacted.
-   * Accepted residual, not a leak of engine-held secrets: it is the user's own
-   * data over a local Unix socket to their own renderer — the same exposure
-   * `/resume` already has in the TUI. Returns null when there is no catalog or the
-   * payload check dropped the whole frame.
-   */
-  private prepareSessionsSnapshotFrame():
-    | Extract<ServerFrame, { kind: 'sessions.snapshot' }>
-    | null {
-    if (!this.sessionsCatalog) {
-      return null
-    }
-    const raw = this.sessionsCatalog.getSnapshot()
-    if (!raw) {
-      return null
-    }
-    const catalog = this.prepareOutboundPayload(raw, 'sessions.snapshot')
-    if (!catalog) {
-      return null
-    }
-    return {
-      kind: 'sessions.snapshot',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      catalog,
-    }
-  }
-
-  /**
-   * P4-6a — send the sessions catalog to a single connection (attach). Wrapped
-   * so a snapshot failure can never strand the connection or skip the subsequent
-   * history replay.
-   */
-  private sendSessionsSnapshot(connection: Connection): void {
-    try {
-      const frame = this.prepareSessionsSnapshotFrame()
-      if (frame) {
-        this.send(connection, frame)
-      }
-    } catch (error) {
-      this.log(
-        `[sidecar] sessions.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
-  }
-
-  /**
-   * #16 (B4) — re-broadcast the (possibly refreshed) sessions catalog to every
-   * attached connection. Outbound-only re-emission of the SAME read-only frame
-   * kind: the renderer reducer replaces its stored catalog for this session
-   * (`sessionsCatalogState.ts`), so a newly-created session shows up live. No new
-   * inbound vocabulary, no protocol change.
-   */
-  private broadcastSessionsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    try {
-      const frame = this.prepareSessionsSnapshotFrame()
-      if (!frame) {
-        return
-      }
-      // Skip-if-unchanged (MINOR): the 30s refresh re-enumerates on a timer, but
-      // when nothing changed since the last broadcast, re-sending the SAME snapshot
-      // would needlessly re-render every attached session. Compare a stable
-      // serialization of the catalog and skip an identical re-broadcast.
-      const serialized = JSON.stringify(frame.catalog)
-      if (serialized === this.lastBroadcastSessionsCatalogJson) {
-        return
-      }
-      this.lastBroadcastSessionsCatalogJson = serialized
-      for (const connection of this.connections) {
-        this.send(connection, frame)
-      }
-    } catch (error) {
-      this.log(
-        `[sidecar] sessions.snapshot broadcast skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
-  }
-
-  /**
-   * #16 (B4) — re-enumerate the transcript history and re-broadcast. Skipped
-   * when nobody is attached (a detached sidecar has no one to notify and may be
-   * TTL'ing out) and guarded against overlap so a slow filesystem never stacks
-   * enumerations. Best-effort: the domain keeps its last good snapshot on a
-   * transient read failure, so a bad refresh never blanks the catalog.
-   */
-  private async refreshSessionsCatalog(): Promise<void> {
-    if (!this.sessionsCatalog) {
-      return
-    }
-    if (this.connections.size === 0) {
-      return
-    }
-    if (this.sessionsCatalogRefreshInFlight) {
-      return
-    }
-    this.sessionsCatalogRefreshInFlight = true
-    try {
-      await this.sessionsCatalog.refresh()
-      this.broadcastSessionsSnapshot()
-    } catch (error) {
-      this.log(
-        `[sidecar] sessions.snapshot refresh skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    } finally {
-      this.sessionsCatalogRefreshInFlight = false
     }
   }
 

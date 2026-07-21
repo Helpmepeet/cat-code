@@ -620,7 +620,6 @@ export function App() {
         dispatchRunControls,
         dispatchSlashCatalog,
         dispatchRemoteSettings,
-        dispatchSessionsCatalog,
         dispatchSessionActionRuntime,
         dispatchTranscript: dispatchSessionEvent,
       })
@@ -650,6 +649,14 @@ export function App() {
     // read and the subscription. The snapshot is then folded as a BASELINE that
     // never clobbers a newer live event already applied (reduceShell hydrate).
     const unsubscribe = bridge.subscribeHost(event => {
+      // Catalog owner (decision #4): the global sessions catalog now arrives as a
+      // read-only `sessions-catalog` host event (was the per-sidecar
+      // `sessions.snapshot` frame). It is NOT a roster row — fold it into the
+      // catalog store and return BEFORE the roster logic reads `event.session`.
+      if (event.type === 'sessions-catalog') {
+        dispatchSessionsCatalog({ type: 'catalog', snapshot: event.catalog })
+        return
+      }
       // A new/restored tab appears in the bar but does NOT steal the pane — a
       // spawning session has nothing to show; it becomes active when it starts
       // streaming (the frame path above), when the user clicks it, or via the
@@ -819,7 +826,7 @@ export function App() {
   // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
   // the sidecar engine-history snapshot (rich metadata), via the shared
   // selector (reused by P4-17 Welcome recents, D5).
-  const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog, activeSessionId)
+  const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog)
   const sessionCatalogRows = useMemo(
     () => selectMergedSessionRows(shellDescriptors, sessionCatalogSnapshot),
     [shellDescriptors, sessionCatalogSnapshot],

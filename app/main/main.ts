@@ -61,6 +61,11 @@ import {
 } from './transcriptBackfill.js'
 import { MAX_TRANSCRIPT_BACKFILL_SESSIONS } from '../shared/transcriptBackfill.js'
 import {
+  createSessionsCatalogDriver,
+  runSessionsCatalogWorker,
+  type SessionsCatalogDriver,
+} from './sessionsCatalogRunner.js'
+import {
   atomicWriteJson0600,
   createDebouncedAction,
   createDevPickerBypass,
@@ -204,6 +209,15 @@ let registryLaunchSettled: Promise<unknown> | null = null
 const TRANSCRIPT_BACKFILL_START_DELAY_MS = 250
 
 /**
+ * Catalog owner (decision #4 shape (b)): one main-supervised, single-flight
+ * driver per app process. Armed once after first paint; it re-spawns the
+ * disposable engine-graph catalog worker on a timer and delivers each accepted
+ * snapshot to the renderer as a read-only `sessions-catalog` host event. Null
+ * until armed; re-armable after a window-all-closed/reactivate cycle.
+ */
+let sessionsCatalogDriver: SessionsCatalogDriver | null = null
+
+/**
  * Persist one session's transcript cache (IS-A). Called at every eviction point
  * in **snapshot → atomic persist → evict** order (the caller evicts AFTER this):
  * snapshot the session's buffered frames, distill to the transcript-only cache,
@@ -345,6 +359,35 @@ async function backfillTranscriptCaches(): Promise<void> {
   }
 }
 
+/**
+ * Catalog owner (decision #4 shape (b), `docs/migration/decisions/CATALOG-OWNERSHIP.md`)
+ * — arm the single-flight, self-rescheduling catalog refresh after first paint,
+ * alongside the PL-B transcript backfill. Each run spawns ONE disposable
+ * engine-graph worker (`--bare`); on an accepted, secret-clean snapshot main
+ * emits a read-only `sessions-catalog` host event to the renderer (C3 precedent,
+ * no inbound verb). A failed run keeps the last good catalog (no event emitted).
+ * The immediate first run means the sidebar is not empty at cold launch; the
+ * per-run engine-graph import (the CATALOG-OWNERSHIP §4 boot cost) is paid off
+ * the launch critical path because this fires from `ready-to-show`.
+ */
+function startSessionsCatalogRefresh(): void {
+  if (sessionsCatalogDriver) return
+  sessionsCatalogDriver = createSessionsCatalogDriver({
+    run: () =>
+      runSessionsCatalogWorker({
+        command: process.env.CATCODE_BUN_BIN ?? 'bun',
+        args: ['run', SESSIONS_CATALOG_WORKER_ENTRY, '--bare'],
+        cwd: process.cwd(),
+        onCatalog: catalog => {
+          sendHostEvent({ type: 'sessions-catalog', catalog })
+        },
+        log: line => process.stderr.write(`${line}\n`),
+      }),
+    log: line => process.stderr.write(`${line}\n`),
+  })
+  sessionsCatalogDriver.start()
+}
+
 // Perf (2026-07-08, F3): send the whole batch as ONE `webContents.send`, not one
 // send per frame. A restore replays its history as a single `frames[]` from the
 // gate (`onRendererReady` → buffer snapshot); one send ⇒ one renderer IPC task ⇒
@@ -371,6 +414,15 @@ const TRANSCRIPT_BACKFILL_WORKER_ENTRY = join(
   'app',
   'sidecar',
   'transcriptBackfillWorker.ts',
+)
+/** Catalog owner (decision #4): the disposable sessions-catalog worker entry. */
+const SESSIONS_CATALOG_WORKER_ENTRY = join(
+  __dirname,
+  '..',
+  '..',
+  'app',
+  'sidecar',
+  'sessionsCatalogWorker.ts',
 )
 
 function createSupervisor(): SidecarSupervisor {
@@ -534,6 +586,10 @@ function createWindow(): void {
     // Paint first. The worker import is the ~189 MB engine-graph cost; never pay
     // it on the launch/first-window critical path.
     setTimeout(() => void backfillTranscriptCaches(), TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    // Catalog owner (decision #4): arm the main-supervised catalog refresh here,
+    // off the launch critical path, so its first run fills the sidebar and it
+    // then self-reschedules — replacing the per-sidecar catalog enumeration.
+    setTimeout(startSessionsCatalogRefresh, TRANSCRIPT_BACKFILL_START_DELAY_MS)
   })
 
   if (IS_DEV) {
@@ -1501,6 +1557,10 @@ app.on('window-all-closed', () => {
   }
   transcriptBackfillAbort?.abort()
   transcriptBackfillAbort = null
+  // Catalog owner (decision #4): stop the refresh driver with the window; a fresh
+  // `activate` re-arms it after the next paint.
+  sessionsCatalogDriver?.stop()
+  sessionsCatalogDriver = null
   supervisor = null
   // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
@@ -1528,4 +1588,6 @@ app.on('before-quit', () => {
   }
   transcriptBackfillAbort?.abort()
   transcriptBackfillAbort = null
+  sessionsCatalogDriver?.stop()
+  sessionsCatalogDriver = null
 })

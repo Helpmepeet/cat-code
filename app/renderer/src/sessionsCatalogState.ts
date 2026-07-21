@@ -1,19 +1,25 @@
 /**
- * Sessions catalog domain (P4-6a) — the renderer half of the read-only
- * cross-workspace session catalog.
+ * Sessions catalog domain (P4-6a; catalog owner decision #4) — the renderer half
+ * of the read-only cross-workspace session catalog.
  *
  * The catalog has two halves:
  *  - the host REGISTRY (`SessionDescriptor[]` from `listSessions()` + the
  *    HostEvent stream, already projected into `ShellState`) — the app's own
  *    live∪restorable rows, which alone can be opened/restored (HC1/RESTORE-
  *    HISTORY: only a registry row carries a restorable engine session id); and
- *  - the engine TRANSCRIPT HISTORY (`sessions.snapshot` frame) — every session
- *    ever run, across every workspace, with its real title/tag/branch/mode/PR/
- *    message-count (richer than the registry, but not directly openable when it
- *    has no registry row).
+ *  - the engine TRANSCRIPT HISTORY — every session ever run, across every
+ *    workspace, with its real title/tag/branch/mode/PR/message-count (richer than
+ *    the registry, but not directly openable when it has no registry row).
  *
- * `selectMergedSessionRows` folds the two into one keyed list. It is the SHARED
- * selector D5 blessed for Welcome recents (P4-17) — build once, reuse there.
+ * The engine-history half is now enumerated by ONE main-supervised worker and
+ * delivered as a `sessions-catalog` HOST EVENT (decision #4 shape (b),
+ * `docs/migration/decisions/CATALOG-OWNERSHIP.md`), replacing the former
+ * per-sidecar `sessions.snapshot` frame. It is a single GLOBAL enumeration, so
+ * there is no per-session keying: `latestGood` holds the freshest delivered
+ * catalog and `baseline` holds the cold-launch cache (lowest precedence).
+ *
+ * `selectMergedSessionRows` folds the two halves into one keyed list. It is the
+ * SHARED selector D5 blessed for Welcome recents (P4-17) — build once, reuse there.
  *
  * Follows the `create/reduce/select` recipe (`agentConfigState.ts`). Status and
  * every derived field are computed at READ time; the stored snapshot is never
@@ -22,7 +28,6 @@
 
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type {
-  ServerFrame,
   SessionCatalogEntry,
   SessionId,
   SessionsCatalogSnapshot,
@@ -31,33 +36,27 @@ import { basename } from './pathUtils.js'
 
 export type SessionsCatalogState = {
   /**
-   * Keyed by the emitting session (recipe conformance). The catalog is a global
-   * point-in-time enumeration, so any session's snapshot is a valid source; the
-   * page reads the ACTIVE session's (freshest for that sidecar).
-   */
-  sessions: Record<SessionId, SessionsCatalogSnapshot | null>
-  /**
-   * The freshest live `sessions.snapshot` from ANY session — retained so the page
-   * still has the global catalog when the ACTIVE session never emitted one (a
-   * restored preview pane has no sidecar). A `lifecycle` frame NEVER clears this:
-   * a stale catalog is still useful, a blank one is a regression — the same
-   * doctrine the sidecar domain holds (`app/sidecar/sessionsCatalogDomain.ts:110`).
+   * The freshest global catalog delivered by the main-owned catalog worker via
+   * the `sessions-catalog` host event. A failed worker run delivers nothing, so
+   * this retains the last good snapshot — a stale catalog is still useful, a
+   * blank one is a regression (the same doctrine the worker/cache path holds).
    */
   latestGood: SessionsCatalogSnapshot | null
   /**
    * The cold-launch persisted baseline (host cache, read once at startup). Lowest
-   * precedence: any live snapshot supersedes it, and it never overwrites
-   * `latestGood`. Present so a launch with zero live sidecars still shows history.
+   * precedence: any delivered live snapshot supersedes it, and it never
+   * overwrites `latestGood`. Present so a launch that has not yet completed its
+   * first catalog worker run still shows history.
    */
   baseline: SessionsCatalogSnapshot | null
 }
 
 export type SessionsCatalogAction =
-  | { type: 'frame'; frame: ServerFrame }
+  | { type: 'catalog'; snapshot: SessionsCatalogSnapshot }
   | { type: 'baseline'; snapshot: SessionsCatalogSnapshot }
 
 export function createSessionsCatalogState(): SessionsCatalogState {
-  return { sessions: {}, latestGood: null, baseline: null }
+  return { latestGood: null, baseline: null }
 }
 
 export function reduceSessionsCatalogState(
@@ -66,45 +65,25 @@ export function reduceSessionsCatalogState(
 ): SessionsCatalogState {
   if (action.type === 'baseline') {
     // Fold the startup cache as the lowest-precedence source only — never touch
-    // `sessions`/`latestGood`, so a baseline arriving after a live snapshot can
-    // never clobber it (select prefers active > latestGood > baseline).
+    // `latestGood`, so a baseline arriving after a live snapshot can never
+    // clobber it (select prefers latestGood > baseline).
     if (state.baseline === action.snapshot) return state
     return { ...state, baseline: action.snapshot }
   }
 
-  const { frame } = action
-
-  if (frame.kind === 'sessions.snapshot') {
-    return {
-      ...state,
-      sessions: { ...state.sessions, [frame.sessionId]: frame.catalog },
-      // Retain the freshest live enumeration as the cross-session fallback.
-      latestGood: frame.catalog,
-    }
-  }
-
-  if (frame.kind === 'lifecycle') {
-    if (!(frame.sessionId in state.sessions)) return state
-    // Null only THIS session's slot; `latestGood`/`baseline` survive so the last
-    // live session dying never blanks a catalog we already have.
-    return {
-      ...state,
-      sessions: { ...state.sessions, [frame.sessionId]: null },
-    }
-  }
-
-  return state
+  // A refreshed global catalog from the main-owned worker (decision #4). Retain
+  // it as the freshest source; the baseline survives underneath.
+  if (state.latestGood === action.snapshot) return state
+  return { ...state, latestGood: action.snapshot }
 }
 
 export function selectSessionsCatalog(
   state: SessionsCatalogState,
-  sessionId: SessionId | null,
 ): SessionsCatalogSnapshot | null {
-  // Active session's snapshot (freshest for its sidecar) > the retained latest-
-  // good live snapshot > the cold-launch baseline. The catalog is a global point-
-  // in-time enumeration, so any of these is a valid source for the whole page.
-  const active = sessionId ? state.sessions[sessionId] : undefined
-  return active ?? state.latestGood ?? state.baseline ?? null
+  // The freshest delivered global catalog > the cold-launch baseline. The catalog
+  // is a single global point-in-time enumeration (one main-owned worker), so
+  // there is no per-session slot to prefer.
+  return state.latestGood ?? state.baseline ?? null
 }
 
 /**

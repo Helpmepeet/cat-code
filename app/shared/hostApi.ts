@@ -24,7 +24,7 @@
  * conflating them erases which layer failed.
  */
 
-import type { SessionId } from './protocol.js'
+import type { SessionId, SessionsCatalogSnapshot } from './protocol.js'
 
 /* ------------------------------------------------------------------------- *
  * Requests / responses (REGISTRY.md §6.1)
@@ -134,14 +134,23 @@ export type HostResult<T> = { ok: true; value: T } | { ok: false; error: HostErr
  *  - `session-added`   — a new row exists (create / restore).
  *  - `session-status`  — a live row's status changed (spawning→ready→…exited).
  *  - `session-removed` — a row left the live∪restorable set (reaped).
+ *  - `sessions-catalog` — the global cross-workspace sessions catalog (engine
+ *    transcript history) refreshed. Catalog owner decision #4 (shape (b),
+ *    `docs/migration/decisions/CATALOG-OWNERSHIP.md`): main re-spawns a
+ *    disposable engine-graph worker on a timer, which enumerates the catalog off
+ *    any sidecar; main delivers the accepted snapshot to the renderer here.
+ *    Read-only OUTBOUND display metadata (C3 precedent) — NOT a roster row and
+ *    NOT a renderer-authored write; carries no session descriptor. `secretGuard`
+ *    ran on it at the worker and again at main's parse boundary.
  *
- * Each event carries the full descriptor (except `removed`, which carries only
+ * The first three carry the full descriptor (except `removed`, which carries only
  * the id) so a subscriber can update without a follow-up read.
  */
 export type HostEvent =
   | { type: 'session-added'; session: SessionDescriptor }
   | { type: 'session-status'; session: SessionDescriptor }
   | { type: 'session-removed'; appSessionId: SessionId }
+  | { type: 'sessions-catalog'; catalog: SessionsCatalogSnapshot }
 
 /* ------------------------------------------------------------------------- *
  * Bounds (HC4 + title cap)
