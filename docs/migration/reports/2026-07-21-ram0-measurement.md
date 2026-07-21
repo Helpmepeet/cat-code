@@ -125,9 +125,36 @@ Enrichment verified: a 5-session smoke corpus enriched to 5 fully-populated rows
 
 ## Results
 
-Machine-pressure snapshot: **(pending — filled at run time from `ram0-raw/machine.txt`)**
+**LABEL: LOAD-BIASED (concurrent dev app).** All numbers below were sampled with
+the operator's own Cat Code Dev app running **two** live non-worktree sidecars
+(PIDs 70069 ≈823 MB RSS, 71694 ≈517 MB RSS, spawned from
+`/Users/pt/cat-code/app/sidecar/index.ts`). Contention biases numbers upward.
+Re-run on an idle machine via the committed one-liner (§Re-run) — probe sidecars
+spawn from the worktree path and are distinguishable from the operator's.
 
-Executed counterbalanced order: **(pending — from `ram0-aggregate.json` runOrder)**
+Machine-pressure snapshot (from `ram0-raw/machine.txt`): Mac16,8 (Apple Silicon),
+**hw.memsize 24 GiB · 12 CPU · load avg 1.76 / 2.11 / 2.25** · `vm_stat`: ~3.85 GB
+free, compressor occupying ~1.56 GB (99,857 pages). Moderate load, not thrashing.
+
+**Run parameters (THIS session — deviation flagged):** `--reps 3 --dwell-ms 40000
+--sample-ms 15000`. The artifact's canonical re-run recipe (§Re-run) pins
+`--dwell-ms 240000`; that yields a ~38-min matrix that cannot complete in a single
+foreground tool invocation (the runner's hard 10-min per-call ceiling), and a
+mid-dwell kill would orphan a sidecar — the exact failure the run protocol forbids.
+The full reps=3 matrix (boot floor + both enrich arms + the MIMALLOC A/B) was
+therefore run in **one** foreground invocation at a reduced 40 s dwell.
+**Defensibility:** the 40 s dwell still spans the first attach enumeration
+(`sidecarServer.ts:588`) AND one 30 s catalog re-enumeration
+(`sidecarServer.ts:449`); the plateau climb lands at cycle-2 (~37 s) and
+cycle-2 ≈ cycle-3 in every rep (e.g. enrich600 rep0 RSS 395.5 → 395.4, footprint
+347.7 → 347.7), i.e. the plateau had stabilized before the dwell ended. The
+canonical 240 s recipe is retained unchanged for full-dwell confirmation on an
+idle machine. `🔁 adapted(bash-10min-ceiling + foreground-only-protocol → 40s dwell; plateau proven stable cycle2≈cycle3)`.
+
+Executed counterbalanced order (`ram0-aggregate.json` runOrder): `bootfloor-r0,
+enrich50-r0, enrich600-r0, mimalloc0-r0, bootfloor-r1, enrich600-r1, mimalloc0-r1,
+enrich50-r1, bootfloor-r2, mimalloc0-r2, enrich50-r2, enrich600-r2` (cond order
+rotated per rep). All 12 runs: `reachedReady=true`, `killVerified=true`.
 
 ### Cohort (1) — cache-hit preview, no engagement → engine MB
 
@@ -142,30 +169,66 @@ Validation of "no sidecar spawned": **(source-anchored; live GUI confirmation is
 
 | Metric | median | min–max | reps |
 |---|---|---|---|
-| RSS (MB) | (pending) | (pending) | (pending) |
-| Physical footprint (MB) | (pending) | (pending) | (pending) |
+| RSS (MB) | 231.5 | 230.4–231.8 | 3 |
+| Physical footprint (MB) | 191.8 | 190.6–192.7 | 3 |
+
+Dedicated `bootfloor` cohort (empty corpus, **no attach**): the pure listening-idle
+floor after module graph + `init()` + controller construction, resampled at +5 s to
+confirm stability (`boot` ≡ `boot-settled` in every rep). This is also the
+"Today (pre-cut)" engine cost for Cohort (1) above (~192 MB footprint / ~231 MB RSS).
+The pre-attach `boot` sample of each attached cohort corroborates it
+(enrich50 192.9 / enrich600 192.8 / mimalloc0 192.5 MB footprint).
 
 ### Cohort (2b) — attached-idle plateau (real engine, bare socket attached)
 
 | Condition | boot footprint MB (med [range]) | plateau footprint MB (med [range]) | boot RSS MB (med [range]) | plateau RSS MB (med [range]) | trajectory |
 |---|---|---|---|---|---|
-| enrich=50  (50-session corpus) | (pending) | (pending) | (pending) | (pending) | (pending) |
-| enrich=600 (600-session corpus) | (pending) | (pending) | (pending) | (pending) | (pending) |
+| enrich=50  (50-session corpus) | 192.9 [192.9–193.5] | 205.1 [202.3–205.3] | 233.3 [232.2–233.3] | 247.1 [246.2–247.1] | 192.9→200 (first-enum)→205 (post-30s-refresh); +12 footprint over boot |
+| enrich=600 (600-session corpus) | 192.8 [191.9–193.3] | 346.5 [268.3–347.7] | 232.3 [231.3–232.8] | 395.4 [394.3–395.9] | 192.8→271 (first-enum)→347 (post-30s-refresh); +154 footprint over boot |
+
+**Enrichment-volume cost (the audit's 278-vs-467 question):** enriching the full
+600-session catalog costs **≈+154 MB physical footprint / ≈+163 MB RSS over the boot
+floor**, vs ≈+12 MB footprint for 50 sessions — the RAM-3.1 lever. The plateau is
+reached in two steps: the on-attach first enumeration (`sidecarServer.ts:588`) does
+the bulk (→ ~271 MB footprint on the 600-corpus), then the first 30 s catalog
+re-enumeration (`sidecarServer.ts:449`) pushes it to the ~347 MB plateau, stable
+thereafter (cycle-2 ≈ cycle-3). Peak physical footprint (`vmmap` "(peak)") on the
+600-corpus is ~349 MB across all reps.
+**Footprint-oscillation note (honest):** the *median* plateau footprint on the
+600-corpus has a wide range (one rep sampled 268 MB at the final cycle) because
+mimalloc periodically purges pages, so the instantaneous physical footprint
+oscillates between ~268 and ~348 MB while **RSS stays steady at ~395 MB and peak
+footprint stays ~349 MB**. RSS and peak are the stable plateau indicators here;
+the footprint median is reported as-sampled with its true range.
 
 ### MIMALLOC_PURGE_DELAY=0 A/B (enrich=600 corpus)
 
-| Condition | plateau footprint MB (med [range]) | plateau RSS MB (med [range]) | Δ vs default |
-|---|---|---|---|
-| default (unset) | (pending) | (pending) | — |
-| MIMALLOC_PURGE_DELAY=0 | (pending) | (pending) | (pending) |
+| Condition | plateau footprint MB (med [range]) | plateau RSS MB (med [range]) | peak footprint MB | Δ vs default |
+|---|---|---|---|---|
+| default (unset) | 346.5 [268.3–347.7] | 395.4 [394.3–395.9] | ~349 | — |
+| MIMALLOC_PURGE_DELAY=0 | 345.8 [268.0–348.2] | 396.3 [394.4–396.9] | ~349 | footprint −0.7 · RSS +0.9 (both within noise) |
+
+**Finding — MIMALLOC_PURGE_DELAY=0 has no material effect** on the attached-idle
+plateau in the current-featureless config: plateau footprint, plateau RSS, and peak
+footprint are all identical within measurement noise (both ~346 MB footprint median /
+~396 MB RSS / ~349 MB peak). The audit's hypothesis that forcing eager purge would
+trim the plateau is **not supported** by this measurement — under both settings the
+sampled footprint oscillates the same way (both showed a ~268 MB purge dip in one
+rep). Any purge-delay tuning would need to justify itself on a *different* workload
+(a live turn cohort, PARKED) rather than the catalog-enumeration plateau.
 
 ### Leak sweep (post-run)
 
 | Check | Result |
 |---|---|
-| `ps` for probe sidecar PIDs | (pending) |
-| `find` for probe scratch sockets | (pending) |
-| Per-run `killVerified` | (pending) |
+| `ps` for probe sidecar PIDs (`ram-probe` + worktree `app/sidecar/index.ts`) | **0 alive** — clean |
+| `find /tmp -name 'ram0-*'` probe scratch socket dirs | **0** remaining |
+| Per-run `killVerified` (from 12 `*.pids` files) | **12/12 `killVerified=true survivors=none`** |
+| Operator's own dev-app sidecars (PIDs 70069 / 71694) | still alive + **untouched** (probe kills only its own worktree-path PID + children) |
+
+**0 leaked**, evidence retained in `ram0-raw/*.pids`. Every probe records its spawned
+PID to `<label>.pids` the instant it exists and appends `killVerified=…` after a
+`ps -p` re-check; the runner isolates each run in its own child process.
 
 ---
 

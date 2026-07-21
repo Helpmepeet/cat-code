@@ -1,0 +1,42 @@
+# RAM-0 machine-pressure snapshot — captured at run time
+# Worktree: /Users/pt/cat-code/.claude/worktrees/agent-a266413daf97a1e12
+# Date: 2026-07-21 (worker session)
+
+## Hardware
+hw.memsize = 25769803776  (24 GiB)
+hw.ncpu    = 12
+hw.model   = Mac16,8  (Apple Silicon)
+
+## Load (uptime at run start)
+19:29  up  7:45, 5 users, load averages: 1.76 2.11 2.25
+
+## vm_stat (page size 16384 bytes) at run start
+Pages free:                              246087.
+Pages active:                            501404.
+Pages inactive:                          532616.
+Pages speculative:                        11499.
+Pages throttled:                              0.
+Pages wired down:                        138342.
+Pages purgeable:                          26120.
+"Translation faults":                  64637235.
+Pages copy-on-write:                    3336964.
+Pages zero filled:                     37545477.
+Pages reactivated:                       917532.
+Pages purged:                            387687.
+File-backed pages:                       407854.
+Anonymous pages:                         637665.
+Pages stored in compressor:              272512.
+Pages occupied by compressor:             99857.
+Decompressions:                          136315.
+Compressions:                            689242.
+Pageins:                                2216143.
+
+## Concurrent NON-worktree sidecars at run start (operator's Cat Code Dev app)
+# These bias memory numbers upward via contention. My probe sidecars spawn from
+# the worktree path (.claude/worktrees/agent-.../app/sidecar/index.ts) and are
+# distinguishable from these main-repo-path processes.
+70069 842464 bun run /Users/pt/cat-code/app/sidecar/index.ts   (~823 MB RSS)
+71694 529680 bun run /Users/pt/cat-code/app/sidecar/index.ts   (~517 MB RSS)
+
+## LABEL: LOAD-BIASED (concurrent dev app) — 2 live operator sidecars present.
+## Re-runnable on an idle machine via the committed one-liner in the report.

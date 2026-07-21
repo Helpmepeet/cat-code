@@ -1,0 +1,149 @@
+# RAM-0 raw vmmap captures — label=bootfloor-r0 mode=real attach=false
+
+===== boot @ 3.5s pid=81359 rss=231.8MB footprint=192.7MB peak=199.6MB =====
+Process:         bun [81359]
+Path:            /Users/USER/*/bun
+Load Address:    0x100cf8000
+Identifier:      bun
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  bun [81358]
+Target Type:     live task
+
+Date/Time:       2569-07-21 19:32:47.879 +0700
+Launch Time:     2569-07-21 19:32:44.831 +0700
+OS Version:      macOS 26.3.1 (25D2128)
+Report Version:  7
+Analysis Tool:   /usr/bin/vmmap
+
+Physical footprint:         192.7M
+Physical footprint (peak):  199.6M
+Idle exit:                  untracked
+----
+
+ReadOnly portion of Libraries: Total=653.1M resident=82.6M(13%) swapped_out_or_unallocated=570.5M(87%)
+Writable regions: Total=69.6G written=200.5M(0%) resident=200.5M(0%) swapped_out=0K(0%) unallocated=69.4G(100%)
+
+                                VIRTUAL RESIDENT    DIRTY  SWAPPED VOLATILE   NONVOL    EMPTY   REGION 
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+Activity Tracing                   256K      16K      16K       0K       0K      16K       0K        1 
+IOAccelerator                    512.2M    77.5M    77.5M       0K       0K       0K       0K       13 
+IOAccelerator (reserved)         512.0M       0K       0K       0K       0K       0K       0K        1         reserved VM address space (unallocated)
+JS JIT generated code            512.0M    1472K    1472K       0K       0K       0K       0K        3 
+JS VM Gigacage                   754.6M    3568K    3440K       0K       0K       0K       0K        3 
+JS VM Gigacage (reserved)         67.3G       0K       0K       0K       0K       0K       0K        3         reserved VM address space (unallocated)
+Kernel Alloc Once                   32K      16K      16K       0K       0K       0K       0K        1 
+MALLOC guard page                 3408K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                   65.0M     544K     544K       0K       0K       0K       0K        7 
+MALLOC_NANO metadata                32K      32K      32K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_SMALL                      24.0M    5376K    5376K       0K       0K       0K       0K        6         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              4096K      32K      32K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     160K     160K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+STACK GUARD                        336K       0K       0K       0K       0K       0K       0K       21 
+Stack                             74.1M    2608K    2608K       0K       0K       0K       0K       21 
+WebKit Malloc                    385.9M   108.4M   100.2M       0K       0K       0K       0K       24 
+__AUTH                              35K      35K     1104       0K       0K       0K       0K       13 
+__AUTH_CONST                       286K     252K       0K       0K       0K       0K       0K       46 
+__BUN                               16K      16K       0K       0K       0K       0K       0K        1 
+__DATA                            5983K     687K     558K       0K       0K       0K       0K       37 
+__DATA_CONST                      1363K    1171K       0K       0K       0K       0K       0K       45 
+__DATA_DIRTY                       175K     175K     153K       0K       0K       0K       0K       39 
+__LINKEDIT                       588.0M    44.7M       0K       0K       0K       0K       0K        2 
+__OBJC_RO                         78.4M    63.5M       0K       0K       0K       0K       0K        1 
+__OBJC_RW                         2571K    2251K      27K       0K       0K       0K       0K        1 
+__TEXT                            65.1M    37.9M       0K       0K       0K       0K       0K       48 
+__TPRO_CONST                       128K     112K      32K       0K       0K       0K       0K        2 
+mapped file                       32.7M     448K       0K       0K       0K       0K       0K        2 
+page table in kernel               769K     769K     769K       0K       0K       0K       0K        1 
+shared memory                       48K      48K      48K       0K       0K       0K       0K        2 
+unused .note.gnu.prope              320      320       0K       0K       0K       0K       0K        1 
+unused but dirty shlib __DATA       93K      93K      93K       0K       0K       0K       0K       37 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+TOTAL                             70.8G   351.4M   192.7M       0K       0K      16K       0K      389 
+TOTAL, minus reserved VM space     3.0G   351.4M   192.7M       0K       0K      16K       0K      389 
+
+                                          VIRTUAL   RESIDENT      DIRTY    SWAPPED ALLOCATION      BYTES DIRTY+SWAP          REGION
+MALLOC ZONE                                  SIZE       SIZE       SIZE       SIZE      COUNT  ALLOCATED  FRAG SIZE  % FRAG   COUNT
+===========                               =======  =========  =========  =========  =========  =========  =========  ======  ======
+DefaultMallocZone_0x1054dc000               32.5M      5728K      5728K         0K      23530      7030K         0K      0%      11
+WebKit Using System Malloc_0x1055ac000         0K         0K         0K         0K          0         0K         0K      0%       0
+===========                               =======  =========  =========  =========  =========  =========  =========  ======  ======
+TOTAL                                       32.5M      5728K      5728K         0K      23530      7030K         0K      0%      11
+
+
+
+===== boot-settled @ 9.0s pid=81359 rss=231.8MB footprint=192.7MB peak=199.6MB =====
+Process:         bun [81359]
+Path:            /Users/USER/*/bun
+Load Address:    0x100cf8000
+Identifier:      bun
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  bun [81358]
+Target Type:     live task
+
+Date/Time:       2569-07-21 19:32:53.339 +0700
+Launch Time:     2569-07-21 19:32:44.831 +0700
+OS Version:      macOS 26.3.1 (25D2128)
+Report Version:  7
+Analysis Tool:   /usr/bin/vmmap
+
+Physical footprint:         192.7M
+Physical footprint (peak):  199.6M
+Idle exit:                  untracked
+----
+
+ReadOnly portion of Libraries: Total=653.1M resident=82.6M(13%) swapped_out_or_unallocated=570.5M(87%)
+Writable regions: Total=69.6G written=200.5M(0%) resident=200.5M(0%) swapped_out=0K(0%) unallocated=69.4G(100%)
+
+                                VIRTUAL RESIDENT    DIRTY  SWAPPED VOLATILE   NONVOL    EMPTY   REGION 
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+Activity Tracing                   256K      16K      16K       0K       0K      16K       0K        1 
+IOAccelerator                    512.2M    77.5M    77.5M       0K       0K       0K       0K       13 
+IOAccelerator (reserved)         512.0M       0K       0K       0K       0K       0K       0K        1         reserved VM address space (unallocated)
+JS JIT generated code            512.0M    1472K    1472K       0K       0K       0K       0K        3 
+JS VM Gigacage                   754.6M    3568K    3440K       0K       0K       0K       0K        3 
+JS VM Gigacage (reserved)         67.3G       0K       0K       0K       0K       0K       0K        3         reserved VM address space (unallocated)
+Kernel Alloc Once                   32K      16K      16K       0K       0K       0K       0K        1 
+MALLOC guard page                 3408K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                   65.0M     544K     544K       0K       0K       0K       0K        7 
+MALLOC_NANO metadata                32K      32K      32K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_SMALL                      24.0M    5376K    5376K       0K       0K       0K       0K        6         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              4096K      32K      32K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     160K     160K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+STACK GUARD                        336K       0K       0K       0K       0K       0K       0K       21 
+Stack                             74.1M    2608K    2608K       0K       0K       0K       0K       21 
+WebKit Malloc                    385.9M   108.4M   100.2M       0K       0K       0K       0K       24 
+__AUTH                              35K      35K     1104       0K       0K       0K       0K       13 
+__AUTH_CONST                       286K     252K       0K       0K       0K       0K       0K       46 
+__BUN                               16K      16K       0K       0K       0K       0K       0K        1 
+__DATA                            5983K     687K     558K       0K       0K       0K       0K       37 
+__DATA_CONST                      1363K    1171K       0K       0K       0K       0K       0K       45 
+__DATA_DIRTY                       175K     175K     153K       0K       0K       0K       0K       39 
+__LINKEDIT                       588.0M    44.7M       0K       0K       0K       0K       0K        2 
+__OBJC_RO                         78.4M    63.5M       0K       0K       0K       0K       0K        1 
+__OBJC_RW                         2571K    2251K      27K       0K       0K       0K       0K        1 
+__TEXT                            65.1M    37.9M       0K       0K       0K       0K       0K       48 
+__TPRO_CONST                       128K     112K      32K       0K       0K       0K       0K        2 
+mapped file                       32.7M     448K       0K       0K       0K       0K       0K        2 
+page table in kernel               769K     769K     769K       0K       0K       0K       0K        1 
+shared memory                       48K      48K      48K       0K       0K       0K       0K        2 
+unused .note.gnu.prope              320      320       0K       0K       0K       0K       0K        1 
+unused but dirty shlib __DATA       93K      93K      93K       0K       0K       0K       0K       37 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+TOTAL                             70.8G   351.4M   192.7M       0K       0K      16K       0K      389 
+TOTAL, minus reserved VM space     3.0G   351.4M   192.7M       0K       0K      16K       0K      389 
+
+                                          VIRTUAL   RESIDENT      DIRTY    SWAPPED ALLOCATION      BYTES DIRTY+SWAP          REGION
+MALLOC ZONE                                  SIZE       SIZE       SIZE       SIZE      COUNT  ALLOCATED  FRAG SIZE  % FRAG   COUNT
+===========                               =======  =========  =========  =========  =========  =========  =========  ======  ======
+DefaultMallocZone_0x1054dc000               32.5M      5728K      5728K         0K      23530      7030K         0K      0%      11
+WebKit Using System Malloc_0x1055ac000         0K         0K         0K         0K          0         0K         0K      0%       0
+===========                               =======  =========  =========  =========  =========  =========  =========  ======  ======
+TOTAL                                       32.5M      5728K      5728K         0K      23530      7030K         0K      0%      11
+
+
