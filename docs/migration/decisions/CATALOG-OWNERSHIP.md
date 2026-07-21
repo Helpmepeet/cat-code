@@ -1,6 +1,10 @@
-# CATALOG-OWNERSHIP — who enumerates the sessions catalog (DRAFT)
+# CATALOG-OWNERSHIP — who enumerates the sessions catalog (RATIFIED: shape b)
 
-**Status: DRAFT — DESIGN, pending operator ratification.** Records the owner
+**Status: RATIFIED 2026-07-21 — owner = shape (b)** (operator-delegated,
+"up to you recommendation"). The SHAPE choice is final and does not reopen a
+locked decision (§7); the quantified savings table below still carries
+`[RAM-0]` placeholders pending a **decision-grade** RAM-0 run — the SCRATCH
+figures are directional only, not pinned. Records the owner
 choice for the cross-workspace sessions-catalog enumeration (audit RAM-3.1,
 `docs/migration/reviews/2026-07-21-app-cutlist-ram-audit.md`, committed
 `6cdb6bc`). Does **NOT** reopen a locked decision — see §7. Numbers below carry
