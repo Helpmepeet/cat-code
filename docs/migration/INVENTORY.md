@@ -94,7 +94,7 @@
 | Surface | File | ⚓ | Faked? | Disposition |
 |---|---|---:|---|---|
 | Shared primitives: `Chip`, `ChipStrip`, `BannerStack`, `ToastHost`, `MentionPicker`, `ToolInspector` | `Surfaces.jsx` | 5 | partial (**S7**) | adapt (source analogs are split TUI primitives; product primitive layer is target-owned) |
-| Connection UI: `ConnectionChip`, `ConnectionDemoBar`, `CONN_STATES` | `Surfaces.jsx` | 2 | yes (**S7**) | adapt; **cut `ConnectionDemoBar` simulator** |
+| Connection UI: `ConnectionChip`, `ConnectionDemoBar`, `CONN_STATES` | `Surfaces.jsx` | 2 | yes (**S7**) | **cut** — `ConnectionDemoBar` simulator cut; `ConnectionChip` also CUT (CC-5 #6, dark/never-mounted); live UX served by `ConnectionRecovery` (`App.tsx`) |
 | `AgentIdentity` (shared agent vocabulary) | `AgentIdentity.jsx` | 4 | partial (**S5**) | adapt (useful vocabulary, but compresses real worker/task/agent state) |
 | **Startup/trust** `StartupFlow`, `ReauthGate`, `WorkspaceSwitchPrompt` | `Startup.jsx` | 11 | partial (**S6**) | **✅ D4 CLOSED — operator ruled 2026-07-07** (`decisions/STARTUP-GATES.md` §5): trust gate + first-run OAuth = adapt (per-session-create; `config.ts:111,735-788`, `ConsoleOAuthFlow.tsx:35-55`); `WorkspaceSwitchPrompt` CUT; **Q1 = TUI parity** (`ReadOnlyModeGate` CUT); **Q2 = non-blocking reauth banner** (blocking modal CUT; block submit only at zero-healthy). → **P4-15** (`backlog/phase4.md`) |
 | Resume: `CrossProjectResumeDialog`, `HydrationOverlay` | `ResumeStates.jsx` | 2 | yes (**S6**) | adapt; real resume is synchronous restore/recovery, overlay/diff list is visualization |
