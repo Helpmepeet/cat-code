@@ -1,10 +1,11 @@
 /**
- * Sessions catalog domain (P4-6a) — the sidecar-owned engine-history half of
- * the Sessions catalog read-seam.
+ * Sessions catalog domain (P4-6a; catalog owner decision #4) — the engine-side
+ * enumeration + wire mapping half of the Sessions catalog read-seam.
  *
  * The host plane is deliberately engine-free (`app/host/registry.ts:19`), so it
- * cannot enumerate transcripts; the sidecar (which runs the real engine) reads
- * them via the SAME loader `/resume` uses:
+ * cannot enumerate transcripts; an engine-capable process (the disposable
+ * catalog worker, `app/sidecar/sessionsCatalogWorker.ts`) reads them via the
+ * SAME loader `/resume` uses:
  * `loadAllProjectsMessageLogsProgressive` (`src/utils/sessionStorage.ts:4476`).
  * That loader stat-lists every project dir (up to `SESSIONS_CATALOG_STAT_LIMIT`
  * per dir) then ENRICHES the most-recent `SESSIONS_CATALOG_ENRICH_LIMIT`
@@ -18,24 +19,22 @@
  * The enrich limit is the RETURNED count, so the pre-#16 default of 50 hid the
  * operator's real terminal history behind the newest ~day of dev/test sessions.
  * #16 raises it to a still-bounded window (each enriched row is a capped
- * head+tail read, never a full transcript read of all 2k+ files) and adds a
- * `refresh()` so a periodic sidecar re-enumeration re-broadcasts a fresh,
- * de-staled catalog (a session created after this sidecar spawned then appears
- * without a new inbound verb — `sidecarServer.ts` owns the timer + broadcast).
+ * head+tail read, never a full transcript read of all 2k+ files).
  *
- * Construction is NON-BLOCKING (#16 review, MAJOR-2): raising the enrich cap to
- * 600 made the enumeration ~10× costlier (~430ms), and it used to run inside the
- * controller builder that `index.ts` awaits BEFORE `Bun.listen`, so every session
- * open waited the full enumeration before the socket was attachable. The domain
- * now constructs with a null snapshot (the renderer already shows a load state)
- * and the first enumeration runs asynchronously via `refresh()`, kicked by the
- * server right after a connection attaches and re-broadcast once ready — the
- * socket opens without waiting on it.
+ * Catalog owner (decision #4, `docs/migration/decisions/CATALOG-OWNERSHIP.md`):
+ * this enumeration no longer runs per-sidecar. A single main-supervised
+ * disposable worker (`app/sidecar/sessionsCatalogWorker.ts`) calls
+ * `enumerateSessionsCatalog` ONCE per run, off any session process, persists the
+ * F2 baseline cache, and hands the snapshot to main, which delivers it to the
+ * renderer as a read-only `sessions-catalog` host event. So no attached sidecar
+ * pays the enumeration plateau (the RAM-3.1 win); a session created after launch
+ * appears on the next timer run (same freshness contract as the old 30 s refresh).
  *
  * Read-only, display-metadata only — no message bodies, no credentials — so the
- * outbound frame is `secretGuard`-clean by construction (§`sidecarServer.ts`
- * prepareOutboundPayload/send). Mirrors `agentConfigDomain.ts`'s pure-builder +
- * async-wrapper split so the mapping is unit-testable without the filesystem.
+ * emitted snapshot is `secretGuard`-clean by construction (scanned at the worker
+ * and again at main's parse boundary). Exposes a pure builder
+ * (`buildSessionsCatalogSnapshot`) + the `enumerateSessionsCatalog` wrapper, both
+ * unit-testable without the filesystem.
  */
 
 import { basename, dirname } from 'node:path'
@@ -61,23 +60,13 @@ export const SESSIONS_CATALOG_STAT_LIMIT = 1000
  */
 export const SESSIONS_CATALOG_ENRICH_LIMIT = 600
 
-export type SidecarSessionsCatalogDomain = {
-  /**
-   * Latest catalog snapshot. null until the first `refresh()` completes (the
-   * enumeration is deferred off the construction/listen critical path — MAJOR-2)
-   * and still null if that first enumeration failed (a later `refresh()` recovers).
-   */
-  getSnapshot(): SessionsCatalogSnapshot | null
-  /**
-   * B4 — re-enumerate transcripts and update the stored snapshot so a session
-   * created after this sidecar spawned becomes visible (de-stale). A failed
-   * re-enumeration keeps the last good snapshot (degrade, don't blank). Returns
-   * the current snapshot after the attempt.
-   */
-  refresh(): Promise<SessionsCatalogSnapshot | null>
-}
-
-async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapshot | null> {
+/**
+ * Enumerate the global sessions catalog ONCE (the catalog owner's single-shot
+ * read, decision #4). Reads the same loader `/resume` uses, bounded by the stat +
+ * enrich limits, and maps it to the wire snapshot. A read failure degrades to
+ * `null` — the caller keeps its last good snapshot (display = degrade gracefully).
+ */
+export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapshot | null> {
   try {
     const result = await loadAllProjectsMessageLogsProgressive(
       SESSIONS_CATALOG_STAT_LIMIT,
@@ -88,43 +77,6 @@ async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapshot | nul
     // A read failure degrades to "no catalog" — the page shows a load state,
     // never a crash (display = degrade gracefully).
     return null
-  }
-}
-
-export async function createSidecarSessionsCatalogDomain(
-  // `enumerate` is injectable ONLY so tests can drive refresh/de-stale hermetically
-  // (the real path reads the filesystem); production always uses the default.
-  enumerate: () => Promise<SessionsCatalogSnapshot | null> = enumerateSessionsCatalog,
-  // F2 — persist each successful enumeration as the cold-launch baseline cache.
-  // Injected (default no-op) so hermetic tests never touch the real config home;
-  // production passes `writeSessionsCatalogCache` (see `sessionController.ts`).
-  persist: (snapshot: SessionsCatalogSnapshot) => void = () => {},
-): Promise<SidecarSessionsCatalogDomain> {
-  // MAJOR-2 — do NOT enumerate here: the controller builder that calls this is
-  // awaited before `Bun.listen`, so awaiting the ~430ms enumeration would block
-  // every session open on it. Start null; the server kicks the first `refresh()`
-  // on attach and re-broadcasts once it lands (see `refresh()` / `sidecarServer.ts`).
-  let snapshot: SessionsCatalogSnapshot | null = null
-  return {
-    getSnapshot() {
-      return snapshot
-    },
-    async refresh() {
-      const next = await enumerate()
-      // Keep the last good snapshot on a transient re-read failure — a stale
-      // catalog is still useful; a blank one is a regression.
-      if (next) {
-        snapshot = next
-        // F2 — refresh the persisted baseline. Best-effort: a failed cache write
-        // must never fail the refresh (the live frame path still delivers).
-        try {
-          persist(next)
-        } catch {
-          // Baseline is a convenience; the session is unaffected.
-        }
-      }
-      return snapshot
-    },
   }
 }
 

@@ -87,11 +87,6 @@ import {
   createSidecarRemoteSettingsDomain,
   type SidecarRemoteSettingsDomain,
 } from './remoteSettingsDomain.js'
-import {
-  createSidecarSessionsCatalogDomain,
-  type SidecarSessionsCatalogDomain,
-} from './sessionsCatalogDomain.js'
-import { writeSessionsCatalogCache } from './sessionsCatalogCache.js'
 
 /**
  * Load the REAL settings-derived permission context for a desktop session,
@@ -376,16 +371,6 @@ export type SidecarSession = {
    */
   remoteSettings: SidecarRemoteSettingsDomain | null
   /**
-   * Sessions catalog read-seam (P4-6a) — a cross-workspace enumeration of the
-   * engine's transcript history (title/tag/branch/PR), the engine-side half of
-   * the Sessions page catalog. The enumeration is DEFERRED (MAJOR-2): this domain
-   * constructs empty (no filesystem read on the listen critical path) and the
-   * server kicks the first async enumeration on attach, then re-broadcasts on a
-   * timer (`sidecarServer.ts`). Read-only; null in probe mode (no config home to
-   * enumerate).
-   */
-  sessionsCatalog: SidecarSessionsCatalogDomain | null
-  /**
    * Agent-mode / Orchestrator read-seam (P4-8, D2) — the joined worker snapshot
    * (persisted agent-mode state ∪ live `local_agent` workers) for this session.
    * Read-only; null in probe mode (no engine app-state store).
@@ -461,7 +446,6 @@ export async function createSidecarSessionController({
       diagnostics: null,
       extensions: null,
       remoteSettings: null,
-      sessionsCatalog: null,
       agentMode: null,
       taskControl: null,
       runControls: null,
@@ -502,10 +486,6 @@ export async function createSidecarSessionController({
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
-    sessionsCatalog: await createSidecarSessionsCatalogDomain(
-      undefined,
-      writeSessionsCatalogCache,
-    ),
     agentMode: createSidecarAgentModeDomain(appStateStore),
     taskControl: createSidecarTaskControlDomain(appStateStore),
     runControls: createSidecarRunControlsDomain(appStateStore),

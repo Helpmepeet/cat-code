@@ -105,7 +105,6 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     dispatchDiagnostics: count('diagnostics') as never,
     dispatchRunControls: count('runControls') as never,
     dispatchRemoteSettings: count('remoteSettings') as never,
-    dispatchSessionsCatalog: count('sessionsCatalog') as never,
     dispatchSlashCatalog: count('slashCatalog') as never,
     dispatchSessionActionRuntime: count('sessionActionRuntime') as never,
     dispatchTranscript: action => {
@@ -135,7 +134,6 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'diagnostics',
     'runControls',
     'remoteSettings',
-    'sessionsCatalog',
     'slashCatalog',
     'sessionActionRuntime',
     'transcript',
@@ -168,7 +166,6 @@ test('an empty delivery dispatches nothing', () => {
     dispatchDiagnostics: mark as never,
     dispatchRunControls: mark as never,
     dispatchRemoteSettings: mark as never,
-    dispatchSessionsCatalog: mark as never,
     dispatchSlashCatalog: mark as never,
     dispatchSessionActionRuntime: mark as never,
     dispatchTranscript: mark as never,
