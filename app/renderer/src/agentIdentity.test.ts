@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test'
 import {
-  DROPPED_PROTOTYPE_AGENT_IDENTITY_FIELDS,
   agentStateMeta,
   agentTypeMeta,
   deriveAgentDisplayVocabulary,
@@ -358,15 +357,6 @@ test('returns complete display vocabulary for P4-8 and P4-9 consumers', () => {
 })
 
 test('declares prototype-only fields that must not become vocabulary inputs', () => {
-  expect(DROPPED_PROTOTYPE_AGENT_IDENTITY_FIELDS).toEqual([
-    'w.progress[] fixture timelines',
-    'w.files fixture file lists',
-    'w.up / w.down fixture traffic counters',
-    'activity arrays not derived from nested frames',
-    'stats arrays not backed by result or task fields',
-    'MOCK_CODEX_LEASES account fixtures',
-  ])
-
   expect(
     deriveAgentState({
       agentId: 'agent-a',

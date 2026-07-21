@@ -234,14 +234,12 @@ export const AGENT_STATE_META = {
   },
 } satisfies Record<AgentStateKey, AgentStateMeta>
 
-export const DROPPED_PROTOTYPE_AGENT_IDENTITY_FIELDS = [
-  'w.progress[] fixture timelines',
-  'w.files fixture file lists',
-  'w.up / w.down fixture traffic counters',
-  'activity arrays not derived from nested frames',
-  'stats arrays not backed by result or task fields',
-  'MOCK_CODEX_LEASES account fixtures',
-] as const
+// Prototype-only agent-identity fields deliberately NOT wired into display
+// vocabulary — they were fixture-backed, never derived from real frames:
+// w.progress[] timelines, w.files lists, w.up/w.down counters, activity arrays
+// not derived from nested frames, stats arrays not backed by result/task
+// fields, MOCK_CODEX_LEASES account fixtures. deriveAgentState() ignores such
+// extras by construction (asserted in agentIdentity.test.ts).
 
 export function agentTypeMeta(type: string | null | undefined): AgentTypeMeta | null {
   if (!type) return null

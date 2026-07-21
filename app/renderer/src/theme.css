@@ -11,8 +11,6 @@
    * (Sidebar.jsx active nav `#f9a8d4`). One shared token so the rail's active
    * states match the prototype without scattering raw hexes. */
   --accent-soft: #f9a8d4;
-  --tone-default: #f4f4f5;
-  --tone-accent: var(--accent);
 
   /*
    * Status tones. Values taken from the prototype's own status palette
@@ -60,8 +58,6 @@
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
 
-  --color-tone-default: var(--tone-default);
-  --color-tone-accent: var(--tone-accent);
   --color-tone-warn: var(--tone-warn);
   --color-tone-danger: var(--tone-danger);
   --color-tone-good: var(--tone-good);

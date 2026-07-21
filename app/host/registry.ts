@@ -27,7 +27,6 @@
  * a client's politeness.
  */
 
-import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import {
   closeSync,
@@ -1031,9 +1030,4 @@ async function defaultAcquireLock(file: string): Promise<() => Promise<void>> {
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-/** A convenience UUID minter for callers that need an appSessionId. */
-export function mintAppSessionId(): string {
-  return randomUUID()
 }

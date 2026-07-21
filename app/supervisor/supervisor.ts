@@ -79,7 +79,6 @@ type SidecarRecord = {
   socket: Socket | null
   decoder: FrameDecoder
   status: SidecarStatus
-  restartCount: number
   /** Spawn config to re-apply on restart (per-session cwd + resume id). */
   config?: SpawnConfig
 }
@@ -239,7 +238,6 @@ export class SidecarSupervisor {
       // valid SDK event (image/tool result) is not rejected (F3).
       decoder: new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES),
       status: 'spawning',
-      restartCount: 0,
       // Retained so restartSession re-roots the fresh engine process in the same
       // cwd and re-resumes the same engine session (REGISTRY.md §2: a restarted
       // engine re-announces its engineSessionId in its new ready frame).
@@ -330,16 +328,11 @@ export class SidecarSupervisor {
     if (!record) {
       throw new Error(`session ${sessionId} does not exist`)
     }
-    const restartCount = record.restartCount + 1
     const config = configOverride ?? record.config
     this.killSession(sessionId)
     // Re-apply the same spawn config so the fresh process re-roots in the same
     // cwd and re-resumes the same engine session.
     this.spawnSession(sessionId, config)
-    const restarted = this.registry.get(sessionId)
-    if (restarted) {
-      restarted.restartCount = restartCount
-    }
   }
 
   /** Kill every sidecar and clear the registry. */
