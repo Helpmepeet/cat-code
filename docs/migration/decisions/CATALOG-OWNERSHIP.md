@@ -4,7 +4,13 @@
 "up to you recommendation"). The SHAPE choice is final and does not reopen a
 locked decision (§7); the quantified savings table below still carries
 `[RAM-0]` placeholders pending a **decision-grade** RAM-0 run — the SCRATCH
-figures are directional only, not pinned. Records the owner
+figures are directional only, not pinned. **UPDATE 2026-07-22 — sidecar-side
+savings VERIFIED** by the #4 confirmation run
+(`reports/2026-07-22-ram0-4-confirmation.md`): the ~154 MB/attached-sidecar
+catalog plateau is eliminated (`enrich600−enrich50` delta +163→≈0 MB RSS), and
+the owner's own per-run cost is measured (~0.9 s, ~307 MB transient, 0 resident
+between ticks). The full per-shape economics table remains SCRATCH-class. Records
+the owner
 choice for the cross-workspace sessions-catalog enumeration (audit RAM-3.1,
 `docs/migration/reviews/2026-07-21-app-cutlist-ram-audit.md`, committed
 `6cdb6bc`). Does **NOT** reopen a locked decision — see §7. Numbers below carry

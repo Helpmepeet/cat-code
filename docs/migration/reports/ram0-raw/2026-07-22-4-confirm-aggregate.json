@@ -1,0 +1,429 @@
+{
+  "runner": "app/scripts/ram-measure.ts",
+  "reps": 2,
+  "dwellMs": 45000,
+  "sampleMs": 22500,
+  "runOrder": [
+    "bootfloor-r0",
+    "enrich50-r0",
+    "enrich600-r0",
+    "mimalloc0-r0",
+    "bootfloor-r1",
+    "enrich600-r1",
+    "mimalloc0-r1",
+    "enrich50-r1"
+  ],
+  "corpus50": "/private/tmp/claude-501/-Users-pt-cat-code/6f08f987-d89c-453a-aeec-f2220e71b26c/scratchpad/ram-confirm/cfg50",
+  "corpus600": "/private/tmp/claude-501/-Users-pt-cat-code/6f08f987-d89c-453a-aeec-f2220e71b26c/scratchpad/ram-confirm/cfg600",
+  "empty": "/private/tmp/claude-501/-Users-pt-cat-code/6f08f987-d89c-453a-aeec-f2220e71b26c/scratchpad/ram-confirm/cfgEmpty",
+  "aggregate": {
+    "bootfloor": {
+      "reps": 2,
+      "validReps": 2,
+      "allKillVerified": true,
+      "allReady": true,
+      "boot": {
+        "rssMB": {
+          "median": 229.8,
+          "values": [
+            229.5,
+            230
+          ]
+        },
+        "footprintMB": {
+          "median": 190,
+          "values": [
+            189.6,
+            190.4
+          ]
+        }
+      },
+      "plateau": {
+        "rssMB": {
+          "median": null,
+          "values": []
+        },
+        "footprintMB": {
+          "median": null,
+          "values": []
+        }
+      }
+    },
+    "enrich50": {
+      "reps": 2,
+      "validReps": 2,
+      "allKillVerified": true,
+      "allReady": true,
+      "boot": {
+        "rssMB": {
+          "median": 232.8,
+          "values": [
+            233.1,
+            232.4
+          ]
+        },
+        "footprintMB": {
+          "median": 193.1,
+          "values": [
+            193.8,
+            192.3
+          ]
+        }
+      },
+      "plateau": {
+        "rssMB": {
+          "median": 233.4,
+          "values": [
+            233.8,
+            232.9
+          ]
+        },
+        "footprintMB": {
+          "median": 190.5,
+          "values": [
+            189.5,
+            191.5
+          ]
+        }
+      }
+    },
+    "enrich600": {
+      "reps": 2,
+      "validReps": 2,
+      "allKillVerified": true,
+      "allReady": true,
+      "boot": {
+        "rssMB": {
+          "median": 228.6,
+          "values": [
+            228,
+            229.1
+          ]
+        },
+        "footprintMB": {
+          "median": 189.2,
+          "values": [
+            189,
+            189.4
+          ]
+        }
+      },
+      "plateau": {
+        "rssMB": {
+          "median": 229.1,
+          "values": [
+            228.6,
+            229.7
+          ]
+        },
+        "footprintMB": {
+          "median": 188.5,
+          "values": [
+            188.3,
+            188.7
+          ]
+        }
+      }
+    },
+    "mimalloc0": {
+      "reps": 2,
+      "validReps": 2,
+      "allKillVerified": true,
+      "allReady": true,
+      "boot": {
+        "rssMB": {
+          "median": 230.4,
+          "values": [
+            231.4,
+            229.4
+          ]
+        },
+        "footprintMB": {
+          "median": 190.4,
+          "values": [
+            191.2,
+            189.7
+          ]
+        }
+      },
+      "plateau": {
+        "rssMB": {
+          "median": 230.9,
+          "values": [
+            231.9,
+            230
+          ]
+        },
+        "footprintMB": {
+          "median": 189.8,
+          "values": [
+            190.4,
+            189.1
+          ]
+        }
+      }
+    }
+  },
+  "runs": [
+    {
+      "rep": 0,
+      "cond": "bootfloor",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3839,
+          "rssMB": 229.5,
+          "footprintMB": 189.6,
+          "footprintPeakMB": 197.1
+        },
+        {
+          "label": "boot-settled",
+          "elapsedMs": 9346,
+          "rssMB": 229.5,
+          "footprintMB": 189.6,
+          "footprintPeakMB": 197.1
+        }
+      ]
+    },
+    {
+      "rep": 0,
+      "cond": "enrich50",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3503,
+          "rssMB": 233.1,
+          "footprintMB": 193.8,
+          "footprintPeakMB": 200.8
+        },
+        {
+          "label": "attached-first-enum",
+          "elapsedMs": 6512,
+          "rssMB": 233.8,
+          "footprintMB": 193.9,
+          "footprintPeakMB": 200.8
+        },
+        {
+          "label": "attached-cycle-1",
+          "elapsedMs": 29507,
+          "rssMB": 233.7,
+          "footprintMB": 193,
+          "footprintPeakMB": 200.8
+        },
+        {
+          "label": "attached-cycle-2",
+          "elapsedMs": 52037,
+          "rssMB": 233.8,
+          "footprintMB": 189.5,
+          "footprintPeakMB": 200.8
+        }
+      ]
+    },
+    {
+      "rep": 0,
+      "cond": "enrich600",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3584,
+          "rssMB": 228,
+          "footprintMB": 189,
+          "footprintPeakMB": 195.7
+        },
+        {
+          "label": "attached-first-enum",
+          "elapsedMs": 6592,
+          "rssMB": 228.7,
+          "footprintMB": 189.1,
+          "footprintPeakMB": 195.7
+        },
+        {
+          "label": "attached-cycle-1",
+          "elapsedMs": 29577,
+          "rssMB": 228.6,
+          "footprintMB": 188.3,
+          "footprintPeakMB": 195.7
+        },
+        {
+          "label": "attached-cycle-2",
+          "elapsedMs": 52091,
+          "rssMB": 228.6,
+          "footprintMB": 188.3,
+          "footprintPeakMB": 195.7
+        }
+      ]
+    },
+    {
+      "rep": 0,
+      "cond": "mimalloc0",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3573,
+          "rssMB": 231.4,
+          "footprintMB": 191.2,
+          "footprintPeakMB": 199
+        },
+        {
+          "label": "attached-first-enum",
+          "elapsedMs": 6565,
+          "rssMB": 232.1,
+          "footprintMB": 191.3,
+          "footprintPeakMB": 199
+        },
+        {
+          "label": "attached-cycle-1",
+          "elapsedMs": 29578,
+          "rssMB": 231.9,
+          "footprintMB": 190.4,
+          "footprintPeakMB": 199
+        },
+        {
+          "label": "attached-cycle-2",
+          "elapsedMs": 52073,
+          "rssMB": 231.9,
+          "footprintMB": 190.4,
+          "footprintPeakMB": 199
+        }
+      ]
+    },
+    {
+      "rep": 1,
+      "cond": "bootfloor",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3519,
+          "rssMB": 230,
+          "footprintMB": 190.4,
+          "footprintPeakMB": 197.5
+        },
+        {
+          "label": "boot-settled",
+          "elapsedMs": 9050,
+          "rssMB": 230,
+          "footprintMB": 190.4,
+          "footprintPeakMB": 197.5
+        }
+      ]
+    },
+    {
+      "rep": 1,
+      "cond": "enrich600",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3542,
+          "rssMB": 229.1,
+          "footprintMB": 189.4,
+          "footprintPeakMB": 196.8
+        },
+        {
+          "label": "attached-first-enum",
+          "elapsedMs": 6531,
+          "rssMB": 229.9,
+          "footprintMB": 189.5,
+          "footprintPeakMB": 196.8
+        },
+        {
+          "label": "attached-cycle-1",
+          "elapsedMs": 29524,
+          "rssMB": 229.7,
+          "footprintMB": 188.6,
+          "footprintPeakMB": 196.8
+        },
+        {
+          "label": "attached-cycle-2",
+          "elapsedMs": 52045,
+          "rssMB": 229.7,
+          "footprintMB": 188.7,
+          "footprintPeakMB": 196.8
+        }
+      ]
+    },
+    {
+      "rep": 1,
+      "cond": "mimalloc0",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3528,
+          "rssMB": 229.4,
+          "footprintMB": 189.7,
+          "footprintPeakMB": 196.9
+        },
+        {
+          "label": "attached-first-enum",
+          "elapsedMs": 6544,
+          "rssMB": 230.1,
+          "footprintMB": 189.9,
+          "footprintPeakMB": 196.9
+        },
+        {
+          "label": "attached-cycle-1",
+          "elapsedMs": 29552,
+          "rssMB": 230,
+          "footprintMB": 189.1,
+          "footprintPeakMB": 196.9
+        },
+        {
+          "label": "attached-cycle-2",
+          "elapsedMs": 52106,
+          "rssMB": 230,
+          "footprintMB": 189.1,
+          "footprintPeakMB": 196.9
+        }
+      ]
+    },
+    {
+      "rep": 1,
+      "cond": "enrich50",
+      "killVerified": true,
+      "reachedReady": true,
+      "samples": [
+        {
+          "label": "boot",
+          "elapsedMs": 3604,
+          "rssMB": 232.4,
+          "footprintMB": 192.3,
+          "footprintPeakMB": 199.6
+        },
+        {
+          "label": "attached-first-enum",
+          "elapsedMs": 6604,
+          "rssMB": 233,
+          "footprintMB": 192.4,
+          "footprintPeakMB": 199.6
+        },
+        {
+          "label": "attached-cycle-1",
+          "elapsedMs": 29615,
+          "rssMB": 232.8,
+          "footprintMB": 191.5,
+          "footprintPeakMB": 199.6
+        },
+        {
+          "label": "attached-cycle-2",
+          "elapsedMs": 52085,
+          "rssMB": 232.9,
+          "footprintMB": 191.5,
+          "footprintPeakMB": 199.6
+        }
+      ]
+    }
+  ]
+}
