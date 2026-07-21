@@ -39,7 +39,6 @@ export type LiveTranscriptAction =
   | { type: 'preview-live-reset'; sessionId: SessionId }
 
 const projectServerFrameBatched = withBatch(projectServerFrame)
-export const PREVIEW_DWELL_MS = 300
 
 export function createPreviewTranscriptState(): PreviewTranscriptState {
   return { bySession: {} }

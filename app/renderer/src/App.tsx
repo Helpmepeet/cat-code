@@ -74,7 +74,6 @@ import {
   type TranscriptState,
 } from './transcriptProjector.js'
 import {
-  PREVIEW_DWELL_MS,
   claimLazyRestore,
   createPreviewTranscriptState,
   hasPreviewTranscript,
@@ -2600,16 +2599,11 @@ export function SessionPane({
   const previewEngageRef = useRef(onPreviewEngage)
   previewEngageRef.current = onPreviewEngage
   useEffect(() => {
+    // Reset engagement when the previewed session changes. The 300 ms dwell
+    // auto-spawn was removed (cut-list §I.1, ruling #3): a read-only browse no
+    // longer spawns an engine process. Engagement is now driven only by composer
+    // focus/pointer-down (engagePreviewPane) and the cache-miss immediate spawn.
     setPreviewEngaged(false)
-    if (!preview) return
-    const timer = window.setTimeout(
-      () => {
-        setPreviewEngaged(true)
-        previewEngageRef.current?.()
-      },
-      PREVIEW_DWELL_MS,
-    )
-    return () => window.clearTimeout(timer)
   }, [activeSessionId, preview])
   const engagePreviewPane = (): void => {
     if (!preview) return
