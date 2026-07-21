@@ -1,0 +1,2 @@
+[sidecar] command catalog load failed (session runs without slash commands): ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required
+[sidecar] READY sessionId=ram0-bootfloor-r2 socket=/tmp/ram0-Hs4JRE/s.sock

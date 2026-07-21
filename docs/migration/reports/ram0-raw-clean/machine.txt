@@ -1,0 +1,38 @@
+# RAM-0 clean-run machine-pressure snapshot (captured just before the matrix)
+# Run label: IDLE (dev-app-unbiased) — 0 competing Cat Code sidecars.
+# Caveat: machine NOT fully idle — general load from Roblox + openclaw-node.
+
+timestamp: 2026-07-21T22:39:50+0700
+host: Mac16,8 (Apple Silicon)
+hw.memsize: 25769803776 bytes (24 GiB)
+hw.ncpu: 12
+loadavg (1/5/15): 5.75 / 5.83 / 5.83
+
+non-worktree app/sidecar/index.ts sidecars (the prior run's load-bias source): 0 (NONE)
+any sidecar/index.ts at all before run: NONE
+ram-probe / ram-measure survivors before run: NONE
+stale /tmp/ram0-* scratch dirs (leftover from prior orphaned attempt, no live owner, left untouched per §4): /tmp/ram0-hwcCwJ (19:20), /tmp/ram0-RQRUTz (19:12)
+
+vm_stat (page size 16384 bytes):
+  Pages free:            43917   (~686 MB)
+  Pages active:         574872
+  Pages inactive:       570475   (~8.9 GB reclaimable)
+  Pages wired down:     253136
+  Pages occupied by compressor: 84419  (~1.32 GB)
+  Swapins: 0   Swapouts: 0    (no swap thrashing)
+
+top CPU consumers at run time (unrelated to Cat Code):
+  PID 770   Roblox RobloxPlayer   ~130% CPU  ~3.15 GB RSS
+  PID 29969 openclaw-node         ~130% CPU  ~0.46 GB RSS
+  PID 399   WindowServer          ~37%  CPU
+  PID 682   iTerm2                ~35%  CPU
+  PID 55431 Discord Helper        ~18%  CPU
+
+Interpretation: the SPECIFIC bias the prior (2026-07-21) run flagged — two
+concurrent operator dev-app sidecars competing on the same catalog-enumeration
+workload — is ELIMINATED here (0 sidecars). Remaining load is unrelated
+user apps (a game + node). Because each measured value is a single isolated
+sidecar process's own RSS / physical footprint (independent address space,
+independent mimalloc arena), unrelated-process CPU load does not bias the
+per-process memory figures; it can only slow enumeration latency, not change
+the plateau memory. Numbers are therefore labeled IDLE / dev-app-unbiased.
