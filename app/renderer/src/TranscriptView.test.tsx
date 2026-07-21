@@ -1,8 +1,19 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { resolveToolCardExpanded, TranscriptRowsView } from './TranscriptView.js'
+import type { SDKMessage } from '@cat-code/engine/session-events'
+import {
+  resolveToolCardExpanded,
+  ToolInspectorOverlay,
+  TranscriptRowsView,
+} from './TranscriptView.js'
+import {
+  createTranscriptState,
+  projectServerFrame,
+  selectNestedTranscriptRows,
+} from './transcriptProjector.js'
 import type {
   NestedTranscriptRow,
+  NestedToolUseRow,
   ToolCardStatus,
   ToolDiffProjection,
   ToolFamily,
@@ -829,4 +840,105 @@ test('P4-18c: a near-total line rewrite skips word-highlight (line-level), no th
   const html = render0()
   expect(html).toContain('zzzzzzzzzz') // whole line intact (not word-split)
   expect(html).not.toContain('bg-tone-success/26') // no word wash — guard tripped
+})
+
+// ─── P4-1 ToolInspector wiring: open-from-card affordance + overlay ──────────
+// Live-path fixture: project a real tool_use + correlated tool_result through the
+// reducer, then read the nested row the transcript actually renders — not a
+// hand-built shape (§8 rule 1: prove real data flows).
+function inspectorReady(sessionId: string) {
+  return {
+    kind: 'ready' as const,
+    protocolVersion: 1 as const,
+    sessionId,
+    engineSessionId: `engine-${sessionId}`,
+    payload: {
+      type: 'app.ready' as const,
+      protocolVersion: 1 as const,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' as const },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  }
+}
+
+function inspectorMessage(sessionId: string, message: SDKMessage) {
+  return {
+    kind: 'event' as const,
+    protocolVersion: 1 as const,
+    sessionId,
+    event: { type: 'message' as const, message },
+  }
+}
+
+function projectedBashRow(): NestedToolUseRow {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, inspectorReady('insp-1'))
+  state = projectServerFrame(
+    state,
+    inspectorMessage('insp-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_insp_1',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_insp_1',
+            name: 'Bash',
+            input: { command: 'echo hi' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d0001',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    inspectorMessage('insp-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_insp_1',
+            content: [{ type: 'text', text: 'hi from the shell' }],
+            is_error: true,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d0002',
+    }),
+  )
+  const row = selectNestedTranscriptRows(state, 'insp-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected a projected tool-use row')
+  return row
+}
+
+test('P4-1: a real projected tool card renders the open-from-card inspector affordance', () => {
+  // Default-expanded (error status), so the body — and the launch affordance
+  // wired to the inspector via context — appears in the real render path.
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={[projectedBashRow()]} />)
+  expect(html).toContain('Open full output')
+})
+
+test('P4-1: the inspector overlay renders the REAL projected row (drawer + backdrop)', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspectorOverlay row={projectedBashRow()} onClose={() => {}} />,
+  )
+  expect(html).toContain('Tool inspector')
+  expect(html).toContain('echo hi') // real input summary, from the projected row
+  expect(html).toContain('hi from the shell') // real correlated result output
+  expect(html).toContain('bg-black/60') // the dimmed dismiss backdrop
+})
+
+test('P4-1: the inspector overlay renders nothing when closed (null row)', () => {
+  expect(
+    renderToStaticMarkup(<ToolInspectorOverlay row={null} onClose={() => {}} />),
+  ).toBe('')
 })
