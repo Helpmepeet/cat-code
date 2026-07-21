@@ -4,15 +4,13 @@ import { createShellState, reduceShellState } from './shellState.js'
 import {
   compareSidebarActivity,
   deriveMergedRowVisual,
-  deriveSidebarRowVisual,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
-  selectSidebarRows,
+  selectShellDescriptors,
   selectVisibleSidebarRows,
   shouldShowSidebarGroupExpansionToggle,
   sidebarActivityKey,
   sortSidebarSessionRows,
-  type SidebarRow,
 } from './sidebarState.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 
@@ -38,12 +36,7 @@ function added(session: SessionDescriptor) {
   return { type: 'session-added', session } as const
 }
 
-function row(id: string): SidebarRow {
-  const d = descriptor(id)
-  return { descriptor: d, visual: deriveSidebarRowVisual(d) }
-}
-
-const rows10 = Array.from({ length: 10 }, (_, i) => row(`r${i}`))
+const rows10 = Array.from({ length: 10 }, (_, i) => descriptor(`r${i}`))
 
 test('selectVisibleSidebarRows shows every row at/under the cap (no toggle)', () => {
   const rows = rows10.slice(0, 6)
@@ -56,7 +49,7 @@ test('selectVisibleSidebarRows shows every row at/under the cap (no toggle)', ()
 test('selectVisibleSidebarRows caps to the first N when collapsed', () => {
   const result = selectVisibleSidebarRows(rows10, () => false, 6, false)
   expect(result.overLimit).toBe(true)
-  expect(result.visible.map(r => r.descriptor.appSessionId)).toEqual([
+  expect(result.visible.map(r => r.appSessionId)).toEqual([
     'r0',
     'r1',
     'r2',
@@ -78,11 +71,11 @@ test('selectVisibleSidebarRows keeps the active session visible past the cap', (
   // Active 'r8' is in the hidden tail → appended so it never disappears.
   const result = selectVisibleSidebarRows(
     rows10,
-    r => r.descriptor.appSessionId === 'r8',
+    r => r.appSessionId === 'r8',
     6,
     false,
   )
-  expect(result.visible.map(r => r.descriptor.appSessionId)).toEqual([
+  expect(result.visible.map(r => r.appSessionId)).toEqual([
     'r0',
     'r1',
     'r2',
@@ -97,13 +90,13 @@ test('selectVisibleSidebarRows keeps the active session visible past the cap', (
 test('selectVisibleSidebarRows does not duplicate an active session already in the head', () => {
   const result = selectVisibleSidebarRows(
     rows10,
-    r => r.descriptor.appSessionId === 'r2',
+    r => r.appSessionId === 'r2',
     6,
     false,
   )
   expect(result.visible).toHaveLength(6)
   expect(
-    result.visible.filter(r => r.descriptor.appSessionId === 'r2'),
+    result.visible.filter(r => r.appSessionId === 'r2'),
   ).toHaveLength(1)
   expect(result.hiddenCount).toBe(4)
 })
@@ -116,7 +109,7 @@ test('selectVisibleSidebarRows at the limit+1 boundary with the active row as th
   const rows7 = rows10.slice(0, 7)
   const result = selectVisibleSidebarRows(
     rows7,
-    r => r.descriptor.appSessionId === 'r6',
+    r => r.appSessionId === 'r6',
     6,
     false,
   )
@@ -169,7 +162,7 @@ describe('normalizeSidebarGroupExpansion (SIDEBAR-2)', () => {
   })
 })
 
-test('selectSidebarRows lists the full roster (live ∪ restorable)', () => {
+test('selectShellDescriptors lists the full roster (live ∪ restorable)', () => {
   let state = createShellState()
   state = reduceShellState(state, added(descriptor('live', { status: 'ready' })))
   state = reduceShellState(
@@ -177,7 +170,7 @@ test('selectSidebarRows lists the full roster (live ∪ restorable)', () => {
     added(descriptor('dead', { status: 'exited', restorable: true })),
   )
 
-  const ids = selectSidebarRows(state).map(r => r.descriptor.appSessionId)
+  const ids = selectShellDescriptors(state).map(r => r.appSessionId)
   expect(ids.sort()).toEqual(['dead', 'live'])
 })
 
@@ -190,7 +183,7 @@ test('rows are NOT reordered by lastAttachedAt (falls back to createdAt desc)', 
   state = reduceShellState(state, added(descriptor('c3', { createdAt: 3, lastAttachedAt: 200 })))
 
   // createdAt-desc (newest-created first); c2's larger lastAttachedAt is ignored.
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
+  expect(selectShellDescriptors(state).map(r => r.appSessionId)).toEqual([
     'c3',
     'c2',
     'c1',
@@ -207,7 +200,7 @@ test('float-to-top: rows order by lastMessageSentAt, most-recent message first',
   state = reduceShellState(state, added(descriptor('c', { createdAt: 3, lastMessageSentAt: 500 })))
 
   // by lastMessageSentAt desc: a(999) > c(500) > b(1) — newest-created 'c' is NOT first.
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual([
+  expect(selectShellDescriptors(state).map(r => r.appSessionId)).toEqual([
     'a',
     'c',
     'b',
@@ -225,14 +218,14 @@ test('CC-2: restoring a closed session does NOT move its Sidebar row', () => {
   let state = createShellState()
   state = reduceShellState(state, added(descriptor('a', { createdAt: 2, status: 'ready' })))
   state = reduceShellState(state, added(descriptor('b', { createdAt: 1, status: 'ready' })))
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
+  expect(selectShellDescriptors(state).map(r => r.appSessionId)).toEqual(['a', 'b'])
 
   // 'a' closes → a restorable row.
   state = reduceShellState(state, {
     type: 'session-status',
     session: descriptor('a', { createdAt: 2, status: 'exited', restorable: true }),
   })
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
+  expect(selectShellDescriptors(state).map(r => r.appSessionId)).toEqual(['a', 'b'])
 
   // 'a' restored → regains tab membership → shellState moves it to the END of
   // state.order. The Sidebar row STAYS first (the fix): it does not follow the warp.
@@ -241,68 +234,13 @@ test('CC-2: restoring a closed session does NOT move its Sidebar row', () => {
     added(descriptor('a', { createdAt: 2, status: 'spawning', restorable: false })),
   )
   expect(state.order).toEqual(['b', 'a']) // TabBar order DID move (unchanged behavior)
-  expect(selectSidebarRows(state).map(r => r.descriptor.appSessionId)).toEqual(['a', 'b'])
+  expect(selectShellDescriptors(state).map(r => r.appSessionId)).toEqual(['a', 'b'])
 })
 
-test('a live ready row is kind:live, tone:live, and shows no chip', () => {
-  const visual = deriveSidebarRowVisual(descriptor('x', { status: 'ready' }))
-  expect(visual.kind).toBe('live')
-  expect(visual.tone).toBe('live')
-  expect(visual.restorable).toBe(false)
-})
-
-test('an exited restorable row is the restore candidate (kind:restorable, tone:dead)', () => {
-  const visual = deriveSidebarRowVisual(
-    descriptor('x', { status: 'exited', restorable: true }),
-  )
-  expect(visual.kind).toBe('restorable')
-  expect(visual.tone).toBe('dead')
-  expect(visual.label).toBe('closed')
-  expect(visual.restorable).toBe(true)
-})
-
-test('a crashed (disconnected) restorable row flags dead/crashed', () => {
-  // The P3-5b kill/close parity descriptor (host surfaces disconnected +
-  // restorable for a crash-marked dead row): the Sidebar row must be a working
-  // restore-offer AND visibly crashed — never the clean-close "closed" label.
-  const visual = deriveSidebarRowVisual(
-    descriptor('x', { status: 'disconnected', restorable: true }),
-  )
-  expect(visual.kind).toBe('restorable')
-  expect(visual.tone).toBe('dead')
-  expect(visual.label).toBe('crashed')
-  expect(visual.restorable).toBe(true)
-})
-
-test('a LIVE socket-drop (disconnected, not restorable) is NOT labeled crashed', () => {
-  // The other half of the overloaded status (P3-5 review): a live session
-  // whose socket dropped (F13 — the child may still be alive) surfaces
-  // status:'disconnected' with restorable:false. It is kind:live (selecting it
-  // focuses the tab, no restore) and must not claim a crash.
-  const visual = deriveSidebarRowVisual(
-    descriptor('x', { status: 'disconnected', restorable: false }),
-  )
-  expect(visual.kind).toBe('live')
-  expect(visual.tone).toBe('dead')
-  expect(visual.label).toBe('disconnected')
-  expect(visual.restorable).toBe(false)
-})
-
-test('a spawning row reads as starting (warn), not yet restorable', () => {
-  const visual = deriveSidebarRowVisual(descriptor('x', { status: 'spawning' }))
-  expect(visual.tone).toBe('warn')
-  expect(visual.label).toBe('starting')
-  expect(visual.kind).toBe('live')
-})
-
-test('the restorable flag drives kind independently of status', () => {
-  // Defensive: if the host ever marks a row restorable while status is still
-  // nominal, kind follows `restorable` (the process-gone truth), not status.
-  const visual = deriveSidebarRowVisual(
-    descriptor('x', { status: 'ready', restorable: true }),
-  )
-  expect(visual.kind).toBe('restorable')
-})
+// The per-row status VISUAL (kind/tone/label) is now derived by
+// `deriveMergedRowVisual` (below) + the shared `sessionStatusVisual`
+// (`sessionStatusVisual.test.ts`) — F9 deleted the `deriveSidebarRowVisual`
+// twin, so its cases live in those two suites.
 
 test('resolveNavSelection routes every enabled Sidebar.tsx NAV id to itself', () => {
   // Mirrors Sidebar.tsx's NAV list (all six entries are enabled:true) — the
@@ -365,6 +303,38 @@ describe('deriveMergedRowVisual', () => {
     expect(v.kind).toBe('restorable')
     expect(v.intent).toBe('restore')
     expect(v.label).toBe('closed')
+  })
+
+  test('a crash-marked (disconnected + restorable) registry row → crashed, restore intent', () => {
+    const v = deriveMergedRowVisual(
+      mergedRow({ status: 'disconnected', live: false, restorable: true }),
+    )
+    expect(v.kind).toBe('restorable')
+    expect(v.intent).toBe('restore')
+    expect(v.tone).toBe('dead')
+    expect(v.label).toBe('crashed')
+  })
+
+  test('F13 — a LIVE socket-drop (disconnected, NOT restorable) stays kind:live/select, never crashed+restore', () => {
+    // The overloaded-status guard the old deriveSidebarRowVisual test protected:
+    // a live child whose socket dropped must not be mislabeled crashed nor offered
+    // restore (`sidebarState.ts` disconnected arm / sessionStatusVisual).
+    const v = deriveMergedRowVisual(
+      mergedRow({ status: 'disconnected', live: true, restorable: false }),
+    )
+    expect(v.kind).toBe('live')
+    expect(v.intent).toBe('select')
+    expect(v.label).toBe('disconnected')
+  })
+
+  test('the restorable flag drives kind independently of status', () => {
+    // If the host ever marks a row restorable while status is still nominal, kind
+    // follows `restorable` (the process-gone truth), not status.
+    const v = deriveMergedRowVisual(
+      mergedRow({ status: 'ready', live: false, restorable: true }),
+    )
+    expect(v.kind).toBe('restorable')
+    expect(v.intent).toBe('restore')
   })
 
   test('a history row WITH a cwd → open-history intent, history kind', () => {

@@ -8,12 +8,15 @@
  * host methods the TabBar/Sidebar already expose). There are NO mocked entries
  * and NO dead rows: an action only appears when it can actually run in the
  * current shell state, and session rows come straight from the live ∪ restorable
- * roster (`SidebarRow` = the same `SessionDescriptor` projection the Sidebar
- * uses). Session search is a filter over those rows' identity fields.
+ * roster (`selectShellDescriptors` — the same `SessionDescriptor` source the
+ * Sidebar reads). Each row's status chip is derived from the shared
+ * `sessionStatusVisual` (audit §I.2). Session search is a filter over those
+ * rows' identity fields.
  */
 
+import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
-import type { SidebarRow } from './sidebarState.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 import type { TabTone } from './tabStatus.js'
 import { tabLabel } from './TabBar.js'
 
@@ -50,7 +53,7 @@ export type PaletteHandlers = {
 }
 
 export type PaletteInput = {
-  rows: SidebarRow[]
+  rows: SessionDescriptor[]
   activeSessionId: SessionId | null
   /** True when the workspace has at least one open panel (P3-6). */
   hasPanels: boolean
@@ -131,23 +134,25 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
     run: handlers.openTasks,
   })
 
-  for (const row of rows) {
-    const { descriptor, visual } = row
+  for (const descriptor of rows) {
     const id = descriptor.appSessionId
     const title = tabLabel(descriptor)
-    const restorable = visual.kind === 'restorable'
+    const restorable = descriptor.restorable
+    // Same status vocabulary the Sidebar/TabBar paint (audit §I.2). A palette
+    // row is always a registry row, so `inRegistry` is true.
+    const { label, tone } = sessionStatusVisual(descriptor.status, restorable, true)
     items.push({
       id: `session:${id}`,
       kind: 'session',
       group: 'Sessions',
       label: title,
       detail: descriptor.cwd,
-      state: visual.label,
-      tone: visual.tone,
-      ariaLabel: `session ${title} — ${visual.label}${
+      state: label,
+      tone,
+      ariaLabel: `session ${title} — ${label}${
         restorable ? ', restorable' : ''
       }`,
-      keywords: `${descriptor.cwd} ${descriptor.engineSessionId ?? ''} ${visual.label}`,
+      keywords: `${descriptor.cwd} ${descriptor.engineSessionId ?? ''} ${label}`,
       // A restorable row re-spawns via restoreSession; a live row focuses its
       // tab — exactly the Sidebar's activate() split.
       run: () =>

@@ -40,44 +40,10 @@
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 import type { ShellState } from './shellState.js'
 import type { TabTone } from './tabStatus.js'
 
-/**
- * A row's status kind — the ONE truth split the Sidebar draws: a row with a
- * live process vs a `restorable` one (no process, but row + transcript can be
- * re-spawned). `restorable` is the restore-offer candidate (selecting it →
- * `restoreSession`); `live` selects like a tab (reuse App's `selectTab`).
- */
-export type SidebarRowKind = 'live' | 'restorable'
-
-/**
- * The visual state of one Sidebar row, derived purely from the descriptor.
- * Reuses 5a's `TabTone` so the dot/chip idiom matches the TabBar exactly.
- */
-export type SidebarRowVisual = {
-  kind: SidebarRowKind
-  /** Same tone families as the TabBar (P0-2 tokens); a crashed row → `dead`. */
-  tone: TabTone
-  /** Short status chip label, mirroring `deriveTabVisualState`'s vocabulary. */
-  label: string
-  /** True when the row's process is gone but it can be re-spawned. */
-  restorable: boolean
-}
-
-export type SidebarRow = {
-  descriptor: SessionDescriptor
-  visual: SidebarRowVisual
-}
-
-/**
- * The rows the Sidebar renders: the full roster in stable arrival order (the
- * same `state.order` the TabBar reads — see the module doc for why this is
- * NOT a recency sort). This is `listSessions()` folded into `ShellState`
- * already (App seeds the roster from it, then keeps it live off the
- * HostEvent stream), so there is no separate poll — same event-driven source
- * as the TabBar.
- */
 /**
  * Resolve a nav-rail click into the view to switch to, or `null` when the
  * item is disabled. Pure so `Sidebar.tsx`'s `NavItemExpanded` and
@@ -119,9 +85,9 @@ export type VisibleRows<T> = {
  * session you are actually on. The head keeps the caller's stable order; a kept
  * active row is appended (it is highlighted, so its exact slot does not matter).
  *
- * Generic over the row type via an `isActive` predicate so both the registry
- * `SidebarRow` and the unified `MergedSessionRow` (SESSIONS-UNIFICATION) share
- * one tested cap implementation.
+ * Generic over the row type via an `isActive` predicate (the Sidebar calls it
+ * with `MergedSessionRow`; the generic keeps the cap logic reusable and tested
+ * independent of the row shape).
  */
 export function selectVisibleSidebarRows<T>(
   rows: T[],
@@ -169,80 +135,34 @@ export function shouldShowSidebarGroupExpansionToggle(
   return expanded ? overLimit : hiddenCount > 0
 }
 
-export function selectSidebarRows(state: ShellState): SidebarRow[] {
+/**
+ * The shell's session roster (live ∪ restorable) as raw `SessionDescriptor`s in
+ * the Sidebar's activity order — the descriptor SOURCE the merge selector, the
+ * workspace-trust join, the ⌘K palette, the startup transcript preload, and the
+ * debug export all read (F9: the old `selectSidebarRows` also folded in a
+ * per-row VISUAL, but that visual is now derived at the point of use via
+ * `sessionStatusVisual`/`deriveMergedRowVisual`, so this carries only the roster
+ * + ordering/hydration assumptions).
+ *
+ * Ordered by activity — `lastMessageSentAt` (falling back to the immutable
+ * `createdAt`), DESCENDING — so the most-recently-messaged session is at the
+ * top and the order matches the recency each row displays. `lastMessageSentAt`
+ * never bumps on attach/open/restore (CC-2, `host.ts`), so a row floats up ONLY
+ * when its session sends a message — no warp on click/restore. Ties break on the
+ * immutable id for a fully deterministic order. This is `listSessions()` folded
+ * into `ShellState` already (no separate poll — the same HostEvent-driven source
+ * as the TabBar).
+ */
+export function selectShellDescriptors(state: ShellState): SessionDescriptor[] {
   return state.order
     .map(id => state.byId[id])
     .filter((value): value is SessionDescriptor => value !== undefined)
     .slice()
-    // Stable order by the immutable `createdAt` (see module doc): a click or
-    // restore never moves a row, because `createdAt` never changes. Ties (same
-    // creation ms) break on the immutable id so the order is fully deterministic.
     .sort((a, b) => {
-      // Order by activity — `lastMessageSentAt` (falling back to `createdAt`),
-      // DESCENDING — so the most-recently-messaged session is at the top and the
-      // order matches the recency each row displays. `lastMessageSentAt` never
-      // bumps on attach/open/restore (CC-2, `host.ts`), so a row floats up ONLY
-      // when its session sends a message — no warp on click/restore. Ties break
-      // on the immutable id for a fully deterministic order.
       const at = a.lastMessageSentAt ?? a.createdAt
       const bt = b.lastMessageSentAt ?? b.createdAt
       return at !== bt ? bt - at : a.appSessionId.localeCompare(b.appSessionId)
     })
-    .map(descriptor => ({
-      descriptor,
-      visual: deriveSidebarRowVisual(descriptor),
-    }))
-}
-
-/**
- * Fold a descriptor into its Sidebar row visual. Mirrors
- * `deriveTabVisualState`'s label/tone mapping so the two panels share one
- * status vocabulary — a `restorable` exited/disconnected row is the restore
- * candidate and paints `dead` (the same tone the TabBar's dead-tab chip uses),
- * a spawning row is `warn`/starting, a live `ready` row is `live`.
- *
- * The host descriptor's `status` is authoritative here (unlike the TabBar, the
- * Sidebar has no per-session connection snapshot — it lists background sessions
- * that may never have streamed, so it reads the control-plane truth only).
- */
-export function deriveSidebarRowVisual(
-  descriptor: SessionDescriptor,
-): SidebarRowVisual {
-  // A row is a restore candidate when its process is gone but the row +
-  // transcript survive. The host sets `restorable` for exactly that; a live
-  // row never carries it.
-  const kind: SidebarRowKind = descriptor.restorable ? 'restorable' : 'live'
-
-  let tone: TabTone
-  let label: string
-  switch (descriptor.status) {
-    case 'spawning':
-      tone = 'warn'
-      label = 'starting'
-      break
-    case 'ready':
-      tone = 'live'
-      label = 'live'
-      break
-    case 'disconnected':
-      // `disconnected` is overloaded (hostApi.ts status doc): a crash-marked
-      // DEAD row surfaces it with restorable:true, while a LIVE socket-drop
-      // (F13 — child may still be alive) carries restorable:false. Only the
-      // dead one is a crash; labeling the live drop "crashed" would lie.
-      tone = 'dead'
-      label = descriptor.restorable ? 'crashed' : 'disconnected'
-      break
-    case 'exited':
-      tone = 'dead'
-      label = 'closed'
-      break
-    default:
-      tone = 'warn'
-      label = 'unknown'
-      break
-  }
-
-  return { kind, tone, label, restorable: descriptor.restorable }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -276,54 +196,33 @@ export type MergedRowVisual = {
 
 /**
  * Fold a merged row into its sidebar visual + click intent. Registry rows reuse
- * the exact status→tone/label vocabulary the TabBar/`deriveSidebarRowVisual`
- * use (live/starting/crashed/closed/disconnected), so live/restorable state
- * reads identically. A history row paints a subdued `history` chip and is
+ * the shared `sessionStatusVisual` vocabulary (live/starting/crashed/closed/
+ * disconnected), so every surface reads live/restorable state identically. A
+ * history row paints a subdued `history` chip and is
  * openable ONLY when it carries a resolvable cwd — an empty-cwd row degrades to
  * a non-interactive `none` intent (browse-only), never a dead-looking button.
  */
 export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
+  const { tone, label } = sessionStatusVisual(
+    row.status,
+    row.restorable,
+    row.inRegistry,
+  )
   if (!row.inRegistry) {
+    // A resolvable cwd makes a history row openable (Part-A host path); an
+    // empty-cwd row degrades to a non-interactive `none` intent (browse-only),
+    // never a dead-looking button.
     const openable = row.cwd.trim().length > 0
     return {
       kind: 'history',
-      // A terminal-history row is a not-live session — `dead` tone, but its
-      // distinct `history` label (subdued chip in Sidebar.tsx) reads apart from a
-      // restorable row's `closed`/`crashed` and a live row's no-chip.
-      tone: 'dead',
-      label: 'history',
+      tone,
+      label,
       openable,
       intent: openable ? 'open-history' : 'none',
     }
   }
 
   const kind: MergedRowKind = row.restorable ? 'restorable' : 'live'
-  let tone: TabTone
-  let label: string
-  switch (row.status) {
-    case 'spawning':
-      tone = 'warn'
-      label = 'starting'
-      break
-    case 'ready':
-      tone = 'live'
-      label = 'live'
-      break
-    case 'disconnected':
-      // Overloaded (hostApi.ts status doc): a crash-marked DEAD row is
-      // restorable; a live socket-drop is not. Only the dead one is a crash.
-      tone = 'dead'
-      label = row.restorable ? 'crashed' : 'disconnected'
-      break
-    case 'exited':
-      tone = 'dead'
-      label = 'closed'
-      break
-    default:
-      tone = 'warn'
-      label = 'unknown'
-      break
-  }
   return {
     kind,
     tone,
@@ -357,7 +256,7 @@ export function sidebarActivityKey(row: MergedSessionRow): number {
 }
 
 /** Comparator: most-recent activity first, ties broken on the immutable merge
- * key so the order is fully deterministic (matches `selectSidebarRows`). */
+ * key so the order is fully deterministic (matches `selectShellDescriptors`). */
 export function compareSidebarActivity(
   a: MergedSessionRow,
   b: MergedSessionRow,

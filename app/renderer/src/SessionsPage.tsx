@@ -18,6 +18,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Chip } from './Chip.js'
 import { basename } from './pathUtils.js'
+import { sessionStatusVisual, statusChipTone } from './sessionStatusVisual.js'
 import type { SessionId } from '../../shared/protocol.js'
 import {
   resolveSessionActions,
@@ -41,7 +42,6 @@ import {
 
 const SORT_LABELS: Record<SessionSort, string> = {
   recent: 'Recent activity',
-  active: 'Most active',
   name: 'Name (A–Z)',
 }
 
@@ -395,9 +395,6 @@ function SessionRow({
           ) : null}
           <MetaItem>{formatRelativeTime(row.modifiedAtMs, now)}</MetaItem>
           {row.gitBranch ? <MetaItem mono>{row.gitBranch}</MetaItem> : null}
-          {row.messageCount > 0 ? (
-            <MetaItem>{row.messageCount} msgs</MetaItem>
-          ) : null}
           {row.agentSetting ? <MetaItem mono>{row.agentSetting}</MetaItem> : null}
           {row.prNumber != null ? (
             <MetaItem mono>
@@ -431,11 +428,13 @@ function SessionRow({
 }
 
 function StatusBadge({ row }: { row: MergedSessionRow }) {
-  if (row.live) return <Chip tone="good" label="live" />
-  if (row.status === 'spawning') return <Chip tone="warn" label="starting" />
-  if (row.restorable) return <Chip tone="warn" label="restorable" />
-  if (!row.inRegistry) return <Chip tone="default" label="history" />
-  return <Chip tone="default" label="closed" />
+  // Keyed off the SAME status → {label, tone} truth every other surface uses
+  // (audit §I.2). The old body checked `row.live` first (`row.live` is true for
+  // both a spawning row AND a live socket-drop, `sessionsCatalogState.ts:209`),
+  // so both wrongly badged "live" while the TabBar showed starting/disconnected
+  // (§I.2 #8 fix). Routing through the shared mapping corrects both.
+  const { tone, label } = sessionStatusVisual(row.status, row.restorable, row.inRegistry)
+  return <Chip tone={statusChipTone(tone)} label={label} />
 }
 
 function MetaItem({ children, mono }: { children: ReactNode; mono?: boolean }) {

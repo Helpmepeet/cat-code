@@ -371,8 +371,9 @@ function AccountUsageBar({ pct }: { pct: number | null }) {
  * The account-switcher popover BODY (the prototype's `AccountChip` panel,
  * Surfaces.jsx:610). Exported + pure (open-state-free) so the row logic — active
  * marker, switchable-vs-capped, usage bars — is unit-testable without jsdom (the
- * open panel never reaches static markup otherwise; same reason `selectSidebarRows`
- * is extracted). Clicking a switchable non-active row calls `onSwitch(id)`; the
+ * open panel never reaches static markup otherwise; same reason
+ * `selectShellDescriptors` is extracted). Clicking a switchable non-active row
+ * calls `onSwitch(id)`; the
  * renderer only NAMES the id — the sidecar re-resolves it against the live pool (T6).
  */
 export function AccountSwitcherPanel({

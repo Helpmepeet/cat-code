@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
-import type { SidebarRow } from './sidebarState.js'
 import {
   buildPaletteItems,
   filterPaletteItems,
@@ -23,18 +22,15 @@ function descriptor(over: Partial<SessionDescriptor>): SessionDescriptor {
   }
 }
 
-function liveRow(over: Partial<SessionDescriptor>): SidebarRow {
-  return {
-    descriptor: descriptor(over),
-    visual: { kind: 'live', tone: 'live', label: 'live', restorable: false },
-  }
+// The palette now consumes raw descriptors (F9) and derives each row's status
+// chip via the shared `sessionStatusVisual`: a ready row → live, a disconnected
+// + restorable row → crashed/restorable.
+function liveRow(over: Partial<SessionDescriptor>): SessionDescriptor {
+  return descriptor(over)
 }
 
-function restorableRow(over: Partial<SessionDescriptor>): SidebarRow {
-  return {
-    descriptor: descriptor({ status: 'disconnected', restorable: true, ...over }),
-    visual: { kind: 'restorable', tone: 'dead', label: 'crashed', restorable: true },
-  }
+function restorableRow(over: Partial<SessionDescriptor>): SessionDescriptor {
+  return descriptor({ status: 'disconnected', restorable: true, ...over })
 }
 
 function noopHandlers(): PaletteHandlers {

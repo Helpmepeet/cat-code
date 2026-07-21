@@ -21,6 +21,7 @@
 
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { ConnectionSnapshot } from './connectionState.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 
 /** The tone a chip / dead-tab affordance paints with (P0-2 token families). */
 export type TabTone = 'live' | 'busy' | 'warn' | 'dead'
@@ -41,9 +42,11 @@ export type TabVisualState = {
 
 /**
  * Fold the descriptor + connection + attention into the tab's visual state.
- * The host descriptor status is authoritative for the label; the renderer
- * connection view escalates to `dead` when a send already failed for a
- * background tab (so a tab can look dead before the host status catches up).
+ * The status → label/tone base comes from the shared `sessionStatusVisual`
+ * (audit §I.2 — one status vocabulary across every surface); this wrapper adds
+ * ONLY the tab-specific parts: the connection-dead escalation (a background tab
+ * whose transport already failed looks dead before the host status catches up)
+ * and the dead-tab restart affordance.
  */
 export function deriveTabVisualState(args: {
   descriptor: SessionDescriptor
@@ -59,39 +62,24 @@ export function deriveTabVisualState(args: {
   const connectionDead =
     connection.status === 'dead' || connection.status === 'disconnected'
 
-  let label: string
-  let tone: TabTone
+  let { label, tone } = sessionStatusVisual(
+    descriptor.status,
+    descriptor.restorable,
+    true,
+  )
   let restartable = false
 
-  switch (descriptor.status) {
-    case 'spawning':
-      label = 'starting'
-      tone = 'busy'
-      break
-    case 'ready':
-      if (connectionDead) {
-        label = 'disconnected'
-        tone = 'dead'
-        restartable = true
-      } else {
-        label = 'ready'
-        tone = 'live'
-      }
-      break
-    case 'disconnected':
-      label = 'disconnected'
-      tone = 'dead'
-      restartable = true
-      break
-    case 'exited':
-      label = 'exited'
-      tone = 'dead'
-      restartable = true
-      break
-    default:
-      label = 'unknown'
-      tone = 'warn'
-      break
+  if (descriptor.status === 'ready' && connectionDead) {
+    // Host still says ready, but the connection view saw a send fail — escalate.
+    label = 'disconnected'
+    tone = 'dead'
+    restartable = true
+  } else if (
+    descriptor.status === 'disconnected' ||
+    descriptor.status === 'exited'
+  ) {
+    // A terminal tab offers the dead-tab restart affordance (CH_RESTART).
+    restartable = true
   }
 
   return {
