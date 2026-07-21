@@ -22,8 +22,12 @@
 
 import {
   Component,
+  createContext,
   isValidElement,
   memo,
+  useCallback,
+  useContext,
+  useEffect,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
@@ -57,6 +61,19 @@ import {
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
 } from './AgentChrome.js'
+import { ToolInspector } from './ToolInspector.js'
+
+/**
+ * P4-1 open-from-card handle: a tool card calls this with its own REAL projected
+ * row to open the `ToolInspector` drawer. Provided by `TranscriptRowsView`, which
+ * owns the selected-row state and renders the overlay. Default `null` so a tool
+ * card rendered outside a transcript (a direct unit test) simply shows no
+ * inspector affordance. The published value is a stable `useCallback` handle, so
+ * exposing it via context never defeats the memoized row subtree.
+ */
+const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | null>(
+  null,
+)
 
 /**
  * IS-C (M5) — how a restore reads while it is NOT yet a live session. App
@@ -128,61 +145,119 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   branch?: string | null
   restorePhase?: RestorePhase | null
 }) {
+  // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
+  // — above the memoized rows — so opening the drawer never mutates a row and the
+  // overlay is a sibling of the transcript column, not nested in a scrolling row.
+  const [inspected, setInspected] = useState<ToolUseNestedRow | null>(null)
+  const openInspector = useCallback((row: ToolUseNestedRow) => setInspected(row), [])
+  const closeInspector = useCallback(() => setInspected(null), [])
+
+  let content: ReactNode
   if (rows.length === 0) {
     // IS-C (M5) — a restore in flight must never read as an empty pane / hang.
     // The no-cache `connecting` path and a cached preview that distilled to zero
     // rows (truncation-only edge) both render the restore skeleton instead of
     // the live WelcomeScreen.
-    if (restorePhase !== null) {
-      return <PreviewSkeleton />
-    }
-    // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
-    // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex pool
-    // table (P4-5) + the orchestrator reflect. HC1 session variant — Project is
-    // the read-only cwd (no picker), and no recents launcher/"Open folder…" (you
-    // are already in a project). Real data only: a null pool snapshot degrades to
-    // "No Codex account data for this view yet.", never a mock.
-    return (
-      <WelcomeScreen
-        variant="session"
-        cwd={cwd}
-        branch={branch}
-        accounts={accounts}
-        orchestratorActive={orchestratorActive}
-        onToggleOrchestrator={onToggleOrchestrator}
-      />
+    content =
+      restorePhase !== null ? (
+        <PreviewSkeleton />
+      ) : (
+        // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
+        // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex
+        // pool table (P4-5) + the orchestrator reflect. HC1 session variant —
+        // Project is the read-only cwd (no picker), and no recents launcher/"Open
+        // folder…" (you are already in a project). Real data only: a null pool
+        // snapshot degrades to "No Codex account data for this view yet.", never a
+        // mock.
+        <WelcomeScreen
+          variant="session"
+          cwd={cwd}
+          branch={branch}
+          accounts={accounts}
+          orchestratorActive={orchestratorActive}
+          onToggleOrchestrator={onToggleOrchestrator}
+        />
+      )
+  } else {
+    // D2/§3 DelegateGroup: coalesce co-spawned parallel agents into ONE grouped
+    // card at read time — a pure derivation over the already-nested rows, never a
+    // new frame or message type (C3). Non-agent rows and lone agents pass through.
+    const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
+    // IS-C (M5) — cached preview rows (engaged or not) keep a non-text restore
+    // marker so the pane never masquerades as a live session; the `connecting`
+    // phase only fires on an empty pane (handled above), so it draws no divider
+    // over live rows.
+    const restored = restorePhase === 'preview' || restorePhase === 'resuming'
+    content = (
+      // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
+      // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
+      // 24px top / 32px side padding. The prototype's light body weight is scoped
+      // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
+      // code / mono text stays at a crisp, readable weight.
+      <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
+        {restored ? (
+          <RestoredSessionDivider resuming={restorePhase === 'resuming'} />
+        ) : null}
+        {items.map(item =>
+          item.kind === 'agent-group' ? (
+            <DelegateGroup key={item.id} members={item.members} />
+          ) : (
+            <TranscriptRowView key={item.row.id} row={item.row} />
+          ),
+        )}
+      </div>
     )
   }
 
-  // D2/§3 DelegateGroup: coalesce co-spawned parallel agents into ONE grouped
-  // card at read time — a pure derivation over the already-nested rows, never a
-  // new frame or message type (C3). Non-agent rows and lone agents pass through.
-  const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
-  // IS-C (M5) — cached preview rows (engaged or not) keep a non-text restore
-  // marker so the pane never masquerades as a live session; the `connecting`
-  // phase only fires on an empty pane (handled above), so it draws no divider
-  // over live rows.
-  const restored = restorePhase === 'preview' || restorePhase === 'resuming'
   return (
-    // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
-    // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
-    // 24px top / 32px side padding. The prototype's light body weight is scoped
-    // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
-    // code / mono text stays at a crisp, readable weight.
-    <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
-      {restored ? (
-        <RestoredSessionDivider resuming={restorePhase === 'resuming'} />
-      ) : null}
-      {items.map(item =>
-        item.kind === 'agent-group' ? (
-          <DelegateGroup key={item.id} members={item.members} />
-        ) : (
-          <TranscriptRowView key={item.row.id} row={item.row} />
-        ),
-      )}
-    </div>
+    <ToolInspectorContext.Provider value={openInspector}>
+      {content}
+      <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+    </ToolInspectorContext.Provider>
   )
 })
+
+/**
+ * P4-1 mount: the `ToolInspector` drawer as a right-side overlay (prototype
+ * OutputInspector, Messages.jsx:254 — `position: fixed`, dimmed backdrop, Esc to
+ * close). Rendered by `TranscriptRowsView` from the REAL projected row a card
+ * handed to `openInspector`; a null row renders nothing. Fixed positioning keeps
+ * it off the transcript's own scroller (App owns `transcriptScrollRef`), so
+ * opening the drawer never perturbs stick-to-bottom. Display degrades gracefully:
+ * `ToolInspector` renders text nodes only and never throws on a malformed input.
+ */
+export function ToolInspectorOverlay({
+  row,
+  onClose,
+}: {
+  row: ToolUseNestedRow | null
+  onClose: () => void
+}) {
+  useEffect(() => {
+    if (!row) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [row, onClose])
+  if (!row) return null
+  return (
+    <div className="fixed inset-0 z-[200] flex justify-end">
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-[1px]"
+        onClick={onClose}
+        aria-hidden
+      />
+      <div className="relative flex h-full shadow-2xl">
+        <ToolInspector row={row} onClose={onClose} />
+      </div>
+    </div>
+  )
+}
 
 /**
  * IS-C (M5) — non-text marker above cached preview rows. Shares the
@@ -757,6 +832,9 @@ function ToolCardShell({
  * change, NOT the P2-locked render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  // Read before the early return so the Agent branch doesn't skip the hook; the
+  // Agent card has its own body and does not carry the inspector affordance.
+  const openInspector = useContext(ToolInspectorContext)
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.
   if (row.toolFamily === 'agent') return <AgentToolCard row={row} />
@@ -778,6 +856,12 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         }
       >
         <ToolCardBody row={row} content={content} />
+        {/* P4-1 open-from-card affordance: hands THIS real projected row to the
+            inspector drawer. Only present when a transcript provided the context
+            (`openInspector`); a card mounted bare in a test shows none. */}
+        {openInspector ? (
+          <ToolInspectorLaunch onOpen={() => openInspector(row)} />
+        ) : null}
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2 border-l border-accent/20 pl-3">
@@ -786,6 +870,28 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
           ))}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * P4-1 "Open full output ↗" — the footer affordance inside a tool card's expanded
+ * body (prototype Messages.jsx:563 "Inspector"/566 "Open full output"). Opens the
+ * `ToolInspector` drawer over this card's real projected row. Sits below the body
+ * so a collapsed card stays quiet; a running/errored card (default-expanded) shows
+ * it immediately.
+ */
+function ToolInspectorLaunch({ onOpen }: { onOpen: () => void }) {
+  return (
+    <div className="mt-2 flex justify-end border-t border-shell-seam pt-2">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="inline-flex items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.06] px-2.5 py-1 font-mono text-[10.5px] text-accent-soft hover:bg-accent/10"
+      >
+        Open full output
+        <span aria-hidden>↗</span>
+      </button>
     </div>
   )
 }
