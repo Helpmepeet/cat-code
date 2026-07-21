@@ -265,7 +265,7 @@ function pickTitle(registryTitle: string | null, catalogTitle: string | null): s
  * Browse selectors (SessionsPage — search / sort / filter / group)
  * ------------------------------------------------------------------------- */
 
-export type SessionSort = 'recent' | 'active' | 'name'
+export type SessionSort = 'recent' | 'name'
 
 /**
  * Filter rows by the free-text query (title/branch/tag/PR/cwd), the active tag
@@ -307,16 +307,18 @@ export function filterSessionRows(
   })
 }
 
-/** Sort a row list. `recent`=mtime desc, `active`=message count desc, `name`=label A–Z. */
+/**
+ * Sort a row list. `recent`=mtime desc, `name`=label A–Z. The former `active`
+ * (message-count desc) sort was removed (§I.7): the bounded catalog loader never
+ * populates `messageCount` (`sessionsCatalogDomain.ts` header — it needs a
+ * full-chain read), so "Most active" silently degraded to mtime for every row.
+ */
 export function sortSessionRows(
   rows: readonly MergedSessionRow[],
   sort: SessionSort,
 ): MergedSessionRow[] {
   const copy = [...rows]
   switch (sort) {
-    case 'active':
-      copy.sort((a, b) => b.messageCount - a.messageCount || b.modifiedAtMs - a.modifiedAtMs)
-      break
     case 'name':
       copy.sort((a, b) => a.displayLabel.localeCompare(b.displayLabel))
       break

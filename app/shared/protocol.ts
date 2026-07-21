@@ -1880,9 +1880,12 @@ export type DiagnosticsSnapshotFrame = {
  * transcripts). The renderer MERGES it with the registry rows via a shared
  * selector (`sessionsCatalogState.ts` — reused by P4-17 Welcome recents, D5).
  *
- * Read-only + spawn-frozen (a point-in-time filesystem enumeration, capped at
- * `SESSIONS_CATALOG_LIMIT`), matching the other domain snapshots' posture. It
- * carries display metadata only — no message bodies, no credentials — so it is
+ * Read-only, capped at `SESSIONS_CATALOG_LIMIT`, and re-enumerated on a periodic
+ * refresh while a sidecar is attached (~30 s,
+ * `sidecarServer.ts SESSIONS_CATALOG_REFRESH_INTERVAL_MS`) so a session created
+ * after this sidecar spawned still appears — NOT the spawn-frozen snapshot an
+ * earlier note claimed. It carries display metadata only — no message bodies, no
+ * credentials — so it is
  * `secretGuard`-clean by construction. It ALSO carries the winning display
  * title (custom-title > ai-title) so the catalog/sidebar can show real session
  * names instead of the cwd-basename fallback (the P4-6 title rider, surface
@@ -1899,7 +1902,12 @@ export type SessionCatalogEntry = {
   modifiedAtMs: number
   /** Session creation time. */
   createdAtMs: number
-  /** Non-sidechain message count (the "most active" sort + msg-count chip). */
+  /**
+   * Non-sidechain message count. NOTE: the bounded catalog loader does NOT
+   * populate this (it needs a full-chain per-session read — see
+   * `sessionsCatalogDomain.ts`), so it is 0 on the bounded path; the "Most
+   * active" sort + "N msgs" chip that consumed it were removed (§I.7).
+   */
   messageCount: number
   /** git branch recorded on the session, else null. */
   gitBranch: string | null
@@ -1923,9 +1931,11 @@ export type SessionsCatalogSnapshot = {
 
 /**
  * P4-6a outbound frame. Emitted on attach (after the other snapshots, before
- * history replay), point-in-time (the transcript enumeration runs once at
- * spawn). Every session's sidecar carries the SAME global catalog; the renderer
- * keys it by `sessionId` and merges it with the host registry rows.
+ * history replay) and re-broadcast on the periodic catalog refresh (~30 s,
+ * `sidecarServer.ts`) — so a session created after spawn is not frozen out (the
+ * enumeration is re-run, not once-at-spawn). Every session's sidecar carries the
+ * SAME global catalog; the renderer keys it by `sessionId` and merges it with
+ * the host registry rows.
  */
 export type SessionsCatalogSnapshotFrame = {
   kind: 'sessions.snapshot'

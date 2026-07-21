@@ -42,7 +42,6 @@ import {
 
 const SORT_LABELS: Record<SessionSort, string> = {
   recent: 'Recent activity',
-  active: 'Most active',
   name: 'Name (A–Z)',
 }
 
@@ -396,9 +395,6 @@ function SessionRow({
           ) : null}
           <MetaItem>{formatRelativeTime(row.modifiedAtMs, now)}</MetaItem>
           {row.gitBranch ? <MetaItem mono>{row.gitBranch}</MetaItem> : null}
-          {row.messageCount > 0 ? (
-            <MetaItem>{row.messageCount} msgs</MetaItem>
-          ) : null}
           {row.agentSetting ? <MetaItem mono>{row.agentSetting}</MetaItem> : null}
           {row.prNumber != null ? (
             <MetaItem mono>

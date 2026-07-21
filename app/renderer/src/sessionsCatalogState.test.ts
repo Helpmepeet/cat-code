@@ -284,9 +284,8 @@ describe('browse selectors', () => {
     ).toEqual(['a', 'b'])
   })
 
-  test('sort recent/active/name', () => {
+  test('sort recent/name (the message-count "Most active" sort was removed, §I.7)', () => {
     expect(sortSessionRows(rows, 'recent').map(r => r.sessionId)).toEqual(['a', 'b', 'c'])
-    expect(sortSessionRows(rows, 'active').map(r => r.sessionId)).toEqual(['b', 'a', 'c'])
     expect(sortSessionRows(rows, 'name').map(r => r.sessionId)).toEqual(['a', 'b', 'c'])
   })
 
