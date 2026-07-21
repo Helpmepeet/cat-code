@@ -1,0 +1,327 @@
+/**
+ * RAM-0 hermetic sidecar memory probe (measurement instrument, NO secrets).
+ *
+ * Spawns exactly ONE real Bun sidecar (`app/sidecar/index.ts`) in a fully
+ * sandboxed environment and samples its resident memory over a dwell, then
+ * kills it and VERIFIES the process is gone. It is the durable, re-runnable
+ * instrument the RAM-0 protocol (audit §RAM-0 / F1) requires: the predecessor
+ * PER-SESSION-COST / cut-list numbers were single-run scratch scripts that were
+ * never retained.
+ *
+ * Sandbox (hermetic, account-free):
+ *   - `CLAUDE_CONFIG_DIR` → a caller-supplied fresh dir (the corpus lives under
+ *     `<configDir>/projects/`); the engine's config home + credential vault are
+ *     both keyed off this (`envUtils.ts:15`), so a fresh dir is keyless.
+ *   - credential env vars deleted (ANTHROPIC_API_KEY, OPENAI_API_KEY, OAuth …)
+ *     → boot is keyless (boot needs no key; only a live turn does).
+ *   - network poisoned: HTTP(S)/ALL proxy → 127.0.0.1:9 (closed), plus
+ *     DISABLE_AUTOUPDATER / CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC / CI so the
+ *     best-effort startup GETs fail fast instead of reaching the internet.
+ *   - idle TTL disabled (`CATCODE_SIDECAR_IDLE_TTL_MS=0`) so the janitor never
+ *     reaps the process mid-measurement.
+ *
+ * Memory: RSS via `ps` AND macOS physical footprint (+ peak) via
+ * `vmmap --summary`. Every raw `ps`/`vmmap` capture is written to the out dir
+ * (retained — the F1 defect was discarding raw output).
+ *
+ * Lifecycle safety: the spawned PID is written to `<out>/<label>.pids` the
+ * instant it exists; a `finally` kills it (+ any children) and asserts via
+ * `ps -p` that nothing survived, recording the result in the JSON.
+ *
+ * Usage (single run):
+ *   bun run app/scripts/ram-probe.ts \
+ *     --config-dir <dir> --label boot600 --out <outDir> \
+ *     --mode real --attach --dwell-ms 240000 --sample-ms 30000 \
+ *     [--mimalloc-purge-delay 0]
+ *
+ * Prints the run result as JSON to stdout.
+ */
+
+import { spawn as bunSpawn } from 'bun'
+import { connect, type Socket } from 'node:net'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const SIDECAR_ENTRY = join(here, '..', 'sidecar', 'index.ts')
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+function parseArgs(argv: string[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a.startsWith('--')) {
+      const key = a.slice(2)
+      const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true'
+      out[key] = val
+    }
+  }
+  return out
+}
+
+type Sample = {
+  label: string
+  elapsedMs: number
+  rssMB: number | null
+  footprintMB: number | null
+  footprintPeakMB: number | null
+}
+
+// Parse a vmmap size token like "237.4M" / "1.2G" / "512K" / "0" → MB.
+function sizeTokenToMB(tok: string): number | null {
+  const m = tok.trim().match(/^([\d.]+)\s*([KMG])?/)
+  if (!m) return null
+  const n = parseFloat(m[1])
+  const unit = m[2]
+  if (unit === 'G') return n * 1024
+  if (unit === 'M') return n
+  if (unit === 'K') return n / 1024
+  return n / (1024 * 1024) // bytes
+}
+
+function psRssMB(pid: number): number | null {
+  try {
+    const out = execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' })
+    const kb = parseInt(out.trim(), 10)
+    return Number.isFinite(kb) ? +(kb / 1024).toFixed(1) : null
+  } catch {
+    return null
+  }
+}
+
+function vmmapSummary(pid: number): { raw: string; footprintMB: number | null; peakMB: number | null } {
+  let raw = ''
+  try {
+    raw = execFileSync('vmmap', ['--summary', String(pid)], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })
+  } catch (e) {
+    raw = `vmmap failed: ${e instanceof Error ? e.message : String(e)}`
+    return { raw, footprintMB: null, peakMB: null }
+  }
+  let footprintMB: number | null = null
+  let peakMB: number | null = null
+  for (const line of raw.split('\n')) {
+    const peak = line.match(/Physical footprint \(peak\):\s*(.+)$/)
+    if (peak) { peakMB = sizeTokenToMB(peak[1]); continue }
+    const fp = line.match(/Physical footprint:\s*(.+)$/)
+    if (fp) footprintMB = sizeTokenToMB(fp[1])
+  }
+  return { raw, footprintMB, peakMB }
+}
+
+function childPids(pid: number): number[] {
+  try {
+    const out = execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
+    return out.split('\n').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n))
+  } catch {
+    return []
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    execFileSync('ps', ['-p', String(pid)], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(res => setTimeout(res, ms))
+}
+
+async function waitForSocket(socketPath: string, timeoutMs = 30_000): Promise<void> {
+  const start = Date.now()
+  while (!existsSync(socketPath)) {
+    if (Date.now() - start > timeoutMs) throw new Error(`sidecar never bound socket at ${socketPath}`)
+    await sleep(50)
+  }
+}
+
+async function run(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2))
+  const configDir = args['config-dir']
+  const label = args.label ?? 'run'
+  const outDir = args.out ?? join(process.cwd(), '.ram-scratch', 'out')
+  const mode = args.mode ?? 'real' // real | probe
+  const attach = args.attach === 'true' || args.attach === undefined ? args.attach === 'true' : false
+  const doAttach = 'attach' in args
+  const dwellMs = Number(args['dwell-ms'] ?? '240000')
+  const sampleMs = Number(args['sample-ms'] ?? '30000')
+  const mimallocPurgeDelay = args['mimalloc-purge-delay']
+  const settleMs = Number(args['settle-ms'] ?? '2500')
+
+  if (!configDir) {
+    process.stderr.write('ram-probe: --config-dir is required\n')
+    process.exit(2)
+  }
+  mkdirSync(outDir, { recursive: true })
+
+  // Sandbox cwd for the engine's project identity (must be a real directory).
+  const socketDir = mkdtempSync(join('/tmp', 'ram0-'))
+  const socketPath = join(socketDir, 's.sock')
+  const cwdDir = join(socketDir, 'cwd')
+  mkdirSync(cwdDir, { recursive: true })
+
+  const pidFile = join(outDir, `${label}.pids`)
+  const rawFile = join(outDir, `${label}.vmmap.txt`)
+  const stderrFile = join(outDir, `${label}.sidecar.stderr.log`)
+
+  // Build hermetic env: strip credentials, poison network, isolate config.
+  const env: Record<string, string> = { ...process.env } as Record<string, string>
+  for (const k of [
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
+    'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_OPENAI',
+  ]) delete env[k]
+  Object.assign(env, {
+    CLAUDE_CONFIG_DIR: configDir,
+    CATCODE_SIDECAR_SOCKET: socketPath,
+    CATCODE_SIDECAR_SESSION_ID: `ram0-${label}`,
+    CATCODE_SIDECAR_CWD: cwdDir,
+    CATCODE_SIDECAR_IDLE_TTL_MS: '0',
+    DISABLE_AUTOUPDATER: '1',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    CI: '1',
+    HTTP_PROXY: 'http://127.0.0.1:9',
+    HTTPS_PROXY: 'http://127.0.0.1:9',
+    ALL_PROXY: 'http://127.0.0.1:9',
+    http_proxy: 'http://127.0.0.1:9',
+    https_proxy: 'http://127.0.0.1:9',
+    all_proxy: 'http://127.0.0.1:9',
+    NO_PROXY: '',
+  })
+  if (mode === 'probe') env.CATCODE_SIDECAR_PROBE = '1'
+  if (mimallocPurgeDelay !== undefined) env.MIMALLOC_PURGE_DELAY = String(mimallocPurgeDelay)
+
+  const stderrChunks: string[] = []
+  let proc: ReturnType<typeof bunSpawn> | null = null
+  let sock: Socket | null = null
+  const samples: Sample[] = []
+  const t0 = Date.now()
+
+  const sample = (lbl: string): void => {
+    const pid = proc?.pid
+    if (!pid) return
+    const rssMB = psRssMB(pid)
+    const { raw, footprintMB, peakMB } = vmmapSummary(pid)
+    appendFileSync(
+      rawFile,
+      `\n===== ${lbl} @ ${((Date.now() - t0) / 1000).toFixed(1)}s pid=${pid} rss=${rssMB}MB footprint=${footprintMB}MB peak=${peakMB}MB =====\n${raw}\n`,
+    )
+    samples.push({ label: lbl, elapsedMs: Date.now() - t0, rssMB, footprintMB, footprintPeakMB: peakMB })
+    process.stderr.write(`[probe:${label}] ${lbl} rss=${rssMB}MB footprint=${footprintMB}MB peak=${peakMB}MB\n`)
+  }
+
+  let killVerified = false
+  let survivors: number[] = []
+  try {
+    writeFileSync(rawFile, `# RAM-0 raw vmmap captures — label=${label} mode=${mode} attach=${doAttach && attach}\n`)
+    proc = bunSpawn(['bun', 'run', SIDECAR_ENTRY], {
+      cwd: cwdDir,
+      env,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    })
+    // Record the PID the instant it exists.
+    writeFileSync(pidFile, `${proc.pid}\n`)
+
+    // Drain stderr for diagnostics (READY line, resume/fatal).
+    void (async () => {
+      try {
+        const reader = (proc!.stderr as ReadableStream<Uint8Array>).getReader()
+        const dec = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const s = dec.decode(value)
+          stderrChunks.push(s)
+          appendFileSync(stderrFile, s)
+        }
+      } catch { /* process gone */ }
+    })()
+
+    await waitForSocket(socketPath)
+    // Let boot fully settle (module graph + init + controller construction) so
+    // the "boot floor" is the real listening-idle plateau, not a mid-init dip.
+    await sleep(settleMs)
+    sample('boot')
+
+    if (doAttach && attach) {
+      sock = connect({ path: socketPath })
+      sock.on('error', () => { /* the process may exit under teardown */ })
+      sock.on('data', () => { /* drain attach snapshots + refresh broadcasts */ })
+      await new Promise<void>((resolve, reject) => {
+        sock!.once('connect', resolve)
+        sock!.once('error', reject)
+      })
+      // First catalog enumeration is kicked on attach (sidecarServer.ts:588);
+      // give it time to complete before the first attached sample.
+      await sleep(settleMs)
+      sample('attached-first-enum')
+
+      // Sample every sampleMs across the dwell — the 30s catalog re-enumeration
+      // (sidecarServer.ts:449) drives the allocator toward its plateau.
+      const deadline = Date.now() + dwellMs
+      let cycle = 1
+      while (Date.now() < deadline) {
+        await sleep(Math.min(sampleMs, Math.max(0, deadline - Date.now())))
+        sample(`attached-cycle-${cycle}`)
+        cycle++
+      }
+    } else {
+      // Boot-floor-only (no attach): hold briefly and resample to confirm the
+      // listening-idle floor is stable.
+      await sleep(Math.min(dwellMs, 5000))
+      sample('boot-settled')
+    }
+  } finally {
+    // ---- Kill + verify (lifecycle safety) ----
+    try { sock?.destroy() } catch { /* ignore */ }
+    const pid = proc?.pid
+    if (pid) {
+      const kids = childPids(pid)
+      try { proc!.kill('SIGKILL') } catch { /* already gone */ }
+      for (const k of kids) { try { execFileSync('kill', ['-9', String(k)]) } catch { /* gone */ } }
+      // Wait for the OS to reap.
+      const waitStart = Date.now()
+      while ((isAlive(pid) || kids.some(isAlive)) && Date.now() - waitStart < 5000) {
+        await sleep(100)
+      }
+      survivors = [pid, ...kids].filter(isAlive)
+      killVerified = survivors.length === 0
+      appendFileSync(pidFile, `killVerified=${killVerified} survivors=${survivors.join(',') || 'none'}\n`)
+    }
+    try { rmSync(socketDir, { recursive: true, force: true }) } catch { /* ignore */ }
+  }
+
+  const result = {
+    label,
+    mode,
+    attached: doAttach && attach,
+    dwellMs,
+    sampleMs,
+    mimallocPurgeDelay: mimallocPurgeDelay ?? null,
+    configDir,
+    sidecarEntry: SIDECAR_ENTRY,
+    reachedReady: stderrChunks.join('').includes('[sidecar] READY'),
+    killVerified,
+    survivors,
+    samples,
+    rawVmmapFile: rawFile,
+    pidFile,
+    stderrTail: stderrChunks.join('').split('\n').slice(-6).join('\n'),
+  }
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n')
+}
+
+run().catch(err => {
+  process.stderr.write(`ram-probe fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
+  process.exit(1)
+})
