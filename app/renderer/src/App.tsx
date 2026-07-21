@@ -265,6 +265,12 @@ import {
   reduceSessionActionRuntimeState,
   selectLatestSessionActionResult,
 } from './sessionActionRuntimeState.js'
+import {
+  createVerbAckResultState,
+  reduceVerbAckResultState,
+  selectLatestVerbAckResult,
+  verbAckErrorToast,
+} from './verbAckResultState.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type {
@@ -318,6 +324,7 @@ const reduceSessionsCatalogStateBatched = withBatch(reduceSessionsCatalogState)
 const reduceSessionActionRuntimeStateBatched = withBatch(
   reduceSessionActionRuntimeState,
 )
+const reduceVerbAckResultStateBatched = withBatch(reduceVerbAckResultState)
 
 export function App() {
   const [state, dispatch] = useReducer(
@@ -456,6 +463,15 @@ export function App() {
     reduceSessionActionRuntimeStateBatched,
     undefined,
     createSessionActionRuntimeState,
+  )
+  // Decision #5 (audit §I.4) — the four verb-ack `.result` frames that had no
+  // renderer consumer. A verb's SUCCESS re-broadcasts a snapshot (the UI already
+  // updates); a FAILURE mutates nothing, so this reducer records the ack and the
+  // outcome toast below surfaces the sidecar's real error — previously silent.
+  const [verbAckResult, dispatchVerbAckResult] = useReducer(
+    reduceVerbAckResultStateBatched,
+    undefined,
+    createVerbAckResultState,
   )
   const [orchestrator, dispatchOrchestrator] = useReducer(
     reduceOrchestratorStateBatched,
@@ -621,6 +637,7 @@ export function App() {
         dispatchSlashCatalog,
         dispatchRemoteSettings,
         dispatchSessionActionRuntime,
+        dispatchVerbAckResult,
         dispatchTranscript: dispatchSessionEvent,
       })
       for (const sessionId of swapSessions) {
@@ -1154,6 +1171,25 @@ export function App() {
     }
     toast(result.message, { tone: result.ok ? 'success' : 'danger' })
   }, [latestSessionActionResult, toast])
+
+  // Decision #5 (audit §I.4) — surface a FAILED verb ack that would otherwise be
+  // silent (a success re-broadcasts a snapshot and the UI already updates; a
+  // failure mutates nothing). Same dedup-by-requestId discipline as the
+  // session-action toast above: a re-render or tab-switch never re-toasts a stale
+  // outcome. The message is the sidecar's real, redacted reason — never invented.
+  const toastedVerbAckRequestsRef = useRef<Set<string>>(new Set())
+  const latestVerbAckResult = selectLatestVerbAckResult(
+    verbAckResult,
+    activeSessionId,
+  )
+  useEffect(() => {
+    const result = latestVerbAckResult
+    if (!result) return
+    if (toastedVerbAckRequestsRef.current.has(result.requestId)) return
+    toastedVerbAckRequestsRef.current.add(result.requestId)
+    const errorToast = verbAckErrorToast(result)
+    if (errorToast) toast(errorToast.message, { tone: errorToast.tone })
+  }, [latestVerbAckResult, toast])
 
   const focusWorkspacePanelSession = useCallback(
     (index: number, sessionId: SessionId) => {
