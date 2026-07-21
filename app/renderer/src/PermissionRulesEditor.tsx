@@ -42,33 +42,37 @@ export function PermissionRulesEditor({
 
   return (
     <div aria-label="Permission rules" className="flex flex-col gap-3 text-xs">
-      {showModes ? (
-        <div className="flex items-center gap-2">
-          <span className="text-text-muted">Mode:</span>
-          {PERMISSION_SET_MODE_MODES.map(mode => (
-            <button
-              aria-pressed={context.mode === mode}
-              className={
-                context.mode === mode
-                  ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
-                  : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
-              }
-              key={mode}
-              onClick={() => onSetMode(mode)}
-              type="button"
-            >
-              {mode}
-            </button>
-          ))}
-          {!PERMISSION_SET_MODE_MODES.includes(
-            context.mode as PermissionSetModeMode,
-          ) ? (
-            <span className="font-mono text-text-muted">
-              current: {context.mode}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="flex items-center gap-2">
+        <span className="text-text-muted">Mode:</span>
+        {/* Read-only current-mode pill — a PURE display of the engine's resolved
+         * `context.mode`, rendered UNCONDITIONALLY. It emits no set-mode verb and
+         * is never a control, so T6b holds even in the Settings read-only pane
+         * (`showModes={false}`); the interactive selector below is the only thing
+         * that authors a mode, and it stays gated on `showModes`. */}
+        <span
+          aria-label={`Current permission mode: ${context.mode}`}
+          className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-primary"
+        >
+          {context.mode}
+        </span>
+        {showModes
+          ? PERMISSION_SET_MODE_MODES.map(mode => (
+              <button
+                aria-pressed={context.mode === mode}
+                className={
+                  context.mode === mode
+                    ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
+                    : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
+                }
+                key={mode}
+                onClick={() => onSetMode(mode)}
+                type="button"
+              >
+                {mode}
+              </button>
+            ))
+          : null}
+      </div>
 
       <RuleGroup label="Always allow" rules={context.alwaysAllowRules} />
       <RuleGroup label="Always deny" rules={context.alwaysDenyRules} />

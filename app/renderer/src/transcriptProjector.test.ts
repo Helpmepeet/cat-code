@@ -1299,6 +1299,121 @@ test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shap
   })
 })
 
+test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
+  // Real FilePatchTool output shape: `{ files: [{ path, type, before, after,
+  // structuredPatch }] }` (src/tools/FilePatchTool/types.ts:138-172, emitted
+  // FilePatchTool.tsx:453-464) — a MULTI-file envelope, unlike FileEditTool's
+  // top-level `filePath`+`structuredPatch`. The single-file ToolDiffProjection
+  // names one path, so the primary (first file with hunks) is projected.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_patch_1',
+        model: 'claude-sonnet-5',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_patch_1',
+            name: 'Apply_patch',
+            // FilePatchToolInput `{ input: string }` envelope
+            // (src/tools/FilePatchTool/types.ts:125-136), NOT Edit's
+            // old_string/new_string.
+            input: {
+              input:
+                '*** Begin Patch\n*** Update File: /repo/src/a.ts\n@@\n export const a = {\n-  x: 1,\n+  x: 2,\n }\n*** Update File: /repo/src/b.ts\n@@\n-const b = false\n+const b = true\n*** End Patch',
+            },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 900, output_tokens: 30, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: 'session-1',
+      uuid: '00000000-0000-4000-8000-0000000c0009',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_patch_1',
+            content: 'Applied patch to 2 files: /repo/src/a.ts, /repo/src/b.ts',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      tool_use_result: {
+        files: [
+          {
+            path: '/repo/src/a.ts',
+            type: 'update',
+            before: 'export const a = {\n  x: 1,\n}\n',
+            after: 'export const a = {\n  x: 2,\n}\n',
+            structuredPatch: [
+              {
+                oldStart: 1,
+                oldLines: 3,
+                newStart: 1,
+                newLines: 3,
+                lines: [' export const a = {', '-  x: 1,', '+  x: 2,', ' }'],
+              },
+            ],
+          },
+          {
+            path: '/repo/src/b.ts',
+            type: 'update',
+            before: 'const b = false\n',
+            after: 'const b = true\n',
+            structuredPatch: [
+              {
+                oldStart: 1,
+                oldLines: 1,
+                newStart: 1,
+                newLines: 1,
+                lines: ['-const b = false', '+const b = true'],
+              },
+            ],
+          },
+        ],
+      },
+      session_id: 'session-1',
+      uuid: '00000000-0000-4000-8000-0000000c000a',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.toolFamily).toBe('edit')
+  expect(row.status).toBe('success')
+  // Primary (first) file's diff is projected — the Diff section now renders.
+  expect(row.result?.diff).toEqual({
+    filePath: '/repo/src/a.ts',
+    hunks: [
+      {
+        oldStart: 1,
+        oldLines: 3,
+        newStart: 1,
+        newLines: 3,
+        lines: [' export const a = {', '-  x: 1,', '+  x: 2,', ' }'],
+      },
+    ],
+  })
+  // Every touched path still shows in the result content (nothing hidden).
+  expect(row.result?.content).toContain('/repo/src/b.ts')
+})
+
 test('a foreign/malformed tool_use_result never crashes and yields diff: null', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

@@ -107,12 +107,14 @@ export type ToolCardStatus = 'pending' | 'success' | 'error'
 
 /**
  * One correlated `tool_result` content block (rides a `user` SDKMessage,
- * `queryHelpers.ts:203-218`). `diff` is populated only when the block's
- * companion `tool_use_result` carries a FileEditTool-shaped
- * `structuredPatch: StructuredPatchHunk[]` (`FileEditTool/types.ts:71-73`,
- * `diff` npm package hunk shape) — narrowed at runtime, never cast; anything
- * else (Bash stdout, Read contents, …) surfaces as plain `content` text with
- * `diff: null`. Malformed/foreign shapes degrade to `diff: null`, never crash.
+ * `queryHelpers.ts:203-218`). `diff` is populated when the block's companion
+ * `tool_use_result` carries a recognized `structuredPatch: StructuredPatchHunk[]`
+ * (`diff` npm package hunk shape) — either FileEditTool's top-level
+ * `filePath`+`structuredPatch` (`FileEditTool/types.ts:71-73`) or FilePatchTool /
+ * `Apply_patch`'s `files[]` envelope (`FilePatchTool/types.ts:138-172`). Narrowed
+ * at runtime, never cast; anything else (Bash stdout, Read contents, …) surfaces
+ * as plain `content` text with `diff: null`. Malformed/foreign shapes degrade to
+ * `diff: null`, never crash.
  */
 export type ToolResultProjection = {
   isError: boolean
@@ -125,14 +127,16 @@ export type ToolResultProjection = {
  * tool — `FileEditTool`'s own multi-edit input (`edits: EditInput[]`) can
  * still only ever produce ONE `structuredPatch` for the ONE file it edited
  * (`FileEditTool/types.ts` output schema has no per-file array). "Multiple
- * files changed in one turn" is multiple separate `tool_use`/`tool_result`
- * pairs, each its own single-file `ToolDiffProjection` — there is no seam
- * shape for a single result spanning many files. `files.length > 1` here
- * models multiple hunks returned for the ONE edited file (structuredPatch is
- * already an array of hunks); DiffView renders one hunk, MultiDiffCard
- * switches between hunks the same way the prototype's FileEditCard switches
- * between files — same component, adapted to the real one-file-many-hunks
- * shape instead of an invented many-files shape.
+ * files changed in one turn" is normally multiple separate
+ * `tool_use`/`tool_result` pairs, each its own single-file `ToolDiffProjection`.
+ * The one result that CAN span many files is `Apply_patch`
+ * (`FilePatchTool/types.ts` output `files[]`); this single-file projection names
+ * ONE path, so `extractDiffProjection` projects that patch's PRIMARY file (the
+ * rest still appear in the result `content`). `hunks.length > 1` models multiple
+ * hunks returned for the ONE projected file (structuredPatch is already an array
+ * of hunks); DiffView renders one hunk, MultiDiffCard switches between hunks the
+ * same way the prototype's FileEditCard switches between files — same component,
+ * adapted to the real one-file-many-hunks shape.
  */
 export type ToolDiffProjection = {
   filePath: string
@@ -1044,21 +1048,51 @@ function flattenToolResultContent(content: unknown): string {
 /**
  * `toolUseResult` is `unknown` on the wire — "Matches tool's `Output` type"
  * (`coreTypes.generated.ts:308` comment) — so every field is runtime-narrowed,
- * zero casts. Only FileEditTool's output shape
- * (`src/tools/FileEditTool/types.ts:63-80`: `filePath: string`,
- * `structuredPatch: StructuredPatchHunk[]`) is recognized; anything else
- * (Bash output, Read contents, a foreign/future tool shape) yields `null` —
- * a degraded ToolCard with plain `content` text, never a crash or a guess.
+ * zero casts. Two owned diff-producing output shapes are recognized:
+ *  - FileEditTool (`src/tools/FileEditTool/types.ts:63-80`): top-level
+ *    `filePath: string` + `structuredPatch: StructuredPatchHunk[]`.
+ *  - FilePatchTool / `Apply_patch` (`src/tools/FilePatchTool/types.ts:138-172`,
+ *    emitted `FilePatchTool.tsx:453-464`): a multi-file envelope
+ *    `files: Array<{ path: string; structuredPatch: StructuredPatchHunk[] }>`.
+ *    The single-file `ToolDiffProjection` names ONE path, so the PRIMARY (first
+ *    file yielding hunks) is projected; further files in the same patch are not
+ *    shown here (the result `content` still enumerates every touched path).
+ * Anything else (Bash output, Read contents, a foreign/future tool shape)
+ * yields `null` — a degraded ToolCard with plain `content` text, never a crash
+ * or a guess.
  */
 function extractDiffProjection(
   toolUseResult: unknown,
 ): ToolDiffProjection | null {
   if (!isRecord(toolUseResult)) return null
-  const { filePath, structuredPatch } = toolUseResult
-  if (typeof filePath !== 'string' || filePath.length === 0) return null
-  if (!Array.isArray(structuredPatch)) return null
 
-  const hunks = structuredPatch.flatMap(hunk => {
+  // FileEditTool: single-file, top-level `filePath` + `structuredPatch`.
+  const { filePath, structuredPatch, files } = toolUseResult
+  if (typeof filePath === 'string' && filePath.length > 0) {
+    const hunks = narrowStructuredPatch(structuredPatch)
+    return hunks.length === 0 ? null : { filePath, hunks }
+  }
+
+  // FilePatchTool / apply_patch: multi-file `files[]` envelope. Project the
+  // first file that yields hunks (matches how a single Edit diff is shown).
+  if (Array.isArray(files)) {
+    for (const file of files) {
+      if (!isRecord(file)) continue
+      const { path, structuredPatch: filePatch } = file
+      if (typeof path !== 'string' || path.length === 0) continue
+      const hunks = narrowStructuredPatch(filePatch)
+      if (hunks.length > 0) return { filePath: path, hunks }
+    }
+  }
+
+  return null
+}
+
+/** Runtime-narrow a `diff`-package `StructuredPatchHunk[]` (zero casts); a
+ * malformed/foreign element is dropped, an all-invalid array yields `[]`. */
+function narrowStructuredPatch(structuredPatch: unknown): ToolDiffHunk[] {
+  if (!Array.isArray(structuredPatch)) return []
+  return structuredPatch.flatMap(hunk => {
     if (!isRecord(hunk)) return []
     const { oldStart, oldLines, newStart, newLines, lines } = hunk
     if (
@@ -1073,7 +1107,6 @@ function extractDiffProjection(
     }
     return [{ oldStart, oldLines, newStart, newLines, lines }]
   })
-  return hunks.length === 0 ? null : { filePath, hunks }
 }
 
 /**
