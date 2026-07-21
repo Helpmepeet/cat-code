@@ -1,7 +1,7 @@
 /**
  * P4-1 shared primitive kit — the ONE place the tone vocabulary maps to P0-2
  * token utilities (theme.css `--tone-*` / `--color-tone-*`). Every primitive
- * (Chip, BannerStack, ToastHost, ConnectionChip, ToolInspector) reads its tone
+ * (Chip, BannerStack, ToastHost, ToolInspector) reads its tone
  * colours from here so a tone reads the same everywhere and the mapping is
  * unit-testable without a DOM.
  *
