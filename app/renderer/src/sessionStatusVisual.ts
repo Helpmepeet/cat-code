@@ -1,8 +1,8 @@
 /**
  * The ONE status → {label, tone} mapping every session surface shares (audit
  * §I.2 "status-mapping collapse"). It replaces FOUR drifted copies of the same
- * switch: the Sidebar rows (`deriveSidebarRowVisual`), the unified merged rows
- * (`deriveMergedRowVisual`), the TabBar tab chip (`deriveTabVisualState`, now a
+ * switch: the Sidebar rows (`deriveMergedRowVisual`), the ⌘K palette rows
+ * (`commandPaletteModel`), the TabBar tab chip (`deriveTabVisualState`, now a
  * thin wrapper), and the Sessions page `StatusBadge`.
  *
  * Keyed off the host descriptor's `status` + `restorable` (the two-signal truth

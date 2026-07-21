@@ -54,7 +54,7 @@ import {
 import { deriveTabVisualState } from './tabStatus.js'
 import { TabBar, tabLabel, type TabModel } from './TabBar.js'
 import { Sidebar } from './Sidebar.js'
-import { selectSidebarRows } from './sidebarState.js'
+import { selectShellDescriptors } from './sidebarState.js'
 import { CommandPalette } from './CommandPalette.js'
 import { buildPaletteItems, type PaletteItem } from './commandPaletteModel.js'
 import { applyServerFrameBatch, withBatch } from './serverFrameBatch.js'
@@ -815,19 +815,15 @@ export function App() {
   // not a second data source, and not a poll loop: it reads the
   // HostEvent-driven `shell` state the TabBar reads (App seeded it once from
   // listSessions, then keeps it live off subscribeHost).
-  const sidebarRows = useMemo(() => selectSidebarRows(shell), [shell])
+  const shellDescriptors = useMemo(() => selectShellDescriptors(shell), [shell])
 
   // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
   // the sidecar engine-history snapshot (rich metadata), via the shared
   // selector (reused by P4-17 Welcome recents, D5).
   const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog, activeSessionId)
   const sessionCatalogRows = useMemo(
-    () =>
-      selectMergedSessionRows(
-        sidebarRows.map(row => row.descriptor),
-        sessionCatalogSnapshot,
-      ),
-    [sidebarRows, sessionCatalogSnapshot],
+    () => selectMergedSessionRows(shellDescriptors, sessionCatalogSnapshot),
+    [shellDescriptors, sessionCatalogSnapshot],
   )
 
   // The active session's merged catalog row — feeds the tab ⋯ actions menu and
@@ -849,15 +845,15 @@ export function App() {
   // account table reads the first available pool snapshot (the pool is global).
   const welcomeTrustByCwd = useMemo(() => {
     const map = new Map<string, boolean>()
-    for (const row of sidebarRows) {
+    for (const descriptor of shellDescriptors) {
       const snap = selectWorkspaceTrustSnapshot(
         workspaceTrust,
-        row.descriptor.appSessionId,
+        descriptor.appSessionId,
       )
-      if (snap) map.set(row.descriptor.cwd, snap.trusted)
+      if (snap) map.set(descriptor.cwd, snap.trusted)
     }
     return map
-  }, [sidebarRows, workspaceTrust])
+  }, [shellDescriptors, workspaceTrust])
   const welcomeRecents = useMemo(
     () => selectRecentWorkspaces(sessionCatalogRows, welcomeTrustByCwd),
     [sessionCatalogRows, welcomeTrustByCwd],
@@ -886,10 +882,10 @@ export function App() {
   // disk write below so the operator's actual layout can persist instead.
   const restorableIds = useMemo(
     () =>
-      sidebarRows
-        .filter(row => row.visual.restorable)
-        .map(row => row.descriptor.appSessionId),
-    [sidebarRows],
+      shellDescriptors
+        .filter(descriptor => descriptor.restorable)
+        .map(descriptor => descriptor.appSessionId),
+    [shellDescriptors],
   )
 
   // PL-A: roster hydration unlocks a store-only preload after the first paint.
@@ -903,9 +899,9 @@ export function App() {
     const frame = window.requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
         startupPreloadStartedRef.current = true
-        const descriptors = selectSidebarRows(shellRef.current)
-          .filter(row => row.visual.restorable)
-          .map(row => row.descriptor)
+        const descriptors = selectShellDescriptors(shellRef.current).filter(
+          descriptor => descriptor.restorable,
+        )
         if (!cancelled) queueTranscriptPreload(descriptors)
       }, 0)
     })
@@ -1938,7 +1934,7 @@ export function App() {
   // (and its closures) on those while the palette is closed is pure waste.
   const paletteItems = paletteOpen
     ? buildPaletteItems({
-        rows: sidebarRows,
+        rows: shellDescriptors,
         activeSessionId,
         hasPanels: workspacePanels.length > 0,
         handlers: {

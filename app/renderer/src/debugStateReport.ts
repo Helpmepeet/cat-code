@@ -8,7 +8,8 @@ import {
   selectLiveSessions,
   type ShellState,
 } from './shellState.js'
-import { selectSidebarRows } from './sidebarState.js'
+import { selectShellDescriptors } from './sidebarState.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { selectConnection, type ConnectionState } from './connectionState.js'
 import { describeSuggestion } from './PermissionPrompt.js'
@@ -47,15 +48,24 @@ export function buildDebugShellStateSnapshot(args: {
           needsAttention: visual.needsAttention,
         }
       }),
-      sidebar: selectSidebarRows(args.shell).map(row => ({
-        appSessionId: row.descriptor.appSessionId,
-        title: tabLabel(row.descriptor),
-        subtitle: basename(row.descriptor.cwd),
-        kind: row.visual.kind,
-        label: row.visual.label,
-        tone: row.visual.tone,
-        restorable: row.visual.restorable,
-      })),
+      sidebar: selectShellDescriptors(args.shell).map(descriptor => {
+        // F9: the roster selector no longer carries a per-row visual; derive the
+        // sidebar chip from the shared `sessionStatusVisual` (audit §I.2).
+        const { label, tone } = sessionStatusVisual(
+          descriptor.status,
+          descriptor.restorable,
+          true,
+        )
+        return {
+          appSessionId: descriptor.appSessionId,
+          title: tabLabel(descriptor),
+          subtitle: basename(descriptor.cwd),
+          kind: descriptor.restorable ? ('restorable' as const) : ('live' as const),
+          label,
+          tone,
+          restorable: descriptor.restorable,
+        }
+      }),
       permissions: Object.fromEntries(
         Object.entries(args.permissions.sessions).map(([sessionId, state]) => [
           sessionId,
