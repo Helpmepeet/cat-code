@@ -164,6 +164,9 @@ test('the Permissions pane embeds the P2-4 read-only rules view over the real C3
   expect(html).not.toContain('aria-pressed')
   expect(html).not.toContain('Add rule')
   expect(html).not.toContain('Save to')
+  // D1: the read-only current-mode PILL still displays the engine mode even
+  // though the interactive selector is hidden (pure display, not a control).
+  expect(html).toContain('Current permission mode: default')
 })
 
 test('the Permissions pane shows the waiting state before the first C3 snapshot', () => {

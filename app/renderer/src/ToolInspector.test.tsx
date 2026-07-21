@@ -128,6 +128,59 @@ test('renders the drawer over a real row (structured input as text, diff lines)'
   expect(html).toContain('text-tone-danger')
 })
 
+test('renders a Diff section for a real Apply_patch row (E1 — edit-family, files[] envelope)', () => {
+  // The projector maps Apply_patch's multi-file `files[]` output to a
+  // single-file diff (primary file); a real apply_patch row is edit-family and
+  // MUST show a Diff section, unlike a diff-less Bash row.
+  const html = renderToStaticMarkup(
+    <ToolInspector
+      row={mkToolRow({
+        toolName: 'Apply_patch',
+        toolFamily: 'edit',
+        input: { input: '*** Begin Patch\n*** Update File: /app/y.ts\n@@\n-a\n+b\n*** End Patch' },
+        status: 'success',
+        result: {
+          isError: false,
+          content: 'Applied patch to 1 file: /app/y.ts',
+          diff: {
+            filePath: '/app/y.ts',
+            hunks: [
+              {
+                oldStart: 1,
+                oldLines: 1,
+                newStart: 1,
+                newLines: 1,
+                lines: ['-a', '+b'],
+              },
+            ],
+          },
+        },
+      })}
+    />,
+  )
+  // The Diff section header + the patched path render.
+  expect(html).toContain('Diff · ')
+  expect(html).toContain('/app/y.ts')
+  // Add/remove diff-line tones present (proves hunk lines rendered).
+  expect(html).toContain('text-tone-good')
+  expect(html).toContain('text-tone-danger')
+})
+
+test('a diff-less Bash row shows NO Diff section (contrast to Apply_patch)', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector
+      row={mkToolRow({
+        toolName: 'Bash',
+        toolFamily: 'bash',
+        input: { command: 'ls' },
+        status: 'success',
+        result: { isError: false, content: 'a\nb\n', diff: null },
+      })}
+    />,
+  )
+  expect(html).not.toContain('Diff · ')
+})
+
 test('renders nothing when there is no row', () => {
   expect(renderToStaticMarkup(<ToolInspector row={null} />)).toBe('')
 })
