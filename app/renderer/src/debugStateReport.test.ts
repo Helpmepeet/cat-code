@@ -83,7 +83,8 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
     {
       appSessionId: sessionA.appSessionId,
       title: 'Scratch',
-      label: 'ready',
+      // Unified status vocabulary (audit §I.2): a ready tab reads as `live`.
+      label: 'live',
       tone: 'live',
       restartable: false,
       needsAttention: false,

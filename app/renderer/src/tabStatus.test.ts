@@ -30,19 +30,23 @@ test('a ready session is live, not restartable, no chip escalation', () => {
     isActive: true,
   })
   expect(visual.tone).toBe('live')
-  expect(visual.label).toBe('ready')
+  // Unified status vocabulary (audit §I.2): `ready` reads as `live`, matching
+  // the Sidebar/palette. TabBar suppresses the chip for a `tone:'live'` tab.
+  expect(visual.label).toBe('live')
   expect(visual.restartable).toBe(false)
   expect(visual.needsAttention).toBe(false)
 })
 
-test('a spawning session reads busy', () => {
+test('a spawning session reads starting (warn)', () => {
   const visual = deriveTabVisualState({
     descriptor: descriptor({ status: 'spawning' }),
     connection: { status: 'starting', inputEnabled: false },
     pendingPermissionCount: 0,
     isActive: false,
   })
-  expect(visual.tone).toBe('busy')
+  // Unified vocabulary (audit §I.2): `warn`, matching the Sidebar's spawning row
+  // (the old tab-only `busy` tone is gone).
+  expect(visual.tone).toBe('warn')
   expect(visual.label).toBe('starting')
   expect(visual.restartable).toBe(false)
 })
@@ -55,7 +59,8 @@ test('an exited session is dead + restartable (the dead-tab affordance)', () => 
     isActive: false,
   })
   expect(visual.tone).toBe('dead')
-  expect(visual.label).toBe('exited')
+  // Unified vocabulary (audit §I.2): `closed`, matching the Sidebar's exited row.
+  expect(visual.label).toBe('closed')
   expect(visual.restartable).toBe(true)
 })
 

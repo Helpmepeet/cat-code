@@ -354,7 +354,10 @@ function Tab({
  * the bar stays quiet; shown for every non-nominal state.
  */
 function StatusChip({ visual }: { visual: TabVisualState }) {
-  if (visual.tone === 'live' && visual.label === 'ready') return null
+  // A healthy live tab needs no chip (the dot carries it). `tone === 'live'` is
+  // produced ONLY for a nominal `ready` tab (spawning is `warn`, every terminal
+  // state is `dead`), so the tone alone is the "quiet, healthy" signal.
+  if (visual.tone === 'live') return null
   return (
     <span
       className={`shrink-0 font-mono text-[10px] uppercase tracking-wide ${toneTextClass(visual.tone)}`}

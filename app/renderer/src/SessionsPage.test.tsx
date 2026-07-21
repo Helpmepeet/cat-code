@@ -34,7 +34,7 @@ test('renders the header, count subtitle and real session titles', () => {
   const html = renderToStaticMarkup(
     <SessionsPage
       rows={[
-        row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, title: 'Fix the parser', displayLabel: 'Fix the parser' }),
+        row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, status: 'ready', title: 'Fix the parser', displayLabel: 'Fix the parser' }),
         row({ sessionId: 'b', title: 'Old TUI session', displayLabel: 'Old TUI session' }),
       ]}
       activeCwd="/w/proj"
@@ -54,7 +54,7 @@ test('renders the header, count subtitle and real session titles', () => {
 test('renders the live status badge for a live registry row', () => {
   const html = renderToStaticMarkup(
     <SessionsPage
-      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, displayLabel: 'Live one' })]}
+      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, status: 'ready', displayLabel: 'Live one' })]}
       activeCwd="/w/proj"
       catalogLoaded
       truncated={false}
@@ -94,7 +94,7 @@ test('shows the empty state (no rows) and the loading state (catalog not loaded)
 test('F3 — shows the terminal-history-loading notice above rows when the catalog is not loaded', () => {
   const loadingWithRows = renderToStaticMarkup(
     <SessionsPage
-      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, displayLabel: 'Registry one' })]}
+      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, status: 'ready', displayLabel: 'Registry one' })]}
       activeCwd={null}
       catalogLoaded={false}
       truncated={false}
@@ -110,7 +110,7 @@ test('F3 — shows the terminal-history-loading notice above rows when the catal
   // Once a catalog (live or baseline) is present, the notice is gone.
   const loaded = renderToStaticMarkup(
     <SessionsPage
-      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, displayLabel: 'Registry one' })]}
+      rows={[row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true, status: 'ready', displayLabel: 'Registry one' })]}
       activeCwd={null}
       catalogLoaded
       truncated={false}

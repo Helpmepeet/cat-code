@@ -40,6 +40,7 @@
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 import type { ShellState } from './shellState.js'
 import type { TabTone } from './tabStatus.js'
 
@@ -212,36 +213,11 @@ export function deriveSidebarRowVisual(
   // transcript survive. The host sets `restorable` for exactly that; a live
   // row never carries it.
   const kind: SidebarRowKind = descriptor.restorable ? 'restorable' : 'live'
-
-  let tone: TabTone
-  let label: string
-  switch (descriptor.status) {
-    case 'spawning':
-      tone = 'warn'
-      label = 'starting'
-      break
-    case 'ready':
-      tone = 'live'
-      label = 'live'
-      break
-    case 'disconnected':
-      // `disconnected` is overloaded (hostApi.ts status doc): a crash-marked
-      // DEAD row surfaces it with restorable:true, while a LIVE socket-drop
-      // (F13 — child may still be alive) carries restorable:false. Only the
-      // dead one is a crash; labeling the live drop "crashed" would lie.
-      tone = 'dead'
-      label = descriptor.restorable ? 'crashed' : 'disconnected'
-      break
-    case 'exited':
-      tone = 'dead'
-      label = 'closed'
-      break
-    default:
-      tone = 'warn'
-      label = 'unknown'
-      break
-  }
-
+  const { tone, label } = sessionStatusVisual(
+    descriptor.status,
+    descriptor.restorable,
+    true,
+  )
   return { kind, tone, label, restorable: descriptor.restorable }
 }
 
@@ -283,47 +259,26 @@ export type MergedRowVisual = {
  * a non-interactive `none` intent (browse-only), never a dead-looking button.
  */
 export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
+  const { tone, label } = sessionStatusVisual(
+    row.status,
+    row.restorable,
+    row.inRegistry,
+  )
   if (!row.inRegistry) {
+    // A resolvable cwd makes a history row openable (Part-A host path); an
+    // empty-cwd row degrades to a non-interactive `none` intent (browse-only),
+    // never a dead-looking button.
     const openable = row.cwd.trim().length > 0
     return {
       kind: 'history',
-      // A terminal-history row is a not-live session — `dead` tone, but its
-      // distinct `history` label (subdued chip in Sidebar.tsx) reads apart from a
-      // restorable row's `closed`/`crashed` and a live row's no-chip.
-      tone: 'dead',
-      label: 'history',
+      tone,
+      label,
       openable,
       intent: openable ? 'open-history' : 'none',
     }
   }
 
   const kind: MergedRowKind = row.restorable ? 'restorable' : 'live'
-  let tone: TabTone
-  let label: string
-  switch (row.status) {
-    case 'spawning':
-      tone = 'warn'
-      label = 'starting'
-      break
-    case 'ready':
-      tone = 'live'
-      label = 'live'
-      break
-    case 'disconnected':
-      // Overloaded (hostApi.ts status doc): a crash-marked DEAD row is
-      // restorable; a live socket-drop is not. Only the dead one is a crash.
-      tone = 'dead'
-      label = row.restorable ? 'crashed' : 'disconnected'
-      break
-    case 'exited':
-      tone = 'dead'
-      label = 'closed'
-      break
-    default:
-      tone = 'warn'
-      label = 'unknown'
-      break
-  }
   return {
     kind,
     tone,
