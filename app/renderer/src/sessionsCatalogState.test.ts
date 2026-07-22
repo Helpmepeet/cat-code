@@ -250,10 +250,14 @@ describe('browse selectors', () => {
     expect(countWorkspaces(rows)).toBe(2)
   })
 
-  test('group by workspace, current first', () => {
-    const groups = groupByWorkspace(rows, '/w/other')
+  test('group by workspace, alphabetical — active workspace does NOT float to top', () => {
+    // Active = '/w/proj' (alphabetically last). Old code sorted active-first and
+    // would return ['proj', 'other']; groups now stay frozen-alphabetical.
+    const groups = groupByWorkspace(rows, '/w/proj')
     expect(groups.map(g => g.name)).toEqual(['other', 'proj'])
-    expect(groups[0]?.current).toBe(true)
+    // `current` is still computed (Sessions-page highlight), it just no longer drives order.
+    expect(groups.find(g => g.name === 'proj')?.current).toBe(true)
+    expect(groups.find(g => g.name === 'other')?.current).toBe(false)
   })
 
   test('MAJOR-1 — two same-workspace sessions (reconciled to one real cwd) form ONE group', () => {

@@ -333,12 +333,18 @@ export type WorkspaceGroup = {
 }
 
 /**
- * Group rows by workspace (cwd), the active session's workspace first, then the
- * rest alphabetically by basename — the real analog of the prototype's
- * `groupByWorkspace` (which keyed on a mock workspace name). Rows with an empty
- * cwd (a transcript whose workspace couldn't be reconciled — MAJOR-1) collect in
- * a single clearly-labeled "Unknown workspace" bucket rather than under a blank
- * or fragmented header.
+ * Group rows by workspace (cwd), ordered alphabetically by basename and FROZEN —
+ * the group order does NOT depend on which session is active, so opening a
+ * session never floats its workspace to the top (operator, 2026-07-21). The
+ * prototype's `groupByWorkspace` (`~/catcode_prototype/cat-app/Sidebar.jsx:26`)
+ * is likewise activeCwd-free and purely alphabetical; its "current workspace
+ * first" comment was aspirational and never implemented, so an earlier port that
+ * sorted active-first was a parity regression. `current` (cwd === activeCwd) is
+ * still computed for the Sessions page's active-workspace highlight
+ * (`SessionsPage.tsx`); it just no longer drives ORDER. Rows with an empty cwd (a
+ * transcript whose workspace couldn't be reconciled — MAJOR-1) collect in a
+ * single clearly-labeled "Unknown workspace" bucket rather than under a blank or
+ * fragmented header.
  */
 export function groupByWorkspace(
   rows: readonly MergedSessionRow[],
@@ -357,10 +363,7 @@ export function groupByWorkspace(
       current: activeCwd != null && cwd === activeCwd,
       rows: groupRows,
     }))
-    .sort((a, b) => {
-      if (a.current !== b.current) return a.current ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 /**
