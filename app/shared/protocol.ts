@@ -379,9 +379,26 @@ export type SettingsSetValueMessage = {
 export type SettingsVerbMessage = SettingsSetValueMessage
 
 /**
+ * IDLE-PARK inbound frame (decisions/IDLE-PARK.md §2/§3). App-owned vocabulary
+ * (NOT part of the engine's shared `appClientMessageSchema`); the sidecar
+ * validates it with its own local schema and OWNS the park gate + latch. It is
+ * originated ONLY by main's policy driver via `supervisor.send` — no preload
+ * channel or `ipcMain` handler forwards it, so the renderer is structurally
+ * unable to author it (the frame is on the sidecar's closed allowlist purely as
+ * defence-in-depth). It carries NO renderer-authored state — just a `requestId`;
+ * there is no ack/result frame, the sidecar's `PARKED_EXIT_CODE` self-exit is the
+ * authoritative signal (host classifies the exit, §2). Additive under v1 — no
+ * `PROTOCOL_VERSION` bump.
+ */
+export type AppParkMessage = {
+  type: 'app.park'
+  requestId: string
+}
+
+/**
  * Everything a client may send toward a sidecar: the engine's allowlisted
  * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, the P4-13
- * RemoteSettings verbs, and the P4-19 settings write verb.
+ * RemoteSettings verbs, the P4-19 settings write verb, and the IDLE-PARK frame.
  */
 export type SidecarClientMessage =
   | AppClientMessage
@@ -395,6 +412,7 @@ export type SidecarClientMessage =
   | TaskControlVerbMessage
   | RunControlVerbMessage
   | SessionActionVerbMessage
+  | AppParkMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`

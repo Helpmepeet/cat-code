@@ -32,6 +32,7 @@ import type {
   SupervisorEvent,
 } from '../supervisor/supervisor.js'
 import type { SessionId } from '../shared/protocol.js'
+import { PARKED_EXIT_CODE } from '../shared/limits.js'
 import {
   MAX_SESSION_TITLE_CHARS,
   MAX_SPAWNS_PER_WINDOW,
@@ -187,12 +188,18 @@ export class Host implements HostApi {
       // A graceful close already marked the row clean + emitted removed; don't
       // re-report the async exit that killSession triggers.
       if (!this.closing.has(appSessionId)) {
-        // F3 — an exit the host did not ask for IS the crash, and this event is
-        // the only moment the host knows it. Record it now; a later quit's
-        // markLiveCleanSync must not relabel a mid-run crash as a clean
-        // shutdown (markCrashed only transitions live rows, so the
-        // shutdownAll mark-clean-then-kill ordering is unaffected).
-        await this.registry.markCrashed(appSessionId)
+        // IDLE-PARK (decisions/IDLE-PARK.md §2) — the exit CODE is the truth
+        // signal. A `PARKED_EXIT_CODE` self-exit is a park, not a crash: mark it
+        // `'parked'` so the descriptor stays disconnected+restorable (tab kept)
+        // WITHOUT the terminal-reap dropping it. Any other exit the host did not
+        // ask for IS the crash (F3), and this event is the only moment the host
+        // knows it. Both `markParked`/`markCrashed` only transition LIVE rows, so
+        // the shutdownAll mark-clean-then-kill ordering is unaffected.
+        if (event.code === PARKED_EXIT_CODE) {
+          await this.registry.markParked(appSessionId)
+        } else {
+          await this.registry.markCrashed(appSessionId)
+        }
         this.emitStatus(appSessionId)
       }
       return
@@ -704,7 +711,12 @@ export class Host implements HostApi {
   ): SessionDescriptor {
     const status = liveStatus
       ? mapStatus(liveStatus)
-      : row?.shutdown === 'crashed'
+      : // IDLE-PARK (decisions/IDLE-PARK.md §1/§5): a `'parked'` row projects
+        // BYTE-IDENTICALLY to a crash — `disconnected` + `restorable` — so the
+        // tab is kept (foldTabMembership) and no renderer/descriptor code is
+        // aware park exists. `isRestorable` already returns true for any dead row
+        // with an engineSessionId, so a parked row is restorable with no change.
+        row?.shutdown === 'crashed' || row?.shutdown === 'parked'
         ? 'disconnected'
         : 'exited'
     return {

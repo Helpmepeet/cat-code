@@ -56,8 +56,18 @@ export const REGISTRY_VERSION = 1 as const
  */
 export const MAX_REGISTRY_SESSIONS = 32
 
-/** How a session ended, from the host's point of view (§3). */
-export type ShutdownState = 'clean' | 'crashed' | null
+/**
+ * How a session ended, from the host's point of view (§3).
+ *
+ * `'parked'` is the IDLE-PARK (decisions/IDLE-PARK.md §2/§8) in-memory-only
+ * state: a session whose engine process was reclaimed while its tab stays open.
+ * It projects like `'crashed'` to the descriptor (`disconnected` + `restorable`,
+ * so the tab is kept and unpark = the existing restore-on-click), but it is
+ * EXCLUDED from the `enforceBound` reap (a parked row is an open tab, not a
+ * terminal row) and normalises to `'crashed'` on disk read — so it never
+ * survives a relaunch as a distinct state.
+ */
+export type ShutdownState = 'clean' | 'crashed' | 'parked' | null
 
 /**
  * One persisted session row. Every field is either [D]urable (meaningful across
@@ -87,7 +97,7 @@ export type RegistrySession = {
    * pre-existing rows.
    */
   lastMessageSentAt: number | null
-  /** [D] "clean" | "crashed" | null (=currently live). */
+  /** [D] "clean" | "crashed" | "parked" (IDLE-PARK, in-memory only) | null (=live). */
   shutdown: ShutdownState
   /** [A] for the crash sweep only. */
   enginePid?: number
@@ -546,7 +556,11 @@ export class SessionRegistry {
     if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
     const terminal = this.doc.sessions
-      .filter(r => r.shutdown !== null)
+      // IDLE-PARK (decisions/IDLE-PARK.md §8): a `'parked'` row is an OPEN tab
+      // (its engine was reclaimed, the tab stays), not a terminal row — exclude
+      // it from the reap so a new spawn never dangles a parked tab. Live rows
+      // (`shutdown === null`) are already excluded by `!== null`.
+      .filter(r => r.shutdown !== null && r.shutdown !== 'parked')
       .sort((a, b) => a.lastAttachedAt - b.lastAttachedAt)
     const removeCount = this.doc.sessions.length - MAX_REGISTRY_SESSIONS
     const doomedRows = terminal.slice(0, removeCount)
@@ -736,6 +750,27 @@ export class SessionRegistry {
   }
 
   /**
+   * IDLE-PARK (decisions/IDLE-PARK.md §2/§8) — mark a LIVE row `'parked'` when its
+   * sidecar self-exited with `PARKED_EXIT_CODE` (host classifies on the exit code,
+   * `host.onSupervisorEvent`). Only transitions rows with `shutdown === null`, the
+   * SAME guard as `markCrashed`: a row already terminal (clean/crashed) keeps its
+   * state, so a park can never relabel a genuine close or crash. Advisory runtime
+   * fields are retained (an unpark re-spawns via the existing restore machinery).
+   * The `'parked'` state lives only in the in-memory doc; it normalises to
+   * `'crashed'` on the next disk read (`normalizeShutdown`).
+   */
+  async markParked(appSessionId: string): Promise<void> {
+    const row = this.find(appSessionId)
+    if (!row) {
+      this.log(`[registry] markParked: no row for ${appSessionId}`)
+      return
+    }
+    if (row.shutdown !== null) return
+    row.shutdown = 'parked'
+    await this.persist()
+  }
+
+  /**
    * Mark `shutdown: "clean"` on graceful close (§4.5, inside killSession/
    * shutdown). The row is KEPT (restorable); advisory runtime fields are retained
    * so restore can refuse if the old writer did not actually die.
@@ -910,6 +945,11 @@ function validateRow(candidate: unknown): RegistrySession | null {
 
 function normalizeShutdown(value: unknown): ShutdownState {
   if (value === 'clean' || value === 'crashed') return value
+  // IDLE-PARK (decisions/IDLE-PARK.md §8): `'parked'` is an in-memory-only state
+  // for a LIVE run. If it ever survives to disk (the app crashed while a session
+  // was parked), treat it next launch as an ordinary crashed restore-offer — a
+  // parked engine has no live process to reattach to, exactly like a crash.
+  if (value === 'parked') return 'crashed'
   return null
 }
 

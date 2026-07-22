@@ -254,6 +254,15 @@ export type SidecarServerOptions = {
    */
   onIdle?: () => void
   /**
+   * IDLE-PARK (decisions/IDLE-PARK.md §2/§3) — fires when an `app.park` frame
+   * passes the park gate (no active turn, no pending permission, no running/
+   * pending task) and the parking latch is set. `index.ts` passes
+   * cleanup()+`process.exit(PARKED_EXIT_CODE)`; tests pass a spy. Absent ⇒ park
+   * is not wired (e.g. the probe fixture) and every `app.park` is declined —
+   * there is nothing to exit, so latching would only wedge the session.
+   */
+  onPark?: () => void
+  /**
    * P4-6 title-rider: true when this session was resumed (has restored history).
    * A resumed session already carries its title and history, so its first turn
    * this run is a continuation — retitling it from that prompt would mislabel it.
@@ -300,6 +309,8 @@ export class SidecarServer {
   private readonly history: readonly SDKMessage[]
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
+  /** IDLE-PARK — the gated self-exit closure (null ⇒ park unwired, see options). */
+  private readonly onPark: (() => void) | null
   /** P4-6 title-rider — the one-shot AI-title generator for this session. */
   private readonly titleGenerator: SessionTitleGenerator
   private readonly log: (line: string) => void
@@ -312,6 +323,14 @@ export class SidecarServer {
   private unsubscribeAgentModeSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private activeTurn = false
+  /**
+   * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
+   * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
+   * the latch is rejected `session_disconnected` before `activeTurn` is touched,
+   * so the turn never starts (no turn loss). One-way per process: a latched
+   * sidecar is exiting.
+   */
+  private parking = false
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
@@ -348,6 +367,7 @@ export class SidecarServer {
     this.history = options.history ?? []
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
+    this.onPark = options.onPark ?? null
     this.titleGenerator = createSessionTitleGenerator({
       engineSessionId: this.engineSessionId,
       resumed: options.resumed ?? false,
@@ -754,6 +774,20 @@ export class SidecarServer {
       return
     }
 
+    // IDLE-PARK (decisions/IDLE-PARK.md §2/§3) — host-initiated park is app-owned
+    // vocabulary validated by a sidecar-LOCAL schema (like C2). The engine's
+    // shared `appClientMessageSchema` is deliberately NOT extended. The gate +
+    // latch live HERE because only the sidecar knows the true turn/permission/
+    // task state at the instant of park (main's frame-derived view can be stale
+    // by one in-flight submit). Originated ONLY by main's policy driver — no
+    // preload channel forwards it — but validated at the trust boundary regardless.
+    if (
+      (frame.message as { type?: unknown } | null | undefined)?.type === 'app.park'
+    ) {
+      this.handlePark(connection, frame.message)
+      return
+    }
+
     // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — the AskUserQuestion answer is
     // app-owned vocabulary validated by a sidecar-LOCAL schema (like C2), then
     // resolved through the engine's OWN `respondToPermissionRequest` allow path.
@@ -916,6 +950,24 @@ export class SidecarServer {
   }
 
   private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
+    // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — a submit that arrives AFTER
+    // the parking latch is rejected before `activeTurn` is touched: the turn
+    // never starts (`controller.submit` never called) → NO turn loss. This is
+    // the FIRST line so no other gate can start a turn on a parking sidecar.
+    // `session_disconnected` is an existing ErrorFrame code the renderer already
+    // folds to disconnected/inputEnabled:false — no new error code, no renderer
+    // change. Retryable: the user unparks (restore-on-click) and re-sends.
+    if (this.parking) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'session_disconnected',
+        'session parking',
+        true,
+      )
+      return
+    }
+
     // P4-15 TRUST BOUNDARY (SECURITY-MINIMUM — validate at the sidecar, not the
     // renderer). A turn runs the engine with tools + HOOKS at the session's cwd.
     // The renderer's trust gate is UX only: enforce trust HERE so no renderer
@@ -1035,6 +1087,76 @@ export class SidecarServer {
           this.broadcastSessionTitle(title),
         )
       })
+  }
+
+  /**
+   * IDLE-PARK (decisions/IDLE-PARK.md §3) — the host-initiated park handler. It
+   * NEVER sends an ack/refuse frame on the happy or the declined path: the
+   * exit-code is the authoritative signal (a declined park is silently a no-op;
+   * main re-evaluates on its next trigger). The ONLY frame it can send is a
+   * boundary `bad_request` for a malformed frame (the security tax).
+   *
+   * The gate (three synchronous reads) + latch + re-verify are the R2-F2 crux:
+   * because the sidecar dispatches one frame at a time synchronously (JS single-
+   * thread), park and submit cannot interleave WITHIN a dispatch — only whole
+   * dispatches interleave. So a turn/permission accepted in an EARLIER dispatch
+   * is already visible to the gate here and aborts the park (not the turn); a
+   * submit in a LATER dispatch sees `parking` and is rejected (handleSubmit).
+   */
+  private handlePark(connection: Connection, rawMessage: unknown): void {
+    const parsed = appParkMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      // A malformed park is a boundary rejection like any other frame. Use
+      // `undefined` requestId — the field it carries is not trustworthy here.
+      this.sendError(
+        connection,
+        undefined,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid app.park',
+        false,
+      )
+      return
+    }
+
+    // Park unwired (probe fixture) ⇒ nothing to exit; decline rather than wedge.
+    if (!this.onPark) return
+    // Already latched ⇒ this process is exiting; a second park is a no-op.
+    if (this.parking) return
+    // Gate: refuse over any active work (no turn loss / no dropped permission).
+    if (!this.isParkGateOpen()) return
+    // Latch, then re-verify the same gate (belt-and-suspenders: trivially still
+    // true under single-thread, but it makes the invariant explicit and future-
+    // proofs against an `await` creeping into the gate reads).
+    this.parking = true
+    if (!this.isParkGateOpen()) {
+      this.parking = false
+      return
+    }
+    // Flush + exit. `onPark` (index.ts) runs cleanup() then process.exit(
+    // PARKED_EXIT_CODE); nothing happens after it. There is no frame after this.
+    this.onPark()
+  }
+
+  /**
+   * IDLE-PARK (decisions/IDLE-PARK.md §3) — the three-gate park check, all
+   * synchronous reads of authoritative live state:
+   *   1. no active turn (`activeTurn`, set sync in handleSubmit before the async
+   *      submit starts, so it is true the instant a turn is accepted);
+   *   2. no pending permission (`controller.getPendingPermissionRequests()` — the
+   *      engine's own live list; a pending permission DIES unrecoverably by
+   *      design (T5a), so never park over one);
+   *   3. no running/pending task, read from the SAME tasks domain the server
+   *      already holds. `hasLiveWork()` reads the RAW task store, FOREGROUND-
+   *      inclusive — NOT the display snapshot, which filters out a foregrounded
+   *      local_agent (parking over a running foregrounded agent-mode worker would
+   *      kill a live turn — a no-turn-loss breach). Covers background + foreground
+   *      workers alike. Do not re-derive.
+   */
+  private isParkGateOpen(): boolean {
+    if (this.activeTurn) return false
+    if (this.controller.getPendingPermissionRequests().length > 0) return false
+    if (this.tasks && this.tasks.hasLiveWork()) return false
+    return true
   }
 
   /**
@@ -2755,6 +2877,11 @@ function checkStrictKeys(message: unknown): string | null {
     ['session.rename', new Set(['type', 'requestId', 'title'])],
     ['session.export', new Set(['type', 'requestId'])],
     ['session.branch', new Set(['type', 'requestId'])],
+    // IDLE-PARK (decisions/IDLE-PARK.md §2/§6). Host-originated (no preload
+    // channel forwards it), but on the closed allowlist as defence-in-depth. The
+    // frame carries NO renderer-authored state — only `type` + `requestId`; any
+    // other key is rejected before the sidecar-local Zod parse.
+    ['app.park', new Set(['type', 'requestId'])],
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],
@@ -2834,6 +2961,18 @@ const permissionSetModeMessageSchema = z.object({
   type: z.literal('permission.setMode'),
   requestId: z.string().min(1),
   mode: z.enum(PERMISSION_SET_MODE_MODES),
+})
+
+/**
+ * IDLE-PARK (decisions/IDLE-PARK.md §6) — sidecar-LOCAL schema for `app.park`.
+ * App-owned, NOT part of the engine's shared `appClientMessageSchema`. The frame
+ * carries no renderer-authored state — just a length-bounded `requestId` (like
+ * every other renderer-controlled string); `checkStrictKeys` has already rejected
+ * any key beyond `{type, requestId}`, so this parse only enforces the value types.
+ */
+const appParkMessageSchema = z.object({
+  type: z.literal('app.park'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
 })
 
 /**

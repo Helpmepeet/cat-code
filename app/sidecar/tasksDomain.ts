@@ -13,6 +13,16 @@ import type { TaskSnapshotItem, TasksSnapshot } from '../shared/protocol.js'
 export type SidecarTasksDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
   getSnapshot(): TasksSnapshot
+  /**
+   * IDLE-PARK gate (decisions/IDLE-PARK.md §3) — true iff ANY task is running or
+   * pending, read from the RAW `AppState.tasks` map, FOREGROUND-INCLUSIVE and
+   * unfiltered. `getSnapshot`'s `isVisibleBackgroundTask` + foregrounded-
+   * local_agent filter is a DISPLAY concern and would hide a foregrounded agent-
+   * mode worker the user is watching run — parking over which would kill a live
+   * turn (a no-turn-loss breach). The park gate must see every live worker, so it
+   * reads the store directly, never the display snapshot.
+   */
+  hasLiveWork(): boolean
   subscribe(listener: () => void): () => void
 }
 
@@ -23,6 +33,16 @@ export function createSidecarTasksDomain(
     getSnapshot() {
       const state = appStateStore.getState()
       return tasksSnapshot(state.tasks, state.foregroundedTaskId)
+    },
+    hasLiveWork() {
+      // Explicit type (the same `tasksSnapshot` accepts) so `Object.values`
+      // infers `TaskState`, not `unknown`, under the sidecar's engine graph.
+      const tasks: Record<string, TaskState> | undefined =
+        appStateStore.getState().tasks
+      if (!tasks) return false
+      return Object.values(tasks).some(
+        task => task.status === 'running' || task.status === 'pending',
+      )
     },
     subscribe(listener) {
       return appStateStore.subscribe(listener)

@@ -61,7 +61,8 @@ export type DebugRendererSnapshot = {
 export type DebugSessionDescriptor = SessionDescriptor & {
   enginePid?: number
   socketPath?: string
-  shutdown?: 'clean' | 'crashed' | null
+  // Mirrors the registry `ShutdownState` (IDLE-PARK adds the in-memory 'parked').
+  shutdown?: 'clean' | 'crashed' | 'parked' | null
 }
 
 export type DebugStateFile = {

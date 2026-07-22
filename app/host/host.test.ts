@@ -27,6 +27,8 @@ import {
   MAX_SPAWNS_PER_WINDOW,
   SPAWN_RATE_WINDOW_MS,
 } from '../shared/hostApi.js'
+import { PARKED_EXIT_CODE } from '../shared/limits.js'
+import { createShellState, reduceShellState } from '../renderer/src/shellState.js'
 
 /* ------------------------------------------------------------------------- *
  * Fake supervisor — the exact public surface the host calls.
@@ -189,6 +191,18 @@ class FakeSupervisor {
     const record = this.records.get(sessionId)
     if (record) record.status = 'exited'
     this.emit({ type: 'exit', sessionId, code: 1, signal: null })
+    this.emit({ type: 'status', sessionId, status: 'exited' })
+  }
+
+  /**
+   * IDLE-PARK — a gated self-exit: the sidecar flushed + exited with
+   * `PARKED_EXIT_CODE`. Same tombstone-kept shape as `emitCrash` (the record
+   * stays registered), but the exit CODE tells the host it is a park, not a crash.
+   */
+  emitPark(sessionId: SessionId): void {
+    const record = this.records.get(sessionId)
+    if (record) record.status = 'exited'
+    this.emit({ type: 'exit', sessionId, code: PARKED_EXIT_CODE, signal: null })
     this.emit({ type: 'status', sessionId, status: 'exited' })
   }
 
@@ -806,6 +820,64 @@ test('a sidecar crash (kill, no closeSession) yields a restorable + crashed desc
     .find(s => s.appSessionId === closedId)
   expect(closedDescriptor?.status).toBe('exited')
   expect(closedDescriptor?.restorable).toBe(true)
+})
+
+test('IDLE-PARK — a PARKED_EXIT_CODE exit marks parked → disconnected+restorable (crash-shaped, tab kept); a non-park exit stays crashed', async () => {
+  const h = makeHost()
+
+  // Session P: parks (self-exit with PARKED_EXIT_CODE; the tombstone stays).
+  const parked = await h.host.createSession({ cwd: h.cwd })
+  expect(parked.ok).toBe(true)
+  if (!parked.ok) return
+  const parkedId = parked.value.appSessionId
+  h.supervisor.emitReady(parkedId, 'engine-parked')
+  await settle(() => h.registry.findSession(parkedId)?.engineSessionId === 'engine-parked')
+  writeTranscript(h.storageDir, 'engine-parked')
+
+  // Capture the LIVE descriptor before parking (status ready, not restorable) —
+  // it grants a tab in the renderer's shell reducer.
+  const liveDescriptor = h.host.listSessions().find(s => s.appSessionId === parkedId)
+  expect(liveDescriptor?.status).toBe('ready')
+  expect(liveDescriptor?.restorable).toBe(false)
+
+  h.events.length = 0
+  h.supervisor.emitPark(parkedId)
+  await settle(() => h.registry.findSession(parkedId)?.shutdown === 'parked')
+
+  // Classified as PARKED, not crashed — but byte-identical descriptor to a crash.
+  expect(h.registry.findSession(parkedId)?.shutdown).toBe('parked')
+  const parkedDescriptor = h.host.listSessions().find(s => s.appSessionId === parkedId)
+  expect(parkedDescriptor?.status).toBe('disconnected')
+  expect(parkedDescriptor?.restorable).toBe(true)
+  const statusEvent = h.events.find(e => e.type === 'session-status')
+  expect(statusEvent).toBeDefined()
+  if (statusEvent?.type === 'session-status') {
+    expect(statusEvent.session.status).toBe('disconnected')
+    expect(statusEvent.session.restorable).toBe(true)
+  }
+  // Tombstone kept: restart/restore-in-place stays host-accepted.
+  expect(h.supervisor.records.has(parkedId)).toBe(true)
+
+  // Tab-kept (the CRASH branch of foldTabMembership): fold the real live-then-
+  // parked descriptors through the renderer's public shell reducer and assert
+  // the tab survives the park — the zero-visual-change guarantee (§1).
+  let shell = createShellState()
+  shell = reduceShellState(shell, { type: 'session-added', session: liveDescriptor! })
+  expect(shell.tabs[parkedId]).toBe(true)
+  shell = reduceShellState(shell, { type: 'session-status', session: parkedDescriptor! })
+  expect(shell.tabs[parkedId]).toBe(true)
+
+  // Contrast — a non-park exit (any other code) is still a CRASH, unchanged.
+  const crashed = await h.host.createSession({ cwd: h.cwd })
+  expect(crashed.ok).toBe(true)
+  if (!crashed.ok) return
+  const crashedId = crashed.value.appSessionId
+  h.supervisor.emitReady(crashedId, 'engine-nonpark')
+  await settle(() => h.registry.findSession(crashedId)?.engineSessionId === 'engine-nonpark')
+  writeTranscript(h.storageDir, 'engine-nonpark')
+  h.supervisor.emitCrash(crashedId)
+  await settle(() => h.registry.findSession(crashedId)?.shutdown === 'crashed')
+  expect(h.registry.findSession(crashedId)?.shutdown).toBe('crashed')
 })
 
 test('restoreSession restores a crashed session whose tombstone record is still registered', async () => {

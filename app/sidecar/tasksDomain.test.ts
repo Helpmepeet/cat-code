@@ -8,7 +8,9 @@ import type { RemoteAgentTaskState } from '../../src/tasks/RemoteAgentTask/Remot
 import type { TaskState } from '../../src/tasks/types.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type { TasksSnapshotFrame } from '../shared/protocol.js'
-import { tasksSnapshot } from './tasksDomain.js'
+import { createSidecarTasksDomain, tasksSnapshot } from './tasksDomain.js'
+import { createStore } from '../../src/state/store.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 
 function bashTask(over: Partial<LocalShellTaskState> = {}): LocalShellTaskState {
   return {
@@ -209,4 +211,52 @@ test('the outbound tasks.snapshot frame is secretGuard-clean even with token-sha
 test('an empty task map produces an empty, well-formed snapshot', () => {
   expect(tasksSnapshot(undefined, undefined)).toEqual({ items: [] })
   expect(tasksSnapshot({}, undefined)).toEqual({ items: [] })
+})
+
+/* --------------------------------------------------------------------------- *
+ * hasLiveWork — the IDLE-PARK park gate (decisions/IDLE-PARK.md §3). Reads the
+ * RAW store, foreground-inclusive — NOT the display snapshot.
+ * --------------------------------------------------------------------------- */
+
+function storeWith(tasks: Record<string, TaskState>, foregroundedTaskId?: string) {
+  return createStore({
+    ...getDefaultAppState(),
+    tasks,
+    ...(foregroundedTaskId ? { foregroundedTaskId } : {}),
+  })
+}
+
+test('hasLiveWork — true for a running background task', () => {
+  const domain = createSidecarTasksDomain(storeWith({ b1: bashTask({ status: 'running' }) }))
+  expect(domain.hasLiveWork()).toBe(true)
+})
+
+test('hasLiveWork — true for a pending task', () => {
+  const domain = createSidecarTasksDomain(storeWith({ b1: bashTask({ status: 'pending' }) }))
+  expect(domain.hasLiveWork()).toBe(true)
+})
+
+test('hasLiveWork — true for a running FOREGROUNDED local_agent the display snapshot HIDES', () => {
+  const worker = agentTask({ id: 'a1', status: 'running', isBackgrounded: false })
+  const store = storeWith({ a1: worker }, 'a1')
+  const domain = createSidecarTasksDomain(store)
+  // The display snapshot hides it (foregrounded + non-backgrounded)…
+  expect(domain.getSnapshot().items).toHaveLength(0)
+  // …but the park gate must still see it — no turn loss.
+  expect(domain.hasLiveWork()).toBe(true)
+})
+
+test('hasLiveWork — false when every task is terminal', () => {
+  const domain = createSidecarTasksDomain(
+    storeWith({
+      b1: bashTask({ status: 'completed' }),
+      a1: agentTask({ id: 'a1', status: 'completed', isBackgrounded: true, handoffStatus: 'blocked' }),
+    }),
+  )
+  expect(domain.hasLiveWork()).toBe(false)
+})
+
+test('hasLiveWork — false for an empty task map', () => {
+  const domain = createSidecarTasksDomain(storeWith({}))
+  expect(domain.hasLiveWork()).toBe(false)
 })

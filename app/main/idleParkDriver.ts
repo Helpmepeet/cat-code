@@ -1,0 +1,181 @@
+/**
+ * IDLE-PARK policy driver (decisions/IDLE-PARK.md §2/§4). Electron-free.
+ *
+ * N-process means every open tab holds a full engine process even when idle. This
+ * driver is the policy OWNER main runs to reclaim those idle engines: it picks
+ * victims and asks their sidecars to park (a gated, host-initiated `app.park`
+ * frame). Only main sees every session and its recency, so the concurrent-count
+ * CAP (the RAM lever) must live here; the sidecar owns the GATE (it alone knows
+ * the true turn/permission/task state at the instant of park). A parked engine
+ * self-exits with `PARKED_EXIT_CODE`; the host classifies the exit and the tab is
+ * kept as a restore-on-click (§1) — none of that is this module's concern.
+ *
+ * Two triggers ship in v1 (both are tuning knobs below):
+ *   - CAP (`MAX_LIVE_ENGINES`): keep at most N live engines; park the least-
+ *     recently-active live sessions until at the cap. The safety valve under
+ *     heavy tab stacking.
+ *   - IDLE-TTL (`PARK_IDLE_TTL_MS`): park any live session idle beyond the TTL,
+ *     even under the cap. At a typical 2–3 live sessions the cap never fires, so
+ *     the TTL is the everyday reclaim.
+ *
+ * A refused park is a silent no-op at the sidecar (the gate declined, or the
+ * victim already exited → `supervisor.send` throws, caught here): the driver
+ * simply re-evaluates on its next trigger.
+ */
+
+import type { SessionDescriptor } from '../shared/hostApi.js'
+
+/* ------------------------------------------------------------------------- *
+ * Tuning knobs (IDLE-PARK.md §4/§10.5). Adjust here.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * TUNING KNOB — max concurrent live engine processes before the soft-LRU cap
+ * parks the least-recently-active ones. The safety valve, not the everyday
+ * reclaim: at a typical 2–3 live sessions it never fires.
+ */
+export const MAX_LIVE_ENGINES = 4
+
+/**
+ * TUNING KNOB — a live session idle (no turn sent, no attach/spawn) for this long
+ * is parked even under the cap, to reclaim genuinely-abandoned tabs. Generous so
+ * a merely-quiet session is never reaped out from under a reader (restore is one
+ * click away regardless).
+ */
+export const PARK_IDLE_TTL_MS = 20 * 60 * 1000
+
+/** How often the driver re-evaluates for the idle-TTL sweep. */
+const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000
+
+/** A session with one of these statuses holds a live engine process. */
+const LIVE_STATUSES: ReadonlySet<SessionDescriptor['status']> = new Set([
+  'spawning',
+  'ready',
+])
+
+export type IdleParkDriver = {
+  /** Subscribe to host events (event-driven cap) + arm the idle-TTL sweep timer. */
+  start(): void
+  /** Stop the timer + unsubscribe; no further evaluations. */
+  stop(): void
+  /** Evaluate victims once now and park them (also the unit-test entry point). */
+  evaluate(): void
+}
+
+export type IdleParkDriverDeps = {
+  /** The host's live∪restorable view; the driver filters it to live engines. */
+  listSessions: () => SessionDescriptor[]
+  /**
+   * Park one session (main sends `app.park` via `supervisor.send`). May throw a
+   * `SidecarSendError` if the victim is no longer `ready` (it raced to exit); the
+   * driver catches that — a park refusal is expected, not an error.
+   */
+  park: (appSessionId: SessionId) => void
+  /**
+   * Subscribe to host events so the CAP re-evaluates on each session-added /
+   * session-status (event-driven, no polling needed for the cap). The listener
+   * takes no args — every host event just triggers a re-evaluation. Returns an
+   * unsubscribe. Absent ⇒ the driver relies on the timer alone.
+   */
+  subscribeHostEvents?: (listener: () => void) => () => void
+  maxLiveEngines?: number
+  idleTtlMs?: number
+  sweepIntervalMs?: number
+  now?: () => number
+  setTimer?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>
+  clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
+  log?: (line: string) => void
+}
+
+type SessionId = SessionDescriptor['appSessionId']
+
+/** recency = last message sent ?? last attached ?? created (IDLE-PARK.md §4). */
+function recencyOf(session: SessionDescriptor): number {
+  return session.lastMessageSentAt ?? session.lastAttachedAt ?? session.createdAt
+}
+
+export function createIdleParkDriver(deps: IdleParkDriverDeps): IdleParkDriver {
+  const maxLiveEngines = deps.maxLiveEngines ?? MAX_LIVE_ENGINES
+  const idleTtlMs = deps.idleTtlMs ?? PARK_IDLE_TTL_MS
+  const sweepIntervalMs = deps.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS
+  const now = deps.now ?? (() => Date.now())
+  const setTimer = deps.setTimer ?? ((cb, ms) => setTimeout(cb, ms))
+  const clearTimer = deps.clearTimer ?? (handle => clearTimeout(handle))
+
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let unsubscribe: (() => void) | null = null
+
+  const selectVictims = (live: SessionDescriptor[]): Set<SessionId> => {
+    const victims = new Set<SessionId>()
+    // Idle-TTL: any live session idle beyond the TTL, regardless of the cap.
+    const cutoff = now() - idleTtlMs
+    for (const session of live) {
+      if (recencyOf(session) <= cutoff) victims.add(session.appSessionId)
+    }
+    // Soft-LRU cap: when over the cap, park the least-recently-active live
+    // sessions until at the cap. Least-recent first; the top-K recent are kept.
+    if (live.length > maxLiveEngines) {
+      const leastRecentFirst = [...live].sort(
+        (a, b) => recencyOf(a) - recencyOf(b),
+      )
+      const overCount = live.length - maxLiveEngines
+      for (let i = 0; i < overCount; i++) {
+        const victim = leastRecentFirst[i]
+        if (victim) victims.add(victim.appSessionId)
+      }
+    }
+    return victims
+  }
+
+  const evaluate = (): void => {
+    if (stopped) return
+    const live = deps.listSessions().filter(s => LIVE_STATUSES.has(s.status))
+    if (live.length === 0) return
+    for (const appSessionId of selectVictims(live)) {
+      try {
+        deps.park(appSessionId)
+      } catch (error) {
+        // A refused park (victim no longer `ready`) is expected — re-evaluated on
+        // the next trigger. Never let one non-ready victim abort the sweep.
+        deps.log?.(
+          `[idle-park] park ${appSessionId} skipped: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
+    }
+  }
+
+  const scheduleSweep = (): void => {
+    if (stopped) return
+    timer = setTimer(() => {
+      timer = null
+      evaluate()
+      scheduleSweep()
+    }, sweepIntervalMs)
+    timer.unref?.()
+  }
+
+  return {
+    start() {
+      if (stopped) return
+      if (deps.subscribeHostEvents) {
+        unsubscribe = deps.subscribeHostEvents(() => evaluate())
+      }
+      scheduleSweep()
+    },
+    stop() {
+      stopped = true
+      if (timer !== null) {
+        clearTimer(timer)
+        timer = null
+      }
+      if (unsubscribe) {
+        unsubscribe()
+        unsubscribe = null
+      }
+    },
+    evaluate,
+  }
+}

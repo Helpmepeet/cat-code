@@ -18,7 +18,7 @@
 import { statSync } from 'node:fs'
 
 import { FrameDecoder } from '../shared/framing.js'
-import { MAX_FRAME_BYTES } from '../shared/limits.js'
+import { MAX_FRAME_BYTES, PARKED_EXIT_CODE } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import type { Message } from '../../src/types/message.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
@@ -210,6 +210,16 @@ async function main(): Promise<void> {
     onIdle: () => {
       cleanup()
       process.exit(0)
+    },
+    // IDLE-PARK (decisions/IDLE-PARK.md §2/§3) — the gated park exit. The sidecar
+    // owns the gate + latch; when it decides to park it flushes the socket and
+    // self-exits with the dedicated PARKED_EXIT_CODE so the host can classify the
+    // exit as a park (not a crash) purely from the code — no ack frame. Same
+    // `cleanup` closure the SIGTERM/onIdle paths use (defined just below and only
+    // invoked here asynchronously, so it is initialized by the time this fires).
+    onPark: () => {
+      cleanup()
+      process.exit(PARKED_EXIT_CODE)
     },
   })
 

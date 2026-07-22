@@ -466,6 +466,83 @@ test('spawn over the bound reaps a terminal row, never the new LIVE row', async 
   expect(doc.sessions.some(r => r.appSessionId === 'app-t-0')).toBe(false)
 })
 
+test('IDLE-PARK — a parked row is EXCLUDED from the over-bound reap (an open tab must not dangle)', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // Seed MAX clean rows with FUTURE lastAttachedAt, so the (to-be) parked row —
+  // upserted at ~now — is the OLDEST row of all. Without the reap-exclusion it
+  // would therefore be the FIRST terminal row dropped; with it, it is spared and
+  // a clean row is dropped instead.
+  const future = Date.now() + 10_000_000
+  const rows: RegistrySession[] = []
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
+    writeTranscript(storageDir, `engine-clean-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-clean-${i}`,
+        engineSessionId: `engine-clean-${i}`,
+        shutdown: 'clean',
+        lastAttachedAt: future + i, // all NEWER than the parked row below
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+
+  // Spawn a live row (lastAttachedAt ~now → the oldest of all). This first upsert
+  // pushes over the bound and reaps the oldest CLEAN row (app-clean-0), leaving us
+  // at MAX with the new row live.
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-parked',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4242,
+  })
+  // Park it — now an OPEN tab whose engine was reclaimed, and the oldest row.
+  await registry.markParked('app-parked')
+  expect(registry.findSession('app-parked')?.shutdown).toBe('parked')
+
+  // Spawn ANOTHER live row → over the bound again. The reap must drop the oldest
+  // CLEAN row (app-clean-1), NOT the parked open tab (even though it is older).
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-extra',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4343,
+  })
+
+  const doc = readDoc(registryPath)
+  expect(doc.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  // The parked open tab SURVIVED, still parked…
+  expect(doc.sessions.find(r => r.appSessionId === 'app-parked')?.shutdown).toBe('parked')
+  // …and an older-than-nothing-but-parked CLEAN row was the one reaped instead.
+  expect(doc.sessions.some(r => r.appSessionId === 'app-clean-1')).toBe(false)
+})
+
+test("IDLE-PARK — a persisted 'parked' shutdown normalises to 'crashed' on disk read", async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // A 'parked' row that survived to disk (the app crashed while a session was
+  // parked). On the next launch it must become an ordinary crashed restore-offer,
+  // never a live 'parked' state — a parked engine has no process to reattach to.
+  writeTranscript(storageDir, 'engine-was-parked')
+  seed(registryPath, [
+    baseRow({
+      appSessionId: 'app-was-parked',
+      engineSessionId: 'engine-was-parked',
+      shutdown: 'parked',
+    }),
+  ])
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+
+  expect(registry.findSession('app-was-parked')?.shutdown).toBe('crashed')
+})
+
 test('evict-reap SIGTERMs a matching over-bound orphan and SPARES a recycled-pid impostor (CC-3)', async () => {
   const storageDir = tempDir()
   const registryPath = join(storageDir, 'registry.json')

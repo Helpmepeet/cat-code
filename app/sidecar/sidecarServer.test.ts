@@ -297,6 +297,275 @@ test('T7 — rejects a prompt over the length cap', () => {
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
+/* ------------------------------------------------------------------------- *
+ * IDLE-PARK (decisions/IDLE-PARK.md §3/§6) — the park gate, the parking latch,
+ * and the R2-F2 no-turn-loss race. `onPark` is a counting spy here (in
+ * production it exits the process with PARKED_EXIT_CODE); a park is otherwise
+ * silent — the exit code, not any frame, is the signal.
+ * ------------------------------------------------------------------------- */
+
+/** A turn that stays active (no permission raised) until `release()` is called. */
+function gatedTurnAdapter(): {
+  adapter: AppSessionControllerAdapter
+  release: () => void
+} {
+  let release = () => {}
+  const gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  return {
+    adapter: {
+      async *runTurn() {
+        await gate
+        yield buildProbeToolUseMessage()
+      },
+    },
+    release,
+  }
+}
+
+/** A server wired with a counting `onPark` spy that NEVER exits the process. */
+function makeParkServer(
+  controller: AppSessionController,
+  tasks?: SidecarTasksDomain,
+): { server: SidecarServer; parkCount: () => number } {
+  let parks = 0
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    ...(tasks ? { tasks } : {}),
+    onPark: () => {
+      parks += 1
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  return { server, parkCount: () => parks }
+}
+
+/** True iff a live (non-replay) `user` message event was broadcast — i.e. a turn
+ * was actually accepted and started (broadcast synchronously in handleSubmit,
+ * BEFORE controller.submit; its absence proves the submit was rejected early). */
+function sawUserTurn(received: ServerFrame[]): boolean {
+  return received.some(
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'user',
+  )
+}
+
+/** A running local_bash task, seeded into the app-state store the tasks domain reads. */
+function runningBashTask(): LocalShellTaskState {
+  return {
+    ...createTaskStateBase('park-b1', 'local_bash', 'sleep 100'),
+    type: 'local_bash',
+    status: 'running',
+    command: 'sleep 100',
+    completionStatusSentInAttachment: false,
+    shellCommand: null,
+    lastReportedTotalLines: 0,
+    isBackgrounded: true,
+  }
+}
+
+test('IDLE-PARK boundary — a valid app.park on an idle session gates the exit (onPark fires, no frame)', () => {
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+
+  expect(parkCount()).toBe(1)
+  // Silent: no ack/refuse/error frame — the exit code is the only signal.
+  expect(received.some(f => f.kind === 'error')).toBe(false)
+})
+
+test('IDLE-PARK boundary — an app.park with an extra key is rejected bad_request (no park)', () => {
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'app.park', requestId: 'park-1', destination: 'session' },
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(parkCount()).toBe(0)
+})
+
+test('IDLE-PARK boundary — an app.park with a non-string requestId is rejected bad_request (no park)', () => {
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'app.park', requestId: 123 },
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(parkCount()).toBe(0)
+})
+
+test('IDLE-PARK gate — app.park is DECLINED while a turn is active (no exit, session stays live)', async () => {
+  const { adapter, release } = gatedTurnAdapter()
+  const controller = new AppSessionController(adapter)
+  const { server, parkCount } = makeParkServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // Start a turn that stays active (no permission), then try to park.
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 's1', prompt: 'go' }))
+  expect(sawUserTurn(received)).toBe(true)
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+
+  expect(parkCount()).toBe(0)
+  // The session is still live: a ping still answers.
+  server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'n1' }))
+  expect(received.some(f => f.kind === 'pong')).toBe(true)
+
+  release()
+  await waitFor(() => received.filter(f => f.kind === 'event').length >= 2)
+})
+
+test('IDLE-PARK gate — app.park is DECLINED while a permission is pending (no exit)', async () => {
+  const controller = new AppSessionController(
+    permissionAdapter({ command: 'ls' }, () => {}),
+  )
+  const { server, parkCount } = makeParkServer(controller)
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 's1', prompt: 'go' }))
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+
+  expect(parkCount()).toBe(0)
+  // The permission is untouched — park did not resolve or drop it.
+  expect(controller.getPendingPermissionRequests().length).toBe(1)
+})
+
+test('IDLE-PARK gate — app.park is DECLINED while a task is running (no exit)', () => {
+  const store = makePermissionStore()
+  store.setState(prev => ({ ...prev, tasks: { 'park-b1': runningBashTask() } }))
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+    createSidecarTasksDomain(store),
+  )
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // No active turn, no pending permission — the ONLY blocker is the running task.
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+
+  expect(parkCount()).toBe(0)
+})
+
+test('IDLE-PARK gate — app.park is DECLINED while a FOREGROUNDED local_agent runs (the display-snapshot hole)', () => {
+  const store = makePermissionStore()
+  // A running agent-mode worker the user has FOREGROUNDED to watch. This is the
+  // exact hole: `activeTurn` is only set by handleSubmit (false here), and the
+  // DISPLAY snapshot filters out the foregrounded local_agent — so a gate reading
+  // getSnapshot().items would see NOTHING and park over a live worker (turn loss).
+  const foregroundedWorker = {
+    ...createTaskStateBase('fg-agent', 'local_agent', 'Wire the auth flow'),
+    type: 'local_agent' as const,
+    status: 'running' as const,
+    agentId: 'agent-live',
+    agentType: 'implementor',
+    agentName: 'Turing',
+    isBackgrounded: false,
+  }
+  store.setState(prev => ({
+    ...prev,
+    tasks: { 'fg-agent': foregroundedWorker } as never,
+    foregroundedTaskId: 'fg-agent',
+  }))
+  const tasks = createSidecarTasksDomain(store)
+
+  // Prove the hole is real: the display snapshot hides this live worker…
+  expect(tasks.getSnapshot().items).toHaveLength(0)
+  // …but the foreground-inclusive raw-store gate sees it.
+  expect(tasks.hasLiveWork()).toBe(true)
+
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+    tasks,
+  )
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+
+  // Park DECLINED — the live foregrounded worker is not killed.
+  expect(parkCount()).toBe(0)
+})
+
+test('IDLE-PARK R2-F2 — submit dispatched BEFORE park: the turn runs, park is declined, no exit', () => {
+  const { adapter, release } = gatedTurnAdapter()
+  const controller = new AppSessionController(adapter)
+  const { server, parkCount } = makeParkServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // No `await` between the two dispatches (the R2-F2 ordering): the submit sets
+  // activeTurn synchronously, so the park gate sees it and declines.
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 's1', prompt: 'go' }))
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+
+  // The turn ran (user event broadcast), and the park did NOT exit.
+  expect(sawUserTurn(received)).toBe(true)
+  expect(received.some(f => f.kind === 'error' && f.code === 'session_disconnected')).toBe(false)
+  expect(parkCount()).toBe(0)
+
+  release()
+})
+
+test('IDLE-PARK R2-F2 — park dispatched BEFORE submit: park exits, submit rejected session_disconnected, controller.submit NEVER called', async () => {
+  let turnStarts = 0
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turnStarts += 1
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const { server, parkCount } = makeParkServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // Park latches + would-exit; the submit that follows sees `parking`.
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 's1', prompt: 'go' }))
+
+  expect(parkCount()).toBe(1)
+  // The submit was rejected with the existing session_disconnected code, retryable.
+  const err = received.find(
+    f => f.kind === 'error' && f.code === 'session_disconnected',
+  )
+  expect(err).toBeDefined()
+  if (err?.kind === 'error') {
+    expect(err.requestId).toBe('s1')
+    expect(err.retryable).toBe(true)
+  }
+  // No turn started: no user event was broadcast and controller.submit → runTurn
+  // was never reached (belt-and-suspenders against async).
+  expect(sawUserTurn(received)).toBe(false)
+  await new Promise(resolve => setTimeout(resolve, 5))
+  expect(turnStarts).toBe(0)
+})
+
 test('app.submit emits the live user event before the assistant and the projector renders it once', async () => {
   let controllerUuid: string | undefined
   let controllerPrompt: unknown

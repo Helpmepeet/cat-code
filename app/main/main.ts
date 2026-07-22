@@ -66,6 +66,10 @@ import {
   type SessionsCatalogDriver,
 } from './sessionsCatalogRunner.js'
 import {
+  createIdleParkDriver,
+  type IdleParkDriver,
+} from './idleParkDriver.js'
+import {
   atomicWriteJson0600,
   createDebouncedAction,
   createDevPickerBypass,
@@ -216,6 +220,14 @@ const TRANSCRIPT_BACKFILL_START_DELAY_MS = 250
  * until armed; re-armable after a window-all-closed/reactivate cycle.
  */
 let sessionsCatalogDriver: SessionsCatalogDriver | null = null
+
+/**
+ * IDLE-PARK (decisions/IDLE-PARK.md §4) — one main-supervised policy driver per
+ * app process, mirroring `sessionsCatalogDriver`'s lifecycle: armed after first
+ * paint, torn down with the window, re-armable on reactivate. It parks idle /
+ * over-cap engines via a host-initiated `app.park`. Null until armed.
+ */
+let idleParkDriver: IdleParkDriver | null = null
 
 /**
  * Persist one session's transcript cache (IS-A). Called at every eviction point
@@ -386,6 +398,38 @@ function startSessionsCatalogRefresh(): void {
     log: line => process.stderr.write(`${line}\n`),
   })
   sessionsCatalogDriver.start()
+}
+
+/**
+ * IDLE-PARK (decisions/IDLE-PARK.md §4) — arm the policy driver after first paint
+ * (alongside the catalog refresh), off the launch critical path. It captures the
+ * CURRENT host + supervisor (both rebuilt as a unit on reactivate), reads the
+ * live set from `host.listSessions()`, and sends a gated `app.park` to each idle/
+ * over-cap victim via `supervisor.send` — the same send path `forward` uses, but
+ * ORIGINATED by main's policy loop, never any renderer IPC channel (no preload
+ * sender exists). A victim that raced to exit makes `supervisor.send` throw; the
+ * driver catches it. Re-evaluates on each host event (cap) + on a timer (TTL).
+ */
+function startIdleParkDriver(): void {
+  if (idleParkDriver) return
+  const activeHost = host
+  const activeSupervisor = supervisor
+  if (!activeHost || !activeSupervisor) return
+  idleParkDriver = createIdleParkDriver({
+    listSessions: () => activeHost.listSessions(),
+    park: appSessionId => {
+      // Host-originated, gated at the sidecar. No renderer authored this — the
+      // requestId is minted here purely to satisfy the frame contract (there is
+      // no ack; the sidecar's PARKED_EXIT_CODE self-exit is the truth signal).
+      activeSupervisor.send(appSessionId, {
+        type: 'app.park',
+        requestId: randomUUID(),
+      })
+    },
+    subscribeHostEvents: listener => activeHost.subscribe(() => listener()),
+    log: line => process.stderr.write(`${line}\n`),
+  })
+  idleParkDriver.start()
 }
 
 // Perf (2026-07-08, F3): send the whole batch as ONE `webContents.send`, not one
@@ -590,6 +634,10 @@ function createWindow(): void {
     // off the launch critical path, so its first run fills the sidebar and it
     // then self-reschedules — replacing the per-sidecar catalog enumeration.
     setTimeout(startSessionsCatalogRefresh, TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
+    // here too, off the launch critical path; it self-reschedules its TTL sweep
+    // and re-evaluates the cap on host events.
+    setTimeout(startIdleParkDriver, TRANSCRIPT_BACKFILL_START_DELAY_MS)
   })
 
   if (IS_DEV) {
@@ -1561,6 +1609,10 @@ app.on('window-all-closed', () => {
   // `activate` re-arms it after the next paint.
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  // IDLE-PARK: stop the policy driver with the window (it holds the now-dead host/
+  // supervisor); a fresh `activate` re-arms it against the rebuilt host.
+  idleParkDriver?.stop()
+  idleParkDriver = null
   supervisor = null
   // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
@@ -1590,4 +1642,6 @@ app.on('before-quit', () => {
   transcriptBackfillAbort = null
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  idleParkDriver?.stop()
+  idleParkDriver = null
 })

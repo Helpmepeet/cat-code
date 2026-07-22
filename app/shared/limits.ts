@@ -77,3 +77,15 @@ export const MAX_QUESTION_ANSWER_CHARS = 4_096
  */
 export const MAX_HISTORY_REPLAY_FRAMES = 400
 export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
+
+/**
+ * IDLE-PARK (decisions/IDLE-PARK.md §2) — the sidecar's dedicated non-zero exit
+ * code for a host-initiated park (alongside `RESUME_FAILED_EXIT_CODE = 4` in
+ * `app/sidecar/index.ts`). A parked engine self-exits with THIS code; the host
+ * classifies the exit purely from the code (`markParked` vs `markCrashed`,
+ * `app/host/host.ts`), which keeps the host plane free of socket frames — no ack
+ * frame, no host↔main coordination. Defined ONCE here so `app/sidecar/index.ts`
+ * (the exiter) and `app/host/host.ts` (the classifier) import one source and can
+ * never drift to two literals.
+ */
+export const PARKED_EXIT_CODE = 5
