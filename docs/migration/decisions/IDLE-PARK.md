@@ -10,7 +10,11 @@
 > = accept / restore-on-click (§4a); `MAX_LIVE_ENGINES=4`, `PARK_IDLE_TTL_MS=20m`
 > (§4). **Review found + closed** a no-turn-loss hole: the park gate's task check
 > missed a *foregrounded* running agent-mode worker — fixed by a raw-store,
-> foreground-inclusive `tasksDomain.hasLiveWork()` (§3), with a test. Every
+> foreground-inclusive `tasksDomain.hasLiveWork()` (§3), with a test.
+> **Measured fleet reclaim** (headless `app/scripts/ram-fleet.ts`, 2026-07-22):
+> **~223 MB RSS / ~183 MB footprint reclaimed per parked session** — 6 engines
+> 1338.9 MB → park 4 → 445.8 MB (**~67% less**); all 4 victims self-exit
+> `PARKED_EXIT_CODE`, zero leaks; matches the ~230/~190 boot floor. Every
 > `file:line` re-verified against source 2026-07-22. **Remaining: operator GUI
 > acceptance** (§9 step 5) — not claimable headlessly.
 
