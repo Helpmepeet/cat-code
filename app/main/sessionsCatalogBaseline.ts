@@ -81,6 +81,11 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (!isRecord(value)) return null
   if (typeof value.sessionId !== 'string') return null
   if (typeof value.cwd !== 'string') return null
+  // Additive field (bug-sweep #1): a cache file written before it existed lacks
+  // it → default `true` (assume-exists, never wrongly hide an old row). A PRESENT
+  // non-boolean is tamper/drift → fail closed like every other field here.
+  if (value.cwdExists !== undefined && typeof value.cwdExists !== 'boolean') return null
+  const cwdExists = value.cwdExists === undefined ? true : value.cwdExists
   if (!isStringOrNull(value.title)) return null
   if (typeof value.modifiedAtMs !== 'number') return null
   if (typeof value.createdAtMs !== 'number') return null
@@ -99,6 +104,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   return {
     sessionId: value.sessionId,
     cwd: value.cwd,
+    cwdExists,
     title: value.title,
     modifiedAtMs: value.modifiedAtMs,
     createdAtMs: value.createdAtMs,

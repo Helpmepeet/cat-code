@@ -9,6 +9,7 @@ import {
 function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): SessionCatalogEntry {
   return {
     cwd: '/w/proj',
+    cwdExists: true,
     title: null,
     modifiedAtMs: 1000,
     createdAtMs: 500,
@@ -129,6 +130,37 @@ describe('parseSessionsCatalogWorkerResult — reject invalid (fail closed)', ()
   test('rejects an invalid mode enum on an entry', () => {
     const parsed = parseSessionsCatalogSnapshot({
       entries: [{ ...entry({ sessionId: 'a' }), mode: 'boss' }],
+      truncated: false,
+      notes: [],
+    })
+    expect(parsed).toBeNull()
+  })
+})
+
+describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
+  test('a present cwdExists:false round-trips (a dead workspace stays dead)', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [{ ...entry({ sessionId: 'a' }), cwdExists: false }],
+      truncated: false,
+      notes: [],
+    })
+    expect(parsed?.entries[0]?.cwdExists).toBe(false)
+  })
+
+  test('a MISSING cwdExists defaults to true (a record from a worker build predating the field)', () => {
+    // Strip the field the factory adds, mimicking an older worker's output.
+    const { cwdExists: _drop, ...withoutFlag } = entry({ sessionId: 'a' })
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [withoutFlag],
+      truncated: false,
+      notes: [],
+    })
+    expect(parsed?.entries[0]?.cwdExists).toBe(true)
+  })
+
+  test('a PRESENT non-boolean cwdExists fails the whole record (tamper/drift)', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [{ ...entry({ sessionId: 'a' }), cwdExists: 'yes' }],
       truncated: false,
       notes: [],
     })

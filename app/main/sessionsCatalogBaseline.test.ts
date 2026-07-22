@@ -30,6 +30,7 @@ const validSnapshot: SessionsCatalogSnapshot = {
     {
       sessionId: 'eng-1',
       cwd: '/Users/me/proj',
+      cwdExists: true,
       title: 'Fix the parser',
       modifiedAtMs: 1000,
       createdAtMs: 500,
@@ -92,6 +93,45 @@ describe('readSessionsCatalogCache', () => {
   test('a top-level shape violation (entries not an array) returns null', () => {
     const dir = tempDir()
     writeRaw(dir, JSON.stringify({ entries: {}, truncated: false, notes: [] }))
+    expect(readSessionsCatalogCache(dir)).toBeNull()
+  })
+
+  // bug-sweep #1 — cwdExists is additive: an OLD cache file (written before the
+  // field existed) must still read, defaulting the flag to true (assume-exists,
+  // never wrongly hide an operator's prior history at first launch after upgrade).
+  test('an old cache entry lacking cwdExists reads with cwdExists defaulted to true', () => {
+    const dir = tempDir()
+    const { cwdExists: _drop, ...legacyEntry } = validSnapshot.entries[0]!
+    writeRaw(
+      dir,
+      JSON.stringify({ entries: [legacyEntry], truncated: false, notes: [] }),
+    )
+    expect(readSessionsCatalogCache(dir)?.entries[0]?.cwdExists).toBe(true)
+  })
+
+  test('a present cwdExists:false round-trips (a dead workspace stays hidden after relaunch)', () => {
+    const dir = tempDir()
+    writeRaw(
+      dir,
+      JSON.stringify({
+        entries: [{ ...validSnapshot.entries[0], cwdExists: false }],
+        truncated: false,
+        notes: [],
+      }),
+    )
+    expect(readSessionsCatalogCache(dir)?.entries[0]?.cwdExists).toBe(false)
+  })
+
+  test('a present non-boolean cwdExists fails closed to null (tamper/drift)', () => {
+    const dir = tempDir()
+    writeRaw(
+      dir,
+      JSON.stringify({
+        entries: [{ ...validSnapshot.entries[0], cwdExists: 'yes' }],
+        truncated: false,
+        notes: [],
+      }),
+    )
     expect(readSessionsCatalogCache(dir)).toBeNull()
   })
 })

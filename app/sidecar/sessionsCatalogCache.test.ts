@@ -26,6 +26,7 @@ const snapshot: SessionsCatalogSnapshot = {
     {
       sessionId: 'eng-1',
       cwd: '/Users/me/proj',
+      cwdExists: true,
       title: 'Fix the parser',
       modifiedAtMs: 1000,
       createdAtMs: 500,

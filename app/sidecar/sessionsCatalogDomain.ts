@@ -37,6 +37,7 @@
  * unit-testable without the filesystem.
  */
 
+import { stat } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import {
   loadAllProjectsMessageLogsProgressive,
@@ -72,11 +73,61 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
       SESSIONS_CATALOG_STAT_LIMIT,
       SESSIONS_CATALOG_ENRICH_LIMIT,
     )
-    return buildSessionsCatalogSnapshot(result)
+    // The pure builder is fs-free (so it stays unit-testable); the existence
+    // stat is the async second pass, done here in the engine-graph worker plane
+    // (the host plane could not — `registry.ts:19`).
+    return await annotateCwdExistence(buildSessionsCatalogSnapshot(result))
   } catch {
     // A read failure degrades to "no catalog" — the page shows a load state,
     // never a crash (display = degrade gracefully).
     return null
+  }
+}
+
+/**
+ * Stamp `cwdExists` on every entry by statting each DISTINCT non-empty cwd ONCE
+ * (bug-sweep #1, 2026-07-21). Kept OFF the pure builder so `buildSessionsCatalogSnapshot`
+ * stays filesystem-free and unit-testable; this async pass runs in the engine
+ * (Bun) worker plane, which is allowed the fs read the host plane is not
+ * (`registry.ts:19`). A dead workspace makes its history rows non-openable and
+ * HIDDEN from the sidebar rail (operator ruling: HIDE, not delete — the
+ * transcript stays on disk and the row self-heals when the dir returns, since
+ * this re-derives every run). Empty cwds are never statted (they resolve to
+ * `false`); the renderer keeps those "Unknown workspace" rows visible via its own
+ * predicate (MAJOR-1). `isExistingDir` is injectable so the pass is testable
+ * without touching the real filesystem.
+ */
+export async function annotateCwdExistence(
+  snapshot: SessionsCatalogSnapshot,
+  isExistingDir: (cwd: string) => Promise<boolean> = defaultIsExistingDir,
+): Promise<SessionsCatalogSnapshot> {
+  const distinct = new Set<string>()
+  for (const entry of snapshot.entries) {
+    if (entry.cwd.length > 0) distinct.add(entry.cwd)
+  }
+  const existing = new Set<string>()
+  await Promise.all(
+    [...distinct].map(async cwd => {
+      if (await isExistingDir(cwd)) existing.add(cwd)
+    }),
+  )
+  const entries = snapshot.entries.map(entry => ({
+    ...entry,
+    cwdExists: existing.has(entry.cwd),
+  }))
+  return { ...snapshot, entries }
+}
+
+/**
+ * Existence check matching the host's authoritative gate (`app/host/host.ts:62`
+ * `statSync().isDirectory()`): a cwd "exists" only when it is a real directory.
+ * Any stat error (missing / permission / not-a-dir) reads as gone.
+ */
+async function defaultIsExistingDir(cwd: string): Promise<boolean> {
+  try {
+    return (await stat(cwd)).isDirectory()
+  } catch {
+    return false
   }
 }
 
@@ -132,6 +183,10 @@ export function mapLogOptionToCatalogEntry(
   return {
     sessionId: log.sessionId,
     cwd,
+    // Default assume-exists; `annotateCwdExistence` (the async worker pass)
+    // downgrades a dead cwd to `false`. A direct/pure use of the builder without
+    // that pass therefore never hides a row — the pre-fix behavior.
+    cwdExists: true,
     title: resolveEntryTitle(log, cwd),
     modifiedAtMs: toMs(log.modified),
     createdAtMs: toMs(log.created),

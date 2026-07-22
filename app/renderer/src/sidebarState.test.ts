@@ -4,6 +4,7 @@ import { createShellState, reduceShellState } from './shellState.js'
 import {
   compareSidebarActivity,
   deriveMergedRowVisual,
+  isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
   selectShellDescriptors,
@@ -267,6 +268,7 @@ function mergedRow(over: Partial<MergedSessionRow> = {}): MergedSessionRow {
     sessionId: 'engine-x',
     appSessionId: 'app-x',
     cwd: '/tmp/proj',
+    cwdExists: true,
     title: null,
     displayLabel: 'X',
     live: true,
@@ -354,6 +356,76 @@ describe('deriveMergedRowVisual', () => {
     expect(v.kind).toBe('history')
     expect(v.openable).toBe(false)
     expect(v.intent).toBe('none')
+  })
+
+  test('bug-sweep #1 — a history row with a non-empty but DEAD cwd → not openable, none intent', () => {
+    // The pre-fix gate (`cwd.trim().length > 0`) called this openable; it then
+    // failed `invalid_cwd` only at open time. cwdExists closes the gate up front.
+    const v = deriveMergedRowVisual(
+      mergedRow({
+        inRegistry: false,
+        appSessionId: null,
+        status: 'history',
+        cwd: '/tmp/gone-fixture',
+        cwdExists: false,
+      }),
+    )
+    expect(v.kind).toBe('history')
+    expect(v.openable).toBe(false)
+    expect(v.intent).toBe('none')
+  })
+})
+
+describe('isSidebarVisibleRow (bug-sweep #1 — HIDE dead-workspace rows from the rail)', () => {
+  test('a history row whose workspace is gone (cwdExists:false) is HIDDEN', () => {
+    expect(
+      isSidebarVisibleRow(
+        mergedRow({
+          inRegistry: false,
+          appSessionId: null,
+          status: 'history',
+          cwd: '/tmp/gone-fixture',
+          cwdExists: false,
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  test('a history row with a still-existing workspace stays visible', () => {
+    expect(
+      isSidebarVisibleRow(
+        mergedRow({
+          inRegistry: false,
+          appSessionId: null,
+          status: 'history',
+          cwd: '/tmp/alive',
+          cwdExists: true,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('an empty-cwd "Unknown workspace" history row stays visible (browse-only, not dead)', () => {
+    expect(
+      isSidebarVisibleRow(
+        mergedRow({
+          inRegistry: false,
+          appSessionId: null,
+          status: 'history',
+          cwd: '',
+          cwdExists: false,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('a REGISTRY row is always visible, even if its recorded cwd no longer exists', () => {
+    // A live/restorable session is addressed by appSessionId, not cwd.
+    expect(
+      isSidebarVisibleRow(
+        mergedRow({ inRegistry: true, cwd: '/tmp/gone', cwdExists: false }),
+      ),
+    ).toBe(true)
   })
 })
 

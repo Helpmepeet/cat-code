@@ -7,6 +7,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
   return {
     appSessionId: null,
     cwd: '/w/proj',
+    cwdExists: true,
     title: null,
     displayLabel: partial.sessionId,
     live: false,

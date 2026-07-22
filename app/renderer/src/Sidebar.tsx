@@ -50,6 +50,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
 import {
   deriveMergedRowVisual,
+  isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
   selectVisibleSidebarRows,
@@ -187,7 +188,10 @@ export function Sidebar({
     [rows, activeSessionId],
   )
   const groups = useMemo(() => {
-    const ordered = sortSidebarSessionRows(rows)
+    // Hide dead-workspace history rows from the rail (bug-sweep #1) BEFORE the
+    // text filter/group — registry rows and empty-cwd "Unknown workspace" rows
+    // stay (`isSidebarVisibleRow`). The Sessions page is unaffected (lists all).
+    const ordered = sortSidebarSessionRows(rows).filter(isSidebarVisibleRow)
     const filtered = query
       ? ordered.filter(
           row =>

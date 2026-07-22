@@ -209,10 +209,13 @@ export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
     row.inRegistry,
   )
   if (!row.inRegistry) {
-    // A resolvable cwd makes a history row openable (Part-A host path); an
-    // empty-cwd row degrades to a non-interactive `none` intent (browse-only),
-    // never a dead-looking button.
-    const openable = row.cwd.trim().length > 0
+    // A resolvable, still-EXISTING cwd makes a history row openable (Part-A host
+    // path). An empty-cwd row degrades to a non-interactive `none` intent
+    // (browse-only); a dead-cwd row (workspace gone from disk — bug-sweep #1) is
+    // likewise non-openable, so it never presents a button that fails
+    // `invalid_cwd` only on click. (`isSidebarVisibleRow` also hides it from the
+    // rail; the Sessions page still lists it as browse-only.)
+    const openable = row.cwd.trim().length > 0 && row.cwdExists
     return {
       kind: 'history',
       tone,
@@ -230,6 +233,28 @@ export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
     openable: true,
     intent: row.restorable ? 'restore' : 'select',
   }
+}
+
+/**
+ * Whether a merged row belongs in the sidebar RAIL (bug-sweep #1, operator ruling
+ * 2026-07-21: HIDE dead-workspace rows, don't delete them). The pre-fix rail
+ * showed every history row whose cwd was merely non-empty, so the ~40 stale
+ * test/eval transcripts pointing at ephemeral temp dirs rendered as clickable
+ * rows that failed `invalid_cwd` on open. This drops a history row whose recorded
+ * workspace no longer exists on disk (`cwdExists === false`).
+ *
+ * Kept visible: every REGISTRY row (addressed by appSessionId, not cwd — always
+ * openable/visible), and every EMPTY-cwd "Unknown workspace" history row (a
+ * transcript whose workspace couldn't be reconciled — MAJOR-1 — which is
+ * intentionally browse-only, not dead). Non-destructive + self-healing: the
+ * transcript stays on disk (still on the Sessions page, which lists everything),
+ * and the row reappears if its workspace ever returns, since `cwdExists` is
+ * re-derived each catalog run.
+ */
+export function isSidebarVisibleRow(row: MergedSessionRow): boolean {
+  if (row.inRegistry) return true
+  if (row.cwd.trim().length === 0) return true
+  return row.cwdExists
 }
 
 /**

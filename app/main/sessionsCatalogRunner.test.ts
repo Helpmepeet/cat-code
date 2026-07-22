@@ -16,6 +16,7 @@ function catalog(ids: string[]): SessionsCatalogSnapshot {
     entries: ids.map(id => ({
       sessionId: id,
       cwd: '/w/proj',
+      cwdExists: true,
       title: id,
       modifiedAtMs: 1,
       createdAtMs: 1,
