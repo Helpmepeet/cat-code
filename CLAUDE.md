@@ -163,15 +163,31 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
 
 - Never invent a name or location: past sessions left `context-cost-fixes-20260706`
   and `account-system-20260706` in ad-hoc spots because this table didn't exist.
-- `.claude/worktrees/` belongs to the harness. Don't hand-roll one there, and
-  don't tidy up what's in it — another session may be live in it.
-- `git worktree list` is the truth, not the directory listing. After merge:
-  `git worktree remove <path>` **and** delete the branch; a bare `rm -rf` leaves
-  a stale admin entry needing `git worktree prune`.
+- `.claude/worktrees/` belongs to the harness. Don't hand-roll one there. Don't
+  tidy what's in it **except a provably-spent one** (see the safe-sweep bullet
+  below) — otherwise a live session may be in it.
+- `git worktree list` is the truth, not the directory listing. **Reap at the
+  source: the session that merges a worktree/agent branch into `migration`/`main`
+  removes that worktree + branch as its LAST step** (`git worktree remove <path>`
+  **and** `git branch -d <branch>`; a bare `rm -rf` leaves a stale admin entry
+  needing `git worktree prune`). They pile up otherwise (2026-07-22: 34 spent
+  worktrees, ~7 GB).
+- **Safe to remove a spent worktree + branch (incl. a `.claude/worktrees/agent-*`)
+  iff ALL hold — verify per worktree, leave it if unsure:** `migration..HEAD`
+  commit count = 0 (fully merged, nothing unmerged to lose), working tree clean
+  except an untracked `node_modules`, and NOT locked (locked = live session). The
+  guards finish the job: `git worktree remove` refuses a dirty/locked tree and
+  `git branch -d` (never `-D`) refuses an unmerged branch, so a misjudgment can't
+  destroy work. `remove` also refuses an untracked `node_modules`; `--force` is OK
+  **only** after confirming `node_modules` is the *sole* untracked entry.
 - Exception: desktop-migration (`app/` + `docs/migration/`) work lives on the
   `migration` branch, never `main` (PROGRAM-PLAN rule).
-- Commit/push only when asked. Never `--no-verify`. Never `git stash` as a
-  checkpoint — if work matters, commit it.
+- **Commit your own explicit paths to the current branch freely — no need to ask;
+  commit early and often.** Uncommitted work on this shared tree is the fragile
+  state (the 2026-07-21 bug-sweep nearly lost 4 finished fixes by staying
+  uncommitted). **Push** only when asked — it publishes other sessions' commits
+  stacked under yours. Never `--no-verify`. Never `git stash` as a checkpoint — if
+  work matters, commit it.
 - Message format: `type(scope): subject` — types `feat|fix|perf|refactor|docs|wip|merge|migration`,
   scopes seen: `app`, `codex`, `migration`, `DONE`. Multi-part commits get a
   short one-line-per-change body.
@@ -369,7 +385,8 @@ set or setting stated in the report.
 - If a needed shape/API exists somewhere in `src/` → find and cite it before
   writing a new one; if you can't find it within the mapped owner files, say so
   explicitly rather than inventing.
-- STOP and ask the user before: committing; writing `DONE.md`; touching locked
+- STOP and ask the user before: pushing (publishes other sessions' commits too)
+  or any history rewrite (`reset`/`rebase`/`amend`/force); writing `DONE.md`; touching locked
   decisions; changing the security baseline; deleting/overwriting anything you
   didn't create; any action on live accounts/credentials (real logins, token
   refresh against real vaults, burning usage); GUI interaction on the user's
