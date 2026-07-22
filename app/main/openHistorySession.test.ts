@@ -101,17 +101,32 @@ describe('resolveOpenHistorySession (open-from-history boundary)', () => {
     if (result.kind === 'reject') expect(result.error.code).toBe('session_not_found')
   })
 
-  test('SUCCESS: resolves cwd from the cache, never from the request', () => {
+  test('SUCCESS: resolves cwd + title from the cache, never from the request', () => {
     const result = resolveOpenHistorySession(
       ENGINE_ID,
       [],
-      catalog([entry({ cwd: '/Users/pt/real-workspace' })]),
+      catalog([entry({ cwd: '/Users/pt/real-workspace', title: 'Fix the parser' })]),
     )
     expect(result.kind).toBe('spawn')
     if (result.kind === 'spawn') {
-      // cwd came from the engine-written cache entry, not the renderer.
+      // cwd + title came from the engine-written cache entry, not the renderer.
       expect(result.cwd).toBe('/Users/pt/real-workspace')
       expect(result.resumeEngineSessionId).toBe(ENGINE_ID)
+      // The persisted title rides along so the resumed tab/sidebar match the
+      // clicked history row instead of the cwd basename (bug-sweep #2, 2026-07-21).
+      expect(result.title).toBe('Fix the parser')
+    }
+  })
+
+  test('SUCCESS: a title-less transcript carries no title (tab keeps the cwd fallback)', () => {
+    const result = resolveOpenHistorySession(
+      ENGINE_ID,
+      [],
+      catalog([entry({ cwd: '/Users/pt/real-workspace', title: null })]),
+    )
+    expect(result.kind).toBe('spawn')
+    if (result.kind === 'spawn') {
+      expect(result.title).toBeUndefined()
     }
   })
 

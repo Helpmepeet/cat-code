@@ -3336,6 +3336,12 @@ const TURN_BOUNDARY_KINDS: ReadonlySet<NestedTranscriptRow['kind']> = new Set([
   'user-text',
   'user-image',
   'command-echo',
+  // An engine-injected task/agent-completion turn is a user-role message that
+  // starts a fresh assistant turn, so it bounds the live token estimate exactly
+  // as its old `user-text` projection did — before bug-sweep #4 split it into a
+  // distinct row kind. Keeps `selectLiveTokenEstimate` counting only the current
+  // turn's assistant output.
+  'task-notification',
 ])
 
 /**

@@ -1230,6 +1230,11 @@ function registerHostControlPlane(): void {
         .createSession({
           cwd: resolution.cwd,
           resumeEngineSessionId: engineId,
+          // Title is main-resolved from the sidecar-written catalog cache
+          // (engine-derived, HC1-safe — never renderer-authored), so a resumed
+          // open-from-history session's tab/sidebar shows its real name instead
+          // of the cwd basename (bug-sweep #2, 2026-07-21).
+          ...(resolution.title !== undefined ? { title: resolution.title } : {}),
         })
         .then(result => {
           // Bootstrap coalescing, the same guard `CH_HOST_RESTORE` arms: this

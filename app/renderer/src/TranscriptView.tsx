@@ -369,6 +369,9 @@ const TranscriptRowView = memo(function TranscriptRowView({
         <SystemNoticeBox noticeType={row.noticeType} content={row.content} />
       )
 
+    case 'task-notification':
+      return <TaskNotificationBox status={row.status} content={row.content} />
+
     case 'result':
       return (
         <ResultSeam
@@ -1404,6 +1407,46 @@ const NOTICE_STYLE: Record<
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
   local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
+}
+
+/**
+ * TaskNotificationRow: an engine-injected agent-completion banner. Rendered
+ * system-side (left, notice grammar) — NOT the right-aligned user bubble it used
+ * to fall into (bug-sweep #4, 2026-07-21). Status tints a small badge; the full
+ * banner text is preserved verbatim so nothing the operator saw before is lost.
+ */
+function TaskNotificationBox({
+  status,
+  content,
+}: {
+  status: string | null
+  content: string
+}) {
+  const statusTone =
+    status === 'failed' || status === 'killed'
+      ? 'text-tone-danger'
+      : status === 'completed'
+        ? 'text-tone-good'
+        : 'text-text-subtle'
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
+      <span className="text-[12px] leading-5 text-accent" aria-hidden>
+        ⤷
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-medium text-text-muted">Agent task</span>
+          {status ? (
+            <span className={`font-mono text-[10px] ${statusTone}`}>{status}</span>
+          ) : null}
+        </div>
+        <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-text-muted">
+          {content}
+        </div>
+      </div>
+      <span className="shrink-0 font-mono text-[9.5px] text-text-subtle/70">task</span>
+    </div>
+  )
 }
 
 /**
