@@ -714,6 +714,44 @@ test('projects plain user text, real command metadata, and image blocks', () => 
   ])
 })
 
+test('projects an engine task-notification banner as a system-side notice, not a user bubble', () => {
+  // Regression (bug-sweep #4, 2026-07-21): the engine injects agent-completion
+  // banners as a USER-role turn (`src/utils/taskNotification.ts`); the
+  // `task-notification` origin that marks them does not cross the app wire.
+  // Without detection the projector rendered them as a right-aligned user bubble,
+  // as if the operator typed them.
+  const banner = [
+    'Task notification',
+    'Task ID: a9b0c1b002e2dd6e3',
+    'Status: completed',
+    'Summary: Agent @Hamilton completed',
+    'Result:',
+    'No — the inventory is not complete.',
+  ].join('\n')
+
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: banner }] },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000301',
+    }),
+  )
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'task-notification',
+    status: 'completed',
+    content: banner,
+  })
+  // The critical assertion: it is NOT rendered as a user-side row.
+  expect(rows[0]?.kind).not.toBe('user-text')
+})
+
 test('rejects malformed P2-1 content blocks without partial rows', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

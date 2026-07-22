@@ -192,6 +192,27 @@ export type UserImageRow = RowSource & {
   isReplay: boolean
 }
 
+/**
+ * A task/agent-completion banner. The engine injects these as a USER-role turn
+ * (`src/utils/taskNotification.ts` `formatTaskNotificationText`, enqueued by
+ * `src/utils/messageQueueManager.ts` with a `task-notification` origin). That
+ * origin marker — which the TUI uses to render it distinctly — is an internal
+ * engine `Message` field that does NOT cross the app wire, so without this the
+ * projector would render the banner as a right-aligned USER bubble, as if the
+ * operator had typed it (bug, 2026-07-21). Detected block-side and projected here
+ * as a system-side notice instead. Block-level (a `RowSource`) because it rides a
+ * single `user` content block.
+ */
+export type TaskNotificationRow = RowSource & {
+  kind: 'task-notification'
+  /** Parsed `Status:` line (completed|failed|killed|…); null when absent. */
+  status: string | null
+  /** The full banner text — rendered on the system side, never as a user bubble. */
+  content: string
+  timestamp?: string
+  isReplay: boolean
+}
+
 export type SystemNoticeRow = FrameRowSource & {
   kind: 'system-notice'
   noticeType: 'api_retry' | 'local_command_output' | 'account_diagnostic'
@@ -226,6 +247,7 @@ export type TranscriptRow =
   | UserTextRow
   | CommandEchoRow
   | UserImageRow
+  | TaskNotificationRow
   | SystemNoticeRow
   | ResultRow
   | CompactBoundaryRow
@@ -1483,7 +1505,7 @@ function projectUserContentBlock(
   block: unknown,
   source: Omit<RowSource, 'id'>,
   metadata: { timestamp?: string; isReplay: boolean },
-): UserTextRow | CommandEchoRow | UserImageRow | null {
+): UserTextRow | CommandEchoRow | UserImageRow | TaskNotificationRow | null {
   if (!isRecord(block) || typeof block.type !== 'string') return null
 
   if (block.type === 'text') {
@@ -1497,6 +1519,18 @@ function projectUserContentBlock(
         id: rowId(source, 'command-echo'),
         kind: 'command-echo',
         ...command,
+      }
+    }
+    if (isTaskNotificationBanner(block.text)) {
+      // An engine-injected agent-completion turn — render it system-side, never
+      // as a user bubble (see TaskNotificationRow doc).
+      return {
+        ...source,
+        ...metadata,
+        id: rowId(source, 'task-notification'),
+        kind: 'task-notification',
+        status: parseTaskNotificationStatus(block.text),
+        content: block.text,
       }
     }
     return {
@@ -1580,6 +1614,33 @@ function extractXmlTag(text: string, tag: string): string | null {
   const contentStart = start + startToken.length
   const end = text.indexOf(endToken, contentStart)
   return end < 0 ? null : text.slice(contentStart, end)
+}
+
+const TASK_NOTIFICATION_HEADER = 'Task notification'
+const LEGACY_TASK_NOTIFICATION_TAG = '<task-notification>'
+
+/**
+ * True for an engine task/agent-completion banner. A local text check (not an
+ * engine import — the renderer bundle resolves `@cat-code/engine` to type-only
+ * snapshots, `app/tsconfig.json`): it mirrors `isTaskNotificationText`
+ * (`src/utils/taskNotification.ts:105`), accepting both the structured banner and
+ * the legacy XML envelope older transcripts still carry.
+ */
+function isTaskNotificationBanner(text: string): boolean {
+  const trimmed = text.trim()
+  return (
+    trimmed === TASK_NOTIFICATION_HEADER ||
+    trimmed.startsWith(`${TASK_NOTIFICATION_HEADER}\n`) ||
+    trimmed.startsWith(LEGACY_TASK_NOTIFICATION_TAG)
+  )
+}
+
+/** The banner's status (structured `Status:` line, else legacy `<status>` tag). */
+function parseTaskNotificationStatus(text: string): string | null {
+  const line = /^Status:\s*(.+)$/m.exec(text)?.[1]?.trim()
+  if (line) return line
+  const legacy = /<status>([\s\S]*?)<\/status>/.exec(text)?.[1]?.trim()
+  return legacy || null
 }
 
 function rowId(source: Omit<RowSource, 'id'>, blockId: string): string {
