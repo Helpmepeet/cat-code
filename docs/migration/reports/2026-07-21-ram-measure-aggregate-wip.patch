@@ -1,0 +1,213 @@
+# Preserved WIP (uncommitted in the abandoned worktree agent-acd8c019, reaped 2026-07-22).
+# ~90-line per-condition aggregation enhancement to app/scripts/ram-measure.ts,
+# on top of the RAM-0 instrument. RAM-0 measurement is complete (CC-5); kept recoverable.
+# Apply from repo root: git apply <this file> (may need adjusting — base ram-measure.ts differs by +4 lines on migration).
+# ---
+diff --git a/app/scripts/ram-measure.ts b/app/scripts/ram-measure.ts
+index f950c4a..ed3ceee 100644
+--- a/app/scripts/ram-measure.ts
++++ b/app/scripts/ram-measure.ts
+@@ -31,7 +31,7 @@
+  */
+ 
+ import { spawnSync } from 'node:child_process'
+-import { mkdirSync, writeFileSync } from 'node:fs'
++import { mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
+ import { join, dirname } from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ 
+@@ -78,10 +78,97 @@ function rotate<T>(arr: T[], n: number): T[] {
+   return [...arr.slice(k), ...arr.slice(0, k)]
+ }
+ 
++const num = (xs: Array<number | null | undefined>) => xs.filter((x): x is number => typeof x === 'number')
++const maxOf = (xs: number[]) => (xs.length ? Math.max(...xs) : NaN)
++
++/** Condition name from a run label like `enrich600-r2` → `enrich600`. */
++function condOfLabel(label: string): string {
++  return label.replace(/-r\d+$/, '')
++}
++
++/**
++ * Aggregate per-condition: boot rss/footprint from the 'boot' sample; plateau
++ * from the STABLE high-water per run — max RSS (resident, monotonic) + max
++ * peak-footprint (vmmap peak, monotonic). Current physical footprint fluctuates
++ * within a run (mimalloc purges pages back to the OS — the MIMALLOC_PURGE_DELAY
++ * effect), so it is reported as a per-run-median + overall range, not a point.
++ */
++function computeAggregate(byCond: Record<string, ProbeResult[]>): Record<string, unknown> {
++  const agg: Record<string, unknown> = {}
++  for (const [name, rs] of Object.entries(byCond)) {
++    const boot = rs.map(r => r.samples.find(s => s.label === 'boot'))
++    const perRun = rs.map(r => {
++      const attached = r.samples.filter(s => s.label.startsWith('attached'))
++      return {
++        maxRss: maxOf(num(attached.map(s => s.rssMB))),
++        maxPeakFp: maxOf(num(attached.map(s => s.footprintPeakMB))),
++        curFpValues: num(attached.map(s => s.footprintMB)),
++      }
++    })
++    const hasAttached = perRun.some(p => p.curFpValues.length > 0)
++    agg[name] = {
++      reps: rs.length,
++      allKillVerified: rs.every(r => r.killVerified),
++      allReady: rs.every(r => r.reachedReady),
++      boot: {
++        rssMB: { median: median(num(boot.map(b => b?.rssMB))), values: num(boot.map(b => b?.rssMB)) },
++        footprintMB: { median: median(num(boot.map(b => b?.footprintMB))), values: num(boot.map(b => b?.footprintMB)) },
++      },
++      ...(hasAttached ? {
++        plateau: {
++          maxRssMB: { median: median(perRun.map(p => p.maxRss)), values: perRun.map(p => p.maxRss) },
++          maxPeakFootprintMB: { median: median(perRun.map(p => p.maxPeakFp)), values: perRun.map(p => p.maxPeakFp) },
++          currentFootprintMB: (() => {
++            const all = perRun.flatMap(p => p.curFpValues)
++            return {
++              medianOfPerRunMedian: median(perRun.map(p => median(p.curFpValues))),
++              overallMin: all.length ? Math.min(...all) : NaN,
++              overallMax: all.length ? Math.max(...all) : NaN,
++            }
++          })(),
++        },
++      } : {}),
++    }
++  }
++  return agg
++}
++
++/** Aggregate-only: read every retained `<out>/*.result.json` and write the
++ * cross-chunk `ram0-aggregate.json`. This makes chunked execution (one
++ * background task per rep, to stay under the wall-clock cap) aggregatable. */
++function aggregateOnly(outDir: string): void {
++  const files = readdirSync(outDir).filter(f => f.endsWith('.result.json'))
++  const byCond: Record<string, ProbeResult[]> = {}
++  for (const f of files) {
++    try {
++      const r = JSON.parse(readFileSync(join(outDir, f), 'utf8')) as ProbeResult
++      ;(byCond[condOfLabel(r.label)] ??= []).push(r)
++    } catch {
++      process.stderr.write(`aggregate: skipping unparseable ${f}\n`)
++    }
++  }
++  const summary = {
++    runner: 'app/scripts/ram-measure.ts --aggregate-only',
++    resultFiles: files.length,
++    aggregate: computeAggregate(byCond),
++    runs: Object.values(byCond).flat().map(r => ({ label: r.label, killVerified: r.killVerified, reachedReady: r.reachedReady })),
++  }
++  writeFileSync(join(outDir, 'ram0-aggregate.json'), JSON.stringify(summary, null, 2) + '\n')
++  process.stdout.write(JSON.stringify(summary, null, 2) + '\n')
++}
++
+ function main(): void {
+   const args = parseArgs(process.argv.slice(2))
+   const outDir = args.out ?? join(process.cwd(), '.ram-scratch', 'measure')
++  mkdirSync(outDir, { recursive: true })
++
++  if (args['aggregate-only'] === 'true') {
++    aggregateOnly(outDir)
++    return
++  }
++
+   const reps = Number(args.reps ?? '3')
++  const repBase = Number(args['rep-base'] ?? '0')
+   const dwellMs = args['dwell-ms'] ?? '240000'
+   const sampleMs = args['sample-ms'] ?? '30000'
+   const corpus50 = args.corpus50
+@@ -91,7 +178,6 @@ function main(): void {
+     process.stderr.write('ram-measure: --corpus50 --corpus600 --empty are required\n')
+     process.exit(2)
+   }
+-  mkdirSync(outDir, { recursive: true })
+ 
+   const conds: Cond[] = [
+     { name: 'enrich50', configDir: corpus50, attach: true },
+@@ -101,8 +187,11 @@ function main(): void {
+   // Boot-floor-only run (no attach, empty corpus) once per rep, first.
+   const bootCond: Cond = { name: 'bootfloor', configDir: empty, attach: false }
+ 
++  // Absolute rep indices (repBase..repBase+reps-1) so chunked invocations
++  // produce distinct labels AND keep the counterbalanced rotation coherent.
+   const runOrder: Array<{ rep: number; cond: Cond }> = []
+-  for (let r = 0; r < reps; r++) {
++  for (let i = 0; i < reps; i++) {
++    const r = repBase + i
+     runOrder.push({ rep: r, cond: bootCond })
+     for (const c of rotate(conds, r)) runOrder.push({ rep: r, cond: c })
+   }
+@@ -123,57 +212,40 @@ function main(): void {
+     if (cond.mimalloc !== undefined) probeArgs.push('--mimalloc-purge-delay', cond.mimalloc)
+     process.stderr.write(`\n=== RUN ${label} (order ${results.length + 1}/${runOrder.length}) ===\n`)
+     const res = spawnSync('bun', probeArgs, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
++    let result: ProbeResult
+     if (res.status !== 0) {
+       process.stderr.write(`run ${label} FAILED (exit ${res.status})\n${res.stderr}\n`)
+-      results.push({ rep, cond: cond.name, result: { label, reachedReady: false, killVerified: false, survivors: [], samples: [] } })
+-      continue
+-    }
+-    try {
+-      const parsed = JSON.parse(res.stdout) as ProbeResult
+-      results.push({ rep, cond: cond.name, result: parsed })
+-    } catch {
+-      process.stderr.write(`run ${label}: could not parse probe JSON\n${res.stdout.slice(-500)}\n`)
++      result = { label, reachedReady: false, killVerified: false, survivors: [], samples: [] }
++    } else {
++      try {
++        result = JSON.parse(res.stdout) as ProbeResult
++      } catch {
++        process.stderr.write(`run ${label}: could not parse probe JSON\n${res.stdout.slice(-500)}\n`)
++        result = { label, reachedReady: false, killVerified: false, survivors: [], samples: [] }
++      }
+     }
++    // Retain each run's full result so a separate `--aggregate-only` pass can
++    // combine runs across chunked invocations.
++    writeFileSync(join(outDir, `${label}.result.json`), JSON.stringify(result, null, 2) + '\n')
++    results.push({ rep, cond: cond.name, result })
+   }
+ 
+-  // Aggregate: boot footprint/RSS = 'boot' sample; plateau = last attached sample.
+   const byCond: Record<string, ProbeResult[]> = {}
+   for (const { cond, result } of results) (byCond[cond] ??= []).push(result)
+ 
+-  const agg: Record<string, unknown> = {}
+-  for (const [name, rs] of Object.entries(byCond)) {
+-    const boot = rs.map(r => r.samples.find(s => s.label === 'boot'))
+-    const plateau = rs.map(r => {
+-      const attached = r.samples.filter(s => s.label.startsWith('attached'))
+-      return attached.length ? attached[attached.length - 1] : undefined
+-    })
+-    const num = (xs: Array<number | null | undefined>) => xs.filter((x): x is number => typeof x === 'number')
+-    agg[name] = {
+-      reps: rs.length,
+-      allKillVerified: rs.every(r => r.killVerified),
+-      allReady: rs.every(r => r.reachedReady),
+-      boot: {
+-        rssMB: { median: median(num(boot.map(b => b?.rssMB))), values: num(boot.map(b => b?.rssMB)) },
+-        footprintMB: { median: median(num(boot.map(b => b?.footprintMB))), values: num(boot.map(b => b?.footprintMB)) },
+-      },
+-      plateau: {
+-        rssMB: { median: median(num(plateau.map(p => p?.rssMB))), values: num(plateau.map(p => p?.rssMB)) },
+-        footprintMB: { median: median(num(plateau.map(p => p?.footprintMB))), values: num(plateau.map(p => p?.footprintMB)) },
+-      },
+-    }
+-  }
+-
+   const summary = {
+     runner: 'app/scripts/ram-measure.ts',
+-    reps,
++    reps, repBase,
+     dwellMs: Number(dwellMs),
+     sampleMs: Number(sampleMs),
+     runOrder: runOrder.map(o => `${o.cond.name}-r${o.rep}`),
+     corpus50, corpus600, empty,
+-    aggregate: agg,
++    aggregate: computeAggregate(byCond),
+     runs: results.map(r => ({ rep: r.rep, cond: r.cond, killVerified: r.result.killVerified, reachedReady: r.result.reachedReady, samples: r.result.samples })),
+   }
+-  writeFileSync(join(outDir, 'ram0-aggregate.json'), JSON.stringify(summary, null, 2) + '\n')
++  // Chunk-local summary (do NOT clobber the canonical cross-chunk aggregate,
++  // which `--aggregate-only` owns).
++  writeFileSync(join(outDir, `ram0-chunk-r${repBase}.json`), JSON.stringify(summary, null, 2) + '\n')
+   process.stdout.write(JSON.stringify(summary, null, 2) + '\n')
+ }
+ 
