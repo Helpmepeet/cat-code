@@ -111,6 +111,11 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (!isRecord(value)) return null
   if (typeof value.sessionId !== 'string') return null
   if (typeof value.cwd !== 'string') return null
+  // Additive field (bug-sweep #1): tolerate a record from a worker build predating
+  // it (default `true` = assume-exists, never wrongly hide); a PRESENT non-boolean
+  // is malformed child output → fail the whole record like every other field.
+  if (value.cwdExists !== undefined && typeof value.cwdExists !== 'boolean') return null
+  const cwdExists = value.cwdExists === undefined ? true : value.cwdExists
   if (!isStringOrNull(value.title)) return null
   if (typeof value.modifiedAtMs !== 'number') return null
   if (typeof value.createdAtMs !== 'number') return null
@@ -131,6 +136,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   return {
     sessionId: value.sessionId,
     cwd: value.cwd,
+    cwdExists,
     title: value.title,
     modifiedAtMs: value.modifiedAtMs,
     createdAtMs: value.createdAtMs,

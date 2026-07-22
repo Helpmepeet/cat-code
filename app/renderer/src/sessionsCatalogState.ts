@@ -100,6 +100,15 @@ export type MergedSessionRow = {
   /** Present ⇒ a live/restorable registry row exists (openable). */
   appSessionId: SessionId | null
   cwd: string
+  /**
+   * Whether `cwd` is a currently-existing directory (bug-sweep #1). Registry rows
+   * are ALWAYS `true` — a live/restorable session is addressed by `appSessionId`,
+   * not its cwd, so it opens regardless. A history-only row carries the catalog's
+   * stat result; a dead-cwd history row is HIDDEN from the sidebar rail
+   * (`isSidebarVisibleRow`) and non-openable (`deriveMergedRowVisual`), rather than
+   * failing `invalid_cwd` only at open time.
+   */
+  cwdExists: boolean
   /** Resolved winner: registry title > catalog (custom/ai) title > null. */
   title: string | null
   /** The label to render: title > first prompt > cwd basename > fallback. */
@@ -183,6 +192,9 @@ export function selectMergedSessionRows(
       sessionId: key,
       appSessionId: descriptor.appSessionId,
       cwd: descriptor.cwd,
+      // A registry row is addressed by appSessionId, not cwd — always openable/
+      // visible regardless of whether its recorded cwd still exists.
+      cwdExists: true,
       title,
       displayLabel: resolveSessionLabel(title, descriptor.cwd),
       live: !descriptor.restorable && descriptor.status !== 'exited',
@@ -210,6 +222,7 @@ export function selectMergedSessionRows(
       sessionId: entry.sessionId,
       appSessionId: null,
       cwd: entry.cwd,
+      cwdExists: entry.cwdExists,
       title: entry.title,
       displayLabel: resolveSessionLabel(entry.title, entry.cwd),
       live: false,

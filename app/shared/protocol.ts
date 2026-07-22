@@ -1914,6 +1914,18 @@ export type SessionCatalogEntry = {
   sessionId: string
   /** Session root (the transcript's project path). */
   cwd: string
+  /**
+   * Whether `cwd` is a currently-existing directory on disk (bug-sweep #1,
+   * 2026-07-21). The catalog worker stats each distinct cwd ONCE per enumeration
+   * (`sessionsCatalogDomain.ts` `annotateCwdExistence`). A history row whose
+   * recorded workspace no longer exists is HIDDEN from the sidebar rail
+   * (non-destructive — the transcript stays on disk and the row self-heals if the
+   * dir returns) and is non-openable, instead of only failing `invalid_cwd` at
+   * open time (`app/host/host.ts` HC1). Additive + OUTBOUND-only (no new inbound
+   * vocabulary). Older cached entries lacking it default to `true` at the read
+   * boundaries (assume-exists → never wrongly hide).
+   */
+  cwdExists: boolean
   /** Winning display title (custom-title > ai-title), else null (→ fallback). */
   title: string | null
   /** Transcript file mtime (recency sort + date buckets). */

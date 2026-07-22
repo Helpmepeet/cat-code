@@ -18,6 +18,7 @@ function registryRow(
     sessionId: `engine-${id}`,
     appSessionId: id as SessionId,
     cwd: '/tmp/proj',
+    cwdExists: true,
     title: 'Alpha',
     displayLabel: 'Alpha',
     live: true,

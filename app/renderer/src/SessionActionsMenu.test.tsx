@@ -14,6 +14,7 @@ function row(overrides: Partial<MergedSessionRow> = {}): MergedSessionRow {
     sessionId: 'engine-1',
     appSessionId: 'app-1',
     cwd: '/w/proj',
+    cwdExists: true,
     title: 'Refactor auth',
     displayLabel: 'Refactor auth',
     live: true,

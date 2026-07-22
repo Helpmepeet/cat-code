@@ -24,6 +24,7 @@ import {
 function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): SessionCatalogEntry {
   return {
     cwd: '/w/proj',
+    cwdExists: true,
     title: null,
     modifiedAtMs: 1000,
     createdAtMs: 500,
@@ -186,6 +187,23 @@ describe('selectMergedSessionRows', () => {
     })
   })
 
+  test('bug-sweep #1 — a history row carries the catalog entry cwdExists; registry rows are always true', () => {
+    const rows = selectMergedSessionRows(
+      // A registry row whose recorded cwd is dead is STILL cwdExists:true (it is
+      // addressed by appSessionId, not cwd).
+      [descriptor({ appSessionId: 'app-1', engineSessionId: 'eng-1', cwd: '/dead/reg' })],
+      snapshot([
+        entry({ sessionId: 'eng-1', cwdExists: false }),
+        entry({ sessionId: 'hist-dead', cwdExists: false }),
+        entry({ sessionId: 'hist-live', cwdExists: true }),
+      ]),
+    )
+    const byId = new Map(rows.map(r => [r.sessionId, r.cwdExists]))
+    expect(byId.get('eng-1')).toBe(true) // registry row → always true
+    expect(byId.get('hist-dead')).toBe(false) // history row → from the catalog
+    expect(byId.get('hist-live')).toBe(true)
+  })
+
   test('a registry row claims its catalog entry (no duplicate history row)', () => {
     const rows = selectMergedSessionRows(
       [descriptor({ appSessionId: 'app-1', engineSessionId: 'eng-1' })],
@@ -308,6 +326,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
   return {
     appSessionId: null,
     cwd: '/w/proj',
+    cwdExists: true,
     title: null,
     displayLabel: partial.sessionId,
     live: false,

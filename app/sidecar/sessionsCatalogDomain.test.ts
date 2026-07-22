@@ -4,6 +4,7 @@ import type { SessionLogResult } from '../../src/utils/sessionStorage.js'
 import type { SessionsCatalogSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  annotateCwdExistence,
   buildSessionsCatalogSnapshot,
   mapLogOptionToCatalogEntry,
 } from './sessionsCatalogDomain.js'
@@ -292,5 +293,66 @@ describe('buildSessionsCatalogSnapshot', () => {
       catalog: snapshot,
     }
     expect(scanForSecrets(frame).ok).toBe(true)
+  })
+
+  // The pure builder is filesystem-free: it never stats. It defaults every entry
+  // to cwdExists:true (assume-exists), so a direct use without the async annotate
+  // pass NEVER hides a row — the pre-fix behavior. `annotateCwdExistence` is the
+  // sole downgrade point.
+  test('the pure builder defaults cwdExists true (assume-exists; annotate downgrades)', () => {
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([makeLog({ sessionId: 'a', projectPath: '/w/one' })]),
+    )
+    expect(snapshot.entries[0]?.cwdExists).toBe(true)
+  })
+})
+
+describe('annotateCwdExistence (bug-sweep #1 — dead-cwd downgrade)', () => {
+  test('marks an existing cwd true and a gone cwd false; empty cwd stays false', async () => {
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([
+        makeLog({ sessionId: 'live', projectPath: '/w/alive' }),
+        makeLog({ sessionId: 'dead', projectPath: '/tmp/gone-fixture' }),
+        makeLog({ sessionId: 'orphan', projectPath: undefined, fullPath: undefined }),
+      ]),
+    )
+    const annotated = await annotateCwdExistence(
+      snapshot,
+      async cwd => cwd === '/w/alive',
+    )
+    const byId = new Map(annotated.entries.map(e => [e.sessionId, e.cwdExists]))
+    expect(byId.get('live')).toBe(true)
+    expect(byId.get('dead')).toBe(false)
+    // Empty cwd is never statted (there is no path); it resolves to false and the
+    // renderer keeps such "Unknown workspace" rows via its own predicate.
+    expect(byId.get('orphan')).toBe(false)
+  })
+
+  test('stats each DISTINCT non-empty cwd exactly once (two sessions, one workspace → one stat)', async () => {
+    const dir = '/Users/me/.cat-code/projects/-Users-me-proj'
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([
+        makeLog({ sessionId: 'has-cwd', projectPath: '/w/proj', fullPath: `${dir}/a.jsonl` }),
+        makeLog({ sessionId: 'no-cwd', projectPath: undefined, fullPath: `${dir}/b.jsonl` }),
+      ]),
+    )
+    const statted: string[] = []
+    const annotated = await annotateCwdExistence(snapshot, async cwd => {
+      statted.push(cwd)
+      return true
+    })
+    // Both sessions reconcile to /w/proj (MAJOR-1), so exactly ONE distinct stat.
+    expect(statted).toEqual(['/w/proj'])
+    expect(annotated.entries.every(e => e.cwdExists)).toBe(true)
+  })
+
+  test('does not mutate the input snapshot (returns a fresh one)', async () => {
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([makeLog({ sessionId: 'a', projectPath: '/tmp/gone' })]),
+    )
+    const annotated = await annotateCwdExistence(snapshot, async () => false)
+    expect(snapshot.entries[0]?.cwdExists).toBe(true) // untouched
+    expect(annotated.entries[0]?.cwdExists).toBe(false) // downgraded copy
+    expect(annotated).not.toBe(snapshot)
   })
 })

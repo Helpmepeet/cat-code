@@ -15,6 +15,7 @@ function entry(over: Partial<SessionCatalogEntry> = {}): SessionCatalogEntry {
   return {
     sessionId: ENGINE_ID,
     cwd: '/Users/pt/project',
+    cwdExists: true,
     title: 'A terminal session',
     modifiedAtMs: 1000,
     createdAtMs: 500,

@@ -114,6 +114,7 @@ describe('buildSessionMetadataView', () => {
     sessionId: 'engine-1',
     appSessionId: 'app-1',
     cwd: '/w',
+    cwdExists: true,
     title: 't',
     displayLabel: 't',
     live: true,
