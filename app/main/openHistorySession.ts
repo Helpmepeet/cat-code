@@ -56,8 +56,15 @@ export type OpenHistoryResolution =
   | { kind: 'reject'; error: HostError }
   /** Already an app row — return it; the renderer switches instead of spawning. */
   | { kind: 'existing'; descriptor: SessionDescriptor }
-  /** Spawn a resume of `resumeEngineSessionId` at the cache-resolved `cwd`. */
-  | { kind: 'spawn'; cwd: string; resumeEngineSessionId: string }
+  /**
+   * Spawn a resume of `resumeEngineSessionId` at the cache-resolved `cwd`. `title`
+   * is the transcript's already-persisted display title from the catalog cache
+   * (engine-derived, NOT renderer-authored — same HC1-safe source as `cwd`), so
+   * the resumed session's tab/sidebar label matches the history row the operator
+   * clicked instead of falling back to the cwd basename. Absent when the
+   * transcript never earned a title.
+   */
+  | { kind: 'spawn'; cwd: string; resumeEngineSessionId: string; title?: string }
 
 /**
  * Decide what opening a history row's engine session id should do, purely from
@@ -103,7 +110,14 @@ export function resolveOpenHistorySession(
     )
   }
 
-  return { kind: 'spawn', cwd: entry.cwd, resumeEngineSessionId: engineSessionId }
+  return {
+    kind: 'spawn',
+    cwd: entry.cwd,
+    resumeEngineSessionId: engineSessionId,
+    ...(entry.title && entry.title.trim().length > 0
+      ? { title: entry.title }
+      : {}),
+  }
 }
 
 function reject(
