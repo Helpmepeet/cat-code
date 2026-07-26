@@ -12,7 +12,7 @@
  * data — the primitives demonstrated over engine truth, not fixtures.
  */
 
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   AgentConfigSnapshot,
@@ -30,8 +30,14 @@ import { AgentsPage } from './AgentsPage.js'
 import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
 import { PermissionRulesEditor } from './PermissionRulesEditor.js'
+import {
+  isReasoningLayoutMode,
+  ReasoningLayoutContext,
+  REASONING_LAYOUT_MODES,
+  REASONING_LAYOUT_LABELS,
+} from './reasoningLayout.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
-import { SettingsPane } from './SettingsEditors.js'
+import { SelectControl, SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import {
   HooksPanel,
@@ -421,11 +427,42 @@ function CategoryBody({
           snapshot={snapshot}
           title="Theme & output"
         />
+        <TranscriptDisplaySection />
         <DeferredEditorsNote note="Accent swatch, code theme/font, and output-style select are deferred (need theming / available-styles seams)." />
       </>
     )
   }
   return <CategoryStub category={category} />
+}
+
+/**
+ * The one APP-LOCAL editor in this shell: how the transcript renders reasoning
+ * summaries (`reasoningLayout.ts`). It carries no `SourceBadge` because it has
+ * no settings layer — it is a renderer view preference stored with the workspace
+ * layout, not a `SettingsSchema` key the sidecar writes, and the description
+ * says so rather than letting it read as an engine setting that failed to
+ * resolve. Reads and writes the same context the transcript reads.
+ */
+function TranscriptDisplaySection() {
+  const { mode, setMode } = useContext(ReasoningLayoutContext)
+  return (
+    <PaneSection title="Transcript">
+      <Field
+        desc="How reasoning summaries are laid out in the transcript. Which reasoning is shown at all is the engine's separate “Reasoning display” setting under Model &amp; Inference. Stored in this app, not in your settings files."
+        label="Reasoning layout"
+      >
+        <SelectControl
+          label="Reasoning layout"
+          onChange={next => {
+            if (isReasoningLayoutMode(next)) setMode(next)
+          }}
+          optionLabels={REASONING_LAYOUT_LABELS}
+          options={REASONING_LAYOUT_MODES}
+          value={mode}
+        />
+      </Field>
+    </PaneSection>
+  )
 }
 
 function LayerSummary({ snapshot }: { snapshot: SettingsSnapshot | null }) {

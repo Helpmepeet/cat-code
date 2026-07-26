@@ -20,6 +20,10 @@ import type {
   ToolFamily,
   ToolResultProjection,
 } from './transcriptProjector.js'
+import {
+  ReasoningLayoutContext,
+  type ReasoningLayoutMode,
+} from './reasoningLayout.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 // P4-24 empty-state Welcome fixtures — a real `AccountsSnapshot` shape (mirrors
@@ -77,6 +81,27 @@ const frameSource = {
 
 function render(row: NestedTranscriptRow): string {
   return renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
+}
+
+/** Render rows under an explicit reasoning-display mode. No provider (the
+ * `render` helper above) means the context default — the shipped default mode. */
+function renderRows(
+  rows: NestedTranscriptRow[],
+  mode: ReasoningLayoutMode,
+): string {
+  return renderToStaticMarkup(
+    <ReasoningLayoutContext.Provider value={{ mode, setMode: () => {} }}>
+      <TranscriptRowsView rows={rows} />
+    </ReasoningLayoutContext.Provider>,
+  )
+}
+
+function thinkingRow(id: string, content: string): NestedTranscriptRow {
+  return { ...blockSource, id, kind: 'thinking', content }
+}
+
+function occurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1
 }
 
 test('renders an assistant text row as markdown, not raw source', () => {
@@ -626,14 +651,19 @@ test('P4-18a: a pasted user image renders an img with the data URI', () => {
   expect(html).toContain('data:image/png;base64,AAAA')
 })
 
-test('P4-18a/#7: a thinking row renders its reasoning body as markdown, no summary label', () => {
-  const html = render({
-    ...blockSource,
-    id: 's:m:0:thinking',
-    kind: 'thinking',
-    content: 'weighing the **socket** options',
-    reasoningKind: 'summary',
-  })
+test('P4-18a/#7: the blocks mode renders a thinking row as an expanded markdown block', () => {
+  const html = renderRows(
+    [
+      {
+        ...blockSource,
+        id: 's:m:0:thinking',
+        kind: 'thinking',
+        content: 'weighing the **socket** options',
+        reasoningKind: 'summary',
+      },
+    ],
+    'blocks',
+  )
 
   expect(html).toContain('Thinking')
   // #7: the reasoning body renders through the markdown path — **bold** becomes
@@ -644,7 +674,85 @@ test('P4-18a/#7: a thinking row renders its reasoning body as markdown, no summa
   expect(html).not.toContain('summary')
 })
 
-test('P4-18a: a redacted-thinking row renders a redacted placeholder', () => {
+test('P4-18a: the blocks mode renders a redacted-thinking placeholder', () => {
+  const html = renderRows(
+    [
+      {
+        ...blockSource,
+        id: 's:m:0:redacted-thinking',
+        kind: 'redacted-thinking',
+        data: 'ENCRYPTED',
+      },
+    ],
+    'blocks',
+  )
+
+  expect(html).toContain('redacted by the model provider')
+  // The encrypted payload must never be printed.
+  expect(html).not.toContain('ENCRYPTED')
+})
+
+test('trail mode: a lone reasoning summary is ONE labelled line, not a card', () => {
+  const html = render(
+    thinkingRow('s:m:0:thinking', 'Locating the transport teardown path'),
+  )
+
+  expect(html).toContain('Reasoning')
+  expect(html).toContain('Locating the transport teardown path')
+  // No run head: a single summary has no step count and nothing to collapse.
+  expect(html).not.toContain('steps')
+  expect(html).not.toContain('aria-expanded')
+  // Not the blocks treatment: no accent-tinted card frame around four words.
+  expect(html).not.toContain('border-accent/15')
+})
+
+test('trail mode: a summary heading is plain text, never markdown prose', () => {
+  const html = render(thinkingRow('s:m:0:thinking', 'weighing the **socket** options'))
+
+  // A heading is a label, not prose — it is not run through the markdown path.
+  expect(html).toContain('**socket**')
+  expect(html).not.toContain('<strong>socket</strong>')
+})
+
+test('trail mode: adjacent reasoning rows coalesce into ONE run with a step count', () => {
+  const html = renderRows(
+    [
+      thinkingRow('s:m:0:thinking', 'Checking close-frame ordering'),
+      thinkingRow('s:m:1:thinking', 'Considering the early-abort path'),
+      thinkingRow('s:m:2:thinking', 'Planning a focused test run'),
+    ],
+    'trail',
+  )
+
+  expect(html).toContain('3 steps')
+  // One head for the run, not one per summary.
+  expect(occurrences(html, 'Reasoning')).toBe(1)
+  expect(html).toContain('Checking close-frame ordering')
+  expect(html).toContain('Considering the early-abort path')
+  expect(html).toContain('Planning a focused test run')
+})
+
+test('trail mode: a run mixes readable summaries with an encrypted-only step, payload never printed', () => {
+  const html = renderRows(
+    [
+      thinkingRow('s:m:0:thinking', 'Acknowledging correction on summary display'),
+      {
+        ...blockSource,
+        id: 's:m:1:redacted-thinking',
+        kind: 'redacted-thinking',
+        data: 'ENCRYPTED',
+      },
+    ],
+    'trail',
+  )
+
+  expect(html).toContain('2 steps')
+  expect(html).toContain('Acknowledging correction on summary display')
+  expect(html).toContain('reasoning not shared by the provider')
+  expect(html).not.toContain('ENCRYPTED')
+})
+
+test('trail mode: a lone encrypted-only block is one row with no label and no payload', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:redacted-thinking',
@@ -652,9 +760,104 @@ test('P4-18a: a redacted-thinking row renders a redacted placeholder', () => {
     data: 'ENCRYPTED',
   })
 
-  expect(html).toContain('redacted by the model provider')
-  // The encrypted payload must never be printed.
+  expect(html).toContain('reasoning not shared by the provider')
   expect(html).not.toContain('ENCRYPTED')
+  expect(html).not.toContain('steps')
+})
+
+test('trail mode: a long-form reasoning body keeps its prose, on the trail', () => {
+  const long = `The transcript keys thinking rows by message id and block index, which is a sentence long enough that it is plainly reasoning text rather than a heading label.
+
+Which means two consecutive **summary** blocks already produce two distinct rows.`
+  const html = render(thinkingRow('s:m:0:thinking', long))
+
+  // A prose step: the trail head with no step count, and the markdown body.
+  expect(html).toContain('Reasoning')
+  expect(html).toContain('<strong>summary</strong>')
+  expect(html).not.toContain('steps')
+})
+
+test('trail mode: the adapter\'s "\\n\\n"-merged headings become one step each', () => {
+  // The common Codex turn: several summary parts merged into ONE thinking block
+  // (codex-fetch-adapter.ts:2018-2031), which must still read as a trail.
+  const html = render(
+    thinkingRow(
+      's:m:0:thinking',
+      'Locating the teardown path\n\nChecking close-frame ordering\n\nPlanning a test run',
+    ),
+  )
+
+  expect(html).toContain('3 steps')
+  expect(html).toContain('Locating the teardown path')
+  expect(html).toContain('Checking close-frame ordering')
+  expect(html).toContain('Planning a test run')
+})
+
+test('an empty-bodied thinking row is withheld in BOTH modes, never an empty card or label', () => {
+  // Encrypted-only reasoning reaches the app as `thinking` with an empty body
+  // carrying the signature (codex-fetch-adapter.ts:2229).
+  const trail = render(thinkingRow('s:m:0:thinking', ''))
+  expect(trail).toContain('reasoning not shared by the provider')
+  expect(trail).not.toContain('steps')
+
+  const blocks = renderRows([thinkingRow('s:m:0:thinking', '')], 'blocks')
+  expect(blocks).toContain('redacted by the model provider')
+})
+
+test('trail mode: an all-withheld run draws bare lines — no head asserting steps', () => {
+  const html = renderRows(
+    [
+      { ...blockSource, id: 's:m:0:r', kind: 'redacted-thinking', data: 'ENCRYPTED' },
+      { ...blockSource, id: 's:m:1:r', kind: 'redacted-thinking', data: 'ENCRYPTED' },
+    ],
+    'trail',
+  )
+
+  expect(occurrences(html, 'reasoning not shared by the provider')).toBe(2)
+  expect(html).not.toContain('steps')
+  expect(html).not.toContain('aria-expanded')
+  expect(html).not.toContain('ENCRYPTED')
+})
+
+test('trail mode: a long run folds its older steps behind a control', () => {
+  const html = renderRows(
+    Array.from({ length: 7 }, (_, index) =>
+      thinkingRow(`s:m:${index}:thinking`, `Step number ${index}`),
+    ),
+    'trail',
+  )
+
+  expect(html).toContain('7 steps')
+  expect(html).toContain('3 earlier steps')
+  // The oldest three are folded away; the last four remain.
+  expect(html).not.toContain('Step number 0')
+  expect(html).toContain('Step number 3')
+  expect(html).toContain('Step number 6')
+})
+
+test('trail mode: a long member inside a run keeps its prose under its own step', () => {
+  const long = `A body long enough to be real reasoning rather than a heading label, carrying **emphasis** across more than one hundred and forty characters of text.`
+  const html = renderRows(
+    [thinkingRow('s:m:0:thinking', long), thinkingRow('s:m:1:thinking', 'Settling on a boxless trail')],
+    'trail',
+  )
+
+  expect(html).toContain('2 steps')
+  expect(html).toContain('<strong>emphasis</strong>')
+  expect(html).toContain('Settling on a boxless trail')
+})
+
+test('blocks mode: adjacent reasoning rows stay separate blocks, never grouped', () => {
+  const html = renderRows(
+    [
+      thinkingRow('s:m:0:thinking', 'Checking close-frame ordering'),
+      thinkingRow('s:m:1:thinking', 'Considering the early-abort path'),
+    ],
+    'blocks',
+  )
+
+  expect(occurrences(html, 'Thinking')).toBe(2)
+  expect(html).not.toContain('steps')
 })
 
 // P4-23 (operator, 2026-07-09): the ✦ "Session started" banner row was removed.

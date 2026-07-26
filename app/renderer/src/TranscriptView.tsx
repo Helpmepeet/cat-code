@@ -28,6 +28,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
@@ -50,6 +51,16 @@ import {
   type ToolFamily,
   type UserImageSource,
 } from './transcriptProjector.js'
+import {
+  groupReasoningRuns,
+  ReasoningLayoutContext,
+  REASONING_WITHHELD_TEXT,
+  reasoningStepsForRow,
+  toDisplayItems,
+  type ReasoningLayoutItem,
+  type ReasoningLayoutMode,
+  type ReasoningStepModel,
+} from './reasoningLayout.js'
 import {
   deriveAgentDisplayVocabulary,
   type AgentToolSource,
@@ -170,6 +181,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const [inspectedId, setInspectedId] = useState<string | null>(null)
   const openInspector = useCallback((row: ToolUseNestedRow) => setInspectedId(row.id), [])
   const closeInspector = useCallback(() => setInspectedId(null), [])
+  const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
@@ -204,7 +216,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // D2/§3 DelegateGroup: coalesce co-spawned parallel agents into ONE grouped
     // card at read time — a pure derivation over the already-nested rows, never a
     // new frame or message type (C3). Non-agent rows and lone agents pass through.
-    const items: TranscriptDisplayItem[] = groupAgentDelegates(rows)
+    // The `trail` reasoning mode layers a second read-time derivation on top
+    // (adjacent reasoning rows → one run); `blocks` leaves the rows alone.
+    const items: readonly ReasoningLayoutItem[] = groupDisplayItems(
+      groupAgentDelegates(rows),
+      reasoningMode,
+    )
     // IS-C (M5) — cached preview rows (engaged or not) keep a non-text restore
     // marker so the pane never masquerades as a live session; the `connecting`
     // phase only fires on an empty pane (handled above), so it draws no divider
@@ -220,13 +237,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         {restored ? (
           <RestoredSessionDivider resuming={restorePhase === 'resuming'} />
         ) : null}
-        {items.map(item =>
-          item.kind === 'agent-group' ? (
-            <DelegateGroup key={item.id} members={item.members} />
-          ) : (
-            <TranscriptRowView key={item.row.id} row={item.row} />
-          ),
-        )}
+        {items.map(item => (
+          <DisplayItemView item={item} key={displayItemKey(item)} />
+        ))}
       </div>
     )
   }
@@ -327,6 +340,65 @@ function PreviewSkeleton() {
   )
 }
 
+/**
+ * The `trail` reasoning mode's grouping pass. `blocks` returns the items
+ * untouched, so selecting it restores exactly the pre-existing row-per-block
+ * rendering — the two modes differ by this one derivation plus the row
+ * components they dispatch, nothing else.
+ */
+function groupDisplayItems(
+  items: readonly TranscriptDisplayItem[],
+  mode: ReasoningLayoutMode,
+): readonly ReasoningLayoutItem[] {
+  // `blocks` returns the input array BY REFERENCE — copying it would throw away
+  // the identity `groupAgentDelegates` caches per rows-slice.
+  return mode === 'trail' ? groupReasoningRuns(items) : items
+}
+
+function displayItemKey(item: ReasoningLayoutItem): string {
+  return item.kind === 'single' ? item.row.id : item.id
+}
+
+/**
+ * One display item — an agent DelegateGroup, a reasoning run, or a single row.
+ * The `default` branch carries the same compile-time `never` tripwire as the row
+ * switch: a new display-item kind breaks the build here until it gets a case.
+ */
+function DisplayItemView({ item }: { item: ReasoningLayoutItem }) {
+  switch (item.kind) {
+    case 'agent-group':
+      return <DelegateGroup members={item.members} />
+    case 'reasoning-run':
+      return <ReasoningRun steps={item.steps} />
+    case 'single':
+      return <TranscriptRowView row={item.row} />
+    default: {
+      const _exhaustive: never = item
+      void _exhaustive
+      return null
+    }
+  }
+}
+
+/**
+ * A nested row list (subagent children under an Agent card, tool-card children).
+ * These never carry agent grouping — co-spawned siblings are a TOP-LEVEL
+ * derivation (C4 keeps children under their owning card) — but their reasoning
+ * runs group exactly like the top level, so a delegated GPT turn reads the same
+ * inside a card as outside one.
+ */
+function NestedRowList({ rows }: { rows: NestedTranscriptRow[] }) {
+  const { mode } = useContext(ReasoningLayoutContext)
+  const items = groupDisplayItems(toDisplayItems(rows), mode)
+  return (
+    <>
+      {items.map(item => (
+        <DisplayItemView item={item} key={displayItemKey(item)} />
+      ))}
+    </>
+  )
+}
+
 // Memoized per row: a slice-cached read reuses unchanged row objects, so only
 // the rows that actually changed re-render (markdown re-parses once per body).
 const TranscriptRowView = memo(function TranscriptRowView({
@@ -334,6 +406,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
 }: {
   row: NestedTranscriptRow
 }) {
+  const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   // Captured before the switch narrows `row` to `never` in the default branch,
   // so the tolerant fallback can name the drifted kind without an `as` cast.
   const rowKind: string = row.kind
@@ -357,12 +430,26 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return <UserImageRowView source={row.source} />
 
     case 'thinking':
-      return (
+      // In `trail` a reasoning row always arrives here already grouped into a
+      // `reasoning-run` item, so this branch is the `blocks` treatment — plus
+      // the shape `blocks` never handled: an encrypted-only block reaches the
+      // app as `thinking` with an EMPTY body (`codex-fetch-adapter.ts:2229`),
+      // which the reasoning card would draw as an empty frame. It has nothing to
+      // read, so it draws as the redacted placeholder in either mode.
+      return row.content.trim().length === 0 ? (
+        <RedactedThinkingBlock />
+      ) : reasoningMode === 'blocks' ? (
         <ThinkingBlock content={row.content} />
+      ) : (
+        <ReasoningRun steps={reasoningStepsForRow(row)} />
       )
 
     case 'redacted-thinking':
-      return <RedactedThinkingBlock />
+      return reasoningMode === 'blocks' ? (
+        <RedactedThinkingBlock />
+      ) : (
+        <WithheldReasoningLine />
+      )
 
     case 'system-notice':
       return (
@@ -899,9 +986,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2 border-l border-accent/20 pl-3">
-          {row.children.map(child => (
-            <TranscriptRowView key={child.id} row={child} />
-          ))}
+          <NestedRowList rows={row.children} />
         </div>
       ) : null}
     </div>
@@ -1020,9 +1105,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     >
       {childCount > 0 ? (
         <div className="flex flex-col gap-2 border-l border-accent/20 pl-3">
-          {row.children.map(child => (
-            <TranscriptRowView key={child.id} row={child} />
-          ))}
+          <NestedRowList rows={row.children} />
         </div>
       ) : null}
     </ToolCardShell>
@@ -1359,6 +1442,232 @@ function ThinkingBlock({ content }: { content: string }) {
           <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
         </MarkdownErrorBoundary>
       </div>
+    </div>
+  )
+}
+
+/* ── `trail` reasoning mode ──────────────────────────────────────────────────
+ * The alternative to `ThinkingBlock` for models that expose short reasoning
+ * SUMMARY headings rather than long-form reasoning prose. Steps are derived by
+ * `reasoningLayout.ts` (which owns the wire shapes: `\n\n`-merged summary parts,
+ * blank-bodied encrypted blocks, `reasoningKind`); this file only draws them.
+ *
+ *  - No frame. Every other model-activity row is boxed (tool cards bordered,
+ *    notices washed, user turns bubbled); a four-word heading inside a card is
+ *    mostly chrome. Grouping is carried by a 1px rail + 5px nodes — the same
+ *    "belongs to the row above" device the nested-children lists already use.
+ *  - One step is ONE row (`ReasoningLine`): a head, a rail and a single node
+ *    spend two rows on four words with nothing to group or collapse. The trail
+ *    form appears only when a second step exists.
+ *  - Headings render as plain sans, one line, no markdown and no italics —
+ *    italic prose makes a six-word phrase read as a truncated quotation.
+ *  - Grey only. Accent stays with user turns, running work and the streaming
+ *    caret; reasoning is background activity.
+ *  - The encrypted signature is a SHAPE, never a payload: a hollow node and a
+ *    fixed phrase, with no affordance suggesting something can be opened.
+ */
+
+/** The one-line honesty statement, on hover: these phrases are the model's own
+ * summary of its reasoning, not the reasoning itself. Stated once per row/run,
+ * never as a per-row badge (the `summary` sub-label was removed, #7). */
+const REASONING_TITLE =
+  'Short summary headings the model exposes about its reasoning — not the reasoning itself.'
+
+/** Steps kept visible before the older ones fold away, mirroring the
+ * "Show N more lines" idiom `AssistantProse` uses for long bodies. */
+const REASONING_RUN_VISIBLE_STEPS = 4
+
+/**
+ * A run of reasoning steps. One step draws as a single line (no head, no count,
+ * nothing to collapse); an all-withheld run draws as bare lines, because a head
+ * asserting "N steps" over rows with no readable content would imply content
+ * that does not exist. Everything else gets the head + rail + steps, with the
+ * older steps folded once the run grows past `REASONING_RUN_VISIBLE_STEPS`.
+ */
+function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const listId = useId()
+
+  if (steps.length === 0) return null
+  if (steps.length === 1) {
+    const [step] = steps
+    if (step.kind === 'withheld') return <WithheldReasoningLine />
+    if (step.kind === 'heading') return <ReasoningLine content={step.text} />
+  }
+  if (steps.every(step => step.kind === 'withheld')) {
+    return (
+      <div className="flex flex-col">
+        {steps.map(step => (
+          <WithheldReasoningLine key={step.key} />
+        ))}
+      </div>
+    )
+  }
+
+  const hidden = showAll ? 0 : Math.max(0, steps.length - REASONING_RUN_VISIBLE_STEPS)
+  const shown = hidden > 0 ? steps.slice(hidden) : steps
+  return (
+    <div className="group flex flex-col">
+      <button
+        type="button"
+        aria-controls={listId}
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(value => !value)}
+        title={REASONING_TITLE}
+        className="flex w-full items-center gap-2.5 py-px text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-accent/40"
+      >
+        <span
+          className={`inline-block w-4 shrink-0 text-center text-[9px] leading-none text-text-ghost transition-[transform,color] duration-100 ease-out group-hover:text-text-subtle ${
+            collapsed ? '-rotate-90' : ''
+          }`}
+          aria-hidden
+        >
+          ▾
+        </span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle transition-colors duration-100 ease-out group-hover:text-text-muted">
+          Reasoning
+        </span>
+        {steps.length > 1 ? (
+          <span className="text-[10.5px] text-text-faint transition-colors duration-100 ease-out group-hover:text-text-subtle">
+            {steps.length} steps
+          </span>
+        ) : null}
+      </button>
+      {collapsed ? null : (
+        <ol
+          id={listId}
+          className="ml-2 mt-0.5 border-l border-white/10 pl-[17px] transition-colors duration-100 ease-out group-hover:border-white/[0.16]"
+        >
+          {hidden > 0 ? (
+            <li>
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="py-0.5 text-[11.5px] text-text-faint hover:text-text-subtle"
+              >
+                {hidden} earlier {hidden === 1 ? 'step' : 'steps'}
+              </button>
+            </li>
+          ) : null}
+          {shown.map(step => (
+            <ReasoningStep key={step.key} step={step} />
+          ))}
+        </ol>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One step on the rail. Memoized on the step model, which `reasoningStepsForRow`
+ * derives from a slice-stable row: without this a prose step re-parses its
+ * markdown on every streamed frame, since the run itself re-renders whenever the
+ * transcript's rows array is rebuilt (`transcriptProjector.ts` per-delta rebuild).
+ */
+const ReasoningStep = memo(function ReasoningStep({
+  step,
+}: {
+  step: ReasoningStepModel
+}) {
+  if (step.kind === 'withheld') {
+    return (
+      <li className="relative py-0.5 text-[12.5px] leading-normal text-text-faint">
+        <ReasoningNode placement="rail" withheld />
+        {REASONING_WITHHELD_TEXT}
+      </li>
+    )
+  }
+  return (
+    <li
+      className="relative py-0.5 text-[12.5px] leading-normal text-text-subtle"
+      title={REASONING_TITLE}
+    >
+      <ReasoningNode placement="rail" />
+      {step.kind === 'heading' ? (
+        <span className="break-words">{step.text}</span>
+      ) : (
+        <ReasoningProse content={step.text} />
+      )}
+    </li>
+  )
+})
+
+const REASONING_NODE_PLACEMENT: Record<'rail' | 'inline', string> = {
+  // Centred on the run rail (the <ol>'s left border), from inside a step <li>.
+  rail: '-left-[20px]',
+  // Centred in the 16px mark gutter of a lone, rail-less row.
+  inline: 'left-[5.5px]',
+}
+
+/** The rail node. Filled = a readable step; hollow = nothing to read. */
+function ReasoningNode({
+  placement,
+  withheld = false,
+}: {
+  placement: 'rail' | 'inline'
+  withheld?: boolean
+}) {
+  return (
+    <span
+      className={`absolute top-[9px] h-[5px] w-[5px] rounded-full ${
+        REASONING_NODE_PLACEMENT[placement]
+      } ${withheld ? 'border border-text-ghost' : 'bg-text-ghost'}`}
+      aria-hidden
+    />
+  )
+}
+
+/** A step that is real reasoning text rather than a heading: the body renders in
+ * the app's ordinary prose grammar under its own step, and can be folded away on
+ * its own so one long body does not push the rest of the run off-screen (the
+ * run's head collapses everything; this collapses just this step). */
+function ReasoningProse({ content }: { content: string }) {
+  const [hidden, setHidden] = useState(false)
+  return (
+    <>
+      {hidden ? null : (
+        <div className="mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle [&>*+*]:mt-2">
+          <MarkdownErrorBoundary fallback={content}>
+            <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
+          </MarkdownErrorBoundary>
+        </div>
+      )}
+      <button
+        type="button"
+        aria-expanded={!hidden}
+        onClick={() => setHidden(value => !value)}
+        className="font-mono text-[10.5px] text-text-faint hover:text-text-subtle"
+      >
+        {hidden ? 'show reasoning' : 'hide'}
+      </button>
+    </>
+  )
+}
+
+/** A lone readable summary: node · label · phrase, on one row. */
+function ReasoningLine({ content }: { content: string }) {
+  return (
+    <div
+      className="relative py-0.5 pl-[26px] text-[12.5px] leading-normal text-text-subtle"
+      title={REASONING_TITLE}
+    >
+      <ReasoningNode placement="inline" />
+      <span className="mr-2 text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+        Reasoning
+      </span>
+      <span className="break-words">{content}</span>
+    </div>
+  )
+}
+
+/** A lone encrypted-only block: one row, no label — the phrase names itself.
+ * The signature/`data` payload is never rendered, here or anywhere. */
+function WithheldReasoningLine() {
+  return (
+    <div className="relative py-0.5 pl-[26px] text-[12.5px] leading-normal text-text-faint">
+      <ReasoningNode placement="inline" withheld />
+      {REASONING_WITHHELD_TEXT}
     </div>
   )
 }

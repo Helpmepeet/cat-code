@@ -6,6 +6,10 @@ import type {
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import { SettingsShell } from './SettingsShell.js'
+import {
+  ReasoningLayoutContext,
+  REASONING_LAYOUT_LABELS,
+} from './reasoningLayout.js'
 
 const SNAPSHOT: SettingsSnapshot = {
   layers: [
@@ -75,6 +79,22 @@ test('core value-editor categories render real editors (P4-19), deferred ones st
     <SettingsShell initialCategory="keybindings" snapshot={SNAPSHOT} />,
   )
   expect(keybindings).toContain('coming soon')
+})
+
+test('the Theme pane carries the app-local reasoning-layout selector at the live mode', () => {
+  const html = renderToStaticMarkup(
+    <ReasoningLayoutContext.Provider value={{ mode: 'blocks', setMode: () => {} }}>
+      <SettingsShell initialCategory="theme" snapshot={SNAPSHOT} />
+    </ReasoningLayoutContext.Provider>,
+  )
+
+  expect(html).toContain('Reasoning layout')
+  // Both treatments are offered, and the control reflects the live mode.
+  expect(html).toContain(REASONING_LAYOUT_LABELS.trail)
+  expect(html).toContain(REASONING_LAYOUT_LABELS.blocks)
+  expect(html).toContain('value="blocks"')
+  // App-local, not an engine key: the row carries no settings SourceBadge.
+  expect(html).toContain('not in your settings files')
 })
 
 const EXTENSIONS: ExtensionsSnapshot = {

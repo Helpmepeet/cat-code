@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App.js'
+import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
 import './theme.css'
 
@@ -14,7 +15,9 @@ if (!root) {
 createRoot(root).render(
   <StrictMode>
     <ToastHost>
-      <App />
+      <ReasoningLayoutProvider>
+        <App />
+      </ReasoningLayoutProvider>
     </ToastHost>
   </StrictMode>,
 )

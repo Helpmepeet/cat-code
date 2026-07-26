@@ -226,7 +226,9 @@ function ToggleSwitch({
   )
 }
 
-function SelectControl({
+/** Exported so the one app-local editor (`TranscriptDisplaySection`,
+ * `SettingsShell.tsx`) wears the same select as every engine-backed one. */
+export function SelectControl({
   value,
   options,
   optionLabels,
