@@ -16,20 +16,24 @@
 
 import { init } from '../../src/entrypoints/init.js'
 import { switchSession } from '../../src/bootstrap/state.js'
-import { asSessionId } from '../../src/types/ids.js'
+import { asAgentId, asSessionId } from '../../src/types/ids.js'
 import {
   createAssistantMessage,
+  createSystemMessage,
   createUserMessage,
 } from '../../src/utils/messages.js'
 import {
   flushSessionStorage,
+  getAgentTranscriptPath,
   getTranscriptPathForSession,
+  recordSidechainTranscript,
   recordTranscript,
 } from '../../src/utils/sessionStorage.js'
 
 async function main(): Promise<void> {
   const sessionId = process.argv[2]
   const marker = process.argv[3] ?? 'p3-1-fixture-marker'
+  const realisticTail = process.argv.includes('--realistic-tail')
   if (!sessionId) {
     throw new Error('usage: mintTranscript.fixture.ts <sessionId> [marker]')
   }
@@ -45,12 +49,30 @@ async function main(): Promise<void> {
     content: `acknowledged the nonce ${marker}`,
   })
   await recordTranscript([user, assistant])
+  if (realisticTail) {
+    // Reproduce the P3-8 live shape through production persistence: a
+    // sidechain record and then a later, dangling system diagnostic. The latter
+    // must not become the resume tip and discard the user/assistant context.
+    await recordSidechainTranscript(
+      [createSystemMessage(`sidechain for ${marker}`, 'info')],
+      'restore-probe-sidechain',
+    )
+    await recordTranscript([
+      createSystemMessage(`diagnostic after ${marker}`, 'info'),
+    ])
+  }
   // Writes are queued on a flush timer; force them to disk before exit (the
   // graceful-shutdown flush we bypass with process.exit would otherwise do it).
   await flushSessionStorage()
 
   const path = getTranscriptPathForSession(sessionId)
   process.stdout.write(`MINTED_TRANSCRIPT_PATH=${path}\n`)
+  if (realisticTail) {
+    process.stdout.write('MINTED_TRANSCRIPT_SHAPE=realistic-tail\n')
+    process.stdout.write(
+      `MINTED_SIDECHAIN_PATH=${getAgentTranscriptPath(asAgentId('restore-probe-sidechain'))}\n`,
+    )
+  }
   process.exit(0)
 }
 
