@@ -5,9 +5,10 @@ import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
-import { asSessionId } from '../types/ids.js'
+import { asAgentId, asSessionId } from '../types/ids.js'
+import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordTranscript, resetProjectForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordTranscript, resetProjectForTesting } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -280,6 +281,104 @@ describe('session storage', () => {
       expect(text).toContain('"subtype":"codex_stream_surface"')
       expect(text).toContain('abc123')
       expect(text).toContain('gpt-5.6-luna')
+    })
+  })
+
+  describe('prompt-cache-break diagnostics only write to an owned transcript', () => {
+    const agentId = asAgentId('cache-break-agent')
+    // Only the fields recordPromptCacheBreak requires; values are arbitrary —
+    // these tests assert where the entry lands, not what it says.
+    const breakEntry = {
+      querySource: 'test',
+      callNumber: 2,
+      prevCacheReadTokens: 100,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      tokenDrop: 100,
+      messageCount: 2,
+      ttlBucket: 'under_5m' as const,
+      reason: 'CACHE-BREAK-MARKER',
+      contextTruncated: false,
+      staleResponseIdRetry: false,
+      systemPromptChanged: false,
+      toolSchemasChanged: false,
+      modelChanged: false,
+      fastModeChanged: false,
+      cacheControlChanged: false,
+      globalCacheStrategyChanged: false,
+      betasChanged: false,
+      autoModeChanged: false,
+      overageChanged: false,
+      cachedMCChanged: false,
+      effortChanged: false,
+      extraBodyChanged: false,
+      addedToolCount: 0,
+      removedToolCount: 0,
+      systemCharDelta: 0,
+      addedTools: [],
+      removedTools: [],
+      changedToolSchemas: [],
+      addedBetas: [],
+      removedBetas: [],
+      previousModel: 'a',
+      newModel: 'b',
+      prevGlobalCacheStrategy: '',
+      newGlobalCacheStrategy: '',
+      prevEffortValue: '',
+      newEffortValue: '',
+    }
+
+    afterEach(() => {
+      unregisterActiveSubagent(agentId)
+    })
+
+    test('main-session branch: no owning session writes nothing', () => {
+      recordPromptCacheBreak(breakEntry)
+
+      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+      expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    test('main-session branch: an owning session writes as before', async () => {
+      await recordTranscript([
+        createUserMessage({ content: 'real turn', uuid: randomUUID() }),
+      ])
+      await flushSessionStorage()
+
+      recordPromptCacheBreak(breakEntry)
+
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      expect(text).toContain('"subtype":"prompt_cache_break"')
+      expect(text).toContain('CACHE-BREAK-MARKER')
+    })
+
+    // getAgentTranscriptPath() nests under getSessionId(), so an unowned agent
+    // write minted a whole <projectDir>/<sessionId>/subagents/ tree.
+    test('agent branch: an unregistered agent writes nothing', () => {
+      recordPromptCacheBreak({ ...breakEntry, agentId })
+
+      expect(existsSync(getAgentTranscriptPath(agentId))).toBe(false)
+      expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    test('agent branch: a live agent writes to the transcript it registered', async () => {
+      const agentTranscriptPath = getAgentTranscriptPath(agentId)
+      // Same shape AgentTool records at spawn and resumeAgent at resume — the
+      // registered transcriptPath is the pointer, not a re-derived path.
+      registerActiveSubagent(agentId, {
+        startedAt: Date.now(),
+        toolUseId: 'toolu_test',
+        transcriptPath: agentTranscriptPath,
+        agentType: 'general-purpose',
+        description: 'test agent',
+        sessionId,
+      })
+
+      recordPromptCacheBreak({ ...breakEntry, agentId })
+
+      const text = await Bun.file(agentTranscriptPath).text()
+      expect(text).toContain('"subtype":"prompt_cache_break"')
+      expect(text).toContain('CACHE-BREAK-MARKER')
     })
   })
 })

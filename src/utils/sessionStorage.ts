@@ -68,7 +68,7 @@ import type {
 } from '../types/message.js'
 import type { QueueOperationMessage } from '../types/messageQueueTypes.js'
 import { uniq } from './array.js'
-import { registerCleanup } from './cleanupRegistry.js'
+import { getActiveSubagentTranscriptPath, registerCleanup } from './cleanupRegistry.js'
 import { updateSessionName } from './concurrentSessions.js'
 import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
@@ -572,6 +572,13 @@ export function recordCodexStreamSurface(entry: {
  * Records confirmed prompt cache misses with structured cause metadata so
  * post-hoc debugging does not rely on debug-log scraping.
  *
+ * No-op unless the target transcript has a live owner. Each branch asks its own
+ * owner for the path rather than deriving one from an id: the main session from
+ * `getOwnedTranscriptPath()`, a subagent from the entry the agent registered at
+ * spawn/resume. Deriving instead (`getTranscriptPath()` /
+ * `getAgentTranscriptPath()`) yields a path whether or not anything owns it, so
+ * an unowned write minted an orphan transcript.
+ *
  * Sync and best-effort — never throws. Safe to call from the API path.
  */
 export function recordPromptCacheBreak(entry: {
@@ -622,8 +629,9 @@ export function recordPromptCacheBreak(entry: {
 }): void {
   try {
     const transcriptPath = entry.agentId
-      ? getAgentTranscriptPath(entry.agentId)
-      : getTranscriptPath()
+      ? getActiveSubagentTranscriptPath(entry.agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null) return
     appendEntryToFile(transcriptPath, {
       type: 'system',
       subtype: 'prompt_cache_break',
