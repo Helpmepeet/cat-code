@@ -876,6 +876,142 @@ export const SDK_MESSAGE_FIXTURE: {
         timestamp: '2026-07-04T09:02:01.000Z',
       },
     },
+
+    /* ── engine-injected user turns (`origin`) ────────────────────────────────
+     * Five of the six `MessageOrigin` kinds (src/types/message.ts:10) are NOT
+     * the operator. They reach the app as ordinary `user` frames — live via the
+     * mid-turn queue drain (QueryEngine.ts `queued_command` yield) and on resume
+     * via `toSDKMessages` over a transcript the TUI wrote — and every one of
+     * them rendered as the operator's own bubble until `origin` crossed the wire
+     * (protocol.ts `EventFrame` §User-turn provenance). One sample per kind: a
+     * gap here is a kind that silently regresses to a user bubble. */
+    {
+      name: 'user: task-notification origin (agent completion banner)',
+      anchor:
+        'src/utils/messageQueueManager.ts:143-155 (enqueuePendingNotification) → src/QueryEngine.ts queued_command yield',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            'Task notification\nTask ID: task_01\nStatus: completed\nSummary: refactored the parser',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        origin: {
+          kind: 'task-notification',
+          status: 'completed',
+          summary: 'refactored the parser',
+        },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u010',
+        timestamp: '2026-07-04T09:03:00.000Z',
+      },
+    },
+    {
+      name: 'user: coordinator origin (orchestrator message to a worker)',
+      anchor:
+        'src/utils/attachments.ts:1107-1112 (getAgentPendingMessageAttachments)',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'switch to the settings surface next' },
+        parent_tool_use_id: null,
+        isReplay: true,
+        origin: { kind: 'coordinator' },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u011',
+        timestamp: '2026-07-04T09:03:01.000Z',
+      },
+    },
+    {
+      name: 'user: channel origin (external MCP channel, server + user)',
+      anchor:
+        'src/services/mcp/useManageMCPConnections.ts:520-536; render precedent src/components/messages/UserChannelMessage.tsx:56-78',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'can you look at the deploy failure?' },
+        parent_tool_use_id: null,
+        isReplay: true,
+        origin: { kind: 'channel', server: 'slack', user: 'dana' },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u012',
+        timestamp: '2026-07-04T09:03:02.000Z',
+      },
+    },
+    {
+      name: 'user: teammate origin (swarm peer message)',
+      anchor:
+        'src/utils/swarm/inProcessRunner.ts:1304,1670,1709; render precedent src/components/messages/UserTeammateMessage.tsx:98',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'I finished the projector tests.' },
+        parent_tool_use_id: null,
+        isReplay: true,
+        origin: { kind: 'teammate', from: 'scout' },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u013',
+        timestamp: '2026-07-04T09:03:03.000Z',
+      },
+    },
+    {
+      name: 'user: deferred-continuation origin (resumed after a provider stall)',
+      anchor: 'src/services/deferredContinuationRunner.ts:367-379 (isMeta:false)',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'Continue where you left off.' },
+        parent_tool_use_id: null,
+        isReplay: true,
+        origin: { kind: 'deferred-continuation' },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u014',
+        timestamp: '2026-07-04T09:03:04.000Z',
+      },
+    },
+    {
+      name: 'user: human origin (explicitly the operator — stays a user bubble)',
+      anchor: 'src/types/message.ts:11 ({ kind: "human" })',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'run the tests please' },
+        parent_tool_use_id: null,
+        origin: { kind: 'human' },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u015',
+        timestamp: '2026-07-04T09:03:05.000Z',
+      },
+    },
+    {
+      name: 'user: legacy <task-notification> envelope, NO origin (pre-field transcript)',
+      anchor:
+        'src/utils/taskNotification.ts:119-137 (compatibility-only legacy parser)',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            '<task-notification>\n<status>failed</status>\n<summary>build broke</summary>\n</task-notification>',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u016',
+        timestamp: '2026-07-04T09:03:06.000Z',
+      },
+    },
   ],
 
   /* ── system — SDKSystemMessage + SDKCompactBoundaryMessage +

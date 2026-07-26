@@ -195,19 +195,52 @@ export type UserImageRow = RowSource & {
 /**
  * A task/agent-completion banner. The engine injects these as a USER-role turn
  * (`src/utils/taskNotification.ts` `formatTaskNotificationText`, enqueued by
- * `src/utils/messageQueueManager.ts` with a `task-notification` origin). That
- * origin marker — which the TUI uses to render it distinctly — is an internal
- * engine `Message` field that does NOT cross the app wire, so without this the
- * projector would render the banner as a right-aligned USER bubble, as if the
- * operator had typed it (bug, 2026-07-21). Detected block-side and projected here
- * as a system-side notice instead. Block-level (a `RowSource`) because it rides a
- * single `user` content block.
+ * `src/utils/messageQueueManager.ts` with a `task-notification` origin), so
+ * without a provenance signal the projector would render the banner as a
+ * right-aligned USER bubble, as if the operator had typed it (bug, 2026-07-21).
+ *
+ * Authoritative source is now `SDKUserMessage.origin` (protocol.ts `EventFrame`
+ * §User-turn provenance) — `status` comes from `origin.status` rather than a
+ * regex over the banner. The text check that remains is the LEGACY
+ * `<task-notification>` XML envelope, which real stored transcripts written
+ * before the origin field still carry; it is a frozen historical artifact, not a
+ * mirror of live engine logic, so it cannot drift when the engine rewords.
+ * Block-level (a `RowSource`) because it rides a single `user` content block.
  */
 export type TaskNotificationRow = RowSource & {
   kind: 'task-notification'
-  /** Parsed `Status:` line (completed|failed|killed|…); null when absent. */
+  /** `origin.status` (completed|failed|killed|…), else the legacy `<status>` tag. */
   status: string | null
   /** The full banner text — rendered on the system side, never as a user bubble. */
+  content: string
+  timestamp?: string
+  isReplay: boolean
+}
+
+/**
+ * The other four engine-injected `role:'user'` turns (`MessageOrigin`,
+ * `src/types/message.ts:10`): `coordinator`, `channel`, `teammate`, and
+ * `deferred-continuation`. All four reach the app as ordinary user frames — the
+ * live path is the mid-turn queue drain (`src/QueryEngine.ts` `queued_command`
+ * yield), plus restored history (`toSDKMessages`) for a session the TUI wrote —
+ * and every one of them used to render as the operator's own bubble.
+ *
+ * One row kind rather than four: the fix they need is identical (attribute the
+ * turn to its real author, on the system side), and the per-kind difference is
+ * only the label/glyph, which `injectedKind` carries. `label` is the sender when
+ * the origin names one (channel server, teammate handle) and null otherwise.
+ * `injectedKind` is a plain `string`, NOT the closed union: a newer engine may
+ * send a kind this build has never heard of, and display degrades gracefully
+ * rather than dropping the row (TranscriptView renders an unknown kind with a
+ * neutral "Injected message" label).
+ */
+export type InjectedTurnRow = RowSource & {
+  kind: 'injected-turn'
+  /** The wire `origin.kind` verbatim; unknown values render a neutral fallback. */
+  injectedKind: string
+  /** Sender handle when the origin names one (`channel.server`, `teammate.from`). */
+  label: string | null
+  /** The turn's text, rendered system-side — never as a user bubble. */
   content: string
   timestamp?: string
   isReplay: boolean
@@ -248,6 +281,7 @@ export type TranscriptRow =
   | CommandEchoRow
   | UserImageRow
   | TaskNotificationRow
+  | InjectedTurnRow
   | SystemNoticeRow
   | ResultRow
   | CompactBoundaryRow
@@ -774,6 +808,10 @@ function projectUserFrame(
       : nonEmptyString(message.timestamp)
   if (message.timestamp !== undefined && timestamp === null) return state
 
+  // Message-level provenance: `origin` describes the whole turn, so every text
+  // block in it is attributed the same way (image blocks stay image rows).
+  const origin = projectMessageOrigin(message.origin)
+
   const rows = blocks.flatMap((block, blockIndex) => {
     const row = projectUserContentBlock(block, {
       sessionId,
@@ -784,6 +822,7 @@ function projectUserFrame(
     }, {
       isReplay: message.isReplay === true,
       timestamp: timestamp ?? undefined,
+      origin,
     })
     return row === null ? [] : [row]
   })
@@ -1504,38 +1543,73 @@ function projectAssistantContentBlock(
 function projectUserContentBlock(
   block: unknown,
   source: Omit<RowSource, 'id'>,
-  metadata: { timestamp?: string; isReplay: boolean },
-): UserTextRow | CommandEchoRow | UserImageRow | TaskNotificationRow | null {
+  metadata: {
+    timestamp?: string
+    isReplay: boolean
+    origin: InjectedOrigin | null
+  },
+):
+  | UserTextRow
+  | CommandEchoRow
+  | UserImageRow
+  | TaskNotificationRow
+  | InjectedTurnRow
+  | null {
   if (!isRecord(block) || typeof block.type !== 'string') return null
+  const { origin, ...rowMetadata } = metadata
 
   if (block.type === 'text') {
     if (typeof block.text !== 'string') return null
+    // Provenance outranks every text heuristic below: an injected turn may
+    // legitimately contain a `<command-message>` or any other marker, and the
+    // operator must never be shown as its author.
+    if (origin && origin.kind === 'task-notification') {
+      return {
+        ...source,
+        ...rowMetadata,
+        id: rowId(source, 'task-notification'),
+        kind: 'task-notification',
+        status: origin.status,
+        content: block.text,
+      }
+    }
+    if (origin) {
+      return {
+        ...source,
+        ...rowMetadata,
+        id: rowId(source, 'injected-turn'),
+        kind: 'injected-turn',
+        injectedKind: origin.kind,
+        label: origin.label,
+        content: block.text,
+      }
+    }
     const command = parseCommandEcho(block.text)
     if (command === false) return null
     if (command) {
       return {
         ...source,
-        ...metadata,
+        ...rowMetadata,
         id: rowId(source, 'command-echo'),
         kind: 'command-echo',
         ...command,
       }
     }
-    if (isTaskNotificationBanner(block.text)) {
-      // An engine-injected agent-completion turn — render it system-side, never
-      // as a user bubble (see TaskNotificationRow doc).
+    if (isLegacyTaskNotificationBanner(block.text)) {
+      // A pre-`origin` stored transcript: the legacy XML envelope is the only
+      // provenance those frames ever carry (see TaskNotificationRow doc).
       return {
         ...source,
-        ...metadata,
+        ...rowMetadata,
         id: rowId(source, 'task-notification'),
         kind: 'task-notification',
-        status: parseTaskNotificationStatus(block.text),
+        status: parseLegacyTaskNotificationStatus(block.text),
         content: block.text,
       }
     }
     return {
       ...source,
-      ...metadata,
+      ...rowMetadata,
       id: rowId(source, 'user-text'),
       kind: 'user-text',
       role: 'user',
@@ -1616,31 +1690,70 @@ function extractXmlTag(text: string, tag: string): string | null {
   return end < 0 ? null : text.slice(contentStart, end)
 }
 
-const TASK_NOTIFICATION_HEADER = 'Task notification'
 const LEGACY_TASK_NOTIFICATION_TAG = '<task-notification>'
 
 /**
- * True for an engine task/agent-completion banner. A local text check (not an
- * engine import — the renderer bundle resolves `@cat-code/engine` to type-only
- * snapshots, `app/tsconfig.json`): it mirrors `isTaskNotificationText`
- * (`src/utils/taskNotification.ts:105`), accepting both the structured banner and
- * the legacy XML envelope older transcripts still carry.
+ * True for the LEGACY `<task-notification>` XML envelope. Kept because real
+ * stored transcripts written before `SDKUserMessage.origin` existed carry no
+ * provenance at all, and this envelope is the only marker they have. It is a
+ * frozen historical format — unlike the structured-banner check it replaced (a
+ * hand-copy of `isTaskNotificationText`, `src/utils/taskNotification.ts:105`),
+ * it cannot silently drift when the engine rewords its banner, because no live
+ * emitter produces it any more (`parseTaskNotificationDetails` calls it
+ * "compatibility-only", taskNotification.ts:119).
  */
-function isTaskNotificationBanner(text: string): boolean {
-  const trimmed = text.trim()
-  return (
-    trimmed === TASK_NOTIFICATION_HEADER ||
-    trimmed.startsWith(`${TASK_NOTIFICATION_HEADER}\n`) ||
-    trimmed.startsWith(LEGACY_TASK_NOTIFICATION_TAG)
-  )
+function isLegacyTaskNotificationBanner(text: string): boolean {
+  return text.trim().startsWith(LEGACY_TASK_NOTIFICATION_TAG)
 }
 
-/** The banner's status (structured `Status:` line, else legacy `<status>` tag). */
-function parseTaskNotificationStatus(text: string): string | null {
-  const line = /^Status:\s*(.+)$/m.exec(text)?.[1]?.trim()
-  if (line) return line
-  const legacy = /<status>([\s\S]*?)<\/status>/.exec(text)?.[1]?.trim()
-  return legacy || null
+/** The legacy envelope's `<status>` tag; null when absent. */
+function parseLegacyTaskNotificationStatus(text: string): string | null {
+  return /<status>([\s\S]*?)<\/status>/.exec(text)?.[1]?.trim() || null
+}
+
+/**
+ * The renderer-side narrowing of `SDKUserMessage.origin` (protocol.ts
+ * `EventFrame` §User-turn provenance): the row-relevant facts only, with
+ * `kind` kept as a plain string so a kind minted by a newer engine still
+ * produces an injected row instead of falling back to a user bubble.
+ */
+type InjectedOrigin = {
+  kind: string
+  /** Sender handle when the origin names one; null otherwise. */
+  label: string | null
+  /** `task-notification` status; null for every other kind. */
+  status: string | null
+}
+
+/**
+ * Narrow an unknown `origin` off the wire. Returns null for absent, malformed,
+ * or explicitly `human` provenance — all three mean "render as the operator's
+ * own turn", which is also the correct reading for every frame that predates
+ * the field. Runtime-narrowed with no casts: the claim arrives from the far
+ * side of a socket, so nothing is trusted structurally.
+ */
+function projectMessageOrigin(value: unknown): InjectedOrigin | null {
+  if (!isRecord(value)) return null
+  const kind = nonEmptyString(value.kind)
+  if (!kind || kind === 'human') return null
+  const server = nonEmptyString(value.server)
+  const user = nonEmptyString(value.user)
+  const from = nonEmptyString(value.from)
+  const label =
+    kind === 'channel'
+      ? server === null
+        ? null
+        : user === null
+          ? server
+          : `${server} · ${user}`
+      : kind === 'teammate'
+        ? from
+        : null
+  return {
+    kind,
+    label,
+    status: kind === 'task-notification' ? nonEmptyString(value.status) : null,
+  }
 }
 
 function rowId(source: Omit<RowSource, 'id'>, blockId: string): string {

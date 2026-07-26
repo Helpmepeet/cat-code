@@ -92,3 +92,54 @@ test('fails CLOSED on a value nested past the scannable depth', () => {
   expect(r.ok).toBe(false)
   if (!r.ok) expect(r.key).toContain('max depth')
 })
+
+test('an origin-bearing user frame is secretGuard-clean; a raw channel `meta` would NOT be', () => {
+  // The narrowing that protects this frame is engine-side (`toSDKMessageOrigin`,
+  // src/utils/messages/mappers.ts): the projection carries `server`/`user` but
+  // never the channel's `meta` map, whose KEYS are authored by a third-party MCP
+  // channel server. This asserts BOTH halves — that what we ship passes, and
+  // that forwarding the raw origin would have cost the whole frame.
+  const shipped = {
+    kind: 'event',
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'can you look at the deploy failure?' },
+        origin: { kind: 'channel', server: 'slack', user: 'dana' },
+      },
+    },
+  }
+  expect(scanForSecrets(shipped).ok).toBe(true)
+
+  const rawUnnarrowed = {
+    kind: 'event',
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        origin: {
+          kind: 'channel',
+          server: 'slack',
+          meta: { authorization: 'Bearer hunter2' },
+        },
+      },
+    },
+  }
+  const r = scanForSecrets(rawUnnarrowed)
+  expect(r.ok).toBe(false)
+  if (!r.ok) expect(r.key).toBe('authorization')
+})
+
+test('a task-notification origin carries no free-text result to scan', () => {
+  // `MessageOrigin`'s task-notification variant carries `result`/`usage`; the
+  // projection keeps only status + summary, so the frame does not double the
+  // banner text it already carries.
+  const projected = {
+    kind: 'task-notification',
+    status: 'completed',
+    summary: 'done',
+  }
+  expect(scanForSecrets(projected).ok).toBe(true)
+  expect(Object.keys(projected).sort()).toEqual(['kind', 'status', 'summary'])
+})

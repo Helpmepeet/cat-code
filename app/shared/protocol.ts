@@ -448,6 +448,42 @@ export type ReadyFrame = {
  * `AppSessionEvent` — including `event.message: SDKMessage` for `type:'message'`
  * — serialized to one JSON frame. This is the raw-forwarding serializer proven
  * in TRANSPORT-DECISION.md §2, NOT `createAppSessionEventMapper`.
+ *
+ * **User-turn provenance (`SDKUserMessage.origin`).** Five of the engine's six
+ * `MessageOrigin` kinds (`src/types/message.ts:10`) are engine-INJECTED turns
+ * that nonetheless carry `role: 'user'` — `task-notification`, `coordinator`,
+ * `channel`, `teammate`, `deferred-continuation`. Until this field existed the
+ * discriminant never left the engine process, so the renderer could only sniff
+ * message TEXT for one of them and rendered the other four as the operator's own
+ * pink right-aligned bubble. `origin` now rides the raw `SDKUserMessage` on this
+ * frame (engine side: `mappers.ts` `toSDKMessageOrigin`), and
+ * `transcriptProjector.ts` reads it instead of re-implementing the engine's
+ * provenance rules renderer-side (the hand-copied `isTaskNotificationText`
+ * mirror it replaced was exactly that duplication).
+ *
+ * The decision that makes it safe (recorded here inline, the way the C2 account
+ * verbs' reasoning is recorded above):
+ *
+ *  - **Additive under v1 — NO `PROTOCOL_VERSION` bump.** No frame changed shape:
+ *    an optional field appeared on a message the frame already carried whole.
+ *    A renderer that ignores `origin` behaves exactly as before, and an engine
+ *    that predates it (a resumed transcript, an older sidecar) simply omits it —
+ *    which is why absent must keep meaning "the operator typed this".
+ *  - **Outbound-only.** No inbound frame kind, no preload channel, no new
+ *    renderer vocabulary. The renderer cannot author or influence `origin`; the
+ *    engine is its sole writer, so it is not an attack surface — it REMOVES the
+ *    renderer's need to infer provenance from attacker-influenceable text.
+ *  - **Secret-owner invariant untouched (SECURITY-MINIMUM §4).** The projection
+ *    is NARROWED at the engine, not forwarded whole: `task-notification` keeps
+ *    only `status`/`summary` (its `result`/`usage` free text is already inside
+ *    the banner content this frame carries), `teammate` keeps only the sender
+ *    handle (never the `TeammateMessageContract[]` payload), and `channel` DROPS
+ *    `meta: Record<string, string>` — whose KEYS are authored by a third-party
+ *    MCP channel server, so a key named `authorization`/`apiKey` would trip
+ *    `secretGuard`'s key-name scan and cost the whole frame. That is the same
+ *    keys-as-values trap `SettingsSnapshot.resolved` is shaped as an array to
+ *    avoid. Every surviving field is a short enum or handle; `secretGuard` and
+ *    `MAX_OUTBOUND_FRAME_BYTES` still apply to the frame unchanged.
  */
 export type EventFrame = {
   kind: 'event'
