@@ -701,3 +701,149 @@ describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
     expect(selectRecentWorkspaces([], new Map())).toEqual([])
   })
 })
+
+describe('selectRecentWorkspaces label disambiguation (CC-15)', () => {
+  /**
+   * Recents built through the REAL P4-6 merge — the production feed is
+   * `selectRecentWorkspaces(sessionCatalogRows, welcomeTrustByCwd)`
+   * (`App.tsx:894`), and `sessionCatalogRows` is `selectMergedSessionRows`
+   * output. History-only entries suffice for a label claim; the trust/openable
+   * pairing gets its own registry-backed case below.
+   */
+  function recentsFor(
+    workspaces: readonly { cwd: string; modifiedAtMs: number }[],
+    limit?: number,
+  ) {
+    const merged = selectMergedSessionRows(
+      [],
+      snapshot(
+        workspaces.map((workspace, index) =>
+          entry({
+            sessionId: `e${index}`,
+            cwd: workspace.cwd,
+            modifiedAtMs: workspace.modifiedAtMs,
+          }),
+        ),
+      ),
+    )
+    return limit == null
+      ? selectRecentWorkspaces(merged, new Map())
+      : selectRecentWorkspaces(merged, new Map(), limit)
+  }
+
+  test("the operator's real collision — two recents ending /app are separable", () => {
+    const recents = recentsFor([
+      { cwd: '/Users/pt/cat-code/app', modifiedAtMs: 5000 },
+      { cwd: '/Users/pt/PTClove/app', modifiedAtMs: 4000 },
+    ])
+    const names = recents.map(r => r.name)
+    expect(new Set(names).size).toBe(2)
+    expect(names).not.toContain('app')
+    const byCwd = new Map(recents.map(r => [r.cwd, r.name]))
+    expect(byCwd.get('/Users/pt/cat-code/app')).toBe('cat-code/app')
+    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
+    // Label-only change: cwd keying and newest-first order are untouched.
+    expect(recents.map(r => r.cwd)).toEqual([
+      '/Users/pt/cat-code/app',
+      '/Users/pt/PTClove/app',
+    ])
+  })
+
+  test('an uncontested recent keeps its bare basename while a collision widens', () => {
+    const recents = recentsFor([
+      { cwd: '/Users/pt/discordbot', modifiedAtMs: 6000 },
+      { cwd: '/Users/pt/cat-code/app', modifiedAtMs: 5000 },
+      { cwd: '/Users/pt/PTClove/app', modifiedAtMs: 4000 },
+    ])
+    const byCwd = new Map(recents.map(r => [r.cwd, r.name]))
+    expect(byCwd.get('/Users/pt/discordbot')).toBe('discordbot')
+    expect(byCwd.get('/Users/pt/cat-code/app')).toBe('cat-code/app')
+    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
+  })
+
+  test('a collision whose entries carry DIFFERENT trust is separable, and the open target rides along', () => {
+    const merged = selectMergedSessionRows(
+      [
+        descriptor({
+          appSessionId: 'live-catcode',
+          engineSessionId: 'e-catcode',
+          cwd: '/Users/pt/cat-code/app',
+          status: 'ready',
+          restorable: false,
+          lastAttachedAt: 5000,
+        }),
+      ],
+      snapshot([
+        entry({
+          sessionId: 'e-catcode',
+          cwd: '/Users/pt/cat-code/app',
+          modifiedAtMs: 5000,
+        }),
+        entry({
+          sessionId: 'e-ptclove',
+          cwd: '/Users/pt/PTClove/app',
+          modifiedAtMs: 4000,
+        }),
+      ]),
+    )
+    const recents = selectRecentWorkspaces(
+      merged,
+      new Map([
+        ['/Users/pt/cat-code/app', true],
+        ['/Users/pt/PTClove/app', false],
+      ]),
+    )
+    const untrusted = recents.filter(r => r.trusted === false)
+    expect(untrusted).toHaveLength(1)
+    // The point of the fix: an untrusted badge must sit on a name that no other
+    // visible entry answers to, or the trust decision is unattributable.
+    expect(recents.filter(r => r.name === untrusted[0]!.name)).toHaveLength(1)
+    expect(untrusted[0]!.name).toBe('PTClove/app')
+    const trusted = recents.find(r => r.cwd === '/Users/pt/cat-code/app')!
+    expect(trusted.trusted).toBe(true)
+    expect(trusted.name).toBe('cat-code/app')
+    // Openable adoption survives the label pass (it is the thing being clicked).
+    expect(trusted.appSessionId).toBe('live-catcode')
+    expect(trusted.live).toBe(true)
+  })
+
+  test('disambiguation runs AFTER the cap — a twin cut by the limit never widens a survivor', () => {
+    const workspaces = [
+      { cwd: '/Users/pt/discordbot', modifiedAtMs: 6000 },
+      { cwd: '/Users/pt/cat-code/app', modifiedAtMs: 5000 },
+      { cwd: '/Users/pt/PTClove/app', modifiedAtMs: 4000 },
+    ]
+    const capped = recentsFor(workspaces, 2)
+    expect(capped.map(r => r.cwd)).toEqual([
+      '/Users/pt/discordbot',
+      '/Users/pt/cat-code/app',
+    ])
+    // The colliding twin is off-screen, so paying a longer label for it would be
+    // noise the operator cannot explain.
+    expect(capped.map(r => r.name)).toEqual(['discordbot', 'app'])
+    // Raise the cap so both land on screen and the collision must be resolved.
+    expect(recentsFor(workspaces, 3).map(r => r.name)).toEqual([
+      'discordbot',
+      'cat-code/app',
+      'PTClove/app',
+    ])
+  })
+
+  test('degenerate cwds stay sane — trailing slash still collides, root and empty keep their labels', () => {
+    const recents = recentsFor([
+      { cwd: '/Users/pt/cat-code/app/', modifiedAtMs: 6000 },
+      { cwd: '/Users/pt/PTClove/app', modifiedAtMs: 5000 },
+      { cwd: '/', modifiedAtMs: 4000 },
+      { cwd: '', modifiedAtMs: 3000 },
+    ])
+    const byCwd = new Map(recents.map(r => [r.cwd, r.name]))
+    // A trailing separator must not defeat the collision detection.
+    expect(byCwd.get('/Users/pt/cat-code/app/')).toBe('cat-code/app')
+    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
+    // basename('/') is '' — the pre-existing `|| cwd` fallback still applies.
+    expect(byCwd.get('/')).toBe('/')
+    // An unreconciled cwd (MAJOR-1) has no path to widen; unchanged by this fix.
+    expect(byCwd.get('')).toBe('')
+    expect(recents).toHaveLength(4)
+  })
+})

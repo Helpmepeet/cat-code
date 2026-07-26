@@ -538,7 +538,12 @@ export function groupByWorkspace(
  */
 export type RecentWorkspace = {
   cwd: string
-  /** basename(cwd) for the label. */
+  /**
+   * The label to render for this project — the cwd basename when nothing else in
+   * the list shares it, otherwise the shortest leading path that tells them apart
+   * (`disambiguateWorkspaceLabels`, the same helper the sidebar's group headers
+   * use). NOT simply `basename(cwd)`: see `selectRecentWorkspaces`.
+   */
   name: string
   /**
    * The most-recent registry-backed session in this workspace (a row carrying an
@@ -568,6 +573,22 @@ export type RecentWorkspace = {
  * capped to `limit`. Prefers an openable (registry) row's app id + live flag so
  * a project with any openable session can be reopened; a purely-history project
  * yields `appSessionId: null`.
+ *
+ * Labels go through `disambiguateWorkspaceLabels`, the SAME helper the sidebar's
+ * group headers use (CC-14): keying on cwd is right, but labelling each recent
+ * with a bare `basename(cwd)` threw away everything that separated two projects
+ * sharing one — and this list is where the operator PICKS a project to open, with
+ * a per-path `trusted` badge attached, so two entries reading `app` could offer
+ * different trust decisions under one name. Latent rather than active only because
+ * the cap keeps the list short.
+ *
+ * Disambiguate AFTER the cap, over exactly the entries that will render. The
+ * helper's contract is "shortest label that separates it from the others ON
+ * SCREEN", and `groupByWorkspace` gives it precisely the set it returns; matching
+ * that here keeps one invariant for both call sites. A 7th, never-rendered project
+ * must not widen a visible label to resolve a collision the operator cannot see —
+ * and since the cap is a subset, doing it after can only ever produce labels that
+ * are equal or shorter, never more ambiguous.
  */
 export function selectRecentWorkspaces(
   rows: readonly MergedSessionRow[],
@@ -600,9 +621,16 @@ export function selectRecentWorkspaces(
       existing.live = row.live
     }
   }
-  return [...byCwd.values()]
+  const visible = [...byCwd.values()]
     .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs)
     .slice(0, limit)
+  const labels = disambiguateWorkspaceLabels(visible.map(recent => recent.cwd))
+  return visible.map(recent => ({
+    ...recent,
+    // Depth 1 IS `basename(cwd) || cwd`, so an uncontested label is byte-identical
+    // to the seed above and the `??` fallback is a no-op belt.
+    name: labels.get(recent.cwd) ?? recent.name,
+  }))
 }
 
 export type DateBucket = { label: string; rows: MergedSessionRow[] }
