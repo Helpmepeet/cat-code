@@ -693,6 +693,28 @@ export type SettingsSnapshot = {
     key: string
     options: Array<{ value: string; label: string; description?: string }>
   }>
+  /**
+   * CC-13 — the persisted `permissions.defaultMode` setting: the value plus the
+   * layer it resolved from. ABSENT when the key is unset at every enabled layer,
+   * in which case the engine chooses the session's opening mode itself
+   * (`src/utils/permissions/permissionSetup.ts:758-796`) — so absent means "not
+   * configured", never "unknown".
+   *
+   * It needs its own field because neither existing carrier can hold it:
+   *  - `resolved` carries TOP-LEVEL key names only, so a nested key is invisible
+   *    there (`permissions` appears; `permissions.defaultMode` never can);
+   *  - `editableValues` is the P4-19 WRITE allowlist — `EDITABLE_SETTING_KEYS`
+   *    is what gates the sidecar's write path — and a permission mode must stay
+   *    READ-ONLY at this boundary. `permission.setMode` is session-scoped by
+   *    construction and deliberately has no destination for `defaultMode`
+   *    (decisions/PERMISSION-BOUNDARY.md §3, `sidecar/permissionDomain.ts:44-48`).
+   *
+   * Read-only outbound and non-secret by construction (a short mode enum + a
+   * layer id), so `secretGuard` passes trivially. Optional + tolerant-read,
+   * following the `availableOptions` precedent: a snapshot predating the field
+   * simply carries none and the pane renders the unset state.
+   */
+  permissionDefaultMode?: { value: string; source: SettingSourceId }
 }
 
 // Compile-time guard: an editable source must be a real settings layer.

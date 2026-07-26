@@ -2,44 +2,64 @@ import { PERMISSION_SET_MODE_MODES } from '../../shared/protocol.js'
 import type {
   PermissionContextSnapshot,
   PermissionSetModeMode,
+  SettingsSnapshot,
 } from '../../shared/protocol.js'
+import { SourceBadge } from './SettingsField.js'
 
 /**
  * Read-only permission rules/context surface (P2-4, adapts the prototype's
  * `PermissionRules.jsx` — decisions/PERMISSION-BOUNDARY.md §4).
  *
- * Read path: the C3 `permission.context` snapshot — the ENGINE's live
- * context, so settings-file and hook-applied rules show up (a renderer-side
- * reconstruction from update echoes would miss them). Not rendered before the
- * first snapshot arrives; a fresh snapshot supersedes everything local.
+ * TWO read paths, on purpose (CC-13) — the split is by what the data IS, not by
+ * convenience:
+ *
+ *  1. `defaultMode` — the persisted `permissions.defaultMode` SETTING, from the
+ *     P4-3 settings snapshot. A global, file-backed configuration value, so it
+ *     is shown whether or not a session is attached.
+ *  2. `context` — the C3 `permission.context` snapshot: the ENGINE's live
+ *     resolved context for ONE session. Everything else here is read from it,
+ *     and must be, because it is a strict SUPERSET of the settings files that no
+ *     settings-file read can reproduce: `cliArg`/`command` rules added at
+ *     runtime, C1 always-allow suggestions applied mid-turn, PermissionRequest
+ *     hooks applying rules, auto-mode dangerous-rule stripping
+ *     (`sidecar/sessionController.ts` post-steps), and `managedRulesOnly`
+ *     (`shouldAllowManagedPermissionRulesOnly()`), which can make user/project/
+ *     local/CLI rules load NOT AT ALL — rendering settings-file rules there
+ *     would actively misreport what is enforced. `ruleMetadata` likewise is
+ *     derived at the sidecar with the engine's own rule parser (P4-34) so the
+ *     renderer never learns the rule grammar.
+ *
+ * Hence: no session ⇒ the settings-backed section still renders, and the
+ * session-derived half says so plainly instead of waiting forever.
  *
  * Write paths, deliberately narrow:
  *   - mode switching via `permission.setMode` (C2 — the 4 wire-allowlisted
  *     modes; `bypassPermissions`/`auto` are not offered and would be rejected
- *     at the sidecar anyway);
+ *     at the sidecar anyway). It sets THIS SESSION's mode only; it has no
+ *     destination for `permissions.defaultMode` (PERMISSION-BOUNDARY.md §3),
+ *     which is why the default is read-only here;
  *   - "always allow" lives on the QUEUE cards as C1 suggestion selection.
  * General rule CRUD is NOT enabled at this boundary — adding allow rules or
  * removing deny rules is exactly T6b's escalation.
  */
 export function PermissionRulesEditor({
   context,
+  defaultMode = null,
   onSetMode,
   showModes = true,
 }: {
   context: PermissionContextSnapshot | null
+  /**
+   * The persisted `permissions.defaultMode` + the layer it resolved from
+   * (`selectPermissionDefaultMode`). null = unset at every layer, or no settings
+   * snapshot yet — both render as an explicit unset state, never a fake value.
+   */
+  defaultMode?: NonNullable<SettingsSnapshot['permissionDefaultMode']> | null
   onSetMode: (mode: PermissionSetModeMode) => void
   /** When false, render the read-only rules WITHOUT the mode buttons — the
    * `PermissionModeChip` owns mode switching and reuses this for the rules. */
   showModes?: boolean
 }) {
-  if (!context) {
-    return (
-      <p className="text-xs text-text-subtle">
-        Waiting for the engine's permission context…
-      </p>
-    )
-  }
-
   return (
     <div aria-label="Permission rules" className="flex flex-col gap-5 text-xs">
       <section aria-labelledby="permission-default-mode">
@@ -49,126 +69,189 @@ export function PermissionRulesEditor({
         >
           Default mode
         </h3>
+        {/* The SETTING, not any session's live mode: `permissions.defaultMode`
+          * off the P4-3 settings snapshot. Read-only — the renderer never
+          * authors a permission value (T6b), and `permission.setMode` has no
+          * destination for the default (PERMISSION-BOUNDARY.md §3). */}
         <div className="flex items-center gap-2">
-          <span className="text-text-muted">Permission mode</span>
-          {/* Read-only current-mode pill — a PURE display of the engine's resolved
-           * `context.mode`, rendered UNCONDITIONALLY. It emits no set-mode verb and
-           * is never a control, so T6b holds even in the Settings read-only pane
-           * (`showModes={false}`); the interactive selector below is the only thing
-           * that authors a mode, and it stays gated on `showModes`. */}
-          <span
-            aria-label={`Current permission mode: ${context.mode}`}
-            className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-primary"
-          >
-            {context.mode}
+          <span className="text-text-muted">
+            The mode new sessions start in
           </span>
-          {showModes
-            ? PERMISSION_SET_MODE_MODES.map(mode => (
-                <button
-                  aria-pressed={context.mode === mode}
-                  className={
-                    context.mode === mode
-                      ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
-                      : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
-                  }
-                  key={mode}
-                  onClick={() => onSetMode(mode)}
-                  type="button"
-                >
-                  {mode}
-                </button>
-              ))
-            : null}
-        </div>
-
-        <div className="mt-3 flex items-center gap-3 rounded-lg border border-shell-seam bg-surface-raised/50 px-3 py-2.5">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-text-primary">
-                Managed-rules-only enforcement
+          {defaultMode ? (
+            <>
+              <span
+                aria-label={`Default permission mode: ${defaultMode.value}`}
+                className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-primary"
+              >
+                {defaultMode.value}
               </span>
-              <span className="rounded bg-shell-hover px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-text-subtle">
-                policy
-              </span>
-            </div>
-            <p className="mt-0.5 text-[11px] leading-4 text-text-subtle">
-              Only managed rules load; user, project, local, and CLI rules are
-              ignored.
-            </p>
-          </div>
-          <ReadOnlySwitch
-            label="Managed-rules-only enforcement"
-            on={context.managedRulesOnly}
-          />
-        </div>
-      </section>
-
-      <section aria-labelledby="permission-rules-list">
-        <h3
-          className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted"
-          id="permission-rules-list"
-        >
-          Allow / deny / ask rules
-        </h3>
-        <div className="flex flex-col gap-3">
-          <RuleGroup
-            behavior="allow"
-            label="Always allow"
-            metadata={context.ruleMetadata}
-            rules={context.alwaysAllowRules}
-          />
-          <RuleGroup
-            behavior="deny"
-            label="Always deny"
-            metadata={context.ruleMetadata}
-            rules={context.alwaysDenyRules}
-          />
-          <RuleGroup
-            behavior="ask"
-            label="Always ask"
-            metadata={context.ruleMetadata}
-            rules={context.alwaysAskRules}
-          />
-        </div>
-      </section>
-
-      {context.additionalWorkingDirectories.length > 0 ? (
-        <section>
-          <h3 className="mb-1 text-text-muted">Additional directories</h3>
-          <ul className="flex flex-col gap-0.5">
-            {context.additionalWorkingDirectories.map(directory => (
-              <li className="font-mono text-text-primary" key={directory.path}>
-                {directory.path}{' '}
-                <span className="text-text-subtle">({directory.source})</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <section aria-labelledby="permission-classifier">
-        <h3
-          className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted"
-          id="permission-classifier"
-        >
-          Classifier &amp; debugging
-        </h3>
-        <div className="flex items-center gap-3 rounded-lg border border-shell-seam bg-surface-raised/50 px-3 py-2.5">
-          <div className="min-w-0 flex-1">
-            <span className="font-medium text-text-primary">
-              Permission classifier
+              <SourceBadge source={defaultMode.source} />
+            </>
+          ) : (
+            <span
+              aria-label="Default permission mode: not set"
+              className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-subtle"
+            >
+              not set
             </span>
-            <p className="mt-0.5 text-[11px] leading-4 text-text-subtle">
-              Route uncertain requests through the engine classifier instead
-              of always prompting.
-            </p>
-          </div>
-          <ReadOnlySwitch
-            label="Permission classifier"
-            on={context.permissionClassifierEnabled}
-          />
+          )}
         </div>
+        {defaultMode ? null : (
+          <p className="mt-1.5 text-[11px] leading-4 text-text-subtle">
+            <code className="font-mono">permissions.defaultMode</code> is not set
+            in any settings file, so the engine chooses each session's opening
+            mode.
+          </p>
+        )}
       </section>
+
+      {context ? (
+        <>
+          <section aria-labelledby="permission-session-mode">
+            <h3
+              className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted"
+              id="permission-session-mode"
+            >
+              This session
+            </h3>
+            <div className="flex items-center gap-2">
+              <span className="text-text-muted">Current permission mode</span>
+              {/* Read-only current-mode pill — a PURE display of the engine's
+               * resolved `context.mode`. It emits no set-mode verb and is never a
+               * control, so T6b holds even in the Settings read-only pane
+               * (`showModes={false}`); the interactive selector below is the only
+               * thing that authors a mode, and it stays gated on `showModes`. */}
+              <span
+                aria-label={`Current permission mode: ${context.mode}`}
+                className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-primary"
+              >
+                {context.mode}
+              </span>
+              {showModes
+                ? PERMISSION_SET_MODE_MODES.map(mode => (
+                    <button
+                      aria-pressed={context.mode === mode}
+                      className={
+                        context.mode === mode
+                          ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
+                          : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
+                      }
+                      key={mode}
+                      onClick={() => onSetMode(mode)}
+                      type="button"
+                    >
+                      {mode}
+                    </button>
+                  ))
+                : null}
+            </div>
+
+            <div className="mt-3 flex items-center gap-3 rounded-lg border border-shell-seam bg-surface-raised/50 px-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-text-primary">
+                    Managed-rules-only enforcement
+                  </span>
+                  <span className="rounded bg-shell-hover px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-text-subtle">
+                    policy
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[11px] leading-4 text-text-subtle">
+                  Only managed rules load; user, project, local, and CLI rules
+                  are ignored.
+                </p>
+              </div>
+              <ReadOnlySwitch
+                label="Managed-rules-only enforcement"
+                on={context.managedRulesOnly}
+              />
+            </div>
+          </section>
+
+          <section aria-labelledby="permission-rules-list">
+            <h3
+              className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted"
+              id="permission-rules-list"
+            >
+              Allow / deny / ask rules
+            </h3>
+            <div className="flex flex-col gap-3">
+              <RuleGroup
+                behavior="allow"
+                label="Always allow"
+                metadata={context.ruleMetadata}
+                rules={context.alwaysAllowRules}
+              />
+              <RuleGroup
+                behavior="deny"
+                label="Always deny"
+                metadata={context.ruleMetadata}
+                rules={context.alwaysDenyRules}
+              />
+              <RuleGroup
+                behavior="ask"
+                label="Always ask"
+                metadata={context.ruleMetadata}
+                rules={context.alwaysAskRules}
+              />
+            </div>
+          </section>
+
+          {context.additionalWorkingDirectories.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-text-muted">Additional directories</h3>
+              <ul className="flex flex-col gap-0.5">
+                {context.additionalWorkingDirectories.map(directory => (
+                  <li
+                    className="font-mono text-text-primary"
+                    key={directory.path}
+                  >
+                    {directory.path}{' '}
+                    <span className="text-text-subtle">
+                      ({directory.source})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          <section aria-labelledby="permission-classifier">
+            <h3
+              className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted"
+              id="permission-classifier"
+            >
+              Classifier &amp; debugging
+            </h3>
+            <div className="flex items-center gap-3 rounded-lg border border-shell-seam bg-surface-raised/50 px-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <span className="font-medium text-text-primary">
+                  Permission classifier
+                </span>
+                <p className="mt-0.5 text-[11px] leading-4 text-text-subtle">
+                  Route uncertain requests through the engine classifier instead
+                  of always prompting.
+                </p>
+              </div>
+              <ReadOnlySwitch
+                label="Permission classifier"
+                on={context.permissionClassifierEnabled}
+              />
+            </div>
+          </section>
+        </>
+      ) : (
+        /* No attached session — a TERMINAL statement, not a "waiting…" that can
+         * never resolve. The effective rules, this session's mode, and the
+         * policy/classifier facts are engine-resolved per session (see the
+         * header), so there is nothing global to fall back to for them. */
+        <p className="text-text-subtle">
+          No session is attached, so this window has no engine-resolved
+          permission state to show: the effective allow / deny / ask rules, the
+          current session mode, and the managed-policy and classifier state are
+          all per-session. Open or select a session to see them.
+        </p>
+      )}
     </div>
   )
 }

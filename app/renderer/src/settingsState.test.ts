@@ -8,6 +8,7 @@ import {
   reduceSettingsState,
   selectLayerOrigin,
   selectManagedFields,
+  selectPermissionDefaultMode,
   selectSettingField,
   selectSettingsSnapshot,
   SETTING_SOURCE_PRECEDENCE,
@@ -119,4 +120,18 @@ test('precedence order is policy → flag → local → project → user (high�
     'projectSettings',
     'userSettings',
   ])
+})
+
+test('CC-13: selectPermissionDefaultMode reads the setting, tolerating an absent field', () => {
+  expect(
+    selectPermissionDefaultMode({
+      ...SNAPSHOT,
+      permissionDefaultMode: { value: 'acceptEdits', source: 'projectSettings' },
+    }),
+  ).toEqual({ value: 'acceptEdits', source: 'projectSettings' })
+  // Unset at every layer, or a snapshot predating the field — both null, never
+  // a fabricated mode.
+  expect(selectPermissionDefaultMode(SNAPSHOT)).toBeNull()
+  // No snapshot at all (no session has delivered one yet).
+  expect(selectPermissionDefaultMode(null)).toBeNull()
 })

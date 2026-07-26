@@ -143,9 +143,22 @@ export function buildSettingsSnapshot(
   // (EDITABLE_SETTING_KEYS); every other key stays values-free. The winning
   // (highest-precedence) layer's value is captured in the same high→low walk.
   const editableValues: SettingsSnapshot['editableValues'] = []
+  // CC-13 — `permissions.defaultMode` is resolved on its OWN axis, deliberately
+  // NOT gated on the `seen` top-level set: the engine deep-merges settings
+  // (`mergeWith(..., settingsMergeCustomizer)`, settings.ts:848) so a nested
+  // scalar is overridden per-key, not per top-level object. A higher layer that
+  // sets only `permissions.allow` must therefore NOT hide a `defaultMode` set at
+  // a lower layer — which is exactly what folding it into `seen` would do.
+  let permissionDefaultMode: SettingsSnapshot['permissionDefaultMode']
   const seen = new Set<string>()
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i]!
+    if (!permissionDefaultMode) {
+      const mode = readPermissionDefaultMode(layer.settings)
+      if (mode !== null) {
+        permissionDefaultMode = { value: mode, source: layer.source }
+      }
+    }
     for (const key of Object.keys(layer.settings)) {
       if (seen.has(key)) continue
       seen.add(key)
@@ -176,7 +189,26 @@ export function buildSettingsSnapshot(
     policyOrigin,
     editableValues,
     availableOptions,
+    ...(permissionDefaultMode ? { permissionDefaultMode } : {}),
   }
+}
+
+/**
+ * The raw `permissions.defaultMode` of ONE layer, or null when that layer does
+ * not set it. A shape guard only — the per-source read already schema-validated
+ * the file against `SettingsSchema` (types.ts:59, an optional enum), and the
+ * mode vocabulary is feature-gated engine-side (`PERMISSION_MODES` vs
+ * `EXTERNAL_PERMISSION_MODES`), so re-deriving that enum here would fork it.
+ * Keeping this a pure structural read is also what lets `buildSettingsSnapshot`
+ * stay pure and fixture-drivable.
+ */
+function readPermissionDefaultMode(
+  settings: Record<string, unknown>,
+): string | null {
+  const permissions = settings['permissions']
+  if (typeof permissions !== 'object' || permissions === null) return null
+  const mode = (permissions as Record<string, unknown>)['defaultMode']
+  return typeof mode === 'string' && mode.length > 0 ? mode : null
 }
 
 /**

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -456,4 +456,120 @@ test('loadAvailableSettingOptions reads the REAL output-style registry (live pat
   expect(bucket!.options.find(option => option.value === 'default')?.label).toBe(
     'Default',
   )
+})
+
+/* ── CC-13 `permissions.defaultMode` — the settings-backed default mode ────── */
+
+test('CC-13: permissionDefaultMode resolves to the highest-precedence layer that sets it', () => {
+  const layers: SettingsSourceLayer[] = [
+    {
+      source: 'userSettings',
+      origin: '/home/u/.cat-code/settings.json',
+      settings: { permissions: { defaultMode: 'plan' } },
+    },
+    {
+      source: 'localSettings',
+      origin: '/repo/.cat-code/settings.local.json',
+      settings: { permissions: { defaultMode: 'acceptEdits' } },
+    },
+  ]
+  expect(buildSettingsSnapshot(layers, null).permissionDefaultMode).toEqual({
+    value: 'acceptEdits',
+    source: 'localSettings',
+  })
+})
+
+test('CC-13: a higher layer touching `permissions` does NOT hide a lower defaultMode', () => {
+  // The engine deep-merges settings (mergeWith + settingsMergeCustomizer,
+  // settings.ts:848), so a nested scalar is overridden per-key. A layer that
+  // sets only `permissions.allow` must not shadow a lower layer's defaultMode —
+  // which is exactly what resolving this on the top-level `seen` set would do.
+  const layers: SettingsSourceLayer[] = [
+    {
+      source: 'userSettings',
+      origin: '/home/u/.cat-code/settings.json',
+      settings: { permissions: { defaultMode: 'plan' } },
+    },
+    {
+      source: 'policySettings',
+      origin: '/Library/Managed/managed-settings.json',
+      settings: { permissions: { allow: ['Bash(ls)'] } },
+    },
+  ]
+  const snapshot = buildSettingsSnapshot(layers, 'file')
+  expect(snapshot.permissionDefaultMode).toEqual({
+    value: 'plan',
+    source: 'userSettings',
+  })
+  // The top-level `permissions` key still resolves to the policy layer — the two
+  // axes are independent, and that is the point.
+  expect(
+    snapshot.resolved.find(entry => entry.key === 'permissions')?.source,
+  ).toBe('policySettings')
+})
+
+test('CC-13: permissionDefaultMode is ABSENT when unset, or shaped wrong on disk', () => {
+  // Unset everywhere → the field is omitted (renderer shows "not set").
+  expect(buildSettingsSnapshot(LAYERS, 'file').permissionDefaultMode).toBeUndefined()
+  // `permissions` present but without defaultMode.
+  expect(
+    buildSettingsSnapshot(
+      [
+        {
+          source: 'userSettings',
+          origin: '/home/u/.cat-code/settings.json',
+          settings: { permissions: { allow: ['Read'] } },
+        },
+      ],
+      null,
+    ).permissionDefaultMode,
+  ).toBeUndefined()
+  // Hand-edited to a non-string / empty string → never emitted as a bad shape.
+  for (const bad of [42, null, '', { nested: true }]) {
+    expect(
+      buildSettingsSnapshot(
+        [
+          {
+            source: 'userSettings',
+            origin: '/home/u/.cat-code/settings.json',
+            settings: { permissions: { defaultMode: bad } },
+          },
+        ],
+        null,
+      ).permissionDefaultMode,
+    ).toBeUndefined()
+  }
+})
+
+test('CC-13: permissionDefaultMode is read-only — it is NOT in the write allowlist', () => {
+  // T6b / PERMISSION-BOUNDARY.md §3: the renderer must not be able to author a
+  // permission mode. Surfacing the default for DISPLAY must not open a write.
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+  const result = domain.runVerb(
+    write('userSettings' as EditableSettingSource, 'permissions.defaultMode', 'bypassPermissions'),
+  )
+  expect(result.ok).toBe(false)
+  expect(result.changed).toBe(false)
+  expect(result.message).toContain('not an editable setting')
+  expect(() => readFileSync(settingsFile, 'utf8')).toThrow()
+})
+
+test('CC-13: the LIVE path reads permissions.defaultMode through the engine reader', () => {
+  // Not a fixture: a real settings.json read by the engine's own
+  // `getSettingsForSource` inside `createSidecarSettingsDomain`.
+  const settingsFile = useTempConfigHome()
+  writeFileSync(
+    settingsFile,
+    JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }),
+  )
+  resetSettingsCache()
+
+  const snapshot = createSidecarSettingsDomain().getSnapshot()
+  expect(snapshot?.permissionDefaultMode).toEqual({
+    value: 'acceptEdits',
+    source: 'userSettings',
+  })
+  // Still carries no secret material.
+  expect(scanForSecrets(snapshot).ok).toBe(true)
 })

@@ -192,7 +192,55 @@ test('the Permissions pane embeds the P2-4 read-only rules view over the real C3
   expect(html).toContain('Current permission mode: default')
 })
 
-test('the Permissions pane shows the waiting state before the first C3 snapshot', () => {
+/**
+ * CC-13 — the operator-observed failure, at the pane the operator actually
+ * opens: Settings → Permissions with NO session attached rendered one
+ * never-resolving "Waiting for the engine's permission context…" line as its
+ * entire content, hiding the persisted `permissions.defaultMode` setting (which
+ * the desktop app had no other way to show) and everything P4-34 Lane 2 added.
+ */
+test('CC-13: Settings → Permissions renders the default-mode setting with NO session attached', () => {
+  const html = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="permissions"
+      permissionContext={null}
+      snapshot={{
+        ...SNAPSHOT,
+        permissionDefaultMode: { value: 'plan', source: 'userSettings' },
+      }}
+    />,
+  )
+  expect(html).not.toContain('coming soon')
+  // The pane's content is the SETTING, sourced from the settings seam…
+  expect(html).toContain('Default mode')
+  expect(html).toContain('Default permission mode: plan')
+  // …not a wait that can never resolve.
+  expect(html).not.toContain('Waiting for the engine')
+  expect(html).toContain('No session is attached')
+})
+
+test('CC-13: the Permissions pane reads defaultMode from the settings seam, not the session', () => {
+  // Session mode `default` (PERMISSION_CONTEXT) vs configured default
+  // `acceptEdits` — the heading/value mismatch this row fixes.
+  const html = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="permissions"
+      permissionContext={PERMISSION_CONTEXT}
+      snapshot={{
+        ...SNAPSHOT,
+        permissionDefaultMode: { value: 'acceptEdits', source: 'localSettings' },
+      }}
+    />,
+  )
+  expect(PERMISSION_CONTEXT.mode).toBe('default')
+  expect(html).toContain('Default permission mode: acceptEdits')
+  expect(html).toContain('Local')
+  expect(html).toContain('Current permission mode: default')
+})
+
+test('CC-13: a settings snapshot without the field renders the unset state, not a wait', () => {
+  // SNAPSHOT carries no `permissionDefaultMode` (unset at every layer, or a
+  // snapshot predating the field) — tolerant read, explicit unset state.
   const html = renderToStaticMarkup(
     <SettingsShell
       initialCategory="permissions"
@@ -200,10 +248,21 @@ test('the Permissions pane shows the waiting state before the first C3 snapshot'
       snapshot={SNAPSHOT}
     />,
   )
-  expect(html).not.toContain('coming soon')
-  // Apostrophe is HTML-escaped in the SSR markup, so match around it.
-  expect(html).toContain('Waiting for the engine')
-  expect(html).toContain('permission context')
+  expect(html).toContain('Default permission mode: not set')
+  expect(html).not.toContain('Waiting for the engine')
+})
+
+test('CC-13: the Permissions pane renders with NO settings snapshot at all', () => {
+  const html = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="permissions"
+      permissionContext={null}
+      snapshot={null}
+    />,
+  )
+  expect(html).toContain('Default permission mode: not set')
+  expect(html).toContain('No session is attached')
+  expect(html).not.toContain('Waiting for the engine')
 })
 
 test('renders without a snapshot (waiting state)', () => {

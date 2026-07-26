@@ -124,6 +124,20 @@ export function selectAvailableOptions(
 }
 
 /**
+ * CC-13 — the persisted `permissions.defaultMode` setting + the layer it came
+ * from, or null when it is unset everywhere (the Settings "Default mode" section
+ * then says so rather than showing a session's live mode as if it were the
+ * default). Settings-backed, so it does NOT depend on the C3 permission context.
+ */
+export function selectPermissionDefaultMode(
+  snapshot: SettingsSnapshot | null,
+): NonNullable<SettingsSnapshot['permissionDefaultMode']> | null {
+  // Tolerant of a snapshot that predates / omits the field (display = degrade
+  // gracefully), matching selectEditableValue / selectAvailableOptions.
+  return snapshot?.permissionDefaultMode ?? null
+}
+
+/**
  * Precedence order for DISPLAY, high → low (policy wins) — the reverse of the
  * ascending `SETTING_SOURCES` layering, matching the prototype's "Resolution
  * order" legend (Settings.jsx: policy ▸ flag ▸ local ▸ project ▸ user).

@@ -48,12 +48,95 @@ test('showModes=true: the pill AND the interactive selector both render', () => 
   expect(html).toContain('aria-pressed')
 })
 
-test('waits for the engine context before rendering the pill', () => {
+/**
+ * CC-13 — the settings-backed half must not depend on a session. These four
+ * cover the operator-observed failure and its neighbours: no session at all, no
+ * session but a default IS configured, a session whose live mode DIVERGES from
+ * the configured default, and a session with no default configured.
+ */
+test('CC-13: with NO session attached the pane still renders its default-mode content', () => {
   const html = renderToStaticMarkup(
-    <PermissionRulesEditor context={null} onSetMode={() => {}} showModes={false} />,
+    <PermissionRulesEditor
+      context={null}
+      defaultMode={{ value: 'acceptEdits', source: 'userSettings' }}
+      onSetMode={() => {}}
+      showModes={false}
+    />,
   )
-  expect(html).toContain('Waiting for the engine')
+  // The settings-backed default renders, with its provenance.
+  expect(html).toContain('Default permission mode: acceptEdits')
+  expect(html).toContain('User')
+  // …and the pane is NOT an indefinite wait.
+  expect(html).not.toContain('Waiting for the engine')
+  // The session-derived half states plainly that it needs a session.
+  expect(html).toContain('No session is attached')
   expect(html).not.toContain('Current permission mode')
+})
+
+test('CC-13: the Default mode section shows the SETTING, not the session mode', () => {
+  // The divergence the old code could not express: the session sits in `plan`
+  // while `permissions.defaultMode` is `acceptEdits`.
+  const html = renderToStaticMarkup(
+    <PermissionRulesEditor
+      context={CONTEXT}
+      defaultMode={{ value: 'acceptEdits', source: 'projectSettings' }}
+      onSetMode={() => {}}
+      showModes={false}
+    />,
+  )
+  expect(CONTEXT.mode).toBe('plan')
+  // Heading promises a default; the default is what it shows.
+  expect(html).toContain('Default permission mode: acceptEdits')
+  expect(html).toContain('Project')
+  // The session's live mode is still shown — but labelled as this session's.
+  expect(html).toContain('This session')
+  expect(html).toContain('Current permission mode: plan')
+})
+
+test('CC-13: an unset defaultMode renders an explicit unset state, never a fake value', () => {
+  const html = renderToStaticMarkup(
+    <PermissionRulesEditor
+      context={CONTEXT}
+      defaultMode={null}
+      onSetMode={() => {}}
+      showModes={false}
+    />,
+  )
+  expect(html).toContain('Default permission mode: not set')
+  // The session's mode must NOT be borrowed as the default.
+  expect(html).not.toContain('Default permission mode: plan')
+  expect(html).toContain('Current permission mode: plan')
+})
+
+test('CC-13 + T6b: the settings-backed default is never a control, even with showModes', () => {
+  // Making the default-mode section session-independent must not turn it into a
+  // set-mode affordance: `permission.setMode` is session-scoped and has no
+  // destination for `permissions.defaultMode` (PERMISSION-BOUNDARY.md §3).
+  const html = renderToStaticMarkup(
+    <PermissionRulesEditor
+      context={null}
+      defaultMode={{ value: 'plan', source: 'policySettings' }}
+      onSetMode={() => {}}
+      showModes
+    />,
+  )
+  expect(html).toContain('Default permission mode: plan')
+  expect(html).not.toContain('aria-pressed')
+  expect(html).not.toContain('<button')
+})
+
+test('CC-13: no session AND no settings snapshot still resolves to a stated state', () => {
+  const html = renderToStaticMarkup(
+    <PermissionRulesEditor
+      context={null}
+      defaultMode={null}
+      onSetMode={() => {}}
+      showModes={false}
+    />,
+  )
+  expect(html).toContain('Default permission mode: not set')
+  expect(html).toContain('No session is attached')
+  expect(html).not.toContain('Waiting for the engine')
 })
 
 test('renders engine-derived match type and read-only managed/classifier facts', () => {

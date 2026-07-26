@@ -55,6 +55,7 @@ import {
 import {
   selectLayerOrigin,
   selectManagedFields,
+  selectPermissionDefaultMode,
   SETTING_SOURCE_PRECEDENCE,
 } from './settingsState.js'
 import { WorkspaceTrustSection } from './WorkspaceTrustSection.js'
@@ -165,9 +166,13 @@ export function SettingsShell({
   snapshot: SettingsSnapshot | null
   /** C3 — reused from `permission.context`, not a second seam (§10). */
   additionalWorkingDirectories?: PermissionContextSnapshot['additionalWorkingDirectories']
-  /** C3 — the active session's live permission context; feeds the read-only
-   * Permissions rules pane (`PermissionRulesEditor`). Same `permission.context`
-   * snapshot the composer mode chip reads — no second seam. */
+  /** C3 — the active session's live permission context. Feeds ONLY the
+   * session-derived half of the Permissions pane (effective rules, this
+   * session's mode, managed-policy + classifier state), which is engine-resolved
+   * per session and has no global equivalent. The pane's settings-backed
+   * "Default mode" section reads `snapshot` instead, so it renders with no
+   * session attached (CC-13). Same `permission.context` snapshot the composer
+   * mode chip reads — no second seam. */
   permissionContext?: PermissionContextSnapshot | null
   agentsSnapshot?: AgentConfigSnapshot | null
   /** The active session's cwd (already known via the host roster; not re-plumbed). */
@@ -350,12 +355,16 @@ function CategoryBody({
     // P2-4 C3 read-only rules view (PERMISSION-BOUNDARY.md §4, ledger row 787).
     // `showModes={false}`: the renderer never authors rules (T6b) and mode
     // switching lives on the composer `PermissionModeChip` — this pane is a
-    // pure read-only display of the engine's live `permission.context`, so
-    // `onSetMode` is never invoked (the mode buttons are not rendered).
+    // pure read-only display, so `onSetMode` is never invoked (the mode buttons
+    // are not rendered).
+    // CC-13 — `defaultMode` comes off the SETTINGS seam, not the session's live
+    // context, so the "Default mode" section shows the persisted setting and
+    // renders with no session attached.
     return (
-      <PaneSection title="Permission rules">
+      <PaneSection title="Permissions">
         <PermissionRulesEditor
           context={permissionContext}
+          defaultMode={selectPermissionDefaultMode(snapshot)}
           onSetMode={() => {}}
           showModes={false}
         />
