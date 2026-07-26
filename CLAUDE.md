@@ -65,6 +65,8 @@ instead of assuming.
 
 ### Engine (`src/`, `scripts/`)
 
+When writing or changing Cat Code tests, use the global `writing-cat-code-tests` skill.
+
 ```bash
 bun run build:dev:full        # THE build gate: branch-diff lint + ./cli-dev + version print
 bun test <specific paths>     # focused tests only — there is NO root test script
