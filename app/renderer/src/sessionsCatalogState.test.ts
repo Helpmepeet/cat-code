@@ -509,6 +509,98 @@ describe('browse selectors', () => {
     expect(names).toContain('proj')
   })
 
+  // Operator, 2026-07-26: the sidebar showed two adjacent groups both labelled
+  // APP (`/Users/pt/cat-code/app` and `/Users/pt/PTClove/app`) with nothing to
+  // tell them apart, and the wrong one was nearly deleted.
+  test('colliding basenames get distinguishable labels; an uncontested basename stays bare', () => {
+    const groups = groupByWorkspace(
+      [
+        row({ sessionId: 'cc', cwd: '/Users/pt/cat-code/app' }),
+        row({ sessionId: 'pt', cwd: '/Users/pt/PTClove/app' }),
+        row({ sessionId: 'db', cwd: '/Users/pt/discordbot' }),
+      ],
+      null,
+    )
+    const byCwd = new Map(groups.map(g => [g.cwd, g.name]))
+    expect(byCwd.get('/Users/pt/cat-code/app')).not.toBe(byCwd.get('/Users/pt/PTClove/app'))
+    // Enough leading path to name the PROJECT, and no more.
+    expect(byCwd.get('/Users/pt/cat-code/app')).toBe('cat-code/app')
+    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
+    // A basename nobody contests must not pay for someone else's collision.
+    expect(byCwd.get('/Users/pt/discordbot')).toBe('discordbot')
+  })
+
+  test('labels widen progressively — one parent segment is not enough when the parents also collide', () => {
+    const groups = groupByWorkspace(
+      [
+        row({ sessionId: 'a', cwd: '/home/alice/x/app' }),
+        row({ sessionId: 'b', cwd: '/home/bob/x/app' }),
+      ],
+      null,
+    )
+    const names = groups.map(g => g.name)
+    expect(new Set(names).size).toBe(2)
+    // A fixed one-segment prefix would leave both at 'x/app' — the exact defect.
+    expect(names.every(name => name !== 'x/app')).toBe(true)
+    expect(names.sort()).toEqual(['alice/x/app', 'bob/x/app'])
+  })
+
+  test('three-way collision at mixed depths — every label distinct, shallowest widens least', () => {
+    const groups = groupByWorkspace(
+      [
+        row({ sessionId: 'a', cwd: '/home/alice/x/app' }),
+        row({ sessionId: 'b', cwd: '/home/bob/x/app' }),
+        row({ sessionId: 'c', cwd: '/srv/app' }),
+      ],
+      null,
+    )
+    const names = groups.map(g => g.name)
+    expect(new Set(names).size).toBe(3)
+    const byCwd = new Map(groups.map(g => [g.cwd, g.name]))
+    expect(byCwd.get('/home/alice/x/app')).toBe('alice/x/app')
+    expect(byCwd.get('/home/bob/x/app')).toBe('bob/x/app')
+    // Exhausting a short path falls back to the whole cwd — always unique,
+    // since the cwd is the group key.
+    expect(byCwd.get('/srv/app')).toBe('/srv/app')
+  })
+
+  test('degenerate paths stay sane — trailing slash, empty basename, and an empty cwd bucket', () => {
+    const groups = groupByWorkspace(
+      [
+        row({ sessionId: 'trail', cwd: '/Users/pt/cat-code/app/' }),
+        row({ sessionId: 'other', cwd: '/Users/pt/PTClove/app' }),
+        row({ sessionId: 'root', cwd: '/' }),
+        row({ sessionId: 'orphan', cwd: '' }),
+      ],
+      null,
+    )
+    const byCwd = new Map(groups.map(g => [g.cwd, g.name]))
+    // A trailing separator must not defeat the collision detection.
+    expect(byCwd.get('/Users/pt/cat-code/app/')).toBe('cat-code/app')
+    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
+    // basename('/') is empty — the header must never render blank.
+    expect(byCwd.get('/')).toBe('/')
+    // The unknown bucket has no path to widen and keeps its label.
+    expect(byCwd.get('')).toBe('Unknown workspace')
+    expect(new Set(groups.map(g => g.name)).size).toBe(4)
+  })
+
+  test('group order stays FROZEN against the active session even when labels are disambiguated', () => {
+    const rows2 = [
+      row({ sessionId: 'a', cwd: '/home/alice/x/app' }),
+      row({ sessionId: 'b', cwd: '/home/bob/x/app' }),
+      row({ sessionId: 'z', cwd: '/home/alice/zeta' }),
+    ]
+    const order = (activeCwd: string | null) =>
+      groupByWorkspace(rows2, activeCwd).map(g => g.name)
+    const frozen = order(null)
+    expect(order('/home/bob/x/app')).toEqual(frozen)
+    expect(order('/home/alice/x/app')).toEqual(frozen)
+    expect(order('/home/alice/zeta')).toEqual(frozen)
+    // Alphabetical by the label the operator actually reads.
+    expect(frozen).toEqual(['alice/x/app', 'bob/x/app', 'zeta'])
+  })
+
   test('bucket by date into today/older, empty buckets dropped', () => {
     const now = new Date('2026-07-10T12:00:00Z').getTime()
     const today = now - 60_000

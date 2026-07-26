@@ -177,9 +177,10 @@ export function Sidebar({
   // Sort (CC-2 warp-free activity order) → filter → group. Recomputes only when
   // the roster, the query, or the active session changes — not on every hover /
   // pin / group-collapse re-render (frequent, and leaving the grouping identical).
-  // The active session's cwd puts its workspace group first (shared
-  // `groupByWorkspace`, which also collects empty-cwd rows under one clearly
-  // labeled "Unknown workspace" bucket rather than a blank header).
+  // The active session's cwd only MARKS its workspace group (`current`); group
+  // order is frozen-alphabetical and activeCwd-free (shared `groupByWorkspace`,
+  // which also collects empty-cwd rows under one clearly labeled "Unknown
+  // workspace" bucket rather than a blank header).
   const activeCwd = useMemo(
     () =>
       activeSessionId == null
@@ -341,9 +342,10 @@ export function Sidebar({
   )
 }
 
-// Workspace grouping (current-first, then alpha, empty-cwd last) is the shared
-// `groupByWorkspace` from `sessionsCatalogState` — the SAME selector the Sessions
-// page uses, so both surfaces group the unified roster identically (no local dup).
+// Workspace grouping (frozen-alphabetical by the rendered label; empty-cwd in one
+// "Unknown workspace" bucket) is the shared `groupByWorkspace` from
+// `sessionsCatalogState` — the SAME selector the Sessions page uses, so both
+// surfaces group AND label the unified roster identically (no local dup).
 
 // Exported for SSR tests: the sidebar collapses to the rail by default
 // (`open = pinned || hovering`, both false under renderToStaticMarkup), so the

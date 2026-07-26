@@ -415,9 +415,78 @@ export type WorkspaceGroup = {
 }
 
 /**
- * Group rows by workspace (cwd), ordered alphabetically by basename and FROZEN —
- * the group order does NOT depend on which session is active, so opening a
- * session never floats its workspace to the top (operator, 2026-07-21). The
+ * The label a workspace shows when `depth` leading path segments are needed to
+ * tell it apart: depth 1 is the bare basename (today's label), depth N is the
+ * last N segments, and once N reaches the segment count the label is the FULL
+ * cwd — which is unique by construction, since the cwd is the group key. That
+ * last property is what terminates `disambiguateWorkspaceLabels`.
+ */
+function workspaceLabelAtDepth(cwd: string, depth: number): string {
+  if (depth <= 1) return basename(cwd) || cwd
+  const segments = cwd
+    .replace(/[/\\]+$/, '')
+    .split(/[/\\]/)
+    .filter(segment => segment.length > 0)
+  if (depth >= segments.length) return cwd
+  return segments.slice(-depth).join('/')
+}
+
+/**
+ * cwd → display label, giving each workspace the SHORTEST leading path that
+ * distinguishes it from every other workspace on screen (the editor idiom:
+ * `cat-code/app` vs `PTClove/app`, while an uncontested `discordbot` stays
+ * bare). Operator-reported 2026-07-26: two adjacent groups both labelled `APP`
+ * (`/Users/pt/cat-code/app` and `/Users/pt/PTClove/app`) were indistinguishable
+ * and the wrong one was nearly deleted.
+ *
+ * Grow PROGRESSIVELY rather than always adding one parent: three projects at
+ * `/a/x/app` and `/b/x/app` all end `x/app`, so a fixed one-segment prefix would
+ * leave the exact defect in place. Each collision round widens only the still-
+ * colliding labels, so a unique basename never pays for someone else's clash.
+ *
+ * Read-time only — every cwd is already in hand, so nothing crosses a seam.
+ */
+function disambiguateWorkspaceLabels(
+  cwds: readonly string[],
+): Map<string, string> {
+  const depths = new Map<string, number>()
+  for (const cwd of cwds) depths.set(cwd, 1)
+
+  for (;;) {
+    const byLabel = new Map<string, string[]>()
+    for (const [cwd, depth] of depths) {
+      const label = workspaceLabelAtDepth(cwd, depth)
+      const sharing = byLabel.get(label)
+      if (sharing) sharing.push(cwd)
+      else byLabel.set(label, [cwd])
+    }
+
+    let widened = false
+    for (const sharing of byLabel.values()) {
+      if (sharing.length < 2) continue
+      for (const cwd of sharing) {
+        const depth = depths.get(cwd) ?? 1
+        // Already showing its full path: it cannot widen further, and its label
+        // is unique, so leaving it fixed is what bounds this loop.
+        if (workspaceLabelAtDepth(cwd, depth) === cwd) continue
+        depths.set(cwd, depth + 1)
+        widened = true
+      }
+    }
+    if (widened) continue
+
+    const labels = new Map<string, string>()
+    for (const [cwd, depth] of depths) {
+      labels.set(cwd, workspaceLabelAtDepth(cwd, depth))
+    }
+    return labels
+  }
+}
+
+/**
+ * Group rows by workspace (cwd), ordered alphabetically by the rendered label and
+ * FROZEN — the group order does NOT depend on which session is active, so opening
+ * a session never floats its workspace to the top (operator, 2026-07-21). The
  * prototype's `groupByWorkspace` (`~/catcode_prototype/cat-app/Sidebar.jsx:26`)
  * is likewise activeCwd-free and purely alphabetical; its "current workspace
  * first" comment was aspirational and never implemented, so an earlier port that
@@ -426,7 +495,15 @@ export type WorkspaceGroup = {
  * (`SessionsPage.tsx`); it just no longer drives ORDER. Rows with an empty cwd (a
  * transcript whose workspace couldn't be reconciled — MAJOR-1) collect in a
  * single clearly-labeled "Unknown workspace" bucket rather than under a blank or
- * fragmented header.
+ * fragmented header — and that bucket is held OUT of the label disambiguation,
+ * since it has no path to widen.
+ *
+ * Labels come from `disambiguateWorkspaceLabels`, so two workspaces that share a
+ * basename are told apart by leading path. Sorting on the LABEL (not the bare
+ * basename) keeps what the operator reads alphabetical; it stays a pure function
+ * of the cwd set, so the frozen-order guarantee is untouched. The prototype
+ * models `workspace` as a mock string with no path (`Sidebar.jsx:26`), so it has
+ * no position on basename collisions — there is nothing here to port or match.
  */
 export function groupByWorkspace(
   rows: readonly MergedSessionRow[],
@@ -438,14 +515,17 @@ export function groupByWorkspace(
     if (list) list.push(row)
     else groups.set(row.cwd, [row])
   }
+  const labels = disambiguateWorkspaceLabels(
+    [...groups.keys()].filter(cwd => cwd.length > 0),
+  )
   return [...groups.entries()]
     .map(([cwd, groupRows]) => ({
       cwd,
-      name: cwd ? basename(cwd) || cwd : 'Unknown workspace',
+      name: cwd ? labels.get(cwd) ?? cwd : 'Unknown workspace',
       current: activeCwd != null && cwd === activeCwd,
       rows: groupRows,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd))
 }
 
 /**
