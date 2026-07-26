@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { mkdtempSync, rmSync, utimesSync } from 'fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordDeferredContinuationResult, recordTranscript, resetProjectForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordTranscript, resetProjectForTesting } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -220,5 +220,66 @@ describe('session storage', () => {
     await expect(
       recordDeferredContinuationResult({ ...entry, sessionId: randomUUID() }),
     ).rejects.toThrow('Invalid deferred continuation result entry')
+  })
+
+  describe('codex diagnostics only write to an owned transcript', () => {
+    const sendPathEntry = {
+      mode: 'prewarm' as const,
+      prev_response_id_prefix: null,
+      sent_items: 0,
+      prev_sent_items: 0,
+      instructions_hash: 'abc123',
+      effort: 'low',
+      prompt_cache_key_prefix: null,
+      session_id_prefix: null,
+      account_id_prefix: null,
+    }
+    const streamSurfaceEntry = {
+      transport: 'websocket' as const,
+      transport_path: 'websocket' as const,
+      conversation_id_prefix: null,
+      account_id_prefix: null,
+      model: 'gpt-5.6-luna',
+      raw_event_count: 0,
+      raw_event_types: {},
+      had_visible_output: false,
+      had_tool_calls: false,
+      completed: true,
+    }
+
+    // The landmine: both recorders resolved their target with getTranscriptPath(),
+    // which derives a path from the current session id whether or not anything
+    // owns it. Called before the first user message (prewarm sends do exactly
+    // this) they created the file, minting an orphan transcript that surfaced in
+    // /resume and the desktop sidebar.
+    test('no owning session writes nothing', () => {
+      // resetProjectForTesting() in beforeEach left the Project singleton unbuilt,
+      // so no session has materialized or adopted a transcript.
+      expect(readdirSync(tempDir)).toHaveLength(0)
+
+      recordCodexSendPath(sendPathEntry)
+      recordCodexStreamSurface(streamSurfaceEntry)
+
+      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+      expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    test('an owning session writes as before', async () => {
+      // Materialize through the real path, not setSessionFileForTesting: the
+      // first user/assistant message is what sets Project.sessionFile.
+      await recordTranscript([
+        createUserMessage({ content: 'real turn', uuid: randomUUID() }),
+      ])
+      await flushSessionStorage()
+
+      recordCodexSendPath(sendPathEntry)
+      recordCodexStreamSurface(streamSurfaceEntry)
+
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      expect(text).toContain('"subtype":"codex_send_path"')
+      expect(text).toContain('"subtype":"codex_stream_surface"')
+      expect(text).toContain('abc123')
+      expect(text).toContain('gpt-5.6-luna')
+    })
   })
 })

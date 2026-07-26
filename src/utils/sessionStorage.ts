@@ -455,10 +455,35 @@ export function appendSubagentTerminal(
 }
 
 /**
+ * The transcript path a live session has taken ownership of, or `null` when
+ * none has. `Project.sessionFile` stays null until the first user/assistant
+ * message materializes the file (`materializeSessionFile`) or
+ * `--continue`/`--resume` adopts an existing one (`adoptResumedSessionFile`),
+ * so this is the same signal that already keeps metadata-only transcripts off
+ * disk — and it inherits `shouldSkipPersistence()` (test env,
+ * `--no-session-persistence`, `cleanupPeriodDays: 0`) for free.
+ *
+ * Diagnostic appenders MUST resolve their target through this rather than
+ * `getTranscriptPath()`: that helper derives a path from the current session
+ * id whether or not anything owns it, so an unowned write mints an orphan
+ * transcript — 162 of 514 files on one machine, which then polluted `/resume`
+ * and the desktop sidebar. Reads the singleton directly instead of via
+ * `getProject()` so a diagnostic never constructs the Project (and registers
+ * its cleanup handler) as a side effect.
+ */
+function getOwnedTranscriptPath(): string | null {
+  return project?.sessionFile ?? null
+}
+
+/**
  * Append a codex_send_path diagnostic entry to the current session JSONL.
  * Records the WS send-path decision (incremental/full/prewarm/stale_retry)
  * and associated metadata so post-hoc analysis of cache misses doesn't
  * require cross-referencing debug logs.
+ *
+ * No-op unless a real session owns the transcript — see
+ * `getOwnedTranscriptPath()`. Prewarm sends in particular fire before the
+ * first user message, when nothing owns the file yet.
  *
  * Sync and best-effort — never throws. Safe to call from the API path.
  */
@@ -479,7 +504,8 @@ export function recordCodexSendPath(entry: {
   route_headers?: Record<string, string>
 }): void {
   try {
-    const transcriptPath = getTranscriptPath()
+    const transcriptPath = getOwnedTranscriptPath()
+    if (transcriptPath === null) return
     appendEntryToFile(transcriptPath, {
       type: 'system',
       subtype: 'codex_send_path',
@@ -496,6 +522,9 @@ export function recordCodexSendPath(entry: {
  * Append a codex_stream_surface diagnostic entry to the current session JSONL.
  * Records raw Codex event timing at the adapter boundary so transport latency,
  * hidden reasoning, and visible-output gaps can be separated post-hoc.
+ *
+ * No-op unless a real session owns the transcript — see
+ * `getOwnedTranscriptPath()`.
  *
  * Sync and best-effort — never throws. Safe to call from the API path.
  */
@@ -524,7 +553,8 @@ export function recordCodexStreamSurface(entry: {
   fallback_error_name?: string
 }): void {
   try {
-    const transcriptPath = getTranscriptPath()
+    const transcriptPath = getOwnedTranscriptPath()
+    if (transcriptPath === null) return
     appendEntryToFile(transcriptPath, {
       type: 'system',
       subtype: 'codex_stream_surface',
