@@ -27,7 +27,7 @@ import {
   MAX_SPAWNS_PER_WINDOW,
   SPAWN_RATE_WINDOW_MS,
 } from '../shared/hostApi.js'
-import { PARKED_EXIT_CODE } from '../shared/limits.js'
+import { PARKED_EXIT_CODE, RESUME_FAILED_EXIT_CODE } from '../shared/limits.js'
 import { createShellState, reduceShellState } from '../renderer/src/shellState.js'
 
 /* ------------------------------------------------------------------------- *
@@ -203,6 +203,24 @@ class FakeSupervisor {
     const record = this.records.get(sessionId)
     if (record) record.status = 'exited'
     this.emit({ type: 'exit', sessionId, code: PARKED_EXIT_CODE, signal: null })
+    this.emit({ type: 'status', sessionId, status: 'exited' })
+  }
+
+  /**
+   * The sidecar refusing an unresumable engine session id: `resumeEngineSession`
+   * threw `SidecarResumeError` and the process self-exited with
+   * `RESUME_FAILED_EXIT_CODE` (app/sidecar/index.ts). Same tombstone-kept shape
+   * as `emitCrash` — only the exit CODE distinguishes the two.
+   */
+  emitResumeFailed(sessionId: SessionId): void {
+    const record = this.records.get(sessionId)
+    if (record) record.status = 'exited'
+    this.emit({
+      type: 'exit',
+      sessionId,
+      code: RESUME_FAILED_EXIT_CODE,
+      signal: null,
+    })
     this.emit({ type: 'status', sessionId, status: 'exited' })
   }
 
@@ -1111,6 +1129,157 @@ test('restoreSession fails session_not_found when the transcript vanished after 
 })
 
 /* ------------------------------------------------------------------------- *
+ * §9-A4 at READ time — a row that acquired its `engineSessionId` DURING THIS RUN
+ * but never materialized a transcript.
+ *
+ * The two-id bridge stamps `engineSessionId` from the ready frame, i.e. at
+ * SPAWN, while the engine writes the `.jsonl` only on the first user/assistant
+ * message (`src/utils/sessionStorage.ts` materializeSessionFile). Every session
+ * opened and never typed in is therefore a row with a non-null `engineSessionId`
+ * pointing at a file that does not exist. The launch reap drops those, but it
+ * only runs BETWEEN launches — so for the rest of the run the row was advertised
+ * as restorable and the sidecar died `resume-failed` on click.
+ * ------------------------------------------------------------------------- */
+
+test('a session opened and never typed in is never offered as restorable: no union entry, no preview, no tab, no restore', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  // Ready stamps the transcript key at spawn…
+  h.supervisor.emitReady(appSessionId, 'engine-never-typed')
+  await settle(
+    () =>
+      h.registry.findSession(appSessionId)?.engineSessionId === 'engine-never-typed' &&
+      h.events.some(e => e.type === 'session-status'),
+  )
+  // …and deliberately NO writeTranscript: no turn ever ran.
+  expect(h.registry.findSession(appSessionId)?.engineSessionId).toBe('engine-never-typed')
+
+  const liveDescriptor = h.host.listSessions().find(s => s.appSessionId === appSessionId)
+  expect(liveDescriptor?.status).toBe('ready')
+
+  h.events.length = 0
+  const closed = await h.host.closeSession(appSessionId)
+  expect(closed.ok).toBe(true)
+
+  // Gone from the live ∪ restorable union — it is neither.
+  expect(h.host.listSessions().some(s => s.appSessionId === appSessionId)).toBe(false)
+  // Not previewable: main must not read an at-rest transcript cache for an id
+  // the host cannot vouch for (the IS-A boundary).
+  expect(h.host.canPreview(appSessionId)).toBe(false)
+  // The stream reports it REMOVED. A `session-status` would be actively wrong
+  // here: `restorable === false` is how the renderer recognises a tab.
+  expect(h.events.map(e => e.type)).toContain('session-removed')
+  expect(h.events.some(e => e.type === 'session-status')).toBe(false)
+
+  // Renderer projection through the real shell reducer: the tab it had while
+  // live is released and no roster row survives to be clicked.
+  let shell = createShellState()
+  shell = reduceShellState(shell, { type: 'session-added', session: liveDescriptor! })
+  expect(shell.tabs[appSessionId]).toBe(true)
+  for (const event of h.events) shell = reduceShellState(shell, event)
+  expect(shell.tabs[appSessionId]).toBeUndefined()
+  expect(shell.byId[appSessionId]).toBeUndefined()
+
+  // And the restore it would have offered is refused — it was never performable.
+  const restored = await h.host.restoreSession(appSessionId)
+  expect(restored.ok).toBe(false)
+  if (!restored.ok) expect(restored.error.code).toBe('session_not_found')
+
+  // CONTRAST — the SAME row once a turn materializes its transcript is a real
+  // offer again. The verdict tracks the transcript, nothing else.
+  writeTranscript(h.storageDir, 'engine-never-typed')
+  const offered = h.host.listSessions().find(s => s.appSessionId === appSessionId)
+  expect(offered?.restorable).toBe(true)
+  expect(h.host.canPreview(appSessionId)).toBe(true)
+})
+
+test('restartSession refuses to resume an engineSessionId with no transcript (the asymmetry with restoreSession is closed)', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-no-file')
+  await settle(
+    () => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-no-file',
+  )
+  // No transcript — a session opened and never typed in.
+  const pidBefore = h.supervisor.getSessionProcessId(appSessionId)
+  const restartsBefore = h.registry.findSession(appSessionId)?.restartCount
+  h.evicted.length = 0
+
+  const refused = await h.host.restartSession(appSessionId)
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.code).toBe('session_not_found')
+  // Nothing was restarted: no fresh child, no replay eviction, and crucially no
+  // `restartCount` bump — the live registry showed restartCount 2 from exactly
+  // this retry loop, one bump per failed resume.
+  expect(h.supervisor.getSessionProcessId(appSessionId)).toBe(pidBefore)
+  expect(h.registry.findSession(appSessionId)?.restartCount).toBe(restartsBefore)
+  expect(h.evicted).not.toContain(appSessionId)
+
+  // With a transcript the same restart succeeds and carries the resume id.
+  writeTranscript(h.storageDir, 'engine-no-file')
+  const accepted = await h.host.restartSession(appSessionId)
+  expect(accepted.ok).toBe(true)
+  expect(h.supervisor.records.get(appSessionId)?.resumeEngineSessionId).toBe(
+    'engine-no-file',
+  )
+})
+
+test('a RESUME_FAILED_EXIT_CODE exit retires an id whose transcript FILE exists but carries no loadable conversation; an ordinary crash does not', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-unloadable')
+  await settle(
+    () => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-unloadable',
+  )
+  // The file EXISTS — this is the engine's "no conversation found" case, which
+  // `existsSync` structurally cannot see. Only the exit code reports it.
+  writeTranscript(h.storageDir, 'engine-unloadable')
+
+  h.supervisor.emitResumeFailed(appSessionId)
+  await settle(() => h.registry.findSession(appSessionId)?.shutdown === 'crashed')
+
+  // The row is still crash-marked on disk (the process did die unasked) …
+  expect(h.registry.findSession(appSessionId)?.shutdown).toBe('crashed')
+  // … but it is no longer advertised, and neither spawn path will retry it.
+  expect(
+    h.host.listSessions().find(s => s.appSessionId === appSessionId)?.restorable,
+  ).toBe(false)
+  expect(h.host.canPreview(appSessionId)).toBe(false)
+  const rejectedRestart = await h.host.restartSession(appSessionId)
+  expect(rejectedRestart.ok).toBe(false)
+
+  // CONTRAST — an ordinary crash with the same transcript on disk stays a real
+  // restore offer. The verdict is the exit CODE, not the death.
+  const other = await h.host.createSession({ cwd: h.cwd })
+  expect(other.ok).toBe(true)
+  if (!other.ok) return
+  const otherId = other.value.appSessionId
+  h.supervisor.emitReady(otherId, 'engine-plain-crash')
+  await settle(() => h.registry.findSession(otherId)?.engineSessionId === 'engine-plain-crash')
+  writeTranscript(h.storageDir, 'engine-plain-crash')
+  h.supervisor.emitCrash(otherId)
+  await settle(() => h.registry.findSession(otherId)?.shutdown === 'crashed')
+  expect(h.host.listSessions().find(s => s.appSessionId === otherId)?.restorable).toBe(true)
+
+  // The verdict holds for the rest of the run: an explicit restore of the retired
+  // id is refused too, so nothing can re-arm the retry loop, and no sidecar is
+  // spawned to fail again.
+  const restored = await h.host.restoreSession(appSessionId)
+  expect(restored.ok).toBe(false)
+  if (!restored.ok) expect(restored.error.code).toBe('session_not_found')
+  expect(h.supervisor.records.get(appSessionId)?.status).toBe('exited')
+})
+
+/* ------------------------------------------------------------------------- *
  * SF7 — listSessions excludes rows that are neither live nor restorable
  * ------------------------------------------------------------------------- */
 
@@ -1469,6 +1638,11 @@ test('F4: a fresh createSession lands with restartCount 0; one restart bumps it 
   const id = created.value.appSessionId
   h.supervisor.emitReady(id, 'engine-f4')
   await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-f4')
+  // A session that actually ran a turn has a materialized transcript — required
+  // for the restart below, which now refuses to resume an id with no transcript
+  // (§9-A4, the guard `restoreSession` always had). This test is about
+  // restartCount, so it uses the real shape rather than exercising that refusal.
+  writeTranscript(h.storageDir, 'engine-f4')
 
   // Pre-fix, the create path's second (advisory) upsert had already bumped
   // this to 1.

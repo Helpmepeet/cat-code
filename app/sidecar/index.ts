@@ -18,7 +18,11 @@
 import { statSync } from 'node:fs'
 
 import { FrameDecoder } from '../shared/framing.js'
-import { MAX_FRAME_BYTES, PARKED_EXIT_CODE } from '../shared/limits.js'
+import {
+  MAX_FRAME_BYTES,
+  PARKED_EXIT_CODE,
+  RESUME_FAILED_EXIT_CODE,
+} from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import type { Message } from '../../src/types/message.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
@@ -27,9 +31,6 @@ import { createSidecarSessionController } from './sessionController.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
-
-/** Dedicated non-zero exit for an unresumable engine session id. */
-const RESUME_FAILED_EXIT_CODE = 4
 
 /**
  * CC-3 — idle self-exit TTL (docs O1 / SESSION-LIFETIME §2). A sidecar whose

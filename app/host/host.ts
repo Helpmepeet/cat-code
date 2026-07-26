@@ -31,7 +31,7 @@ import type {
   SupervisorEvent,
 } from '../supervisor/supervisor.js'
 import type { SessionId } from '../shared/protocol.js'
-import { PARKED_EXIT_CODE } from '../shared/limits.js'
+import { PARKED_EXIT_CODE, RESUME_FAILED_EXIT_CODE } from '../shared/limits.js'
 import {
   MAX_LIVE_SESSIONS,
   MAX_SESSION_TITLE_CHARS,
@@ -122,6 +122,23 @@ export class Host implements HostApi {
    */
   private readonly closing = new Set<SessionId>()
 
+  /**
+   * appSessionIds a sidecar has PROVEN unresumable this run by exiting
+   * `RESUME_FAILED_EXIT_CODE`: the engine could not load their transcript
+   * (missing, or present with no loadable conversation —
+   * `app/sidecar/sessionResume.ts`). `canResume` refuses them, so such a row
+   * stops being offered and stops being retried instead of failing on every
+   * click — the same doctrine the sessions catalog already applies to
+   * `hasConversation === false` rows (`app/sidecar/sessionsCatalogDomain.ts`).
+   *
+   * Deliberately IN-MEMORY, and deliberately for the remainder of the run: it is
+   * a cached engine verdict, not registry state (the schema gains nothing, §3),
+   * and a relaunch re-earns it — where the launch reap gets a fresh look at the
+   * transcript anyway. A verdict that expired sooner would just re-arm the retry
+   * loop this exists to break.
+   */
+  private readonly resumeFailed = new Set<SessionId>()
+
   /** Resolves once the registry launch sweep has completed (B4 / REGISTRY §4). */
   private readonly launched: Promise<unknown>
 
@@ -198,6 +215,23 @@ export class Host implements HostApi {
         if (event.code === PARKED_EXIT_CODE) {
           await this.registry.markParked(appSessionId)
         } else {
+          // A `RESUME_FAILED_EXIT_CODE` exit is the engine reporting that this
+          // row's `engineSessionId` has no loadable transcript — the sidecar
+          // exits ONLY for `SidecarResumeError`, and only on a spawn that asked
+          // for a resume, so the code is unambiguous (nothing else in the engine
+          // or the app exits 4). The row is still crash-marked (the process did
+          // die unasked) and keeps its tab, but the id is now proven
+          // unresumable: `canResume` refuses it, so the descriptor stops
+          // advertising `restorable` and neither `restoreSession` nor
+          // `restartSession` will retry the resume that just failed. Recorded
+          // BEFORE the mark so the status emitted below already carries it.
+          if (event.code === RESUME_FAILED_EXIT_CODE) {
+            this.resumeFailed.add(appSessionId)
+            this.log(
+              `[host] resume_failed: ${appSessionId} has no loadable transcript; ` +
+                'no longer offered as restorable this run',
+            )
+          }
           await this.registry.markCrashed(appSessionId)
         }
         this.emitStatus(appSessionId)
@@ -277,10 +311,11 @@ export class Host implements HostApi {
         `no restorable session ${appSessionId}`,
       )
     }
-    // §9-A4 (SF6) — re-check transcript existence NOW, not just at launch: it may
-    // have been pruned between launch and this restore. Never offer a restore we
-    // cannot perform (which would exit `resume-failed` downstream).
-    if (!this.registry.hasTranscript(appSessionId)) {
+    // §9-A4 (SF6) — re-check resumability NOW, not just at launch: the transcript
+    // may have been pruned between launch and this restore, or a prior attempt
+    // this run may already have proven the id unloadable. Never offer a restore
+    // we cannot perform (which would exit `resume-failed` downstream).
+    if (!this.canResume(appSessionId)) {
       return hostError(
         'session_not_found',
         `transcript for ${appSessionId} is gone`,
@@ -415,15 +450,15 @@ export class Host implements HostApi {
       // Spawn threw synchronously (e.g. socket-path overflow, duplicate id). The
       // row we just wrote is now dead — mark it clean so it does not masquerade
       // as a live crash on the next sweep, and report spawn_failed. A fresh
-      // create's row (engineSessionId null) is neither a tab nor an offer —
-      // remove it; a RESTORE's row still holds its engineSessionId and remains
-      // a valid restore-offer — a session-removed would hide it until relaunch
-      // (the renderer pins removed ids), so re-emit its (exited, restorable)
-      // status instead (SF-2, P3-5 review).
+      // create's row (engineSessionId null, or an id whose transcript is gone) is
+      // neither a tab nor an offer — remove it; a RESTORE's row is still a valid
+      // restore-offer — a session-removed would hide it until relaunch (the
+      // renderer pins removed ids), so re-emit its (exited, restorable) status
+      // instead (SF-2, P3-5 review). Same restorable test as `closeSession`.
       await this.registry.markClean(appSessionId)
-      const row = this.registry.findSession(appSessionId)
-      if (row && row.engineSessionId !== null) {
-        this.emitStatus(appSessionId)
+      const failedDescriptor = this.descriptorFor(appSessionId)
+      if (failedDescriptor?.restorable) {
+        this.emit({ type: 'session-status', session: failedDescriptor })
       } else {
         this.emitRemoved(appSessionId)
       }
@@ -477,15 +512,22 @@ export class Host implements HostApi {
     this.surfaceRegistryHealth(appSessionId)
     this.closing.delete(appSessionId)
 
-    const row = this.registry.findSession(appSessionId)
-    if (row?.engineSessionId === null) {
+    // A closed session leaves the "live" half of the union; it lives on ONLY as a
+    // restore-offer, so what it emits turns on whether it is still restorable.
+    // Not restorable — no engineSessionId, or (the resume-failed class) an
+    // engineSessionId whose transcript does not exist — means neither a tab nor
+    // an offer, and a `session-status` would be actively wrong: the renderer
+    // folds `restorable === false` back into TAB membership
+    // (`app/renderer/src/shellState.ts` foldTabMembership), so a just-closed
+    // session would reappear as a live-looking tab. Report it removed.
+    const descriptor = this.descriptorFor(appSessionId)
+    if (!descriptor || !descriptor.restorable) {
       this.emitRemoved(appSessionId)
     } else {
-      // The row still exists (restorable) but is no longer live — the session left
-      // the "live" half of the union, so the list projection must drop the live
-      // entry and pick up the restorable one. A single session-status carries the
-      // new (exited, restorable) descriptor.
-      this.emitStatus(appSessionId)
+      // Still restorable — the list projection drops the live entry and picks up
+      // the restorable one. A single session-status carries the new
+      // (exited, restorable) descriptor.
+      this.emit({ type: 'session-status', session: descriptor })
     }
     return { ok: true, value: undefined }
   }
@@ -521,12 +563,15 @@ export class Host implements HostApi {
     // Restorable rows first — but ONLY genuinely restorable ones (SF7). The
     // registry's `restorable()` is the launch restore-ORDERING (all rows sorted);
     // the live∪restorable UNION excludes rows that are neither live nor
-    // restorable — e.g. a clean row that never acquired an engineSessionId, or a
-    // spawn_failed row marked clean before any ready frame. Those are not a tab
-    // and not a restore.
+    // restorable — e.g. a clean row that never acquired an engineSessionId, a
+    // spawn_failed row marked clean before any ready frame, or a row whose
+    // transcript does not exist. Those are not a tab and not a restore, so the
+    // descriptor's OWN `restorable` flag is the filter (one predicate, no second
+    // copy of it here).
     for (const row of this.registry.restorable()) {
-      if (row.engineSessionId === null) continue
-      byId.set(row.appSessionId, this.descriptorFromRow(row, null))
+      const descriptor = this.descriptorFromRow(row, null)
+      if (!descriptor.restorable) continue
+      byId.set(row.appSessionId, descriptor)
     }
     // …then live sessions overwrite (a live session's status wins over its row).
     for (const live of this.supervisor.listSessions()) {
@@ -554,6 +599,20 @@ export class Host implements HostApi {
     const row = this.registry.findSession(appSessionId)
     if (!row) {
       return hostError('session_not_found', `session ${appSessionId} has no registry row`)
+    }
+    // §9-A4 (SF6) — the SAME re-check `restoreSession` performs, because this is
+    // the other path that hands `resumeEngineSessionId` to a spawn. Without it a
+    // restart resumes an id whose transcript never existed (a session opened but
+    // never typed in never materializes one — `materializeSessionFile` runs on
+    // the first user/assistant message, `src/utils/sessionStorage.ts:1354,1387`)
+    // and the sidecar dies `resume-failed`, bumping `restartCount` on every
+    // retry. A row with no `engineSessionId` resumes nothing, so it needs no
+    // transcript and restarts into blank context exactly as before.
+    if (row.engineSessionId !== null && !this.canResume(appSessionId)) {
+      return hostError(
+        'session_not_found',
+        `transcript for ${appSessionId} is gone`,
+      )
     }
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
@@ -601,20 +660,24 @@ export class Host implements HostApi {
 
   /**
    * Instant session open (IS-A): may the renderer fetch this session's at-rest
-   * transcript cache? True ONLY for a session that is NOT live, HAS a registry
-   * row, and HAS a non-null `engineSessionId` — i.e. exactly the descriptor's
-   * `restorable` flag, which `isRestorable(row, liveStatus)` already forces false
-   * when a process is live (`host.ts:639-645`). Reusing the descriptor keeps the
-   * not-live guard in one place; a LIVE or unknown id returns false, so main
-   * never reads a cache off disk for an id the host does not vouch for (the IS-A
-   * boundary-test requirement — main-side validation before any disk touch).
+   * transcript cache? True ONLY for a session that is NOT live and whose row is
+   * restorable — i.e. exactly the descriptor's `restorable` flag, which
+   * `isRestorable(row, liveStatus)` already forces false when a process is live.
+   * Reusing the descriptor keeps the not-live guard in one place; a LIVE or
+   * unknown id returns false, so main never reads a cache off disk for an id the
+   * host does not vouch for (the IS-A boundary-test requirement — main-side
+   * validation before any disk touch).
+   *
+   * Derived from THIS id's descriptor rather than from `listSessions()`: the two
+   * agree by construction (the union keys on the same `restorable` flag), but
+   * `listSessions` now stats one transcript per non-live row, and main's startup
+   * cache GC calls this once per cached file (`app/main/main.ts` gcTranscriptCache)
+   * — which would have made a one-shot O(rows²) burst of `existsSync` on the
+   * Electron main thread.
    */
   canPreview(appSessionId: SessionId): boolean {
     if (!isUuid(appSessionId)) return false
-    return (
-      this.listSessions().find(s => s.appSessionId === appSessionId)?.restorable ===
-      true
-    )
+    return this.descriptorFor(appSessionId)?.restorable === true
   }
 
   /* --------------------------------------------------------------------- *
@@ -738,19 +801,54 @@ export class Host implements HostApi {
 
   /**
    * A session is restorable when a registry row exists with a known
-   * engineSessionId (transcript key) AND no process is currently live for it.
-   * `restorable` means "no process is live but the row can be re-spawned"
-   * (app/shared/hostApi.ts:74) — a LIVE session is never a restore candidate
-   * (restoreSession rejects an already-live id), so `liveStatus != null` forces
-   * `false`. The launch reap already dropped rows whose transcript is gone, so a
-   * non-live row that survived launch WITH an engineSessionId is re-spawnable.
+   * engineSessionId (transcript key), that transcript EXISTS RIGHT NOW, and no
+   * process is currently live for it. `restorable` means "registry row +
+   * transcript both present (the row can be re-spawned)"
+   * (app/shared/hostApi.ts, REGISTRY.md §6.1) — a LIVE session is never a
+   * restore candidate (restoreSession rejects an already-live id), so
+   * `liveStatus != null` forces `false`.
+   *
+   * The transcript check is READ-TIME, not launch-time. This method used to
+   * assume "the launch reap already dropped rows whose transcript is gone", but
+   * that holds only ACROSS launches: `fillEngineSessionId` stamps the id from
+   * the ready frame (`onSupervisorEvent`), i.e. at SPAWN, while the engine only
+   * materializes the `.jsonl` on the first user/assistant message
+   * (`src/utils/sessionStorage.ts:1354,1387`). Every session opened and never
+   * typed in therefore holds a non-null `engineSessionId` pointing at a file
+   * that does not exist, and nothing re-checked it for the rest of the run — so
+   * the descriptor claimed restorable and the sidecar died `resume-failed` on
+   * click. `hasTranscript` is the registry's existing §9-A4 re-check (the one
+   * `restoreSession` already trusts) and also covers a transcript pruned
+   * mid-run.
    */
   private isRestorable(
     row: RegistrySession | undefined,
     liveStatus: SidecarStatus | null,
   ): boolean {
     if (liveStatus !== null) return false
-    return !!row && row.engineSessionId !== null
+    if (!row || row.engineSessionId === null) return false
+    return this.canResume(row.appSessionId)
+  }
+
+  /**
+   * May this row's `engineSessionId` be handed to a spawn as a resume — and
+   * therefore be ADVERTISED as one? The single rule behind `isRestorable`,
+   * `restoreSession` and `restartSession`, so the descriptor can never promise a
+   * restore the spawn paths would refuse (that split is what let the sidebar
+   * offer sessions that died `resume-failed` on click).
+   *
+   * Two signals, both read-time:
+   *  - `hasTranscript` — the registry's §9-A4 re-check (`registry.ts` filePath
+   *    encoding + `existsSync`). Catches the never-materialized row and the
+   *    pruned-since-launch row.
+   *  - `resumeFailed` — the engine's own verdict from a prior attempt this run.
+   *    A transcript FILE can exist and still carry no loadable conversation
+   *    (`app/sidecar/sessionResume.ts` "no conversation found"); `existsSync`
+   *    cannot see that, only the sidecar's exit code reports it.
+   */
+  private canResume(appSessionId: SessionId): boolean {
+    if (this.resumeFailed.has(appSessionId)) return false
+    return this.registry.hasTranscript(appSessionId)
   }
 
   /* --------------------------------------------------------------------- *

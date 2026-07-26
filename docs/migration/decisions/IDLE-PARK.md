@@ -129,7 +129,8 @@ emits `{type:'exit', code, signal}` (`supervisor.ts:256-267`; the F11 guard only
 drops exits after a `killSession` deregister). The host reads that `code`
 (`host.ts:186-199` — today it ignores the code and always `markCrashed`). Giving
 park a dedicated non-zero exit code (`PARKED_EXIT_CODE = 5`, alongside the
-existing `RESUME_FAILED_EXIT_CODE = 4` idiom, `index.ts:31-32`) lets the host
+existing `RESUME_FAILED_EXIT_CODE = 4` idiom, since 2026-07-26 beside it in
+`shared/limits.ts`) lets the host
 classify a park purely from the exit — no host↔main coordination, no `parking`
 set, no ack frame required for correctness. This keeps the **host plane free of
 socket frames** (its stated invariant, `host.ts:13-16`): main sends the frame,
@@ -272,7 +273,7 @@ add (b) only if live use shows focused-idle parking is annoying.
 | **sidecar/sidecarServer.ts** | `checkStrictKeys` allowlist entry `['app.park', new Set(['type','requestId'])]` (`:2711-2765`); a sidecar-local Zod schema for `app.park`; a `dispatch` case (`:875-916`) → `handlePark`; the `parking` field + `handlePark` (§3); the one-line `if (this.parking)` guard in `handleSubmit` (`:918`); an `onPark` option (mirrors `onIdle`, `:302,350,429-442`). | yes — full security tax |
 | **sidecar/index.ts** | `PARKED_EXIT_CODE = 5` const; pass `onPark: () => { cleanup(); process.exit(PARKED_EXIT_CODE) }` into `SidecarServer` (mirrors `onIdle`, `:204-214`). | no |
 | **host/registry.ts** | `ShutdownState` gains `'parked'` (`:85`); `normalizeShutdown` maps a **persisted** `'parked'` → `'crashed'` on read (`:961-969`) so `'parked'` is an in-memory-only state for the current run; `enforceBound` excludes `'parked'` rows from the terminal reap (`:570-609`, filter `:578`); new `markParked()` (like `markCrashed`, `:777-786`, transitions `null → 'parked'`). | no |
-| **host/host.ts** | `onSupervisorEvent` exit branch (`:186-199`): `event.code === PARKED_EXIT_CODE ⇒ registry.markParked` else `markCrashed`; `descriptorFromRow` status map (`:705-709`): treat `'parked'` like `'crashed'` → `'disconnected'` so the tab is kept + `restorable` stays true (`isRestorable`, `:734-740`, already returns true for a dead row with an `engineSessionId`). | no (host sends no frame) |
+| **host/host.ts** | `onSupervisorEvent` exit branch (`:186-199`): `event.code === PARKED_EXIT_CODE ⇒ registry.markParked` else `markCrashed`; `descriptorFromRow` status map (`:705-709`): treat `'parked'` like `'crashed'` → `'disconnected'` so the tab is kept + `restorable` stays true (`isRestorable` already returns true for a dead row with an `engineSessionId` — and, since 2026-07-26, a transcript that actually exists; a session parked before it ever ran a turn has none, so it reads `disconnected` + NOT restorable, which keeps its tab just the same). | no (host sends no frame) |
 | **main/main.ts** | `createIdleParkDriver` (policy §4) sending `app.park` via `supervisor.send`; started/stopped with the window (mirror `sessionsCatalogDriver`, `:374-388,1562,1591`). The exit→`lifecycle{exited}` synth (`:671-695`) and the terminal-frame persist+evict (`:636-644`) need **no change** — a parked exit rides them exactly like a crash. | no |
 | **preload** | **none.** | — |
 | **renderer** | **none** (unless the operator picks focus-hint (b) in §4, or the optional draft-restore hardening in §3). | — |
@@ -441,7 +442,8 @@ citing `decisions/IDLE-PARK.md`; add it to the `SidecarClientMessage` union
 (`:386-397`). Additive; **no `PROTOCOL_VERSION` bump**. Verify: `typecheck`.
 
 **Step 2 — sidecar exit code.** `app/sidecar/index.ts`: add
-`PARKED_EXIT_CODE = 5` (beside `RESUME_FAILED_EXIT_CODE`, `:31-32`); add an
+`PARKED_EXIT_CODE = 5` (beside `RESUME_FAILED_EXIT_CODE`; both now live in
+`app/shared/limits.ts`); add an
 `onPark: () => { cleanup(); process.exit(PARKED_EXIT_CODE) }` and pass it into
 `new SidecarServer({... onPark})` (mirror `onIdle`, `:204-214`).
 

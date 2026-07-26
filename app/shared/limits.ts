@@ -80,8 +80,8 @@ export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
 
 /**
  * IDLE-PARK (decisions/IDLE-PARK.md §2) — the sidecar's dedicated non-zero exit
- * code for a host-initiated park (alongside `RESUME_FAILED_EXIT_CODE = 4` in
- * `app/sidecar/index.ts`). A parked engine self-exits with THIS code; the host
+ * code for a host-initiated park (alongside `RESUME_FAILED_EXIT_CODE` below). A
+ * parked engine self-exits with THIS code; the host
  * classifies the exit purely from the code (`markParked` vs `markCrashed`,
  * `app/host/host.ts`), which keeps the host plane free of socket frames — no ack
  * frame, no host↔main coordination. Defined ONCE here so `app/sidecar/index.ts`
@@ -89,3 +89,15 @@ export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
  * never drift to two literals.
  */
 export const PARKED_EXIT_CODE = 5
+
+/**
+ * The sidecar's dedicated non-zero exit code for an UNRESUMABLE engine session
+ * id: `resumeEngineSession` threw `SidecarResumeError` because the transcript is
+ * missing or carries no loadable conversation (`app/sidecar/sessionResume.ts`),
+ * so the sidecar dies loudly instead of silently minting a fresh session (D6
+ * anti-Potemkin). Re-homed here from `app/sidecar/index.ts` for the same reason
+ * `PARKED_EXIT_CODE` lives here: the host classifies this exit
+ * (`app/host/host.ts` — an unresumable row stops being offered) and the two
+ * sides must never drift to two literals.
+ */
+export const RESUME_FAILED_EXIT_CODE = 4

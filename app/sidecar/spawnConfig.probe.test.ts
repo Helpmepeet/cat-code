@@ -328,7 +328,7 @@ test('(a) two sidecars with different cwds do not cross — a transcript is resu
       }
     })
   })
-  // Dedicated resume-failed exit code (index.ts RESUME_FAILED_EXIT_CODE).
+  // Dedicated resume-failed exit code (shared/limits.ts RESUME_FAILED_EXIT_CODE).
   expect(exitB.code).toBe(4)
 }, TEST_TIMEOUT_MS)
 
