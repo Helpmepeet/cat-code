@@ -12,6 +12,7 @@ import {
 function fakeExecutor(
   initialTrusted: boolean,
   onPersist: (flip: () => void) => void = flip => flip(),
+  trustRoot: string | null = '/repo',
 ): { executor: WorkspaceTrustExecutor; persistCalls: () => number } {
   let trusted = initialTrusted
   let persistCalls = 0
@@ -24,6 +25,7 @@ function fakeExecutor(
           trusted = true
         })
       },
+      getTrustRoot: () => trustRoot,
     },
     persistCalls: () => persistCalls,
   }
@@ -56,6 +58,73 @@ test('a directory outside the config.projects trust store reports trusted:false'
   const domain = await createSidecarWorkspaceTrustDomain('/tmp')
   const snapshot = domain.getSnapshot()
   expect(snapshot?.trusted).toBe(false)
+})
+
+/* ── trust ROOT: the scope an accept actually writes at ────────────────────── */
+
+test('the snapshot carries the trust ROOT, not the session cwd, when they differ', async () => {
+  // The honesty gap: trust is keyed at `getProjectPathForConfig()` (the canonical
+  // git root, `src/utils/config.ts:1626`), never the session cwd, so accepting for
+  // one package silently trusts every sibling under the repo. The snapshot must
+  // carry that root or the gate cannot name what approving does.
+  const fake = fakeExecutor(false, flip => flip(), '/Users/me/monorepo')
+  const domain = await createSidecarWorkspaceTrustDomain(
+    '/Users/me/monorepo/packages/foo',
+    { executor: fake.executor },
+  )
+  expect(domain.getSnapshot()?.trustRoot).toBe('/Users/me/monorepo')
+})
+
+test('the real executor resolves trustRoot through the engine function that KEYS the write', async () => {
+  // `saveCurrentProjectConfig` keys its write at `getProjectPathForConfig()`
+  // (`src/utils/config.ts:1675`); the domain reads the trust root through that
+  // same call, so the displayed scope cannot drift from the stored scope.
+  const { getProjectPathForConfig } = await import('../../src/utils/config.js')
+  const domain = await createSidecarWorkspaceTrustDomain(process.cwd())
+  expect(domain.getSnapshot()?.trustRoot).toBe(getProjectPathForConfig())
+})
+
+test('a failed trust-root read degrades to null and NEVER opens the gate (P4-25 fail-closed)', async () => {
+  // Same independence rule as `detectedRepo`: the cosmetic/scope read may fail,
+  // but `trusted` is computed separately and must stay false.
+  const executor: WorkspaceTrustExecutor = {
+    isTrusted: () => false,
+    persistTrust: () => {},
+    getTrustRoot: () => {
+      throw new Error('git blew up')
+    },
+  }
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', { executor })
+  const snapshot = domain.getSnapshot()
+  expect(snapshot).not.toBeNull()
+  expect(snapshot?.trustRoot).toBeNull()
+  expect(snapshot?.trusted).toBe(false)
+})
+
+test('a failed trust-root read does not discard a known trusted:true fact', async () => {
+  const executor: WorkspaceTrustExecutor = {
+    isTrusted: () => true,
+    persistTrust: () => {},
+    getTrustRoot: () => {
+      throw new Error('git blew up')
+    },
+  }
+  const domain = await createSidecarWorkspaceTrustDomain('/tmp', { executor })
+  expect(domain.getSnapshot()?.trusted).toBe(true)
+  expect(domain.getSnapshot()?.trustRoot).toBeNull()
+})
+
+test('acceptTrust re-broadcasts the SAME trust root the gate displayed', async () => {
+  // The re-broadcast must not silently report a different scope than the one the
+  // user approved.
+  const fake = fakeExecutor(false, flip => flip(), '/Users/me/monorepo')
+  const domain = await createSidecarWorkspaceTrustDomain(
+    '/Users/me/monorepo/packages/foo',
+    { executor: fake.executor },
+  )
+  domain.acceptTrust()
+  expect(domain.getSnapshot()?.trusted).toBe(true)
+  expect(domain.getSnapshot()?.trustRoot).toBe('/Users/me/monorepo')
 })
 
 test('acceptTrust persists, re-reads trusted:true, updates the snapshot, and reports changed', async () => {
@@ -111,6 +180,7 @@ test('acceptTrust re-broadcasts (changed:true, no redundant write) when trust wa
       persistCalls++
       trusted = true
     },
+    getTrustRoot: () => '/repo',
   }
   const domain = await createSidecarWorkspaceTrustDomain('/tmp', { executor })
   expect(domain.getSnapshot()?.trusted).toBe(false)
@@ -131,6 +201,7 @@ test('acceptTrust is throw-free — a persist error degrades to ok:false', async
     persistTrust: () => {
       throw new Error('disk full')
     },
+    getTrustRoot: () => '/repo',
   }
   const domain = await createSidecarWorkspaceTrustDomain('/tmp', { executor })
   const result = domain.acceptTrust()

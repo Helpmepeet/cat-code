@@ -2356,6 +2356,9 @@ export function App() {
           <div className="relative flex min-h-0 flex-1">
             <WorkspaceTrustGate
               cwd={tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId}
+              // The scope the accept actually writes at (git root, not the cwd) —
+              // straight off the engine snapshot so the prompt names what it does.
+              trustRoot={activeTrustSnapshot?.trustRoot ?? null}
               onTrust={sendWorkspaceTrust}
               onDecline={() => closeTab(activeSessionId)}
               errorMessage={selectWorkspaceTrustError(workspaceTrust, activeSessionId)}

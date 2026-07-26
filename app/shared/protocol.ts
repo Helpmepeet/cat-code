@@ -1768,6 +1768,28 @@ export type WorkspaceTrustSnapshot = {
   trusted: boolean
   /** `owner/repo` parsed from the git remote origin, or null (no remote / not a repo). */
   detectedRepo: string | null
+  /**
+   * The path an accept actually writes trust at — `getProjectPathForConfig()`
+   * (`src/utils/config.ts:1626`), i.e. the canonical GIT ROOT of the session's
+   * cwd, falling back to the cwd itself outside a repo. Null only when the
+   * engine read failed (display degrades; it never affects `trusted`).
+   *
+   * Additive (2026-07-26) and load-bearing for INFORMED CONSENT, not cosmetics.
+   * D4 (`decisions/STARTUP-GATES.md §1.1`) makes the desktop trust gate
+   * per-session-CREATE, so it *presents* as per-folder — but the storage it
+   * writes to is per-REPO: `saveCurrentProjectConfig` keys the write at
+   * `getProjectPathForConfig()` (`config.ts:1675`) and `isPathTrusted` walks UP
+   * from a directory (`config.ts:790-799`), so approving for
+   * `repo/packages/foo` makes every sibling under `repo` read trusted — in the
+   * desktop AND the shared terminal CLI config. That storage shape is upstream
+   * Claude Code behavior and is deliberately NOT changed here (a second trust
+   * model over one shared config file was considered and rejected); the
+   * presentation mismatch is ours, so the gate must NAME this path.
+   *
+   * HC1: the renderer never derives or authors a path — it renders this field
+   * verbatim, exactly like every other fact on this surface.
+   */
+  trustRoot: string | null
 }
 
 /**

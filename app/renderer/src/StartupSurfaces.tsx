@@ -19,7 +19,10 @@
  *    (`src/utils/config.ts:790,111`), surfaced per session by the P4-14
  *    `workspace-trust.snapshot`; accept persists through the engine's own
  *    `saveCurrentProjectConfig` (`TrustDialog.tsx:177,272`) via the P4-15
- *    `workspace.trust` verb. Decline closes the session's tab.
+ *    `workspace.trust` verb. Decline closes the session's tab. The gate names the
+ *    snapshot's `trustRoot` — the git root the write is actually keyed at
+ *    (`config.ts:1626,1675`), which is wider than the session cwd — so approving
+ *    is informed; see the `trustRoot` doc-comment in `protocol.ts`.
  *  - OAuth: the engine's real `OAuthStatus` flow (`ConsoleOAuthFlow.tsx:35-55`);
  *    the renderer drives navigation only, the engine owns the token
  *    (SECURITY-MINIMUM §4). Begin dispatches the existing P4-5 `account.login`
@@ -138,16 +141,29 @@ export function StartupShell({
 
 export function WorkspaceTrustGate({
   cwd,
+  trustRoot,
   onTrust,
   onDecline,
   errorMessage,
 }: {
   cwd: string
+  /**
+   * Where accepting actually persists trust — the engine's own
+   * `getProjectPathForConfig()`, delivered on `workspace-trust.snapshot`
+   * (`protocol.ts` `WorkspaceTrustSnapshot.trustRoot`). Null = the engine could
+   * not resolve it. HC1: rendered verbatim; the renderer never derives a path.
+   */
+  trustRoot: string | null
   onTrust: () => void
   onDecline: () => void
   /** An `ok:false` trust-accept outcome (write didn't persist) — shown inline. */
   errorMessage?: string | null
 }): ReactNode {
+  // Comparing two ENGINE-supplied strings to pick which copy is truthful — not
+  // path derivation (HC1). Trust is keyed at the git root, so when the root is an
+  // ancestor of the session folder, approving reaches sibling projects too; that
+  // widening must be stated, never implied by showing only the session folder.
+  const widerThanCwd = trustRoot !== null && trustRoot !== cwd
   return (
     <StartupShell step="trust">
       <div className="mb-5">
@@ -166,6 +182,13 @@ export function WorkspaceTrustGate({
         </div>
         <code className="break-all font-mono text-[13px] text-text-primary">{cwd}</code>
       </div>
+      <p className="mb-[18px] max-w-[460px] break-words text-[13px] leading-relaxed text-text-muted">
+        {trustRoot === null
+          ? 'Cat Code could not resolve where this trust would be saved. Trust is stored per git repository, so approving may cover more than this folder.'
+          : widerThanCwd
+            ? `Trust is stored per git repository. Approving saves trust for ${trustRoot} and covers every folder under it, including sibling projects — here and in the terminal CLI, which share this setting.`
+            : 'Approving trusts this folder and everything under it — here and in the terminal CLI, which share this setting.'}
+      </p>
       {errorMessage ? (
         <div
           role="alert"

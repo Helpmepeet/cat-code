@@ -35,10 +35,23 @@ function reauthHtml(view: ReauthOAuthView): string {
 
 /* ── trust gate ────────────────────────────────────────────────────────────── */
 
-test('trust gate shows the title, the session cwd, and the two ruled actions', () => {
-  const html = renderToStaticMarkup(
-    <WorkspaceTrustGate cwd="/Users/me/proj" onTrust={() => {}} onDecline={() => {}} />,
+/** Render the trust gate with no-op handlers. */
+function trustHtml(
+  props: Partial<Parameters<typeof WorkspaceTrustGate>[0]> = {},
+): string {
+  return renderToStaticMarkup(
+    <WorkspaceTrustGate
+      cwd="/Users/me/proj"
+      trustRoot="/Users/me/proj"
+      onTrust={() => {}}
+      onDecline={() => {}}
+      {...props}
+    />,
   )
+}
+
+test('trust gate shows the title, the session cwd, and the two ruled actions', () => {
+  const html = trustHtml()
   expect(html).toContain('Trust this workspace?')
   expect(html).toContain('/Users/me/proj')
   expect(html).toContain('Trust required')
@@ -48,34 +61,84 @@ test('trust gate shows the title, the session cwd, and the two ruled actions', (
 })
 
 test('trust gate surfaces an ok:false accept error inline (not a silent no-op)', () => {
-  const html = renderToStaticMarkup(
-    <WorkspaceTrustGate
-      cwd="/x"
-      onTrust={() => {}}
-      onDecline={() => {}}
-      errorMessage="Trust write did not persist; the workspace is still untrusted."
-    />,
-  )
+  const html = trustHtml({
+    cwd: '/x',
+    trustRoot: '/x',
+    errorMessage: 'Trust write did not persist; the workspace is still untrusted.',
+  })
   expect(html).toContain('role="alert"')
   expect(html).toContain('Trust write did not persist')
 })
 
 test('trust gate shows no alert when there is no error', () => {
-  const html = renderToStaticMarkup(
-    <WorkspaceTrustGate cwd="/x" onTrust={() => {}} onDecline={() => {}} />,
-  )
-  expect(html).not.toContain('role="alert"')
+  expect(trustHtml({ cwd: '/x', trustRoot: '/x' })).not.toContain('role="alert"')
 })
 
 test('trust gate has NO read-only affordance (Q1 CUT)', () => {
-  const html = renderToStaticMarkup(
-    <WorkspaceTrustGate cwd="/x" onTrust={() => {}} onDecline={() => {}} />,
-  )
+  const html = trustHtml({ cwd: '/x', trustRoot: '/x' })
   expect(html).not.toContain('read-only')
   expect(html).not.toContain('Open read-only')
   expect(html.toLowerCase()).not.toContain('read only')
   // Not a workspace-switch prompt either (G4 CUT).
   expect(html).not.toContain('Workspace changed')
+})
+
+/* ── trust SCOPE honesty: name the path approving actually trusts ──────────── */
+
+/** How many `<code>` path elements the gate rendered. */
+function codeElementCount(html: string): number {
+  return html.split('<code').length - 1
+}
+
+test('trust gate keeps ONE Workspace path box — scope is carried in the copy, not extra rows', () => {
+  // The honesty fix is WORDING ONLY. An earlier revision grew a second labelled
+  // path row + divider; that layout was reversed. This test is the tripwire: the
+  // gate shows exactly one path element (the session cwd) under the original
+  // "Workspace" label, in every scope case.
+  for (const trustRoot of ['/Users/me/monorepo', '/Users/me/proj', null]) {
+    const html = trustHtml({ cwd: '/Users/me/proj', trustRoot })
+    expect(codeElementCount(html)).toBe(1)
+    expect(html).toContain('>Workspace</div>')
+    expect(html).toContain('>/Users/me/proj</code>')
+    expect(html).not.toContain('Session folder')
+    expect(html).not.toContain('Trust is saved for')
+  }
+})
+
+test('trust gate names the resolved trust ROOT inline when it is wider than the session folder', () => {
+  // Trust is stored per git repo (`getProjectPathForConfig()`), so approving for
+  // one package trusts every sibling under the root. The prompt must say so and
+  // name the root — otherwise approving is uninformed.
+  const html = trustHtml({
+    cwd: '/Users/me/monorepo/packages/foo',
+    trustRoot: '/Users/me/monorepo',
+  })
+  expect(html).toContain('Trust is stored per git repository')
+  expect(html).toContain(
+    'Approving saves trust for /Users/me/monorepo and covers every folder under it',
+  )
+  expect(html).toContain('sibling projects')
+  expect(html).toContain('terminal CLI')
+  // Still a single path box showing the session folder (layout untouched).
+  expect(codeElementCount(html)).toBe(1)
+  expect(html).toContain('>/Users/me/monorepo/packages/foo</code>')
+})
+
+test('trust gate does NOT claim repo-wide scope when the root IS the session folder', () => {
+  const html = trustHtml({ cwd: '/Users/me/proj', trustRoot: '/Users/me/proj' })
+  expect(html).toContain('this folder and everything under it')
+  expect(html).toContain('terminal CLI')
+  // No overstated sibling/repository claim when there is nothing wider.
+  expect(html).not.toContain('sibling projects')
+  expect(html).not.toContain('Trust is stored per git repository')
+})
+
+test('trust gate says the scope is unresolved rather than implying folder-only trust', () => {
+  const html = trustHtml({ cwd: '/Users/me/proj', trustRoot: null })
+  expect(html).toContain('could not resolve where this trust would be saved')
+  expect(html).toContain('may cover more than this folder')
+  // It must not assert the narrow scope it cannot prove.
+  expect(html).not.toContain('this folder and everything under it')
 })
 
 /* ── first-run OAuth sub-states (P4-15 — each is REACHABLE + prototype-faithful) ── */
