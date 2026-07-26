@@ -1301,6 +1301,47 @@ export const SDKAccountDiagnosticProviderSchema = lazySchema(() =>
   z.enum(['openai', 'anthropic', 'unknown']),
 )
 
+/**
+ * Display-safe projection of the internal `MessageOrigin` (`src/types/message.ts`).
+ * Five of the six kinds are engine-injected turns that nonetheless carry
+ * `role: 'user'`; without this discriminant an out-of-process consumer cannot
+ * tell them apart from something the operator typed and renders them all as the
+ * operator's own message.
+ *
+ * NARROWED on purpose — this is the projection, not the internal union:
+ *  - `task-notification` carries only `status`/`summary`; `result`/`usage`/
+ *    `worktreePath` are already inside the banner text and would just double the
+ *    frame.
+ *  - `channel` drops `meta` (`Record<string, string>`): its KEYS come from a
+ *    third-party MCP channel server, and a key named e.g. `authorization` would
+ *    trip a consumer's key-name secret guard and cost the whole frame — the same
+ *    trap `SettingsSnapshot.resolved` is shaped as an array to avoid.
+ *  - `teammate` carries the sender handle only, never the full
+ *    `TeammateMessageContract[]` payload.
+ * Nothing here is credential-bearing, and every field is already present in the
+ * message text a consumer receives anyway.
+ */
+export const SDKMessageOriginSchema = lazySchema(() =>
+  z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('human') }),
+    z.object({
+      kind: z.literal('task-notification'),
+      status: z
+        .enum(['completed', 'failed', 'killed', 'running', 'pending'])
+        .optional(),
+      summary: z.string().optional(),
+    }),
+    z.object({ kind: z.literal('coordinator') }),
+    z.object({
+      kind: z.literal('channel'),
+      server: z.string(),
+      user: z.string().optional(),
+    }),
+    z.object({ kind: z.literal('teammate'), from: z.string().optional() }),
+    z.object({ kind: z.literal('deferred-continuation') }),
+  ]),
+)
+
 // SDKUserMessage content without uuid/session_id
 const SDKUserMessageContentSchema = lazySchema(() =>
   z.object({
@@ -1315,6 +1356,11 @@ const SDKUserMessageContentSchema = lazySchema(() =>
       .optional()
       .describe(
         'ISO timestamp when the message was created on the originating process. Older emitters omit it; consumers should fall back to receive time.',
+      ),
+    origin: SDKMessageOriginSchema()
+      .optional()
+      .describe(
+        'Provenance of a user-role turn. Absent means "typed by the operator" (also the value for every emitter that predates the field); a present non-human kind means the engine injected this turn and a UI must not attribute it to the operator.',
       ),
   }),
 )

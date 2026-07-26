@@ -9,6 +9,14 @@
  * from its SDKMessage provider, src/entrypoints/sdk/coreTypes.generated.ts, at
  * commit 234da9e. Renderer code must import the aliases configured in this
  * fixture, never this file directly.
+ *
+ * Partial re-sync 2026-07-26 (commit 1a02444): `SDKMessageOrigin` +
+ * `SDKUserMessage.origin` copied verbatim from coreTypes.generated.ts so
+ * engine-injected user turns stop rendering as the operator's own message
+ * (app/shared/protocol.ts `EventFrame` §User-turn provenance). Sync is PROVEN,
+ * not asserted: app/sidecar/engineTypeDriftCheck.ts compiles this snapshot's
+ * SDKMessage against the REAL engine module and `bun run --cwd app
+ * typecheck:sidecar` fails on any mismatch.
  */
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { UUID } from 'crypto'
@@ -308,6 +316,25 @@ export type SDKRateLimitInfo = {
   surpassedThreshold?: number
 }
 
+/**
+ * Display-safe projection of the internal `MessageOrigin` (`src/types/message.ts`)
+ * — see `SDKMessageOriginSchema` in coreSchemas.ts for why each member is
+ * narrowed. Five of the six kinds are engine-injected turns that still carry
+ * `role: 'user'`; a consumer without this discriminant renders them as the
+ * operator's own message.
+ */
+export type SDKMessageOrigin =
+  | { kind: 'human' }
+  | {
+      kind: 'task-notification'
+      status?: 'completed' | 'failed' | 'killed' | 'running' | 'pending'
+      summary?: string
+    }
+  | { kind: 'coordinator' }
+  | { kind: 'channel'; server: string; user?: string }
+  | { kind: 'teammate'; from?: string }
+  | { kind: 'deferred-continuation' }
+
 export type SDKUserMessage = SDKBaseMessage & {
   type: 'user'
   message?: {
@@ -321,6 +348,13 @@ export type SDKUserMessage = SDKBaseMessage & {
   priority?: 'now' | 'next' | 'later'
   timestamp?: string
   uuid?: UUID
+  /**
+   * Provenance of a user-role turn. Absent = typed by the operator (also the
+   * value for every emitter that predates the field), so consumers that ignore
+   * it keep their current behaviour. A present non-human kind means the ENGINE
+   * injected this turn and it must not be attributed to the operator.
+   */
+  origin?: SDKMessageOrigin
 }
 
 export type SDKUserMessageReplay = SDKUserMessage & {

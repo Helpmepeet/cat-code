@@ -165,6 +165,7 @@ import {
   isPlanModeInterviewPhaseEnabled,
 } from './planModeV2.js'
 import { escapeRegExp } from './stringUtils.js'
+import { queuedCommandOrigin } from './taskNotification.js'
 import { isTodoV2Enabled } from './tasks.js'
 
 // Lazy import to avoid circular dependency (teammateMailbox -> teammate -> ... -> messages)
@@ -3897,13 +3898,9 @@ Read the team config to discover your teammates' names. Check the task list peri
     case 'queued_command': {
       // Prefer explicit origin carried from the queue; fall back to parsing the
       // structured task-notification banner for older queued_command attachments.
-      const origin: MessageOrigin | undefined =
-        attachment.origin ??
-        (attachment.commandMode === 'task-notification' &&
-        typeof attachment.prompt === 'string'
-          ? taskNotificationOriginFromText(attachment.prompt) ??
-            { kind: 'task-notification' }
-          : undefined)
+      // Shared with QueryEngine's SDK user-frame yield so the TUI and every SDK/app
+      // consumer provenance the SAME drained command identically.
+      const origin: MessageOrigin | undefined = queuedCommandOrigin(attachment)
 
       // Only hide from the transcript if the queued command was itself
       // system-generated. Human input drained mid-turn has no origin and no

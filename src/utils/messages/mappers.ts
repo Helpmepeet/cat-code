@@ -9,6 +9,7 @@ import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
   SDKMessage,
+  SDKMessageOrigin,
   SDKRateLimitInfo,
 } from 'src/entrypoints/agentSdkTypes.js'
 import type { ClaudeAILimits } from 'src/services/claudeAiLimits.js'
@@ -17,6 +18,7 @@ import type {
   AssistantMessage,
   CompactMetadata,
   Message,
+  MessageOrigin,
 } from 'src/types/message.js'
 import type { DeepImmutable } from 'src/types/utils.js'
 import stripAnsi from 'strip-ansi'
@@ -112,6 +114,66 @@ export function fromSDKCompactMetadata(
   }
 }
 
+/**
+ * Project the internal `MessageOrigin` onto the SDK's display-safe
+ * `SDKMessageOrigin` (see `SDKMessageOriginSchema` for why each member is
+ * narrowed). This is the ONLY place the internal union crosses to the SDK
+ * surface, so out-of-process consumers never hand-copy the engine's provenance
+ * rules — and the closed-union tripwire below forces a new `MessageOrigin` kind
+ * to decide, here, whether it is attributable to the operator.
+ */
+export function toSDKMessageOrigin(
+  origin: MessageOrigin,
+): SDKMessageOrigin | undefined {
+  switch (origin.kind) {
+    case 'human':
+      return { kind: 'human' }
+    case 'task-notification':
+      return {
+        kind: 'task-notification',
+        ...(origin.status !== undefined && { status: origin.status }),
+        ...(origin.summary !== undefined && { summary: origin.summary }),
+      }
+    case 'coordinator':
+      return { kind: 'coordinator' }
+    case 'channel':
+      return {
+        kind: 'channel',
+        server: origin.server,
+        ...(origin.user !== undefined && { user: origin.user }),
+      }
+    case 'teammate': {
+      const from = origin.messages[0]?.from
+      return { kind: 'teammate', ...(from !== undefined && { from }) }
+    }
+    case 'deferred-continuation':
+      return { kind: 'deferred-continuation' }
+    default: {
+      // Closed-union tripwire: a new MessageOrigin must decide its SDK-facing
+      // projection here rather than silently vanishing from the wire and being
+      // rendered as the operator's own message.
+      const _exhaustive: never = origin
+      void _exhaustive
+      // Unreachable while the tripwire compiles (converter and union are the
+      // same build). Omitting is the pre-field behaviour, never a false claim.
+      return undefined
+    }
+  }
+}
+
+/**
+ * Spread helper for the three SDK user-frame emitters (here plus QueryEngine's
+ * ack and drained-command yields): attach `origin` when there is one, and stay
+ * byte-identical to the pre-field frame when there is not.
+ */
+export function toSDKMessageOriginProp(
+  origin: MessageOrigin | undefined,
+): { origin?: SDKMessageOrigin } {
+  if (origin === undefined) return {}
+  const projected = toSDKMessageOrigin(origin)
+  return projected === undefined ? {} : { origin: projected }
+}
+
 export function toSDKMessages(messages: Message[]): SDKMessage[] {
   return messages.flatMap((message): SDKMessage[] => {
     switch (message.type) {
@@ -143,6 +205,10 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             ...(message.toolUseResult !== undefined
               ? { tool_use_result: message.toolUseResult }
               : {}),
+            // Provenance for restored transcripts: a resumed session's stored
+            // messages carry `origin`, and dropping it here is what made an
+            // engine-injected turn replay as the operator's own message.
+            ...toSDKMessageOriginProp(message.origin),
           },
         ]
       case 'system':

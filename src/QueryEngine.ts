@@ -93,7 +93,9 @@ const messageSelector =
 import {
   localCommandOutputToSDKAssistantMessage,
   toSDKCompactMetadata,
+  toSDKMessageOriginProp,
 } from './utils/messages/mappers.js'
+import { queuedCommandOrigin } from './utils/taskNotification.js'
 import {
   buildSystemInitMessage,
   sdkCompatToolName,
@@ -830,6 +832,9 @@ export class QueryEngine {
                 uuid: msgToAck.uuid,
                 timestamp: msgToAck.timestamp,
                 isReplay: true,
+                // Provenance travels with the ack; an origin-stamped turn must
+                // not reach a UI looking like something the operator typed.
+                ...toSDKMessageOriginProp(msgToAck.origin),
               } as SDKUserMessageReplay
             }
           }
@@ -974,6 +979,12 @@ export class QueryEngine {
               uuid: message.attachment.source_uuid || message.uuid,
               timestamp: message.timestamp,
               isReplay: true,
+              // The mid-turn drain is the LIVE path by which an engine-injected
+              // turn (task-notification / coordinator / channel / teammate)
+              // reaches an out-of-process UI. Resolved through the same helper
+              // the internal message builder uses (messages.ts 'queued_command')
+              // so both agree on provenance.
+              ...toSDKMessageOriginProp(queuedCommandOrigin(message.attachment)),
             } as SDKUserMessageReplay
           }
           break

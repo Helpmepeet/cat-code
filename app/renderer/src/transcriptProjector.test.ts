@@ -714,12 +714,32 @@ test('projects plain user text, real command metadata, and image blocks', () => 
   ])
 })
 
+/** Project one user frame with the given `origin` and return its rows. */
+function rowsForUserOrigin(
+  origin: unknown,
+  content: unknown = 'a message the operator did not write',
+) {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const raw = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000301',
+    ...(origin === undefined ? {} : { origin }),
+  })
+  state = projectServerFrame(
+    state,
+    // Parsed JSON, exactly as the socket delivers it — never a compile-time
+    // value, so drifted/malformed origins can be exercised too.
+    messageFrame('session-1', JSON.parse(raw) as SDKMessage),
+  )
+  return selectTranscriptRows(state, 'session-1')
+}
+
 test('projects an engine task-notification banner as a system-side notice, not a user bubble', () => {
-  // Regression (bug-sweep #4, 2026-07-21): the engine injects agent-completion
-  // banners as a USER-role turn (`src/utils/taskNotification.ts`); the
-  // `task-notification` origin that marks them does not cross the app wire.
-  // Without detection the projector rendered them as a right-aligned user bubble,
-  // as if the operator typed them.
+  // Regression (bug-sweep #4, 2026-07-21). Status now comes from the wire
+  // `origin.status` rather than a regex over the banner text.
   const banner = [
     'Task notification',
     'Task ID: a9b0c1b002e2dd6e3',
@@ -729,19 +749,10 @@ test('projects an engine task-notification banner as a system-side notice, not a
     'No — the inventory is not complete.',
   ].join('\n')
 
-  let state = createTranscriptState()
-  state = projectServerFrame(state, ready('session-1'))
-  state = projectServerFrame(
-    state,
-    messageFrame('session-1', {
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text: banner }] },
-      parent_tool_use_id: null,
-      uuid: '00000000-0000-4000-8000-000000000301',
-    }),
+  const rows = rowsForUserOrigin(
+    { kind: 'task-notification', status: 'completed', summary: 'Agent @Hamilton completed' },
+    [{ type: 'text', text: banner }],
   )
-
-  const rows = selectTranscriptRows(state, 'session-1')
   expect(rows).toHaveLength(1)
   expect(rows[0]).toMatchObject({
     kind: 'task-notification',
@@ -750,6 +761,101 @@ test('projects an engine task-notification banner as a system-side notice, not a
   })
   // The critical assertion: it is NOT rendered as a user-side row.
   expect(rows[0]?.kind).not.toBe('user-text')
+})
+
+/**
+ * The four kinds that had NO desktop handling at all: `coordinator`, `channel`,
+ * `teammate`, `deferred-continuation` (`MessageOrigin`, src/types/message.ts:10).
+ * Each carries `role:'user'` but was written by the engine, and each rendered as
+ * the operator's own right-aligned bubble before `origin` crossed the wire.
+ */
+test.each([
+  [{ kind: 'coordinator' }, 'coordinator', null],
+  [{ kind: 'channel', server: 'slack' }, 'channel', 'slack'],
+  [{ kind: 'channel', server: 'slack', user: 'dana' }, 'channel', 'slack · dana'],
+  [{ kind: 'teammate', from: 'scout' }, 'teammate', 'scout'],
+  [{ kind: 'teammate' }, 'teammate', null],
+  [{ kind: 'deferred-continuation' }, 'deferred-continuation', null],
+])(
+  'projects origin %j as an injected-turn row, never a user bubble',
+  (origin, injectedKind, label) => {
+    const rows = rowsForUserOrigin(origin)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      kind: 'injected-turn',
+      injectedKind,
+      label,
+      content: 'a message the operator did not write',
+    })
+    // The assertion that fails without the wire change:
+    expect(rows[0]?.kind).not.toBe('user-text')
+  },
+)
+
+test('an operator turn still renders as a user bubble — with or without a human origin', () => {
+  for (const origin of [undefined, { kind: 'human' }]) {
+    const rows = rowsForUserOrigin(origin, 'run the tests please')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      kind: 'user-text',
+      role: 'user',
+      content: 'run the tests please',
+    })
+  }
+})
+
+test('provenance outranks the command-echo text heuristic', () => {
+  // An injected turn may legitimately contain a `<command-message>` marker; the
+  // operator must not be shown as the author of a command they never ran.
+  const echo =
+    '<command-message>compact</command-message>\n<command-name>/compact</command-name>'
+  expect(rowsForUserOrigin({ kind: 'coordinator' }, echo)[0]).toMatchObject({
+    kind: 'injected-turn',
+    injectedKind: 'coordinator',
+  })
+  // …while a real operator command echo is untouched.
+  expect(rowsForUserOrigin(undefined, echo)[0]).toMatchObject({
+    kind: 'command-echo',
+    commandName: 'compact',
+  })
+})
+
+test('a drifted or malformed origin degrades to an injected row, never a user bubble and never a throw', () => {
+  // A kind minted by a newer engine: the row must still be attributed away from
+  // the operator (TranscriptView renders an unknown kind with a neutral label).
+  expect(rowsForUserOrigin({ kind: 'future-kind-2027' })[0]).toMatchObject({
+    kind: 'injected-turn',
+    injectedKind: 'future-kind-2027',
+    label: null,
+  })
+  // Structurally broken origins are not provenance claims — they fall back to
+  // the operator-turn reading rather than inventing an injected row.
+  for (const broken of [null, 42, 'coordinator', {}, { kind: '' }, { kind: 7 }]) {
+    const rows = rowsForUserOrigin(broken, 'plain text')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.kind).toBe('user-text')
+  }
+  // A channel origin missing its server still reads as injected, just unlabelled.
+  expect(rowsForUserOrigin({ kind: 'channel' })[0]).toMatchObject({
+    kind: 'injected-turn',
+    injectedKind: 'channel',
+    label: null,
+  })
+})
+
+test('legacy <task-notification> transcripts (no origin field) do not regress', () => {
+  // Real stored transcripts written before `origin` existed carry only this XML
+  // envelope (`src/utils/taskNotification.ts:119` "compatibility-only"). They
+  // must keep rendering system-side.
+  const legacy =
+    '<task-notification>\n<status>failed</status>\n<summary>build broke</summary>\n</task-notification>'
+  const rows = rowsForUserOrigin(undefined, legacy)
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'task-notification',
+    status: 'failed',
+    content: legacy,
+  })
 })
 
 test('rejects malformed P2-1 content blocks without partial rows', () => {

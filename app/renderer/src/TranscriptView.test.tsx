@@ -550,6 +550,38 @@ test('P4-18a REGRESSION: a projected user-text turn is rendered, not dropped', (
   expect(html).toContain('restart the sidecar please')
 })
 
+test('an injected turn renders system-side — never in the operator user column', () => {
+  // The bug this closes: `coordinator`/`channel`/`teammate`/`deferred-continuation`
+  // all carry role:'user' and rendered inside the right-aligned accent bubble,
+  // i.e. as if the operator had typed them.
+  const cases: Array<[string, string | null, string, string]> = [
+    ['coordinator', null, 'Coordinator', 'coordinator'],
+    ['channel', 'slack · dana', 'slack · dana', 'channel'],
+    ['teammate', 'scout', '@scout', 'teammate'],
+    ['deferred-continuation', null, 'Continuation', 'continuation'],
+    // A kind from a newer engine: still attributed away from the operator.
+    ['future-kind-2027', null, 'Injected message', 'injected'],
+  ]
+  for (const [injectedKind, label, expectedHeading, expectedTag] of cases) {
+    const html = render({
+      ...blockSource,
+      id: `s:m:0:injected-${injectedKind}`,
+      kind: 'injected-turn',
+      injectedKind,
+      label,
+      content: 'a message the operator did not write',
+      isReplay: false,
+    })
+    expect(html).toContain('a message the operator did not write')
+    expect(html).toContain(expectedHeading)
+    expect(html).toContain(expectedTag)
+    // The user-bubble grammar (UserBubble/CommandEchoBubble/UserImageRowView)
+    // is right-aligned + accent-tinted; an injected row must use neither.
+    expect(html).not.toContain('justify-end')
+    expect(html).not.toContain('bg-accent/10')
+  }
+})
+
 test('P4-18a: a command echo renders the slash command in the user column', () => {
   const html = render({
     ...blockSource,

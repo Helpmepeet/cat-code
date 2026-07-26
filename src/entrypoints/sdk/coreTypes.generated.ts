@@ -296,6 +296,25 @@ export type SDKRateLimitInfo = {
   surpassedThreshold?: number
 }
 
+/**
+ * Display-safe projection of the internal `MessageOrigin` (`src/types/message.ts`)
+ * — see `SDKMessageOriginSchema` in coreSchemas.ts for why each member is
+ * narrowed. Five of the six kinds are engine-injected turns that still carry
+ * `role: 'user'`; a consumer without this discriminant renders them as the
+ * operator's own message.
+ */
+export type SDKMessageOrigin =
+  | { kind: 'human' }
+  | {
+      kind: 'task-notification'
+      status?: 'completed' | 'failed' | 'killed' | 'running' | 'pending'
+      summary?: string
+    }
+  | { kind: 'coordinator' }
+  | { kind: 'channel'; server: string; user?: string }
+  | { kind: 'teammate'; from?: string }
+  | { kind: 'deferred-continuation' }
+
 export type SDKUserMessage = SDKBaseMessage & {
   type: 'user'
   message?: {
@@ -309,6 +328,13 @@ export type SDKUserMessage = SDKBaseMessage & {
   priority?: 'now' | 'next' | 'later'
   timestamp?: string
   uuid?: UUID
+  /**
+   * Provenance of a user-role turn. Absent = typed by the operator (also the
+   * value for every emitter that predates the field), so consumers that ignore
+   * it keep their current behaviour. A present non-human kind means the ENGINE
+   * injected this turn and it must not be attributed to the operator.
+   */
+  origin?: SDKMessageOrigin
 }
 
 export type SDKUserMessageReplay = SDKUserMessage & {

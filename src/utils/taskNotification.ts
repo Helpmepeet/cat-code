@@ -182,3 +182,49 @@ export function taskNotificationOriginFromText(
   const details = parseTaskNotificationDetails(text)
   return details ? toTaskNotificationOrigin(details) : undefined
 }
+
+/**
+ * Resolve the provenance of a drained `queued_command`: the explicit origin the
+ * queue carried, else the structured banner parsed out of a task-notification's
+ * text (older queued commands predate the enqueue-time inference in
+ * messageQueueManager.ts), else a bare `task-notification` marker so a
+ * mode-tagged notification is never attributed to the user.
+ *
+ * Single definition on purpose — both consumers of a `queued_command`
+ * attachment (the internal message builder in messages.ts and the SDK user-frame
+ * yield in QueryEngine.ts) must agree, or the same notification is provenanced
+ * one way for the TUI and another way for an SDK/app consumer.
+ *
+ * Takes `unknown` because `AttachmentMessage.attachment` is declared `unknown`
+ * (`src/types/message.ts:115`) — the attachment is narrowed here rather than at
+ * each call site, and a shape this does not recognize yields `undefined` (the
+ * pre-existing "no provenance" reading) instead of throwing.
+ */
+function isQueuedCommandAttachment(value: unknown): value is {
+  origin?: MessageOrigin
+  commandMode?: string
+  prompt?: unknown
+} {
+  return typeof value === 'object' && value !== null
+}
+
+export function queuedCommandOrigin(command: unknown): MessageOrigin | undefined {
+  if (!isQueuedCommandAttachment(command)) return undefined
+  // An explicit origin from the queue wins, but only if it is actually a
+  // discriminated origin — a malformed value must not become provenance.
+  const explicit = command.origin
+  if (typeof explicit === 'object' && explicit !== null && 'kind' in explicit) {
+    return explicit
+  }
+  if (
+    command.commandMode !== 'task-notification' ||
+    typeof command.prompt !== 'string'
+  ) {
+    return undefined
+  }
+  return (
+    taskNotificationOriginFromText(command.prompt) ?? {
+      kind: 'task-notification',
+    }
+  )
+}

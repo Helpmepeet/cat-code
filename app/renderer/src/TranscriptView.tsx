@@ -372,6 +372,15 @@ const TranscriptRowView = memo(function TranscriptRowView({
     case 'task-notification':
       return <TaskNotificationBox status={row.status} content={row.content} />
 
+    case 'injected-turn':
+      return (
+        <InjectedTurnBox
+          injectedKind={row.injectedKind}
+          label={row.label}
+          content={row.content}
+        />
+      )
+
     case 'result':
       return (
         <ResultSeam
@@ -1447,6 +1456,95 @@ function TaskNotificationBox({
       <span className="shrink-0 font-mono text-[9.5px] text-text-subtle/70">task</span>
     </div>
   )
+}
+
+/**
+ * InjectedTurnRow: one of the four other engine-injected `role:'user'` turns.
+ * Rendered in the SAME left-aligned notice grammar as TaskNotificationBox — the
+ * GUI's "this row came from the engine, not from you" shape — never the
+ * right-aligned accent bubble they used to land in.
+ *
+ * Glyph + heading per kind, matched to the terminal REPL rather than invented:
+ *  - `channel`  — `←` (`CHANNEL_ARROW`, `src/constants/figures.ts:21`) and the
+ *    server name, as `UserChannelMessage.tsx:56-78` prints `← slack · user:`.
+ *  - `teammate` — `@handle`, as `UserTeammateMessage.tsx:98` prints `@name❯`.
+ *    The TUI additionally tints the handle with the teammate's own color; the
+ *    renderer cannot (Tailwind cannot take an interpolated arbitrary value — the
+ *    AGENT_DOT_CLASS lesson), so the handle rides the neutral accent. §0 flag:
+ *    🔁 adapted(per-teammate color needs a static hex→class map).
+ *  - `coordinator` / `deferred-continuation` — the TUI has NO distinct row for
+ *    either (coordinator is `isMeta`-hidden, `attachments.ts:1108`; the
+ *    continuation renders as a human turn, which IS this bug). Their headings
+ *    come from the engine's own canonical description of each kind in
+ *    `wrapCommandText` (`src/utils/messages.ts:5681,5686`) — the one exhaustive
+ *    per-kind statement in the engine. §0 flag: 🔁 adapted(no TUI precedent).
+ *  - anything else — a kind minted by a newer engine: neutral "Injected
+ *    message" heading, row still rendered (display degrades, never drops).
+ */
+function InjectedTurnBox({
+  injectedKind,
+  label,
+  content,
+}: {
+  injectedKind: string
+  label: string | null
+  content: string
+}) {
+  const style = INJECTED_TURN_STYLE[injectedKind] ?? INJECTED_TURN_FALLBACK
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
+      <span className="text-[12px] leading-5 text-accent" aria-hidden>
+        {style.glyph}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-medium text-text-muted">
+            {label === null ? style.heading : `${style.prefix}${label}`}
+          </span>
+        </div>
+        <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-text-muted">
+          {content}
+        </div>
+      </div>
+      <span className="shrink-0 font-mono text-[9.5px] text-text-subtle/70">
+        {style.tag}
+      </span>
+    </div>
+  )
+}
+
+type InjectedTurnStyle = {
+  glyph: string
+  /** Heading when the origin names no sender. */
+  heading: string
+  /** Prefix in front of a named sender (`@` for a teammate, '' for a channel). */
+  prefix: string
+  /** Trailing debug tag, matching the SystemNoticeBox/TaskNotificationBox idiom. */
+  tag: string
+}
+
+const INJECTED_TURN_STYLE: Record<string, InjectedTurnStyle> = {
+  channel: { glyph: '←', heading: 'Channel message', prefix: '', tag: 'channel' },
+  teammate: { glyph: '@', heading: 'Teammate', prefix: '@', tag: 'teammate' },
+  coordinator: {
+    glyph: '⤷',
+    heading: 'Coordinator',
+    prefix: '',
+    tag: 'coordinator',
+  },
+  'deferred-continuation': {
+    glyph: '⏱',
+    heading: 'Continuation',
+    prefix: '',
+    tag: 'continuation',
+  },
+}
+
+const INJECTED_TURN_FALLBACK: InjectedTurnStyle = {
+  glyph: '⤷',
+  heading: 'Injected message',
+  prefix: '',
+  tag: 'injected',
 }
 
 /**
