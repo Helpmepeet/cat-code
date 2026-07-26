@@ -38,6 +38,10 @@ const PROVIDER_MANAGED_ENV_VARS = new Set([
   'CLAUDE_CODE_SKIP_FOUNDRY_AUTH',
   // Model defaults — often set to provider-specific ID formats
   'ANTHROPIC_MODEL',
+  // Cat Code's own name for the same lever; checked ahead of ANTHROPIC_MODEL
+  // (src/utils/model/model.ts getModelEnvOverride) so it must be stripped
+  // alongside it under host-managed routing.
+  'CAT_CODE_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME',
@@ -132,6 +136,7 @@ export const SAFE_ENV_VARS = new Set([
   'BASH_DEFAULT_TIMEOUT_MS',
   'BASH_MAX_OUTPUT_LENGTH',
   'BASH_MAX_TIMEOUT_MS',
+  'CAT_CODE_MODEL',
   'CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR',
   'CLAUDE_CODE_API_KEY_HELPER_TTL_MS',
   'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS',

@@ -87,6 +87,16 @@ export function remapRetiredGptModel(model: ModelName): ModelName {
 }
 
 /**
+ * Cat Code's own env var for the model-selection env lever, checked ahead of
+ * upstream Claude Code's ANTHROPIC_MODEL. ANTHROPIC_MODEL is kept working
+ * (not renamed) so upstream merges don't conflict and existing scripts/docs
+ * referencing it keep working; CAT_CODE_MODEL just wins when both are set.
+ */
+export function getModelEnvOverride(): ModelName | undefined {
+  return process.env.CAT_CODE_MODEL || process.env.ANTHROPIC_MODEL || undefined
+}
+
+/**
  * Helper to get the model from /model (including via /config), the --model flag, environment variable,
  * or the saved settings. The returned value can be a model alias if that's what the user specified.
  * Undefined if the user didn't configure anything, in which case we fall back to
@@ -95,7 +105,7 @@ export function remapRetiredGptModel(model: ModelName): ModelName {
  * Priority order within this function:
  * 1. Model override during session (from /model command) - highest priority
  * 2. Model override at startup (from --model flag)
- * 3. ANTHROPIC_MODEL environment variable
+ * 3. CAT_CODE_MODEL environment variable, then ANTHROPIC_MODEL environment variable
  * 4. Settings (from user's saved settings)
  */
 export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
@@ -106,7 +116,7 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
     specifiedModel = modelOverride
   } else {
     const settings = getSettings_DEPRECATED() || {}
-    specifiedModel = process.env.ANTHROPIC_MODEL || settings.model || undefined
+    specifiedModel = getModelEnvOverride() || settings.model || undefined
   }
 
   if (typeof specifiedModel === 'string') {
@@ -127,7 +137,7 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
  * Model Selection Priority Order:
  * 1. Model override during session (from /model command) - highest priority
  * 2. Model override at startup (from --model flag)
- * 3. ANTHROPIC_MODEL environment variable
+ * 3. CAT_CODE_MODEL environment variable, then ANTHROPIC_MODEL environment variable
  * 4. Settings (from user's saved settings)
  * 5. Built-in default
  *

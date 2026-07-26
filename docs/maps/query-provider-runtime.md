@@ -105,7 +105,7 @@ src/services/api/client.ts
 | Request provider | `src/utils/model/providers.ts:resolveRequestProvider()` | Provider implied by model name wins; GPT-family models route to OpenAI, otherwise the base provider is used. |
 | Default main-loop model | `src/utils/model/model.ts:getDefaultMainLoopModelSetting()` | Codex subscribers default to a GPT model; other defaults depend on ant/user subscription and provider. |
 | Model catalog and picker entries | `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts` | Codex/OpenAI model options are assembled separately from adapter request translation. Keep picker labels/descriptions, `ALL_MODEL_CONFIGS`, and display/canonicalization in `model.ts` aligned. |
-| User-selected model | `src/utils/model/model.ts:getMainLoopModel()` | Session override, startup flag, `ANTHROPIC_MODEL`, settings, then default. Disallowed configured models are ignored. |
+| User-selected model | `src/utils/model/model.ts:getMainLoopModel()` | Session override, startup flag, `CAT_CODE_MODEL` (falls back to upstream `ANTHROPIC_MODEL` via `getModelEnvOverride()`), settings, then default. Disallowed configured models are ignored. |
 | Runtime model | `src/utils/model/model.ts:getRuntimeMainLoopModel()` | Per-iteration adjustment based on permission mode and token state, notably plan-mode aliases. |
 | API model string | `src/utils/model/model.ts:normalizeModelStringForAPI()` | Removes `[1m]`/`[2m]` suffixes before API dispatch. |
 | Provider-specific model capability | `src/utils/model/modelCapabilities.ts` | Ant-only first-party model capability cache can refine known limits; otherwise callers fall back to static context/model utilities. |

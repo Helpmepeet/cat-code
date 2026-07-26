@@ -29,6 +29,7 @@ import {
 } from 'src/utils/messages.js'
 import {
   getDefaultMainLoopModelSetting,
+  getModelEnvOverride,
   isNonCustomOpusModel,
 } from 'src/utils/model/model.js'
 import { getModelStrings } from 'src/utils/model/modelStrings.js'
@@ -815,7 +816,7 @@ function getAssistantMessageFromErrorInternal(
   // Ants using new or unknown org IDs that haven't been gated in.
   if (
     process.env.USER_TYPE === 'ant' &&
-    !process.env.ANTHROPIC_MODEL &&
+    !getModelEnvOverride() &&
     error instanceof Error &&
     error.message.toLowerCase().includes('invalid model name')
   ) {
