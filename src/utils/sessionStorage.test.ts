@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
 import { asAgentId, asSessionId } from '../types/ids.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
@@ -359,6 +359,22 @@ describe('session storage', () => {
 
       expect(existsSync(getAgentTranscriptPath(agentId))).toBe(false)
       expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    // LocalMainSessionTask.ts:101 links its own agent transcript and passes the
+    // same agentId to the API (:125) without ever registering as a subagent.
+    // Guarding on the registry alone would silently drop its diagnostics, so an
+    // already-existing derived transcript is accepted too — that still cannot
+    // mint an orphan, because the diagnostic never creates the file.
+    test('agent branch: an unregistered agent that already owns a transcript still writes', async () => {
+      const agentTranscriptPath = getAgentTranscriptPath(agentId)
+      mkdirSync(dirname(agentTranscriptPath), { recursive: true })
+      await writeFile(agentTranscriptPath, '')
+
+      recordPromptCacheBreak({ ...breakEntry, agentId })
+
+      const text = await Bun.file(agentTranscriptPath).text()
+      expect(text).toContain('"subtype":"prompt_cache_break"')
     })
 
     test('agent branch: a live agent writes to the transcript it registered', async () => {

@@ -568,16 +568,40 @@ export function recordCodexStreamSurface(entry: {
 }
 
 /**
+ * Transcript a diagnostic may append to for `agentId`, or `null` if nothing
+ * owns one.
+ *
+ * Order matters. A live subagent's registered path is true ownership — recorded
+ * at spawn/resume, dropped at terminal. The DERIVED path is accepted only when
+ * it already exists, which keeps coverage for agent-shaped callers that own a
+ * transcript without registering as a subagent (a backgrounded main-session
+ * task links its own at `LocalMainSessionTask.ts:101` and passes that same
+ * `agentId` to the API) while preserving the property that actually matters: a
+ * diagnostic never CREATES an agent transcript, so it cannot mint an orphan.
+ */
+function getOwnedAgentTranscriptPath(agentId: AgentId): string | null {
+  const registered = getActiveSubagentTranscriptPath(agentId)
+  if (registered !== null) return registered
+  const derived = getAgentTranscriptPath(agentId)
+  try {
+    getFsImplementation().statSync(derived)
+    return derived
+  } catch {
+    return null
+  }
+}
+
+/**
  * Append a prompt_cache_break diagnostic entry to the current session JSONL.
  * Records confirmed prompt cache misses with structured cause metadata so
  * post-hoc debugging does not rely on debug-log scraping.
  *
- * No-op unless the target transcript has a live owner. Each branch asks its own
- * owner for the path rather than deriving one from an id: the main session from
- * `getOwnedTranscriptPath()`, a subagent from the entry the agent registered at
- * spawn/resume. Deriving instead (`getTranscriptPath()` /
- * `getAgentTranscriptPath()`) yields a path whether or not anything owns it, so
- * an unowned write minted an orphan transcript.
+ * No-op unless the target transcript has an owner. Each branch asks an owner
+ * for the path instead of deriving one from an id: the main session from
+ * `getOwnedTranscriptPath()`, an agent from `getOwnedAgentTranscriptPath()`.
+ * Deriving unconditionally (`getTranscriptPath()` / `getAgentTranscriptPath()`)
+ * yields a path whether or not anything owns it, so an unowned write minted an
+ * orphan transcript.
  *
  * Sync and best-effort — never throws. Safe to call from the API path.
  */
@@ -629,7 +653,7 @@ export function recordPromptCacheBreak(entry: {
 }): void {
   try {
     const transcriptPath = entry.agentId
-      ? getActiveSubagentTranscriptPath(entry.agentId)
+      ? getOwnedAgentTranscriptPath(entry.agentId)
       : getOwnedTranscriptPath()
     if (transcriptPath === null) return
     appendEntryToFile(transcriptPath, {
