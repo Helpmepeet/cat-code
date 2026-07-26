@@ -21,6 +21,21 @@
  * (`mintTranscript.fixture.ts` → `recordTranscript`), never hand-written JSONL.
  * No live credentialed turn is required (that anti-Potemkin live proof is P3-8).
  *
+ * TEST EVIDENCE (F5 real-process complement)
+ * - Claim: independently spawned production sidecars isolate their OS-process
+ *   lifecycles: killing one leaves the other live and reachable over its own
+ *   production Unix-domain socket.
+ * - Exact pre-fix failure: a shared/reused sidecar process, or a supervisor
+ *   kill path that tears down sibling sessions, would give both sessions one PID
+ *   or make the survivor's ping fail after the first child is SIGKILLed.
+ * - Production entry point: `SidecarSupervisor.spawnSession()` / its Node
+ *   `child_process.spawn` sidecar boundary, then `SidecarSupervisor.send()`.
+ * - Proof layer: process. Higher GUI and credentialed-live layers are
+ *   UNVERIFIED; this sends only a protocol ping and never makes a model call.
+ * - Red/mutation evidence: the focused test was intentionally perturbed to
+ *   signal the survivor PID; its `ready` assertion observed `exited`, then the
+ *   original kill target was restored before the recorded green run.
+ *
  * Run: `bun test app/sidecar/spawnConfig.probe.test.ts`
  */
 
@@ -117,6 +132,26 @@ function waitForFrame(
         clearTimeout(timer)
         unsub()
         resolve(event.frame)
+      }
+    })
+  })
+}
+
+function waitForEvent(
+  sup: SidecarSupervisor,
+  predicate: (event: SupervisorEvent) => boolean,
+  timeoutMs = 45_000,
+): Promise<SupervisorEvent> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsub()
+      reject(new Error('timed out waiting for supervisor event'))
+    }, timeoutMs)
+    const unsub = sup.subscribe(event => {
+      if (predicate(event)) {
+        clearTimeout(timer)
+        unsub()
+        resolve(event)
       }
     })
   })
@@ -290,6 +325,70 @@ test('(a) two sidecars with different cwds do not cross — a transcript is resu
   })
   // Dedicated resume-failed exit code (index.ts RESUME_FAILED_EXIT_CODE).
   expect(exitB.code).toBe(4)
+}, TEST_TIMEOUT_MS)
+
+test('(a/F5) SIGKILLing one real sidecar leaves its independently spawned sibling live and responsive', async () => {
+  const configHome = freshConfigHome()
+  const cwdA = tmp('catcode-f5-wdA-')
+  const cwdB = tmp('catcode-f5-wdB-')
+  const sup = makeSupervisor(configHome)
+  const sessionA = 'f5-killed-sidecar'
+  const sessionB = 'f5-survivor-sidecar'
+
+  // Subscribe before spawning so readiness is our deterministic barrier: both
+  // children have independently completed the real sidecar boot/socket join
+  // before we send the external kill signal.
+  const readyA = waitForFrame(
+    sup,
+    frame => frame.kind === 'ready' && frame.sessionId === sessionA,
+  )
+  const readyB = waitForFrame(
+    sup,
+    frame => frame.kind === 'ready' && frame.sessionId === sessionB,
+  )
+  sup.spawnSession(sessionA, { cwd: cwdA })
+  sup.spawnSession(sessionB, { cwd: cwdB })
+  await Promise.all([readyA, readyB])
+
+  const pidA = sup.getSessionProcessId(sessionA)
+  const pidB = sup.getSessionProcessId(sessionB)
+  expect(pidA).toBeDefined()
+  expect(pidB).toBeDefined()
+  expect(pidA).not.toBe(pidB)
+  if (pidA === undefined || pidB === undefined) {
+    throw new Error('ready sidecar was missing its production child PID')
+  }
+
+  // This is deliberately an OS-level crash, not `killSession()`: the external
+  // signal exercises the real child-process boundary and the supervisor's exit
+  // listener. The pending listener is installed before SIGKILL to avoid a
+  // timing race with the fast child exit.
+  const exitedA = waitForEvent(
+    sup,
+    (event): boolean => event.type === 'exit' && event.sessionId === sessionA,
+  )
+  process.kill(pidA, 'SIGKILL')
+  const exit = await exitedA
+  expect(exit.type).toBe('exit')
+  if (exit.type === 'exit') {
+    expect(exit.signal).toBe('SIGKILL')
+  }
+
+  // A sibling process has a separate PID, socket, and supervisor record. It
+  // remains ready and can answer a real framed ping after A dies. A shared
+  // process, shared teardown, or cross-session supervision bug fails here.
+  expect(sup.getSessionProcessId(sessionB)).toBe(pidB)
+  expect(sup.listSessions()).toContainEqual({ sessionId: sessionB, status: 'ready' })
+  const pong = waitForFrame(
+    sup,
+    frame => frame.kind === 'pong' && frame.sessionId === sessionB,
+  )
+  sup.send(sessionB, { type: 'app.ping', nonce: 'f5-survivor-still-live' })
+  const survivorPong = await pong
+  expect(survivorPong.kind).toBe('pong')
+  if (survivorPong.kind === 'pong') {
+    expect(survivorPong.nonce).toBe('f5-survivor-still-live')
+  }
 }, TEST_TIMEOUT_MS)
 
 test('(c) a bogus resume id fails loudly — non-zero exit + distinguishable stderr, no ready frame', async () => {

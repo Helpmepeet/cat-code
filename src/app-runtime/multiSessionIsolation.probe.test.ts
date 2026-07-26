@@ -12,6 +12,20 @@
  *     setCwd(cwd)  at src/QueryEngine.ts:245  (→ setCwdState at state.ts:464/537).
  *   Two sessions in one process therefore write the SAME module-level singleton.
  *
+ * PROOF CLASSIFICATION (F5 test-evidence follow-up): caller/wiring only.
+ *
+ * This file proves the deterministic one-process stomp and the controller's
+ * per-instance permission routing. Its "two processes" rows deliberately use
+ * `resetStateForTests()` as an in-process namespace simulation, so they are
+ * NOT OS-process evidence: they cannot prove child lifecycle, signal delivery,
+ * sockets, inherited resources, or a killed sidecar's survivor behavior.
+ *
+ * The real-process complement is
+ * `app/sidecar/spawnConfig.probe.test.ts`: it uses the production
+ * `SidecarSupervisor` to spawn real Bun sidecars over real Unix sockets,
+ * including distinct-cwd isolation and kill-one/survivor liveness. GUI and
+ * credentialed-live layers remain UNVERIFIED by both probes.
+ *
  * WHAT THIS PROBE DOES (honest scope):
  *   It drives the REAL `AppSessionController` (the desktop seam — the same class
  *   the sidecar builders wrap) with a minimal adapter whose runTurn() performs
