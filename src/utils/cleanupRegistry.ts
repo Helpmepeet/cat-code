@@ -52,6 +52,18 @@ export function unregisterActiveSubagent(agentId: string): void {
 }
 
 /**
+ * Transcript path the named subagent registered when it started, or `null` if
+ * no live subagent owns that id. Registration happens on spawn (AgentTool) and
+ * on resume (resumeAgent) and is dropped on terminal, so this is the agent-side
+ * analogue of the main session's materialized transcript pointer: a diagnostic
+ * appender can use it to write only to a transcript some live agent owns,
+ * instead of deriving a path from an id that may own nothing.
+ */
+export function getActiveSubagentTranscriptPath(agentId: string): string | null {
+  return activeSubagents.get(agentId)?.transcriptPath ?? null
+}
+
+/**
  * Called on process exit. For each subagent still in the map (no terminal entry
  * was written), read the last timestamp from its transcript, then append a
  * stall-detected terminal entry to the parent transcript.
