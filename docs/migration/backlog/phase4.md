@@ -168,12 +168,26 @@ scope** (Standing rule: read it before building). The coordinate per session:
 | P4-17 | Welcome.jsx | §29 | 0 |
 | **P4-18** | Messages.jsx · Chat activity | §5 · §6 | **64** |
 | **P4-19** | Settings.jsx core editors | §11 | **45** |
+| **P4-29** | SessionsPage.jsx | §16 | **22** |
+| **P4-30** | SessionActions.jsx (dialog layer) | §17 | **18** |
+| **P4-31** | MetadataInspector.jsx | §18 | **10** |
+| **P4-32** | OrchestratorMode.jsx · AgentIdentity.jsx · orchestrator flow | §20 · §13 · FLOW-5 | **52** |
+| **P4-33** | Chat.jsx · Surfaces.jsx · Messages.jsx · AppV2 · Sidebar · WorkspaceLayout | §6 · §12 · §5 · §1 · §2 · §4 | **12** |
+| **P4-34** | PermissionRules · CommandPalette · Settings · MemoryPage · Permissions · Welcome | §8 · §9 · §11 · §23 · §7 · §29 | **13** |
 
 Done sessions own their sections too (P4-1 §12 · P4-2 §13 · P4-3 §11-shell · P4-4 §2/§3/§4 · P4-7 §19 ·
 P4-10 §22/§23); their residual ❓ = 0. **Danger-list ownership (126 ❓ → 0 silent):** 64 → P4-18,
 45 → P4-19, 3 → P4-0, 1 → CC-2 (restore-reorder), 5 waived (mock/cosmetic), **8 → recommended P4-20
 (AskUserQuestion renderer, §7 — not yet drafted; operator greenlight).** Full row-level resolution:
 `PARITY-LEDGER.md` Part C.
+
+**⚠ That 2026-07-07 resolution is SPENT — re-derived 2026-07-26.** All those owners ran. A nine-range
+re-audit re-verified every ⬜/❓ row against current source (❓ 10 → 45), and the 82 rows tagged
+`⬜ deferred — ORPHANED` (owner session ran, never covered the row, never §0-flagged it) were
+**promoted to ❓ rather than waived**, per the operator: *"i dont mind working it all. Just added it
+as a task in phase4 then."* Danger list **45 → 127**; realized parity **unchanged at 79%** (⬜ and ❓
+are both in-scope — the promotion cannot move the ratio). The six **TRANCHE G** rows above own all
+127. Per-row map + the owning session per row: `PARITY-LEDGER.md` Part C, itemized parts 1 and 2.
 
 ---
 
@@ -1422,5 +1436,883 @@ The corrected ledger (§28 cut, Part D re-derived + the single realized-parity n
 reclassified) + the corrected STATUS notes. Report: the before/after parity number, the three "built"
 totals reconciled to one, and the list of STATUS notes corrected (file:line each). Update this
 session's STATUS row + the P4-REVIEW row (B4/B5/M3 resolved) as the last step.
+```
+─── PASTE ───
+
+---
+
+# TRANCHE G — the ORPHANED-row backfill (generated 2026-07-26)
+
+The 2026-07-26 nine-range parity re-audit (commit `60abc0f`) found **82 rows** whose owner session
+**ran, finished, never covered the row, and never §0-flagged it** — tagged `⬜ deferred — ORPHANED`.
+A ⬜ requires a *named* owner; a spent owner is no owner, so those rows were ❓ wearing a ⬜ tag.
+**Operator ruling 2026-07-26: own them, do not waive them** — *"i dont mind working it all. Just
+added it as a task in phase4 then."* All 82 were promoted to ❓ and joined the 45 already there:
+**Part C is now 127, and these six sessions own every one of them.**
+
+**Realized parity did not move** (79% before and after). ⬜ and ❓ are both in-scope for the
+Realized% denominator, so a ⬜→❓ promotion is invisible to the ratio. Part C grew because it became
+honest. Nobody should read TRANCHE G as a regression, and no session here should "fix" the number.
+
+## The acceptance bar for every session in this tranche — read this before your prompt
+
+**Operator instruction, verbatim: *"you are underestimate the goal of prototype. What we build
+should be rendered exact to prototype."*** Closing a ledger row is a **coverage** measure and
+coverage is NOT the goal. A session could flip all 22 of its rows and render nothing like the
+prototype — which is the exact failure that created this instrument (the 2026-07-07 Sidebar was ✅
+and review-GREEN while having silently dropped 4 chrome items and a whole feature class). So:
+
+- **PROGRAM-PLAN §6 / §8 visual-fidelity acceptance is REQUIRED, not optional, for every session
+  below** — all six render UI, so none is exempt. Verbatim (`PROGRAM-PLAN.md:323`): *"The Step-1
+  prototype surface is the acceptance bar for how it looks — not merely a data/behavior reference.
+  The session's done-criteria MUST include a side-by-side visual check against that prototype
+  surface (layout, chrome, spacing, states); a surface is done only when it reads as the prototype,
+  not merely when its data is wired. The prototype IS the visual grammar — a session must not invent
+  a parallel one."* And (`PROGRAM-PLAN.md:430`): *"Do not instruct a session to establish its own
+  visual grammar — that phrasing is what let the Phase-3 shell chrome drift while passing its
+  function-only gate."*
+- **Invoke the `verifying-cat-code-changes` skill.** Its **FIDELITY** block
+  (`.claude/skills/verifying-cat-code-changes/SKILL.md:89`, template `:106`) is *required, not
+  optional* for prototype-affecting renderer changes, and the **SURFACE ACCEPTANCE** tiered verdict
+  (`:175`) must appear in the final report. Hard rule from that skill: **an open, unapproved
+  mismatch stops a fidelity-pass claim** — a §0 `adapted/deferred/cut` self-flag records a
+  *proposed* deviation, it does NOT close the mismatch. Only the operator can move an item from
+  "Open mismatches" to "Operator-approved deviations".
+- **Render-and-diff is buildable — use it.** The prototype runner is
+  **`~/catcode_prototype/CatCode Web App.html`** (note: repo root, NOT inside `cat-app/`) — a
+  Babel-standalone SPA that loads `cat-app/*.jsx`. Open the real prototype surface beside the real
+  app instead of reasoning about fidelity from JSX source. This is the single highest-value thing
+  in this tranche; state in your report whether you used it.
+- **READ your prototype surface before writing code.** Ledger row text is a *summary*; the
+  prototype is the *spec*. Each prompt names its file + line count + the components it must match.
+- **Standing constraints are unchanged and this tranche is not a licence against them:** port
+  **ZERO** prototype code; **no inline `style={{}}`** (tokens + the Tailwind idiom, and beware the
+  dynamic-class trap — interpolated arbitrary values like `` text-[${hex}] `` silently no-op; use a
+  static map); the prototype's **mock fixture data is never the contract** — real engine shapes win
+  and a dropped mock field is ✂️/🔁 **with a flag**, never ❓. Prototype parity is the **DEFAULT**;
+  a deviation is a §0 flag (adapted/deferred/cut + reason) raised as a **PROPOSAL to the operator**,
+  never a silent drop and never a call the session makes alone.
+
+Everything in **Standing rules** at the top of this file still applies (Step-0 INVENTORY row, the
+domain recipe, the security baseline, the GUI protocol, kill-what-you-spawn, `bun test app/` +
+both tscs + `test:hardening`).
+
+## Dependency / ordering
+
+```
+P4-30 (SAModal + dialog layer) ─▶ P4-29 (its bulk-bar Export + row actions reuse the dialogs)
+P4-32 (decision FIRST, then 32a/32b) ─▶ P4-33 (§6 orchestrator rows share P4-32's chrome seam)
+P4-31, P4-34  [standalone — run any time]
+```
+**Run P4-30 before P4-29** (P4-29's bulk Export and row Branch/Export actions want the dialogs
+P4-30 builds; doing it the other way means building the invocation twice). **P4-32 must reach an
+operator ruling before P4-33 builds §6's four orchestrator rows** — they render the same chrome.
+
+
+## P4-30 · ⬜ — Branch/Rewind/Export dialog layer: the `SAModal` family (CC-1 §17, 18 ❓)
+
+Run this **before P4-29**. Read `PARITY-LEDGER.md` §17 (`:1232`-`:1305`) and the P4-6/P4-6b STATUS
+rows first — this session exists because a whole dialog layer was dropped with no §0 flag, so the
+*first* thing to internalize is that "P4-6b said it wired the actions end-to-end" is not evidence.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 7/10 · 🖐 GUI
+
+You are running P4-30 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+CC-1 §17 (`docs/migration/PARITY-LEDGER.md:1232-1305`) owns `SessionActions.jsx`: the per-session
+actions menu PLUS the Branch / Rewind / Export dialogs it opens. The menu half shipped. **The
+entire dialog layer did not, and no §0 flag was ever raised** — it was a silent parity cut, which
+is the exact failure mode this ledger exists to catch. Verified in source 2026-07-26:
+
+- `rg -n 'BranchDialog|RewindDialog|ExportDialog|SAModal' app/renderer/src/` → **zero matches.**
+  The only `*Dialog` component in the renderer is `TasksDialog.tsx`, unrelated.
+- **Branch fires with NO confirmation.** `app/renderer/src/App.tsx:2195-2199` — a menu row click
+  goes `MenuRow onAction` (`SessionActionsMenu.tsx:69-72`) → `sendSessionActionVerb(targetId,
+  {type:'session.branch', requestId})` → a real fork on disk (`createFork`, see
+  `app/shared/protocol.ts:1283-1290`). No intermediate state, no gate. `rg 'confirm|Are you sure'`
+  over `app/renderer/src`, `app/preload`, `app/main` finds no confirmation UI anywhere.
+- **Export has no Download and no filename — the clipboard is the ONLY sink.** Dispatch at
+  `App.tsx:2190-2194`; result handler `App.tsx:1174-1180` does exactly
+  `navigator.clipboard.writeText(result.exportText)` + a toast. There is no `showSaveDialog`, no
+  `createObjectURL`, no `<a download>`, no renderer-reachable `writeFile`. **Saving a transcript to
+  a file is unreachable from the desktop.** A filename is not even expressible: `SessionExportMessage`
+  is `{type, requestId}` only (`app/shared/protocol.ts:1317-1321`), same for branch (`:1323-1327`).
+- Doc drift to fix in passing: `app/shared/protocol.ts:1282` claims *"the renderer offers a
+  download/clipboard."* Only clipboard exists.
+
+Your 18 ❓ rows are every row in §17 whose disposition reads `❓ missing-no-owner — promoted from ⬜
+ORPHANED 2026-07-26` — ledger lines `:1239 :1243 :1246 :1258 :1264 :1265 :1266 :1267 :1268 :1269
+:1270 :1279 :1282 :1283 :1293 :1295 :1296 :1298`. They are, grouped: the `SA_IC` icon vocabulary,
+`sa-pop` entry animation, `SectionLabel`, the copy-flyout hover behavior, the **`SAModal` shell**
+(scrim + centered card + click-scrim-close + stopPropagation + header with tinted icon chip +
+scrollable body + footer slot + Escape + the `saBtn` primary/danger/disabled variants), the
+**BranchDialog** (modal + preview callout + Cancel), and the **ExportDialog** (modal + live content
+preview `<pre>` + derived filename + Download button). Re-verify every anchor before building.
+
+=== PROTOTYPE — THIS IS THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Operator, verbatim: *"you are underestimate the goal of prototype. What we build should be rendered
+exact to prototype."* Closing 18 rows is COVERAGE. The bar is **renders exact to the prototype.**
+
+- **Read `~/catcode_prototype/cat-app/SessionActions.jsx` (389 lines) before you write any code.**
+  Ledger row text is a summary; the prototype is the spec. Match: `SA_IC`, `SAModal`, `saBtn`,
+  `SectionLabel`, the copy flyout, `BranchDialog`, `RewindDialog`, `ExportDialog`, and the
+  `sa-pop` animation. Do not work from the row titles.
+- **Run it side-by-side.** The prototype runner is `~/catcode_prototype/CatCode Web App.html`
+  (repo root, NOT inside `cat-app/`) — a Babel-standalone SPA that loads `cat-app/*.jsx`. Open the
+  real prototype dialogs beside the real app rather than reasoning about fidelity from JSX.
+- **Enumerate STATES, not one screenshot.** Per dialog at minimum: closed, open-default,
+  open-with-a-long-title (ellipsis/wrap), the disabled/invalid button state, and mid-Escape/
+  scrim-click dismissal. A surface can match in one state and be wrong in another — that mount-gate
+  class of miss is what "0 High" reviews have repeatedly missed here.
+- PROGRAM-PLAN §6 (`:323`) applies in full: a surface is done only when it **reads as** the
+  prototype, not when its data is wired; the prototype IS the visual grammar — do not invent a
+  parallel one; every intentional divergence is a §0 case-by-case conflict.
+- Port **ZERO** prototype code. No inline `style={{}}` — P0-2 tokens + the Tailwind idiom, and
+  beware the dynamic-class trap (interpolated arbitrary values silently no-op; use a static map).
+  Prototype mock data is never the contract — real engine shapes win.
+
+=== BUILD ===
+- **`SAModal` + `saBtn` first** — they are shared primitives; the three dialogs are their consumers.
+  Follow the house component idiom, not the prototype's. Escape-to-close and scrim-click-to-close
+  are two of your rows; `stopPropagation` on the card is a third — test them, don't eyeball them.
+- **BranchDialog** — this is the one that closes a live defect: branch must not fire until the
+  operator confirms. The preview callout ("keeps 1–N / drops M after", new name `"title (branch)"`)
+  is a derived string; derive it from what actually crosses the wire, and if a field is missing,
+  **flag it — do not invent it and do not mock it.**
+- **ExportDialog** — live content preview pane + derived filename (slugified title + `.md`/`.json`)
+  + a **Download** primary button. Download is a real capability gap, not just chrome: today no
+  renderer-reachable file-write path exists. **Adding one is a boundary change — treat it as such.**
+  Renderer never authors a path (HC1). If the honest shape is a main-process `showSaveDialog` behind
+  an HC3 fixed-sender preload channel, that needs the full security tax (sidecar/main validation,
+  boundary test, hardening smoke) and a decision reference — or, if you judge it out of one sitting,
+  build the dialog + filename + preview and **§0-flag Download as a proposal to the operator with
+  the exact seam you'd add.** Do not silently ship clipboard-only again.
+- **RewindDialog** — §17 rows for it are `⬜ owner-flagged`, not yours; build it only if it falls
+  out of `SAModal` for free, and say which rows you touched either way.
+- **Fix `protocol.ts:1282`'s "download/clipboard" comment** to match whatever ships.
+
+=== GROUND RULES ===
+Renderer-first. If you add ANY inbound vocabulary or preload channel it needs sidecar-side
+validation + a boundary test + a decision reference (`decisions/SECURITY-MINIMUM.md` T4/T5a/T6/T7,
+HC1–HC4) — repo mistake #5 is widening the desktop inbound surface. Locked decisions untouched.
+`app/` is strict — keep it that way; known-red sidecar tsc means **zero NEW owned** diagnostics.
+No new deps. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (report the pass count against the newest ✅ STATUS row — a DROP is
+a regression) · `bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar`
+zero new owned · `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill** and paste BOTH artifacts in your report:
+1. the filled **FIDELITY** block (Surfaces touched / States compared / Prototype anchors —
+   `SessionActions.jsx:line` per dialog / Comparison artifacts per state / Open mismatches /
+   Operator-approved deviations / Live GUI acceptance). **An open, unapproved mismatch stops a
+   fidelity-pass claim** — a §0 flag is a proposal, not a closure.
+2. the **SURFACE ACCEPTANCE** tiered verdict (Engineering / Security / Fidelity artifact / Live
+   fidelity / Overall). Never collapse these into one ✅.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation): open a session's ⋯
+menu → Branch → the confirmation dialog appears and Cancel leaves the transcript untouched → Export
+→ preview + filename render and Download writes a real file. Migration test turns use `gpt-5.6-luna`
+at low effort on a healthy account — never burn frontier quota on a dev-loop turn.
+
+Ledger: flip your 18 rows in `PARITY-LEDGER.md` §17 from ❓ to ✅/🔁 **directly** (do NOT demote to
+⬜ — a spent-owner ⬜ is what created this session) with a real `app/…:line` each, and record any
+row you could not close as a §0 proposal naming what it needs. Kill any sidecar you spawn. Update
+your STATUS row (⬜→✅/🟡 + date + note) as the last step; `STATUS.md` is multi-writer, so **re-read
+it immediately before writing and touch only your own row.**
+```
+─── PASTE ───
+
+## P4-29 · ⬜ — Sessions-page row actions, rename, tags, bulk bar (CC-1 §16, 22 ❓)
+
+Run **after P4-30**. Read `PARITY-LEDGER.md` §16 (`:1163`-`:1231`) plus the P4-6a / P4-6b / P4-26 /
+P4-6a-FIX STATUS rows. The headline is that P4-6b closed as "wired end-to-end" having wired only
+TabBar + Sidebar, and left four imports in `SessionsPage.tsx` that nothing uses.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 6/10 · 🖐 GUI
+
+You are running P4-29 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+CC-1 §16 (`docs/migration/PARITY-LEDGER.md:1163-1231`) owns `SessionsPage.jsx` — the cross-workspace
+Sessions MANAGER (browse/search/filter/sort, multi-select bulk ops, per-row actions), which is a
+different surface from the sidebar switcher. Browse/search/sort shipped. **Every action affordance
+did not.** Verified in source 2026-07-26:
+
+- **`app/renderer/src/SessionsPage.tsx:23-30` imports `resolveSessionActions`, `SessionActionKind`,
+  `SessionActionsMenu`, `SessionActionsAnchor` and uses NONE of them.** All 594 lines read: those
+  four identifiers appear only in the import statement and in a doc-comment at `:7` that says the
+  row menu / inline rename / tag popover "are P4-6b". Rows render as a plain
+  `<button onClick={() => onOpen(row)}>` (`:415`) with no actions affordance at all.
+- **Nothing catches it.** `app/tsconfig.json` has no `noUnusedLocals`/`noUnusedParameters`, and
+  `eslint.config.js:54` scopes lint to `src/**` so `app/` is not linted at all. The abandoned
+  wiring has been invisible to every gate.
+- **`SessionActionsMenu` is rendered in exactly ONE production place** — `App.tsx:2175` — opened by
+  `TabBar.tsx:309-322` (active tab ⋯) and `Sidebar.tsx:612-634` (hover kebab). SessionsPage is the
+  one surface that imports it and never opens it.
+- **Related live defect, and it is yours to judge (see BUILD): the ⋯ menu's "Restore" row does not
+  restore.** `app/renderer/src/sessionActions.ts:104` sets `label: openable ? (row.live ? 'Open' :
+  'Restore') : 'Open'` with `enabled: openable`, so a non-live row gets an ENABLED row labelled
+  "Restore" — but `App.tsx:2183` handles it with `else if (kind === 'open') selectTab(targetId)`,
+  and `selectTab` is documented at `App.tsx:1026-1034` as *pure UI focus* that never touches the
+  frame stream. Every OTHER open path branches on `live` and routes restorable rows through
+  `performRestore` (`App.tsx:1387-1426`): SessionsPage row click `:2341-2342`, Sidebar restore-offer
+  `:2133`, command palette `:2004-2005`, WelcomeScreen recent `:2395-2396`, open-from-history
+  `:1451-1452`. `App.tsx:2183` is the sole outlier, and it is reachable: the Sidebar kebab shows for
+  **any** registry row, live or restorable (`Sidebar.tsx:513`). Clicking "Restore" focuses a stale
+  pane.
+
+Your 22 ❓ rows are every §16 row reading `❓ missing-no-owner — promoted from ⬜ ORPHANED
+2026-07-26` — ledger lines `:1192 :1194 :1196 :1207 :1208 :1209 :1210 :1211 :1212 :1213 :1214 :1215
+:1216 :1217 :1218 :1219 :1220 :1223 :1225 :1226 :1228 :1229`. Grouped: row right-click context menu
+at cursor · row checkbox select · inline rename input (autofocus, Enter commit / Escape cancel /
+blur commit) · `+ tag` add button · row overflow ⋯ button · the whole **TagPopover** (panel + scrim
+with above/below auto-placement and viewport clamp, header incl. the bulk "Tag N sessions" form,
+filter/create input, matching-tag list with active check, "Create #tag", empty hint, "Remove tag") ·
+the **floating bulk-action bar** (appears at selection > 0, `left:48` offset for the sidebar rail,
+"N selected" label, Select-all/Deselect-all toggle, Tag, Export, Clear-selection ×) ·
+`SessionActionsMenu` invocation (row ⋯ + right-click, `hide=['metadata']`) · BranchDialog and
+ExportDialog invocation · Copy-as-Markdown / Copy-as-text row actions. Re-verify before building.
+
+=== PROTOTYPE — THIS IS THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Operator, verbatim: *"you are underestimate the goal of prototype. What we build should be rendered
+exact to prototype."* Flipping 22 rows is COVERAGE. The bar is **renders exact to the prototype.**
+
+- **Read `~/catcode_prototype/cat-app/SessionsPage.jsx` (670 lines) before you write any code** —
+  especially the TagPopover placement math and the bulk-bar geometry, which are the two things a
+  row-title summary cannot convey. Ledger row text is a summary; the prototype is the spec.
+- **Run it side-by-side:** `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside
+  `cat-app/`) is a Babel-standalone SPA that loads `cat-app/*.jsx`. Open the prototype Sessions page
+  beside the real one. Say in your report whether you did.
+- **Enumerate STATES:** zero rows / rows-no-selection / one selected / many selected / select-all ·
+  popover placed above vs below vs viewport-clamped · rename mid-edit · a row with no tag vs tagged ·
+  hover-only affordances (the ⋯ button and `+ tag` are hover-revealed — **hover/focus-only states are
+  operator-driven ALWAYS**, never warp the cursor; mark them PENDING per GUI-VERIFICATION.md).
+- PROGRAM-PLAN §6 (`:323`) in full: done only when it **reads as** the prototype; the prototype IS
+  the visual grammar — do not invent a parallel one; every divergence is a §0 case-by-case conflict.
+- Port **ZERO** prototype code; no inline `style={{}}`; beware the dynamic-class trap. **Prototype
+  mock data is never the contract** — this matters unusually much here: if session **tags** have no
+  engine backing, tags are NOT a ❓ to satisfy with a mock store. Render truth, §0-flag the
+  extend-engine-vs-change-UI trade-off as a PROPOSAL, and do not fake a tag model.
+
+=== BUILD ===
+- **Consume the four abandoned imports or delete them** — do not leave `SessionsPage.tsx:23-30`
+  half-wired a second time. Wire the ⋯ button and right-click to the existing App-owned
+  `SessionActionsMenu` (`App.tsx:2175`) with `hide=['metadata']`, following how `TabBar.tsx:309-322`
+  and `Sidebar.tsx:612-634` open it — reuse that path, do not build a second menu (repo mistake #10).
+- **The "Restore" bug — your call which session takes it, but SAY which.** It is a one-line class of
+  fix at `App.tsx:2183` (branch on `live` and route restorable rows through `performRestore`, like
+  every other open path). If you take it, add a test that fails before and passes after. If you
+  judge it P4-31's or a CC-row's, state that explicitly in your report — do not leave it unclaimed.
+- **Branch/Export invocation** rides P4-30's dialogs. If P4-30 has not landed, STOP and say so
+  rather than building a second dialog layer.
+- Selection, tags, and rename are renderer state: follow the house `create<X>State` /
+  `reduce<X>State` / `select<X>` idiom (`app/renderer/src/agentConfigState.ts` is the template) and
+  derive status at read time — never mutate stored rows.
+
+=== GROUND RULES ===
+Renderer-first. Any new inbound vocabulary or preload channel needs sidecar validation + a boundary
+test + a decision reference (SECURITY-MINIMUM T4/T5a/T6/T7, HC1–HC4). Renderer never authors a cwd
+(HC1) and never authors permission rules. Locked decisions untouched. `app/` is strict; sidecar tsc
+is known-red — zero NEW owned diagnostics. No new deps. Commit your own explicit paths to `migration`.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (report the count vs the newest ✅ STATUS row) · app tsc clean ·
+`typecheck:sidecar` zero new owned · `test:hardening` 19/19 · `renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill** and paste BOTH the filled **FIDELITY** block
+(with `SessionsPage.jsx:line` prototype anchors and per-state comparison artifacts) and the
+**SURFACE ACCEPTANCE** tiered verdict. **An open, unapproved mismatch stops a fidelity-pass claim.**
+
+GUI (operator's — STOP, print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, WAIT; NO automation): open Sessions → right-click a row and click its ⋯ → the menu
+appears at the cursor → rename inline and press Enter, then a second row and press Escape →
+select 2 rows → the bulk bar appears clear of the sidebar rail → Tag opens the popover both above
+and below the fold. Migration test turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Ledger: flip your 22 §16 rows ❓ → ✅/🔁 **directly** (never back to ⬜) with a real `app/…:line`
+each; anything you cannot close is a §0 proposal naming what it needs. Kill any sidecar you spawn.
+Update your STATUS row last — **re-read `STATUS.md` immediately before writing, touch only your row.**
+```
+─── PASTE ───
+
+## P4-31 · ⬜ — MetadataInspector residue: drawer chrome + subagent/compaction sections (CC-1 §18, 10 ❓)
+
+Standalone — run any time. Read `PARITY-LEDGER.md` §18 (`:1306`-`:1374`) and the P4-6b STATUS row.
+The 17 `owner-flagged` rows in §18 are NOT yours; only the 10 promoted-ORPHANED ones are.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 5/10 · 🖐 GUI
+
+You are running P4-31 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+CC-1 §18 (`docs/migration/PARITY-LEDGER.md:1306-1374`) owns `MetadataInspector.jsx` — the read-only
+right drawer exposing raw metadata for a transcript message and its session. The drawer shipped;
+ten elements did not, and their owner session (P4-6b) ran without covering or flagging them. They
+were tagged `⬜ deferred — ORPHANED` in the 2026-07-26 re-audit and promoted to ❓ on the operator's
+ruling *"i dont mind working it all"* — so they are real work, not bookkeeping.
+
+Your 10 ❓ rows are the §18 rows reading `❓ missing-no-owner — promoted from ⬜ ORPHANED
+2026-07-26` — ledger lines `:1315 :1316 :1347 :1352 :1353 :1354 :1356 :1357 :1370 :1372`:
+- **Drawer chrome:** slide-in animation (toast-in 0.18s ease) `:1315`; Escape-key closes the drawer
+  via a window keydown handler `:1316`.
+- **Surface row → MIPill** (cli / ide / …) `:1347`.
+- **Subagent section** (conditional on `mm.subagent`) `:1352` with its Agent row (agentName ·
+  agentType) `:1353`, Agent ID row (mono) `:1354`, Sidechain yes/no `:1356`, Spawned-at (mono) `:1357`.
+- **Compaction rows:** Messages-summarized (mono) `:1370`; Preserved-segment (mono, head → tail,
+  conditional) `:1372`.
+Re-verify each anchor against source before building — anchors drift, and the ledger's own header
+warns that a Notes cell may describe a pre-audit state while the Evidence cell is current.
+**Evidence wins over Notes.**
+
+**Recon before inventing (repo mistake #1 — three times so far).** Every one of these rows is a
+*data* row: it exists only if the field really crosses the wire. Before rendering any of them, find
+the real shape in the engine and cite `src/…:line` or `app/shared/protocol.ts:line`. If a field is
+not carried (subagent identity, sidechain flag, spawned-at, compaction head/tail), that is a
+**read-seam gap**, not a rendering gap: either add it as a read-only outbound snapshot field
+following the C3 precedent in `decisions/PERMISSION-BOUNDARY.md`, or §0-flag it as a proposal with
+the exact seam you'd add. **Do not mock a field to close a row** — a dropped mock fixture field is
+✂️/🔁 with a flag, never a satisfied ❓.
+
+**A defect you may find is yours (coordinate with P4-29 — one of you takes it, and BOTH of you must
+say which):** the ⋯ menu's "Restore" row does not restore. `app/renderer/src/sessionActions.ts:104`
+labels a non-live row 'Restore' and enables it, but `App.tsx:2183` handles it with `selectTab`
+(pure UI focus, documented `App.tsx:1026-1034`) while every other open path routes restorable rows
+through `performRestore` (`App.tsx:1387-1426`). Reachable via the Sidebar kebab, which shows for any
+registry row (`Sidebar.tsx:513`). If P4-29 has already taken it, skip it and note that.
+
+=== PROTOTYPE — THIS IS THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Operator, verbatim: *"you are underestimate the goal of prototype. What we build should be rendered
+exact to prototype."* Ten closed rows is COVERAGE. The bar is **renders exact to the prototype.**
+
+- **Read `~/catcode_prototype/cat-app/MetadataInspector.jsx` (191 lines) before writing code** —
+  it is short, so there is no excuse for working from row titles. Match the section grammar
+  (uppercase labels, mono value rows, `MIPill`), the drawer's slide-in, and the conditional
+  sections' empty behavior.
+- **Run it side-by-side:** `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside
+  `cat-app/`). Report whether you used it.
+- **Enumerate STATES:** drawer closed / opening (the animation is one of your rows — a static
+  screenshot cannot prove it) / open on a plain assistant message / open on a **subagent** message
+  (the conditional section) / open on a **compacted** session (the compaction rows) / open on a
+  message whose optional fields are absent. The conditional sections are precisely the mount-gate
+  class of miss: they render in one state and are invisible in the state a reviewer looks at.
+- PROGRAM-PLAN §6 (`:323`) in full: done only when it **reads as** the prototype; the prototype IS
+  the visual grammar — do not invent a parallel one; every divergence is a §0 conflict flag.
+- Port **ZERO** prototype code; no inline `style={{}}`; beware the dynamic-class trap; prototype
+  mock data is never the contract.
+
+=== BUILD ===
+- Escape-to-close is a **window** keydown handler — mind the interaction with other Escape consumers
+  (permission prompts, pickers, dialogs). Test the precedence, don't assume it.
+- Display degrades gracefully (house rule): an unknown or absent metadata variant renders a tolerant
+  fallback row and **never throws**. Runtime-narrow unknown shapes; **zero `as` casts** in
+  projector-style code. Inbound stays fail-closed.
+- Reuse existing projection/selectors rather than adding a parallel derivation (repo mistake #10) —
+  search `app/renderer/src/transcriptProjector.ts` and the relevant map first.
+
+=== GROUND RULES ===
+Read-only drawer: prefer **no** new inbound vocabulary. If a read seam must grow, it is an outbound
+read-only snapshot field with `secretGuard` on the outbound frame, plus a boundary test — cite
+`decisions/PERMISSION-BOUNDARY.md` C3 and `decisions/SECURITY-MINIMUM.md`. Locked decisions
+untouched. `app/` strict; sidecar tsc known-red — zero NEW owned diagnostics. No new deps.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (count vs the newest ✅ STATUS row) · app tsc clean ·
+`typecheck:sidecar` zero new owned · `test:hardening` 19/19 · `renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block (prototype
+anchors as `MetadataInspector.jsx:line`, one comparison artifact per state above, incl. the subagent
+and compaction states) and the **SURFACE ACCEPTANCE** tiered verdict. **An open, unapproved mismatch
+stops a fidelity-pass claim** — a §0 flag is a proposal, not a closure.
+
+GUI (operator's — STOP, print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, WAIT; NO automation): open the inspector on a message from a subagent run → the
+Subagent section renders agent name/type/id/sidechain/spawned-at → press Escape → the drawer closes.
+Migration test turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Ledger: flip your 10 §18 rows ❓ → ✅/🔁 **directly** (never back to ⬜) with a real `app/…:line`
+each; a row you cannot close is a §0 proposal naming the missing seam. Kill any sidecar you spawn.
+Update your STATUS row last — **re-read `STATUS.md` immediately before writing, touch only your row.**
+```
+─── PASTE ───
+
+## P4-32 · ⬜ — Orchestrator in-session chrome: **DECISION FIRST**, then split 32a/32b (CC-1 §20 + §13 + FLOW-5, 52 ❓)
+
+**This is the important one, and it is not a build session yet.** Read, in order:
+`PARITY-LEDGER.md` §20 (`:1431`-`:1505`), §13 (`:956`-`:1021`), FLOW-5 (`:2182`-`:2209`);
+`decisions/AGENT-MODE-TOGGLE.md` (P4-8b's ruling — the per-session toggle already ships);
+`decisions/AGENT-CHROME.md` (D2); `reviews/2026-07-13-ui-drift/orchestrator.md`; and the P4-8/P4-8b
+STATUS rows. **A previous build of this surface was created and then deleted by the operator
+(`f626b5d`, 2026-07-14) — rebuilding it under a different name without a ruling would repeat that
+exactly.** Hence: the first deliverable is a decision doc, and the session STOPS for approval.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (system-architecture) · Difficulty: 7/10 · 🖐 GUI
+
+You are running P4-32 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+**YOUR FIRST DELIVERABLE IS A DECISION DOC, NOT CODE. You will STOP and wait for operator approval
+before implementing anything.** Read the whole prompt before doing anything at all.
+
+=== CONTEXT (you start cold) — and the correction that defines this session ===
+On 2026-07-14 the operator said *"we dont have 'orchestrator' page. remove it"*, and
+`OrchestratorPage.tsx` (383 lines), `OrchestratorRoster.tsx` (136), `WorkerFocusView.tsx` (154) and
+`LeaseRoster.tsx` (118) were deleted in `f626b5d`. On 2026-07-26 they clarified what that ruling
+meant: **they removed the icon/page, which was OUR invention. The prototype has no orchestrator nav
+destination at all.** That is confirmed by the prototype itself.
+
+`~/catcode_prototype/cat-app/OrchestratorMode.jsx:1-15`, verbatim:
+> "Orchestrator Mode is NOT a separate product — it's a mode of a normal Cat Code session. When it's
+> on, the assistant (the orchestrator on this same thread) delegates to workers via the Agent tool.
+> Those workers surface as INLINE Agent-tool cards in the ordinary transcript, and an on-demand
+> /tasks panel lists them. The user only ever talks to the orchestrator here — never to a worker
+> directly."
+> "note — we never surface a worker's output/conclusion here — the main agent narrates the outcome
+> in its own message"
+
+**So do NOT frame this as "re-home the page into a per-session mode view." There is no view.** It is
+**in-session chrome hung off the ordinary chat surface**, delivered three ways: (a) inline
+Agent-tool cards in the transcript, (b) an on-demand /tasks panel, (c) small chrome — a roster strip
+above the composer, a title-adjacent mode badge, a footer task pill, and worker detail / focus
+drilldowns. **Two of the three already ship here**, which is why your row count is smaller than it
+looks. Recon done 2026-07-26 (re-verify everything; source wins):
+
+**ALREADY SERVED — do not rebuild:**
+- Inline `AgentToolCard` `app/renderer/src/TranscriptView.tsx:1072` and `DelegateGroup` `:1126`
+  (dispatch `:961`/`:370`; grouping `transcriptProjector.ts:477`). P4-8c; survived `f626b5d`.
+- `WDot`/`LifeDot` → `AgentPip` (`AgentChrome.tsx:63`); `WStatusText` → `AgentStateLabel` (`:121`).
+- Footer pill **slot** → `TasksStrip` (defined `App.tsx:2453`, rendered `:2420`). CC-5 rule #10
+  already says do not add a second pill there. What is unserved is the *semantics*
+  (`orchestratorPill`'s amber "N needs you"), not the slot.
+- `OrchestratorDemoSwitch`, `ODEMO_STATES`, `MOCK_CODEX_LEASES`, `w.progress`, `w.files`,
+  `w.up|down|cost|account` are ✂️ **cut** in the ledger. Do not resurrect them.
+
+**PARTIAL:**
+- `/tasks` panel → `TasksDialog.tsx:30` serves the *tasks* plane, not a worker roster: no role
+  grouping, no handle/agentType display (the field is carried at `tasksState.ts:133` and never
+  rendered), no drilldown, no Leases tab — and `tasksDomain.ts:67` **excludes the foregrounded
+  `local_agent`**, so it is structurally not a worker roster.
+- `deriveWorker` / `workerStateKey` / `summarizeWorkers` / `workerEventPriority` exist in
+  `app/renderer/src/orchestratorState.ts` but are **TEST-ONLY**. Only `reduceOrchestratorState` and
+  `selectAgentModeSnapshot` have production importers (`App.tsx:235-237`, used at `:1737`/`:2391`
+  purely to read `.active`). Test-only exports: `orchestratorWorkerState` (:77),
+  `deriveWorkerOwner` (:101), `summarizeOrchestratorWorkers` (:124), `orchestratorPill` (:154),
+  `workerEventPriority` (:175), `selectPromotedWorker` (:188), `displayHandle` (:203),
+  `selectWorkerById` (:215). The whole two-axis model is dead code with a green test file.
+- `Baton` is **built but unreachable**: `AgentChrome.tsx:142` renders correctly, and its sole caller
+  hard-codes `owner="none"` (`TranscriptView.tsx:1102`), so it never renders in production.
+- `AgentTypeChip` (`AgentChrome.tsx:98`) and `AgentHandle` (`:112`) have **no production importer at
+  all** — these are two of your §13 rows.
+
+**GENUINELY MISSING:** `OrchestratorModeWorkerRoster` (the block above the composer),
+`OrchestratorBadge` (title-adjacent pill), `TasksButton` (top-bar with running/blocked counts),
+`WorkerDetail`, worker focus mode (`WorkerFocusView`), `LeaseRoster`/`LEASE_STATE`/
+`leaseAccountRollup`/`LeaseRow`, and the `WMeta`/`WLabel`/`WBtn` primitives.
+Name greps under `app/` all return **0**: `OrchestratorBadge` · `OrchestratorIcon` ·
+`WorkerFocusView` · `LeaseRoster` · `OrchestratorPage` · `OrchestratorRoster` · `TasksButton` ·
+`bgTaskPill` · `BackgroundTaskStatus`. The Sidebar nav (`Sidebar.tsx:92-96`) has
+chat/sessions/goals/accounts/settings — **no orchestrator destination, and none is wanted.**
+
+**What crosses the wire today** — `AgentModeWorkerItem`, `app/shared/protocol.ts:959`: `agentId` ·
+`handle` · `role` · `status` · `description` · `synthesisStatus?` · `origin?` · `resumable?` ·
+`handoffStatus?` · `blockReason?` · `verdict?` · `isBackgrounded?` · `outputSummary?`; wrapper
+`AgentModeSnapshot` (`:991`): `active` · `objective` · `phase` · `workers[]`. **`blockReason`,
+`verdict`, `outputSummary`, `handle`, `isBackgrounded`, `objective`, `phase` have ZERO production
+readers** — most of what `WorkerDetail` needs is already on the wire and simply unread. The
+`agent-mode.set` verb (`protocol.ts:1032`, ruling in `decisions/AGENT-MODE-TOGGLE.md`) ships:
+`App.tsx:1835` `onToggleOrchestrator` → `SessionPane` (`:3006`) → `TranscriptView` (`:3005`).
+
+**An extra gap worth a ruling of its own:** that toggle and the `active` reflect are reachable
+**only when the transcript is EMPTY** (`TranscriptView.tsx:206` → `WelcomeScreen.tsx:139`
+`OrchestratorReflect`). In a session that has messages there is currently **no way to see or change
+orchestrator mode** — which directly contradicts the prototype's "it's a mode of a normal session"
+premise. Include this in your proposal.
+
+**Where in-session chrome would hang** (all inside `SessionPane`, props `App.tsx:2504`, render `:2967`):
+- **Above the composer:** the docked column `App.tsx:3062`
+  (`mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-4`), which today stacks
+  `AskQuestionFlow` (`:3068`), `PermissionQueue` (`:3078`), the pastes strip, then the composer
+  `<form>` (`:3155`). That is the roster-strip slot.
+- **Session title:** there is deliberately **no chat header row** — `App.tsx:2969-2973` says so
+  explicitly ("the session title lives in the TabBar"). The title renders at `TabBar.tsx:289`. A
+  title-adjacent badge therefore has to go in the TabBar tab row, **or** a new header must be
+  introduced — that is a design decision, not a placement, and it belongs in your proposal.
+- **Footer:** the floating `TasksStrip` (`App.tsx:2420`/`:2453`) and the chip strip under the
+  composer, `ComposerActionsBar` (`App.tsx:3252`).
+
+Your 52 ❓ rows: §20's 40 (ledger `:1441`-`:1493`), §13's 6 (`:964 :994 :997 :998 :1002 :1009`), and
+FLOW-5's 6 (`:2195 :2196 :2197 :2201 :2202 :2203`).
+
+=== PHASE 1 — THE DECISION DOC (your only deliverable before you stop) ===
+Write `docs/migration/decisions/ORCHESTRATOR-IN-SESSION.md` proposing the target shape. It must:
+
+1. **Restate the premise in the prototype's own words** and state plainly that there is no page and
+   none is proposed. Anchor to `OrchestratorMode.jsx:1-15`.
+2. **Read the prototype surface first-hand and inventory it** — `~/catcode_prototype/cat-app/
+   OrchestratorMode.jsx` is **903 lines**. Cover at minimum: `WDot` (:36), `WStatusText` (:43),
+   `WMeta` (:53), `WLabel` (:90), `WBtn` (:93), `OWNER` (:125), `deriveWorker` (:131),
+   `workerStateKey` (:161), `summarizeWorkers` (:171), `LifeDot` (:187), `Baton` (:194),
+   `workerEventPriority` (:216), `CountTail` (:224), **`OrchestratorModeWorkerRoster` (:237 — its
+   own comment says "block above PromptInput"; single-worker row :251, multi-worker whisper line
+   :275-367, hover popover :302-335, `compact` while generating)**, `bgTaskPill` (:376),
+   `BackgroundTaskStatus` (:385), `OrchestratorBadge` (:410), `TasksButton` (:420),
+   `WorkerDetail` (:436), `WorkerFocusView` (:491), `AgentToolCard` (:562), `DelegateGroup` (:581),
+   the lease family (:598-711), `TasksPanel` (:713). `ODEMO_*` (:827-901) is demo scaffolding whose
+   own header says delete on migration.
+3. **Per prototype piece, give a verdict: already-served (cite `app/…:line`) · partially-served
+   (name exactly what is missing) · genuinely-missing (propose where it hangs) · cut (cite the
+   ruling).** Where a row is already served, **flag it for a follow-up ledger pass — do NOT silently
+   re-tag it yourself.** Several §20 rows may prove to be honest ✅/🔁; say which and let the
+   operator decide.
+4. **Answer the four placement questions explicitly**, each with a recommendation and its cost:
+   (a) the roster strip above the composer — into the `App.tsx:3062` docked column?
+   (b) the mode badge — into the TabBar tab row, or introduce a chat header (and what that costs)?
+   (c) the footer pill — **`TasksStrip` already owns that slot (CC-5 rule #10)**; is the answer to
+   extend `TasksStrip`'s semantics with the amber "N needs you" case rather than add a pill?
+   (d) worker detail / focus — a drilldown inside `TasksDialog`, a main-column swap, or neither?
+   Note that the prototype's own header says a worker's output is never surfaced in the main thread,
+   which constrains (d) more than the row titles suggest.
+5. **Rule on the dead two-axis model:** wire `orchestratorState.ts`'s eight test-only exports into
+   the chrome, or delete them. A green test file over dead code is not a third option.
+6. **Rule on the unreachable `Baton`** (`TranscriptView.tsx:1102` hard-codes `owner="none"`) and on
+   the empty-transcript-only mode toggle.
+7. **Rule on leases.** `rg -i lease app/renderer app/sidecar app/shared/protocol.ts` finds **no**
+   lease vocabulary, frame or UI, and the prior LeaseRoster had degraded into the P4-5 account pool.
+   Building it means a new read seam. Recommend build-with-seam, fold-into-Accounts, or cut — and
+   say which, with the cost.
+8. **Propose the 32a/32b split** along component seams (NOT by row count), per the P4-18a/b/c
+   precedent, with a `🧠 Model/Difficulty` tag suggestion for each half. Say which ledger rows each
+   half owns.
+9. **Name every row you propose to CUT or WAIVE, with its reason.** A waive is an operator decision;
+   propose it, never take it.
+
+**THEN STOP.** Print the proposal's summary and the open questions, and WAIT for the operator's
+ruling. **Do not write a single line of `app/` code in this phase.** The last build of this surface
+was deleted; a second unratified build is the one outcome this session exists to prevent.
+
+=== PHASE 2 — ONLY AFTER OPERATOR APPROVAL ===
+Split into 32a/32b as ruled and run them as separate sessions. Each half then carries the full
+TRANCHE G acceptance bar below.
+
+=== PROTOTYPE — THE ACCEPTANCE BAR FOR PHASE 2 ===
+Operator, verbatim: *"you are underestimate the goal of prototype. What we build should be rendered
+exact to prototype."* Closing 52 rows is COVERAGE. The bar is **renders exact to the prototype.**
+- Read `~/catcode_prototype/cat-app/OrchestratorMode.jsx` (903 lines) — the inventory above is a
+  map, not a substitute. Also `~/catcode_prototype/cat-app/AgentIdentity.jsx` (248 lines) for §13.
+- **Run it side-by-side:** `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside
+  `cat-app/`) — a Babel-standalone SPA loading `cat-app/*.jsx`.
+- **Enumerate STATES:** orchestrator off · on with zero workers · one worker running · many workers
+  with a promoted lead · a **blocked** worker (the amber "you" baton — the prototype's only strong
+  case) · orchestrator generating (`compact` roster) · all settled. The roster's hover popover is
+  hover-only → **operator-driven ALWAYS**, never warp the cursor; mark it PENDING.
+- PROGRAM-PLAN §6 (`:323`) in full; the prototype IS the visual grammar — do not invent a parallel
+  one. Port **ZERO** prototype code; no inline `style={{}}`; beware the dynamic-class trap (a
+  per-worker interpolated color silently no-ops — use a static map, the `AGENT_DOT_CLASS` idiom).
+  **Prototype mock data is never the contract** — `WMeta`'s elapsed/tools/tokens/cost/account have
+  no wire fields and are ledger-✂️/❓; render truth and flag, never mock.
+
+=== GROUND RULES ===
+**Locked decisions — if your shape seems to need transport / N-process / raw-event-fidelity /
+die-with-window / two-id changes, STOP and report instead (repo mistake #6).** Any new inbound verb
+carries the full security tax: sidecar-local schema, boundary test accepting valid AND rejecting
+invalid, doc-comment citing its decision, `test:hardening` green (T4/T5a/T6/T6b/T7, HC1–HC4).
+Prefer read-only outbound snapshot fields (C3, `decisions/PERMISSION-BOUNDARY.md`) with
+`secretGuard`. **Reuse the engine's real machinery — do not duplicate it in `app/` (mistake #10);**
+construct anything the engine also builds from the SAME source the engine runtime uses and cite that
+`src/…:line`. `app/` strict; sidecar tsc known-red — zero NEW owned diagnostics. No new deps.
+
+=== DELIVERABLE / DONE WHEN (PHASE 1) ===
+`docs/migration/decisions/ORCHESTRATOR-IN-SESSION.md` exists with all nine sections above, every
+claim citing `app/…:line` / `src/…:line` / a prototype `OrchestratorMode.jsx:line`; the proposed
+32a/32b split with tags; the already-served rows flagged for a follow-up ledger pass; and the
+explicit STOP. Docs-only: `git diff --check` clean, `bun run maps:lint` passes (8 pre-existing
+warnings on `docs/maps/*` are expected). **Do not flip any ledger row in Phase 1** — the rows close
+when 32a/32b build, not when the shape is agreed. Update your STATUS row to 🟡 with "decision doc
+delivered, awaiting operator ruling" — **re-read `STATUS.md` immediately before writing and touch
+only your own row.** No GUI step in Phase 1; the 🖐 GUI tag is for Phase 2.
+```
+─── PASTE ───
+
+## P4-33 · ⬜ — Composer rail + transcript + shell residue (CC-1 §6 · §12 · §5 · §1 · §2 · §4, 12 ❓)
+
+Depends on **P4-32 reaching an operator ruling** — four of its twelve rows are the same orchestrator
+chrome P4-32 is deciding the shape of. Read `PARITY-LEDGER.md` §6 (`:441`-`:528`), §12 (`:862`-`:955`),
+§5, §1, §2, §4, plus the P4-0 / P4-24 / P4-11 STATUS rows. Two of these rows were dropped by **both**
+of their owner sessions with no flag; that pattern is the point of the session.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 6/10 · 🖐 GUI
+
+You are running P4-33 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+Twelve elements across six prototype surfaces were tagged `⬜ deferred — ORPHANED` in the 2026-07-26
+re-audit — their owner sessions ran, never covered them, never §0-flagged them — and were promoted
+to ❓ on the operator ruling *"i dont mind working it all. Just added it as a task in phase4 then."*
+Your rows, by ledger line:
+
+**§6 Chat.jsx (7)** — `:450` `OrchestratorBadge` in header · `:451` transcript-mode 'Hidden' reveal
+toggle (eye icon, only when meta rows exist) · `:452` meta-row dimmed rendering when revealed
+(opacity 0.55) · `:461` focus-mode header (back-to-orchestrator, "Viewing @worker", AgentHandle,
+TypeChip, "Esc to return") · `:462` `WorkerFocusView` · `:494` `onCommandRoute` (`/agents`→Settings
+etc. map to app surfaces) · `:519` `OrchestratorModeWorkerRoster` strip above composer.
+**⚠ `:450`, `:461`, `:462`, `:519` are the same chrome P4-32 is deciding.** Do NOT build them until
+P4-32's decision doc is approved; build them to that ruling, or defer them to 32a/32b and say so.
+
+**§12 Surfaces.jsx (1)** — `:928` **`TokenWarning`**, the amber auto-compact glyph + popover.
+Verified 2026-07-26: prototype `Surfaces.jsx:415` defines it, `:779` renders it in the composer rail
+between `<Sep/>` and `<ContextChip/>`. It renders **nothing** until `tokens > threshold - 20_000`
+(`:422-424`; `AUTOCOMPACT_BUFFER_TOKENS = 13000` `:413`, `WARNING_THRESHOLD_BUFFER_TOKENS = 20000`
+`:414`, both source-cited to `autoCompact.ts:69`); above it, a 22×22 amber `#fbbf24` warning-triangle
+button with a `tokenWarnIn` animation, title `${pctLeft}% until auto-compact` (or `Context low ·
+${pctLeft}% remaining` when auto-compact is off), click-opening a 252px popover (`:443-461`). `rg -c
+'TokenWarning' app/` → **0**; `rg -i 'auto-compact|autocompact|until auto' app/renderer/src` → **0**.
+The prototype rail has TWO elements; the app built only the chip: `ContextGauge.tsx:28` (16×16 donut
++ `NN%`, tone at `:20-27`), fed by `contextUsage.ts:52` `selectContextUsage`, mounted
+`ComposerActionsBar.tsx:684` ← `App.tsx:2786`. **Both composer owners (P4-0 2026-07-09; P4-24/24c
+2026-07-12/13) shipped without it and neither flagged it.** It is **not blocked on a seam** —
+`contextUsage.ts` already carries used/window; only the auto-compact threshold needs mirroring from
+the engine. Mirror it from the engine's real constant and cite `src/…:line`; do not hard-code a
+number you invented (repo mistake #1).
+
+**§5 Messages.jsx (1)** — `:372` UserBubble hover-reveal copy chip.
+**§1 AppV2.jsx (1)** — `:181` `workersBySession` derivation (orchestrator-adjacent; coordinate with P4-32).
+**§2 Sidebar.jsx (1)** — `:246` menu-active keeps the sidebar pinned open + backdrop-close re-collapse guard.
+**§4 WorkspaceLayout.jsx (1)** — `:348` compact ChatView layout when split (`compact: panels>1`).
+
+**Also in scope, and it is a real hole rather than chrome: plan-mode ENTRY.** Verified 2026-07-26:
+`rg -c 'EnterPlanMode' app/` → **0 files**, while `ExitPlanMode` has 14 hits — the exit half is fully
+built and the entry half is entirely absent, so this is not a naming miss. Engine side exists:
+`src/tools/EnterPlanModeTool/EnterPlanModeTool.ts:36` (transition at `:75-93`), name constant
+`constants.ts:1`, TUI render `UI.tsx:12`, registered `src/constants/tools.ts:5`, and it is
+`shouldDefer: true` (`EnterPlanModeTool.ts:57`) — i.e. it raises an approval request the GUI must
+render. App side: `PlanPanel.tsx:13` states real "plan" = a pending **ExitPlanMode**, so entry is out
+of scope *by construction*; `permissionState.ts:235` hard-codes `EXIT_PLAN_MODE_TOOL_NAME` with no
+`ENTER_` counterpart. The only way into plan mode today is the permission-mode chip
+(`PermissionModeChip.tsx:58,94` → `App.tsx:3267` → `:1863`/`:1940` `setPermissionMode`). Program truth
+already admits this — `PARITY-LEDGER.md:586` "Plan-enter card ('Enter plan mode?', Yes/No,
+planEnterDesc) … ⬜ deferred — owner-flagged", quoting `STATUS.md:284`: *"plan-mode ENTRY is
+undiscoverable (only the buried ▸ Permissions toggle; the 'Enter plan mode?' card is deferred)"*.
+**P4-11 is closed and no successor owns it.** That row is `owner-flagged`, so it is not one of your
+12 — but you are the right session to close it or to give it a named owner. Do one; do not leave it.
+
+=== PROTOTYPE — THIS IS THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Operator, verbatim: *"you are underestimate the goal of prototype. What we build should be rendered
+exact to prototype."* Twelve closed rows is COVERAGE. The bar is **renders exact to the prototype.**
+- **Read the prototype surfaces before writing code:** `Chat.jsx` (1485 lines — the composer rail and
+  header), `Surfaces.jsx` (1263 — `TokenWarning` at `:415`, rail composition at `:779`),
+  `Messages.jsx` (2175 — UserBubble), `AppV2.jsx` (624), `Sidebar.jsx` (338),
+  `WorkspaceLayout.jsx` (288). Row titles are summaries; the prototype is the spec.
+- **Run it side-by-side:** `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside
+  `cat-app/`). The composer rail is exactly the kind of dense chrome where reading JSX misleads and
+  a live diff does not. Say in your report whether you used it.
+- **Enumerate STATES.** `TokenWarning` is invisible below threshold — a "looks fine" screenshot of a
+  fresh session proves nothing. Compare at minimum: below threshold (absent) · above threshold
+  (glyph present) · popover open · auto-compact ON vs OFF (different copy). Sidebar: menu open vs
+  closed vs backdrop-dismissed. WorkspaceLayout: 1 panel vs 2 vs 3. UserBubble copy chip is
+  **hover-only → operator-driven ALWAYS**, never warp the cursor; mark it PENDING.
+- PROGRAM-PLAN §6 (`:323`) in full: done only when it **reads as** the prototype; the prototype IS
+  the visual grammar — do not invent a parallel one; every divergence is a §0 case-by-case conflict.
+- Port **ZERO** prototype code; no inline `style={{}}` (the amber `#fbbf24` goes through a token or a
+  static class map — an interpolated arbitrary value silently no-ops); prototype mock data is never
+  the contract.
+
+=== BUILD ===
+- **Sequence:** do §12/§5/§2/§4 and plan-entry first (independent), and hold §6's four orchestrator
+  rows until P4-32 is ruled. If P4-32 has not landed its decision when you reach them, **defer those
+  four to 32a/32b and say so in your report** — do not guess the shape.
+- `TokenWarning` extends the existing rail; extend `ComposerActionsBar`/`contextUsage`, do not fork a
+  parallel context derivation (repo mistake #10). Derive the threshold from the engine's constant.
+- Status/derived state is computed at **read time**, never stored. House idiom for renderer state:
+  `create<X>State` / `reduce<X>State` / `select<X>`.
+- Display degrades gracefully; runtime-narrow unknown shapes; **zero `as` casts** in projector-style
+  code. If you touch `SDKMessage` handling, extend BOTH the projector switch and
+  `app/renderer/src/sdkMessageFixtures.ts` and prove both exhaustiveness tripwires still fire by
+  deliberately removing a case and seeing the error, then restoring byte-identical.
+
+=== GROUND RULES ===
+Renderer-first. Any new inbound vocabulary or preload channel needs sidecar validation + boundary
+test + decision reference (SECURITY-MINIMUM T4/T5a/T6/T7, HC1–HC4). Plan-entry touches the
+permission plane — T5a (responses match an engine-minted request id) and T6 (renderer `updatedInput`
+is echo-only) are hard constraints; the renderer never authors permission rules. Locked decisions
+untouched. `app/` strict; sidecar tsc known-red — zero NEW owned diagnostics. No new deps.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (count vs the newest ✅ STATUS row — a DROP is a regression) · app
+tsc clean · `typecheck:sidecar` zero new owned · `test:hardening` 19/19 · `renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block (prototype
+anchors per surface, one comparison artifact per state above — including the below-threshold and
+above-threshold `TokenWarning` pair) and the **SURFACE ACCEPTANCE** tiered verdict. **An open,
+unapproved mismatch stops a fidelity-pass claim** — a §0 flag is a proposal, not a closure.
+
+GUI (operator's — STOP, print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, WAIT; NO automation): drive a session near the auto-compact threshold → the amber glyph
+appears in the composer rail and its popover reads the remaining percentage · split the workspace to
+2 panels → ChatView goes compact · open a sidebar row menu → the sidebar stays pinned open and a
+backdrop click re-collapses it. Migration test turns use `gpt-5.6-luna` at low effort on a healthy
+account — never burn frontier quota on a dev-loop turn.
+
+Ledger: flip your 12 rows ❓ → ✅/🔁 **directly** (never back to ⬜) with a real `app/…:line` each;
+state the disposition you gave the plan-entry row (`PARITY-LEDGER.md:586`) and its owner if you did
+not close it. Kill any sidecar you spawn. Update your STATUS row last — **re-read `STATUS.md`
+immediately before writing and touch only your own row.**
+```
+─── PASTE ───
+
+## P4-34 · ⬜ — Scattered danger-list sweep (CC-1 §8 · §9 · §11 · §23 · §7 · §29, 13 ❓)
+
+Standalone — run any time. Read `PARITY-LEDGER.md` §8 (`:597`-`:643`), §9 (`:644`-`:710`), §11,
+§23, §7, §29, plus the P4-19 / P4-12 / P4-15 / P4-17 STATUS rows. Thirteen rows across six surfaces
+means **six separate fidelity comparisons**, not one — budget for that.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 6/10 · 🖐 GUI
+
+You are running P4-34 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== CONTEXT (you start cold) ===
+Thirteen ❓ rows scattered across six prototype surfaces: three were already on the danger list, ten
+were promoted from `⬜ deferred — ORPHANED` on 2026-07-26 (owner ran, never covered, never flagged)
+per the operator ruling *"i dont mind working it all. Just added it as a task in phase4 then."*
+
+**§8 PermissionRules.jsx (3 — the original danger list)** — ledger `:611` match-type label per rule
+row (exact/prefix/wildcard) · `:627` managed-rules-only enforcement toggle (disabled, policy-managed)
+· `:635` permission-classifier toggle. All three are **real engine capabilities dropped from the
+read-only rules viewer**, and none is on the C3 wire type: `PermissionContextSnapshot`
+(`app/shared/protocol.ts:556-563`) is mode + `alwaysAllow/Deny/AskRules: Record<string,string[]>` +
+`additionalWorkingDirectories` + `isBypassPermissionsModeAvailable` — no match-type field.
+`PermissionRulesEditor.tsx:123` renders a whole row as `{rule} <span>({source})</span>`, nothing
+more. `rg -c "classifier" docs/migration/STATUS.md` → **0**: the word appears nowhere in program
+truth, so no session has ever owned or waived it. **Trap flagged by the auditors — do not fall in:**
+`protocol.ts:645` `managed: boolean` is P4-19's PER-SETTING managed/locked flag, a *different*
+concept; it is not evidence for `:613`.
+
+**§9 CommandPalette.jsx (3)** — `:665` 'Recent' commands section (label + rows) · `:666` its divider
+rule · `:704` `PAGE_NAV` routing (slash command → navigate to a page). For recents:
+`rg -n "Recent|recent|RECENT" app/renderer/src/CommandPalette.tsx app/renderer/src/commandPaletteModel.ts`
+→ 0 hits; `buildPaletteItems` (`commandPaletteModel.ts:69-166`) emits exactly two groups, `'Actions'`
+and `'Sessions'`; `CommandPalette.tsx:146-151` renders a `GroupHeader` per `item.group`. There is no
+recents store, no owner, no cut ruling. **P4-17's derived recents are WORKSPACES on the welcome
+launcher (`selectRecentWorkspaces`), not palette commands — do not conflate them.**
+
+**§11 Settings.jsx (3)** — `:812` Model ▸ Default-model select · `:822` Theme ▸ OutputPreview live
+code canvas · `:823` Theme ▸ Accent-colour swatch picker. **P4-19's STATUS row claims a batch landed
+these and its own caveat admits the coverage was never audited** (*"I merged it, did not audit each
+editor"*); the in-source `DeferredEditorsNote`s in `SettingsShell.tsx` still declare default-model
+and accent/code-theme deferred. Verify against source, not against the STATUS note — and if the
+STATUS claim is wrong, correct that row too (say so in your report).
+
+**§23 MemoryPage.jsx (2)** — `:1672` "Agent memory" section (per-agent memory dirs, "N agent(s)") ·
+`:1673` per-agent rows (`AgentTypeChip` + dir + "N file(s)", plain-text fallback). Note
+`AgentTypeChip` (`AgentChrome.tsx:98`) currently has **no production importer** — this is one of the
+two places that would give it one (P4-32 owns the other); coordinate rather than duplicating.
+
+**§7 Permissions.jsx (1)** — `:578` worker-relay chrome ("worker" badge + "Relayed from worker X"
+subtitle). Orchestrator-adjacent — check P4-32's ruling before inventing the vocabulary.
+
+**§29 Welcome.jsx (1)** — `:1996` `openSignal`: the `/workspace` slash command opens the picker from
+the composer.
+
+**Plus one built-but-unreachable component to re-home or delete — verified 2026-07-26.**
+`ReauthOAuthProgress` (`app/renderer/src/StartupSurfaces.tsx:493`, imported `App.tsx:249`, rendered
+`App.tsx:2261`) is gated on `reauthOAuthView`, derived at `App.tsx:2066-2079` from
+`oauthContext === 'reauth'`. `oauthContext` (`App.tsx:489`) has five setters — `:1056`, `:1070`,
+`:2092`, `:2103`, `:2117` — and **four of them set `null`**; the only one that can set `'reauth'` is
+`beginOAuth` (`App.tsx:1054-1056`), whose **sole `'reauth'` caller is the card's own Retry prop at
+`App.tsx:2265`**. The component is gated on a state only its own button can set: **structurally
+unreachable.** Its real launcher was the reauth banner deleted by ruling #12 — see the §0 comment at
+`App.tsx:2247-2249` and its mirror at `StartupSurfaces.tsx:11-15`, citing `STARTUP-GATES.md`.
+`rg 'reauthBannerState' app/` → 0. **Re-home it (give it a real launcher) or delete it — flip a coin
+is not an option; state which and why.** Fingerprint of the orphaning to fix either way:
+`App.tsx:1048` still describes `beginOAuth` as *"the reauth banner's 'Re-authenticate' action"*,
+naming a deleted caller.
+
+**Two stale doc references to fix in passing (both verified):** the §0 comments at `App.tsx:2247-2249`
+and `StartupSurfaces.tsx:11-15` cite `decisions/STARTUP-GATES.md`, a repo-root-relative path that
+does not resolve — the file is `docs/migration/decisions/STARTUP-GATES.md`. And
+`docs/migration/reviews/2026-07-14-fidelity-workflow-forensics.md:56` still cites
+`reauthBannerState.ts:101` as live evidence for a module that no longer exists.
+
+=== PROTOTYPE — THIS IS THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Operator, verbatim: *"you are underestimate the goal of prototype. What we build should be rendered
+exact to prototype."* Thirteen closed rows is COVERAGE. The bar is **renders exact to the prototype.**
+- **Read each prototype surface before touching its rows:** `PermissionRules.jsx` (318 lines),
+  `CommandPalette.jsx` (275), `Settings.jsx` (758), `MemoryPage.jsx` (215), `Permissions.jsx` (601),
+  `Welcome.jsx` (522). Six surfaces = **six fidelity comparisons**; do not collapse them into one.
+- **Run them side-by-side:** `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside
+  `cat-app/`) — a Babel-standalone SPA loading `cat-app/*.jsx`.
+- **Enumerate STATES per surface:** palette with recents vs empty-recents (the divider is a row —
+  it only exists when there is something to divide) · rules viewer with each match type present ·
+  a managed/policy-locked rule vs an unmanaged one (the toggle is *disabled* in that state — a
+  screenshot of the enabled state proves nothing) · Settings Theme with the preview canvas live and
+  a swatch selected · MemoryPage with zero agents / one / many, plus the plain-text fallback.
+- PROGRAM-PLAN §6 (`:323`) in full: done only when it **reads as** the prototype; the prototype IS
+  the visual grammar — do not invent a parallel one; every divergence is a §0 case-by-case conflict.
+- Port **ZERO** prototype code; no inline `style={{}}`; beware the dynamic-class trap (the accent
+  swatch picker is exactly where an interpolated colour class silently no-ops — use a static map).
+  Prototype mock data is never the contract — real engine shapes win.
+
+=== BUILD ===
+- **The §8 rows need a read seam, not just a renderer change.** Match-type, managed-enforcement and
+  the classifier toggle are engine facts that do not cross the wire. Add them as **read-only outbound
+  snapshot fields** on the existing `permission.context` frame (the C3 precedent,
+  `decisions/PERMISSION-BOUNDARY.md`) — additive only, `secretGuard` on the outbound frame, and a
+  boundary test. **The renderer never authors permission rules (T6b) and never sees raw credentials.**
+  If a fact genuinely has no engine source, §0-flag it as a proposal; do not mock it.
+- `PermissionRulesEditor` currently ships read-only behind Settings → Permissions (CC-5 #6). Keep it
+  read-only; these three rows are *display* of engine truth, not authoring.
+- Palette recents need a store that does not exist. Decide honestly: derive from something real, or
+  §0-flag as an operator proposal. **Do not invent a persistence layer for a cosmetic list.**
+- `openSignal` and `PAGE_NAV` are routing wiring — reuse the existing command/route plumbing rather
+  than adding a second dispatcher (repo mistake #10).
+
+=== GROUND RULES ===
+Any new outbound field is additive to `app/shared/protocol.ts` (version bump ONLY on a breaking shape
+change) with a doc-comment citing its decision. Any new INBOUND frame kind needs a sidecar-local
+schema + a boundary test that accepts valid and rejects invalid + `test:hardening` green — repo
+mistake #5. Directional limits are never swapped (`MAX_FRAME_BYTES` inbound vs
+`MAX_OUTBOUND_FRAME_BYTES` outbound). Locked decisions untouched. `app/` strict; sidecar tsc
+known-red — zero NEW owned diagnostics. No new deps. Commit your own explicit paths to `migration`.
+
+=== DELIVERABLE / DONE WHEN ===
+Headless: `bun test app/` green (count vs the newest ✅ STATUS row) · app tsc clean ·
+`typecheck:sidecar` zero new owned · `test:hardening` 19/19 (mandatory — you may touch the
+permission plane) · `renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block with **a
+separate States-compared list per surface** (six surfaces, six sets of artifacts) and the **SURFACE
+ACCEPTANCE** tiered verdict. **An open, unapproved mismatch stops a fidelity-pass claim** — a §0
+flag is a proposal, not a closure.
+
+GUI (operator's — STOP, print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, WAIT; NO automation): Settings → Permissions shows a match-type label per rule and a
+disabled managed toggle where policy applies · ⌘K shows a Recent section with its divider (or,
+if flagged, does not and the flag is in the report) · Settings → Theme renders the live preview and
+the accent swatch applies · `/workspace` in the composer opens the picker. Migration test turns use
+`gpt-5.6-luna` at low effort on a healthy account.
+
+Ledger: flip your 13 rows ❓ → ✅/🔁 **directly** (never back to ⬜) with a real `app/…:line` each;
+record the `ReauthOAuthProgress` decision (re-homed with its launcher, or deleted) and the two stale
+doc refs fixed. Kill any sidecar you spawn. Update your STATUS row last — **re-read `STATUS.md`
+immediately before writing and touch only your own row.**
 ```
 ─── PASTE ───
