@@ -8,6 +8,10 @@
 
 ## Phase 0
 
+### 26 Jul 2026
+
+118. Started the test-evidence program: published the global `writing-cat-code-tests` skill through the canonical publisher and added only its concise repository routing line; added durable, mutation-backed F2–F5 regressions for two-session realistic-tail restore, the real deferred-continuation fsync barrier, retired-GPT settings migration, and sidecar SIGKILL/survivor isolation. Reclassified the older reset-state isolation probe as caller/wiring simulation, preserving the existing real cross-CWD process probe. The program ledger and migration STATUS record proof layers and explicit GUI/credentialed-live gaps; the DOM harness, verifier condition, and enforcement threshold decisions remain operator-gated. Desktop battery: 1426/0, strict typecheck, scoped sidecar typecheck, hardening 19/19; focused engine tests and `build:dev:full` pass. A review-and-fix pass eliminated an F2 one-shot-frame waiter race and added complete test-local evidence records.
+
 ### 15 Jul 2026
 
 117. Made workspace maps the conditional starting point for repository navigation: when implementation or diagnosis needs broad ownership discovery, main and built-in worker prompts now route through `WORKSPACE_MAP.md` and one focused map before source, while exact owner files and supplied focused maps skip the router. Replaced the delayed third-search experiment with a one-time first-broad-search hook that excludes exact-file, piped-filter, and external searches and never changes permission decisions. Added a deterministic map linter to `build:dev:full` for index/date/link/path integrity, repaired the stale reactive-compact route, and hardened the active 03:00 GPT-5.6 Terra refresh automation with an immutable ancestry-checked commit cursor, source-validated cumulative recovery patch, and cursor advancement only after verification and persistence. Twelve focused tests and `build:dev:full` pass; a two-agent review-and-fix pass ended with no actionable findings.
