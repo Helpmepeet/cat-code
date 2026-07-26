@@ -139,18 +139,6 @@ export function StartupShell({
 
 /* ── trust gate (Q1: no read-only; decline = don't open) ───────────────────── */
 
-/** A labelled path row inside the gate's scope block. */
-function GatePath({ label, path }: { label: string; path: string }): ReactNode {
-  return (
-    <>
-      <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
-        {label}
-      </div>
-      <code className="break-all font-mono text-[13px] text-text-primary">{path}</code>
-    </>
-  )
-}
-
 export function WorkspaceTrustGate({
   cwd,
   trustRoot,
@@ -189,24 +177,18 @@ export function WorkspaceTrustGate({
         you trust the workspace, project commands stay gated.
       </p>
       <div className="mb-5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-        {widerThanCwd ? (
-          <>
-            <GatePath label="Session folder" path={cwd} />
-            <div className="mt-3 border-t border-shell-seam pt-3">
-              <GatePath label="Trust is saved for" path={trustRoot} />
-            </div>
-          </>
-        ) : (
-          <GatePath label={trustRoot ? 'Trust is saved for' : 'Workspace'} path={trustRoot ?? cwd} />
-        )}
-        <p className="mt-2.5 text-[11.5px] leading-relaxed text-text-faint">
-          {trustRoot === null
-            ? 'Cat Code could not resolve where this trust would be saved. Trust is stored per git repository, so approving may cover more than this folder.'
-            : widerThanCwd
-              ? 'Trust is stored per git repository. This folder is inside that repository, so approving also trusts every other folder under it, including sibling projects — here and in the terminal CLI, which share this setting.'
-              : 'Approving trusts this folder and everything under it — here and in the terminal CLI, which share this setting.'}
-        </p>
+        <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+          Workspace
+        </div>
+        <code className="break-all font-mono text-[13px] text-text-primary">{cwd}</code>
       </div>
+      <p className="mb-[18px] max-w-[460px] break-words text-[13px] leading-relaxed text-text-muted">
+        {trustRoot === null
+          ? 'Cat Code could not resolve where this trust would be saved. Trust is stored per git repository, so approving may cover more than this folder.'
+          : widerThanCwd
+            ? `Trust is stored per git repository. Approving saves trust for ${trustRoot} and covers every folder under it, including sibling projects — here and in the terminal CLI, which share this setting.`
+            : 'Approving trusts this folder and everything under it — here and in the terminal CLI, which share this setting.'}
+      </p>
       {errorMessage ? (
         <div
           role="alert"

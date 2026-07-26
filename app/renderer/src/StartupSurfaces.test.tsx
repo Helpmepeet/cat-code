@@ -85,32 +85,52 @@ test('trust gate has NO read-only affordance (Q1 CUT)', () => {
 
 /* ── trust SCOPE honesty: name the path approving actually trusts ──────────── */
 
-test('trust gate names the resolved trust ROOT, not just the session folder, when they differ', () => {
+/** How many `<code>` path elements the gate rendered. */
+function codeElementCount(html: string): number {
+  return html.split('<code').length - 1
+}
+
+test('trust gate keeps ONE Workspace path box — scope is carried in the copy, not extra rows', () => {
+  // The honesty fix is WORDING ONLY. An earlier revision grew a second labelled
+  // path row + divider; that layout was reversed. This test is the tripwire: the
+  // gate shows exactly one path element (the session cwd) under the original
+  // "Workspace" label, in every scope case.
+  for (const trustRoot of ['/Users/me/monorepo', '/Users/me/proj', null]) {
+    const html = trustHtml({ cwd: '/Users/me/proj', trustRoot })
+    expect(codeElementCount(html)).toBe(1)
+    expect(html).toContain('>Workspace</div>')
+    expect(html).toContain('>/Users/me/proj</code>')
+    expect(html).not.toContain('Session folder')
+    expect(html).not.toContain('Trust is saved for')
+  }
+})
+
+test('trust gate names the resolved trust ROOT inline when it is wider than the session folder', () => {
   // Trust is stored per git repo (`getProjectPathForConfig()`), so approving for
-  // one package trusts every sibling under the root. Showing only the session
-  // folder made approving uninformed — the root must be named in its own right.
+  // one package trusts every sibling under the root. The prompt must say so and
+  // name the root — otherwise approving is uninformed.
   const html = trustHtml({
     cwd: '/Users/me/monorepo/packages/foo',
     trustRoot: '/Users/me/monorepo',
   })
-  expect(html).toContain('Session folder')
-  expect(html).toContain('Trust is saved for')
-  // The root renders as its OWN path element, not merely as a prefix of the cwd.
-  expect(html).toContain('>/Users/me/monorepo</code>')
-  expect(html).toContain('>/Users/me/monorepo/packages/foo</code>')
-  // …and the widening is stated, not left for the user to infer.
   expect(html).toContain('Trust is stored per git repository')
+  expect(html).toContain(
+    'Approving saves trust for /Users/me/monorepo and covers every folder under it',
+  )
   expect(html).toContain('sibling projects')
   expect(html).toContain('terminal CLI')
+  // Still a single path box showing the session folder (layout untouched).
+  expect(codeElementCount(html)).toBe(1)
+  expect(html).toContain('>/Users/me/monorepo/packages/foo</code>')
 })
 
 test('trust gate does NOT claim repo-wide scope when the root IS the session folder', () => {
   const html = trustHtml({ cwd: '/Users/me/proj', trustRoot: '/Users/me/proj' })
-  expect(html).toContain('Trust is saved for')
   expect(html).toContain('this folder and everything under it')
-  // No second path row, and no overstated sibling claim.
-  expect(html).not.toContain('Session folder')
+  expect(html).toContain('terminal CLI')
+  // No overstated sibling/repository claim when there is nothing wider.
   expect(html).not.toContain('sibling projects')
+  expect(html).not.toContain('Trust is stored per git repository')
 })
 
 test('trust gate says the scope is unresolved rather than implying folder-only trust', () => {
