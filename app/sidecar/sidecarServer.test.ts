@@ -3975,7 +3975,11 @@ function fakeDiagnostics(
 }
 
 test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read', () => {
-  const workspaceTrust = fakeWorkspaceTrust({ trusted: true, detectedRepo: 'acme/cat-code' })
+  const workspaceTrust = fakeWorkspaceTrust({
+    trusted: true,
+    detectedRepo: 'acme/cat-code',
+    trustRoot: '/repo',
+  })
   const server = makeServer(
     new AppSessionController(probeAdapter()),
     undefined,
@@ -3991,7 +3995,9 @@ test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read
     kind: 'workspace-trust.snapshot',
     protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
-    workspaceTrust: { trusted: true, detectedRepo: 'acme/cat-code' },
+    // `trustRoot` crosses the wire verbatim — the renderer gate cannot name the
+    // real trust scope (git root ≠ session cwd) unless the snapshot carries it.
+    workspaceTrust: { trusted: true, detectedRepo: 'acme/cat-code', trustRoot: '/repo' },
   })
 })
 
@@ -4032,7 +4038,7 @@ function makeWorkspaceTrustServer(
 test('P4-15 — a valid workspace.trust accept produces an ok result and re-broadcasts the trust snapshot', () => {
   let called = 0
   const server = makeWorkspaceTrustServer(
-    { trusted: false, detectedRepo: 'acme/x' },
+    { trusted: false, detectedRepo: 'acme/x', trustRoot: '/repo' },
     () => {
       called++
       return { ok: true, message: 'Workspace trusted.', changed: true }
@@ -4070,7 +4076,7 @@ test('P4-15 — a valid workspace.trust accept produces an ok result and re-broa
 
 test('P4-15 — an already-trusted accept returns ok but does NOT re-broadcast (changed:false)', () => {
   const server = makeWorkspaceTrustServer(
-    { trusted: true, detectedRepo: null },
+    { trusted: true, detectedRepo: null, trustRoot: '/repo' },
     () => ({ ok: true, message: 'Workspace already trusted.', changed: false }),
   )
   const { socket, received } = makeSocket()
@@ -4102,7 +4108,7 @@ test('P4-15 — an already-trusted accept returns ok but does NOT re-broadcast (
 test('P4-15 — rejects a workspace.trust verb carrying a renderer-authored path (HC1 / checkStrictKeys)', () => {
   let called = 0
   const server = makeWorkspaceTrustServer(
-    { trusted: false, detectedRepo: null },
+    { trusted: false, detectedRepo: null, trustRoot: '/repo' },
     () => {
       called++
       return { ok: true, message: 'Workspace trusted.', changed: true }
@@ -4134,7 +4140,7 @@ test('P4-15 — rejects a workspace.trust verb carrying a renderer-authored path
 test('P4-15 — rejects a workspace.trust verb missing requestId at the schema boundary', () => {
   let called = 0
   const server = makeWorkspaceTrustServer(
-    { trusted: false, detectedRepo: null },
+    { trusted: false, detectedRepo: null, trustRoot: '/repo' },
     () => {
       called++
       return { ok: true, message: 'x', changed: true }
@@ -4174,7 +4180,7 @@ test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no
     undefined,
     undefined,
     undefined,
-    fakeWorkspaceTrust({ trusted: false, detectedRepo: null }),
+    fakeWorkspaceTrust({ trusted: false, detectedRepo: null, trustRoot: '/repo' }),
   )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
@@ -4199,7 +4205,7 @@ test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off 
     undefined,
     undefined,
     undefined,
-    fakeWorkspaceTrust({ trusted: true, detectedRepo: null }),
+    fakeWorkspaceTrust({ trusted: true, detectedRepo: null, trustRoot: '/repo' }),
   )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)

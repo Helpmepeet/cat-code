@@ -11,6 +11,13 @@
  *  - `detectedRepo`: `getGithubRepo()` (`src/utils/git.ts:504`) — the git
  *    remote origin, parsed to `owner/repo`, resolved against the sidecar's own
  *    process cwd (the sidecar is spawned in the session's cwd, P3-1).
+ *  - `trustRoot`: `getProjectPathForConfig()` (`src/utils/config.ts:1626`) — the
+ *    path an accept ACTUALLY writes at. Read through the write's own function
+ *    (`saveCurrentProjectConfig` calls it at `config.ts:1675`) rather than
+ *    re-derived here, so the scope the gate displays cannot drift from the scope
+ *    that gets stored. It is the canonical git ROOT, not the session cwd — see
+ *    the `trustRoot` doc-comment in `protocol.ts` for why that mismatch is the
+ *    honesty gap this field closes.
  *
  * The "Additional trusted directories" list is DELIBERATELY not part of this
  * domain — it already crosses the wire on the C3 `permission.context` frame's
@@ -33,7 +40,10 @@
  */
 
 import { isPathTrusted } from '../../src/utils/config.js'
-import { saveCurrentProjectConfig } from '../../src/utils/config.js'
+import {
+  getProjectPathForConfig,
+  saveCurrentProjectConfig,
+} from '../../src/utils/config.js'
 import { getGithubRepo } from '../../src/utils/git.js'
 import type { WorkspaceTrustSnapshot } from '../shared/protocol.js'
 
@@ -57,6 +67,14 @@ export type WorkspaceTrustExecutor = {
   isTrusted(): boolean
   /** Persist trust for THIS cwd (real: `saveCurrentProjectConfig`, config.ts:1663). */
   persistTrust(): void
+  /**
+   * Where `persistTrust()` will actually write — the SAME
+   * `getProjectPathForConfig()` that keys the write (`config.ts:1675`), never a
+   * re-derivation. Reading it through the write's own function is what makes the
+   * gate's displayed scope unable to drift from the stored scope (§8 rule 1:
+   * construct from the source the engine runtime uses).
+   */
+  getTrustRoot(): string | null
 }
 
 export function createRealWorkspaceTrustExecutor(
@@ -75,6 +93,11 @@ export function createRealWorkspaceTrustExecutor(
         ...current,
         hasTrustDialogAccepted: true,
       }))
+    },
+    getTrustRoot() {
+      // The write key itself (config.ts:1675 reads the same call). Git root of
+      // the session's cwd, or the cwd when it is not in a repo.
+      return getProjectPathForConfig()
     },
   }
 }
@@ -119,12 +142,15 @@ export async function createSidecarWorkspaceTrustDomain(
       // out-of-band after this session's spawn read (N-process, same cwd).
       const wasTrusted = snapshot?.trusted === true
       const detectedRepo = snapshot?.detectedRepo ?? null
+      // Carried, not re-read: the accept writes at the SAME root the gate just
+      // showed, so the re-broadcast must not silently report a different scope.
+      const trustRoot = snapshot?.trustRoot ?? null
       try {
         if (!executor.isTrusted()) {
           executor.persistTrust()
         }
         const trusted = executor.isTrusted()
-        snapshot = { trusted, detectedRepo }
+        snapshot = { trusted, detectedRepo, trustRoot }
         if (!trusted) {
           return {
             ok: false,
@@ -181,5 +207,20 @@ async function readWorkspaceTrustSnapshotOnce(
     )
     detectedRepo = null
   }
-  return { trusted, detectedRepo }
+  // The scope an accept would write at. Read INDEPENDENTLY of `trusted` for the
+  // same P4-25 reason as `detectedRepo`: a failure here degrades the gate's copy
+  // to "scope unresolved", it must never discard a known trust fact — and it can
+  // never turn an untrusted workspace into an open gate.
+  let trustRoot: string | null = null
+  try {
+    trustRoot = executor.getTrustRoot()
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] workspace-trust root resolution failed (gate shows scope as unresolved): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    trustRoot = null
+  }
+  return { trusted, detectedRepo, trustRoot }
 }

@@ -7,7 +7,11 @@ import {
   selectWorkspaceTrustSnapshot,
 } from './workspaceTrustState.js'
 
-const SNAPSHOT: WorkspaceTrustSnapshot = { trusted: true, detectedRepo: 'acme/cat-code' }
+const SNAPSHOT: WorkspaceTrustSnapshot = {
+  trusted: true,
+  detectedRepo: 'acme/cat-code',
+  trustRoot: '/repo',
+}
 
 function snapshotFrame(sessionId: string, workspaceTrust: WorkspaceTrustSnapshot): ServerFrame {
   return { kind: 'workspace-trust.snapshot', protocolVersion: 1, sessionId, workspaceTrust }
@@ -30,7 +34,11 @@ test('workspace-trust.snapshot frame stores the snapshot per session', () => {
 test('snapshots are isolated across sessions', () => {
   let state = createWorkspaceTrustState()
   state = reduceWorkspaceTrustState(state, { type: 'frame', frame: snapshotFrame('a', SNAPSHOT) })
-  const other: WorkspaceTrustSnapshot = { trusted: false, detectedRepo: null }
+  const other: WorkspaceTrustSnapshot = {
+    trusted: false,
+    detectedRepo: null,
+    trustRoot: '/other',
+  }
   state = reduceWorkspaceTrustState(state, { type: 'frame', frame: snapshotFrame('b', other) })
   expect(selectWorkspaceTrustSnapshot(state, 'a')).toEqual(SNAPSHOT)
   expect(selectWorkspaceTrustSnapshot(state, 'b')).toEqual(other)

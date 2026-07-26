@@ -91,7 +91,7 @@ const gateFrames: ServerFrame[] = [
     kind: 'workspace-trust.snapshot',
     protocolVersion: 1,
     sessionId: HARDENING_SESSION_ID,
-    workspaceTrust: { trusted: true, detectedRepo: null },
+    workspaceTrust: { trusted: true, detectedRepo: null, trustRoot: null },
   },
   {
     kind: 'accounts.snapshot',
