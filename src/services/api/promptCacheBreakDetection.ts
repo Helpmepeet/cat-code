@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import type { AgentId } from 'src/types/ids.js'
 import type { Message } from 'src/types/message.js'
+import { getAgentContext } from 'src/utils/agentContext.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { djb2Hash } from 'src/utils/hash.js'
 import { logError } from 'src/utils/log.js'
@@ -167,8 +168,11 @@ function isExcludedModel(model: string): boolean {
 
 /**
  * Returns the tracking key for a querySource, or null if untracked.
- * Compact shares the same server-side cache as repl_main_thread
- * (same cacheSafeParams), so they share tracking state.
+ * A main-thread compact shares the main thread's server-side cache
+ * (same cacheSafeParams), so they share tracking state. A compact started
+ * inside an in-process subagent instead shares that subagent's cache and must
+ * not mutate the main thread's baseline. The compact fork has its own generated
+ * agentId, so use the ambient parent agent context to identify the owner.
  *
  * For subagents with a tracked querySource, uses the unique agentId to
  * isolate tracking state. This prevents false positive cache break
@@ -185,11 +189,30 @@ function getTrackingKey(
   querySource: QuerySource,
   agentId?: AgentId,
 ): string | null {
-  if (querySource === 'compact') return 'repl_main_thread'
+  if (querySource === 'compact') {
+    return getTrackingAgentId(querySource, agentId) ?? 'repl_main_thread'
+  }
   for (const prefix of TRACKED_SOURCE_PREFIXES) {
     if (querySource.startsWith(prefix)) return agentId || querySource
   }
   return null
+}
+
+function getTrackingAgentId(
+  querySource: QuerySource,
+  agentId?: AgentId,
+): AgentId | undefined {
+  if (querySource === 'compact') {
+    return getAgentContext()?.agentId as AgentId | undefined
+  }
+  return agentId
+}
+
+function shouldSurfaceCacheWarning(querySource: QuerySource): boolean {
+  return (
+    querySource === 'repl_main_thread' ||
+    (querySource === 'compact' && getAgentContext() === undefined)
+  )
 }
 
 function stripCacheControl(
@@ -509,6 +532,7 @@ export async function checkResponseForCacheBreak(
   try {
     const key = getTrackingKey(querySource, agentId)
     if (!key) return
+    const trackingAgentId = getTrackingAgentId(querySource, agentId)
 
     const state = previousStateBySource.get(key)
     if (!state) return
@@ -548,7 +572,7 @@ export async function checkResponseForCacheBreak(
         cacheReadTokens === 0 &&
         cacheCreationTokens === 0 &&
         !isExcludedModel(state.model) &&
-        (querySource === 'repl_main_thread' || querySource === 'compact')
+        shouldSurfaceCacheWarning(querySource)
       ) {
         pendingCacheWarnings.push(
           'Cache not active: no cached or creation tokens on this turn — prompt caching may not be enabled for this model/provider',
@@ -819,7 +843,7 @@ export async function checkResponseForCacheBreak(
             : 'under_5m'
 
     recordPromptCacheBreak({
-      agentId,
+      agentId: trackingAgentId,
       querySource,
       requestId,
       callNumber: state.callCount,
@@ -866,7 +890,7 @@ export async function checkResponseForCacheBreak(
     })
 
     // Queue a user-visible warning so the REPL can display it after the turn
-    if (querySource === 'repl_main_thread' || querySource === 'compact') {
+    if (shouldSurfaceCacheWarning(querySource)) {
       const tokenStr = `${prevCacheRead.toLocaleString()} → ${cacheReadTokens.toLocaleString()}`
       pendingCacheWarnings.push(`Cache miss: ${reason} (cached tokens: ${tokenStr})`)
     }

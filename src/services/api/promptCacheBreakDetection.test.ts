@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { AgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
+import { runWithAgentContext } from '../../utils/agentContext.js'
 
 // QuerySource is a string-union type; the functions under test accept it but we
 // only ever pass valid members, so a thin local alias keeps the tests honest
@@ -161,5 +162,116 @@ describe('promptCacheBreakDetection stale previous_response_id retry', () => {
     // stale-response-id eviction because the notify missed the tracking key.
     expect(subBreak?.staleResponseIdRetry).toBe(false)
     expect(subBreak?.reason).not.toContain(STALE_EVICTION_LABEL)
+  })
+})
+
+describe('promptCacheBreakDetection compact ownership', () => {
+  test('main-thread compact shares the main cache state and surfaces its warning', async () => {
+    const mod = await import('./promptCacheBreakDetection.js')
+    const { recordPromptState, checkResponseForCacheBreak } = mod
+    const system = [{ type: 'text' as const, text: 'stable system prompt' }]
+    const noMessages: Message[] = []
+
+    recordPromptState({
+      system,
+      toolSchemas: [],
+      querySource: 'repl_main_thread' as QuerySource,
+      model: 'gpt-5.6-sol',
+    })
+    await checkResponseForCacheBreak(
+      'repl_main_thread' as QuerySource,
+      5000,
+      0,
+      noMessages,
+    )
+    recordPromptState({
+      system,
+      toolSchemas: [],
+      querySource: 'compact' as QuerySource,
+      model: 'gpt-5.6-luna',
+      // The compact fork has its own generated ID, but the absence of an
+      // ambient agent context means this compact still belongs to main.
+      agentId: 'compact_helper_main' as AgentId,
+    })
+    await checkResponseForCacheBreak(
+      'compact' as QuerySource,
+      0,
+      0,
+      noMessages,
+      'compact_helper_main' as AgentId,
+    )
+
+    const mainCompactBreak = capturedBreaks.find(
+      b =>
+        b.querySource === 'compact' &&
+        b.reason.includes('model changed (gpt-5.6-sol → gpt-5.6-luna)'),
+    )
+    expect(mainCompactBreak).toBeDefined()
+    expect(mainCompactBreak?.agentId).toBeUndefined()
+    expect(
+      mod
+        .drainCacheWarnings()
+        .some(w =>
+          w.includes('model changed (gpt-5.6-sol → gpt-5.6-luna)'),
+        ),
+    ).toBe(true)
+  })
+
+  test('subagent compact stays agent-scoped and does not surface in the parent', async () => {
+    const mod = await import('./promptCacheBreakDetection.js')
+    const { recordPromptState, checkResponseForCacheBreak } = mod
+    const parentAgentId = 'agent_explorer_42' as AgentId
+    const compactHelperId = 'compact_helper_42' as AgentId
+    const system = [{ type: 'text' as const, text: 'stable agent prompt' }]
+    const noMessages: Message[] = []
+
+    await runWithAgentContext(
+      {
+        agentId: parentAgentId,
+        agentType: 'subagent',
+        subagentName: 'Explore',
+        isBuiltIn: true,
+      },
+      async () => {
+        recordPromptState({
+          system,
+          toolSchemas: [],
+          querySource: 'agent:builtin:Explore' as QuerySource,
+          model: 'gpt-5.6-sol',
+          agentId: parentAgentId,
+        })
+        await checkResponseForCacheBreak(
+          'agent:builtin:Explore' as QuerySource,
+          5000,
+          0,
+          noMessages,
+          parentAgentId,
+        )
+
+        recordPromptState({
+          system,
+          toolSchemas: [],
+          querySource: 'compact' as QuerySource,
+          model: 'gpt-5.6-luna',
+          agentId: compactHelperId,
+        })
+        await checkResponseForCacheBreak(
+          'compact' as QuerySource,
+          0,
+          0,
+          noMessages,
+          compactHelperId,
+        )
+      },
+    )
+
+    const subagentCompactBreak = capturedBreaks.find(
+      b =>
+        b.querySource === 'compact' &&
+        b.reason.includes('model changed (gpt-5.6-sol → gpt-5.6-luna)'),
+    )
+    expect(subagentCompactBreak).toBeDefined()
+    expect(subagentCompactBreak?.agentId).toBe(parentAgentId)
+    expect(mod.drainCacheWarnings()).toHaveLength(0)
   })
 })
