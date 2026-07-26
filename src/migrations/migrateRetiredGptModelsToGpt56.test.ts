@@ -3,6 +3,24 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { SettingsJson } from '../utils/settings/types.js'
 
+/**
+ * TEST EVIDENCE
+ * - Claim: every user-owned retired GPT setting and runtime override migrates
+ *   without clobbering current/colliding values, and a second run is a no-op.
+ * - Exact pre-fix failure: an early return left all legacy model surfaces stale.
+ * - Production entry point: `migrateRetiredGptModelsToGpt56`; `runMigrations`
+ *   is covered only by the explicitly limited source-string tripwire below.
+ * - Test path: `src/migrations/migrateRetiredGptModelsToGpt56.test.ts`.
+ * - Proof layer: helper/module-boundary functional; wiring tripwire is not it.
+ * - Red/mutation evidence: an early-return mutation made three functional cases
+ *   red while the source-string tripwire remained green; source was restored.
+ * - Pairwise/adversarial cases: remap+dedupe, old/current override collision,
+ *   unrelated override preservation, mixed state, runtime override, idempotence.
+ * - UNVERIFIED: executable startup caller, real settings-file/process, DOM,
+ *   GUI, credentialed-live.
+ * - Commands and outcomes: focused suite passed 4/0; engine build passed.
+ */
+
 let userSettings: SettingsJson | null = null
 let updateCalls: Array<Partial<SettingsJson>> = []
 let mainLoopOverride: string | undefined

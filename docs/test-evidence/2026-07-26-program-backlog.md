@@ -21,7 +21,7 @@ outside the automated evidence, not that it failed.
 
 | Unit | Finding / scope | State | Outcome / evidence |
 |---|---|---|---|
-| TE-0 | Record this backlog and routing line | active | Docs-only; commit explicit paths. |
+| TE-0 | Record this backlog and routing line | done | Docs-only; committed explicit paths. |
 | TE-1 | `writing-cat-code-tests` global skill; publish and verify; short CLAUDE routing line | done | Canonical source validated; publisher hash `db767ac…a8321` verified for Claude Code and Cat Code mirrors. |
 | TE-2 | F2 two-session restore anti-Potemkin process probe | done | `9bb3a3c`; distinct realistic-tail transcripts, stable ids/fresh PIDs/no marker crossover; old leaf predicate mutation red. Credentialed answer-from-context and GUI remain `UNVERIFIED`. Primary desktop battery: 1426/0, tsc clean, wrapper 5546 ignored, hardening 19/19. |
 | TE-3 | F3 deferred-continuation actual durable-barrier regression | done | `bda89ee`; materialized persisted JSONL and injected `FileHandle.sync` at the actual flush barrier; removing the await turned red. Process crash/restart, DOM, GUI, credentialed-live `UNVERIFIED`. |

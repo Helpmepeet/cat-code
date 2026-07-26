@@ -12,6 +12,23 @@
  * answer from restored context is the operator-run P3-8 gate; replay frames
  * are never substituted for that evidence.
  *
+ * TEST EVIDENCE
+ * - Claim: two independently persisted realistic transcripts restore through
+ *   fresh sidecars with stable engine ids, fresh PIDs, and no marker crossover.
+ * - Exact pre-fix failure: the old non-sidechain-only leaf selector chose a
+ *   trailing system diagnostic and resumed one message without prior context.
+ * - Production entry point: sidecar `index.ts` → `resumeEngineSession()` →
+ *   `loadConversationForResume` / `getLastSessionLog`.
+ * - Test path: `app/sidecar/restoreAntiPotemkin.probe.test.ts`.
+ * - Proof layer: process.
+ * - Red/mutation evidence: restoring the old leaf predicate made both sidecars
+ *   seed one message and fail marker replay; production source was restored.
+ * - Pairwise/adversarial cases: two cwd/id/marker pairs, realistic
+ *   sidechain+diagnostic tails, old PID death, fresh PID restore, no crossover.
+ * - UNVERIFIED: credentialed answer-from-context and GUI operator acceptance.
+ * - Commands and outcomes: focused restore probes passed; primary desktop
+ *   battery passed 1426/0, typechecks clean, hardening 19/19.
+ *
  * Run: `bun test app/sidecar/restoreAntiPotemkin.probe.test.ts`
  */
 
@@ -156,12 +173,11 @@ test('F2: two realistic transcripts restore through new real sidecar processes w
   const appSessionA = 'f2-restore-a'
   const appSessionB = 'f2-restore-b'
   const first = makeSupervisor(configHome)
+  const firstReadyAPromise = waitForFrame(first, frame => frame.kind === 'ready' && frame.sessionId === appSessionA)
+  const firstReadyBPromise = waitForFrame(first, frame => frame.kind === 'ready' && frame.sessionId === appSessionB)
   first.spawnSession(appSessionA, { cwd: cwdA, resumeEngineSessionId: engineSessionIdA })
   first.spawnSession(appSessionB, { cwd: cwdB, resumeEngineSessionId: engineSessionIdB })
-  const [firstReadyA, firstReadyB] = await Promise.all([
-    waitForFrame(first, frame => frame.kind === 'ready' && frame.sessionId === appSessionA),
-    waitForFrame(first, frame => frame.kind === 'ready' && frame.sessionId === appSessionB),
-  ])
+  const [firstReadyA, firstReadyB] = await Promise.all([firstReadyAPromise, firstReadyBPromise])
   expect(firstReadyA.kind === 'ready' && firstReadyA.engineSessionId).toBe(engineSessionIdA)
   expect(firstReadyB.kind === 'ready' && firstReadyB.engineSessionId).toBe(engineSessionIdB)
   const firstPidA = first.getSessionProcessId(appSessionA)
@@ -179,21 +195,19 @@ test('F2: two realistic transcripts restore through new real sidecar processes w
   restored.subscribe(event => {
     if (event.type === 'frame') restoredFrames.push(event.frame)
   })
+  const restoredReadyAPromise = waitForFrame(restored, frame => frame.kind === 'ready' && frame.sessionId === appSessionA)
+  const restoredReadyBPromise = waitForFrame(restored, frame => frame.kind === 'ready' && frame.sessionId === appSessionB)
+  const replayMarkerA = waitForFrame(restored, frame => frame.kind === 'event' && frame.sessionId === appSessionA && frame.replay === true && JSON.stringify(frame).includes(markerA))
+  const replayMarkerB = waitForFrame(restored, frame => frame.kind === 'event' && frame.sessionId === appSessionB && frame.replay === true && JSON.stringify(frame).includes(markerB))
   restored.spawnSession(appSessionA, { cwd: cwdA, resumeEngineSessionId: engineSessionIdA })
   restored.spawnSession(appSessionB, { cwd: cwdB, resumeEngineSessionId: engineSessionIdB })
-  const [restoredReadyA, restoredReadyB] = await Promise.all([
-    waitForFrame(restored, frame => frame.kind === 'ready' && frame.sessionId === appSessionA),
-    waitForFrame(restored, frame => frame.kind === 'ready' && frame.sessionId === appSessionB),
-  ])
+  const [restoredReadyA, restoredReadyB] = await Promise.all([restoredReadyAPromise, restoredReadyBPromise])
   expect(restoredReadyA.kind === 'ready' && restoredReadyA.engineSessionId).toBe(engineSessionIdA)
   expect(restoredReadyB.kind === 'ready' && restoredReadyB.engineSessionId).toBe(engineSessionIdB)
   expect(restored.getSessionProcessId(appSessionA)).not.toBe(firstPidA)
   expect(restored.getSessionProcessId(appSessionB)).not.toBe(firstPidB)
 
-  await Promise.all([
-    waitForFrame(restored, frame => frame.kind === 'event' && frame.sessionId === appSessionA && frame.replay === true && JSON.stringify(frame).includes(markerA)),
-    waitForFrame(restored, frame => frame.kind === 'event' && frame.sessionId === appSessionB && frame.replay === true && JSON.stringify(frame).includes(markerB)),
-  ])
+  await Promise.all([replayMarkerA, replayMarkerB])
 
   const replayA = restoredFrames.filter(frame => frame.kind === 'event' && frame.sessionId === appSessionA && frame.replay === true)
   const replayB = restoredFrames.filter(frame => frame.kind === 'event' && frame.sessionId === appSessionB && frame.replay === true)

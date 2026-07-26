@@ -186,6 +186,21 @@ describe('deferred continuation runner', () => {
     }
   })
 
+  /**
+   * TEST EVIDENCE
+   * - Claim: an actual durable transcript fsync failure leaves the job submitted.
+   * - Exact pre-fix failure: the prior named barrier test stopped in validation.
+   * - Production entry point: `beginForegroundDeferredContinuation` →
+   *   `finalizeDeferredAttempt` → `flushCurrentTranscriptDurably`.
+   * - Test path: `src/services/deferredContinuationRunner.test.ts`.
+   * - Proof layer: caller/wiring.
+   * - Red/mutation evidence: removing the awaited flush surfaced the armed
+   *   fault later and made this test fail; production source was restored.
+   * - Pairwise/adversarial cases: materialized JSONL, accepted UUID, appended
+   *   result entry, exact `FileHandle.sync` fault, submitted reconciliation.
+   * - UNVERIFIED: process crash/restart, DOM, GUI, credentialed-live.
+   * - Commands and outcomes: focused suite passed 9/0; engine build passed.
+   */
   test('actual durable barrier failure after a materialized transcript leaves the job submitted for reconciliation', async () => {
     const root = await mkdtemp('/tmp/cat-code-deferred-durable-barrier-')
     const sessionDir = await mkdtemp('/tmp/cat-code-deferred-durable-session-')

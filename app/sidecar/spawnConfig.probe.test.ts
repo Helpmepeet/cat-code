@@ -30,11 +30,16 @@
  *   or make the survivor's ping fail after the first child is SIGKILLed.
  * - Production entry point: `SidecarSupervisor.spawnSession()` / its Node
  *   `child_process.spawn` sidecar boundary, then `SidecarSupervisor.send()`.
+ * - Test path: `app/sidecar/spawnConfig.probe.test.ts`.
  * - Proof layer: process. Higher GUI and credentialed-live layers are
  *   UNVERIFIED; this sends only a protocol ping and never makes a model call.
  * - Red/mutation evidence: the focused test was intentionally perturbed to
  *   signal the survivor PID; its `ready` assertion observed `exited`, then the
  *   original kill target was restored before the recorded green run.
+ * - Pairwise/adversarial cases: two concurrent child PIDs, SIGKILL-one/exit
+ *   event/survivor ping, plus the existing distinct-cwd transcript isolation.
+ * - Commands and outcomes: focused probe passed 5 tests; desktop battery
+ *   passed 1392/0 with typechecks clean and hardening 19/19 at authoring time.
  *
  * Run: `bun test app/sidecar/spawnConfig.probe.test.ts`
  */
