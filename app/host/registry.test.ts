@@ -723,6 +723,46 @@ test('setTitle and touchAttached update only their fields', async () => {
   expect(row.lastAttachedAt).toBeGreaterThanOrEqual(before)
 })
 
+// `titleUpdatedAt` is the app's half of the title-precedence rule the renderer
+// applies (`app/renderer/src/sessionsCatalogState.ts` pickTitle). It must move ONLY
+// on a real change of intent: a restore replays the row's own title back through
+// upsertOnSpawn (`app/host/host.ts:332`), and re-stamping there would let an
+// untouched title outrank a newer terminal `/rename` on every reopen.
+test('titleUpdatedAt stamps on a real title change and NOT on a restore replay', async () => {
+  const { registry, registryPath } = makeRegistry()
+
+  // A spawn with no title records no intent at all.
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a' })
+  expect(readDoc(registryPath).sessions[0]!.titleUpdatedAt).toBeUndefined()
+
+  await registry.setTitle('app-1', 'renamed')
+  const stamped = readDoc(registryPath).sessions[0]!.titleUpdatedAt
+  expect(typeof stamped).toBe('number')
+
+  // Restore feeds the SAME title straight back in — the stamp must not move.
+  await new Promise(r => setTimeout(r, 2))
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', title: 'renamed' })
+  expect(readDoc(registryPath).sessions[0]!.titleUpdatedAt).toBe(stamped)
+
+  // A genuinely different title IS a new intent.
+  await new Promise(r => setTimeout(r, 2))
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', title: 'renamed again' })
+  const restamped = readDoc(registryPath).sessions[0]!.titleUpdatedAt!
+  expect(restamped).toBeGreaterThan(stamped!)
+  expect(readDoc(registryPath).sessions[0]!.title).toBe('renamed again')
+})
+
+test('a fresh row created WITH a title stamps titleUpdatedAt, and it survives a reload', async () => {
+  const { registry, registryPath, storageDir } = makeRegistry()
+  await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', title: 'Seeded at open' })
+  const stamped = readDoc(registryPath).sessions[0]!.titleUpdatedAt
+  expect(typeof stamped).toBe('number')
+
+  const reloaded = makeRegistry({ storageDir })
+  await reloaded.registry.launch()
+  expect(reloaded.registry.sessions[0]!.titleUpdatedAt).toBe(stamped)
+})
+
 test('markClean sets shutdown clean, keeps advisory fields and the row', async () => {
   const { registry, registryPath } = makeRegistry()
   await registry.upsertOnSpawn({

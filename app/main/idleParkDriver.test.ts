@@ -15,6 +15,7 @@ function desc(
     engineSessionId: `engine-${over.appSessionId}`,
     cwd: '/tmp',
     title: null,
+    titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
     createdAt: 0,

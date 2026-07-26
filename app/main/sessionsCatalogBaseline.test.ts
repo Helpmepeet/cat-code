@@ -32,6 +32,7 @@ const validSnapshot: SessionsCatalogSnapshot = {
       cwd: '/Users/me/proj',
       cwdExists: true,
       title: 'Fix the parser',
+      transcriptTitle: 'Fix the parser',
       modifiedAtMs: 1000,
       createdAtMs: 500,
       messageCount: 3,
@@ -45,6 +46,7 @@ const validSnapshot: SessionsCatalogSnapshot = {
   ],
   truncated: false,
   notes: ['All discovered sessions are enriched.'],
+  capturedAtMs: 1700,
 }
 
 describe('readSessionsCatalogCache', () => {
@@ -130,6 +132,45 @@ describe('readSessionsCatalogCache', () => {
         entries: [{ ...validSnapshot.entries[0], cwdExists: 'yes' }],
         truncated: false,
         notes: [],
+      }),
+    )
+    expect(readSessionsCatalogCache(dir)).toBeNull()
+  })
+
+  // The title-precedence pair. This cache IS the cold-launch baseline, so its
+  // capture age must be the one the worker recorded — stamping it at read time
+  // would make a months-old cache look freshly captured and let it outrank a
+  // registry title written since.
+  test('capturedAtMs + transcriptTitle round-trip through the cache file', () => {
+    const dir = tempDir()
+    writeRaw(dir, JSON.stringify(validSnapshot))
+    const read = readSessionsCatalogCache(dir)
+    expect(read?.capturedAtMs).toBe(1700)
+    expect(read?.entries[0]?.transcriptTitle).toBe('Fix the parser')
+  })
+
+  test('an old cache file lacking them reads with the safe defaults (0 / null)', () => {
+    const dir = tempDir()
+    const { transcriptTitle: _drop, ...legacyEntry } = validSnapshot.entries[0]!
+    writeRaw(dir, JSON.stringify({ entries: [legacyEntry], truncated: false, notes: [] }))
+    const read = readSessionsCatalogCache(dir)
+    expect(read?.capturedAtMs).toBe(0)
+    expect(read?.entries[0]?.transcriptTitle).toBeNull()
+  })
+
+  test('a present non-number capturedAtMs fails closed to null (tamper/drift)', () => {
+    const dir = tempDir()
+    writeRaw(dir, JSON.stringify({ ...validSnapshot, capturedAtMs: 'soon' }))
+    expect(readSessionsCatalogCache(dir)).toBeNull()
+  })
+
+  test('a present non-string transcriptTitle fails closed to null (tamper/drift)', () => {
+    const dir = tempDir()
+    writeRaw(
+      dir,
+      JSON.stringify({
+        ...validSnapshot,
+        entries: [{ ...validSnapshot.entries[0], transcriptTitle: 7 }],
       }),
     )
     expect(readSessionsCatalogCache(dir)).toBeNull()

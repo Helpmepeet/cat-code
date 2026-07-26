@@ -17,6 +17,7 @@ function entry(over: Partial<SessionCatalogEntry> = {}): SessionCatalogEntry {
     cwd: '/Users/pt/project',
     cwdExists: true,
     title: 'A terminal session',
+    transcriptTitle: null,
     modifiedAtMs: 1000,
     createdAtMs: 500,
     messageCount: 3,
@@ -31,7 +32,7 @@ function entry(over: Partial<SessionCatalogEntry> = {}): SessionCatalogEntry {
 }
 
 function catalog(entries: SessionCatalogEntry[]): SessionsCatalogSnapshot {
-  return { entries, truncated: false, notes: [] }
+  return { entries, truncated: false, notes: [], capturedAtMs: 1000 }
 }
 
 function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {
@@ -40,6 +41,7 @@ function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {
     engineSessionId: ENGINE_ID,
     cwd: '/Users/pt/project',
     title: null,
+    titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
     createdAt: 1,

@@ -21,6 +21,7 @@ function descriptor(input: Partial<SessionDescriptor> & { appSessionId: string; 
   return {
     engineSessionId: null,
     title: null,
+    titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
     createdAt: 1,

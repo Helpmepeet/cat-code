@@ -11,6 +11,7 @@ function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): S
     cwd: '/w/proj',
     cwdExists: true,
     title: null,
+    transcriptTitle: null,
     modifiedAtMs: 1000,
     createdAtMs: 500,
     messageCount: 0,
@@ -165,5 +166,64 @@ describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
       notes: [],
     })
     expect(parsed).toBeNull()
+  })
+})
+
+describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, fail-closed)', () => {
+  test('both round-trip through the boundary', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [{ ...entry({ sessionId: 'a' }), transcriptTitle: 'Renamed in the terminal' }],
+      truncated: false,
+      notes: [],
+      capturedAtMs: 1234,
+    })
+    expect(parsed?.capturedAtMs).toBe(1234)
+    expect(parsed?.entries[0]?.transcriptTitle).toBe('Renamed in the terminal')
+  })
+
+  test('a record predating the fields parses with the SAFE defaults (0 / null)', () => {
+    // 0 = unknown capture age and null = no recorded title, so such a record can
+    // never outrank a registry title — i.e. exactly the pre-fix behavior.
+    const { transcriptTitle: _drop, ...legacyEntry } = entry({ sessionId: 'a' })
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [legacyEntry],
+      truncated: false,
+      notes: [],
+    })
+    expect(parsed?.capturedAtMs).toBe(0)
+    expect(parsed?.entries[0]?.transcriptTitle).toBeNull()
+  })
+
+  test('a PRESENT non-number capturedAtMs fails the whole record', () => {
+    expect(
+      parseSessionsCatalogSnapshot({
+        entries: [entry({ sessionId: 'a' })],
+        truncated: false,
+        notes: [],
+        capturedAtMs: 'soon',
+      }),
+    ).toBeNull()
+  })
+
+  test('a PRESENT non-string/non-null transcriptTitle fails the whole record', () => {
+    expect(
+      parseSessionsCatalogSnapshot({
+        entries: [{ ...entry({ sessionId: 'a' }), transcriptTitle: 7 }],
+        truncated: false,
+        notes: [],
+      }),
+    ).toBeNull()
+  })
+
+  test('the closed-vocabulary gate still rejects an UNKNOWN snapshot key', () => {
+    expect(
+      parseSessionsCatalogSnapshot({
+        entries: [entry({ sessionId: 'a' })],
+        truncated: false,
+        notes: [],
+        capturedAtMs: 1,
+        smuggled: 'x',
+      }),
+    ).toBeNull()
   })
 })
