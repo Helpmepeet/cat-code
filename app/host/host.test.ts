@@ -531,12 +531,12 @@ test('createSession enforces the spawn rate cap (HC4 → session_limit)', async 
   expect(next.ok).toBe(true)
 })
 
-test('createSession enforces the live-row bound (HC4 → session_limit)', async () => {
+test('createSession enforces the live-process bound (HC4 → session_limit)', async () => {
   // A tiny fake registry that reports a saturated live set via the supervisor.
   const h = makeHost()
-  // Stuff the supervisor with MAX_REGISTRY_SESSIONS live records directly.
-  const { MAX_REGISTRY_SESSIONS } = await import('./registry.js')
-  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
+  // Stuff the supervisor with MAX_LIVE_SESSIONS live records directly.
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+  for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
     h.supervisor.records.set(`live-${i}`, {
       sessionId: `live-${i}`,
       status: 'ready',
@@ -548,6 +548,33 @@ test('createSession enforces the live-row bound (HC4 → session_limit)', async 
   const result = await h.host.createSession({ cwd: h.cwd })
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe('session_limit')
+})
+
+test('HC4: the live-process cap is independent of the registry row bound', async () => {
+  // These were ONE constant until 2026-07-26, so raising the registry's
+  // file-growth bound silently raised the fork-bomb cap. The row bound must be
+  // free to grow while the process cap stays put; a future edit that re-fuses
+  // them (or lets the process cap drift up with the rows) fails here.
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+  const { MAX_REGISTRY_SESSIONS } = await import('./registry.js')
+  expect(MAX_LIVE_SESSIONS).toBe(32)
+  expect(MAX_REGISTRY_SESSIONS).toBeGreaterThan(MAX_LIVE_SESSIONS)
+
+  // And the cap that actually gates spawning is the process one: a supervisor
+  // holding MAX_LIVE_SESSIONS live records refuses, well below the row bound.
+  const h = makeHost()
+  for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+    h.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`,
+      status: 'ready',
+      pid: 1000 + i,
+      socketPath: `/tmp/s${i}`,
+      cwd: h.cwd,
+    })
+  }
+  const refused = await h.host.createSession({ cwd: h.cwd })
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.message).toContain(`${MAX_LIVE_SESSIONS}`)
 })
 
 /* ------------------------------------------------------------------------- *
@@ -1446,19 +1473,23 @@ test('F5: a runtime bound-reap emits session-removed for the reaped terminal row
     acquireLock: async () => async () => {},
   })
   const h = makeHost({ registry })
+  const { MAX_REGISTRY_SESSIONS } = await import('./registry.js')
 
-  // Fill the registry to the bound with terminal rows.
+  // Fill the registry to the bound with terminal rows. Seeded off the CONSTANT,
+  // not a literal 32 — this test proves the reap still emits `session-removed`
+  // at whatever the bound is, and hardcoding the old value would have quietly
+  // stopped exercising the reap at all when the bound was raised (it did).
   const seeded: string[] = []
-  for (let i = 0; i < 32; i++) {
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
     const id = randomUUID()
     seeded.push(id)
     await registry.upsertOnSpawn({ appSessionId: id, cwd: '/seeded' })
     await registry.markClean(id)
   }
-  expect(registry.sessions.length).toBe(32)
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
 
-  // The 33rd row (a live create) must reap one terminal row — and the reap
-  // must surface on the HostEvent stream, not silently vanish from the file.
+  // One row past the bound (a live create) must reap one terminal row — and the
+  // reap must surface on the HostEvent stream, not silently vanish from the file.
   const created = await h.host.createSession({ cwd: h.cwd })
   if (!created.ok) throw new Error(`create failed: ${created.error.code}`)
 
@@ -1467,7 +1498,7 @@ test('F5: a runtime bound-reap emits session-removed for the reaped terminal row
   expect(seeded).toContain(
     (removed[0] as { type: 'session-removed'; appSessionId: string }).appSessionId,
   )
-  expect(registry.sessions.length).toBe(32)
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
   // The new live row survived; the reaped one is gone from the doc.
   expect(registry.findSession(created.value.appSessionId)).toBeDefined()
 })

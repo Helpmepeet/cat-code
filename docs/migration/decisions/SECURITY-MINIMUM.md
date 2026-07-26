@@ -287,9 +287,14 @@ Rules (extend §2's R-rules; all enforced in main/host, never in the preload):
   as **fixed, per-method structured senders** exactly like the four session channels (extends
   R1). No generic `invoke`, no renderer-controlled channel names, no method that returns
   filesystem contents.
-- **HC4 — spawning is bounded.** `MAX_REGISTRY_SESSIONS` (registry bound) plus a spawn rate cap
-  extend T7's flood posture to process creation: a compromised renderer must not be able to
-  fork-bomb the machine through `createSession`.
+- **HC4 — spawning is bounded.** `MAX_LIVE_SESSIONS` (concurrent engine processes) plus a spawn
+  rate cap extend T7's flood posture to process creation: a compromised renderer must not be able
+  to fork-bomb the machine through `createSession`. Both live in `app/shared/hostApi.ts`.
+  Deliberately **not** the registry's `MAX_REGISTRY_SESSIONS` row bound, which they were fused
+  with until 2026-07-26 — that bound covers live *plus* closed-but-restorable rows and is a
+  file-growth backstop (`decisions/REGISTRY.md` §3), so tying process concurrency to it meant
+  raising it for a UX fix would have silently raised this cap. Splitting them left the effective
+  live limit unchanged at 32.
 
 The sidecar trust boundary (§2) is unchanged: the control plane never adds an inbound frame
 type to the socket protocol; its only contact with a sidecar is the spawn environment

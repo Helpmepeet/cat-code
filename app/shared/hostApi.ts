@@ -104,7 +104,7 @@ export type HostErrorCode =
   | 'invalid_cwd'
   /** Id not in live map ∪ registry (HC2). */
   | 'session_not_found'
-  /** `MAX_REGISTRY_SESSIONS` or the spawn rate cap hit (HC4). */
+  /** `MAX_LIVE_SESSIONS` or the spawn rate cap hit (HC4). */
   | 'session_limit'
   /** Sidecar process failed to start / never sent a valid ready frame. */
   | 'spawn_failed'
@@ -157,10 +157,25 @@ export type HostEvent =
  * ------------------------------------------------------------------------- */
 
 /**
+ * Concurrency cap (HC4): at most this many engine processes live at once —
+ * `createSession` refuses beyond it with `session_limit`. Under the N-process
+ * model each live session is a real sidecar, so this is the standing-fleet half
+ * of HC4's fork-bomb defense (the rate cap below is the burst half).
+ *
+ * Deliberately SEPARATE from the registry's `MAX_REGISTRY_SESSIONS` row bound,
+ * which it was fused with until 2026-07-26. That bound is a file-growth
+ * backstop over live + closed-but-restorable rows and had to be raised to stop
+ * browsing from evicting restorable sessions; this one bounds *processes* and
+ * must not move with it. Value unchanged (32) across that split — the effective
+ * live limit is exactly what it has always been.
+ */
+export const MAX_LIVE_SESSIONS = 32
+
+/**
  * Spawn rate cap (HC4): at most this many `createSession` spawns per
  * `SPAWN_RATE_WINDOW_MS`, extending T7's flood posture to process creation so a
- * compromised renderer cannot fork-bomb the machine. Paired with the registry's
- * `MAX_REGISTRY_SESSIONS` row bound; either breach → `session_limit`.
+ * compromised renderer cannot fork-bomb the machine. Paired with
+ * `MAX_LIVE_SESSIONS`; either breach → `session_limit`.
  */
 export const MAX_SPAWNS_PER_WINDOW = 8
 export const SPAWN_RATE_WINDOW_MS = 10_000

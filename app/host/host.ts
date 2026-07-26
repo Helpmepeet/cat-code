@@ -25,7 +25,6 @@
 import { randomUUID } from 'node:crypto'
 
 import type { SessionRegistry, RegistrySession } from './registry.js'
-import { MAX_REGISTRY_SESSIONS } from './registry.js'
 import type {
   SidecarStatus,
   SidecarSupervisor,
@@ -34,6 +33,7 @@ import type {
 import type { SessionId } from '../shared/protocol.js'
 import { PARKED_EXIT_CODE } from '../shared/limits.js'
 import {
+  MAX_LIVE_SESSIONS,
   MAX_SESSION_TITLE_CHARS,
   MAX_SPAWNS_PER_WINDOW,
   SPAWN_RATE_WINDOW_MS,
@@ -634,14 +634,13 @@ export class Host implements HostApi {
    * --------------------------------------------------------------------- */
 
   private checkSpawnLimits(): { ok: false; error: HostError } | null {
-    // Row bound: live sessions + restorable rows. A create that would exceed the
-    // registry bound is refused (the reap only trims TERMINAL rows; live ones
-    // must not be evicted to make room).
-    if (this.liveCount() >= MAX_REGISTRY_SESSIONS) {
-      return hostError(
-        'session_limit',
-        `at most ${MAX_REGISTRY_SESSIONS} live sessions`,
-      )
+    // Concurrency bound: live engine processes. Deliberately NOT the registry's
+    // row bound (`MAX_REGISTRY_SESSIONS`) — that one covers live + terminal rows
+    // and is a file-growth backstop, so tying process concurrency to it meant
+    // raising the row bound would raise the fork-bomb cap too. The reap only
+    // trims TERMINAL rows; live rows are never evicted to make room.
+    if (this.liveCount() >= MAX_LIVE_SESSIONS) {
+      return hostError('session_limit', `at most ${MAX_LIVE_SESSIONS} live sessions`)
     }
     // Rate cap: fork-bomb defense (extends T7 to process creation).
     const cutoff = this.now() - SPAWN_RATE_WINDOW_MS

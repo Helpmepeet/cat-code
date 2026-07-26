@@ -53,8 +53,23 @@ export const REGISTRY_VERSION = 1 as const
 /**
  * Beyond this many rows, oldest `shutdown != null` rows are reaped on write
  * (§3). Live rows (`shutdown == null`) are never reaped for the bound.
+ *
+ * This is a FILE-GROWTH backstop only — NOT a spawn limit. The HC4 bound on how
+ * many engine processes may be live at once is `MAX_LIVE_SESSIONS`
+ * (`../shared/hostApi.ts`); the two were one constant until 2026-07-26, so
+ * raising this one silently raised the fork-bomb cap. Keep them separate.
+ *
+ * Sized at 256 (was 32) per the 2026-07-26 ruling in `decisions/REGISTRY.md` §3.
+ * The old value was justified by A5 accretion hygiene, which the immediate reap
+ * of never-ran-a-turn rows already handles independently, and it was chosen when
+ * the registry was the ONLY session list — post-SESSIONS-UNIFICATION history is
+ * unlimited and this file is just the open+restorable layer. At 32 the operator's
+ * real registry sat permanently at 32/32, so every open-from-history evicted a
+ * genuinely-restorable session: a READ action destroyed state, unsignalled.
+ * Measured cost at 256 rows (real-shaped rows, ~300 B/row): 98 KB file,
+ * `launch()` 1.20 ms vs 0.53 ms at 32, per-write persist 0.50 ms vs 0.39 ms.
  */
-export const MAX_REGISTRY_SESSIONS = 32
+export const MAX_REGISTRY_SESSIONS = 256
 
 /**
  * How a session ended, from the host's point of view (§3).

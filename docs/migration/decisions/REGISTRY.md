@@ -101,9 +101,50 @@ would rot); **no window/tab layout** (that is renderer/W2 state — it may *refe
 and vice versa); **no permission state** (session-scoped in the engine, C3 snapshot is its read
 path).
 
-Bounds: `MAX_REGISTRY_SESSIONS = 32` rows — beyond that, oldest `shutdown != null` rows are
-reaped on write. Rows whose `engineSessionId` transcript no longer exists on disk are dropped
-during the launch sweep (the index must never offer a restore it cannot perform).
+Bounds: `MAX_REGISTRY_SESSIONS = 256` rows — beyond that, oldest `shutdown != null` rows are
+reaped on write. Live rows (`shutdown == null`) and `'parked'` rows (IDLE-PARK §8 — an open tab,
+not a terminal row) are never reaped for the bound. Rows whose `engineSessionId` transcript no
+longer exists on disk are dropped during the launch sweep (the index must never offer a restore
+it cannot perform).
+
+**This bound is a file-growth backstop, NOT a spawn limit.** How many engine processes may be
+live at once is `MAX_LIVE_SESSIONS = 32` (`app/shared/hostApi.ts`) — see HC4 in §6.1.
+
+**Raised 32 → 256 on 2026-07-26 (operator ruling).** The original 32 was justified by A5
+accretion hygiene (§9), but A5 is already handled independently by the immediate reap of
+`shutdown:"clean"` rows that never acquired an `engineSessionId` — a row that never ran a turn
+dies on its own, whatever the bound is. The number was also sized when the registry was the ONLY
+session list; post-`SESSIONS-UNIFICATION.md` the engine's transcript history is unlimited and this
+file is just the open+restorable layer over it.
+
+At 32 the bound was actively destructive. Opening a session from history mints a registry row, so
+once the file saturated, every **read** evicted a genuinely-restorable recently-closed session,
+with nothing in the UI signalling the loss (the 2026-07-20 bare-rows ruling removed status chips).
+The operator's live `~/.cat-code/desktop/registry.json` sat at 32/32 (1 live, 31 closed) on
+2026-07-21 — permanently at the cap, evicting on every open. Operator framing: *"it's not a
+bookmark if it only goes to top when we open it."*
+
+Measured cost of the new value (2026-07-26, `app/host/registry.ts` driven directly at N rows with
+rows shaped from the operator's real registry, ~300 B/row; every timed write asserted to have
+reached disk):
+
+| rows | file | `launch()` | one write point |
+|---|---|---|---|
+| 32 | 10 KB | 0.53 ms | 0.39 ms |
+| 256 | 98 KB | 1.20 ms | 0.50 ms |
+| 1024 | 397 KB | 2.87 ms | 0.81 ms |
+| 4096 | 1.6 MB | 10.2 ms | 2.21 ms |
+
+So no size or latency argument distinguishes any value below ~1024: 256 costs +0.67 ms once per
+app launch and +0.11 ms per write. (An earlier "the sweep would get slower" claim was an unmeasured
+inference and is withdrawn — the sweep's per-row work is one `existsSync`.) **The measurement fixes
+only the affordability ceiling; the value itself is a product choice** — 256 keeps the file the
+size of one small transcript while being 8× the value that demonstrably saturated.
+
+Known residual, accepted: a *count* cap cannot fully separate "browsing" from "keeping", so at 256
+opened-and-closed sessions eviction resumes. Removing that class of failure entirely needs a
+different shape (protect-restorable, ephemeral browse rows, or recency-instead-of-count); all three
+were considered and **not** chosen on 2026-07-26. Raising the number is the whole ruling.
 
 ## 4. Restore & crash recovery — the launch sequence
 
@@ -196,7 +237,7 @@ type SessionDescriptor = {
 type HostErrorCode =
   | 'invalid_cwd'          // HC1 validation failed (not a dir / not absolute / vanished)
   | 'session_not_found'    // id not in live map ∪ registry
-  | 'session_limit'        // MAX_REGISTRY_SESSIONS or spawn rate cap hit (HC4)
+  | 'session_limit'        // MAX_LIVE_SESSIONS or spawn rate cap hit (HC4)
   | 'spawn_failed'         // sidecar process failed to start / never sent ready
   | 'registry_unavailable' // registry file unwritable — sessions still work, persistence doesn't
 ```
@@ -222,8 +263,10 @@ HC1–HC4) and summarized here for locality:
   map/registry lookup; unknown → `session_not_found`, never an exception with internal state.
 - **HC3** — preload exposes these five methods as fixed, structured senders (extends R1);
   no generic `invoke(channel, args)` escape hatch.
-- **HC4** — `createSession` enforces `MAX_REGISTRY_SESSIONS` and a spawn rate cap (extends T7);
-  breach → `session_limit`.
+- **HC4** — `createSession` enforces `MAX_LIVE_SESSIONS` (live engine processes) and a spawn rate
+  cap (extends T7); breach → `session_limit`. **Not** the registry's `MAX_REGISTRY_SESSIONS` row
+  bound: the two were one constant until 2026-07-26, so raising the row bound (§3) would have
+  raised the fork-bomb cap with it. The effective live limit is unchanged at 32 across that split.
 
 ## 7. What Phase 3 implements (backlog fodder, in dependency order)
 
@@ -279,9 +322,11 @@ HC1–HC4) and summarized here for locality:
   registry forgot) degrades to the Sessions page's normal resume path — the registry is an index,
   not a gatekeeper.
 - **A5 — macOS `activate` mints a fresh session per dock reopen** (D6 §8-A5): without hygiene the
-  registry accretes one-turn-old rows. Handled by the bound + reap (§3) and by `shutdown:"clean"`
-  rows with `engineSessionId: null` (never got a ready frame / never ran a turn) being reaped
-  immediately — an address that never acquired content is not restorable and not worth a row.
+  registry accretes one-turn-old rows. Handled by `shutdown:"clean"` rows with
+  `engineSessionId: null` (never got a ready frame / never ran a turn) being reaped **immediately**
+  — an address that never acquired content is not restorable and not worth a row. That reap is
+  bound-independent and does the real work here; the §3 row bound is a file-growth backstop behind
+  it, which is why raising the bound to 256 on 2026-07-26 costs A5 nothing.
 - **A6 — Secrets creep.** The schema has no secret-shaped field and the doc forbids adding one
   (§3). Registry writes go nowhere near the outbound frame path, so the F6 secret scan is not the
   (only) line of defense — exclusion by construction is.

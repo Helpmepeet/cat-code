@@ -271,7 +271,7 @@ add (b) only if live use shows focused-idle parking is annoying.
 | **shared/protocol.ts** | Add `AppParkMessage = {type:'app.park'; requestId:string}` to the `SidecarClientMessage` union (`protocol.ts:386-397`), with a doc-comment citing this file. Additive under v1 — no `PROTOCOL_VERSION` bump. | inbound verb (see §6) |
 | **sidecar/sidecarServer.ts** | `checkStrictKeys` allowlist entry `['app.park', new Set(['type','requestId'])]` (`:2711-2765`); a sidecar-local Zod schema for `app.park`; a `dispatch` case (`:875-916`) → `handlePark`; the `parking` field + `handlePark` (§3); the one-line `if (this.parking)` guard in `handleSubmit` (`:918`); an `onPark` option (mirrors `onIdle`, `:302,350,429-442`). | yes — full security tax |
 | **sidecar/index.ts** | `PARKED_EXIT_CODE = 5` const; pass `onPark: () => { cleanup(); process.exit(PARKED_EXIT_CODE) }` into `SidecarServer` (mirrors `onIdle`, `:204-214`). | no |
-| **host/registry.ts** | `ShutdownState` gains `'parked'` (`:60`); `normalizeShutdown` maps a **persisted** `'parked'` → `'crashed'` on read (`:911-914`) so `'parked'` is an in-memory-only state for the current run; `enforceBound` excludes `'parked'` rows from the terminal reap (`:545-581`, filter `:549`); new `markParked()` (like `markCrashed`, `:727-736`, transitions `null → 'parked'`). | no |
+| **host/registry.ts** | `ShutdownState` gains `'parked'` (`:85`); `normalizeShutdown` maps a **persisted** `'parked'` → `'crashed'` on read (`:961-969`) so `'parked'` is an in-memory-only state for the current run; `enforceBound` excludes `'parked'` rows from the terminal reap (`:570-609`, filter `:578`); new `markParked()` (like `markCrashed`, `:777-786`, transitions `null → 'parked'`). | no |
 | **host/host.ts** | `onSupervisorEvent` exit branch (`:186-199`): `event.code === PARKED_EXIT_CODE ⇒ registry.markParked` else `markCrashed`; `descriptorFromRow` status map (`:705-709`): treat `'parked'` like `'crashed'` → `'disconnected'` so the tab is kept + `restorable` stays true (`isRestorable`, `:734-740`, already returns true for a dead row with an `engineSessionId`). | no (host sends no frame) |
 | **main/main.ts** | `createIdleParkDriver` (policy §4) sending `app.park` via `supervisor.send`; started/stopped with the window (mirror `sessionsCatalogDriver`, `:374-388,1562,1591`). The exit→`lifecycle{exited}` synth (`:671-695`) and the terminal-frame persist+evict (`:636-644`) need **no change** — a parked exit rides them exactly like a crash. | no |
 | **preload** | **none.** | — |
@@ -336,13 +336,14 @@ not a park-specific obligation.
 ## 8. Registry bookkeeping & restore-path confirmations
 
 - **enforceBound reap (the dangling-tab hazard):** `enforceBound` reaps oldest
-  terminal rows over `MAX_REGISTRY_SESSIONS = 32` (`registry.ts:57,545-581`).
+  terminal rows over `MAX_REGISTRY_SESSIONS` (`registry.ts:72,570-609`; raised
+  32 → 256 on 2026-07-26, `REGISTRY.md` §3 — the exclusion below is unaffected).
   A `'parked'` row is an *open tab*, so it is excluded from the reap
-  (`:549` filter gains `&& r.shutdown !== 'parked'`). Live rows (`shutdown:null`)
-  are already never reaped. `checkSpawnLimits` counts **live processes**
-  (`this.liveCount()` = supervisor sessions, `host.ts:633,658-660`), which a
-  parked session is NOT part of — so **parking frees a live slot**, the whole
-  point, while the row is retained for the tab.
+  (`:578` filter gains `&& r.shutdown !== 'parked'`). Live rows (`shutdown:null`)
+  are already never reaped. `checkSpawnLimits` counts **live processes** against
+  the separate `MAX_LIVE_SESSIONS` cap (`this.liveCount()` = supervisor sessions,
+  `host.ts:636,664-666`), which a parked session is NOT part of — so **parking
+  frees a live slot**, the whole point, while the row is retained for the tab.
 - **Not misread as a crash:** the parked self-exit carries `PARKED_EXIT_CODE`;
   `host.onSupervisorEvent` classifies on the code → `markParked`, never
   `markCrashed`. A `'disconnected'` supervisor status event (socket close) does
@@ -351,7 +352,7 @@ not a park-specific obligation.
 - **Not misread across a relaunch:** `'parked'` normalises to `'crashed'` on
   disk read (§5), so a parked row that survives an app crash becomes an ordinary
   restore-offer next launch (the sweep skips it — `shutdown != null`,
-  `registry.ts:466` — and reap treats it like any terminal restorable row).
+  `registry.ts:491` — and reap treats it like any terminal restorable row).
   Foldable back to a tab only via an explicit restore (`foldTabMembership`
   never grants a tab to a hydrated restorable-only row, `shellState.ts:154-163`).
 - **Unpark = the existing restore machinery, no new UX:** `performRestore` /
@@ -381,8 +382,9 @@ Before ratification-close, prove — through the real path, not this table:
    composer disabled, engine process gone (registry `'parked'`, `liveCount`
    dropped) → click restore → assert the conversation replays (P4-28), a new
    turn runs, and the DIE-list items reset as in §7 (goal null, mode default).
-4. **enforceBound:** with 32+ rows including a parked open tab, a new spawn reaps
-   an oldest *clean/crashed* row and **never** the parked one.
+4. **enforceBound:** with more than `MAX_REGISTRY_SESSIONS` rows including a
+   parked open tab, a new spawn reaps an oldest *clean/crashed* row and **never**
+   the parked one.
 5. **Battery:** `bun test app/`, `bun run --cwd app typecheck` +
    `typecheck:sidecar` (0 owned), `bun run --cwd app test:hardening` (all pass),
    `renderer:build`. GUI acceptance (operator): park a background tab, confirm it
@@ -417,7 +419,7 @@ Before ratification-close, prove — through the real path, not this table:
   Kept on the table as the fallback if the operator drops the cap (would delete
   the entire §6 tax and the main driver).
 - **Reuse `'crashed'` for parked rows (no new registry state).** Rejected:
-  `enforceBound` would reap a parked open tab at 32+ rows and dangle it. The
+  `enforceBound` would reap a parked open tab over the row bound and dangle it. The
   `'parked'` state exists solely to exclude it from that reap; it is invisible
   to the descriptor (maps to `'disconnected'`) and to disk (normalises to
   `'crashed'`).
@@ -455,9 +457,9 @@ domain the server already holds (`this.tasks`, `sessionController.ts:483`),
 do not re-derive. Verify: new boundary tests (§9.1–9.2) + `test:hardening`.
 
 **Step 4 — registry `'parked'` state.** `app/host/registry.ts`: `ShutdownState`
-+= `'parked'` (`:60`); `normalizeShutdown` maps persisted `'parked'` → `'crashed'`
-(`:911-914`); `enforceBound` filter excludes `'parked'` (`:549`); `markParked()`
-(clone `markCrashed`, `:727-736`, `null → 'parked'`). Verify: registry unit tests
++= `'parked'` (`:85`); `normalizeShutdown` maps persisted `'parked'` → `'crashed'`
+(`:961-969`); `enforceBound` filter excludes `'parked'` (`:578`); `markParked()`
+(clone `markCrashed`, `:777-786`, `null → 'parked'`). Verify: registry unit tests
 (parked excluded from reap; parked normalises to crashed on read).
 
 **Step 5 — host classification + descriptor.** `app/host/host.ts`:
