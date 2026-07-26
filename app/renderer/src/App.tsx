@@ -480,6 +480,10 @@ export function App() {
     createOrchestratorState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
+  // P4-34 — cosmetic palette recents are derived from real invocations in this
+  // renderer lifetime. No disk store: the prompt explicitly forbids inventing
+  // persistence for this convenience list.
+  const [recentPaletteItemIds, setRecentPaletteItemIds] = useState<string[]>([])
   // P4-15 OAuth flow-local state. The sub-states themselves are DRIVEN by the
   // `oauth.login.progress` back-channel (`accountsState.oauthProgress`); these two
   // are the renderer-local framing: `oauthContext` distinguishes the first-run
@@ -1988,6 +1992,8 @@ export function App() {
         rows: shellDescriptors,
         activeSessionId,
         hasPanels: workspacePanels.length > 0,
+        slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
+        recentItemIds: recentPaletteItemIds,
         handlers: {
           newSession: () => void newSession(),
           closeActiveSession: () => {
@@ -2004,6 +2010,7 @@ export function App() {
           selectLiveSession: selectTab,
           restoreSession: sessionId => void performRestore(sessionId),
           openTasks: () => setTasksOpen(true),
+          navigatePage: page => setActiveView(page),
         },
       })
     : EMPTY_PALETTE_ITEMS
@@ -2429,6 +2436,12 @@ export function App() {
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
+        onRunItem={itemId =>
+          setRecentPaletteItemIds(previous => [
+            itemId,
+            ...previous.filter(id => id !== itemId),
+          ].slice(0, 5))
+        }
         items={paletteItems}
       />
 

@@ -38,6 +38,22 @@ test('renders the requested tool, exact input, controls, and inline key hints', 
   expect(html).not.toContain('Always allow')
 })
 
+test('renders worker-relay chrome from the engine request agent_id', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        ...REQUEST,
+        request: { ...REQUEST.request, agent_id: 'worker-42' },
+      }}
+    />,
+  )
+  expect(html).toContain('>worker<')
+  expect(html).toContain('Relayed from worker')
+  expect(html).toContain('worker-42')
+})
+
 test('renders an always-allow option per ENGINE-minted suggestion, verbatim', () => {
   const request: PermissionRequest = {
     requestId: 'perm-2',

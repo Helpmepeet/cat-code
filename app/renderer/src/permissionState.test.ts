@@ -368,6 +368,9 @@ const CONTEXT_SNAPSHOT = {
   alwaysAllowRules: { userSettings: ['Bash(date:*)'] },
   alwaysDenyRules: {},
   alwaysAskRules: {},
+  ruleMetadata: [],
+  managedRulesOnly: false,
+  permissionClassifierEnabled: false,
   additionalWorkingDirectories: [],
   isBypassPermissionsModeAvailable: false,
 }

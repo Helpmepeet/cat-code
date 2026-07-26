@@ -17,8 +17,27 @@
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
-import { transitionPermissionMode } from '../../src/utils/permissions/permissionSetup.js'
+import { feature } from 'bun:bundle'
+import {
+  isAutoModeGateEnabled,
+  transitionPermissionMode,
+} from '../../src/utils/permissions/permissionSetup.js'
+import { shouldAllowManagedPermissionRulesOnly } from '../../src/utils/permissions/permissionsLoader.js'
 import type { PermissionSetModeMode } from '../shared/protocol.js'
+
+export type PermissionDisplayFacts = {
+  managedRulesOnly: boolean
+  permissionClassifierEnabled: boolean
+}
+
+function readPermissionDisplayFacts(): PermissionDisplayFacts {
+  return {
+    managedRulesOnly: shouldAllowManagedPermissionRulesOnly(),
+    permissionClassifierEnabled: feature('TRANSCRIPT_CLASSIFIER')
+      ? isAutoModeGateEnabled()
+      : false,
+  }
+}
 
 export type SidecarPermissionDomain = {
   /**
@@ -30,6 +49,12 @@ export type SidecarPermissionDomain = {
   setMode(mode: PermissionSetModeMode): void
   /** The engine's live context — the C3 snapshot source of truth. */
   getToolPermissionContext(): ToolPermissionContext
+  /**
+   * Read-only engine facts used by the rules viewer. These are deliberately
+   * read at snapshot time so policy/gate changes cannot be reconstructed or
+   * guessed in the renderer.
+   */
+  getDisplayFacts(): PermissionDisplayFacts
   /**
    * Fires whenever the live context reference changes, INCLUDING changes made
    * without boundary involvement (C1 updates applied by the engine's decision
@@ -71,15 +96,32 @@ export function createSidecarPermissionDomain(
       return appStateStore.getState().toolPermissionContext
     },
 
+    getDisplayFacts() {
+      return readPermissionDisplayFacts()
+    },
+
     subscribeToolPermissionContext(listener) {
       // The store notifies on ANY app-state change; re-emit only when the
       // permission context itself changed (reference compare — engine code
-      // replaces the context object on every permission mutation).
+      // replaces the context object on every permission mutation). P4-34 also
+      // re-emits when either read-only display fact changes (managed settings
+      // reload or classifier availability), even if the context reference did
+      // not.
       let last = appStateStore.getState().toolPermissionContext
+      let lastFacts = readPermissionDisplayFacts()
       return appStateStore.subscribe(() => {
         const next = appStateStore.getState().toolPermissionContext
-        if (next === last) return
+        const nextFacts = readPermissionDisplayFacts()
+        if (
+          next === last &&
+          nextFacts.managedRulesOnly === lastFacts.managedRulesOnly &&
+          nextFacts.permissionClassifierEnabled ===
+            lastFacts.permissionClassifierEnabled
+        ) {
+          return
+        }
         last = next
+        lastFacts = nextFacts
         listener(next)
       })
     },

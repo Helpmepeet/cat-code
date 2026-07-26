@@ -296,6 +296,14 @@ export type PermissionContextFrame = {
 - Renderer rule: don't render the editor before the first snapshot; a fresh snapshot supersedes
   any optimistic local state.
 
+**P4-34 additive display extension (2026-07-26):** the same C3 snapshot now also
+carries `ruleMetadata` (behavior/source/rule plus engine-parser-derived
+`exact|prefix|wildcard`), `managedRulesOnly` (from
+`shouldAllowManagedPermissionRulesOnly`), and `permissionClassifierEnabled`
+(from the compiled feature plus the engine's live gate). These are read-only
+engine facts for prototype-parity display. They add no inbound vocabulary and
+do not weaken the rule-authorship prohibition above.
+
 ---
 
 ## 5. C4 — `deny.interrupt` stays cut (CONFIRMED)

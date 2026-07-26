@@ -156,6 +156,9 @@ const PERMISSION_CONTEXT: PermissionContextSnapshot = {
   alwaysAllowRules: { userSettings: ['Bash(ls)', 'Read'] },
   alwaysDenyRules: { localSettings: ['Bash(rm -rf /tmp)'] },
   alwaysAskRules: {},
+  ruleMetadata: [],
+  managedRulesOnly: false,
+  permissionClassifierEnabled: false,
   additionalWorkingDirectories: [{ path: '/tmp/work', source: 'cliArg' }],
   isBypassPermissionsModeAvailable: false,
 }
@@ -175,7 +178,7 @@ test('the Permissions pane embeds the P2-4 read-only rules view over the real C3
   expect(html).toContain('Always deny')
   expect(html).toContain('Bash(ls)')
   expect(html).toContain('Bash(rm -rf /tmp)')
-  expect(html).toContain('(userSettings)')
+  expect(html).toContain('>userSettings<')
   // C3 additional working directories.
   expect(html).toContain('/tmp/work')
   expect(html).toContain('(cliArg)')

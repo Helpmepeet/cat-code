@@ -44,6 +44,7 @@ function noopHandlers(): PaletteHandlers {
     selectLiveSession: () => {},
     restoreSession: () => {},
     openTasks: () => {},
+    navigatePage: () => {},
   }
 }
 
@@ -146,4 +147,34 @@ test('filterPaletteItems matches session identity fields and ranks prefixes firs
 
   // No match → empty result (palette shows its empty state).
   expect(filterPaletteItems(items, 'zzzzz')).toEqual([])
+})
+
+test('buildPaletteItems derives real navigation commands and session-local recents', () => {
+  let page = ''
+  const items = buildPaletteItems({
+    rows: [],
+    activeSessionId: null,
+    hasPanels: false,
+    slashCatalog: [
+      { name: 'accounts', description: 'Manage accounts' },
+      { name: 'not-a-page', description: 'Runs in the engine' },
+    ],
+    recentItemIds: ['command:/accounts'],
+    handlers: {
+      ...noopHandlers(),
+      navigatePage: next => {
+        page = next
+      },
+    },
+  })
+  expect(items[0]?.id).toBe('recent:command:/accounts')
+  expect(items[0]?.group).toBe('Recent')
+  const command = items.find(item => item.id === 'command:/accounts')
+  expect(command?.label).toBe('/accounts')
+  command?.run()
+  expect(page).toBe('accounts')
+  expect(items.some(item => item.label === '/not-a-page')).toBe(false)
+  expect(filterPaletteItems(items, 'accounts').map(item => item.id)).toEqual([
+    'command:/accounts',
+  ])
 })

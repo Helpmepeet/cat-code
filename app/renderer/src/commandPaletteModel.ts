@@ -15,7 +15,7 @@
  */
 
 import type { SessionDescriptor } from '../../shared/hostApi.js'
-import type { SessionId } from '../../shared/protocol.js'
+import type { SessionId, SlashCatalogEntry } from '../../shared/protocol.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
 import type { TabTone } from './tabStatus.js'
 import { tabLabel } from './TabBar.js'
@@ -38,8 +38,12 @@ export type PaletteItem = {
   ariaLabel: string
   /** Extra searchable text (cwd, engine id, synonyms) folded into filtering. */
   keywords: string
+  /** Original item id when this is the session-local Recent projection. */
+  recentOf?: string
   run: () => void
 }
+
+export type PalettePage = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
 
 export type PaletteHandlers = {
   newSession: () => void
@@ -50,6 +54,7 @@ export type PaletteHandlers = {
   selectLiveSession: (sessionId: SessionId) => void
   restoreSession: (sessionId: SessionId) => void
   openTasks: () => void
+  navigatePage: (page: PalettePage) => void
 }
 
 export type PaletteInput = {
@@ -57,7 +62,30 @@ export type PaletteInput = {
   activeSessionId: SessionId | null
   /** True when the workspace has at least one open panel (P3-6). */
   hasPanels: boolean
+  /** Active sidecar's real slash catalog; navigation rows are never mocked. */
+  slashCatalog?: readonly SlashCatalogEntry[]
+  /** Most-recently invoked real palette item ids, newest first. */
+  recentItemIds?: readonly string[]
   handlers: PaletteHandlers
+}
+
+const PAGE_NAV_BY_COMMAND: Readonly<Record<string, PalettePage>> = {
+  accounts: 'accounts',
+  'switch-account': 'accounts',
+  cost: 'accounts',
+  usage: 'accounts',
+  stats: 'accounts',
+  resume: 'sessions',
+  goals: 'goals',
+  tasks: 'chat',
+  bashes: 'chat',
+  agents: 'settings',
+  permissions: 'settings',
+  mcp: 'settings',
+  skills: 'settings',
+  config: 'settings',
+  doctor: 'settings',
+  status: 'settings',
 }
 
 /**
@@ -67,7 +95,14 @@ export type PaletteInput = {
  * disabled/no-op row can never appear.
  */
 export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
-  const { rows, activeSessionId, hasPanels, handlers } = input
+  const {
+    rows,
+    activeSessionId,
+    hasPanels,
+    slashCatalog = [],
+    recentItemIds = [],
+    handlers,
+  } = input
   const items: PaletteItem[] = []
 
   items.push({
@@ -162,7 +197,35 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
     })
   }
 
-  return items
+  const seenCommands = new Set<string>()
+  for (const entry of slashCatalog) {
+    const name = entry.name.replace(/^\/+/, '')
+    const page = PAGE_NAV_BY_COMMAND[name]
+    if (!page || seenCommands.has(name)) continue
+    seenCommands.add(name)
+    items.push({
+      id: `command:/${name}`,
+      kind: 'action',
+      group: 'Commands',
+      label: `/${name}`,
+      detail: entry.argumentHint,
+      ariaLabel: `Navigate with /${name}`,
+      keywords: `${entry.description} ${entry.argumentHint ?? ''} navigate ${page}`,
+      run: () => handlers.navigatePage(page),
+    })
+  }
+
+  // Cosmetic recents stay session-local renderer state: a projection of real
+  // invocations, never a fabricated fixture or persistence layer. Like the
+  // prototype, the Recent rows duplicate their canonical rows above a divider.
+  const byId = new Map(items.map(item => [item.id, item]))
+  const recentItems = recentItemIds.flatMap(id => {
+    const item = byId.get(id)
+    return item
+      ? [{ ...item, id: `recent:${id}`, group: 'Recent', recentOf: id }]
+      : []
+  })
+  return [...recentItems, ...items]
 }
 
 /**
@@ -180,6 +243,9 @@ export function filterPaletteItems(
 
   const ranked: Array<{ item: PaletteItem; rank: number; order: number }> = []
   items.forEach((item, order) => {
+    // Recent is an empty-query convenience section, not a duplicated search
+    // result (the prototype's searching branch searches the canonical catalog).
+    if (item.recentOf) return
     const label = item.label.toLowerCase()
     if (label.startsWith(q)) {
       ranked.push({ item, rank: 0, order })

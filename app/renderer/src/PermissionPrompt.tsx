@@ -83,6 +83,7 @@ export function PermissionPrompt({
   const suggestions = Array.isArray(request.request.permission_suggestions)
     ? request.request.permission_suggestions
     : []
+  const workerId = request.request.agent_id
 
   return (
     <section
@@ -90,6 +91,17 @@ export function PermissionPrompt({
       className="border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3"
       role="alertdialog"
     >
+      {workerId ? (
+        <div className="mb-2 flex items-center gap-2">
+          <span className="rounded bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-violet-300">
+            worker
+          </span>
+          <p className="text-[11px] text-text-subtle">
+            Relayed from worker{' '}
+            <span className="font-mono text-violet-300">{workerId}</span>
+          </p>
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-sm font-medium text-text-primary" id={titleId}>
