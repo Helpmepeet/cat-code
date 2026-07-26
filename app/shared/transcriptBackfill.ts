@@ -276,11 +276,16 @@ function isBackfillSdkMessage(
     if (!isRecord(value.compact_metadata)) return false
     const trigger = value.compact_metadata.trigger
     const preTokens = value.compact_metadata.pre_tokens
+    const messagesSummarized = value.compact_metadata.messages_summarized
     if (
       (trigger !== 'manual' && trigger !== 'auto') ||
       typeof preTokens !== 'number' ||
       !Number.isFinite(preTokens) ||
-      preTokens < 0
+      preTokens < 0 ||
+      (messagesSummarized !== undefined &&
+        (typeof messagesSummarized !== 'number' ||
+          !Number.isInteger(messagesSummarized) ||
+          messagesSummarized < 0))
     ) {
       return false
     }

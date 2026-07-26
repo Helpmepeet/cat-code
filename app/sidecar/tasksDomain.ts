@@ -8,7 +8,11 @@
  */
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 import { isBackgroundTask, type TaskState } from '../../src/tasks/types.js'
-import type { TaskSnapshotItem, TasksSnapshot } from '../shared/protocol.js'
+import type {
+  TaskSnapshotItem,
+  TasksSnapshot,
+  TaskSubagentMetadata,
+} from '../shared/protocol.js'
 
 export type SidecarTasksDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
@@ -66,10 +70,24 @@ export function tasksSnapshot(
     .filter(isVisibleBackgroundTask)
     .filter(task => !(task.type === 'local_agent' && task.id === foregroundedTaskId))
     .map(toTaskSnapshotItem)
+  const subagents = Object.values(tasks ?? {}).flatMap(toSubagentMetadata)
   return {
     items,
+    subagents,
     ...(foregroundedTaskId ? { foregroundedTaskId } : {}),
   }
+}
+
+function toSubagentMetadata(task: TaskState): TaskSubagentMetadata[] {
+  if (task.type !== 'local_agent' || !task.toolUseId) return []
+  return [{
+    toolUseId: task.toolUseId,
+    agentId: task.agentId,
+    agentName: task.agentName ?? null,
+    agentType: task.agentType,
+    isSidechain: true,
+    spawnedAt: task.startTime,
+  }]
 }
 
 // Inlines `isBackgroundTask` (types.ts) rather than calling it: `BackgroundTaskState`

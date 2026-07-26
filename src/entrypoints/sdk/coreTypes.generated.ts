@@ -193,6 +193,7 @@ export type SDKSystemMessage = SDKBaseMessage & {
   compact_metadata?: {
     trigger: 'manual' | 'auto'
     pre_tokens: number
+    messages_summarized?: number
     preserved_segment?: {
       head_uuid: string
       anchor_uuid: string

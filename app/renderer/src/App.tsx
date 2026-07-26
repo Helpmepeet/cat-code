@@ -2234,6 +2234,7 @@ export function App() {
               threadGoal: selectThreadGoalSnapshot(goalMemory, activeSessionId),
             })}
             log={selectRawMessageLog(state, activeSessionId)}
+            tasks={selectTasksSnapshot(tasks, activeSessionId)}
             onClose={() => setMetadataOpen(false)}
           />
         ) : null}

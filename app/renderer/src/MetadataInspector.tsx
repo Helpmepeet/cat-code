@@ -15,7 +15,8 @@
  * inventing them (the prototype's `MOCK_SESSION_META`/`MOCK_MSG_META` fields).
  */
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import type { TasksSnapshot } from '../../shared/protocol.js'
 import type { SessionMetadataView } from './messageMetadata.js'
 import {
   selectMessageMetadata,
@@ -42,16 +43,29 @@ const GOAL_TONE: Record<string, Tone> = {
 export function MetadataInspector({
   session,
   log,
+  tasks,
   onClose,
 }: {
   session: SessionMetadataView | null
   log: RawMessageSessionLog
+  tasks?: TasksSnapshot | null
   onClose?: () => void
 }): ReactNode {
   const refs = selectMessageRefs(log)
   const [picked, setPicked] = useState<string | null>(null)
   const activeUuid = picked ?? refs[refs.length - 1]?.uuid ?? null
-  const meta = selectMessageMetadata(log, activeUuid)
+  const meta = selectMessageMetadata(log, activeUuid, tasks?.subagents)
+
+  useEffect(() => {
+    if (!onClose) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
   return (
     <>
@@ -63,7 +77,7 @@ export function MetadataInspector({
       <div
         role="dialog"
         aria-label="Session metadata"
-        className="fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
+        className="animate-metadata-inspector-in fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
       >
         <div className="flex items-center gap-2.5 border-b border-shell-seam px-5 py-4">
           <div className="min-w-0 flex-1">
@@ -146,6 +160,9 @@ export function MetadataInspector({
                 </Row>
                 <Row label="Message ID" mono>{meta.messageId ?? '—'}</Row>
                 <Row label="Frame UUID" mono>{meta.uuid}</Row>
+                <Row label="Surface">
+                  <MIPill text={meta.surface ?? 'cli'} tone="info" />
+                </Row>
                 <Row label="Model" mono>{meta.model ?? '—'}</Row>
                 <Row label="Request ID" mono>{meta.requestId ?? '—'}</Row>
                 <Row label="Timestamp" mono>{meta.timestamp ?? '—'}</Row>
@@ -154,6 +171,22 @@ export function MetadataInspector({
               </>
             ) : null}
           </Section>
+
+          {/* Subagent — joined by the engine-minted parent tool-use id. */}
+          {meta?.subagent ? (
+            <Section title="Subagent">
+              <Row label="Agent">
+                {meta.subagent.agentName ?? 'Agent'}{' '}
+                <span className="text-text-subtle">· {meta.subagent.agentType}</span>
+              </Row>
+              <Row label="Agent ID" mono>{meta.subagent.agentId}</Row>
+              <Row label="Tool use ID" mono>{meta.subagent.toolUseId}</Row>
+              <Row label="Sidechain">{meta.subagent.isSidechain ? 'yes' : 'no'}</Row>
+              <Row label="Spawned at" mono>
+                {new Date(meta.subagent.spawnedAt).toLocaleTimeString()}
+              </Row>
+            </Section>
+          ) : null}
 
           {/* Usage & cost — result frames */}
           {meta?.usage || meta?.totalCostUsd != null || meta?.durationMs != null ? (
@@ -174,7 +207,18 @@ export function MetadataInspector({
           {meta?.compaction ? (
             <Section title="Context collapse">
               <Row label="Trigger" mono>{meta.compaction.trigger ?? '—'}</Row>
-              <Row label="Tokens at boundary" mono>{numOr(meta.compaction.preTokens)}</Row>
+              <Row label="Messages summarized" mono>
+                {numOr(meta.compaction.messagesSummarized)}
+              </Row>
+              <Row label="Tokens at boundary" mono>
+                {meta.compaction.preTokens == null ? '—' : fmtK(meta.compaction.preTokens)}
+              </Row>
+              {meta.compaction.preservedSegment ? (
+                <Row label="Preserved" mono>
+                  {meta.compaction.preservedSegment.headUuid} →{' '}
+                  {meta.compaction.preservedSegment.tailUuid}
+                </Row>
+              ) : null}
             </Section>
           ) : null}
 
@@ -238,6 +282,15 @@ function RolePill({ role, subtype }: { role: string; subtype: string | null }) {
 function GoalStatus({ status }: { status: string }) {
   const t = toneClasses(GOAL_TONE[status] ?? 'default')
   return <span className={t.text}>{status}</span>
+}
+
+function MIPill({ text, tone }: { text: string; tone: Tone }) {
+  const t = toneClasses(tone)
+  return (
+    <span className={`rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold ${t.text} ${t.softBg} ${t.softBorder}`}>
+      {text}
+    </span>
+  )
 }
 
 function Section({

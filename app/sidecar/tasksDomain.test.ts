@@ -155,7 +155,15 @@ test('keeps a terminal backgrounded local_agent visible (blocked/completed hando
 test('excludes the foregrounded local_agent — its messages already render in the main pane', () => {
   const snapshot = tasksSnapshot(
     {
-      a1: agentTask({ id: 'a1', status: 'running', isBackgrounded: false }),
+      a1: agentTask({
+        id: 'a1',
+        status: 'running',
+        isBackgrounded: false,
+        toolUseId: 'toolu-a1',
+        agentName: 'lead-worker',
+        agentType: 'verification',
+        startTime: 100,
+      }),
       a2: agentTask({ id: 'a2', status: 'running', isBackgrounded: true }),
     },
     'a1',
@@ -163,6 +171,16 @@ test('excludes the foregrounded local_agent — its messages already render in t
   const ids = snapshot.items.map(item => item.id)
   expect(ids).not.toContain('a1')
   expect(ids).toContain('a2')
+  expect(snapshot.subagents).toEqual([
+    {
+      toolUseId: 'toolu-a1',
+      agentId: 'agent-1',
+      agentName: 'lead-worker',
+      agentType: 'verification',
+      isSidechain: true,
+      spawnedAt: 100,
+    },
+  ])
   expect(snapshot.foregroundedTaskId).toBe('a1')
 })
 
@@ -209,8 +227,8 @@ test('the outbound tasks.snapshot frame is secretGuard-clean even with token-sha
 })
 
 test('an empty task map produces an empty, well-formed snapshot', () => {
-  expect(tasksSnapshot(undefined, undefined)).toEqual({ items: [] })
-  expect(tasksSnapshot({}, undefined)).toEqual({ items: [] })
+  expect(tasksSnapshot(undefined, undefined)).toEqual({ items: [], subagents: [] })
+  expect(tasksSnapshot({}, undefined)).toEqual({ items: [], subagents: [] })
 })
 
 /* --------------------------------------------------------------------------- *

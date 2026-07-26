@@ -1588,6 +1588,7 @@ export const SDKCompactBoundaryMessageSchema = lazySchema(() =>
     compact_metadata: z.object({
       trigger: z.enum(['manual', 'auto']),
       pre_tokens: z.number(),
+      messages_summarized: z.number().int().nonnegative().optional(),
       preserved_segment: z
         .object({
           head_uuid: UUIDPlaceholder(),

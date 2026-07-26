@@ -912,8 +912,27 @@ export type TaskSnapshotItem = {
   agentType?: string
 }
 
+/**
+ * P4-31 — source-backed identity for a subagent transcript branch.
+ *
+ * This is read-only display metadata projected from the SAME `local_agent`
+ * task state the engine owns. `toolUseId` is the join key already carried by
+ * nested SDK messages as `parent_tool_use_id`; no renderer-authored identity
+ * or filesystem path crosses the boundary.
+ */
+export type TaskSubagentMetadata = {
+  toolUseId: string
+  agentId: string
+  agentName: string | null
+  agentType: string
+  isSidechain: true
+  spawnedAt: number
+}
+
 export type TasksSnapshot = {
   items: TaskSnapshotItem[]
+  /** Includes foregrounded workers too; `items` remains display-filtered. */
+  subagents?: TaskSubagentMetadata[]
   /** Task id currently foregrounded (viewed in the main pane); already excluded from `items`. */
   foregroundedTaskId?: string
 }

@@ -22,7 +22,10 @@
  */
 
 import type { SDKMessage } from '@cat-code/engine/sdk'
-import type { ThreadGoalSnapshot } from '../../shared/protocol.js'
+import type {
+  TaskSubagentMetadata,
+  ThreadGoalSnapshot,
+} from '../../shared/protocol.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 
@@ -52,12 +55,29 @@ export type MessageMetadata = {
   timestamp: string | null
   parentToolUseId: string | null
   stopReason: string | null
+  surface: string | null
+  subagent: {
+    agentName: string | null
+    agentType: string
+    agentId: string
+    toolUseId: string
+    isSidechain: boolean
+    spawnedAt: number
+  } | null
   /** result frames only. */
   totalCostUsd: number | null
   durationMs: number | null
   usage: MessageUsage | null
   /** system/compact_boundary frames only. */
-  compaction: { trigger: string | null; preTokens: number | null } | null
+  compaction: {
+    trigger: string | null
+    preTokens: number | null
+    messagesSummarized: number | null
+    preservedSegment: {
+      headUuid: string
+      tailUuid: string
+    } | null
+  } | null
 }
 
 /** Session-level metadata assembled from existing read-seams (no new frame). */
@@ -95,6 +115,7 @@ export function selectMessageRefs(log: RawMessageSessionLog): MetadataMessageRef
 export function selectMessageMetadata(
   log: RawMessageSessionLog,
   uuid: string | null,
+  subagents: readonly TaskSubagentMetadata[] = [],
 ): MessageMetadata | null {
   if (!uuid) return null
   const message = log.messages.find(m => readString(m, 'uuid') === uuid)
@@ -102,6 +123,10 @@ export function selectMessageMetadata(
 
   const type = readString(message, 'type') ?? 'unknown'
   const inner = readRecord(message, 'message')
+  const parentToolUseId = readString(message, 'parent_tool_use_id')
+  const subagent = parentToolUseId
+    ? subagents.find(item => item.toolUseId === parentToolUseId) ?? null
+    : null
   return {
     uuid,
     role: type,
@@ -110,8 +135,10 @@ export function selectMessageMetadata(
     model: readString(message, 'model') ?? (inner ? readString(inner, 'model') : null),
     requestId: readString(message, 'requestId'),
     timestamp: readString(message, 'timestamp'),
-    parentToolUseId: readString(message, 'parent_tool_use_id'),
+    parentToolUseId,
     stopReason: readString(message, 'stop_reason') ?? (inner ? readString(inner, 'stop_reason') : null),
+    surface: readString(message, 'surface') ?? (inner ? readString(inner, 'surface') : null),
+    subagent,
     totalCostUsd: readNumber(message, 'total_cost_usd'),
     durationMs: readNumber(message, 'duration_ms'),
     usage: readUsage(message, inner),
@@ -169,13 +196,26 @@ function readUsage(
 
 function readCompaction(
   message: SDKMessage,
-): { trigger: string | null; preTokens: number | null } | null {
+): MessageMetadata['compaction'] {
   const meta = readRecord(message, 'compact_metadata')
   if (!meta) return null
+  const preserved = readRecordOf(meta, 'preserved_segment')
   return {
     trigger: typeof meta.trigger === 'string' ? meta.trigger : null,
     preTokens: numberOrNull(meta.pre_tokens),
+    messagesSummarized: numberOrNull(meta.messages_summarized),
+    preservedSegment: preserved
+      ? readPreservedSegment(preserved)
+      : null,
   }
+}
+
+function readPreservedSegment(
+  preserved: Record<string, unknown>,
+): { headUuid: string; tailUuid: string } | null {
+  const headUuid = stringOrNull(preserved.head_uuid)
+  const tailUuid = stringOrNull(preserved.tail_uuid)
+  return headUuid && tailUuid ? { headUuid, tailUuid } : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -212,6 +252,10 @@ function readNumber(message: unknown, key: string): number | null {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
 }
 
 function clip(text: string): string {

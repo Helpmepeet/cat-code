@@ -194,7 +194,7 @@ test('normal startup constructs a real runtime-backed controller without startin
   expect(permissions).not.toBeNull()
   expect(goals?.getSnapshot()).toBeNull()
   expect(memory).not.toBeNull()
-  expect(tasks?.getSnapshot()).toEqual({ items: [] })
+  expect(tasks?.getSnapshot()).toEqual({ items: [], subagents: [] })
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
