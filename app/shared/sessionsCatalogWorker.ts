@@ -89,9 +89,21 @@ export function parseSessionsCatalogSnapshot(
   value: unknown,
 ): SessionsCatalogSnapshot | null {
   if (!isRecord(value)) return null
-  if (!hasExactKeys(value, ['entries', 'truncated', 'notes'])) return null
+  // `capturedAtMs` is additive (the terminal-rename title-precedence fix): accept
+  // the record with OR without it, but no OTHER key — the closed-vocabulary gate
+  // stands. Absent ⇒ 0 (unknown age ⇒ never outranks a registry title).
+  if (
+    !hasExactKeys(value, ['entries', 'truncated', 'notes', 'capturedAtMs']) &&
+    !hasExactKeys(value, ['entries', 'truncated', 'notes'])
+  ) {
+    return null
+  }
   if (!Array.isArray(value.entries)) return null
   if (typeof value.truncated !== 'boolean') return null
+  if (value.capturedAtMs !== undefined && typeof value.capturedAtMs !== 'number') {
+    return null
+  }
+  const capturedAtMs = value.capturedAtMs === undefined ? 0 : value.capturedAtMs
   if (
     !Array.isArray(value.notes) ||
     !value.notes.every(note => typeof note === 'string')
@@ -104,7 +116,7 @@ export function parseSessionsCatalogSnapshot(
     if (!entry) return null
     entries.push(entry)
   }
-  return { entries, truncated: value.truncated, notes: value.notes }
+  return { entries, truncated: value.truncated, notes: value.notes, capturedAtMs }
 }
 
 function parseEntry(value: unknown): SessionCatalogEntry | null {
@@ -117,6 +129,14 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (value.cwdExists !== undefined && typeof value.cwdExists !== 'boolean') return null
   const cwdExists = value.cwdExists === undefined ? true : value.cwdExists
   if (!isStringOrNull(value.title)) return null
+  // Additive (terminal-rename title precedence): absent ⇒ null, i.e. this entry
+  // can never outrank the registry title — the pre-fix behavior. A PRESENT
+  // non-string/non-null is malformed child output → fail the whole record.
+  if (value.transcriptTitle !== undefined && !isStringOrNull(value.transcriptTitle)) {
+    return null
+  }
+  const transcriptTitle =
+    value.transcriptTitle === undefined ? null : value.transcriptTitle
   if (typeof value.modifiedAtMs !== 'number') return null
   if (typeof value.createdAtMs !== 'number') return null
   if (typeof value.messageCount !== 'number') return null
@@ -138,6 +158,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
     cwd: value.cwd,
     cwdExists,
     title: value.title,
+    transcriptTitle,
     modifiedAtMs: value.modifiedAtMs,
     createdAtMs: value.createdAtMs,
     messageCount: value.messageCount,

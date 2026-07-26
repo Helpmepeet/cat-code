@@ -18,14 +18,17 @@ import {
   selectRecentWorkspaces,
   selectSessionsCatalog,
   sortSessionRows,
+  withResolvedTitle,
   type MergedSessionRow,
 } from './sessionsCatalogState.js'
+import { tabLabel } from './TabBar.js'
 
 function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): SessionCatalogEntry {
   return {
     cwd: '/w/proj',
     cwdExists: true,
     title: null,
+    transcriptTitle: null,
     modifiedAtMs: 1000,
     createdAtMs: 500,
     messageCount: 0,
@@ -39,8 +42,11 @@ function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): S
   }
 }
 
-function snapshot(entries: SessionCatalogEntry[]): SessionsCatalogSnapshot {
-  return { entries, truncated: false, notes: [] }
+function snapshot(
+  entries: SessionCatalogEntry[],
+  capturedAtMs = 5000,
+): SessionsCatalogSnapshot {
+  return { entries, truncated: false, notes: [], capturedAtMs }
 }
 
 function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string }): SessionDescriptor {
@@ -48,6 +54,7 @@ function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string
     engineSessionId: null,
     cwd: '/w/proj',
     title: null,
+    titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
     createdAt: 100,
@@ -169,6 +176,205 @@ describe('selectMergedSessionRows', () => {
     )
     expect(rows[0]?.title).toBe('AI generated title')
     expect(rows[0]?.displayLabel).toBe('AI generated title')
+  })
+
+  /**
+   * The terminal-rename fix. A `/rename` in the CLI writes ONLY the engine
+   * transcript (`src/commands/rename/rename.ts:57` → `saveCustomTitle`); the app's
+   * registry row is untouched and nothing re-reads the title on attach
+   * (`app/sidecar/sidecarServer.ts:2484`). Before the fix `pickTitle` returned the
+   * registry title whenever it was non-empty, so the new name was invisible
+   * forever on any row the app had ever opened — while a never-opened history row
+   * (no registry title) showed it fine. Both halves are pinned here.
+   */
+  describe('title precedence — registry vs engine transcript (terminal /rename)', () => {
+    test('a transcript title read AFTER the app recorded its own outranks it', () => {
+      const rows = selectMergedSessionRows(
+        [
+          descriptor({
+            appSessionId: 'app-1',
+            engineSessionId: 'eng-1',
+            title: 'Opened from history',
+            titleUpdatedAt: 1_000,
+          }),
+        ],
+        // Enumeration started at 2_000 — after the app's write — so this read of
+        // the transcript provably saw the terminal rename.
+        snapshot(
+          [
+            entry({
+              sessionId: 'eng-1',
+              title: 'Renamed in the terminal',
+              transcriptTitle: 'Renamed in the terminal',
+            }),
+          ],
+          2_000,
+        ),
+      )
+      expect(rows[0]?.title).toBe('Renamed in the terminal')
+      expect(rows[0]?.displayLabel).toBe('Renamed in the terminal')
+    })
+
+    test('a desktop rename is NOT reverted by an older catalog snapshot', () => {
+      // The desktop rename verb writes BOTH sides (`sessionActionsDomain.ts:76` +
+      // broadcastSessionTitle → host.setTitle), but the catalog only re-enumerates
+      // on its timer. The in-hand snapshot still carries the pre-rename title;
+      // preferring the transcript unconditionally would flash the old name back.
+      const rows = selectMergedSessionRows(
+        [
+          descriptor({
+            appSessionId: 'app-1',
+            engineSessionId: 'eng-1',
+            title: 'Renamed in the app',
+            titleUpdatedAt: 9_000,
+          }),
+        ],
+        snapshot(
+          [
+            entry({
+              sessionId: 'eng-1',
+              title: 'Stale name',
+              transcriptTitle: 'Stale name',
+            }),
+          ],
+          2_000,
+        ),
+      )
+      expect(rows[0]?.title).toBe('Renamed in the app')
+    })
+
+    test('only a RECORDED transcript title outranks — the display cascade cannot', () => {
+      // `entry.title` falls through to the summary / first prompt / cwd basename
+      // (`sessionsCatalogDomain.ts` resolveEntryTitle). Letting that outrank would
+      // replace a real app title with prompt text as soon as the `ai-title` entry
+      // scrolled out of the bounded read windows.
+      const rows = selectMergedSessionRows(
+        [
+          descriptor({
+            appSessionId: 'app-1',
+            engineSessionId: 'eng-1',
+            title: 'AI generated title',
+            titleUpdatedAt: 1_000,
+          }),
+        ],
+        snapshot(
+          [
+            entry({
+              sessionId: 'eng-1',
+              title: 'please fix the parser bug in',
+              transcriptTitle: null,
+            }),
+          ],
+          9_000,
+        ),
+      )
+      expect(rows[0]?.title).toBe('AI generated title')
+    })
+
+    test('a snapshot of unknown age (capturedAtMs 0 — a pre-field cache) never outranks', () => {
+      const rows = selectMergedSessionRows(
+        [
+          descriptor({
+            appSessionId: 'app-1',
+            engineSessionId: 'eng-1',
+            title: 'Registry name',
+            titleUpdatedAt: null,
+          }),
+        ],
+        snapshot(
+          [
+            entry({
+              sessionId: 'eng-1',
+              title: 'Terminal name',
+              transcriptTitle: 'Terminal name',
+            }),
+          ],
+          0,
+        ),
+      )
+      expect(rows[0]?.title).toBe('Registry name')
+    })
+
+    test('a row that never recorded a title yields to any real transcript title', () => {
+      // Rows persisted before `titleUpdatedAt` existed read as null ⇒ 0, so a
+      // rename made before this shipped still surfaces on the first live run.
+      const rows = selectMergedSessionRows(
+        [
+          descriptor({
+            appSessionId: 'app-1',
+            engineSessionId: 'eng-1',
+            title: 'Seeded at open',
+            titleUpdatedAt: null,
+          }),
+        ],
+        snapshot(
+          [
+            entry({
+              sessionId: 'eng-1',
+              title: 'Terminal name',
+              transcriptTitle: 'Terminal name',
+            }),
+          ],
+          1,
+        ),
+      )
+      expect(rows[0]?.title).toBe('Terminal name')
+    })
+
+    test('the never-opened history row keeps showing the transcript title', () => {
+      // The half that always worked (no registry row ⇒ no registry title). Pinned
+      // so the fix cannot regress it.
+      const rows = selectMergedSessionRows(
+        [],
+        snapshot(
+          [
+            entry({
+              sessionId: 'hist-1',
+              title: 'Renamed in the terminal',
+              transcriptTitle: 'Renamed in the terminal',
+            }),
+          ],
+          0,
+        ),
+      )
+      expect(rows[0]?.title).toBe('Renamed in the terminal')
+    })
+  })
+
+  describe('withResolvedTitle (the TabBar half — one precedence rule)', () => {
+    test('the tab descriptor picks up a newer transcript title', () => {
+      const resolved = withResolvedTitle(
+        descriptor({
+          appSessionId: 'app-1',
+          engineSessionId: 'eng-1',
+          title: 'Opened from history',
+          titleUpdatedAt: 1_000,
+        }),
+        snapshot(
+          [
+            entry({
+              sessionId: 'eng-1',
+              title: 'Renamed in the terminal',
+              transcriptTitle: 'Renamed in the terminal',
+            }),
+          ],
+          2_000,
+        ),
+      )
+      expect(tabLabel(resolved)).toBe('Renamed in the terminal')
+    })
+
+    test('an unmatched / pre-ready descriptor is returned untouched (identity)', () => {
+      const pending = descriptor({ appSessionId: 'app-1', engineSessionId: null })
+      expect(withResolvedTitle(pending, snapshot([entry({ sessionId: 'eng-1' })]))).toBe(
+        pending,
+      )
+      const unmatched = descriptor({ appSessionId: 'app-2', engineSessionId: 'eng-9' })
+      expect(withResolvedTitle(unmatched, snapshot([entry({ sessionId: 'eng-1' })]))).toBe(
+        unmatched,
+      )
+      expect(withResolvedTitle(unmatched, null)).toBe(unmatched)
+    })
   })
 
   test('history-only sessions (no registry row) are included but not openable', () => {

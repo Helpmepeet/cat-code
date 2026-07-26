@@ -723,6 +723,9 @@ export class Host implements HostApi {
       engineSessionId: row?.engineSessionId ?? null,
       cwd: row?.cwd ?? '',
       title: row?.title ?? null,
+      // null ⇒ the app never recorded a title intent for this row, so the
+      // renderer lets a real transcript title win (the terminal-rename fix).
+      titleUpdatedAt: row?.titleUpdatedAt ?? null,
       status,
       restorable: this.isRestorable(row, liveStatus),
       createdAt: row?.createdAt ?? 0,

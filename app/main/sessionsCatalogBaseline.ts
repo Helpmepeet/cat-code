@@ -65,6 +65,13 @@ function parseSnapshot(value: unknown): SessionsCatalogSnapshot | null {
   if (!isRecord(value)) return null
   if (!Array.isArray(value.entries)) return null
   if (typeof value.truncated !== 'boolean') return null
+  // Additive (terminal-rename title precedence): a cache file written before the
+  // field existed lacks it → 0, an unknown capture age that can never outrank a
+  // registry title. A PRESENT non-number is tamper/drift → fail closed.
+  if (value.capturedAtMs !== undefined && typeof value.capturedAtMs !== 'number') {
+    return null
+  }
+  const capturedAtMs = value.capturedAtMs === undefined ? 0 : value.capturedAtMs
   if (!Array.isArray(value.notes) || !value.notes.every(n => typeof n === 'string')) {
     return null
   }
@@ -74,7 +81,7 @@ function parseSnapshot(value: unknown): SessionsCatalogSnapshot | null {
     if (!entry) return null
     entries.push(entry)
   }
-  return { entries, truncated: value.truncated, notes: value.notes }
+  return { entries, truncated: value.truncated, notes: value.notes, capturedAtMs }
 }
 
 function parseEntry(value: unknown): SessionCatalogEntry | null {
@@ -87,6 +94,13 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (value.cwdExists !== undefined && typeof value.cwdExists !== 'boolean') return null
   const cwdExists = value.cwdExists === undefined ? true : value.cwdExists
   if (!isStringOrNull(value.title)) return null
+  // Additive (terminal-rename title precedence): an old cache entry lacks it →
+  // null, so it can never outrank the registry title (the pre-fix behavior).
+  if (value.transcriptTitle !== undefined && !isStringOrNull(value.transcriptTitle)) {
+    return null
+  }
+  const transcriptTitle =
+    value.transcriptTitle === undefined ? null : value.transcriptTitle
   if (typeof value.modifiedAtMs !== 'number') return null
   if (typeof value.createdAtMs !== 'number') return null
   if (typeof value.messageCount !== 'number') return null
@@ -106,6 +120,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
     cwd: value.cwd,
     cwdExists,
     title: value.title,
+    transcriptTitle,
     modifiedAtMs: value.modifiedAtMs,
     createdAtMs: value.createdAtMs,
     messageCount: value.messageCount,

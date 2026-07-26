@@ -119,6 +119,50 @@ describe('mapLogOptionToCatalogEntry', () => {
     })
   })
 
+  /**
+   * The terminal-rename fix needs a title field that is NOT the B2 cascade above:
+   * only a title the engine actually recorded (`custom-title` > `ai-title`, folded
+   * into `LogOption.customTitle` at `src/utils/sessionStorage.ts:5262`) may outrank
+   * the host registry's own title.
+   */
+  describe('transcriptTitle — the recorded title, never the display cascade', () => {
+    test('carries the recorded title while `title` falls through the cascade', () => {
+      const recorded = mapLogOptionToCatalogEntry(
+        makeLog({ sessionId: 's', customTitle: 'Renamed in the terminal', firstPrompt: 'hi' }),
+      )
+      expect(recorded?.transcriptTitle).toBe('Renamed in the terminal')
+      expect(recorded?.title).toBe('Renamed in the terminal')
+
+      // No recorded title: `title` still labels the row from the summary / first
+      // prompt / basename, but `transcriptTitle` stays null so none of those
+      // fallbacks can ever overwrite an app-set title.
+      const summaryOnly = mapLogOptionToCatalogEntry(
+        makeLog({ sessionId: 's', summary: 'A summary', firstPrompt: 'hi' }),
+      )
+      expect(summaryOnly?.transcriptTitle).toBeNull()
+      expect(summaryOnly?.title).toBe('A summary')
+
+      const promptOnly = mapLogOptionToCatalogEntry(
+        makeLog({ sessionId: 's', firstPrompt: 'please fix the parser' }),
+      )
+      expect(promptOnly?.transcriptTitle).toBeNull()
+      expect(promptOnly?.title).toBe('please fix the parser')
+
+      const basenameOnly = mapLogOptionToCatalogEntry(
+        makeLog({ sessionId: 's', firstPrompt: '', projectPath: '/Users/me/my-proj' }),
+      )
+      expect(basenameOnly?.transcriptTitle).toBeNull()
+      expect(basenameOnly?.title).toBe('my-proj')
+    })
+
+    test('a whitespace-only recorded title is null, not blank', () => {
+      expect(
+        mapLogOptionToCatalogEntry(makeLog({ sessionId: 's', customTitle: '   ' }))
+          ?.transcriptTitle,
+      ).toBeNull()
+    })
+  })
+
   describe('B3 / MAJOR-1 — cwd resolution when the transcript recorded no projectPath', () => {
     test('no projectPath and no reconciliation sibling ⇒ empty cwd, never the sanitized storage dir', () => {
       const entry = mapLogOptionToCatalogEntry(
@@ -206,6 +250,17 @@ describe('buildSessionsCatalogSnapshot', () => {
     expect(snapshot.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
     expect(snapshot.truncated).toBe(true)
     expect(snapshot.notes.length).toBeGreaterThan(0)
+  })
+
+  test('carries the injected capturedAtMs, and defaults to a real clock reading', () => {
+    // The renderer compares this against the registry's `titleUpdatedAt` to decide
+    // which title is the newer intent, so it must survive the build unchanged.
+    expect(
+      buildSessionsCatalogSnapshot(result([makeLog({ sessionId: 'a' })]), 1234).capturedAtMs,
+    ).toBe(1234)
+    const before = Date.now()
+    const defaulted = buildSessionsCatalogSnapshot(result([makeLog({ sessionId: 'a' })]))
+    expect(defaulted.capturedAtMs).toBeGreaterThanOrEqual(before)
   })
 
   test('not truncated when every discovered session is enriched', () => {
@@ -354,5 +409,17 @@ describe('annotateCwdExistence (bug-sweep #1 — dead-cwd downgrade)', () => {
     expect(snapshot.entries[0]?.cwdExists).toBe(true) // untouched
     expect(annotated.entries[0]?.cwdExists).toBe(false) // downgraded copy
     expect(annotated).not.toBe(snapshot)
+  })
+
+  test('carries capturedAtMs + transcriptTitle through the async pass', async () => {
+    // The pass rebuilds the snapshot, so a field it forgot to spread would silently
+    // become "unknown age" and disable the whole title-precedence rule.
+    const snapshot = buildSessionsCatalogSnapshot(
+      result([makeLog({ sessionId: 'a', projectPath: '/w/x', customTitle: 'Recorded' })]),
+      4321,
+    )
+    const annotated = await annotateCwdExistence(snapshot, async () => true)
+    expect(annotated.capturedAtMs).toBe(4321)
+    expect(annotated.entries[0]?.transcriptTitle).toBe('Recorded')
   })
 })

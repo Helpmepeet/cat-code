@@ -1926,8 +1926,29 @@ export type SessionCatalogEntry = {
    * boundaries (assume-exists → never wrongly hide).
    */
   cwdExists: boolean
-  /** Winning display title (custom-title > ai-title), else null (→ fallback). */
+  /**
+   * Winning DISPLAY title — a cascade, not a recorded name: recorded title >
+   * summary > first prompt > cwd basename (`sessionsCatalogDomain.ts`
+   * `resolveEntryTitle`, the B2 "never emit an unlabeled row" rule). null only
+   * when nothing at all is available.
+   */
   title: string | null
+  /**
+   * The title actually RECORDED IN THE TRANSCRIPT — `custom-title` (a user
+   * rename) or, failing that, `ai-title` (`src/utils/sessionStorage.ts:5262`) —
+   * else null when the session never earned one.
+   *
+   * Deliberately separate from `title` above: only a real recorded title may
+   * outrank the host registry's own title (`sessionsCatalogState.ts` `pickTitle`,
+   * the terminal-rename fix). Letting the display cascade do it would overwrite an
+   * app-set title with first-prompt text the moment the `ai-title` entry scrolled
+   * out of the bounded head/tail read windows (`sessionStorage.ts:3048-3052`).
+   *
+   * Additive + OUTBOUND-only (no new inbound vocabulary). Older cached entries
+   * lacking it read as null at the parse boundaries → the registry title keeps
+   * winning, i.e. exactly the pre-fix behavior.
+   */
+  transcriptTitle: string | null
   /** Transcript file mtime (recency sort + date buckets). */
   modifiedAtMs: number
   /** Session creation time. */
@@ -1957,6 +1978,21 @@ export type SessionsCatalogSnapshot = {
   /** True when the enumeration hit `SESSIONS_CATALOG_LIMIT` (older rows dropped). */
   truncated: boolean
   notes: string[]
+  /**
+   * Wall-clock at which this enumeration STARTED — the recency half of the
+   * title-precedence rule (`sessionsCatalogState.ts` `pickTitle`). A transcript
+   * title may outrank the registry's title only when the snapshot was captured
+   * AFTER the registry's `titleUpdatedAt` (`app/shared/hostApi.ts`), so a terminal
+   * `/rename` — which writes the transcript only (`src/commands/rename/rename.ts:57`)
+   * — surfaces within one refresh, while a desktop rename (which writes BOTH the
+   * transcript and the registry) is never reverted by an older snapshot.
+   *
+   * Stamped at the START of enumeration, never the end: every transcript read then
+   * happened at or after it, so "captured after the registry stamp" implies the
+   * read really did see the newer title. 0 on a cache file or worker record
+   * written before the field existed — unknown age ⇒ never overrides (fail safe).
+   */
+  capturedAtMs: number
 }
 
 /**

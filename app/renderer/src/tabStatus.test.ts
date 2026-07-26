@@ -11,6 +11,7 @@ function descriptor(
     engineSessionId: 'engine-a',
     cwd: '/tmp/a',
     title: null,
+    titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
     createdAt: 0,

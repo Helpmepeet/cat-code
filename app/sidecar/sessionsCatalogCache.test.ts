@@ -28,6 +28,7 @@ const snapshot: SessionsCatalogSnapshot = {
       cwd: '/Users/me/proj',
       cwdExists: true,
       title: 'Fix the parser',
+      transcriptTitle: 'Fix the parser',
       modifiedAtMs: 1000,
       createdAtMs: 500,
       messageCount: 3,
@@ -41,6 +42,7 @@ const snapshot: SessionsCatalogSnapshot = {
   ],
   truncated: false,
   notes: ['All discovered sessions are enriched.'],
+  capturedAtMs: 1700,
 }
 
 describe('writeSessionsCatalogCache', () => {

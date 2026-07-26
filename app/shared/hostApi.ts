@@ -72,6 +72,18 @@ export type SessionDescriptor = {
   cwd: string
   title: string | null
   /**
+   * Wall-clock at which `title` last CHANGED, or null when it never has (also the
+   * value for rows persisted before the field existed). Read together with the
+   * sessions catalog's `capturedAtMs` (`protocol.ts`) to decide whether the app's
+   * own title or the engine transcript's recorded title is the NEWER intent
+   * (`app/renderer/src/sessionsCatalogState.ts` `pickTitle`) — without it a
+   * terminal `/rename`, which writes only the transcript, could never reach a row
+   * the app had already opened. Additive control-plane descriptor field — not a
+   * wire frame, so no `protocol.ts` version bump (the `lastMessageSentAt`
+   * precedent below).
+   */
+  titleUpdatedAt: number | null
+  /**
    * Live process/transport view. `restorable` is set when no process is live.
    * For a DEAD session the status carries the row's shutdown marking — a
    * crash-marked row (sidecar died without a graceful close, REGISTRY §4.4)

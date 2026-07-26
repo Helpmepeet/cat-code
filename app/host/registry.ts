@@ -98,6 +98,22 @@ export type RegistrySession = {
   cwd: string
   /** [D] optional app-owned display name. */
   title?: string
+  /**
+   * [D] Wall-clock at which `title` last CHANGED, or absent when it never has
+   * (including rows written before this field existed). The recency half of the
+   * title-precedence rule the renderer applies (`app/renderer/src/sessionsCatalogState.ts`
+   * `pickTitle`): a title recorded in the engine transcript outranks this row's
+   * title only when the sessions-catalog snapshot carrying it was captured LATER,
+   * so a terminal `/rename` (transcript-only — `src/commands/rename/rename.ts:57`)
+   * reaches the desktop while a desktop rename, which writes both sides, is never
+   * reverted by an older snapshot.
+   *
+   * Only a real change of intent stamps it. A restore replays the row's OWN title
+   * back through `upsertOnSpawn` (`app/host/host.ts:332`); re-stamping there would
+   * let an untouched title float ahead of a genuinely newer transcript title on
+   * every reopen.
+   */
+  titleUpdatedAt?: number
   /** [D] */
   createdAt: number
   /** [D] recency for restore-ordering / reaping. */
@@ -644,7 +660,13 @@ export class SessionRegistry {
     const existing = this.find(input.appSessionId)
     if (existing) {
       existing.cwd = input.cwd
-      if (input.title !== undefined) existing.title = input.title
+      if (input.title !== undefined) {
+        // Stamp ONLY a real change of intent: restore feeds the row's own title
+        // straight back in (`host.ts:332`), and re-stamping that would make an
+        // untouched title outrank a newer transcript rename on every reopen.
+        if (input.title !== existing.title) existing.titleUpdatedAt = now
+        existing.title = input.title
+      }
       existing.enginePid = input.enginePid
       existing.socketPath = input.socketPath
       existing.lastAttachedAt = now
@@ -655,7 +677,9 @@ export class SessionRegistry {
         appSessionId: input.appSessionId,
         engineSessionId: null,
         cwd: input.cwd,
-        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.title !== undefined
+          ? { title: input.title, titleUpdatedAt: now }
+          : {}),
         createdAt: now,
         lastAttachedAt: now,
         // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
@@ -705,7 +729,11 @@ export class SessionRegistry {
     await this.persist()
   }
 
-  /** Update the app-owned title on rename (§4.5). */
+  /**
+   * Update the app-owned title on rename (§4.5), stamping `titleUpdatedAt` with
+   * the moment this intent was recorded so the renderer can tell an app rename
+   * from a newer engine-transcript rename (see `titleUpdatedAt` above).
+   */
   async setTitle(appSessionId: string, title: string): Promise<void> {
     const row = this.find(appSessionId)
     if (!row) {
@@ -713,6 +741,7 @@ export class SessionRegistry {
       return
     }
     row.title = title
+    row.titleUpdatedAt = Date.now()
     await this.persist()
   }
 
@@ -952,6 +981,12 @@ function validateRow(candidate: unknown): RegistrySession | null {
     shutdown,
   }
   if (typeof candidate.title === 'string') row.title = candidate.title
+  // Absent on rows written before the field existed → "never stamped", which the
+  // renderer reads as 0, so a real transcript title wins and a terminal rename
+  // made before this shipped still surfaces.
+  if (typeof candidate.titleUpdatedAt === 'number') {
+    row.titleUpdatedAt = candidate.titleUpdatedAt
+  }
   if (typeof candidate.enginePid === 'number') row.enginePid = candidate.enginePid
   if (typeof candidate.socketPath === 'string') row.socketPath = candidate.socketPath
   if (typeof candidate.restartCount === 'number') row.restartCount = candidate.restartCount

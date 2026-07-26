@@ -187,7 +187,7 @@ export function selectMergedSessionRows(
       ? byId.get(descriptor.engineSessionId)
       : undefined
     if (descriptor.engineSessionId) claimed.add(descriptor.engineSessionId)
-    const title = pickTitle(descriptor.title, entry?.title ?? null)
+    const title = pickTitle(descriptor, entry ?? null, catalog?.capturedAtMs ?? 0)
     rows.push({
       sessionId: key,
       appSessionId: descriptor.appSessionId,
@@ -247,10 +247,79 @@ export function selectMergedSessionRows(
   return rows
 }
 
-function pickTitle(registryTitle: string | null, catalogTitle: string | null): string | null {
+/**
+ * Title precedence — NEWEST INTENT WINS, and only a real recorded title counts.
+ *
+ * Two writers name a session and they do not see each other:
+ *  - the app, whose name lives on the host registry row (`descriptor.title`) —
+ *    written by the desktop rename verb, by the AI title-rider, and by
+ *    open-from-history seeding (`app/main/openHistorySession.ts:117`); and
+ *  - the engine transcript, written by the terminal `/rename`
+ *    (`src/commands/rename/rename.ts:57` → `saveCustomTitle`) and by
+ *    `saveAiGeneratedTitle`, surfaced here as `entry.transcriptTitle`.
+ *
+ * Preferring the registry unconditionally (the pre-fix rule) made a terminal
+ * rename permanently invisible on any row the app had ever opened: opening a row
+ * gives it a registry title, and nothing re-reads the transcript's name afterwards
+ * (`app/sidecar/sidecarServer.ts:2484` — the title frame is deliberately not part
+ * of attach/replay). Preferring the transcript unconditionally is equally wrong in
+ * the other direction: the catalog is a periodic global enumeration, so a desktop
+ * rename would visibly revert to the old name until the next run.
+ *
+ * So compare the two timestamps that actually exist: `descriptor.titleUpdatedAt`
+ * (when the app last recorded a title) against `catalog.capturedAtMs` (when this
+ * enumeration started, hence a lower bound on when it read the transcript). A
+ * transcript title wins only when it was read after the app's own write. A desktop
+ * rename writes BOTH sides (`sessionActionsDomain.ts:76` + `broadcastSessionTitle`
+ * → `host.setTitle`), so once the catalog does catch up it carries the same
+ * string — the rule never flickers.
+ *
+ * `entry.transcriptTitle`, not `entry.title`: the latter is a display cascade that
+ * falls through to the summary, the first prompt and the cwd basename, so letting
+ * it outrank the registry would replace a real app title with prompt text.
+ *
+ * A history-only row has no descriptor and never reaches here — it keeps reading
+ * the catalog title directly, which is why a terminal rename ALWAYS showed on
+ * never-opened rows.
+ */
+function pickTitle(
+  descriptor: Pick<SessionDescriptor, 'title' | 'titleUpdatedAt'>,
+  entry: Pick<SessionCatalogEntry, 'title' | 'transcriptTitle'> | null,
+  catalogCapturedAtMs: number,
+): string | null {
+  const registryTitle = descriptor.title
+  const transcriptTitle = entry?.transcriptTitle ?? null
+  if (
+    transcriptTitle &&
+    transcriptTitle.trim().length > 0 &&
+    // A snapshot of unknown age (0 — a pre-field cache file) never outranks.
+    catalogCapturedAtMs > (descriptor.titleUpdatedAt ?? 0)
+  ) {
+    return transcriptTitle
+  }
   if (registryTitle && registryTitle.trim().length > 0) return registryTitle
+  const catalogTitle = entry?.title ?? null
   if (catalogTitle && catalogTitle.trim().length > 0) return catalogTitle
   return null
+}
+
+/**
+ * The same resolution for surfaces that render a lone descriptor rather than a
+ * merged row (the TabBar via `tabLabel`). Returns a descriptor whose `title` is
+ * the resolved winner, so one precedence rule serves the tab, the sidebar and the
+ * Sessions page — the `resolveSessionLabel`/`tabLabel` lockstep note above.
+ */
+export function withResolvedTitle(
+  descriptor: SessionDescriptor,
+  catalog: SessionsCatalogSnapshot | null,
+): SessionDescriptor {
+  if (!descriptor.engineSessionId) return descriptor
+  const entry = catalog?.entries.find(
+    candidate => candidate.sessionId === descriptor.engineSessionId,
+  )
+  if (!entry) return descriptor
+  const title = pickTitle(descriptor, entry, catalog?.capturedAtMs ?? 0)
+  return title === descriptor.title ? descriptor : { ...descriptor, title }
 }
 
 /* ------------------------------------------------------------------------- *

@@ -68,6 +68,10 @@ export const SESSIONS_CATALOG_ENRICH_LIMIT = 600
  * `null` — the caller keeps its last good snapshot (display = degrade gracefully).
  */
 export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapshot | null> {
+  // Stamped BEFORE the read, not after (`protocol.ts` `capturedAtMs`): every
+  // transcript this run reads is read at or after this instant, so a snapshot that
+  // is "newer than the registry's titleUpdatedAt" provably saw the newer title.
+  const capturedAtMs = Date.now()
   try {
     const result = await loadAllProjectsMessageLogsProgressive(
       SESSIONS_CATALOG_STAT_LIMIT,
@@ -76,7 +80,9 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
     // The pure builder is fs-free (so it stays unit-testable); the existence
     // stat is the async second pass, done here in the engine-graph worker plane
     // (the host plane could not — `registry.ts:19`).
-    return await annotateCwdExistence(buildSessionsCatalogSnapshot(result))
+    return await annotateCwdExistence(
+      buildSessionsCatalogSnapshot(result, capturedAtMs),
+    )
   } catch {
     // A read failure degrades to "no catalog" — the page shows a load state,
     // never a crash (display = degrade gracefully).
@@ -131,7 +137,12 @@ async function defaultIsExistingDir(cwd: string): Promise<boolean> {
   }
 }
 
-export function buildSessionsCatalogSnapshot(result: SessionLogResult): SessionsCatalogSnapshot {
+export function buildSessionsCatalogSnapshot(
+  result: SessionLogResult,
+  // Enumeration start (`protocol.ts` `capturedAtMs`). Defaulted so the pure
+  // builder stays callable standalone, and injectable so tests pin it.
+  capturedAtMs: number = Date.now(),
+): SessionsCatalogSnapshot {
   // MAJOR-1 — reconcile workspace grouping before mapping. A storage dir
   // (`…/projects/-Users-me-proj`) is the sanitized form of exactly ONE real cwd,
   // but only ~60% of sessions recorded that cwd (`projectPath`). Learn each
@@ -158,7 +169,7 @@ export function buildSessionsCatalogSnapshot(result: SessionLogResult): Sessions
       ? `Only the ${entries.length} most-recent sessions are enriched; older sessions are omitted.`
       : 'All discovered sessions are enriched.',
   ]
-  return { entries, truncated, notes }
+  return { entries, truncated, notes, capturedAtMs }
 }
 
 export function mapLogOptionToCatalogEntry(
@@ -188,6 +199,11 @@ export function mapLogOptionToCatalogEntry(
     // that pass therefore never hides a row — the pre-fix behavior.
     cwdExists: true,
     title: resolveEntryTitle(log, cwd),
+    // The RECORDED title only (`custom-title` > `ai-title` — the loader folds both
+    // into `customTitle`, `sessionStorage.ts:5262`), never the display cascade's
+    // summary/first-prompt/basename fallbacks. This is the one catalog field
+    // allowed to outrank the host registry's title (`protocol.ts` doc).
+    transcriptTitle: nonEmpty(log.customTitle),
     modifiedAtMs: toMs(log.modified),
     createdAtMs: toMs(log.created),
     messageCount: log.messageCount ?? 0,

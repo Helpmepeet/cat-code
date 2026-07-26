@@ -18,6 +18,7 @@ function catalog(ids: string[]): SessionsCatalogSnapshot {
       cwd: '/w/proj',
       cwdExists: true,
       title: id,
+      transcriptTitle: null,
       modifiedAtMs: 1,
       createdAtMs: 1,
       messageCount: 0,
@@ -30,6 +31,7 @@ function catalog(ids: string[]): SessionsCatalogSnapshot {
     })),
     truncated: false,
     notes: [],
+    capturedAtMs: 1,
   }
 }
 

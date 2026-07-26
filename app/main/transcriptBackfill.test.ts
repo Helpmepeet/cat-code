@@ -36,6 +36,7 @@ function descriptor(restorable: boolean): SessionDescriptor {
     engineSessionId: ENGINE_ID,
     cwd: '/tmp',
     title: null,
+    titleUpdatedAt: null,
     status: restorable ? 'exited' : 'ready',
     restorable,
     createdAt: 1,

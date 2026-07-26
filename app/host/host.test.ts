@@ -456,6 +456,27 @@ test('setTitle — persists on the row, surfaces the descriptor, caps length, no
   ).resolves.toBeUndefined()
 })
 
+test('setTitle surfaces titleUpdatedAt on the descriptor (the renderer title-precedence input)', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  const find = () =>
+    h.host.listSessions().find(s => s.appSessionId === appSessionId) ?? null
+
+  // A session created without a title recorded no intent — null, so the renderer
+  // lets any real transcript title win.
+  expect(created.value.titleUpdatedAt).toBeNull()
+  expect(find()?.titleUpdatedAt).toBeNull()
+
+  const before = Date.now()
+  await h.host.setTitle(appSessionId, 'Fix login button')
+  const stamped = find()?.titleUpdatedAt
+  expect(typeof stamped).toBe('number')
+  expect(stamped!).toBeGreaterThanOrEqual(before)
+})
+
 test('createSession rejects a cwd that is not an existing directory (invalid_cwd)', async () => {
   const h = makeHost()
   const result = await h.host.createSession({ cwd: '/no/such/dir' })

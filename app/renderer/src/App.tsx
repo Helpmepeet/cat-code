@@ -226,6 +226,7 @@ import {
   selectMergedSessionRows,
   selectRecentWorkspaces,
   selectSessionsCatalog,
+  withResolvedTitle,
 } from './sessionsCatalogState.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
@@ -788,13 +789,22 @@ export function App() {
 
   const activeConnection = selectConnection(connection, activeSessionId)
 
+  // P4-6a — the freshest sessions catalog. Read BEFORE the tab models because the
+  // tab label resolves its title against it too (`withResolvedTitle`), so the tab,
+  // the sidebar and the Sessions page all apply one title-precedence rule.
+  const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog)
+
   // Build one tab model per pane session, fusing the host descriptor with the
   // per-session connection view + pending-permission count (the background
   // attention badge). Every tab is computed from its OWN sessionId slice, so a
   // background tab's status/badge is correct without it being active.
   const tabs: TabModel[] = useMemo(
     () =>
-      selectPaneSessions(shell).map(descriptor => {
+      selectPaneSessions(shell).map(rawDescriptor => {
+        // A terminal `/rename` writes only the engine transcript, so the registry
+        // title the descriptor carries can be stale — resolve it the same way the
+        // merged sidebar rows do (`sessionsCatalogState.ts` `pickTitle`).
+        const descriptor = withResolvedTitle(rawDescriptor, sessionCatalogSnapshot)
         const sessionId = descriptor.appSessionId
         const previewOnly =
           shell.previews[sessionId] === true && shell.tabs[sessionId] !== true
@@ -818,7 +828,7 @@ export function App() {
               }),
         }
       }),
-    [shell, connection, permissions, activeSessionId],
+    [shell, connection, permissions, activeSessionId, sessionCatalogSnapshot],
   )
   const paneSessionIds = useMemo(
     () => tabs.map(tab => tab.descriptor.appSessionId),
@@ -843,7 +853,6 @@ export function App() {
   // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
   // the sidecar engine-history snapshot (rich metadata), via the shared
   // selector (reused by P4-17 Welcome recents, D5).
-  const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog)
   const sessionCatalogRows = useMemo(
     () => selectMergedSessionRows(shellDescriptors, sessionCatalogSnapshot),
     [shellDescriptors, sessionCatalogSnapshot],
