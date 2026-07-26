@@ -1,0 +1,180 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import type { SettingsJson } from '../utils/settings/types.js'
+
+let userSettings: SettingsJson | null = null
+let updateCalls: Array<Partial<SettingsJson>> = []
+let mainLoopOverride: string | undefined
+let mainLoopOverrideWrites: Array<string | undefined> = []
+
+const actualSettings = await import('../utils/settings/settings.js')
+mock.module('../utils/settings/settings.js', () => ({
+  ...actualSettings,
+  getSettingsForSource: () => userSettings,
+  updateSettingsForSource: (
+    _source: string,
+    patch: Partial<SettingsJson>,
+  ) => {
+    updateCalls.push(patch)
+    if (userSettings) {
+      const mergedOverrides = patch.modelOverrides
+        ? Object.fromEntries(
+            Object.entries({
+              ...userSettings.modelOverrides,
+              ...patch.modelOverrides,
+            }).filter(([, value]) => value !== undefined),
+          )
+        : userSettings.modelOverrides
+      userSettings = {
+        ...userSettings,
+        ...patch,
+        ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
+      }
+    }
+    return { error: null }
+  },
+}))
+
+const actualState = await import('../bootstrap/state.js')
+mock.module('../bootstrap/state.js', () => ({
+  ...actualState,
+  getMainLoopModelOverride: () => mainLoopOverride,
+  setMainLoopModelOverride: (model: string | undefined) => {
+    mainLoopOverrideWrites.push(model)
+    mainLoopOverride = model
+  },
+}))
+
+const { migrateRetiredGptModelsToGpt56 } = await import(
+  './migrateRetiredGptModelsToGpt56.js'
+)
+
+beforeEach(() => {
+  userSettings = null
+  updateCalls = []
+  mainLoopOverride = undefined
+  mainLoopOverrideWrites = []
+})
+
+afterEach(() => {
+  mock.restore()
+})
+
+describe('migrateRetiredGptModelsToGpt56', () => {
+  test('remaps every user-owned model surface and de-duplicates the resulting allowlist', () => {
+    userSettings = {
+      model: 'gpt-5.4',
+      availableModels: [
+        'gpt-5.6-luna',
+        'gpt-5.4',
+        'gpt-5.3-codex',
+        'gpt-5.5',
+        'gpt-5.6-terra',
+        'custom-model',
+      ],
+      modelOverrides: {
+        'gpt-5.4': 'legacy-luna-override',
+        'gpt-5.5': 'legacy-terra-override',
+        'gpt-5.6-terra': 'existing-terra-override',
+        'custom-model': 'custom-override',
+      },
+    }
+
+    migrateRetiredGptModelsToGpt56()
+
+    expect(updateCalls).toEqual([
+      {
+        model: 'gpt-5.6-luna',
+        availableModels: ['gpt-5.6-luna', 'gpt-5.6-terra', 'custom-model'],
+        modelOverrides: {
+          'gpt-5.4': undefined,
+          'gpt-5.5': undefined,
+          'gpt-5.6-luna': 'legacy-luna-override',
+          'gpt-5.6-terra': 'existing-terra-override',
+          'custom-model': 'custom-override',
+        },
+      },
+    ])
+    expect(userSettings).toEqual({
+      model: 'gpt-5.6-luna',
+      availableModels: ['gpt-5.6-luna', 'gpt-5.6-terra', 'custom-model'],
+      modelOverrides: {
+        'gpt-5.6-luna': 'legacy-luna-override',
+        'gpt-5.6-terra': 'existing-terra-override',
+        'custom-model': 'custom-override',
+      },
+    })
+  })
+
+  test('preserves mixed current settings while migrating the remaining retired values', () => {
+    userSettings = {
+      model: 'gpt-5.6-terra',
+      availableModels: ['gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.6-luna'],
+      modelOverrides: {
+        'gpt-5.6-luna': 'keep-current-luna',
+        'gpt-5.4-mini': 'retired-luna',
+        'custom-model': 'keep-custom',
+      },
+    }
+
+    migrateRetiredGptModelsToGpt56()
+
+    expect(updateCalls).toEqual([
+      {
+        availableModels: ['gpt-5.6-terra', 'gpt-5.6-luna'],
+        modelOverrides: {
+          'gpt-5.6-luna': 'keep-current-luna',
+          'gpt-5.4-mini': undefined,
+          'custom-model': 'keep-custom',
+        },
+      },
+    ])
+    expect(userSettings).toEqual({
+      model: 'gpt-5.6-terra',
+      availableModels: ['gpt-5.6-terra', 'gpt-5.6-luna'],
+      modelOverrides: {
+        'gpt-5.6-luna': 'keep-current-luna',
+        'custom-model': 'keep-custom',
+      },
+    })
+  })
+
+  test('migrates the runtime main-loop override and is idempotent on a second startup', () => {
+    userSettings = {
+      model: 'gpt-5.5',
+      availableModels: ['gpt-5.5', 'gpt-5.6-terra'],
+      modelOverrides: { 'gpt-5.5': 'legacy-terra-override' },
+    }
+    mainLoopOverride = 'gpt-5.4[1m]'
+
+    migrateRetiredGptModelsToGpt56()
+    migrateRetiredGptModelsToGpt56()
+
+    expect(updateCalls).toEqual([
+      {
+        model: 'gpt-5.6-terra',
+        availableModels: ['gpt-5.6-terra'],
+        modelOverrides: {
+          'gpt-5.5': undefined,
+          'gpt-5.6-terra': 'legacy-terra-override',
+        },
+      },
+    ])
+    expect(mainLoopOverrideWrites).toEqual(['gpt-5.6-luna'])
+    expect(mainLoopOverride).toBe('gpt-5.6-luna')
+  })
+})
+
+test('startup wiring tripwire keeps the migration imported and invoked by runMigrations', () => {
+  const mainSource = readFileSync(
+    fileURLToPath(new URL('../main.tsx', import.meta.url)),
+    'utf8',
+  )
+
+  expect(mainSource).toContain(
+    "import { migrateRetiredGptModelsToGpt56 } from './migrations/migrateRetiredGptModelsToGpt56.js';",
+  )
+  const runMigrations = mainSource.slice(mainSource.indexOf('function runMigrations'))
+  expect(runMigrations).toContain('migrateRetiredGptModelsToGpt56();')
+})
