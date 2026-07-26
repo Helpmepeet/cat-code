@@ -559,6 +559,21 @@ export type PermissionContextSnapshot = {
   alwaysAllowRules: Record<string, string[]>
   alwaysDenyRules: Record<string, string[]>
   alwaysAskRules: Record<string, string[]>
+  /**
+   * Read-only display metadata derived by the sidecar with the engine's own
+   * permission-rule parser (P4-34). Keeping the classification beside the
+   * authoritative strings avoids teaching the renderer the rule grammar.
+   */
+  ruleMetadata: Array<{
+    behavior: 'allow' | 'deny' | 'ask'
+    source: string
+    rule: string
+    matchType: 'exact' | 'prefix' | 'wildcard'
+  }>
+  /** Engine policy truth; this is not P4-19's per-setting `managed` flag. */
+  managedRulesOnly: boolean
+  /** Whether the engine's permission classifier is currently available. */
+  permissionClassifierEnabled: boolean
   additionalWorkingDirectories: Array<{ path: string; source: string }>
   isBypassPermissionsModeAvailable: boolean
 }

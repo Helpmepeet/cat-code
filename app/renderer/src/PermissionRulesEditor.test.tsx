@@ -8,6 +8,16 @@ const CONTEXT: PermissionContextSnapshot = {
   alwaysAllowRules: { userSettings: ['Bash(ls)'] },
   alwaysDenyRules: {},
   alwaysAskRules: {},
+  ruleMetadata: [
+    {
+      behavior: 'allow',
+      source: 'userSettings',
+      rule: 'Bash(ls)',
+      matchType: 'exact',
+    },
+  ],
+  managedRulesOnly: true,
+  permissionClassifierEnabled: false,
   additionalWorkingDirectories: [],
   isBypassPermissionsModeAvailable: false,
 }
@@ -44,4 +54,19 @@ test('waits for the engine context before rendering the pill', () => {
   )
   expect(html).toContain('Waiting for the engine')
   expect(html).not.toContain('Current permission mode')
+})
+
+test('renders engine-derived match type and read-only managed/classifier facts', () => {
+  const html = renderToStaticMarkup(
+    <PermissionRulesEditor
+      context={CONTEXT}
+      onSetMode={() => {}}
+      showModes={false}
+    />,
+  )
+  expect(html).toContain('>exact<')
+  expect(html).toContain(
+    'Managed-rules-only enforcement: on, managed read-only',
+  )
+  expect(html).toContain('Permission classifier: off, managed read-only')
 })

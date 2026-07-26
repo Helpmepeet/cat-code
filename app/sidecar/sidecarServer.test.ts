@@ -2897,6 +2897,22 @@ test('C3 — attach emits a permission.context snapshot faithful to the engine c
       alwaysAllowRules: { userSettings: ['Bash(date:*)'] },
       alwaysDenyRules: { projectSettings: ['WebSearch'] },
       alwaysAskRules: {},
+      ruleMetadata: [
+        {
+          behavior: 'allow',
+          source: 'userSettings',
+          rule: 'Bash(date:*)',
+          matchType: 'prefix',
+        },
+        {
+          behavior: 'deny',
+          source: 'projectSettings',
+          rule: 'WebSearch',
+          matchType: 'exact',
+        },
+      ],
+      managedRulesOnly: false,
+      permissionClassifierEnabled: false,
       // The engine's Map, converted to the JSON POJO entries shape.
       additionalWorkingDirectories: [{ path: '/tmp/extra', source: 'session' }],
       isBypassPermissionsModeAvailable: false,

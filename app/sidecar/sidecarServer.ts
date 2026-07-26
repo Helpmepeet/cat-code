@@ -32,6 +32,7 @@ import type {
 import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
+import { permissionRuleValueFromString } from '../../src/utils/permissions/permissionRuleParser.js'
 import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
 // C5 (P4-20) — the wire tool-name literal, imported from the ENGINE source the
 // runtime mints permission requests with (appRuntimeCanUseTool.ts sets
@@ -108,6 +109,7 @@ import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
+import type { PermissionDisplayFacts } from './permissionDomain.js'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array): void
@@ -2152,7 +2154,13 @@ export class SidecarServer {
     context: ToolPermissionContext,
   ): ServerFrame | null {
     const snapshot = this.prepareOutboundPayload(
-      buildPermissionContextSnapshot(context),
+      buildPermissionContextSnapshot(
+        context,
+        this.permissions?.getDisplayFacts() ?? {
+          managedRulesOnly: false,
+          permissionClassifierEnabled: false,
+        },
+      ),
       'permission.context snapshot',
     )
     if (!snapshot) {
@@ -3214,6 +3222,10 @@ const settingsVerbMessageSchema = z.discriminatedUnion('type', [
  */
 export function buildPermissionContextSnapshot(
   context: ToolPermissionContext,
+  displayFacts: PermissionDisplayFacts = {
+    managedRulesOnly: false,
+    permissionClassifierEnabled: false,
+  },
 ): PermissionContextSnapshot {
   const additionalWorkingDirectories: Array<{ path: string; source: string }> =
     []
@@ -3230,9 +3242,36 @@ export function buildPermissionContextSnapshot(
     alwaysAllowRules: cloneRulesBySource(context.alwaysAllowRules),
     alwaysDenyRules: cloneRulesBySource(context.alwaysDenyRules),
     alwaysAskRules: cloneRulesBySource(context.alwaysAskRules),
+    ruleMetadata: [
+      ...buildRuleMetadata('allow', context.alwaysAllowRules),
+      ...buildRuleMetadata('deny', context.alwaysDenyRules),
+      ...buildRuleMetadata('ask', context.alwaysAskRules),
+    ],
+    managedRulesOnly: displayFacts.managedRulesOnly,
+    permissionClassifierEnabled: displayFacts.permissionClassifierEnabled,
     additionalWorkingDirectories,
     isBypassPermissionsModeAvailable: context.isBypassPermissionsModeAvailable,
   }
+}
+
+function buildRuleMetadata(
+  behavior: 'allow' | 'deny' | 'ask',
+  rules: ToolPermissionRulesBySource,
+): PermissionContextSnapshot['ruleMetadata'] {
+  return Object.entries(rules).flatMap(([source, ruleStrings]) =>
+    (ruleStrings ?? []).map(rule => {
+      const content = permissionRuleValueFromString(rule).ruleContent
+      const matchType =
+        content === undefined
+          ? 'exact'
+          : content.endsWith(':*')
+            ? 'prefix'
+            : content.includes('*')
+              ? 'wildcard'
+              : 'exact'
+      return { behavior, source, rule, matchType }
+    }),
+  )
 }
 
 function cloneRulesBySource(

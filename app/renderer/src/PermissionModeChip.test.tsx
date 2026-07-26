@@ -10,6 +10,9 @@ function ctx(mode: string): PermissionContextSnapshot {
     alwaysAllowRules: {},
     alwaysDenyRules: {},
     alwaysAskRules: {},
+    ruleMetadata: [],
+    managedRulesOnly: false,
+    permissionClassifierEnabled: false,
     additionalWorkingDirectories: [],
     isBypassPermissionsModeAvailable: false,
   }

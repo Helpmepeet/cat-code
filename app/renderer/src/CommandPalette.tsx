@@ -25,10 +25,12 @@ import {
 export function CommandPalette({
   open,
   onClose,
+  onRunItem,
   items,
 }: {
   open: boolean
   onClose: () => void
+  onRunItem?: (itemId: string) => void
   items: PaletteItem[]
 }) {
   const [query, setQuery] = useState('')
@@ -69,6 +71,7 @@ export function CommandPalette({
   const runAt = (index: number): void => {
     const item = filtered[index]
     if (!item) return
+    onRunItem?.(item.recentOf ?? item.id)
     item.run()
     onClose()
   }
@@ -146,8 +149,19 @@ export function CommandPalette({
               const showHeader =
                 query.trim().length === 0 &&
                 (index === 0 || filtered[index - 1]?.group !== item.group)
+              const previous = filtered[index - 1]
+              const showRecentDivider =
+                query.trim().length === 0 &&
+                previous?.group === 'Recent' &&
+                item.group !== 'Recent'
               return (
                 <div key={item.id}>
+                  {showRecentDivider ? (
+                    <div
+                      aria-hidden="true"
+                      className="mt-1 border-t border-shell-seam"
+                    />
+                  ) : null}
                   {showHeader ? <GroupHeader label={item.group} /> : null}
                   <PaletteRow
                     item={item}
