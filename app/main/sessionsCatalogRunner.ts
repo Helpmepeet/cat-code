@@ -8,12 +8,20 @@
  * accepted global catalog snapshot to main (which forwards it to the renderer as
  * a read-only outbound host event).
  *
- * The driver is single-flight + self-rescheduling: it never spawns a second
- * worker while one is in flight, and the next run is scheduled only AFTER the
- * current one settles, so a run that overruns its interval can never stack (the
- * CATALOG-OWNERSHIP §4 "run can overrun its interval" con). A failed run keeps
- * the last good catalog: it simply does not call `onCatalog`, so main emits no
- * host event and the renderer's retained snapshot survives.
+ * The driver is single-flight + fixed-cadence: it never spawns a second worker
+ * while one is in flight (the next run is only ever SCHEDULED after the current
+ * one settles, so a run that overruns its interval can never stack — the
+ * CATALOG-OWNERSHIP §4 "run can overrun its interval" con), but the next run is
+ * anchored to when the current one STARTED, not when it settled. That keeps the
+ * refresh period at exactly `intervalMs` instead of `intervalMs + runDuration`,
+ * so the staleness window a session created in the terminal actually waits is
+ * bounded by the interval alone. Anchoring on completion instead let the period
+ * grow without bound with run duration (up to
+ * `SESSIONS_CATALOG_WORKER_TIMEOUT_MS`, i.e. a 5.5-minute period for a hung
+ * run), silently degrading the freshness contract CATALOG-OWNERSHIP §4 states as
+ * "one interval + one boot". A failed run keeps the last good catalog: it simply
+ * does not call `onCatalog`, so main emits no host event and the renderer's
+ * retained snapshot survives.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -221,11 +229,15 @@ export type SessionsCatalogDriver = {
 }
 
 /**
- * Single-flight, self-rescheduling driver. `run()` performs ONE catalog run
- * (spawn + deliver). The driver guarantees at most one run in flight and
- * schedules the next only after the current settles, so a slow corpus can never
- * cause overlapping spawns. A rejected `run()` is logged and swallowed — the
- * timer keeps ticking and the renderer keeps its last good catalog.
+ * Single-flight, fixed-cadence driver. `run()` performs ONE catalog run (spawn +
+ * deliver). The driver guarantees at most one run in flight — the next is only
+ * SCHEDULED once the current settles, so a slow corpus can never cause
+ * overlapping spawns — while anchoring that next run to the current run's START,
+ * so the period stays `intervalMs` rather than `intervalMs + runDuration`. A run
+ * that overruns the interval schedules the next immediately (delay 0), which is
+ * still serialized behind the in-flight guard. A rejected `run()` is logged and
+ * swallowed — the timer keeps ticking and the renderer keeps its last good
+ * catalog.
  */
 export function createSessionsCatalogDriver(deps: {
   run: () => Promise<unknown>
@@ -233,21 +245,31 @@ export function createSessionsCatalogDriver(deps: {
   log?: (line: string) => void
   setTimer?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>
   clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
+  /** Injected only so tests can drive the cadence math on a virtual clock. */
+  now?: () => number
 }): SessionsCatalogDriver {
   const intervalMs = deps.intervalMs ?? SESSIONS_CATALOG_REFRESH_INTERVAL_MS
   const setTimer = deps.setTimer ?? ((cb, ms) => setTimeout(cb, ms))
   const clearTimer = deps.clearTimer ?? (handle => clearTimeout(handle))
+  const now = deps.now ?? (() => Date.now())
 
   let inFlight = false
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
 
-  const schedule = () => {
+  /**
+   * `startedAt` is when the run that just settled BEGAN. Subtracting its duration
+   * keeps successive run starts one `intervalMs` apart; a run slower than the
+   * interval clamps to 0 so the cadence degrades to back-to-back rather than
+   * compounding.
+   */
+  const schedule = (startedAt: number) => {
     if (stopped) return
+    const delay = Math.max(0, intervalMs - (now() - startedAt))
     timer = setTimer(() => {
       timer = null
       void tick()
-    }, intervalMs)
+    }, delay)
     timer.unref?.()
   }
 
@@ -256,6 +278,7 @@ export function createSessionsCatalogDriver(deps: {
     // arrives mid-run is dropped; the running tick reschedules on completion.
     if (inFlight || stopped) return
     inFlight = true
+    const startedAt = now()
     try {
       await deps.run()
     } catch (error) {
@@ -266,7 +289,7 @@ export function createSessionsCatalogDriver(deps: {
       )
     } finally {
       inFlight = false
-      schedule()
+      schedule(startedAt)
     }
   }
 
