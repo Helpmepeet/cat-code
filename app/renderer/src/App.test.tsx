@@ -184,7 +184,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   expect(html).toContain('aria-label="Send prompt"')
 })
 
-test('IS-B preview paints cached rows and keeps the composer focusable-readOnly', () => {
+test('CC-16: a preview pane paints cached rows and its composer accepts typing', () => {
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
@@ -249,14 +249,24 @@ test('IS-B preview paints cached rows and keeps the composer focusable-readOnly'
   )
 
   const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
-  expect(textarea).toContain('readOnly=""')
+  // CC-16 — the composer no longer refuses keystrokes or instructs the user to
+  // act. Focus/pointer-down still fires the spawn (`engagePreviewPane`); it
+  // just stops blocking the typing that triggers it.
+  expect(textarea).not.toContain('readOnly=""')
   expect(textarea).not.toContain('disabled=""')
-  expect(textarea).toContain('placeholder="Focus to reconnect…"')
+  expect(textarea).toContain(
+    'placeholder="Ask Cat Code anything or describe a task…"',
+  )
+  expect(textarea).not.toContain('Focus to reconnect')
+  expect(textarea).not.toContain('Connecting')
   expect(html).toContain('Earlier restored history was omitted.')
+  // The send arrow is still quiet for an EMPTY draft (prototype parity,
+  // `Chat.jsx:1419` — `disabled={!input.trim()}`).
+  expect(html).toContain('aria-label="Send prompt"')
   expect(html).toContain('disabled=""')
 })
 
-test('IS-B connecting composer remains focusable-readOnly until live input is enabled', () => {
+test('CC-16: a connecting session accepts typing and can arm the send arrow', () => {
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
@@ -306,9 +316,196 @@ test('IS-B connecting composer remains focusable-readOnly until live input is en
   const html = renderToStaticMarkup(<SessionPane {...props} />)
   const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
 
-  expect(textarea).toContain('readOnly=""')
+  // The ~0.6 s spawn is hidden behind the typing, not announced.
+  expect(textarea).not.toContain('readOnly=""')
   expect(textarea).not.toContain('disabled=""')
-  expect(textarea).toContain('placeholder="Connecting…"')
+  expect(textarea).toContain(
+    'placeholder="Ask Cat Code anything or describe a task…"',
+  )
+
+  // With a draft in hand the send arrow is live, so Enter/click can issue the
+  // submit that App parks until the engine is ready.
+  const typed = renderToStaticMarkup(
+    <SessionPane {...props} prompt="ship it" />,
+  )
+  const sendButton =
+    typed.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+  expect(sendButton).not.toContain('disabled=""')
+  // …and the attach affordance (a purely local draft action) is live too.
+  const attachButton =
+    typed.match(/<button[^>]*aria-label="Add attachment"[^>]*>/)?.[0] ?? ''
+  expect(attachButton).not.toContain('disabled=""')
+})
+
+test('CC-16 REGRESSION GUARD: a mid-turn composer is still blocked — the engine owns that', () => {
+  // `ready` + `inputEnabled: false` is the engine's own "input is closed" (a
+  // turn is running). CC-16 unblocked "not connected yet"; widening it into
+  // this state is the regression this test exists to catch.
+  const props = {
+    accountsSnapshot: null,
+    accountsLastResult: null,
+    orchestratorActive: false,
+    activeConnection: { status: 'ready', inputEnabled: false },
+    activeDescriptor: undefined,
+    activeLog: {
+      inputEnabled: true,
+      messages: [],
+      retainedBytes: 0,
+      truncated: false,
+      error: null,
+      messageBytes: [],
+    },
+    activeAccount: null,
+    activeSessionId: 'session-1',
+    isActivePane: true,
+    branch: null,
+    allowPermission: () => {},
+    model: null,
+    reasoningEffort: null,
+    fastMode: false,
+    copyForLlm: () => {},
+    denyPermission: () => {},
+    history: [],
+    mentionItems: [],
+    onApprovePlan: () => {},
+    onPaste: () => {},
+    onRemovePaste: () => {},
+    onRevisePlan: () => {},
+    partialCount: 0,
+    pastes: [],
+    permissionContext: null,
+    permissionQueue: [],
+    planReview: null,
+    askQuestion: null,
+    onAnswerQuestions: () => {},
+    onCancelQuestions: () => {},
+    prompt: 'mid-turn text',
+    restorePermission: () => {},
+    setPermissionMode: () => {},
+    setPrompt: () => {},
+    submit: () => {},
+    transcript: createTranscriptState(),
+    transportError: null,
+  } satisfies ComponentProps<typeof SessionPane>
+  const html = renderToStaticMarkup(<SessionPane {...props} />)
+  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  const sendButton =
+    html.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+
+  expect(textarea).toContain('readOnly=""')
+  // A ready session's placeholder is the normal one — unchanged by CC-16.
+  expect(textarea).toContain(
+    'placeholder="Ask Cat Code anything or describe a task…"',
+  )
+  // Non-empty draft, yet the arrow stays disabled: the engine, not the draft,
+  // is what refuses this submit.
+  expect(sendButton).toContain('disabled=""')
+})
+
+test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
+  const props = {
+    accountsSnapshot: null,
+    accountsLastResult: null,
+    orchestratorActive: false,
+    activeConnection: { status: 'failed', inputEnabled: false },
+    activeDescriptor: undefined,
+    activeLog: {
+      inputEnabled: false,
+      messages: [],
+      retainedBytes: 0,
+      truncated: false,
+      error: null,
+      messageBytes: [],
+    },
+    activeAccount: null,
+    activeSessionId: 'session-1',
+    isActivePane: true,
+    branch: null,
+    allowPermission: () => {},
+    model: null,
+    reasoningEffort: null,
+    fastMode: false,
+    copyForLlm: () => {},
+    denyPermission: () => {},
+    history: [],
+    mentionItems: [],
+    onApprovePlan: () => {},
+    onPaste: () => {},
+    onRemovePaste: () => {},
+    onRevisePlan: () => {},
+    partialCount: 0,
+    pastes: [],
+    permissionContext: null,
+    permissionQueue: [],
+    planReview: null,
+    askQuestion: null,
+    onAnswerQuestions: () => {},
+    onCancelQuestions: () => {},
+    prompt: 'text',
+    restorePermission: () => {},
+    setPermissionMode: () => {},
+    setPrompt: () => {},
+    submit: () => {},
+    transcript: createTranscriptState(),
+    transportError: null,
+  } satisfies ComponentProps<typeof SessionPane>
+  const html = renderToStaticMarkup(<SessionPane {...props} />)
+  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  const sendButton =
+    html.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+
+  expect(textarea).toContain('readOnly=""')
+  expect(sendButton).toContain('disabled=""')
+})
+
+test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through App', () => {
+  // LAYER HONESTY: the app/ renderer suite is SSR-only (no DOM — see
+  // AccountsPage.test.tsx), so React effects never run here and the drain
+  // cannot be executed. The DECISIONS it is built from are executable and
+  // covered in composerState.test.ts; this pins the App-side join those pure
+  // functions are wired into, and fails if a refactor unhooks one of them.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const submitStart = source.indexOf('  function submitSession(')
+  const submitBody = source.slice(
+    submitStart,
+    source.indexOf('\n  }', source.indexOf('// CC-16 drain', submitStart)),
+  )
+
+  // The submit decision is the pure one, not a re-derived local condition.
+  expect(submitBody).toContain('const action = planSessionSubmit({')
+  expect(submitBody).toContain(
+    'alreadyParked: selectPendingSubmit(pendingSubmits, sessionId) !== null,',
+  )
+  // Park, and retire the draft exactly like a real send (so nothing is left
+  // half-submitted), then return WITHOUT touching the bridge.
+  expect(submitBody).toContain(
+    "if (action.type === 'hold') {\n      setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))\n      retireDraft()",
+  )
+  // The drain rides the EXISTING app.submit — no new frame kind or channel.
+  expect(submitBody).toContain(
+    'const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))',
+  )
+  expect(submitBody).toContain("if (outcome === 'wait') continue")
+  expect(submitBody).toContain("if (outcome === 'release') {\n        releasePendingSubmit(sessionId)")
+  expect(submitBody).toContain('getBridge().submit(sessionId, parked)')
+
+  // A failed spawn releases the parked text back into the composer on every
+  // terminal restore path, not only on the connection status.
+  const restoreBody = source.slice(
+    source.indexOf('  const restoreLiveSession = useCallback('),
+    source.indexOf('  const engagePreview = useCallback('),
+  )
+  expect(restoreBody.match(/releasePendingSubmit\(sessionId\)/g)).toHaveLength(3)
+
+  // The composer's three consumers all read the SAME gate object, so
+  // "typeable" can never drift apart from "sendable" again.
+  expect(source).toContain('readOnly={!composerGate.editable}')
+  expect(source).toContain(
+    'disabled={!composerGate.editable || prompt.trim().length === 0}',
+  )
+  expect(source).toContain('attachDisabled={!composerGate.editable}')
+  // …and nothing instructs the user to act on a not-yet-connected session.
+  expect(source).not.toContain('Focus to reconnect')
 })
 
 test('P4-24: the composer bar forwards the REAL active account + model override', () => {

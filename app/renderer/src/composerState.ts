@@ -24,6 +24,7 @@
  *    50-cap in the history store (`src/utils/config`).
  */
 
+import type { ConnectionSnapshot } from './connectionState.js'
 import type { MentionItem } from './MentionPicker.js'
 import type { AgentConfigSnapshot, SessionId } from '../../shared/protocol.js'
 
@@ -352,4 +353,196 @@ export function caretAtHistoryEdge(
   return direction === 'up'
     ? !value.slice(0, caret).includes('\n')
     : !value.slice(caret).includes('\n')
+}
+
+// ── Connect-then-type gating + the parked submit (CC-16) ─────────────────────
+
+/**
+ * The composer's single `composerEnabled` flag used to conflate TWO different
+ * reasons it could be unusable. They are separated here because only one of
+ * them is the user's to resolve:
+ *
+ *  - `engineInputEnabled` — the ENGINE says input is closed: a ready session
+ *    mid-turn (`inputEnabled: false`), or a log that has not enabled input.
+ *    Real engine-authored state; nothing in this module relaxes it.
+ *  - `connectPending` — no engine process is attached YET, and the user's own
+ *    intent is what starts one: a preview pane (composer focus/pointer-down
+ *    runs `engagePreviewPane` → the existing lazy-restore spawn) or an
+ *    in-flight spawn (`connecting` / `starting`).
+ *
+ * Typing is accepted whenever EITHER holds (`editable`); only the SUBMIT waits
+ * for the engine (`planComposerSubmit` → `hold`, drained by
+ * `resolvePendingSubmit`). This does NOT make browsing spawn an engine: the
+ * spawn still fires on focus/pointer-down/submit intent, it just stops blocking
+ * that intent (the 300 ms dwell auto-spawn stays removed, cut-list §I.1 #3).
+ *
+ * The terminal statuses — `dead`, `failed`, `exited`, `disconnected` — are
+ * neither: no spawn is in flight and no keystroke starts one, so the composer
+ * stays read-only there exactly as it was.
+ */
+export type ComposerGate = {
+  engineInputEnabled: boolean
+  connectPending: boolean
+  /** Typing / attach are accepted: the union of the two reasons above. */
+  editable: boolean
+}
+
+export type ComposerGateInput = {
+  hasSession: boolean
+  preview: boolean
+  connectionStatus: ConnectionSnapshot['status']
+  connectionInputEnabled: boolean
+  logInputEnabled: boolean
+}
+
+export function selectComposerGate(input: ComposerGateInput): ComposerGate {
+  const engineInputEnabled =
+    input.hasSession &&
+    !input.preview &&
+    input.logInputEnabled &&
+    input.connectionStatus === 'ready' &&
+    input.connectionInputEnabled
+  const connectPending =
+    input.hasSession &&
+    !engineInputEnabled &&
+    (input.preview ||
+      input.connectionStatus === 'connecting' ||
+      input.connectionStatus === 'starting')
+  return {
+    engineInputEnabled,
+    connectPending,
+    editable: engineInputEnabled || connectPending,
+  }
+}
+
+/**
+ * What Enter / the send arrow does.
+ *  - `send`   — the engine is attached and accepting input (today's path).
+ *  - `hold`   — still spawning: park the text and drain it on ready. Reachable
+ *               ONLY while `connectPending`; a mid-turn composer is not
+ *               editable, so nothing is ever parked for an engine-disabled turn.
+ *  - `ignore` — nothing to send, or the composer is not accepting submissions.
+ *               The caller leaves the draft alone, so an ignored submit is
+ *               visible as "my text is still there", never a swallowed prompt.
+ */
+export type ComposerSubmitAction =
+  | { type: 'ignore' }
+  | { type: 'hold'; text: string }
+  | { type: 'send'; text: string }
+
+/**
+ * The whole submit decision for one session, in one pure call: expand the
+ * collapsed pastes the way the engine would (`expandPasteRefs`), then route by
+ * the two gates above. App's `submitSession` is the side-effecting half
+ * (bridge + setState) wrapped around exactly this.
+ */
+export function planSessionSubmit(input: {
+  draft: string
+  pasteEntries: Record<number, PasteEntry>
+  preview: boolean
+  connectionStatus: ConnectionSnapshot['status']
+  connectionInputEnabled: boolean
+  logInputEnabled: boolean
+  alreadyParked: boolean
+}): ComposerSubmitAction {
+  const text = expandPasteRefs(input.draft, input.pasteEntries).trim()
+  if (text.length === 0) return { type: 'ignore' }
+  const gate = selectComposerGate({
+    hasSession: true,
+    preview: input.preview,
+    connectionStatus: input.connectionStatus,
+    connectionInputEnabled: input.connectionInputEnabled,
+    logInputEnabled: input.logInputEnabled,
+  })
+  if (gate.engineInputEnabled) return { type: 'send', text }
+  if (gate.connectPending && !input.alreadyParked) return { type: 'hold', text }
+  return { type: 'ignore' }
+}
+
+/**
+ * One parked prompt per session — the text submitted while the engine was still
+ * spawning, already paste-expanded (`expandPasteRefs`) so the drain hands the
+ * sidecar exactly what a live submit would have. Renderer-local: it rides the
+ * EXISTING `app.submit` when it flushes, so no frame kind, preload method or
+ * inbound vocabulary is added (SECURITY-MINIMUM §2).
+ */
+export type PendingSubmitState = Record<SessionId, string>
+
+export function createPendingSubmitState(): PendingSubmitState {
+  return {}
+}
+
+export function selectPendingSubmit(
+  state: PendingSubmitState,
+  sessionId: SessionId | null,
+): string | null {
+  if (!sessionId) return null
+  return state[sessionId] ?? null
+}
+
+export function reducePendingSubmitHeld(
+  state: PendingSubmitState,
+  sessionId: SessionId,
+  text: string,
+): PendingSubmitState {
+  if (text.length === 0) return state
+  return { ...state, [sessionId]: text }
+}
+
+export function reducePendingSubmitCleared(
+  state: PendingSubmitState,
+  sessionId: SessionId,
+): PendingSubmitState {
+  if (!(sessionId in state)) return state
+  const next = { ...state }
+  delete next[sessionId]
+  return next
+}
+
+/**
+ * What to do with a parked prompt on the session's current connection snapshot.
+ *  - `send`    — attached and accepting input: flush it through `app.submit`.
+ *  - `wait`    — still spawning, or ready but mid-turn: keep holding.
+ *  - `release` — terminal: this spawn will never complete. The text goes BACK
+ *                into the composer (`restoreDraftWithPending`) with an error,
+ *                so a failed reconnect can never eat a prompt silently.
+ */
+export type PendingSubmitOutcome = 'send' | 'wait' | 'release'
+
+export function resolvePendingSubmit(connection: {
+  status: ConnectionSnapshot['status']
+  inputEnabled: boolean
+}): PendingSubmitOutcome {
+  switch (connection.status) {
+    case 'ready':
+      return connection.inputEnabled ? 'send' : 'wait'
+    case 'connecting':
+    case 'starting':
+      return 'wait'
+    case 'dead':
+    case 'disconnected':
+    case 'failed':
+    case 'exited':
+      return 'release'
+    default: {
+      const exhaustive: never = connection.status
+      return exhaustive
+    }
+  }
+}
+
+/** Shown when a parked prompt is released — the text is visibly back, not gone. */
+export const PENDING_SUBMIT_RELEASED_MESSAGE =
+  'The session did not connect, so your message was not sent — it is back in the composer.'
+
+/**
+ * Give a released prompt back to the composer without clobbering whatever the
+ * user typed while it was parked: the parked text goes FIRST (it was submitted
+ * first) and the live draft keeps its own line.
+ */
+export function restoreDraftWithPending(
+  draft: string,
+  pending: string,
+): string {
+  return draft.length === 0 ? pending : `${pending}\n${draft}`
 }

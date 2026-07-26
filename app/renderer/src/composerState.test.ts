@@ -27,6 +27,15 @@ import {
   selectSessionPasteList,
   selectSessionPasteState,
   shouldCollapsePaste,
+  createPendingSubmitState,
+  planSessionSubmit,
+  reducePendingSubmitCleared,
+  reducePendingSubmitHeld,
+  resolvePendingSubmit,
+  restoreDraftWithPending,
+  selectComposerGate,
+  selectPendingSubmit,
+  type ComposerGateInput,
 } from './composerState.js'
 
 const S1 = 's-1' as unknown as import('../../shared/protocol.js').SessionId
@@ -382,5 +391,281 @@ describe('P4-24 multi-line composer helpers', () => {
     const draft = `x${token}`
     const range = pasteTokenBeforeCaret(draft, draft.length)
     expect(range).toEqual({ start: 1, end: draft.length })
+  })
+})
+
+// ── CC-16: the composer accepts input while the engine is still spawning ─────
+
+function gateInput(overrides: Partial<ComposerGateInput> = {}): ComposerGateInput {
+  return {
+    hasSession: true,
+    preview: false,
+    connectionStatus: 'ready',
+    connectionInputEnabled: true,
+    logInputEnabled: true,
+    ...overrides,
+  }
+}
+
+describe('CC-16 composer gate — "not connected" is not "engine disabled input"', () => {
+  test('a live, idle session is editable and engine-enabled', () => {
+    const gate = selectComposerGate(gateInput())
+    expect(gate).toEqual({
+      engineInputEnabled: true,
+      connectPending: false,
+      editable: true,
+    })
+  })
+
+  test('a previewed (not-yet-spawned) session accepts typing', () => {
+    // The friction being removed: a preview pane used to be read-only and told
+    // the user to "Focus to reconnect…". Focus/pointer-down already spawns.
+    const gate = selectComposerGate(gateInput({ preview: true }))
+    expect(gate.editable).toBe(true)
+    expect(gate.connectPending).toBe(true)
+    expect(gate.engineInputEnabled).toBe(false)
+  })
+
+  test('an in-flight spawn (connecting/starting) accepts typing', () => {
+    for (const connectionStatus of ['connecting', 'starting'] as const) {
+      const gate = selectComposerGate(
+        gateInput({
+          connectionStatus,
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+      )
+      expect(gate.editable).toBe(true)
+      expect(gate.connectPending).toBe(true)
+      expect(gate.engineInputEnabled).toBe(false)
+    }
+  })
+
+  test('REGRESSION GUARD: a mid-turn session stays blocked — the engine owns that', () => {
+    // `ready` + `inputEnabled: false` is the engine's own "input is closed"
+    // (a turn is running). Widening CC-16 into this state is the failure this
+    // test exists to catch: it must remain non-editable AND non-connect-pending.
+    const gate = selectComposerGate(
+      gateInput({ connectionInputEnabled: false }),
+    )
+    expect(gate).toEqual({
+      engineInputEnabled: false,
+      connectPending: false,
+      editable: false,
+    })
+  })
+
+  test('REGRESSION GUARD: a log that has not enabled input stays blocked', () => {
+    const gate = selectComposerGate(gateInput({ logInputEnabled: false }))
+    expect(gate.editable).toBe(false)
+    expect(gate.connectPending).toBe(false)
+  })
+
+  test('terminal statuses are neither pending nor editable — no spawn is coming', () => {
+    for (const connectionStatus of [
+      'dead',
+      'failed',
+      'exited',
+      'disconnected',
+    ] as const) {
+      const gate = selectComposerGate(
+        gateInput({
+          connectionStatus,
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+      )
+      expect(gate.editable).toBe(false)
+      expect(gate.connectPending).toBe(false)
+    }
+  })
+
+  test('a terminal-status PREVIEW pane is still pending — focus re-spawns it', () => {
+    const gate = selectComposerGate(
+      gateInput({
+        preview: true,
+        connectionStatus: 'exited',
+        connectionInputEnabled: false,
+        logInputEnabled: false,
+      }),
+    )
+    expect(gate.editable).toBe(true)
+    expect(gate.connectPending).toBe(true)
+  })
+
+  test('no session at all: nothing is editable', () => {
+    const gate = selectComposerGate(
+      gateInput({ hasSession: false, connectionStatus: 'connecting' }),
+    )
+    expect(gate).toEqual({
+      engineInputEnabled: false,
+      connectPending: false,
+      editable: false,
+    })
+  })
+})
+
+describe('CC-16 submit planning — only the submit waits for the engine', () => {
+  // The exact argument shape `App.submitSession` builds, so these cases
+  // traverse the same join the production caller does.
+  function submitInput(
+    overrides: Partial<Parameters<typeof planSessionSubmit>[0]> = {},
+  ): Parameters<typeof planSessionSubmit>[0] {
+    return {
+      draft: 'hello',
+      pasteEntries: {},
+      preview: false,
+      connectionStatus: 'ready',
+      connectionInputEnabled: true,
+      logInputEnabled: true,
+      alreadyParked: false,
+      ...overrides,
+    }
+  }
+  const spawning = {
+    connectionStatus: 'connecting',
+    connectionInputEnabled: false,
+    logInputEnabled: false,
+  } as const
+
+  test('a live session sends immediately (unchanged path)', () => {
+    expect(planSessionSubmit(submitInput())).toEqual({
+      type: 'send',
+      text: 'hello',
+    })
+  })
+
+  test('a spawning session HOLDS instead of dropping the prompt', () => {
+    expect(planSessionSubmit(submitInput(spawning))).toEqual({
+      type: 'hold',
+      text: 'hello',
+    })
+  })
+
+  test('a previewed session HOLDS — this is the reported friction', () => {
+    expect(planSessionSubmit(submitInput({ preview: true }))).toEqual({
+      type: 'hold',
+      text: 'hello',
+    })
+  })
+
+  test('REGRESSION GUARD: a mid-turn submit is still refused, never parked', () => {
+    // Parking a mid-turn submit would be the out-of-scope "queue during a turn"
+    // feature. `ready` + `inputEnabled: false` is exactly the mid-turn gate.
+    expect(
+      planSessionSubmit(submitInput({ connectionInputEnabled: false })),
+    ).toEqual({ type: 'ignore' })
+    expect(planSessionSubmit(submitInput({ logInputEnabled: false }))).toEqual({
+      type: 'ignore',
+    })
+  })
+
+  test('a terminal (dead) session neither sends nor parks', () => {
+    expect(
+      planSessionSubmit(
+        submitInput({
+          connectionStatus: 'failed',
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+      ),
+    ).toEqual({ type: 'ignore' })
+  })
+
+  test('an empty or whitespace-only prompt is ignored in every state', () => {
+    expect(planSessionSubmit(submitInput({ draft: '' }))).toEqual({
+      type: 'ignore',
+    })
+    expect(planSessionSubmit(submitInput({ draft: '   \n ', ...spawning }))).toEqual(
+      { type: 'ignore' },
+    )
+  })
+
+  test('a second submit while one is already parked leaves the draft alone', () => {
+    // 'ignore' means submitSession returns before retiring the draft, so the
+    // second prompt stays visible in the composer rather than vanishing.
+    expect(
+      planSessionSubmit(submitInput({ ...spawning, alreadyParked: true })),
+    ).toEqual({ type: 'ignore' })
+    // …but a live session still sends it, parked prompt or not.
+    expect(planSessionSubmit(submitInput({ alreadyParked: true }))).toEqual({
+      type: 'send',
+      text: 'hello',
+    })
+  })
+
+  test('a parked prompt carries EXPANDED paste text, exactly like a live send', () => {
+    // The drain hands the sidecar `app.submit(text)` verbatim, so the expansion
+    // has to happen at park time or the engine would receive the placeholder.
+    const body = 'line\n'.repeat(30)
+    const { state, token } = reducePasteAdded(createPasteState(), S1, body)
+    const entries = selectSessionPasteState(state, S1).entries
+    const action = planSessionSubmit(
+      submitInput({ draft: `see ${token}`, pasteEntries: entries, ...spawning }),
+    )
+    expect(action).toEqual({ type: 'hold', text: `see ${body}`.trim() })
+  })
+})
+
+describe('CC-16 parked prompt store', () => {
+  test('hold / select / clear round-trip, keyed per session', () => {
+    let state = createPendingSubmitState()
+    expect(selectPendingSubmit(state, S1)).toBeNull()
+    state = reducePendingSubmitHeld(state, S1, 'first')
+    state = reducePendingSubmitHeld(state, S2, 'second')
+    expect(selectPendingSubmit(state, S1)).toBe('first')
+    expect(selectPendingSubmit(state, S2)).toBe('second')
+    state = reducePendingSubmitCleared(state, S1)
+    expect(selectPendingSubmit(state, S1)).toBeNull()
+    expect(selectPendingSubmit(state, S2)).toBe('second')
+  })
+
+  test('empty text is never parked, and a null session selects nothing', () => {
+    const state = reducePendingSubmitHeld(createPendingSubmitState(), S1, '')
+    expect(selectPendingSubmit(state, S1)).toBeNull()
+    expect(selectPendingSubmit(state, null)).toBeNull()
+  })
+
+  test('clearing an absent session is identity (no needless re-render)', () => {
+    const state = createPendingSubmitState()
+    expect(reducePendingSubmitCleared(state, S1)).toBe(state)
+  })
+})
+
+describe('CC-16 drain — flushed on ready, given back on failure', () => {
+  test('ready + input enabled sends the parked prompt', () => {
+    expect(resolvePendingSubmit({ status: 'ready', inputEnabled: true })).toBe(
+      'send',
+    )
+  })
+
+  test('still spawning keeps holding', () => {
+    expect(
+      resolvePendingSubmit({ status: 'connecting', inputEnabled: false }),
+    ).toBe('wait')
+    expect(
+      resolvePendingSubmit({ status: 'starting', inputEnabled: false }),
+    ).toBe('wait')
+  })
+
+  test('ready but mid-turn keeps holding — it is not a failure', () => {
+    expect(resolvePendingSubmit({ status: 'ready', inputEnabled: false })).toBe(
+      'wait',
+    )
+  })
+
+  test('every terminal status RELEASES the prompt back to the user', () => {
+    for (const status of ['dead', 'failed', 'exited', 'disconnected'] as const) {
+      expect(resolvePendingSubmit({ status, inputEnabled: false })).toBe(
+        'release',
+      )
+    }
+  })
+
+  test('a released prompt is restored without clobbering a newer draft', () => {
+    expect(restoreDraftWithPending('', 'parked')).toBe('parked')
+    expect(restoreDraftWithPending('typed after', 'parked')).toBe(
+      'parked\ntyped after',
+    )
   })
 })

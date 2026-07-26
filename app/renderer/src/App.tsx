@@ -110,19 +110,27 @@ import {
   caretAtHistoryEdge,
   createHistoryState,
   createPasteState,
+  createPendingSubmitState,
   EMPTY_HISTORY_NAV,
-  expandPasteRefs,
   formatPasteRef,
   navigateHistory,
   parseMentionQuery,
   pasteTokenBeforeCaret,
+  PENDING_SUBMIT_RELEASED_MESSAGE,
+  planSessionSubmit,
   reduceHistoryPushed,
   reducePasteAdded,
   reducePasteRemoved,
   reducePasteStateForDraftWrite,
+  reducePendingSubmitCleared,
+  reducePendingSubmitHeld,
   reduceSessionPastesCleared,
+  resolvePendingSubmit,
+  restoreDraftWithPending,
   selectAgentMentionItems,
+  selectComposerGate,
   selectHistory,
+  selectPendingSubmit,
   selectSessionPasteList,
   selectSessionPasteState,
   shouldCollapsePaste,
@@ -131,6 +139,7 @@ import {
   type HistoryState,
   type PasteEntry,
   type PasteState,
+  type PendingSubmitState,
 } from './composerState.js'
 import {
   WorkspaceLayout,
@@ -358,6 +367,15 @@ export function App() {
   // crosses the wire.
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
+  // CC-16 — a prompt submitted while the session was still spawning. Parked
+  // per-session (same keying as `promptDrafts`) and drained through the SAME
+  // `app.submit` once the engine accepts input; released back into the composer
+  // if the spawn dies. Renderer-local, never on the wire.
+  const [pendingSubmits, setPendingSubmits] = useState<PendingSubmitState>(
+    createPendingSubmitState,
+  )
+  const pendingSubmitsRef = useRef(pendingSubmits)
+  pendingSubmitsRef.current = pendingSubmits
   const [transportError, setTransportError] = useState<string | null>(null)
   const [shellError, setShellError] = useState<string | null>(null)
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
@@ -1337,35 +1355,59 @@ export function App() {
     }
   }, [])
 
-  const restoreLiveSession = useCallback(async (sessionId: SessionId) => {
-    const bridge = getBridge()
-    try {
-      const result = await bridge.restoreSession(sessionId)
-      if (result.ok) {
-        if (cancelledRestoresRef.current.delete(sessionId)) {
-          lazyRestoreClaimsRef.current.delete(sessionId)
-          const closeResult = await bridge.closeSession(sessionId)
-          if (!closeResult.ok) {
-            setShellError(hostErrorMessage(closeResult.error))
-          } else {
-            setShellError(null)
+  // CC-16 — hand a parked prompt back to the composer. Called on every terminal
+  // outcome of the spawn the user's keystroke started (a rejected/thrown
+  // restore here, a terminal connection status in the drain effect below), so a
+  // failed reconnect surfaces the text plus an error instead of eating it.
+  const releasePendingSubmit = useCallback((sessionId: SessionId) => {
+    const parked = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
+    if (parked === null) return
+    setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
+    setPromptDrafts(drafts =>
+      reducePromptDrafts(
+        drafts,
+        sessionId,
+        restoreDraftWithPending(selectPromptDraft(drafts, sessionId), parked),
+      ),
+    )
+    setTransportError(PENDING_SUBMIT_RELEASED_MESSAGE)
+  }, [])
+
+  const restoreLiveSession = useCallback(
+    async (sessionId: SessionId) => {
+      const bridge = getBridge()
+      try {
+        const result = await bridge.restoreSession(sessionId)
+        if (result.ok) {
+          if (cancelledRestoresRef.current.delete(sessionId)) {
+            lazyRestoreClaimsRef.current.delete(sessionId)
+            releasePendingSubmit(sessionId)
+            const closeResult = await bridge.closeSession(sessionId)
+            if (!closeResult.ok) {
+              setShellError(hostErrorMessage(closeResult.error))
+            } else {
+              setShellError(null)
+            }
+            return
           }
-          return
+          setActiveSessionId(result.value.appSessionId)
+          setActiveView('chat')
+          setShellError(null)
+        } else {
+          lazyRestoreClaimsRef.current.delete(sessionId)
+          cancelledRestoresRef.current.delete(sessionId)
+          releasePendingSubmit(sessionId)
+          setShellError(hostErrorMessage(result.error))
         }
-        setActiveSessionId(result.value.appSessionId)
-        setActiveView('chat')
-        setShellError(null)
-      } else {
+      } catch (error) {
         lazyRestoreClaimsRef.current.delete(sessionId)
         cancelledRestoresRef.current.delete(sessionId)
-        setShellError(hostErrorMessage(result.error))
+        releasePendingSubmit(sessionId)
+        setShellError(errorMessage(error))
       }
-    } catch (error) {
-      lazyRestoreClaimsRef.current.delete(sessionId)
-      cancelledRestoresRef.current.delete(sessionId)
-      setShellError(errorMessage(error))
-    }
-  }, [])
+    },
+    [releasePendingSubmit],
+  )
 
   const engagePreview = useCallback(
     (sessionId: SessionId) => {
@@ -1472,31 +1514,75 @@ export function App() {
     event.preventDefault()
     const sessionLog = selectRawMessageLog(state, sessionId)
     const sessionConnection = selectConnection(connection, sessionId)
-    const sessionPrompt = selectPromptDraft(promptDrafts, sessionId)
-    // Expand collapsed-paste tokens back to their full text before submit — the
-    // engine receives plain prompt text, never a `[Pasted text #N]` ref (parity
-    // with `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
-    const pasteEntries = selectSessionPasteState(pasteState, sessionId).entries
-    const text = expandPasteRefs(sessionPrompt, pasteEntries).trim()
-    if (
-      !sessionLog.inputEnabled ||
-      !sessionConnection.inputEnabled ||
-      text.length === 0
-    ) return
+    // Collapsed-paste tokens are expanded back to their full text before submit
+    // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
+    // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
+    // CC-16 — `engineInputEnabled` (mid-turn) still refuses the submit exactly
+    // as before; `connectPending` (a preview pane or an in-flight spawn) parks
+    // it instead of dropping it. The two are never collapsed back into one flag.
+    const action = planSessionSubmit({
+      draft: selectPromptDraft(promptDrafts, sessionId),
+      pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
+      preview: hasPreviewTranscript(previewTranscript, sessionId),
+      connectionStatus: sessionConnection.status,
+      connectionInputEnabled: sessionConnection.inputEnabled,
+      logInputEnabled: sessionLog.inputEnabled,
+      alreadyParked: selectPendingSubmit(pendingSubmits, sessionId) !== null,
+    })
+    if (action.type === 'ignore') return
+    const text = action.text
+    // Both paths retire the draft the same way: the prompt has left the
+    // composer, so the pastes it expanded are spent and it joins ↑/↓ history.
+    // A parked prompt that is later released comes back as its expanded text
+    // (`restoreDraftWithPending`) — the pills are gone, the content is not.
+    const retireDraft = (): void => {
+      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
+      setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
+      setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
+    }
+    if (action.type === 'hold') {
+      setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))
+      retireDraft()
+      setTransportError(null)
+      return
+    }
 
     // This is the existing transport-agnostic app.submit path. Do not send a
     // goalSnapshot unless the renderer actually owns one; if added later, the
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
       getBridge().submit(sessionId, text)
-      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
-      setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
-      setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
+      retireDraft()
       setTransportError(null)
     } catch (error) {
       setTransportError(errorMessage(error))
     }
   }
+
+  // CC-16 drain — the parked prompt rides the SAME `app.submit` the moment the
+  // session accepts input, so the ~0.6 s spawn is hidden behind the typing the
+  // user was already doing. A terminal status releases it back into the
+  // composer instead: a queued prompt must never disappear on a failed spawn.
+  useEffect(() => {
+    for (const sessionId of Object.keys(pendingSubmits)) {
+      const parked = pendingSubmits[sessionId]
+      if (parked === undefined) continue
+      const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))
+      if (outcome === 'wait') continue
+      if (outcome === 'release') {
+        releasePendingSubmit(sessionId)
+        continue
+      }
+      try {
+        getBridge().submit(sessionId, parked)
+        setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
+        setTransportError(null)
+      } catch (error) {
+        releasePendingSubmit(sessionId)
+        setTransportError(errorMessage(error))
+      }
+    }
+  }, [connection, pendingSubmits, releasePendingSubmit])
 
   const setSessionPrompt = useCallback(
     (
@@ -2710,12 +2796,26 @@ export function SessionPane({
     !!activeSessionId &&
     activeConnection.status === 'ready' &&
     !activeConnection.inputEnabled
-  const composerEnabled =
-    !!activeSessionId &&
-    !preview &&
-    activeLog.inputEnabled &&
-    activeConnection.status === 'ready' &&
-    activeConnection.inputEnabled
+  // CC-16 — the composer's two gates, kept apart: `engineInputEnabled` is the
+  // engine's own "input is closed" (mid-turn), `connectPending` is "no engine
+  // attached yet, and your own focus/keystroke is what attaches one". Typing,
+  // sending and attaching are all allowed while connect-pending; the SUBMIT is
+  // what waits (parked by `submitSession`, drained in App's CC-16 effect).
+  const composerGate = selectComposerGate({
+    hasSession: !!activeSessionId,
+    preview,
+    connectionStatus: activeConnection.status,
+    connectionInputEnabled: activeConnection.inputEnabled,
+    logInputEnabled: activeLog.inputEnabled,
+  })
+  // The placeholder never instructs the user any more: a previewed/connecting
+  // pane reads exactly like a live one (prototype `Chat.jsx:1145` has no
+  // connection-state placeholder at all). 'Connecting…' survives only for the
+  // terminal statuses — dead/failed/exited/disconnected — which stay read-only.
+  const composerPlaceholder =
+    composerGate.editable || activeConnection.status === 'ready'
+      ? 'Ask Cat Code anything or describe a task…'
+      : 'Connecting…'
   const paused = permissionQueue.length > 0 || askQuestion !== null
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
@@ -3170,7 +3270,15 @@ export function SessionPane({
         aria-label="Composer"
         className="flex flex-col"
         onKeyDown={onComposerKeyDown}
-        onSubmit={submit}
+        onSubmit={event => {
+          // CC-16 — a submit is intent too. Focus/pointer-down normally fired
+          // the spawn already (`claimLazyRestore` makes a repeat a no-op), but
+          // a send-arrow click on a pre-filled draft never touched the
+          // textarea; without this the parked prompt would wait on a spawn
+          // nobody started.
+          engagePreviewPane()
+          submit(event)
+        }}
       >
         <div className="peer relative flex items-end gap-[14px] px-1 pb-[11px]">
           <div className="relative min-w-0 flex-1">
@@ -3198,7 +3306,7 @@ export function SessionPane({
               rows={1}
               className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
               disabled={!activeSessionId}
-              readOnly={!composerEnabled}
+              readOnly={!composerGate.editable}
               onFocus={engagePreviewPane}
               onPointerDown={engagePreviewPane}
               onChange={event => {
@@ -3215,15 +3323,7 @@ export function SessionPane({
                 isComposingRef.current = false
               }}
               onPaste={handlePaste}
-              placeholder={
-                preview
-                  ? previewEngaged
-                    ? 'Connecting…'
-                    : 'Focus to reconnect…'
-                  : activeConnection.status !== 'ready'
-                    ? 'Connecting…'
-                    : 'Ask Cat Code anything or describe a task…'
-              }
+              placeholder={composerPlaceholder}
               value={prompt}
             />
           </div>
@@ -3233,7 +3333,7 @@ export function SessionPane({
             aria-label="Send prompt"
             title="Send"
             className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
-            disabled={!composerEnabled || prompt.trim().length === 0}
+            disabled={!composerGate.editable || prompt.trim().length === 0}
             type="submit"
           >
             <svg
@@ -3263,7 +3363,7 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
-          attachDisabled={!composerEnabled}
+          attachDisabled={!composerGate.editable}
           onAttach={() =>
             toast('Paste a large block to attach it as a collapsed chip.', {
               tone: 'info',
