@@ -268,6 +268,63 @@ describe('createSessionsCatalogDriver — single-flight + keeps-last-good', () =
     driver.stop()
   })
 
+  test('fixed cadence: the next run is anchored to run START, not completion', async () => {
+    // Before the fix the driver always scheduled `intervalMs` AFTER the run
+    // settled, so the real refresh period was `intervalMs + runDuration` — the
+    // measured 30.36 s ceiling against a 30 s freshness contract.
+    const delays: number[] = []
+    let clock = 0
+    const runMs = 450
+    const driver = createSessionsCatalogDriver({
+      run: () => {
+        clock += runMs // the run consumes wall time
+        return Promise.resolve()
+      },
+      intervalMs: 30_000,
+      now: () => clock,
+      setTimer: (_cb, ms) => {
+        delays.push(ms)
+        return { unref() {} } as unknown as ReturnType<typeof setTimeout>
+      },
+      clearTimer: () => {},
+    })
+
+    driver.start()
+    await flush()
+    driver.stop()
+    // Period = interval exactly: the run's own 450 ms is absorbed, not added.
+    expect(delays).toEqual([30_000 - runMs])
+  })
+
+  test('fixed cadence: a run that overruns the interval reschedules immediately, never stacks', async () => {
+    const delays: number[] = []
+    let clock = 0
+    let running = 0
+    let maxConcurrent = 0
+    const driver = createSessionsCatalogDriver({
+      run: async () => {
+        running++
+        maxConcurrent = Math.max(maxConcurrent, running)
+        clock += 90_000 // three intervals long
+        running--
+      },
+      intervalMs: 30_000,
+      now: () => clock,
+      setTimer: (_cb, ms) => {
+        delays.push(ms)
+        return { unref() {} } as unknown as ReturnType<typeof setTimeout>
+      },
+      clearTimer: () => {},
+    })
+
+    driver.start()
+    await flush()
+    driver.stop()
+    // Clamped to 0 (never negative), and the in-flight guard still serialized it.
+    expect(delays).toEqual([0])
+    expect(maxConcurrent).toBe(1)
+  })
+
   test('stop() prevents any further scheduled runs', async () => {
     let runCount = 0
     let timerCb: (() => void) | null = null
