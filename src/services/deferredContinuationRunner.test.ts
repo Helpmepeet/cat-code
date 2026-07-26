@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, open, readFile, rm } from 'node:fs/promises'
+import {
+  getSessionId,
+  getSessionProjectDir,
+  switchSession,
+} from '../bootstrap/state.js'
+import { asSessionId } from '../types/ids.js'
+import {
+  clearSessionMessagesCache,
+  flushSessionStorage,
+  getTranscriptPathForSession,
+  recordTranscript,
+  resetProjectForTesting,
+} from '../utils/sessionStorage.js'
+import { createUserMessage } from '../utils/messages.js'
 import {
   ACCOUNT_AVAILABLE_CONTINUATION,
   RESET_ELAPSED_CONTINUATION,
@@ -140,7 +154,7 @@ describe('deferred continuation runner', () => {
     expect(settled).not.toMatchObject({ outcome: 'completed' })
   })
 
-  test('terminal-barrier failure leaves the job submitted for reconciliation', async () => {
+  test('post-turn result-entry persistence failure leaves the job submitted for reconciliation', async () => {
     const root = await mkdtemp('/tmp/cat-code-deferred-terminal-barrier-')
     cleanup.push(root)
     const previous = process.env.CLAUDE_CONFIG_DIR
@@ -150,16 +164,10 @@ describe('deferred continuation runner', () => {
       await createPendingDeferredContinuation(pending)
       const attempt = await beginForegroundDeferredContinuation(pending)
       expect(attempt).not.toBeNull()
-      // persistAttemptResult fails after the turn already reported success. The
-      // mechanism here is the result-entry validator, NOT the durable barrier:
-      // this test never switchSession()s, so `entry.sessionId !== getSessionId()`
-      // rejects in recordDeferredContinuationResult (sessionStorage.ts:1993) —
-      // before appendEntry, before flushCurrentTranscriptDurably. The transition
-      // asserted below is the same either way (any post-turn persistence failure
-      // takes this path), which is what this test pins. Reaching the barrier
-      // itself would need TEST_ENABLE_SESSION_PERSISTENCE=1 plus a materialized
-      // session file, the setup deferredContinuation.probe.test.ts carries;
-      // flushCurrentTranscriptDurably has no coverage here.
+      // This intentionally exercises the result-entry validator, not the durable
+      // barrier: the session id was never switched, so the entry is rejected
+      // before appendEntry or flushCurrentTranscriptDurably. The transition is
+      // still valid for any post-turn persistence failure.
       expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
         outcome: 'completed',
         observedAt: NOW,
@@ -175,6 +183,91 @@ describe('deferred continuation runner', () => {
     } finally {
       if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+
+  test('actual durable barrier failure after a materialized transcript leaves the job submitted for reconciliation', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-durable-barrier-')
+    const sessionDir = await mkdtemp('/tmp/cat-code-deferred-durable-session-')
+    cleanup.push(root, sessionDir)
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousTestPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    const previousSessionId = getSessionId()
+    const previousSessionProjectDir = getSessionProjectDir()
+    let fileHandlePrototype: { sync: () => Promise<void> } | undefined
+    let originalSync: (() => Promise<void>) | undefined
+    try {
+      process.env.CLAUDE_CONFIG_DIR = root
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+      const pending = pendingJob()
+      resetProjectForTesting()
+      switchSession(asSessionId(pending.sessionId), sessionDir)
+      clearSessionMessagesCache()
+      await createPendingDeferredContinuation(pending)
+
+      // The real recordTranscript path creates the owning JSONL file. The
+      // result write below can therefore pass its session-id validator, append
+      // to that file, and enter flushCurrentTranscriptDurably.
+      const recorded = await recordTranscript([
+        createUserMessage({
+          content: 'continue',
+          uuid: pending.attempt.messageUuid,
+        }),
+      ])
+      expect(recorded).toBe(pending.attempt.messageUuid)
+      await flushSessionStorage()
+      const transcriptPath = getTranscriptPathForSession(pending.sessionId)
+      expect(await readFile(transcriptPath, 'utf8')).toContain(
+        pending.attempt.messageUuid,
+      )
+
+      // Inject the fsync failure at the FileHandle method that the actual
+      // flushCurrentTranscriptDurably implementation calls. It is armed only
+      // after the real transcript is materialized and restored immediately.
+      const probe = await open(transcriptPath, 'r')
+      fileHandlePrototype = Object.getPrototypeOf(probe) as {
+        sync: () => Promise<void>
+      }
+      originalSync = fileHandlePrototype.sync
+      await probe.close()
+      let armed = false
+      fileHandlePrototype.sync = async function (this: unknown) {
+        if (armed) {
+          armed = false
+          throw new Error('injected durable fsync failure')
+        }
+        return originalSync!.call(this)
+      }
+
+      const attempt = await beginForegroundDeferredContinuation(pending)
+      expect(attempt).not.toBeNull()
+      armed = true
+      expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
+        outcome: 'completed',
+        observedAt: NOW,
+      })).toBe(true)
+      await attempt!.finished
+
+      const transcript = await readFile(transcriptPath, 'utf8')
+      expect(transcript).toContain('deferred-continuation-result')
+      expect(transcript).toContain('"outcome":"completed"')
+      expect((await readPendingDeferredContinuation(pending.sessionId))?.state).toBe('submitted')
+      expect(await getLatestDeferredContinuationHistory(pending.sessionId)).toBeNull()
+      expect(await takeDeferredContinuationNotice(pending.sessionId)).toBeNull()
+    } finally {
+      if (fileHandlePrototype && originalSync) {
+        fileHandlePrototype.sync = originalSync
+      }
+      clearSessionMessagesCache()
+      resetProjectForTesting()
+      switchSession(asSessionId(previousSessionId), previousSessionProjectDir)
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousTestPersistence === undefined) {
+        delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      } else {
+        process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousTestPersistence
+      }
     }
   })
 
