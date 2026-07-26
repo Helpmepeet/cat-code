@@ -422,6 +422,62 @@ test('reap enforces MAX_REGISTRY_SESSIONS, dropping oldest terminal rows first',
   expect(survivingIds.has(`app-${total - 1}`)).toBe(true)
 })
 
+/**
+ * The 2026-07-26 ruling (decisions/REGISTRY.md §3): browsing must not destroy
+ * restorable state. Opening a session from history mints a registry row, so at
+ * the bound a READ action evicted a genuinely-restorable session — the operator's
+ * live registry sat permanently at 32/32.
+ *
+ * The literal 32 is the HISTORICAL bound, deliberately not `MAX_REGISTRY_SESSIONS`
+ * — writing the symbol here would make the assertion vacuous at any bound. This
+ * test fails at the old value (the 33rd open reaps a restorable row) and is the
+ * tripwire against silently regressing the bound back toward it.
+ */
+const HISTORICAL_REGISTRY_BOUND = 32
+
+test('opening a session with 32 restorable rows evicts nothing (a READ must not destroy state)', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // Exactly the historical bound's worth of closed-but-restorable rows.
+  const rows: RegistrySession[] = []
+  for (let i = 0; i < HISTORICAL_REGISTRY_BOUND; i++) {
+    writeTranscript(storageDir, `engine-r-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-r-${i}`,
+        engineSessionId: `engine-r-${i}`,
+        shutdown: 'clean',
+        lastAttachedAt: 1_700_000_000_000 + i,
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.sessions.length).toBe(HISTORICAL_REGISTRY_BOUND)
+
+  // Open one from history: mints a live row. Nothing may be reaped for it.
+  const reaped = await registry.upsertOnSpawn({
+    appSessionId: 'app-opened-from-history',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4242,
+  })
+
+  expect(reaped).toEqual([])
+  const doc = readDoc(registryPath)
+  expect(doc.sessions.length).toBe(HISTORICAL_REGISTRY_BOUND + 1)
+  // Every restorable row that existed before the open still exists after it.
+  const ids = new Set(doc.sessions.map(r => r.appSessionId))
+  for (let i = 0; i < HISTORICAL_REGISTRY_BOUND; i++) {
+    expect(ids.has(`app-r-${i}`)).toBe(true)
+  }
+  // Tripwire: the assertions above only bite while the bound exceeds the
+  // historical value. Regressing it back to 32 must fail loudly here too.
+  expect(MAX_REGISTRY_SESSIONS).toBeGreaterThan(HISTORICAL_REGISTRY_BOUND)
+})
+
 test('spawn over the bound reaps a terminal row, never the new LIVE row', async () => {
   const storageDir = tempDir()
   const registryPath = join(storageDir, 'registry.json')

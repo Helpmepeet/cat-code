@@ -7,7 +7,6 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import {
   DEBUG_STATE_VERSION,
@@ -212,7 +211,17 @@ type ParseResult =
   | { ok: false; error: string }
 
 const MAX_STRING = 1024
-const MAX_ITEMS = MAX_REGISTRY_SESSIONS * 4
+/**
+ * Collection sanity bound for the debug snapshot parse (tabs, sidebar rows,
+ * pending permissions, suggestion labels).
+ *
+ * A literal, deliberately NOT derived from `MAX_REGISTRY_SESSIONS` as it was
+ * until 2026-07-26. That constant is a registry file-growth backstop; when it
+ * was raised 32 → 256 for the browse-eviction fix (`decisions/REGISTRY.md` §3),
+ * the derived form would have quadrupled this validation cap 128 → 1024 as a
+ * silent side effect. 128 preserves the previously effective value.
+ */
+const MAX_ITEMS = 128
 const TONES = new Set(['live', 'busy', 'warn', 'dead'])
 const SIDEBAR_KINDS = new Set(['live', 'restorable'])
 
