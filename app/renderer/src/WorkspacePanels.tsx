@@ -12,7 +12,7 @@ import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { ConnectionSnapshot } from './connectionState.js'
 import { basename } from './pathUtils.js'
-import { tabLabel } from './TabBar.js'
+import { tabLabel } from './tabBarModel.js'
 import {
   MAX_WORKSPACE_PANELS,
   resizeWorkspaceDivider,

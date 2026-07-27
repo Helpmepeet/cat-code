@@ -21,7 +21,7 @@ import {
   withResolvedTitle,
   type MergedSessionRow,
 } from './sessionsCatalogState.js'
-import { tabLabel } from './TabBar.js'
+import { tabLabel } from './tabBarModel.js'
 
 function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): SessionCatalogEntry {
   return {

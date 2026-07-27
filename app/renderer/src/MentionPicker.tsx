@@ -15,6 +15,7 @@
  */
 
 import type { ReactNode } from 'react'
+import { filterMentionItems } from './mentionPickerModel.js'
 
 export type MentionItem = {
   /** The visible primary text; also what the query matches against. */
@@ -33,15 +34,6 @@ export type MentionTab = { id: string; label: string }
  * Case-insensitive substring filter on `label` (the prototype's filter,
  * Surfaces.jsx:1040). An empty/whitespace query returns every item unchanged.
  */
-export function filterMentionItems(
-  items: readonly MentionItem[],
-  query: string,
-): MentionItem[] {
-  const q = query.trim().toLowerCase()
-  if (q.length === 0) return [...items]
-  return items.filter(item => item.label.toLowerCase().includes(q))
-}
-
 export function MentionPicker({
   open,
   query,

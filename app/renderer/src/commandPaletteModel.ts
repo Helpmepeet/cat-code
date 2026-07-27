@@ -18,7 +18,7 @@ import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId, SlashCatalogEntry } from '../../shared/protocol.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
 import type { TabTone } from './tabStatus.js'
-import { tabLabel } from './TabBar.js'
+import { tabLabel } from './tabBarModel.js'
 
 export type PaletteItemKind = 'action' | 'session'
 

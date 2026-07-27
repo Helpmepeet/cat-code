@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  filterMentionItems,
   MentionPicker,
   type MentionItem,
 } from './MentionPicker.js'
+import { filterMentionItems } from './mentionPickerModel.js'
 
 const items: MentionItem[] = [
   { label: 'src/auth/auth.ts', mono: true },

@@ -8,7 +8,7 @@ import {
   formatResetLabel,
   statusDotTone,
   usageTone,
-} from './AccountsPage.js'
+} from './accountsPageModel.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
 import type { ContextUsage } from './contextUsage.js'
@@ -84,22 +84,6 @@ export type ComposerFaceProps = {
  * attach or fast toggle is not a landing spot); returns whether a face actually
  * took focus so the caller only swallows the key when the move happened.
  */
-export function focusFirstComposerFace(container: HTMLElement | null): boolean {
-  if (!container) return false
-  const faces = container.querySelectorAll<HTMLElement>('[data-composer-face]')
-  for (const face of faces) {
-    if (
-      face.hasAttribute('disabled') ||
-      face.getAttribute('aria-disabled') === 'true'
-    ) {
-      continue
-    }
-    face.focus()
-    return document.activeElement === face
-  }
-  return false
-}
-
 // The prototype's `ColumnChipFace` face (Surfaces.jsx:228-244): quiet inline
 // text, no border/background, 12.5px medium, ellipsised, brightening on hover.
 const RAIL_FACE =

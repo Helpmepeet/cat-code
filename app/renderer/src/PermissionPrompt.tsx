@@ -1,62 +1,6 @@
 import { useState } from 'react'
-import type { PermissionUpdate } from '@cat-code/engine/sdk'
 import type { PermissionRequest } from './permissionState.js'
-
-export type PermissionKeyboardAction = 'allow' | 'deny' | 'dismiss'
-
-type KeyLike = {
-  key: string
-  altKey?: boolean
-  ctrlKey?: boolean
-  metaKey?: boolean
-}
-
-export function permissionActionForKey(
-  event: KeyLike,
-): PermissionKeyboardAction | null {
-  if (event.altKey || event.ctrlKey || event.metaKey) return null
-  if (event.key === 'Enter') return 'allow'
-  if (event.key.toLowerCase() === 'n' || event.key === 'Backspace') return 'deny'
-  if (event.key === 'Escape') return 'dismiss'
-  return null
-}
-
-/**
- * Display an ENGINE-minted permission suggestion. This renders the engine's
- * own rule content verbatim (`Tool` / `Tool(content)` — the engine's own
- * serialization idiom); nothing here derives or invents scope. The
- * prototype's client-side `ruleImplication` guesser is deliberately CUT
- * (S2 §7 — rendering a guessed rule that differs from what would be
- * persisted is a correctness bug).
- */
-export function describeSuggestion(update: PermissionUpdate): string {
-  switch (update.type) {
-    case 'addRules':
-    case 'replaceRules':
-    case 'removeRules': {
-      const rules = update.rules
-        .map(rule =>
-          rule.ruleContent
-            ? `${rule.toolName}(${rule.ruleContent})`
-            : rule.toolName,
-        )
-        .join(', ')
-      return `${update.behavior} ${rules} · ${update.destination}`
-    }
-    case 'setMode':
-      return `mode → ${update.mode} · ${update.destination}`
-    case 'addDirectories':
-    case 'removeDirectories':
-      return `${update.type === 'addDirectories' ? 'allow' : 'remove'} directory ${update.directories.join(', ')} · ${update.destination}`
-    default: {
-      // Compile-time exhaustiveness tripwire (P2-0 idiom, see
-      // transcriptProjector.ts): if PermissionUpdate grows a variant, this
-      // assignment errors until it gets an explicit case above.
-      const _exhaustive: never = update
-      return `unknown permission update · ${JSON.stringify(_exhaustive)}`
-    }
-  }
-}
+import { describeSuggestion } from './permissionPromptModel.js'
 
 /**
  * One permission card. Options map 1:1 to the S2 §5 payload contract:

@@ -19,79 +19,21 @@
  */
 
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useReducer,
   useRef,
   type ReactNode,
 } from 'react'
+import { ToastContext } from './toastContext.js'
+import {
+  DEFAULT_TOAST_DURATION,
+  toastReducer,
+  type Toast,
+  type ToastFn,
+  type ToastTone,
+} from './toastModel.js'
 import { toneClasses, type Tone } from './tone.js'
-
-/** Toast tones (the prototype's set, Surfaces.jsx:850-855). */
-export type ToastTone = 'default' | 'success' | 'danger' | 'warn' | 'info'
-
-export type ToastOptions = {
-  tone?: ToastTone
-  /** Auto-dismiss delay in ms; defaults to {@link DEFAULT_TOAST_DURATION}. */
-  duration?: number
-}
-
-export type Toast = {
-  id: string
-  message: string
-  tone: ToastTone
-  duration: number
-}
-
-export type ToastFn = (message: string, options?: ToastOptions) => void
-
-export const DEFAULT_TOAST_DURATION = 3200
-/** Newest-wins cap so a burst of toasts can never grow the stack unbounded. */
-export const MAX_TOASTS = 5
-
-/* ── queue model (pure, unit-tested) ──────────────────────────────────────── */
-
-export type ToastAction =
-  | { type: 'add'; toast: Toast }
-  | { type: 'dismiss'; id: string }
-
-export function toastReducer(state: Toast[], action: ToastAction): Toast[] {
-  switch (action.type) {
-    case 'add': {
-      const next = [...state, action.toast]
-      // Drop the oldest beyond the cap (FIFO) so the newest is always visible.
-      return next.length > MAX_TOASTS ? next.slice(next.length - MAX_TOASTS) : next
-    }
-    case 'dismiss':
-      return state.some(t => t.id === action.id)
-        ? state.filter(t => t.id !== action.id)
-        : state
-    default:
-      return state
-  }
-}
-
-/* ── provider / hook ──────────────────────────────────────────────────────── */
-
-const ToastContext = createContext<ToastFn | null>(null)
-
-/**
- * `useToast()` returns the `toast()` function. Called outside a `ToastHost` it
- * returns a no-op (with a dev warning) rather than throwing — a domain rendered
- * in isolation (a test, a storybook) must not crash for want of a toast host.
- */
-export function useToast(): ToastFn {
-  const fn = useContext(ToastContext)
-  return fn ?? noopToast
-}
-
-function noopToast(): void {
-  if (import.meta.env?.DEV) {
-    console.warn('useToast() called outside a <ToastHost>, so the toast was dropped.')
-  }
-}
 
 let toastCounter = 0
 

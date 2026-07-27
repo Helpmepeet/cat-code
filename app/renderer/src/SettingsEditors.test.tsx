@@ -12,7 +12,8 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SettingsSnapshot } from '../../shared/protocol.js'
-import { SettingsPane, settingsPaneSpecs } from './SettingsEditors.js'
+import { SettingsPane } from './SettingsEditors.js'
+import { settingsPaneSpecs } from './settingsEditorModel.js'
 
 function snapshot(partial: Partial<SettingsSnapshot>): SettingsSnapshot {
   return {

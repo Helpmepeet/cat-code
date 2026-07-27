@@ -22,7 +22,7 @@ import type {
   SettingsResultFrame,
   TaskControlResultFrame,
 } from '../../shared/protocol.js'
-import type { ToastTone } from './ToastHost.js'
+import type { ToastTone } from './toastModel.js'
 
 /**
  * The four previously-unconsumed verb-ack results. Every member shares the

@@ -8,6 +8,8 @@ import type {
 } from '../../shared/protocol.js'
 import {
   AccountsPage,
+} from './AccountsPage.js'
+import {
   deleteVerb,
   renameError,
   resultToastTone,
@@ -16,7 +18,7 @@ import {
   statusLabelTone,
   switchVerb,
   usageTone,
-} from './AccountsPage.js'
+} from './accountsPageModel.js'
 
 /**
  * This package has NO DOM test harness — `bun test` exposes no `document`/`window`,

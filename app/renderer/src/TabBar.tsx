@@ -11,7 +11,7 @@
 import { useRef, type KeyboardEvent } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
-import { basename } from './pathUtils.js'
+import { tabLabel } from './tabBarModel.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 
@@ -393,15 +393,6 @@ function AttentionBadge() {
       <span className="h-1.5 w-1.5 rounded-full bg-accent" />
     </span>
   )
-}
-
-/** A row's tab title: its title, else the cwd basename, else a fallback. */
-export function tabLabel(descriptor: SessionDescriptor): string {
-  if (descriptor.title && descriptor.title.trim().length > 0) {
-    return descriptor.title
-  }
-  const base = basename(descriptor.cwd)
-  return base.length > 0 ? base : 'New session'
 }
 
 function toneTextClass(tone: TabTone): string {

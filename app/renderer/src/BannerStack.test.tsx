@@ -2,10 +2,9 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   BannerStack,
-  dismissBanner,
-  upsertBanner,
   type BannerNotice,
 } from './BannerStack.js'
+import { dismissBanner, upsertBanner } from './bannerStackModel.js'
 
 const reauth: BannerNotice = {
   id: 'reauth',

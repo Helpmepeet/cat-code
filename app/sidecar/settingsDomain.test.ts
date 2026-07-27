@@ -9,7 +9,7 @@ import {
   type SettingSource,
 } from '../../src/utils/settings/constants.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
-import { SOURCE_LABEL } from '../renderer/src/SettingsField.js'
+import { SOURCE_LABEL } from '../renderer/src/settingsFieldModel.js'
 import { SETTING_SOURCE_PRECEDENCE } from '../renderer/src/settingsState.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {

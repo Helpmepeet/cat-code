@@ -6,6 +6,8 @@ import {
   App,
   ConnectionRecovery,
   SessionPane,
+} from './App.js'
+import {
   buildDebugExport,
   deriveActivity,
   fmtElapsed,
@@ -14,7 +16,7 @@ import {
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
-} from './App.js'
+} from './appModel.js'
 import { createTranscriptState } from './transcriptProjector.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type { AccountStatus } from '../../shared/protocol.js'

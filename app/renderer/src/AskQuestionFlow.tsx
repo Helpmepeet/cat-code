@@ -18,27 +18,12 @@ import { useEffect, useRef, useState } from 'react'
 import { MAX_QUESTION_ANSWER_CHARS } from '../../shared/limits.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 import type { AskQuestion } from './askQuestionState.js'
+import {
+  buildAskAnswerPayload,
+  type DraftAnswer,
+} from './askQuestionFlowModel.js'
 
 /** One question's in-progress answer: engine-option indices + freeform text. */
-type DraftAnswer = { optionIndices: number[]; other: string }
-
-/**
- * Build the wire payload from the per-question drafts: option INDICES + the
- * trimmed freeform text (omitted when empty). The renderer authors NO label —
- * the sidecar re-attaches the engine's own option labels by index
- * (decisions/ASK-USER-QUESTION-ANSWER.md). Exported for unit testing.
- */
-export function buildAskAnswerPayload(
-  drafts: DraftAnswer[],
-): AskUserQuestionAnswer[] {
-  return drafts.map(draft => {
-    const trimmed = draft.other.trim()
-    return {
-      optionIndices: draft.optionIndices,
-      ...(trimmed.length > 0 ? { other: trimmed } : {}),
-    }
-  })
-}
 
 export function AskQuestionFlow({
   questions,

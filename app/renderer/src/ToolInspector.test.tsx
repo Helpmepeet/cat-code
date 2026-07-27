@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describeToolForInspector, ToolInspector } from './ToolInspector.js'
+import { ToolInspector } from './ToolInspector.js'
+import { describeToolForInspector } from './toolInspectorModel.js'
 import type { ToolUseRow } from './transcriptProjector.js'
 
 function mkToolRow(overrides: Partial<ToolUseRow>): ToolUseRow {

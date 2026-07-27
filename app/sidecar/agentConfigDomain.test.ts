@@ -22,7 +22,7 @@ import {
   deriveAgentModeWorkerState,
   deriveTaskAgentState,
 } from '../renderer/src/agentIdentity.js'
-import { describeToolForInspector } from '../renderer/src/ToolInspector.js'
+import { describeToolForInspector } from '../renderer/src/toolInspectorModel.js'
 import type { ToolUseRow } from '../renderer/src/transcriptProjector.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {

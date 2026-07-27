@@ -12,9 +12,9 @@ import { selectShellDescriptors } from './sidebarState.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { selectConnection, type ConnectionState } from './connectionState.js'
-import { describeSuggestion } from './PermissionPrompt.js'
+import { describeSuggestion } from './permissionPromptModel.js'
 import { basename } from './pathUtils.js'
-import { tabLabel } from './TabBar.js'
+import { tabLabel } from './tabBarModel.js'
 
 export function buildDebugShellStateSnapshot(args: {
   shell: ShellState

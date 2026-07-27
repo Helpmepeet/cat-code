@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
-import { TabBar, tabLabel, type TabModel } from './TabBar.js'
+import { TabBar, type TabModel } from './TabBar.js'
+import { tabLabel } from './tabBarModel.js'
 import type { TabVisualState } from './tabStatus.js'
 
 function descriptor(

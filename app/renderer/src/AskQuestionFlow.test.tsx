@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AskQuestionFlow, buildAskAnswerPayload } from './AskQuestionFlow.js'
+import { AskQuestionFlow } from './AskQuestionFlow.js'
+import { buildAskAnswerPayload } from './askQuestionFlowModel.js'
 import type { AskQuestion } from './askQuestionState.js'
 
 const SINGLE: AskQuestion[] = [

@@ -22,7 +22,7 @@ import type {
 } from '../../shared/protocol.js'
 import { Chip } from './Chip.js'
 import { PaneSection } from './SettingsField.js'
-import { useToast } from './ToastHost.js'
+import { useToast } from './toastContext.js'
 
 const newRequestId = (): string => crypto.randomUUID()
 

@@ -2,9 +2,11 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   PermissionPrompt,
+} from './PermissionPrompt.js'
+import {
   describeSuggestion,
   permissionActionForKey,
-} from './PermissionPrompt.js'
+} from './permissionPromptModel.js'
 import type { PermissionRequest } from './permissionState.js'
 
 const REQUEST: PermissionRequest = {

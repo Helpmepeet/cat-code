@@ -11,7 +11,7 @@
  * render as text nodes (React escapes them) — never as HTML.
  */
 
-import { useCallback, useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { toneClasses, type Tone } from './tone.js'
 
 /** The banner tones the prototype paints (Surfaces.jsx:788-793). */
@@ -34,44 +34,6 @@ export type BannerNotice = {
   actions?: BannerAction[]
   /** Defaults to true; a `false` banner (e.g. a hard gate) hides the ×. */
   dismissable?: boolean
-}
-
-/* ── stacking model (pure, unit-tested) ───────────────────────────────────── */
-
-/**
- * Add or replace a banner by id (banners are identity-stable notices, not a
- * log — re-deriving the same reauth banner must not duplicate it). A new id
- * appends to the bottom of the stack; an existing id updates in place.
- */
-export function upsertBanner(
-  banners: readonly BannerNotice[],
-  banner: BannerNotice,
-): BannerNotice[] {
-  const index = banners.findIndex(b => b.id === banner.id)
-  if (index < 0) return [...banners, banner]
-  const next = banners.slice()
-  next[index] = banner
-  return next
-}
-
-/** Remove a banner by id (the × / an action that resolves it). */
-export function dismissBanner(
-  banners: readonly BannerNotice[],
-  id: string,
-): BannerNotice[] {
-  return banners.filter(b => b.id !== id)
-}
-
-/** Imperative helper for callers that push banners (vs derive them). */
-export function useBannerStack(initial: readonly BannerNotice[] = []) {
-  const [banners, setBanners] = useState<BannerNotice[]>(() => [...initial])
-  const showBanner = useCallback((banner: BannerNotice) => {
-    setBanners(current => upsertBanner(current, banner))
-  }, [])
-  const removeBanner = useCallback((id: string) => {
-    setBanners(current => dismissBanner(current, id))
-  }, [])
-  return { banners, showBanner, removeBanner }
 }
 
 /* ── presentation ─────────────────────────────────────────────────────────── */

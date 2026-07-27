@@ -16,90 +16,10 @@
 
 import type { ReactNode } from 'react'
 import type {
-  ToolCardStatus,
-  ToolDiffProjection,
-  ToolFamily,
   ToolUseRow,
 } from './transcriptProjector.js'
-import { toneClasses, type Tone } from './tone.js'
-
-export type ToolInspectorModel = {
-  family: ToolFamily
-  name: string
-  /** A best-effort one-line summary derived from the real input (never throws). */
-  summary: string
-  status: ToolCardStatus
-  statusLabel: string
-  statusTone: Tone
-  /** The real, structured tool input — rendered as read-only JSON text. */
-  input: Record<string, unknown>
-  /** A narrowed FileEditTool diff, when the result carried one. */
-  diff: ToolDiffProjection | null
-  /** The result's flattened text output, when non-empty. */
-  output: string | null
-}
-
-/**
- * Keys whose value (if a non-empty string) makes the best summary line, most
- * salient first. The engine's real tool inputs use these
- * (BashTool `command`, Read/Edit `file_path`, Grep `pattern`, WebFetch `url`,
- * Agent `prompt`, …); anything unrecognised falls back to the first string
- * value, then to `—`. Tolerant by construction.
- */
-const SUMMARY_KEYS = [
-  'file_path',
-  'filePath',
-  'path',
-  'command',
-  'pattern',
-  'query',
-  'url',
-  'prompt',
-  'description',
-  'name',
-] as const
-
-const STATUS_TONE: Record<ToolCardStatus, Tone> = {
-  pending: 'accent',
-  success: 'good',
-  error: 'danger',
-}
-
-const STATUS_LABEL: Record<ToolCardStatus, string> = {
-  pending: 'running',
-  success: 'success',
-  error: 'error',
-}
-
-export function describeToolForInspector(row: ToolUseRow): ToolInspectorModel {
-  const input = isRecord(row.input) ? row.input : {}
-  return {
-    family: row.toolFamily,
-    name: row.toolName,
-    summary: deriveSummary(input),
-    status: row.status,
-    statusLabel: STATUS_LABEL[row.status] ?? 'unknown',
-    statusTone: STATUS_TONE[row.status] ?? 'default',
-    input,
-    diff: row.result?.diff ?? null,
-    output: nonEmpty(row.result?.content),
-  }
-}
-
-function deriveSummary(input: Record<string, unknown>): string {
-  for (const key of SUMMARY_KEYS) {
-    const value = input[key]
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.length > 200 ? `${value.slice(0, 200)}…` : value
-    }
-  }
-  for (const value of Object.values(input)) {
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.length > 200 ? `${value.slice(0, 200)}…` : value
-    }
-  }
-  return 'none'
-}
+import { describeToolForInspector } from './toolInspectorModel.js'
+import { toneClasses } from './tone.js'
 
 export function ToolInspector({
   row,
@@ -214,12 +134,4 @@ function safeStringify(value: unknown): string {
   } catch {
     return '[uninspectable input]'
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function nonEmpty(value: string | undefined | null): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null
 }

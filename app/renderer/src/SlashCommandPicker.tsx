@@ -32,51 +32,6 @@ import type { SlashCatalogEntry } from '../../shared/protocol.js'
  * so the picker closes and the draft submits verbatim. Returns the text AFTER
  * the slash (possibly empty for a bare `/`).
  */
-export function parseSlashDraft(draft: string): string | null {
-  const match = /^\/(\S*)$/.exec(draft)
-  return match ? match[1] : null
-}
-
-/**
- * Filter the catalog for a query: case-insensitive NAME-PREFIX matches first
- * (the intent when typing a command name), then remaining matches on name OR
- * description substring (the prototype ranks name-prefix then description-match),
- * each group in the catalog's own order. A bare `/` (empty query) shows the whole
- * catalog. Mirrors the prototype's `SlashCommandPicker` ranking.
- */
-export function filterSlashCommands(
-  entries: readonly SlashCatalogEntry[],
-  query: string,
-): SlashCatalogEntry[] {
-  const q = query.toLowerCase()
-  if (q.length === 0) return [...entries]
-  const prefix: SlashCatalogEntry[] = []
-  const rest: SlashCatalogEntry[] = []
-  for (const entry of entries) {
-    const name = entry.name.toLowerCase()
-    if (name.startsWith(q)) prefix.push(entry)
-    else if (name.includes(q) || entry.description.toLowerCase().includes(q))
-      rest.push(entry)
-  }
-  return [...prefix, ...rest]
-}
-
-/** Move `activeIndex` within `[0, length)`, wrapping at both ends. */
-export function nextSlashIndex(
-  activeIndex: number,
-  length: number,
-  direction: 1 | -1,
-): number {
-  if (length <= 0) return 0
-  return (activeIndex + direction + length) % length
-}
-
-/** The completed draft after picking a command: `/name ` (trailing space so the
- * picker closes and the caret sits ready for arguments). */
-export function completeSlashDraft(name: string): string {
-  return `/${name} `
-}
-
 export function SlashCommandPicker({
   open,
   query,

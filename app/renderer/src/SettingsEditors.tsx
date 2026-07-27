@@ -35,7 +35,6 @@ import type {
   EditableSettingValue,
 } from '../../shared/settingsEditable.js'
 import {
-  EDITABLE_SETTINGS,
   validateEditableSettingValue,
 } from '../../shared/settingsEditable.js'
 import { Field, PaneSection } from './SettingsField.js'
@@ -51,6 +50,7 @@ import {
   type SettingsRowModel,
 } from './settingsScope.js'
 import { selectAvailableOptions, selectLayerOrigin } from './settingsState.js'
+import { settingsPaneSpecs } from './settingsEditorModel.js'
 
 export type SettingWriteInput = {
   source: EditableSettingSource
@@ -72,21 +72,6 @@ export type SettingWriteInput = {
  *  - `spinnerTipsEnabled` / `terminalTitleFromRename` are terminal-presentation
  *    keys (an Ink spinner, a terminal tab title) with no desktop meaning.
  */
-const HIDDEN_KEYS: ReadonlySet<string> = new Set([
-  'includeCoAuthoredBy',
-  'spinnerTipsEnabled',
-  'terminalTitleFromRename',
-])
-
-/** The editable specs one pane renders, in spec order, minus the §5 removals. */
-export function settingsPaneSpecs(
-  pane: EditableSettingPane,
-): readonly EditableSettingSpec[] {
-  return EDITABLE_SETTINGS.filter(
-    spec => spec.pane === pane && !HIDDEN_KEYS.has(spec.key),
-  )
-}
-
 /**
  * Renders every core value-editor for one pane, in one scope.
  *

@@ -5,7 +5,7 @@ import {
   filterSlashCommands,
   nextSlashIndex,
   parseSlashDraft,
-} from './SlashCommandPicker.js'
+} from './slashCommandPickerModel.js'
 
 /** Catalog entries whose descriptions never incidentally match a name query. */
 const entriesOf = (names: string[]): SlashCatalogEntry[] =>

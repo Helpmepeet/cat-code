@@ -69,10 +69,16 @@ import {
   AgentRoleDot,
   AgentStateLabel,
   Baton,
+} from './AgentChrome.js'
+import {
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
-} from './AgentChrome.js'
+} from './agentChromeModel.js'
 import { ToolInspector } from './ToolInspector.js'
+import {
+  findNestedToolUseRow,
+  resolveToolCardExpanded,
+} from './transcriptViewModel.js'
 
 /**
  * P4-1 open-from-card handle: a tool card calls this with its own REAL projected
@@ -93,18 +99,6 @@ const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | n
  * snapshot, and a vanished id (row pruned / session switched) resolves to null →
  * the drawer closes.
  */
-export function findNestedToolUseRow(
-  rows: NestedTranscriptRow[],
-  id: string,
-): ToolUseNestedRow | null {
-  for (const row of rows) {
-    if (row.kind === 'tool-use' && row.id === id) return row
-    const nested = findNestedToolUseRow(row.children, id)
-    if (nested) return nested
-  }
-  return null
-}
-
 /**
  * IS-C (M5) — how a restore reads while it is NOT yet a live session. App
  * derives this from the preview flag + connection status (never a frame):
@@ -854,13 +848,6 @@ function deriveSub(row: ToolUseNestedRow): string | undefined {
  * `defaultExpanded` change. Exported so the decision logic is unit-testable
  * without a DOM (SSR can't exercise a live re-render).
  */
-export function resolveToolCardExpanded(
-  userExpanded: boolean | null,
-  defaultExpanded: boolean,
-): boolean {
-  return userExpanded ?? defaultExpanded
-}
-
 /**
  * Shared quiet-panel card shell (FrameEShell): mark · WORD · target ·
  * state-dot+word header, click-to-collapse body. Family identity colors the

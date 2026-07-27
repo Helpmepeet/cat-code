@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  MAX_TOASTS,
   ToastHost,
+} from './ToastHost.js'
+import {
+  MAX_TOASTS,
   toastReducer,
   type Toast,
-} from './ToastHost.js'
+} from './toastModel.js'
 
 function mkToast(id: string, message = id): Toast {
   return { id, message, tone: 'default', duration: 3200 }

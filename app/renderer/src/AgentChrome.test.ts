@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test'
-import { AGENT_STATE_TONE_CLASS, AGENT_TYPE_TONE_CLASS } from './AgentChrome.js'
+import {
+  AGENT_STATE_TONE_CLASS,
+  AGENT_TYPE_TONE_CLASS,
+} from './agentChromeModel.js'
 import { AGENT_STATE_META, AGENT_TYPE_META } from './agentIdentity.js'
 
 // Tailwind v4 only emits class literals it can statically see — a dynamic

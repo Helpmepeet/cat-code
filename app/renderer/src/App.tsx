@@ -11,13 +11,11 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
-import { permissionActionForKey } from './PermissionPrompt.js'
+import { permissionActionForKey } from './permissionPromptModel.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { selectContextUsage } from './contextUsage.js'
-import {
-  ComposerActionsBar,
-  focusFirstComposerFace,
-} from './ComposerActionsBar.js'
+import { ComposerActionsBar } from './ComposerActionsBar.js'
+import { focusFirstComposerFace } from './composerActionsBarModel.js'
 import {
   buildAllowResponse,
   buildDenyResponse,
@@ -42,7 +40,7 @@ import {
 } from './askQuestionState.js'
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
-import { useToast } from './ToastHost.js'
+import { useToast } from './toastContext.js'
 import {
   activeAfterPaneChange,
   createShellState,
@@ -52,7 +50,8 @@ import {
   type ShellState,
 } from './shellState.js'
 import { deriveTabVisualState } from './tabStatus.js'
-import { TabBar, tabLabel, type TabModel } from './TabBar.js'
+import { TabBar, type TabModel } from './TabBar.js'
+import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
 import { CommandPalette } from './CommandPalette.js'
@@ -69,8 +68,6 @@ import {
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptRows,
-  type NestedTranscriptRow,
-  type TranscriptRow,
   type TranscriptState,
 } from './transcriptProjector.js'
 import {
@@ -93,18 +90,15 @@ import {
   selectStartupPreloadCandidates,
 } from './sessionPreload.js'
 import { TranscriptView, type RestorePhase } from './TranscriptView.js'
+import { SlashCommandPicker } from './SlashCommandPicker.js'
 import {
   completeSlashDraft,
   filterSlashCommands,
   nextSlashIndex,
   parseSlashDraft,
-  SlashCommandPicker,
-} from './SlashCommandPicker.js'
-import {
-  filterMentionItems,
-  MentionPicker,
-  type MentionItem,
-} from './MentionPicker.js'
+} from './slashCommandPickerModel.js'
+import { MentionPicker, type MentionItem } from './MentionPicker.js'
+import { filterMentionItems } from './mentionPickerModel.js'
 import {
   applyMention,
   caretAtHistoryEdge,
@@ -245,15 +239,15 @@ import {
   selectAgentModeSnapshot,
 } from './orchestratorState.js'
 import { GoalsPage } from './GoalsPage.js'
+import { AccountsPage } from './AccountsPage.js'
 import {
-  AccountsPage,
   loginVerb,
   oauthAliasVerb,
   oauthCancelVerb,
   oauthPasteCodeVerb,
   resultToastTone,
   switchVerb,
-} from './AccountsPage.js'
+} from './accountsPageModel.js'
 import {
   ReauthOAuthProgress,
   StartupOAuth,
@@ -290,7 +284,6 @@ import type {
   AccountSwitchMessage,
   AccountVerbMessage,
   AskUserQuestionAnswer,
-  CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
@@ -304,6 +297,17 @@ import type {
   HostEvent,
   SessionDescriptor,
 } from '../../shared/hostApi.js'
+import {
+  buildDebugExport,
+  deriveActivity,
+  fmtElapsed,
+  fmtTok,
+  reducePromptDrafts,
+  selectLiveTokenEstimate,
+  selectPromptDraft,
+  sendPermissionResponse,
+  type PromptDraftState,
+} from './appModel.js'
 
 // Perf F3 (2026-07-08): batch-folding reducer variants, defined at module scope
 // so their identity is stable across renders. A batched server-frame delivery is
@@ -3414,95 +3418,6 @@ export function SessionPane({
   )
 }
 
-/**
- * P4-18c live activity verb, derived from the transcript tail (real frames, no
- * new seam vocabulary). SpinnerMode phases themselves do NOT cross the app
- * seam, so this approximates the current phase from the last arrival-ordered
- * row: a pending tool card ⇒ "Running <tool>", a thinking block ⇒ "Thinking",
- * a streaming assistant body ⇒ "Responding", otherwise "Working".
- */
-export function deriveActivity(rows: NestedTranscriptRow[]): {
-  verb: string
-  target: string | null
-} {
-  const last = rows[rows.length - 1]
-  if (!last) return { verb: 'Working', target: null }
-  if (last.kind === 'tool-use' && last.status === 'pending') {
-    return { verb: 'Running', target: last.toolName }
-  }
-  if (last.kind === 'thinking') return { verb: 'Thinking', target: null }
-  if (last.kind === 'assistant-text' && last.isStreaming === true) {
-    return { verb: 'Responding', target: null }
-  }
-  return { verb: 'Working', target: null }
-}
-
-export function fmtElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  return minutes > 0
-    ? `${minutes}m ${String(seconds).padStart(2, '0')}s`
-    : `${seconds}s`
-}
-
-/** Compact token count, matching the prototype `fmtTok` (`Chat.jsx:134`): raw
- * below 1k, `N.Nk` up to 100k, `Nk` above. */
-export function fmtTok(n: number): string {
-  const r = Math.round(n)
-  if (r < 1000) return String(r)
-  const k = r / 1000
-  return `${k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`
-}
-
-/** Kinds that mark the start of the user's current turn — the point after which
- * new assistant output belongs to this turn. */
-const TURN_BOUNDARY_KINDS: ReadonlySet<NestedTranscriptRow['kind']> = new Set([
-  'user-text',
-  'user-image',
-  'command-echo',
-  // An engine-injected task/agent-completion turn is a user-role message that
-  // starts a fresh assistant turn, so it bounds the live token estimate exactly
-  // as its old `user-text` projection did — before bug-sweep #4 split it into a
-  // distinct row kind. Keeps `selectLiveTokenEstimate` counting only the current
-  // turn's assistant output.
-  'task-notification',
-])
-
-/**
- * Live per-turn output-token estimate for the activity byline, the faithful
- * renderer-side equivalent of the engine's `displayedResponseLength / 4`
- * (`SpinnerAnimationRow.tsx:159-160`): sum the character length of every
- * assistant-authored block produced since the current turn began (streaming
- * text + thinking + tool-input, which the projector grows delta-by-delta),
- * divided by 4. Counts only rows AFTER the last user-authored boundary so prior
- * turns in a retained transcript never leak in; returns 0 when no boundary is
- * present (fail to "no estimate", never to a wrong large number). Purely an
- * estimate — same footing as the TUI, never a fabricated exact count.
- */
-export function selectLiveTokenEstimate(
-  rows: readonly NestedTranscriptRow[],
-): number {
-  let start = -1
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (TURN_BOUNDARY_KINDS.has(rows[i].kind)) {
-      start = i
-      break
-    }
-  }
-  if (start === -1) return 0
-  let chars = 0
-  for (let i = start + 1; i < rows.length; i++) {
-    const row = rows[i]
-    if (row.kind === 'assistant-text' || row.kind === 'thinking') {
-      chars += row.content.length
-    } else if (row.kind === 'tool-use') {
-      chars += JSON.stringify(row.input).length
-    }
-  }
-  return Math.round(chars / 4)
-}
-
 /** Parity with the engine's `SHOW_TOKENS_AFTER_MS` (`SpinnerAnimationRow.tsx:19`):
  * the estimated token byline is gated behind 30s of turn time so quick turns
  * stay quiet — it appears only on genuinely long turns, exactly as the TUI. */
@@ -3623,49 +3538,9 @@ export function ConnectionRecovery({
   )
 }
 
-export function sendPermissionResponse(
-  bridge: Pick<CatCodeBridge, 'respondPermission'>,
-  sessionId: SessionId,
-  requestId: string,
-  response: PermissionResponseInput,
-): string | null {
-  try {
-    bridge.respondPermission(sessionId, requestId, response)
-    return null
-  } catch (error) {
-    return errorMessage(error)
-  }
-}
-
 /** Stable empty inventory for the closed palette — a fresh `[]` each render would
  * bust the palette's `useMemo(filter)` identity check for no reason. */
 const EMPTY_PALETTE_ITEMS: PaletteItem[] = []
-
-export type PromptDraftState = Record<SessionId, string>
-
-export function selectPromptDraft(
-  drafts: PromptDraftState,
-  sessionId: SessionId | null,
-): string {
-  if (!sessionId) return ''
-  return drafts[sessionId] ?? ''
-}
-
-export function reducePromptDrafts(
-  drafts: PromptDraftState,
-  sessionId: SessionId | null,
-  value: string,
-): PromptDraftState {
-  if (!sessionId) return drafts
-  if (value.length === 0) {
-    if (!(sessionId in drafts)) return drafts
-    const next = { ...drafts }
-    delete next[sessionId]
-    return next
-  }
-  if (drafts[sessionId] === value) return drafts
-  return { ...drafts, [sessionId]: value }
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -3825,31 +3700,4 @@ type SessionPaneProps = {
   onRemovePaste: (entry: PasteEntry) => void
   transcript: TranscriptState
   transportError: string | null
-}
-
-export function buildDebugExport(
-  transcriptRows: TranscriptRow[],
-  rawLog: RawMessageSessionLog,
-): string {
-  return `# CatCode debug export
-
-> ⚠️ [!WARNING]
-> **POTENTIALLY SENSITIVE:** The raw transcript and debug clipboard output may contain
-> sensitive file contents, command inputs/outputs, or credential material that passed
-> the outbound key-name secret guard. Handle this export with care.
-
-## Transcript (projected)
-
-\`\`\`json
-${JSON.stringify(transcriptRows, null, 2)}
-\`\`\`
-
-## Raw SDKMessage events
-
-Raw retention: ${rawLog.truncated ? 'TRUNCATED' : 'complete'} (${rawLog.retainedBytes} UTF-8 JSON bytes retained)
-
-\`\`\`json
-${JSON.stringify(rawLog.messages, null, 2)}
-\`\`\`
-`
 }

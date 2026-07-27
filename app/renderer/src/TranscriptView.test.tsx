@@ -2,11 +2,13 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
-  findNestedToolUseRow,
-  resolveToolCardExpanded,
   ToolInspectorOverlay,
   TranscriptRowsView,
 } from './TranscriptView.js'
+import {
+  findNestedToolUseRow,
+  resolveToolCardExpanded,
+} from './transcriptViewModel.js'
 import {
   createTranscriptState,
   projectServerFrame,

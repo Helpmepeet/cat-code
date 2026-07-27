@@ -16,7 +16,8 @@
  */
 
 import type { DiagnosticsSnapshot, SettingsSnapshot } from '../../shared/protocol.js'
-import { Field, PaneSection, SOURCE_LABEL } from './SettingsField.js'
+import { Field, PaneSection } from './SettingsField.js'
+import { SOURCE_LABEL } from './settingsFieldModel.js'
 import { SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 
 function WarningList({ items }: { items: string[] }) {
