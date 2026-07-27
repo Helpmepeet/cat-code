@@ -4,6 +4,42 @@
  * P1-3; P1-0/P1-2 shipped without it). */
 @import 'tailwindcss';
 
+/* Self-hosted (CSP `font-src 'self' data:` blocks the prototype's Google Fonts
+ * CDN link, so the --font-* families below previously had no matching file
+ * and silently fell back to system fonts). Files fetched from the same
+ * fonts.gstatic.com URLs the prototype's Google Fonts <link> resolves to. */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url('./assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/DMMono-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./assets/fonts/DMMono-Medium.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/PressStart2P-Regular.woff2') format('woff2');
+}
+
 :root {
   --accent: #f472b6;
   /* The prototype's lighter active-pink (pink-300): active nav destination /

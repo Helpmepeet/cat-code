@@ -12,7 +12,15 @@
  * This is the ONLY module in `app/` that imports `electron`.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeImage,
+  session,
+  shell,
+} from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -154,6 +162,7 @@ const CH_HOST_EVENT = 'catcode:host:event'
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
 const IS_DEV = !app.isPackaged
 if (IS_DEV) app.setName('Cat Code Dev')
+const APP_ICON_PATH = join(__dirname, '..', 'resources', 'icon.png')
 const VITE_REACT_PREAMBLE_CSP_HASH =
   "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
 
@@ -565,6 +574,7 @@ function createWindow(): void {
     height: 720,
     backgroundColor: '#09090b',
     show: false,
+    icon: APP_ICON_PATH,
     webPreferences: {
       // SECURITY-MINIMUM §3 BrowserWindow/webPreferences — every box checked.
       sandbox: true,
@@ -1579,6 +1589,12 @@ if (!gotSingleInstanceLock) {
   })
 
   app.whenReady().then(() => {
+    // BrowserWindow's `icon` option doesn't reach the Dock tile (SECURITY-MINIMUM
+    // is silent on this — it's cosmetic, not a trust boundary); the Dock image
+    // comes from the running bundle's own Info.plist/icns unless overridden here.
+    if (process.platform === 'darwin') {
+      app.dock?.setIcon(nativeImage.createFromPath(APP_ICON_PATH))
+    }
     applySecurityBaseline()
     registerIpcHandlers() // once — handlers read the module-level host/supervisor
     // Host construction (and thus the registry's launch sweep) runs only after we

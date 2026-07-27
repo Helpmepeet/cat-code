@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="cc-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232228"/>
+      <stop offset="1" stop-color="#0B0A0E"/>
+    </linearGradient>
+    <linearGradient id="cc-glyph" gradientUnits="userSpaceOnUse" x1="310" y1="426" x2="738" y2="758">
+      <stop offset="0" stop-color="#FF9ECF"/>
+      <stop offset="1" stop-color="#FF2E7E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Cat-head terminal tile: one silhouette, ears grow out of the window frame -->
+  <path d="M240 896 L784 896 Q896 896 896 784 L896 420
+           C896 330 872 236 812 156 Q796 136 776 150
+           C736 190 700 250 664 306
+           C612 332 412 332 360 306
+           C324 250 288 190 248 150 Q228 136 212 156
+           C152 236 128 330 128 420 L128 784 Q128 896 240 896 Z"
+        fill="url(#cc-body)" stroke="#FF7AB8" stroke-opacity="0.3" stroke-width="8"/>
+
+  <!-- Prompt chevron + cursor underscore -->
+  <polyline points="352,468 492,592 352,716" fill="none"
+            stroke="url(#cc-glyph)" stroke-width="84"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="566" y="682" width="172" height="76" rx="38" fill="url(#cc-glyph)"/>
+</svg>

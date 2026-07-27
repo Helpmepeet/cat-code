@@ -8,10 +8,22 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { prepareDevElectron } from './prepare-dev-electron.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
-const electronBin = join(appRoot, 'node_modules', '.bin', 'electron')
+
+// Rebranded copy so the Dock shows "Cat Code Dev" instead of "Electron"
+// (see prepare-dev-electron.ts); falls back to the stock binary on any
+// platform/failure where rebranding doesn't apply.
+let electronBin: string
+try {
+  electronBin =
+    prepareDevElectron() ?? join(appRoot, 'node_modules', '.bin', 'electron')
+} catch (err) {
+  console.warn('[dev] electron rebrand failed, using stock binary:', err)
+  electronBin = join(appRoot, 'node_modules', '.bin', 'electron')
+}
 
 // 1. Build main + preload bundles.
 const build = spawnSync('bun', ['run', join(here, 'build-electron.ts')], {
