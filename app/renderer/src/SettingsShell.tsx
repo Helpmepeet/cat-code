@@ -1,21 +1,39 @@
 /**
- * Settings shell (P4-3) — the two-pane Settings frame from the prototype's
- * `Settings.jsx` (left category rail + dense right pane), rebuilt in TS/Tailwind
- * on the P0-2 tokens. This session ships the SHELL + the `Field`/`SourceBadge`/
- * `ManagedBadge` primitives over the real settings source/precedence model; the
- * value-editing panels plug in later (P4-12 → `SettingsExtensions`, etc.).
+ * Settings shell — rebuilt on `docs/migration/specs/2026-07-27-settings-redesign.md`
+ * after the operator rejected the previous surface wholesale ("very bad in
+ * grouping and everything… needs a full rebuild in philosophy").
  *
- * The read-seam is `settings.snapshot` (P4-3, `settingsState.ts`): the source/
- * editable/managed model, no values. So the panels that are pure value editors
- * are honest stubs here (the prototype uses the same `StubPanel` idiom); the
- * MANAGED panel and the resolution legend/layer summary render REAL snapshot
- * data — the primitives demonstrated over engine truth, not fixtures.
+ * The old page displayed the RESOLVER's output: it bound silently to whichever
+ * session was focused, so switching tabs changed what most panes meant, and it
+ * showed a running session's permission mode under a heading ("Default mode")
+ * that promised durable configuration. Both are one error — answering *"what did
+ * the engine compute for whoever happens to be focused?"* where a Settings page
+ * must answer *"what will happen next time, and for whom?"*.
  *
- * The category rail is grouped by SCOPE (see `SETTINGS_CATEGORIES` /
- * `CAT_SCOPE`), not by the prototype's functional headings, because the screen
- * mixes settings that are identical on every machine with settings that
- * silently describe whichever session is focused, and nothing on screen told
- * the operator which was which.
+ * So this shell edits FILES, and its subject is CHOSEN:
+ *
+ *  - **Law 1 — Settings edits sources; sessions show state.** No live session
+ *    value renders here. The live permission context, workspace trust, IDE/LSP
+ *    status and doctor output moved to the session inspector (tab ⋯ → "Inspect
+ *    metadata…", `MetadataInspector.tsx`), which already hosts every one of
+ *    them — so this is a relocation, not a cut.
+ *  - **Law 2 — Scope is chosen, never inherited.** The page head carries the
+ *    subject: My defaults · a named Project · This app · Enforced. Switching
+ *    session tabs never changes it. The focused session's project is offered
+ *    FIRST and labeled "current", but selecting it is an act.
+ *  - **Law 3 — Every write names its file before it happens.** The scope decides
+ *    the write layer (`settingsScope.ts`); the pane states the destination path
+ *    above the controls. `targetSourceFor` resolve-time targeting is deleted.
+ *
+ * The rail is FUNCTIONAL again — the resolver's five-way source taxonomy became
+ * the scope selector plus a per-row annotation, and never structures the nav.
+ *
+ * v1 limits, stated on screen rather than papered over (spec §6): the settings
+ * snapshot is one session's spawn-time read (`app/sidecar/settingsDomain.ts:16-17`),
+ * so the user layer is trustworthy from any session while a PROJECT other than
+ * the focused session's has not been read at all — and must not be written
+ * either, since the write verb reaches that session's sidecar and would land in
+ * its cwd's file. Scope-addressed reads (`settings.refresh`) are a later task.
  */
 
 import { useContext, useState } from 'react'
@@ -33,9 +51,7 @@ import type {
   WorkspaceTrustSnapshot,
 } from '../../shared/protocol.js'
 import { AgentsPage } from './AgentsPage.js'
-import { DiagnosticsSection } from './DiagnosticsSection.js'
 import { MemoryPage } from './MemoryPage.js'
-import { PermissionRulesEditor } from './PermissionRulesEditor.js'
 import {
   isReasoningLayoutMode,
   ReasoningLayoutContext,
@@ -45,572 +61,680 @@ import {
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import { SelectControl, SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
+import type { SettingsProjectBinding } from './settingsProjectBinding.js'
 import {
-  SETTINGS_PROJECT_UNBOUND_NOTE,
-  type SettingsProjectBinding,
-} from './settingsProjectBinding.js'
-import {
+  SETTINGS_UNKNOWN_VALUE,
   SETTINGS_UNREAD_NOTE,
   settingsWereRead,
 } from './settingsReadState.js'
+import {
+  SETTINGS_APPLY_NOTE,
+  SETTINGS_PROJECT_LAYER_DESC,
+  SETTINGS_PROJECT_LAYER_LABEL,
+  SETTINGS_PROJECT_LAYERS,
+  SETTINGS_SCOPE_KINDS,
+  SETTINGS_SCOPE_LABEL,
+  SETTINGS_SCOPE_SUBTITLE,
+  SETTINGS_SESSION_STATE_NOTE,
+  selectProjectEngine,
+  selectSettingsProjects,
+  selectSettingsRail,
+  selectSettingsRailItem,
+  selectSettingsWriteLayer,
+  settingsNoEngineNote,
+  settingsRailItem,
+  type SettingsProjectEngine,
+  type SettingsProjectLayer,
+  type SettingsProjectOption,
+  type SettingsRailItemId,
+  type SettingsScopeKind,
+} from './settingsScope.js'
 import {
   HooksPanel,
   McpPanel,
   PluginsPanel,
   SkillsPanel,
 } from './SettingsExtensions.js'
-import {
-  Field,
-  LockIcon,
-  PaneSection,
-  ResolutionOrderLegend,
-  SourceBadge,
-} from './SettingsField.js'
+import { Field, LockIcon, PaneSection, SourceBadge } from './SettingsField.js'
 import {
   selectLayerOrigin,
   selectManagedFields,
   selectPermissionDefaultMode,
-  SETTING_SOURCE_PRECEDENCE,
 } from './settingsState.js'
-import { WorkspaceTrustSection } from './WorkspaceTrustSection.js'
-
-type NavItem = { id: string; label: string; locked?: boolean }
-
-/**
- * What the open project can do to a category's values.
- *
- *  - `machine` — no project layer exists anywhere in the resolver, so the values
- *    are the same whatever session is focused.
- *  - `project` — every field is cwd/session-derived; nothing global is inside.
- *  - `resolved` — your user config with the open project's layers stacked on
- *    top, per row.
- *
- * The three-way split is the point: a heading may say *"depends on the open
- * project"*, which is a possibility claim the `SourceBadge` on each row then
- * repairs into the exact answer, but it may NOT say *"applies everywhere"* about
- * a category a project layer can override — that is a universal claim, and no
- * per-row badge can repair a heading that already promised it. So a category
- * whose scope is uncertain belongs in `resolved`, the weaker claim.
- */
-type SettingsScope = 'resolved' | 'project' | 'machine'
-
-type NavGroup = {
-  scope: SettingsScope
-  heading: string
-  /** Why no project could be named. Rendered only under the heading that would
-   * otherwise have named one. */
-  note?: string
-  /** The bound project's cwd — its identity, behind the truncated label. */
-  cwd?: string
-  items: readonly NavItem[]
-}
-
-/**
- * Category rail, ported from the prototype's `SETTINGS_NAV` minus the CUT groups
- * (the `Prototype` demo group and `native`, both dropped — INVENTORY CUT list /
- * Settings.jsx note). Several bodies are still P4-x stubs.
- *
- * Kept as ONE ordered list because scope, not function, now groups the rail: the
- * prototype's `Interface`/`Extensions`/`System`/`Organization` headings are
- * subordinated (an operator-approved deviation from prototype parity), and this
- * order is what survives of them — each category keeps its relative position
- * inside whichever scope group it lands in, so the rail reads the way it did.
- */
-const SETTINGS_CATEGORIES = [
-  { id: 'general', label: 'General' },
-  { id: 'model', label: 'Model & Inference' },
-  { id: 'permissions', label: 'Permissions' },
-  { id: 'workspace', label: 'Workspace' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'privacy', label: 'Privacy' },
-  { id: 'keybindings', label: 'Keybindings' },
-  { id: 'theme', label: 'Theme & Output' },
-  { id: 'transcript', label: 'Transcript' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'mcp', label: 'MCP' },
-  { id: 'plugins', label: 'Plugins' },
-  { id: 'skills', label: 'Skills' },
-  { id: 'hooks', label: 'Hooks' },
-  { id: 'ide', label: 'IDE & LSP' },
-  { id: 'remote', label: 'Remote' },
-  { id: 'diagnostics', label: 'Diagnostics' },
-  { id: 'managed', label: 'Managed', locked: true },
-] as const satisfies readonly NavItem[]
-
-type SettingsCategoryId = (typeof SETTINGS_CATEGORIES)[number]['id']
-
-/**
- * Every category's scope, from a source-level read of each pane's resolver (not
- * from its heading, which is what made the mixture invisible in the first
- * place). A `Record` over the id union, so adding a category without deciding
- * its scope is a compile error rather than a silent drop out of the rail.
- *
- * `ide` is the one JUDGEMENT call: it is an unbuilt stub with no read-seam, so
- * its scope is genuinely unknown. It sits in `resolved` because that is the
- * claim that cannot be falsified by whatever seam it eventually grows — a
- * machine-wide IDE setting is simply one the project layers never override.
- * Re-decide it when the seam lands.
- */
-const CAT_SCOPE: Record<SettingsCategoryId, SettingsScope> = {
-  general: 'resolved',
-  model: 'resolved',
-  permissions: 'resolved',
-  workspace: 'project',
-  memory: 'resolved',
-  privacy: 'resolved',
-  keybindings: 'machine',
-  theme: 'resolved',
-  transcript: 'machine',
-  agents: 'resolved',
-  mcp: 'resolved',
-  plugins: 'resolved',
-  skills: 'resolved',
-  hooks: 'resolved',
-  ide: 'resolved',
-  remote: 'project',
-  diagnostics: 'resolved',
-  managed: 'machine',
-}
-
-/**
- * Rail order. `resolved` leads because it holds 13 of the 18 categories and
- * because the pane the screen opens on is inside it either way (`agents`, which
- * App passes, and `general`, this shell's own default); putting the two small
- * scopes first would push the whole familiar rail down the screen for no
- * navigational gain.
- */
-const SCOPE_ORDER: readonly SettingsScope[] = ['resolved', 'project', 'machine']
-
-/**
- * The heading for one scope group.
- *
- * Only `resolved` names the project, and only when one is bound. Unbound it
- * falls back to a statement about HOW these settings resolve rather than a
- * placeholder name or an empty heading — the `settingsReadState.ts` rule
- * (nothing is in flight, so nothing may promise a resolution) applied to the
- * other fact this surface silently assumes.
- */
-function scopeHeading(
-  scope: SettingsScope,
-  binding: SettingsProjectBinding | undefined,
-): string {
-  switch (scope) {
-    case 'machine':
-      return 'This machine'
-    case 'project':
-      return 'This project'
-    case 'resolved':
-      return binding?.bound
-        ? `Resolved for ${binding.name}`
-        : 'Resolved per project'
-    default: {
-      const exhaustive: never = scope
-      return exhaustive
-    }
-  }
-}
-
-/**
- * The rail: every category placed in its scope group and matched against the
- * search box, in one pure pass.
- *
- * Exported because the search box is the one part of this shell the SSR-only
- * renderer suite cannot drive (no events), and a filter that quietly stopped
- * reaching the third group would look identical in the markup to one that
- * worked. Groups emptied by the query drop out entirely — heading, note and all
- * — so no heading is left standing over nothing.
- */
-export function selectSettingsNavGroups(
-  binding: SettingsProjectBinding | undefined,
-  query: string,
-): NavGroup[] {
-  const q = query.trim().toLowerCase()
-  return SCOPE_ORDER.map(scope => ({
-    scope,
-    heading: scopeHeading(scope, binding),
-    // Absent prop ≠ "no session". Until App wires the selector the shell has not
-    // been TOLD anything, so it names no project AND states no reason — stating
-    // one would assert "no session is open" over a session that is open, which
-    // is the same class of false claim this whole surface is being fixed for.
-    note:
-      scope === 'resolved' && binding && !binding.bound
-        ? SETTINGS_PROJECT_UNBOUND_NOTE[binding.reason]
-        : undefined,
-    cwd: scope === 'resolved' && binding?.bound ? binding.cwd : undefined,
-    items: SETTINGS_CATEGORIES.filter(
-      item =>
-        CAT_SCOPE[item.id] === scope &&
-        (!q || item.label.toLowerCase().includes(q)),
-    ),
-  })).filter(group => group.items.length > 0)
-}
-
-const CAT_DESC: Record<string, string> = {
-  general: 'Identity, editor, startup, and update behavior',
-  model: 'Default model, reasoning effort, and thinking',
-  permissions: 'Default mode and tool allow / deny rules',
-  workspace: 'Trust state and accessible directories',
-  memory: 'CLAUDE.md instruction files and saved memories',
-  privacy: 'Retention, sharing, and crash reporting',
-  keybindings: 'Composer mode and keyboard shortcuts',
-  theme: 'Accent, syntax highlighting, and output style',
-  transcript: 'How this app lays out reasoning in the transcript',
-  agents: 'Agent definitions by source, with overrides and precedence',
-  mcp: 'Connected Model Context Protocol servers',
-  plugins: 'Installed plugins and the marketplace',
-  skills: 'Prompt-command skills, grouped by source',
-  hooks: 'Event hooks by event, with recent run results',
-  ide: 'Editor connection and language servers',
-  remote: 'Remote Control bridge and connect transports',
-  diagnostics: 'Doctor and status checks',
-  managed: 'Settings enforced by organization policy',
-}
-
-/** Which later Phase-4 session fills each stubbed category (honesty, not a mock). */
-const CAT_OWNER: Record<string, string> = {
-  general: 'a later Phase-4 settings session',
-  model: 'a later Phase-4 settings session',
-  memory: 'Goals + Memory (P4-10)',
-  privacy: 'a later Phase-4 settings session',
-  keybindings: 'a later Phase-4 settings session',
-  theme: 'a later Phase-4 settings session',
-  agents: 'Agents config (P4-7)',
-  mcp: 'Settings extensions (P4-12)',
-  plugins: 'Settings extensions (P4-12)',
-  skills: 'Settings extensions (P4-12)',
-  hooks: 'Settings extensions (P4-12)',
-  ide: 'a later Phase-4 settings session',
-}
 
 export function SettingsShell({
   snapshot,
-  additionalWorkingDirectories,
-  permissionContext,
   agentsSnapshot,
   cwd,
-  diagnosticsSnapshot,
   memorySnapshot,
-  workspaceTrustSnapshot,
   extensionsSnapshot,
   remoteSnapshot,
   remoteLastResult,
   onRemoteVerb,
   onSettingWrite,
   projectBinding,
+  projects,
+  initialScope = 'user',
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
-  /** C3 — reused from `permission.context`, not a second seam (§10). */
-  additionalWorkingDirectories?: PermissionContextSnapshot['additionalWorkingDirectories']
-  /** C3 — the active session's live permission context. Feeds ONLY the
-   * session-derived half of the Permissions pane (effective rules, this
-   * session's mode, managed-policy + classifier state), which is engine-resolved
-   * per session and has no global equivalent. The pane's settings-backed
-   * "Default mode" section reads `snapshot` instead, so it renders with no
-   * session attached (CC-13). Same `permission.context` snapshot the composer
-   * mode chip reads — no second seam. */
-  permissionContext?: PermissionContextSnapshot | null
   agentsSnapshot?: AgentConfigSnapshot | null
-  /** The active session's cwd (already known via the host roster; not re-plumbed). */
+  /** The focused session's cwd. Used ONLY as project IDENTITY — which project
+   * the picker can offer and whose files this window has actually read. It never
+   * chooses the scope (Law 2). */
   cwd?: string | null
-  diagnosticsSnapshot?: DiagnosticsSnapshot | null
   memorySnapshot?: MemorySnapshot | null
-  workspaceTrustSnapshot?: WorkspaceTrustSnapshot | null
   extensionsSnapshot?: ExtensionsSnapshot | null
   remoteSnapshot?: RemoteSettingsSnapshot | null
   remoteLastResult?: RemoteSettingsResultFrame | null
   onRemoteVerb?: (verb: RemoteVerbMessage) => void
-  /** P4-19 — send one editable-setting write to the sidecar. */
+  /** Sends one editable-setting write to the sidecar. The SOURCE it carries is
+   * decided by the chosen scope (Law 3), never by where the value resolves. */
   onSettingWrite?: (input: SettingWriteInput) => void
-  /** Which project this screen is describing (`settingsProjectBinding.ts`).
-   * Optional so App can wire `selectSettingsProjectBinding(rows,
-   * activeSessionId)` in one line later; the default names nothing. */
+  /** Names the focused session's project (`settingsProjectBinding.ts`), so the
+   * picker's "current" entry gets the roster-disambiguated label instead of a
+   * bare basename. Optional: without it the cwd's last segment is used. */
   projectBinding?: SettingsProjectBinding
+  /** Every project the picker may offer (the merged workspace roster). Only the
+   * focused session's project can be READ or WRITTEN in v1; the rest render the
+   * honest limit. App wires this in one line when it is free to edit. */
+  projects?: readonly SettingsProjectOption[]
+  /**
+   * Which scope the page opens on. Law 2 makes My defaults the landing scope,
+   * so this defaults to `user` and App passes nothing; it exists because the
+   * renderer suite is SSR-only and cannot click a scope tab, and every scope but
+   * the landing one would otherwise be unrenderable in a test.
+   */
+  initialScope?: SettingsScopeKind
   initialCategory?: string
-}) {
-  const [active, setActive] = useState(initialCategory)
-  const [query, setQuery] = useState('')
 
-  const filteredNav = selectSettingsNavGroups(projectBinding, query)
-  const activeItem = SETTINGS_CATEGORIES.find(item => item.id === active)
+  /* Accepted but no longer rendered here — all four feed LIVE session state,
+   * which Law 1 moves to the session inspector (`MetadataInspector.tsx` already
+   * renders every one of them). Kept in the props type so App keeps type-checking
+   * unchanged while it is mid-edit in another session; drop them from App's call
+   * site and from here in the same later change. */
+  additionalWorkingDirectories?: PermissionContextSnapshot['additionalWorkingDirectories']
+  permissionContext?: PermissionContextSnapshot | null
+  diagnosticsSnapshot?: DiagnosticsSnapshot | null
+  workspaceTrustSnapshot?: WorkspaceTrustSnapshot | null
+}) {
+  const [scope, setScope] = useState<SettingsScopeKind>(initialScope)
+  const [item, setItem] = useState<string>(initialCategory)
+  const [query, setQuery] = useState('')
+  const [projectLayer, setProjectLayer] =
+    useState<SettingsProjectLayer>('projectSettings')
+  const [projectCwd, setProjectCwd] = useState<string | null>(null)
+
+  const activeCwd =
+    cwd && cwd.trim().length > 0
+      ? cwd
+      : projectBinding?.bound
+        ? projectBinding.cwd
+        : null
+  const known =
+    projects ??
+    (projectBinding?.bound
+      ? [{ cwd: projectBinding.cwd, name: projectBinding.name }]
+      : undefined)
+  const projectChoices = selectSettingsProjects(known, activeCwd)
+  // Law 2: the current project is offered first but never auto-selected — until
+  // the operator picks one, the picker's own first entry is merely what the
+  // control displays, and the pane says which project it is describing.
+  const selectedProject =
+    projectChoices.find(choice => choice.cwd === projectCwd) ??
+    projectChoices[0] ??
+    null
+  const engine: SettingsProjectEngine =
+    scope === 'project'
+      ? selectProjectEngine(selectedProject?.cwd ?? null, activeCwd)
+      : 'live'
+  const writeLayer = selectSettingsWriteLayer(scope, projectLayer)
+  const activeItem = selectSettingsRailItem(scope, item)
+  const rail = selectSettingsRail(scope, query)
+  const scopeFile = writeLayer ? selectLayerOrigin(snapshot, writeLayer) : null
 
   return (
-    <div className="flex min-w-0 flex-1 overflow-hidden" aria-label="Settings">
-      {/* Left rail */}
-      <nav className="w-[224px] shrink-0 overflow-y-auto border-r border-shell-seam bg-shell-chrome px-3 py-5">
-        <div className="mb-4 px-2">
-          <h1 className="text-base font-semibold tracking-tight text-text-primary">
-            Settings
-          </h1>
+    <div
+      aria-label="Settings"
+      className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden"
+    >
+      <header className="shrink-0 border-b border-shell-seam bg-shell-chrome px-6 py-4">
+        <h1 className="mb-2.5 text-base font-semibold tracking-tight text-text-primary">
+          Settings
+        </h1>
+        <div
+          aria-label="Settings scope"
+          className="flex flex-wrap items-center gap-1.5"
+          role="group"
+        >
+          {SETTINGS_SCOPE_KINDS.map(kind => {
+            const on = kind === scope
+            return (
+              <button
+                aria-pressed={on}
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] transition-colors ${
+                  on
+                    ? 'border-accent/40 bg-accent/10 font-semibold text-accent-soft'
+                    : 'border-shell-seam text-text-muted hover:bg-shell-hover'
+                }`}
+                key={kind}
+                onClick={() => {
+                  setScope(kind)
+                  setItem(selectSettingsRailItem(kind, item))
+                }}
+                type="button"
+              >
+                {kind === 'project' && selectedProject
+                  ? `${SETTINGS_SCOPE_LABEL.project}: ${selectedProject.name}`
+                  : SETTINGS_SCOPE_LABEL[kind]}
+                {kind === 'enforced' ? <LockIcon className="h-2.5 w-2.5" /> : null}
+              </button>
+            )
+          })}
         </div>
-        <input
-          aria-label="Search settings"
-          className="mb-4 w-full rounded-lg border border-shell-seam bg-shell-hover px-2.5 py-1.5 text-[12.5px] text-text-primary outline-none placeholder:text-text-subtle"
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Search settings"
-          value={query}
-        />
-        {filteredNav.map(group => (
-          <div
-            aria-label={group.heading}
-            className="mb-3"
-            key={group.scope}
-            role="group"
-          >
-            <div
-              className="mb-1.5 truncate px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-subtle"
-              title={group.cwd}
-            >
-              {group.heading}
-            </div>
-            {group.note ? (
-              <p className="mb-1.5 px-2 text-[10.5px] leading-relaxed text-text-subtle">
-                {group.note}
-              </p>
-            ) : null}
-            <div className="flex flex-col gap-px">
-              {group.items.map(item => {
-                const on = item.id === active
-                return (
-                  <button
-                    aria-current={on ? 'page' : undefined}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors ${
-                      on
-                        ? 'bg-accent/10 font-semibold text-accent-soft'
-                        : 'text-text-muted hover:bg-shell-hover'
-                    }`}
-                    key={item.id}
-                    onClick={() => setActive(item.id)}
-                    type="button"
-                  >
-                    <span className="flex-1 truncate">{item.label}</span>
-                    {item.locked ? (
-                      <LockIcon
-                        className={on ? 'h-2.5 w-2.5 text-accent-soft' : 'h-2.5 w-2.5 text-text-subtle'}
-                      />
-                    ) : null}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        ))}
-        {filteredNav.length === 0 ? (
-          <div className="px-2 text-xs text-text-subtle">No matches</div>
-        ) : null}
-      </nav>
-
-      {/* Right pane */}
-      <div className="flex-1 overflow-y-auto px-8 py-7">
-        <div className="mx-auto max-w-[660px]">
-          <header className="mb-5">
-            <h2 className="text-lg font-semibold tracking-tight text-text-primary">
-              {activeItem?.label ?? 'Settings'}
-            </h2>
-            <p className="text-[13px] text-text-subtle">{CAT_DESC[active]}</p>
-          </header>
-          <CategoryBody
-            additionalWorkingDirectories={additionalWorkingDirectories ?? []}
-            permissionContext={permissionContext ?? null}
-            agentsSnapshot={agentsSnapshot ?? null}
-            category={active}
-            cwd={cwd ?? null}
-            diagnosticsSnapshot={diagnosticsSnapshot ?? null}
-            extensionsSnapshot={extensionsSnapshot ?? null}
-            memorySnapshot={memorySnapshot ?? null}
-            onRemoteVerb={onRemoteVerb ?? (() => {})}
-            onSettingWrite={onSettingWrite ?? (() => {})}
-            remoteLastResult={remoteLastResult ?? null}
-            remoteSnapshot={remoteSnapshot ?? null}
-            snapshot={snapshot}
-            workspaceTrustSnapshot={workspaceTrustSnapshot ?? null}
+        <p className="mt-2 text-[12px] leading-relaxed text-text-subtle">
+          {SETTINGS_SCOPE_SUBTITLE[scope]}
+        </p>
+        {scope === 'project' ? (
+          <ProjectScopeControls
+            choices={projectChoices}
+            engine={engine}
+            layer={projectLayer}
+            onSelectLayer={setProjectLayer}
+            onSelectProject={setProjectCwd}
+            selected={selectedProject}
           />
+        ) : null}
+        {writeLayer ? (
+          <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
+            {SETTINGS_APPLY_NOTE}
+            {engine === 'live' && settingsWereRead(snapshot) ? (
+              <>
+                {' '}
+                Anything this page does not show lives in the same file
+                {scopeFile ? (
+                  <>
+                    :{' '}
+                    <span className="font-mono text-[11px]">{scopeFile}</span>
+                  </>
+                ) : (
+                  ', which holds no settings yet'
+                )}
+                .
+              </>
+            ) : null}
+          </p>
+        ) : null}
+      </header>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <nav className="flex w-[240px] shrink-0 flex-col overflow-y-auto border-r border-shell-seam bg-shell-chrome px-3 py-5">
+          <input
+            aria-label="Search settings"
+            className="mb-4 w-full rounded-lg border border-shell-seam bg-shell-hover px-2.5 py-1.5 text-[12.5px] text-text-primary outline-none placeholder:text-text-subtle"
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Search settings"
+            value={query}
+          />
+          {rail.map((group, index) => (
+            <div
+              aria-label={group.heading ?? undefined}
+              className="mb-3"
+              key={group.heading ?? `block-${index}`}
+              role="group"
+            >
+              {group.heading ? (
+                <div className="mb-1.5 truncate px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-subtle">
+                  {group.heading}
+                </div>
+              ) : null}
+              <div className="flex flex-col gap-px">
+                {group.items.map(entry => {
+                  const on = entry.id === activeItem
+                  return (
+                    <button
+                      aria-current={on ? 'page' : undefined}
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors ${
+                        on
+                          ? 'bg-accent/10 font-semibold text-accent-soft'
+                          : 'text-text-muted hover:bg-shell-hover'
+                      }`}
+                      key={entry.id}
+                      onClick={() => setItem(entry.id)}
+                      type="button"
+                    >
+                      <span className="flex-1 truncate">{entry.label}</span>
+                      {entry.locked ? (
+                        <LockIcon
+                          className={
+                            on
+                              ? 'h-2.5 w-2.5 text-accent-soft'
+                              : 'h-2.5 w-2.5 text-text-subtle'
+                          }
+                        />
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+          {rail.length === 0 ? (
+            <div className="px-2 text-xs text-text-subtle">No matches</div>
+          ) : null}
+          {/* Where the categories that left this page went. Rendered in the rail
+           * because that is where someone looks for a missing one. */}
+          <p className="mt-auto px-2 pt-6 text-[10.5px] leading-relaxed text-text-subtle">
+            {SETTINGS_SESSION_STATE_NOTE}
+          </p>
+        </nav>
+
+        <div className="flex-1 overflow-y-auto px-8 py-7">
+          <div className="mx-auto max-w-[660px]">
+            <header className="mb-5">
+              <h2 className="text-lg font-semibold tracking-tight text-text-primary">
+                {settingsRailItem(activeItem).label}
+              </h2>
+              <p className="text-[13px] text-text-subtle">
+                {settingsRailItem(activeItem).desc}
+              </p>
+            </header>
+            <ScopeBody
+              agentsSnapshot={agentsSnapshot ?? null}
+              engine={engine}
+              extensionsSnapshot={extensionsSnapshot ?? null}
+              item={activeItem}
+              layer={writeLayer}
+              memorySnapshot={memorySnapshot ?? null}
+              onRemoteVerb={onRemoteVerb ?? (() => {})}
+              onSettingWrite={onSettingWrite ?? (() => {})}
+              projectName={selectedProject?.name ?? 'this project'}
+              remoteLastResult={remoteLastResult ?? null}
+              remoteSnapshot={remoteSnapshot ?? null}
+              scope={scope}
+              snapshot={snapshot}
+            />
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-function CategoryBody({
-  additionalWorkingDirectories,
-  permissionContext,
-  agentsSnapshot,
-  category,
-  cwd,
-  diagnosticsSnapshot,
-  extensionsSnapshot,
-  memorySnapshot,
-  onRemoteVerb,
-  onSettingWrite,
-  remoteLastResult,
-  remoteSnapshot,
-  snapshot,
-  workspaceTrustSnapshot,
+/** The project picker plus the Shared / Just-me layer choice (Law 3's one
+ * further explicit choice per write, made once for the pane). */
+function ProjectScopeControls({
+  choices,
+  selected,
+  onSelectProject,
+  layer,
+  onSelectLayer,
+  engine,
 }: {
-  additionalWorkingDirectories: PermissionContextSnapshot['additionalWorkingDirectories']
-  permissionContext: PermissionContextSnapshot | null
-  agentsSnapshot: AgentConfigSnapshot | null
-  category: string
-  cwd: string | null
-  diagnosticsSnapshot: DiagnosticsSnapshot | null
-  extensionsSnapshot: ExtensionsSnapshot | null
-  memorySnapshot: MemorySnapshot | null
-  onRemoteVerb: (verb: RemoteVerbMessage) => void
-  onSettingWrite: (input: SettingWriteInput) => void
-  remoteLastResult: RemoteSettingsResultFrame | null
-  remoteSnapshot: RemoteSettingsSnapshot | null
-  snapshot: SettingsSnapshot | null
-  workspaceTrustSnapshot: WorkspaceTrustSnapshot | null
+  choices: readonly { cwd: string; name: string; current: boolean }[]
+  selected: { cwd: string; name: string; current: boolean } | null
+  onSelectProject: (cwd: string) => void
+  layer: SettingsProjectLayer
+  onSelectLayer: (layer: SettingsProjectLayer) => void
+  engine: SettingsProjectEngine
 }) {
-  if (category === 'agents') {
-    return <AgentsPage embedded snapshot={agentsSnapshot} />
-  }
-  if (category === 'memory') {
-    return <MemoryPage embedded snapshot={memorySnapshot} />
-  }
-  if (category === 'mcp') {
-    return <McpPanel snapshot={extensionsSnapshot} />
-  }
-  if (category === 'plugins') {
-    return <PluginsPanel snapshot={extensionsSnapshot} />
-  }
-  if (category === 'skills') {
-    return <SkillsPanel snapshot={extensionsSnapshot} />
-  }
-  if (category === 'hooks') {
-    return <HooksPanel snapshot={extensionsSnapshot} />
-  }
-  if (category === 'remote') {
+  if (!selected) {
     return (
-      <RemoteSettingsPage
-        embedded
-        lastResult={remoteLastResult}
-        onVerb={onRemoteVerb}
-        snapshot={remoteSnapshot}
-      />
+      <p className="mt-2.5 text-[12px] leading-relaxed text-text-subtle">
+        No project is open, so there is none to name. Open a session in a project
+        to edit its settings files.
+      </p>
     )
   }
-  if (category === 'managed') {
-    return <ManagedPanel snapshot={snapshot} />
-  }
-  if (category === 'permissions') {
-    // P2-4 C3 read-only rules view (PERMISSION-BOUNDARY.md §4, ledger row 787).
-    // `showModes={false}`: the renderer never authors rules (T6b) and mode
-    // switching lives on the composer `PermissionModeChip` — this pane is a
-    // pure read-only display, so `onSetMode` is never invoked (the mode buttons
-    // are not rendered).
-    // CC-13 — `defaultMode` comes off the SETTINGS seam, not the session's live
-    // context, so the "Default mode" section shows the persisted setting and
-    // renders with no session attached.
-    return (
-      <PaneSection title="Permissions">
-        <PermissionRulesEditor
-          context={permissionContext}
-          defaultMode={selectPermissionDefaultMode(snapshot)}
-          onSetMode={() => {}}
-          // No snapshot ⇒ no settings file has been read, so a null defaultMode
-          // is UNKNOWN rather than unset (`settingsReadState.ts` — the one rule
-          // this whole surface branches on).
-          settingsLoaded={settingsWereRead(snapshot)}
-          showModes={false}
+  return (
+    <div className="mt-2.5 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <SelectControl
+          label="Project"
+          onChange={onSelectProject}
+          optionLabels={Object.fromEntries(
+            choices.map(choice => [
+              choice.cwd,
+              choice.current ? `${choice.name} (current)` : choice.name,
+            ]),
+          )}
+          options={choices.map(choice => choice.cwd)}
+          value={selected.cwd}
         />
+        <span className="truncate font-mono text-[11px] text-text-subtle">
+          {selected.cwd}
+        </span>
+      </div>
+      <div
+        aria-label="Where project edits are saved"
+        className="flex flex-wrap items-center gap-1.5"
+        role="group"
+      >
+        {SETTINGS_PROJECT_LAYERS.map(candidate => {
+          const on = candidate === layer
+          return (
+            <button
+              aria-pressed={on}
+              className={`rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors ${
+                on
+                  ? 'border-accent/40 bg-accent/10 font-semibold text-accent-soft'
+                  : 'border-shell-seam text-text-muted hover:bg-shell-hover'
+              }`}
+              key={candidate}
+              onClick={() => onSelectLayer(candidate)}
+              type="button"
+            >
+              {SETTINGS_PROJECT_LAYER_LABEL[candidate]}
+            </button>
+          )
+        })}
+        <span className="text-[11px] text-text-subtle">
+          {SETTINGS_PROJECT_LAYER_DESC[layer]}
+        </span>
+      </div>
+      {engine === 'absent' ? (
+        <p className="text-[11.5px] leading-relaxed text-tone-warn">
+          {settingsNoEngineNote(selected.name)}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function ScopeBody({
+  scope,
+  item,
+  layer,
+  engine,
+  projectName,
+  snapshot,
+  agentsSnapshot,
+  extensionsSnapshot,
+  memorySnapshot,
+  remoteSnapshot,
+  remoteLastResult,
+  onRemoteVerb,
+  onSettingWrite,
+}: {
+  scope: SettingsScopeKind
+  item: SettingsRailItemId
+  layer: ReturnType<typeof selectSettingsWriteLayer>
+  engine: SettingsProjectEngine
+  projectName: string
+  snapshot: SettingsSnapshot | null
+  agentsSnapshot: AgentConfigSnapshot | null
+  extensionsSnapshot: ExtensionsSnapshot | null
+  memorySnapshot: MemorySnapshot | null
+  remoteSnapshot: RemoteSettingsSnapshot | null
+  remoteLastResult: RemoteSettingsResultFrame | null
+  onRemoteVerb: (verb: RemoteVerbMessage) => void
+  onSettingWrite: (input: SettingWriteInput) => void
+}) {
+  if (scope === 'app') return <AppScopeBody item={item} />
+  if (scope === 'enforced') return <ManagedPanel snapshot={snapshot} />
+
+  // One gate for the whole project scope: nothing in this window has read the
+  // chosen project's files, so no pane may show values from the focused
+  // session's project as if they were this one's.
+  if (engine === 'absent') {
+    return (
+      <PaneSection title={settingsRailItem(item).label}>
+        <p className="text-[12.5px] leading-relaxed text-text-subtle">
+          {settingsNoEngineNote(projectName)}
+        </p>
       </PaneSection>
     )
   }
-  if (category === 'workspace') {
-    return (
-      <WorkspaceTrustSection
-        additionalWorkingDirectories={additionalWorkingDirectories}
-        cwd={cwd}
-        snapshot={workspaceTrustSnapshot}
-      />
-    )
-  }
-  if (category === 'transcript') {
-    return <TranscriptDisplaySection />
-  }
-  if (category === 'diagnostics') {
-    return <DiagnosticsSection settingsSnapshot={snapshot} snapshot={diagnosticsSnapshot} />
-  }
-  if (category === 'general') {
-    // Real read-seam data (layer summary + resolution legend) above the live
-    // General value-editors (P4-19).
-    return (
-      <>
-        <PaneSection title="Configuration sources">
-          <LayerSummary snapshot={snapshot} />
-          <ResolutionOrderLegend />
-        </PaneSection>
+
+  // `layer` is non-null for the user and project scopes (settingsScope.ts).
+  const writeLayer = layer ?? 'userSettings'
+  const noEngineNote = settingsNoEngineNote(projectName)
+
+  switch (item) {
+    case 'general':
+      return (
         <SettingsPane
+          engine={engine}
+          layer={writeLayer}
+          noEngineNote={noEngineNote}
           onWrite={onSettingWrite}
           pane="general"
           snapshot={snapshot}
           title="General"
         />
-      </>
-    )
+      )
+    case 'model':
+      return (
+        <>
+          <SettingsPane
+            engine={engine}
+            layer={writeLayer}
+            noEngineNote={noEngineNote}
+            onWrite={onSettingWrite}
+            pane="model"
+            snapshot={snapshot}
+            title="Model &amp; reasoning"
+          />
+          <DeferredNote note="A default-model select belongs here; it is deferred on the model-list read-seam." />
+        </>
+      )
+    case 'permissions':
+      return <PermissionsPane layer={writeLayer} snapshot={snapshot} />
+    case 'interface':
+      return (
+        <>
+          <SettingsPane
+            engine={engine}
+            layer={writeLayer}
+            noEngineNote={noEngineNote}
+            onWrite={onSettingWrite}
+            pane="theme"
+            snapshot={snapshot}
+            title="Interface"
+          />
+          {scope === 'user' ? <KeybindingsRow /> : null}
+          <DeferredNote note="Language and reduced-motion are real schema keys with no control yet; they need the shared write allowlist to grow, which is a per-key sidecar review." />
+        </>
+      )
+    case 'privacy':
+      return (
+        <>
+          <SettingsPane
+            engine={engine}
+            layer={writeLayer}
+            noEngineNote={noEngineNote}
+            onWrite={onSettingWrite}
+            pane="privacy"
+            snapshot={snapshot}
+            title="Privacy &amp; data"
+          />
+          <DeferredNote note="Auto-memory and auto-dream toggles belong here; they need the shared write allowlist to grow, which is a per-key sidecar review." />
+        </>
+      )
+    case 'memory':
+      return (
+        <>
+          <MemoryPage embedded snapshot={memorySnapshot} />
+          {scope === 'project' ? (
+            <DeferredNote note="This list is not filtered to the project's own CLAUDE.md files yet — every source is shown, each with its own badge." />
+          ) : null}
+        </>
+      )
+    case 'agents':
+      return <AgentsPage embedded snapshot={agentsSnapshot} />
+    case 'skills':
+      return <SkillsPanel snapshot={extensionsSnapshot} />
+    case 'plugins':
+      return <PluginsPanel snapshot={extensionsSnapshot} />
+    case 'mcp':
+      return <McpPanel snapshot={extensionsSnapshot} />
+    case 'hooks':
+      return <HooksPanel snapshot={extensionsSnapshot} />
+    case 'remote':
+      return (
+        <>
+          <RemoteSettingsPage
+            embedded
+            lastResult={remoteLastResult}
+            onVerb={onRemoteVerb}
+            snapshot={remoteSnapshot}
+          />
+          <DeferredNote note="Only the saved SSH environments below are configuration. The bridge and pairing controls are live operational actions, and re-homing them beside Accounts is deferred." />
+        </>
+      )
+    default:
+      // `appearance` / `notifications` / `policy` belong to the other two scopes
+      // and cannot reach here (selectSettingsRailItem keeps the rail and the
+      // active item in the same scope).
+      return null
   }
-  if (category === 'model') {
-    return (
-      <>
-        <SettingsPane
-          onWrite={onSettingWrite}
-          pane="model"
-          snapshot={snapshot}
-          title="Model & inference"
-        />
-        <DeferredEditorsNote note="Default-model select is deferred (needs the model-list read-seam)." />
-      </>
-    )
-  }
-  if (category === 'privacy') {
-    return (
-      <>
-        <SettingsPane
-          onWrite={onSettingWrite}
-          pane="privacy"
-          snapshot={snapshot}
-          title="Privacy"
-        />
-        <DeferredEditorsNote note="Share-session-data and crash-reporting have no engine setting today; deferred." />
-      </>
-    )
-  }
-  if (category === 'theme') {
-    return (
-      <>
-        <SettingsPane
-          onWrite={onSettingWrite}
-          pane="theme"
-          snapshot={snapshot}
-          title="Theme & output"
-        />
-        <DeferredEditorsNote note="Accent swatch, code theme/font, and output-style select are deferred (need theming / available-styles seams)." />
-      </>
-    )
-  }
-  return <CategoryStub category={category} />
 }
 
 /**
- * The one APP-LOCAL editor in this shell: how the transcript renders reasoning
- * summaries (`reasoningLayout.ts`). It carries no `SourceBadge` because it has
- * no settings layer — it is a renderer view preference stored with the workspace
- * layout, not a `SettingsSchema` key the sidecar writes, and the description
- * says so rather than letting it read as an engine setting that failed to
- * resolve. Reads and writes the same context the transcript reads.
+ * The durable half of Permissions.
  *
- * Its own category under `This machine`, not a section of `Theme & Output`,
- * where it used to sit: having no settings layer at all, it is the one control
- * on this screen that genuinely cannot vary by project, and it was the only such
- * control filed under a heading that promised the opposite.
+ * The live half — the running session's mode, its engine-resolved allow/deny/ask
+ * rules, managed-rules-only enforcement, the classifier state, this-session
+ * extra directories — is per-session state, and it is precisely the thing the
+ * operator objected to seeing under a Settings heading. It already renders on
+ * the session inspector (`MetadataInspector.tsx` §Permissions, the same
+ * `PermissionRulesEditor`), so it is not shown twice here.
+ *
+ * `permissions.defaultMode` stays READ-ONLY: making it writable means adding a
+ * permission-family key to the sidecar's write allowlist, which is a
+ * security-baseline change needing an explicit PERMISSION-BOUNDARY review
+ * (spec §7.1). Rules stay read-only for a harder reason — the renderer never
+ * authors permission rules at all (SECURITY-MINIMUM T6b).
+ */
+function PermissionsPane({
+  snapshot,
+  layer,
+}: {
+  snapshot: SettingsSnapshot | null
+  layer: NonNullable<ReturnType<typeof selectSettingsWriteLayer>>
+}) {
+  const defaultMode = selectPermissionDefaultMode(snapshot)
+  const read = settingsWereRead(snapshot)
+  const origin = selectLayerOrigin(snapshot, layer)
+  return (
+    <>
+      <PaneSection title="Default mode">
+        <Field
+          desc="The mode a session starts in. Read-only here — change it from the CLI; letting the renderer write a permission-family key needs a recorded permission-boundary review."
+          editable={false}
+          label="Default permission mode"
+          origin={read && defaultMode ? selectLayerOrigin(snapshot, defaultMode.source) : null}
+          source={defaultMode?.source}
+        >
+          <span
+            aria-label={`Default permission mode: ${
+              defaultMode ? defaultMode.value : read ? 'not set' : SETTINGS_UNKNOWN_VALUE
+            }`}
+            className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-[12.5px] text-text-primary"
+          >
+            {defaultMode
+              ? defaultMode.value
+              : read
+                ? 'not set'
+                : SETTINGS_UNKNOWN_VALUE}
+          </span>
+        </Field>
+        {/* Only a snapshot that WAS read may speak about the settings files. */}
+        {read && !defaultMode ? (
+          <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
+            <code className="font-mono">permissions.defaultMode</code> is not set
+            in any settings file, so the engine chooses each session's opening
+            mode.
+          </p>
+        ) : null}
+        {read ? null : (
+          <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
+            {SETTINGS_UNREAD_NOTE}
+          </p>
+        )}
+      </PaneSection>
+      <PaneSection title="Rules">
+        <p className="text-[12.5px] leading-relaxed text-text-subtle">
+          Allow, deny and ask rules live under{' '}
+          <code className="font-mono">permissions</code> in the settings file
+          this scope writes
+          {origin ? (
+            <>
+              , <span className="font-mono text-[11px]">{origin}</span>
+            </>
+          ) : null}
+          . This app never authors permission rules, and the settings snapshot
+          carries key names without their contents, so they are neither shown nor
+          editable here — edit the file, or use the CLI.
+        </p>
+        <p className="mt-2 text-[12.5px] leading-relaxed text-text-subtle">
+          The rules actually in force for a running session are a different
+          thing: they include rules added at runtime and mid-turn, so they are
+          shown per session, on the session inspector.
+        </p>
+      </PaneSection>
+    </>
+  )
+}
+
+/** Keybindings are one file for this machine, so no project can override them —
+ * the annotation is the whole point of the row. No read seam exists for the
+ * file's contents, and one is not invented here. */
+function KeybindingsRow() {
+  return (
+    <PaneSection title="Keybindings">
+      <Field
+        desc="One file for this machine; projects cannot override it. This app cannot read or edit it yet."
+        editable={false}
+        label="Keyboard shortcuts"
+      >
+        <span className="font-mono text-[12.5px] text-text-subtle">
+          {SETTINGS_UNKNOWN_VALUE}
+        </span>
+      </Field>
+    </PaneSection>
+  )
+}
+
+/**
+ * The This-app scope: desktop preferences with no settings layer at all.
+ *
+ * The old page had no home for these, so its one existing control (reasoning
+ * layout) sat under a heading that promised engine configuration. Only that
+ * control is real today; the rest of the scope is named, not faked.
+ */
+function AppScopeBody({ item }: { item: SettingsRailItemId }) {
+  if (item === 'notifications') {
+    return (
+      <PaneSection title="Notifications">
+        <p className="text-[12.5px] leading-relaxed text-text-subtle">
+          System notifications for a finished turn or a waiting permission
+          request are not built. Today this app only raises in-window toasts,
+          which need the window to be visible.
+        </p>
+      </PaneSection>
+    )
+  }
+  return (
+    <>
+      <TranscriptDisplaySection />
+      <DeferredNote note="Accent colour, code theme and font, and window &amp; startup behaviour belong in this scope too; none of them has an app-side setting yet, so none is shown." />
+    </>
+  )
+}
+
+/**
+ * The one APP-LOCAL editor that exists today: how the transcript renders
+ * reasoning summaries (`reasoningLayout.ts`). It carries no `SourceBadge`
+ * because it has no settings layer — it is a renderer view preference stored
+ * with the workspace layout, not a `SettingsSchema` key the sidecar writes.
  */
 function TranscriptDisplaySection() {
   const { mode, setMode } = useContext(ReasoningLayoutContext)
   return (
-    <PaneSection title="Reasoning">
+    <PaneSection title="Transcript">
       <Field
-        desc="How reasoning summaries are laid out in the transcript. Which reasoning is shown at all is the engine's separate “Reasoning display” setting under Model &amp; Inference. Stored in this app, not in your settings files."
+        desc="How reasoning summaries are laid out in the transcript. Which reasoning is shown at all is the engine's separate “Reasoning display” setting under Model &amp; Reasoning. Stored in this app, not in your settings files."
         label="Reasoning layout"
       >
         <SelectControl
@@ -627,44 +751,7 @@ function TranscriptDisplaySection() {
   )
 }
 
-function LayerSummary({ snapshot }: { snapshot: SettingsSnapshot | null }) {
-  if (!snapshot) {
-    return (
-      <p className="text-[12.5px] text-text-subtle">
-        Waiting for the engine's settings snapshot…
-      </p>
-    )
-  }
-  if (snapshot.layers.length === 0) {
-    return (
-      <p className="text-[12.5px] text-text-subtle">
-        No settings files on disk — every value is at its built-in default.
-      </p>
-    )
-  }
-  // Highest-precedence first, matching the legend below.
-  const ordered = [...snapshot.layers].sort(
-    (a, b) =>
-      SETTING_SOURCE_PRECEDENCE.indexOf(a.source) -
-      SETTING_SOURCE_PRECEDENCE.indexOf(b.source),
-  )
-  return (
-    <div className="flex flex-col gap-1.5">
-      {ordered.map(layer => (
-        <div className="flex items-center gap-2 text-[12px]" key={layer.source}>
-          <SourceBadge origin={layer.origin} source={layer.source} />
-          <span className="truncate font-mono text-[11px] text-text-subtle">
-            {layer.origin}
-          </span>
-          <span className="ml-auto shrink-0 text-[11px] text-text-muted">
-            {layer.keys.length} {layer.keys.length === 1 ? 'key' : 'keys'}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
+/** The Enforced scope: the machine's read-only policy floor. */
 function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
   const managed = selectManagedFields(snapshot)
   const policyOrigin = snapshot?.policyOrigin ?? null
@@ -698,7 +785,9 @@ function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
         {!settingsWereRead(snapshot) ? (
           <p className="text-[12.5px] text-text-subtle">
             {SETTINGS_UNREAD_NOTE} Whether your organization enforces any
-            settings is <span className="font-mono">unknown</span> until then.
+            settings is{' '}
+            <span className="font-mono">{SETTINGS_UNKNOWN_VALUE}</span> until
+            then.
           </p>
         ) : managed.length === 0 ? (
           <p className="text-[12.5px] text-text-subtle">
@@ -714,38 +803,19 @@ function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
           ))
         )}
       </PaneSection>
+      {settingsWereRead(snapshot) && managed.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-text-subtle">
+          <span>Policy beats every other layer:</span>
+          <SourceBadge origin={layerOrigin} source="policySettings" />
+        </div>
+      ) : null}
     </>
   )
 }
 
-/** An honest footnote naming the value-editors still deferred for a pane. */
-function DeferredEditorsNote({ note }: { note: string }) {
+/** An honest footnote naming what a pane deliberately does not have yet. */
+function DeferredNote({ note }: { note: ReactNode }) {
   return (
     <p className="mt-4 text-[11.5px] leading-relaxed text-text-subtle">{note}</p>
-  )
-}
-
-function CategoryStub({ category }: { category: string }) {
-  return (
-    <StubPanel
-      note={`This panel's value editors land in ${
-        CAT_OWNER[category] ?? 'a later Phase-4 session'
-      }. The source-badge model and the Field primitives it plugs into are ready.`}
-      title={`${CAT_DESC[category] ? CAT_DESC[category] : 'Settings'} — coming soon`}
-    />
-  )
-}
-
-function StubPanel({ title, note }: { title: string; note: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/40 px-8 py-10 text-center">
-      <div className="mx-auto mb-3.5 flex h-10 w-10 items-center justify-center rounded-xl bg-shell-hover text-text-subtle">
-        <LockIcon className="h-4 w-4" />
-      </div>
-      <div className="mb-1.5 text-sm font-semibold text-text-muted">{title}</div>
-      <div className="mx-auto max-w-[360px] text-[12.5px] leading-relaxed text-text-subtle">
-        {note}
-      </div>
-    </div>
   )
 }

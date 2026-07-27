@@ -1,17 +1,18 @@
 /**
- * P4-19 value-editor render tests. This package has NO DOM harness (bun test
- * exposes no document/window; adding happy-dom needs sign-off), so — like every
- * sibling renderer test — these use `renderToStaticMarkup` for render/state/
- * degrade assertions. The click→write path is proven end-to-end at the sidecar
- * boundary (sidecarServer.test.ts) + the domain round-trip (settingsDomain.test.ts);
- * here we prove the controls REFLECT real snapshot state and correctly DISABLE
- * managed / flag-sourced keys.
+ * Value-editor render tests. This package has NO DOM harness (bun test exposes
+ * no document/window; adding happy-dom needs sign-off), so — like every sibling
+ * renderer test — these use `renderToStaticMarkup` for render/state/degrade
+ * assertions. The click→write path is proven end-to-end at the sidecar boundary
+ * (`sidecarServer.test.ts`) + the domain round-trip (`settingsDomain.test.ts`);
+ * the scope→target decision is proven in `settingsScope.test.ts`. Here we prove
+ * the controls REFLECT real snapshot state, DISABLE what cannot be written, and
+ * render NOTHING for a value this scope has not read.
  */
 
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SettingsSnapshot } from '../../shared/protocol.js'
-import { SettingsPane } from './SettingsEditors.js'
+import { SettingsPane, settingsPaneSpecs } from './SettingsEditors.js'
 
 function snapshot(partial: Partial<SettingsSnapshot>): SettingsSnapshot {
   return {
@@ -25,41 +26,75 @@ function snapshot(partial: Partial<SettingsSnapshot>): SettingsSnapshot {
 
 const noop = () => {}
 
+/** React escapes apostrophes; compare against prose after decoding. */
+function decode(html: string): string {
+  return html
+    .replace(/&amp;/g, '&')
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+}
+
+/** How many live controls a pane actually rendered. */
+function controlCount(html: string): number {
+  return (
+    (html.match(/role="switch"/g) ?? []).length +
+    (html.match(/<select/g) ?? []).length +
+    (html.match(/inputMode="numeric"/g) ?? []).length
+  )
+}
+
 test('a boolean editor reflects the current editableValue (aria-checked)', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="general"
       snapshot={snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: '/u/settings.json',
+            keys: ['respectGitignore'],
+          },
+        ],
         resolved: [
-          { key: 'includeCoAuthoredBy', source: 'userSettings', editable: true, managed: false },
+          { key: 'respectGitignore', source: 'userSettings', editable: true, managed: false },
         ],
         editableValues: [
-          { key: 'includeCoAuthoredBy', value: false, source: 'userSettings' },
+          { key: 'respectGitignore', value: false, source: 'userSettings' },
         ],
       })}
     />,
   )
-  // The co-author switch reflects the persisted `false`.
   expect(html).toContain('role="switch"')
   expect(html).toContain('aria-checked="false"')
-  expect(html).toContain('Co-author attribution')
+  expect(html).toContain('Respect .gitignore')
 })
 
-test('an unset boolean editor falls back to the spec default', () => {
-  const html = renderToStaticMarkup(
-    <SettingsPane onWrite={noop} pane="general" snapshot={snapshot({})} />,
-  )
-  // includeCoAuthoredBy defaults to true when unset at every layer.
-  expect(html).toContain('aria-checked="true"')
-})
-
-test('a managed key renders disabled with the Managed badge', () => {
+test('an unset boolean editor falls back to the spec default, and says it is unset', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="general"
+      snapshot={snapshot({})}
+    />,
+  )
+  // respectGitignore defaults to true when unset at every layer.
+  expect(html).toContain('aria-checked="true"')
+  expect(html).toContain('Not set here')
+})
+
+test('a managed key renders disabled with the Managed badge and the enforced note', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="model"
       snapshot={snapshot({
+        layers: [
+          { source: 'policySettings', origin: '/policy.json', keys: ['fastMode'] },
+        ],
         resolved: [
           { key: 'fastMode', source: 'policySettings', editable: false, managed: true },
         ],
@@ -67,16 +102,24 @@ test('a managed key renders disabled with the Managed badge', () => {
       })}
     />,
   )
-  expect(html).toContain('disabled')
-  expect(html).toContain('Managed')
+  const row = html.slice(html.indexOf('>Fast mode<'))
+  expect(row).toContain('Managed')
+  expect(row).toContain('Enforced by organization policy')
+  // The control exists (the enforced value is real) but cannot be operated.
+  expect(row).toContain('role="switch"')
+  expect(row).toContain('disabled=""')
 })
 
-test('a flag-sourced key renders disabled (non-editable) without a Managed badge', () => {
+test('a flag-sourced key annotates the session flag, without a Managed badge', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="model"
       snapshot={snapshot({
+        layers: [
+          { source: 'flagSettings', origin: '--settings', keys: ['effortLevel'] },
+        ],
         resolved: [
           { key: 'effortLevel', source: 'flagSettings', editable: false, managed: false },
         ],
@@ -84,16 +127,49 @@ test('a flag-sourced key renders disabled (non-editable) without a Managed badge
       })}
     />,
   )
-  expect(html).toContain('disabled')
-  expect(html).toContain('Flag') // the flag source badge, not Managed
+  // The user file does not set this key, so the row shows OUR layer's own
+  // contribution (the built-in default) and carries no provenance badge — a
+  // badge would attribute the displayed value to the flag, which did not
+  // produce it. The override is stated in prose instead.
+  expect(html).toContain('command-line flag on the open session')
+  expect(html).not.toContain('Managed') // never the policy badge
+  const noBadgeRow = html.slice(html.indexOf('>Reasoning effort<'))
+  expect(noBadgeRow).not.toContain('>Flag<')
+
+  // When the user file DOES set the key, the value on screen belongs to the
+  // flag layer — so that layer is badged, and the row stops claiming a value.
+  const shadowed = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u.json', keys: ['effortLevel'] },
+          { source: 'flagSettings', origin: '--settings', keys: ['effortLevel'] },
+        ],
+        resolved: [
+          { key: 'effortLevel', source: 'flagSettings', editable: false, managed: false },
+        ],
+        editableValues: [{ key: 'effortLevel', value: 'high', source: 'flagSettings' }],
+      })}
+    />,
+  )
+  const shadowedRow = shadowed.slice(shadowed.indexOf('>Reasoning effort<'))
+  expect(shadowedRow).toContain('>Flag<')
+  expect(shadowedRow).toContain('unknown')
 })
 
 test('an enum editor renders its options with labels and selects the current value', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="general"
       snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u.json', keys: ['autoUpdatesChannel'] },
+        ],
         resolved: [
           { key: 'autoUpdatesChannel', source: 'userSettings', editable: true, managed: false },
         ],
@@ -110,9 +186,13 @@ test('an enum editor renders its options with labels and selects the current val
 test('the int (retention) editor renders the current value', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="privacy"
       snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u.json', keys: ['cleanupPeriodDays'] },
+        ],
         resolved: [
           { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
         ],
@@ -126,9 +206,11 @@ test('the int (retention) editor renders the current value', () => {
 test('a dynamic-enum (output style) renders the live options and selects the current value', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="theme"
       snapshot={snapshot({
+        layers: [{ source: 'userSettings', origin: '/u.json', keys: ['outputStyle'] }],
         resolved: [
           { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
         ],
@@ -149,7 +231,6 @@ test('a dynamic-enum (output style) renders the live options and selects the cur
     />,
   )
   expect(html).toContain('Output style')
-  expect(html).toContain('Default')
   expect(html).toContain('Explanatory')
   expect(html).toContain('Learning')
 })
@@ -157,9 +238,11 @@ test('a dynamic-enum (output style) renders the live options and selects the cur
 test('a dynamic-enum with no live options renders disabled (honest degrade)', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="theme"
       snapshot={snapshot({
+        layers: [{ source: 'userSettings', origin: '/u.json', keys: ['outputStyle'] }],
         resolved: [
           { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
         ],
@@ -170,17 +253,18 @@ test('a dynamic-enum with no live options renders disabled (honest degrade)', ()
       })}
     />,
   )
-  expect(html).toContain('Output style')
-  expect(html).toContain('disabled')
+  const row = html.slice(html.indexOf('>Output style<'))
+  expect(row).toContain('disabled=""')
 })
 
 test('a dynamic-enum shows an on-disk value that is not in the live option set', () => {
-  // A style whose dir was removed: the value must still display (reflect truth).
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
       pane="theme"
       snapshot={snapshot({
+        layers: [{ source: 'userSettings', origin: '/u.json', keys: ['outputStyle'] }],
         resolved: [
           { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
         ],
@@ -196,53 +280,188 @@ test('a dynamic-enum shows an on-disk value that is not in the live option set',
   expect(html).toContain('my-removed-style')
 })
 
-test('a null snapshot renders every pane at its defaults without throwing', () => {
+test('every pane renders at its defaults without throwing, snapshot or not', () => {
   for (const pane of ['general', 'model', 'privacy', 'theme'] as const) {
     const html = renderToStaticMarkup(
-      <SettingsPane onWrite={noop} pane={pane} snapshot={null} />,
+      <SettingsPane layer="userSettings" onWrite={noop} pane={pane} snapshot={null} />,
     )
     expect(html.length).toBeGreaterThan(0)
   }
 })
 
-/* ── write-target disclosure ──────────────────────────────────────────────
- * `targetSourceFor` (SettingsEditors.tsx) writes back to whichever editable
- * layer a key already resolves at. A key that already has a project override
- * therefore writes into THAT project's settings file, invisible everywhere
- * else — and previously nothing on the row said so before the click. These
- * tests assert the user-file and project-file cases render DIFFERENT text
- * (not merely that some text is present, per the false-positive caution
- * above: `toContain('disabled')` once passed with the guard deleted).
- *
- * Panes render every spec for that pane, so a snapshot naming ONE key still
- * renders its sibling rows (at their unset/user-layer defaults). Tests that
- * need "no note anywhere" use `privacy` (single-spec pane, `cleanupPeriodDays`)
- * to avoid sibling noise; the dynamic-enum test scopes to the tail of the html
- * starting at its own label, since `outputStyle` is that pane's LAST row. */
+/* ── spec §5: keys removed from the UI ────────────────────────────────────── */
 
-test('a key resolving to the user layer shows a quiet write-target note naming the user file, not the project one', () => {
+test('the deprecated and terminal-only keys are no longer rendered anywhere', () => {
+  const rendered = (['general', 'model', 'privacy', 'theme'] as const).flatMap(
+    pane => settingsPaneSpecs(pane).map(spec => spec.key),
+  )
+  for (const gone of [
+    'includeCoAuthoredBy',
+    'spinnerTipsEnabled',
+    'terminalTitleFromRename',
+  ]) {
+    expect(rendered).not.toContain(gone)
+  }
+  // …and the panes are not simply empty: the keys a person revisits stayed.
+  expect(rendered).toContain('respectGitignore')
+  expect(rendered).toContain('effortLevel')
+  expect(rendered).toContain('outputStyle')
+
+  const html = renderToStaticMarkup(
+    <SettingsPane layer="userSettings" onWrite={noop} pane="general" snapshot={snapshot({})} />,
+  )
+  expect(html).not.toContain('Co-author attribution')
+  expect(html).not.toContain('terminal title')
+})
+
+/* ── Law 3: the scope decides the destination, and says so first ──────────── */
+
+test('the destination is stated once, above the controls, naming the real file', () => {
+  const html = decode(
+    renderToStaticMarkup(
+      <SettingsPane
+        layer="userSettings"
+        onWrite={noop}
+        pane="privacy"
+        snapshot={snapshot({
+          layers: [
+            {
+              source: 'userSettings',
+              origin: '/Users/pt/.cat-code/settings.json',
+              keys: ['cleanupPeriodDays'],
+            },
+          ],
+          resolved: [
+            { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
+          ],
+          editableValues: [
+            { key: 'cleanupPeriodDays', value: 7, source: 'userSettings' },
+          ],
+        })}
+      />,
+    ),
+  )
+  expect(html).toContain(
+    'Edits here write to your own settings file: /Users/pt/.cat-code/settings.json',
+  )
+  // The destination appears BEFORE the control it governs.
+  expect(html.indexOf('Edits here write to')).toBeLessThan(
+    html.indexOf('inputMode="numeric"'),
+  )
+})
+
+/**
+ * The behaviour this redesign deletes: `targetSourceFor` wrote back to whichever
+ * layer a key already resolved at, so editing a project-overridden value in the
+ * user scope silently rewrote that project's file. Same snapshot, two scopes —
+ * the destination follows the SCOPE, never the resolution.
+ */
+test('a project-overridden key writes to the user file in My defaults, and to the project file in project scope', () => {
+  const overridden = snapshot({
+    layers: [
+      { source: 'userSettings', origin: '/u/settings.json', keys: [] },
+      {
+        source: 'projectSettings',
+        origin: '/repo/.cat-code/settings.json',
+        keys: ['respectGitignore'],
+      },
+    ],
+    resolved: [
+      { key: 'respectGitignore', source: 'projectSettings', editable: true, managed: false },
+    ],
+    editableValues: [
+      { key: 'respectGitignore', value: false, source: 'projectSettings' },
+    ],
+  })
+
+  const asUser = decode(
+    renderToStaticMarkup(
+      <SettingsPane layer="userSettings" onWrite={noop} pane="general" snapshot={overridden} />,
+    ),
+  )
+  expect(asUser).toContain(
+    'Edits here write to your own settings file: /u/settings.json',
+  )
+  expect(asUser).not.toContain('write to this project')
+  // The override is still VISIBLE — it just does not redirect the write.
+  expect(asUser).toContain(
+    "Overridden by this project's shared settings — /repo/.cat-code/settings.json",
+  )
+
+  const asProject = decode(
+    renderToStaticMarkup(
+      <SettingsPane layer="projectSettings" onWrite={noop} pane="general" snapshot={overridden} />,
+    ),
+  )
+  expect(asProject).toContain(
+    "Edits here write to this project's shared settings file: /repo/.cat-code/settings.json",
+  )
+  expect(asProject).not.toContain('write to your own settings file')
+  expect(asProject).toContain('Set here')
+})
+
+test('a value hidden under a higher layer shows unknown, not a guess, and offers no control', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      layer="userSettings"
       onWrite={noop}
-      pane="general"
+      pane="privacy"
       snapshot={snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: '/u/settings.json',
+            keys: ['cleanupPeriodDays'],
+          },
+          {
+            source: 'localSettings',
+            origin: '/repo/.cat-code/settings.local.json',
+            keys: ['cleanupPeriodDays'],
+          },
+        ],
         resolved: [
-          { key: 'includeCoAuthoredBy', source: 'userSettings', editable: true, managed: false },
+          { key: 'cleanupPeriodDays', source: 'localSettings', editable: true, managed: false },
         ],
         editableValues: [
-          { key: 'includeCoAuthoredBy', value: false, source: 'userSettings' },
+          { key: 'cleanupPeriodDays', value: 3, source: 'localSettings' },
         ],
       })}
     />,
   )
-  expect(html).toContain('Writes to your settings')
-  expect(html).not.toContain('Writes to Project settings')
-  expect(html).not.toContain('text-source-project')
+  // `privacy` is a single-row pane, so this counts THIS row's controls.
+  expect(controlCount(html)).toBe(0)
+  expect(html).toContain('unknown')
+  // Specifically: the overriding layer's value is never shown as if it were the
+  // user's own — the number 3 appears nowhere.
+  expect(html).not.toContain('value="3"')
+  expect(decode(html)).toContain('your own value here cannot be shown')
 })
 
-test('a key resolving to a project override shows the project write-target note with the real file path', () => {
+test('with nothing read the pane offers no control at all, and says why', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane layer="userSettings" onWrite={noop} pane="general" snapshot={null} />,
+  )
+  // Not "disabled controls": no control is drawn, because a drawn toggle has a
+  // position and a position is a claim about the operator's file.
+  expect(controlCount(html)).toBe(0)
+  expect(html).toContain('No session is open')
+  // …and nothing promises a destination for a click that cannot happen.
+  expect(html).not.toContain('Edits here write to')
+
+  // The same pane with a real snapshot is fully live, so the guard is not
+  // simply an empty render.
+  const live = renderToStaticMarkup(
+    <SettingsPane layer="userSettings" onWrite={noop} pane="general" snapshot={snapshot({})} />,
+  )
+  expect(controlCount(live)).toBeGreaterThan(0)
+})
+
+test('a project with no engine renders no values and no controls, and names the project', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
+      engine="absent"
+      layer="projectSettings"
+      noEngineNote="No engine is running in other-repo, so its settings files have not been read."
       onWrite={noop}
       pane="general"
       snapshot={snapshot({
@@ -250,118 +469,21 @@ test('a key resolving to a project override shows the project write-target note 
           {
             source: 'projectSettings',
             origin: '/repo/.cat-code/settings.json',
-            keys: ['includeCoAuthoredBy'],
+            keys: ['respectGitignore'],
           },
         ],
         resolved: [
-          { key: 'includeCoAuthoredBy', source: 'projectSettings', editable: true, managed: false },
+          { key: 'respectGitignore', source: 'projectSettings', editable: true, managed: false },
         ],
         editableValues: [
-          { key: 'includeCoAuthoredBy', value: false, source: 'projectSettings' },
+          { key: 'respectGitignore', value: false, source: 'projectSettings' },
         ],
       })}
     />,
   )
-  // `includeCoAuthoredBy` is the FIRST row in `general`; scope to it so a
-  // sibling's (unset → user-layer) note can't leak a false pass/fail either
-  // way — the sibling rows legitimately say "Writes to your settings" too.
-  const coAuthorRow = html.slice(0, html.indexOf('Git workflow instructions'))
-  // Distinguishes the project destination from the user one: different text
-  // AND the actual on-disk path, not just "some note is present".
-  expect(coAuthorRow).toContain('Writes to Project settings, not yours')
-  expect(coAuthorRow).toContain('/repo/.cat-code/settings.json')
-  expect(coAuthorRow).toContain('text-source-project')
-  expect(coAuthorRow).not.toContain('Writes to your settings')
-})
-
-test('a key resolving to a local override shows the local write-target note, distinct from the project one', () => {
-  const html = renderToStaticMarkup(
-    <SettingsPane
-      onWrite={noop}
-      pane="general"
-      snapshot={snapshot({
-        layers: [
-          {
-            source: 'localSettings',
-            origin: '/repo/.cat-code/settings.local.json',
-            keys: ['includeCoAuthoredBy'],
-          },
-        ],
-        resolved: [
-          { key: 'includeCoAuthoredBy', source: 'localSettings', editable: true, managed: false },
-        ],
-        editableValues: [
-          { key: 'includeCoAuthoredBy', value: false, source: 'localSettings' },
-        ],
-      })}
-    />,
-  )
-  const coAuthorRow = html.slice(0, html.indexOf('Git workflow instructions'))
-  expect(coAuthorRow).toContain('Writes to Local settings, not yours')
-  expect(coAuthorRow).toContain('/repo/.cat-code/settings.local.json')
-  expect(coAuthorRow).toContain('text-source-local')
-  expect(coAuthorRow).not.toContain('Writes to Project settings')
-  expect(coAuthorRow).not.toContain('Writes to your settings')
-})
-
-test('an unread snapshot shows no write-target note at all (the disabled controls assert nothing)', () => {
-  const html = renderToStaticMarkup(
-    <SettingsPane onWrite={noop} pane="general" snapshot={null} />,
-  )
-  expect(html).not.toContain('Writes to')
-})
-
-test('a managed key shows no write-target note (it cannot be clicked)', () => {
-  const html = renderToStaticMarkup(
-    <SettingsPane
-      onWrite={noop}
-      pane="privacy"
-      snapshot={snapshot({
-        resolved: [
-          { key: 'cleanupPeriodDays', source: 'policySettings', editable: false, managed: true },
-        ],
-        editableValues: [{ key: 'cleanupPeriodDays', value: 30, source: 'policySettings' }],
-      })}
-    />,
-  )
-  expect(html).not.toContain('Writes to')
-})
-
-test('a flag-sourced key shows no write-target note (it cannot be clicked)', () => {
-  const html = renderToStaticMarkup(
-    <SettingsPane
-      onWrite={noop}
-      pane="privacy"
-      snapshot={snapshot({
-        resolved: [
-          { key: 'cleanupPeriodDays', source: 'flagSettings', editable: false, managed: false },
-        ],
-        editableValues: [{ key: 'cleanupPeriodDays', value: 14, source: 'flagSettings' }],
-      })}
-    />,
-  )
-  expect(html).not.toContain('Writes to')
-})
-
-test('a dynamic-enum with no live options shows no write-target note (the control is inert despite being "editable")', () => {
-  const html = renderToStaticMarkup(
-    <SettingsPane
-      onWrite={noop}
-      pane="theme"
-      snapshot={snapshot({
-        resolved: [
-          { key: 'outputStyle', source: 'userSettings', editable: true, managed: false },
-        ],
-        editableValues: [
-          { key: 'outputStyle', value: 'default', source: 'userSettings' },
-        ],
-        // availableOptions omitted → no live registry → the select disables
-        // itself for a SECOND reason beyond `resolution.editable`.
-      })}
-    />,
-  )
-  // `outputStyle` is the last row in `theme`, so the tail of the html from its
-  // own label onward belongs to it alone — no sibling row's note can leak in.
-  const outputStyleRow = html.slice(html.indexOf('>Output style<'))
-  expect(outputStyleRow).not.toContain('Writes to')
+  expect(controlCount(html)).toBe(0)
+  expect(html).toContain('No engine is running in other-repo')
+  // The OTHER project's file must not leak in as if it described this one.
+  expect(html).not.toContain('/repo/.cat-code/settings.json')
+  expect(html).not.toContain('Edits here write to')
 })
