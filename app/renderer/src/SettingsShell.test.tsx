@@ -237,16 +237,23 @@ describe('no project bound', () => {
     }
   })
 
-  test('the default binding names no project, so an unwired App cannot invent one', () => {
-    // App.tsx has not been given `projectBinding` yet (a one-line change made in
-    // a later commit); until it is, the shell must name nothing rather than
-    // fall back to a placeholder.
+  test('an absent binding names no project AND gives no reason', () => {
+    // App.tsx has not been given `projectBinding` yet (a one-line change, held
+    // back because that file is mid-edit in another session). "Not told" is a
+    // THIRD state, distinct from both bound and explicitly-unbound: defaulting
+    // it to `no-session` would print "No session is open" over a session that
+    // IS open — the same false-claim class this whole surface is being fixed
+    // for. So the heading stays generic and no reason is asserted.
     const html = renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />)
     expect(railGroups(html)[0]).toEqual({
       heading: 'Resolved per project',
-      note: SETTINGS_PROJECT_UNBOUND_NOTE['no-session'],
+      note: null,
       items: expect.arrayContaining(['General']) as unknown as string[],
     })
+    // And specifically: no unbound reason leaks in from any of the three.
+    for (const note of Object.values(SETTINGS_PROJECT_UNBOUND_NOTE)) {
+      expect(navMarkup(html)).not.toContain(note)
+    }
   })
 })
 

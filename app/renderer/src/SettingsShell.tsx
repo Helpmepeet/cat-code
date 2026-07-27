@@ -192,7 +192,7 @@ const SCOPE_ORDER: readonly SettingsScope[] = ['resolved', 'project', 'machine']
  */
 function scopeHeading(
   scope: SettingsScope,
-  binding: SettingsProjectBinding,
+  binding: SettingsProjectBinding | undefined,
 ): string {
   switch (scope) {
     case 'machine':
@@ -200,7 +200,7 @@ function scopeHeading(
     case 'project':
       return 'This project'
     case 'resolved':
-      return binding.bound
+      return binding?.bound
         ? `Resolved for ${binding.name}`
         : 'Resolved per project'
     default: {
@@ -221,36 +221,28 @@ function scopeHeading(
  * — so no heading is left standing over nothing.
  */
 export function selectSettingsNavGroups(
-  binding: SettingsProjectBinding,
+  binding: SettingsProjectBinding | undefined,
   query: string,
 ): NavGroup[] {
   const q = query.trim().toLowerCase()
   return SCOPE_ORDER.map(scope => ({
     scope,
     heading: scopeHeading(scope, binding),
+    // Absent prop ≠ "no session". Until App wires the selector the shell has not
+    // been TOLD anything, so it names no project AND states no reason — stating
+    // one would assert "no session is open" over a session that is open, which
+    // is the same class of false claim this whole surface is being fixed for.
     note:
-      scope === 'resolved' && !binding.bound
+      scope === 'resolved' && binding && !binding.bound
         ? SETTINGS_PROJECT_UNBOUND_NOTE[binding.reason]
         : undefined,
-    cwd: scope === 'resolved' && binding.bound ? binding.cwd : undefined,
+    cwd: scope === 'resolved' && binding?.bound ? binding.cwd : undefined,
     items: SETTINGS_CATEGORIES.filter(
       item =>
         CAT_SCOPE[item.id] === scope &&
         (!q || item.label.toLowerCase().includes(q)),
     ),
   })).filter(group => group.items.length > 0)
-}
-
-/**
- * Until `App.tsx` passes `selectSettingsProjectBinding(rows, activeSessionId)`
- * — a one-line change, deliberately left out of this commit because App is
- * mid-edit in another session — the shell names no project. The default is the
- * resting state of a launched app with every tab closed, which is also the state
- * every test that omits the prop is exercising.
- */
-const UNBOUND_PROJECT: SettingsProjectBinding = {
-  bound: false,
-  reason: 'no-session',
 }
 
 const CAT_DESC: Record<string, string> = {
@@ -304,7 +296,7 @@ export function SettingsShell({
   remoteLastResult,
   onRemoteVerb,
   onSettingWrite,
-  projectBinding = UNBOUND_PROJECT,
+  projectBinding,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
