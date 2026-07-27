@@ -252,7 +252,11 @@ test('CC-13: a settings snapshot without the field renders the unset state, not 
   expect(html).not.toContain('Waiting for the engine')
 })
 
-test('CC-13: the Permissions pane renders with NO settings snapshot at all', () => {
+// The shell is the only production caller, so it is the only place the
+// settings-read distinction can actually be got wrong: the editor cannot tell
+// "unset" from "never read" unless the shell passes `settingsLoaded`. Both
+// panes must still render — the pane not blocking was the original CC-13 fix.
+test('CC-13: with NO settings snapshot the Permissions pane renders, and says unknown rather than unset', () => {
   const html = renderToStaticMarkup(
     <SettingsShell
       initialCategory="permissions"
@@ -260,9 +264,24 @@ test('CC-13: the Permissions pane renders with NO settings snapshot at all', () 
       snapshot={null}
     />,
   )
-  expect(html).toContain('Default permission mode: not set')
+  expect(html).toContain('Default permission mode: unknown')
+  // Must not assert anything about settings files it has not read.
+  expect(html).not.toContain('is not set')
   expect(html).toContain('No session is attached')
   expect(html).not.toContain('Waiting for the engine')
+})
+
+test('CC-13: WITH a snapshot and no defaultMode, the same pane says unset', () => {
+  const html = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="permissions"
+      permissionContext={null}
+      snapshot={SNAPSHOT}
+    />,
+  )
+  expect(html).toContain('Default permission mode: not set')
+  expect(html).toContain('is not set')
+  expect(html).not.toContain('Default permission mode: unknown')
 })
 
 test('renders without a snapshot (waiting state)', () => {

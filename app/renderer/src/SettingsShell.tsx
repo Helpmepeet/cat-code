@@ -366,6 +366,9 @@ function CategoryBody({
           context={permissionContext}
           defaultMode={selectPermissionDefaultMode(snapshot)}
           onSetMode={() => {}}
+          // No snapshot ⇒ no settings file has been read, so a null defaultMode
+          // is UNKNOWN rather than unset (see the editor's `settingsLoaded`).
+          settingsLoaded={snapshot !== null}
           showModes={false}
         />
       </PaneSection>

@@ -108,6 +108,37 @@ test('CC-13: an unset defaultMode renders an explicit unset state, never a fake 
   expect(html).toContain('Current permission mode: plan')
 })
 
+// "Unset at every layer" and "no settings file has been read yet" are different
+// facts, and only the first licenses a statement about the operator's files. The
+// snapshot is session-keyed, so the second is the state the Settings page is in
+// with nothing open — exactly where the original CC-13 report came from.
+test('CC-13: an unread settings snapshot reads as unknown, and claims nothing about the files', () => {
+  const props = {
+    context: null,
+    defaultMode: null,
+    onSetMode: () => {},
+    showModes: false,
+  } as const
+  const unread = renderToStaticMarkup(
+    <PermissionRulesEditor {...props} settingsLoaded={false} />,
+  )
+  const read = renderToStaticMarkup(
+    <PermissionRulesEditor {...props} settingsLoaded />,
+  )
+
+  expect(unread).toContain('Default permission mode: unknown')
+  expect(unread).not.toContain('is not set')
+  expect(unread).toContain('have not been read yet')
+
+  // The loaded case is the ONLY one allowed to speak for the settings files.
+  expect(read).toContain('Default permission mode: not set')
+  expect(read).toContain('is not set')
+  expect(read).not.toContain('have not been read yet')
+
+  // The whole bug was these two rendering identically.
+  expect(unread).not.toBe(read)
+})
+
 test('CC-13 + T6b: the settings-backed default is never a control, even with showModes', () => {
   // Making the default-mode section session-independent must not turn it into a
   // set-mode affordance: `permission.setMode` is session-scoped and has no
@@ -131,10 +162,11 @@ test('CC-13: no session AND no settings snapshot still resolves to a stated stat
       context={null}
       defaultMode={null}
       onSetMode={() => {}}
+      settingsLoaded={false}
       showModes={false}
     />,
   )
-  expect(html).toContain('Default permission mode: not set')
+  expect(html).toContain('Default permission mode: unknown')
   expect(html).toContain('No session is attached')
   expect(html).not.toContain('Waiting for the engine')
 })

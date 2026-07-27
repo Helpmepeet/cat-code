@@ -14,8 +14,15 @@ import { SourceBadge } from './SettingsField.js'
  * convenience:
  *
  *  1. `defaultMode` — the persisted `permissions.defaultMode` SETTING, from the
- *     P4-3 settings snapshot. A global, file-backed configuration value, so it
- *     is shown whether or not a session is attached.
+ *     P4-3 settings snapshot. A global, file-backed configuration value, so the
+ *     section renders whether or not a session is attached. It has THREE states,
+ *     not two: set, unset, and NOT YET READ. The snapshot is keyed by session
+ *     (`settingsState.ts` `selectSettingsSnapshot`) because settings are
+ *     resolved engine-side and there is no engine without a session
+ *     (N-process), so with none attached the app has read no settings file at
+ *     all. Collapsing that into "unset" would assert a fact about the
+ *     operator's files that the app has not established — `settingsLoaded`
+ *     keeps the two apart.
  *  2. `context` — the C3 `permission.context` snapshot: the ENGINE's live
  *     resolved context for ONE session. Everything else here is read from it,
  *     and must be, because it is a strict SUPERSET of the settings files that no
@@ -45,16 +52,24 @@ import { SourceBadge } from './SettingsField.js'
 export function PermissionRulesEditor({
   context,
   defaultMode = null,
+  settingsLoaded = true,
   onSetMode,
   showModes = true,
 }: {
   context: PermissionContextSnapshot | null
   /**
    * The persisted `permissions.defaultMode` + the layer it resolved from
-   * (`selectPermissionDefaultMode`). null = unset at every layer, or no settings
-   * snapshot yet — both render as an explicit unset state, never a fake value.
+   * (`selectPermissionDefaultMode`). null means unset at every enabled layer —
+   * but ONLY when `settingsLoaded`; otherwise nothing has been read yet.
    */
   defaultMode?: NonNullable<SettingsSnapshot['permissionDefaultMode']> | null
+  /**
+   * Whether a settings snapshot has arrived at all. False ⇒ no session is
+   * attached, so no settings file has been read and a null `defaultMode` means
+   * UNKNOWN, not unset. Defaults true so a caller that always has a snapshot
+   * need not think about it.
+   */
+  settingsLoaded?: boolean
   onSetMode: (mode: PermissionSetModeMode) => void
   /** When false, render the read-only rules WITHOUT the mode buttons — the
    * `PermissionModeChip` owns mode switching and reuses this for the rules. */
@@ -89,18 +104,29 @@ export function PermissionRulesEditor({
             </>
           ) : (
             <span
-              aria-label="Default permission mode: not set"
+              aria-label={`Default permission mode: ${
+                settingsLoaded ? 'not set' : 'unknown'
+              }`}
               className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-subtle"
             >
-              not set
+              {settingsLoaded ? 'not set' : 'unknown'}
             </span>
           )}
         </div>
-        {defaultMode ? null : (
+        {/* Only the LOADED case may speak about the settings files — with no
+         * snapshot the app has read none, so claiming "not set in any settings
+         * file" would be an assertion it cannot support. */}
+        {defaultMode || !settingsLoaded ? null : (
           <p className="mt-1.5 text-[11px] leading-4 text-text-subtle">
             <code className="font-mono">permissions.defaultMode</code> is not set
             in any settings file, so the engine chooses each session's opening
             mode.
+          </p>
+        )}
+        {settingsLoaded ? null : (
+          <p className="mt-1.5 text-[11px] leading-4 text-text-subtle">
+            No session is open, so your settings files have not been read yet.
+            Open a session to see the saved default.
           </p>
         )}
       </section>
