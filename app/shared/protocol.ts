@@ -2254,6 +2254,36 @@ export type ServerFrame =
  * + the truncation-boundary error frame — never `ready`, permission, or any
  * operational snapshot, so cache hydration can reach nothing but transcript state.
  */
+/**
+ * What a session RAN ON, for a pane that has no engine to ask.
+ *
+ * A preview reads a cache, and the cache's frames are conversation only: the
+ * engine's `toSDKMessages` conversion keeps assistant/user turns and drops the
+ * telemetry (verified 2026-07-28 against real caches — 1,615 assistant, 889
+ * user, 0 result, 0 `permissionMode`). These facts are therefore captured at
+ * WRITE time, from the source that still has them, rather than re-derived from
+ * frames that no longer carry them.
+ *
+ * Every field is nullable and independently so: a cache may record a model but
+ * no effort (an Anthropic session has no effort record at all). Null means the
+ * source did not say, and the surface renders nothing rather than a zero.
+ *
+ * Non-secret scalars only. No field here is credential-bearing, and
+ * `scanForSecrets` still runs over the whole artifact as defence in depth.
+ */
+export type TranscriptRunFacts = {
+  /** The newest model the transcript records. */
+  model: string | null
+  /** The newest permission mode. May be an engine-internal mode (`auto`). */
+  permissionMode: string | null
+  /** The newest reasoning effort actually sent. Codex/GPT sessions only. */
+  effort: string | null
+  /** Context tokens at the newest turn that reported usage. */
+  usedTokens: number | null
+  /** The model's context window at that turn, when the source stated one. */
+  contextWindow: number | null
+}
+
 export type TranscriptCacheHeader = {
   appSessionId: SessionId
   /** The transcript key (two-id bridge). null only for a never-ready session. */
@@ -2264,6 +2294,12 @@ export type TranscriptCacheHeader = {
   /** Guard-drift fast-path (the real guard is a read-time `scanForSecrets` re-scan). */
   guardVersion: number
   writtenAt: number
+  /**
+   * Additive and OPTIONAL: caches written before this field existed stay valid
+   * and simply say nothing. They are refreshed opportunistically rather than
+   * discarded, so no transcript is ever destroyed to gain a display detail.
+   */
+  runFacts?: TranscriptRunFacts
 }
 
 export type TranscriptCache = {

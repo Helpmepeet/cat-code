@@ -16,6 +16,17 @@ import { runStartupTranscriptPreload } from '../renderer/src/sessionPreload.js'
 import { persistTranscriptBackfillResult } from './transcriptBackfill.js'
 import { readCache } from './transcriptCache.js'
 
+/** Worker results always carry run facts; these fixtures exercise other
+ * concerns, so they use the all-null value the boundary requires. */
+const NO_RUN_FACTS = {
+  model: null,
+  permissionMode: null,
+  effort: null,
+  usedTokens: null,
+  contextWindow: null,
+}
+
+
 const APP_ID = '11111111-1111-4111-8111-111111111111'
 const ENGINE_ID = '22222222-2222-4222-8222-222222222222'
 const dirs: string[] = []
@@ -61,6 +72,7 @@ test('PL-B cache is admitted by PL-A and the later click stays store-first', asy
         } as never,
       },
     ],
+    runFacts: NO_RUN_FACTS,
   }
   expect(
     persistTranscriptBackfillResult(

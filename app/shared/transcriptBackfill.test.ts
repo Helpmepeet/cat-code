@@ -1,3 +1,13 @@
+/** A worker result carries run facts always; these fixtures exercise other
+ * concerns, so they use the all-null value the boundary requires. */
+const NO_RUN_FACTS = {
+  model: null,
+  permissionMode: null,
+  effort: null,
+  usedTokens: null,
+  contextWindow: null,
+}
+
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
 
@@ -65,6 +75,7 @@ test('backfill result rejects extra keys and cross-session/cross-engine frame fo
     appSessionId: APP_ID,
     engineSessionId: ENGINE_ID,
     frames: [eventFrame()],
+    runFacts: NO_RUN_FACTS,
   }
   expect(parseTranscriptBackfillResult(valid)).toEqual(valid)
   expect(parseTranscriptBackfillResult({ ...valid, token: 'secret' })).toBeNull()
@@ -100,6 +111,7 @@ test('only the existing visible history-truncation error may precede replay even
       appSessionId: APP_ID,
       engineSessionId: ENGINE_ID,
       frames: [boundary, eventFrame()],
+      runFacts: NO_RUN_FACTS,
     }),
   ).not.toBeNull()
   expect(
@@ -108,6 +120,7 @@ test('only the existing visible history-truncation error may precede replay even
       appSessionId: APP_ID,
       engineSessionId: ENGINE_ID,
       frames: [eventFrame(), boundary],
+      runFacts: NO_RUN_FACTS,
     }),
   ).toBeNull()
 })
@@ -175,6 +188,7 @@ test('backfill result rejects discriminant-only and unsupported SDK messages', (
         appSessionId: APP_ID,
         engineSessionId: ENGINE_ID,
         frames: [{ ...frame, event: { type: 'message', message } }],
+        runFacts: NO_RUN_FACTS,
       }),
     ).toBeNull()
   }

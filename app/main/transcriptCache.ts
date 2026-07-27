@@ -39,6 +39,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -53,9 +54,11 @@ import {
   type ServerFrame,
   type SessionId,
   type TranscriptCache,
+  type TranscriptRunFacts,
 } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import { DEFAULT_MAX_BUFFERED_BYTES, isReplayTruncationFrame } from './replayBuffer.js'
+import { parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
 
 /**
  * Guard-drift fast-path stamp. This is a NEW constant main OWNS (there is no
@@ -143,6 +146,13 @@ export function createTranscriptCache(
   appSessionId: SessionId,
   engineSessionId: string | null,
   frames: ServerFrame[],
+  /**
+   * Only the PL-B worker can supply these: it reads the raw transcript, which
+   * still carries the mode/effort/usage records the engine's message conversion
+   * drops. An on-close cache omits them, and the renderer falls back to reading
+   * what the FRAMES still carry (model, and usage from a live `result`).
+   */
+  runFacts?: TranscriptRunFacts,
 ): TranscriptCache {
   return {
     header: {
@@ -152,10 +162,51 @@ export function createTranscriptCache(
       appVersion: TRANSCRIPT_CACHE_APP_VERSION,
       guardVersion: TRANSCRIPT_CACHE_GUARD_VERSION,
       writtenAt: Date.now(),
+      ...(runFacts ? { runFacts } : {}),
     },
     frames,
   }
 }
+
+/**
+ * Whether a cache already carries run facts.
+ *
+ * Backfill discovery uses this to REFRESH a cache written before the field
+ * existed, instead of discarding it: an old cache still previews correctly, so
+ * destroying it to gain a display detail would be a strictly worse trade.
+ */
+export function cacheHasRunFacts(dir: string, id: SessionId): boolean {
+  const filePath = cacheFilePath(dir, id)
+  if (!filePath) return false
+  let handle: number | undefined
+  try {
+    // A bounded PREFIX read, never `readCache`: discovery runs on Electron's
+    // main thread for every restorable row, and parsing plus recursively
+    // secret-scanning multi-MB caches there is the exact cost the enumeration
+    // above is written to avoid. The header is the first object in the file, so
+    // the marker is inside this window or the cache predates the field.
+    handle = openSync(filePath, 'r')
+    const buffer = Buffer.alloc(RUN_FACTS_PROBE_BYTES)
+    const read = readSync(handle, buffer, 0, RUN_FACTS_PROBE_BYTES, 0)
+    return buffer.subarray(0, read).includes(RUN_FACTS_MARKER)
+  } catch {
+    // Unreadable: treat as missing so the row is re-backfilled rather than
+    // silently left stale. A genuinely broken file fails the real read anyway.
+    return false
+  } finally {
+    if (handle !== undefined) {
+      try {
+        closeSync(handle)
+      } catch {
+        // Best-effort close; the process is not long-lived on this path.
+      }
+    }
+  }
+}
+
+/** Header-sized window: `runFacts` sits in the first object of the file. */
+const RUN_FACTS_PROBE_BYTES = 4096
+const RUN_FACTS_MARKER = Buffer.from('"runFacts"', 'utf8')
 
 /** `<registryDir>/transcript-cache` — main passes its real registry dir. */
 export function transcriptCacheDir(registryDir: string): string {
@@ -313,6 +364,15 @@ function parseTranscriptCache(value: unknown): TranscriptCache | null {
     typeof header.appVersion !== 'string' ||
     typeof header.guardVersion !== 'number' ||
     typeof header.writtenAt !== 'number'
+  ) {
+    return null
+  }
+  // Optional and additive: absent is a valid pre-field cache. PRESENT but
+  // malformed is a corrupt artifact, and fails the read like any other
+  // schema drift rather than being silently dropped.
+  if (
+    header.runFacts !== undefined &&
+    parseTranscriptRunFacts(header.runFacts) === null
   ) {
     return null
   }

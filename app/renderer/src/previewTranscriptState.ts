@@ -131,7 +131,7 @@ export function projectPreviewTranscriptCache(
   return {
     transcript,
     truncationMessage,
-    runFacts: selectPreviewRunFacts(cacheFrames),
+    runFacts: selectPreviewRunFacts(cache),
   }
 }
 
@@ -143,7 +143,46 @@ export function projectPreviewTranscriptCache(
  * SAME function the live composer donut uses, so a previewed session's context
  * is computed exactly as a live one's is, never approximated.
  */
-export function selectPreviewRunFacts(
+export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
+  const sessionId = cache.header.appSessionId
+  const frames = cache.frames.filter(frame => frame.sessionId === sessionId)
+  // The HEADER wins when present. A backfilled cache is written by the worker,
+  // which read the raw transcript and so still had the mode/effort/usage the
+  // engine's message conversion drops; the frames below cannot recover those at
+  // all. A cache written on session close carries no header facts, and its
+  // frames DO still hold a live `result`, so the scan is the fallback rather
+  // than dead code.
+  const header = cache.header.runFacts
+  if (header) {
+    return {
+      model: header.model,
+      permissionMode: header.permissionMode,
+      effort: header.effort,
+      contextUsage:
+        header.usedTokens === null
+          ? null
+          : {
+              usedTokens: header.usedTokens,
+              contextWindow: header.contextWindow ?? DEFAULT_PREVIEW_WINDOW,
+              percentUsed: percentOf(
+                header.usedTokens,
+                header.contextWindow ?? DEFAULT_PREVIEW_WINDOW,
+              ),
+            },
+    }
+  }
+  return selectRunFactsFromFrames(frames)
+}
+
+/** Matches `contextUsage.ts`'s default when no turn reported a real window. */
+const DEFAULT_PREVIEW_WINDOW = 200_000
+
+function percentOf(used: number, window: number): number {
+  if (window <= 0) return 0
+  return Math.max(0, Math.min(100, Math.round((used / window) * 100)))
+}
+
+function selectRunFactsFromFrames(
   frames: readonly ServerFrame[],
 ): PreviewRunFacts {
   const messages: SDKMessage[] = []

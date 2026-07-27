@@ -28,6 +28,15 @@ async function main(): Promise<void> {
           },
         },
       ],
+      // The boundary requires the key on every session record; this fixture
+      // exercises framing/reaping, not derivation, so it sends all-nulls.
+      runFacts: {
+        model: null,
+        permissionMode: null,
+        effort: null,
+        usedTokens: null,
+        contextWindow: null,
+      },
     }))
   process.stdout.write(
     `${sessions.map(session => JSON.stringify(session)).join('\n')}\n${JSON.stringify({ type: 'done', attempted: sessions.length })}\n`,

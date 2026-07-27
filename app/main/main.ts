@@ -55,6 +55,7 @@ import {
 import {
   deleteCache,
   distill,
+  cacheHasRunFacts,
   listCachedSessionIds,
   readCache,
   resolvePreview,
@@ -303,7 +304,11 @@ async function backfillTranscriptCaches(): Promise<void> {
       session =>
         session.restorable &&
         session.engineSessionId !== null &&
-        !cachedIds.has(session.appSessionId),
+        // A cached row is skipped only when its cache can already speak for the
+        // session. One written before run facts existed is re-derived here, and
+        // `persistTranscriptBackfillResult` keeps the write idempotent.
+        (!cachedIds.has(session.appSessionId) ||
+          !cacheHasRunFacts(TRANSCRIPT_CACHE_DIR, session.appSessionId)),
     )
     .sort((a, b) => b.lastAttachedAt - a.lastAttachedAt)
     .slice(0, MAX_TRANSCRIPT_BACKFILL_SESSIONS)

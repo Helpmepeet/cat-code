@@ -16,6 +16,7 @@ import {
   PROTOCOL_VERSION,
   type ServerFrame,
   type SessionId,
+  type TranscriptRunFacts,
 } from './protocol.js'
 import {
   MAX_HISTORY_REPLAY_BYTES,
@@ -47,6 +48,13 @@ export type TranscriptBackfillSessionResult = {
   appSessionId: SessionId
   engineSessionId: string
   frames: ServerFrame[]
+  /**
+   * What the session ran on, read from the raw transcript BEFORE the engine's
+   * `toSDKMessages` conversion drops it. Always present on the wire (with null
+   * fields when the transcript is silent) so a missing key is a malformed
+   * record rather than an ambiguous absence.
+   */
+  runFacts: TranscriptRunFacts
 }
 
 export type TranscriptBackfillFailureResult = {
@@ -151,6 +159,7 @@ export function parseTranscriptBackfillResult(
       'appSessionId',
       'engineSessionId',
       'frames',
+      'runFacts',
     ]) ||
     !isUuid(value.appSessionId) ||
     !isUuid(value.engineSessionId) ||
@@ -170,13 +179,73 @@ export function parseTranscriptBackfillResult(
     if (!frame) return null
     frames.push(frame)
   }
+  const runFacts = parseTranscriptRunFacts(value.runFacts)
+  if (!runFacts) return null
   return {
     type: 'session',
     appSessionId: value.appSessionId,
     engineSessionId: value.engineSessionId,
     frames,
+    runFacts,
   }
 }
+
+/**
+ * Validate the run facts at the boundary like everything else crossing it: a
+ * child process is untrusted, so each field must be a string/number or an
+ * explicit null, with no extra keys. Strings are length-bounded because they
+ * are rendered; numbers must be finite and non-negative because they become a
+ * percentage.
+ */
+export function parseTranscriptRunFacts(
+  value: unknown,
+): TranscriptRunFacts | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'model',
+      'permissionMode',
+      'effort',
+      'usedTokens',
+      'contextWindow',
+    ])
+  ) {
+    return null
+  }
+  const model = parseFactString(value.model)
+  const permissionMode = parseFactString(value.permissionMode)
+  const effort = parseFactString(value.effort)
+  const usedTokens = parseFactNumber(value.usedTokens)
+  const contextWindow = parseFactNumber(value.contextWindow)
+  if (
+    model === undefined ||
+    permissionMode === undefined ||
+    effort === undefined ||
+    usedTokens === undefined ||
+    contextWindow === undefined
+  ) {
+    return null
+  }
+  return { model, permissionMode, effort, usedTokens, contextWindow }
+}
+
+/** `undefined` = invalid (reject the record); `null` = the source said nothing. */
+function parseFactString(value: unknown): string | null | undefined {
+  if (value === null) return null
+  if (typeof value !== 'string') return undefined
+  if (value.length === 0 || value.length > MAX_RUN_FACT_CHARS) return undefined
+  return value
+}
+
+function parseFactNumber(value: unknown): number | null | undefined {
+  if (value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  if (value < 0) return undefined
+  return value
+}
+
+/** Bounded because these render in the composer rail. */
+const MAX_RUN_FACT_CHARS = 128
 
 function parseTranscriptFrame(
   value: unknown,

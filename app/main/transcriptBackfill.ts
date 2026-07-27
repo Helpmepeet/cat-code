@@ -75,7 +75,12 @@ export function persistTranscriptBackfillResult(
   ) {
     return 'ineligible'
   }
-  if (readCache(options.cacheDir, result.appSessionId) !== null) {
+  // A cache written BEFORE run facts existed is refreshed rather than kept:
+  // it previews fine but can say nothing about what the session ran on, and
+  // the worker has just read that from the raw transcript. A cache that
+  // already has them is left alone, so a re-run is still a no-op.
+  const existing = readCache(options.cacheDir, result.appSessionId)
+  if (existing !== null && existing.header.runFacts !== undefined) {
     return 'already_cached'
   }
   writeCache(
@@ -84,6 +89,7 @@ export function persistTranscriptBackfillResult(
       result.appSessionId,
       result.engineSessionId,
       result.frames,
+      result.runFacts,
     ),
   )
   return readCache(options.cacheDir, result.appSessionId) === null

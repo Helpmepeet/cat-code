@@ -33,6 +33,7 @@ import {
 } from '../shared/protocol.js'
 import { checkJsonSafe, omitUndefinedObjectProperties } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { readTranscriptRunFacts } from './transcriptRunFacts.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
 // imported. conversationRecovery always calls processSessionStartHooks('resume'),
@@ -112,6 +113,10 @@ async function main(): Promise<void> {
         appSessionId: item.appSessionId,
         engineSessionId: item.engineSessionId,
         frames,
+        // Read from the RAW transcript, not from `history` above: the
+        // `toSDKMessages` conversion keeps conversation turns and drops the
+        // telemetry these come from, so by that point they no longer exist.
+        runFacts: readTranscriptRunFacts(item.transcriptPath),
       }
       const secret = scanForSecrets(result)
       if (!secret.ok) {

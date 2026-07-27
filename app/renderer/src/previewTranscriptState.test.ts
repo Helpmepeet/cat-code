@@ -434,3 +434,44 @@ test('effort is ignored on a system message of another subtype', () => {
   // The stray is NEWER, so a missing guard would return its 'low'.
   expect(entry.runFacts.effort).toBe('xhigh')
 })
+
+/**
+ * The header is the ONLY source that can answer mode/effort for a backfilled
+ * cache: its frames are conversation-only, because the engine's `toSDKMessages`
+ * conversion drops the telemetry. Measured against real caches (2026-07-28):
+ * 1,615 assistant + 889 user frames, 0 result, 0 permissionMode. So a cache
+ * whose header carries facts must be believed over its own frames.
+ */
+test('header run facts win over the frames, which cannot know mode or effort', () => {
+  const withHeader: TranscriptCache = {
+    ...cache([assistantFrame('claude-sonnet-5', 0)]),
+    header: {
+      ...cache([]).header,
+      runFacts: {
+        model: 'gpt-5.6-terra',
+        permissionMode: 'auto',
+        effort: 'xhigh',
+        usedTokens: 50_000,
+        contextWindow: 200_000,
+      },
+    },
+  }
+  const entry = projectPreviewTranscriptCache(withHeader)
+  // The frame says sonnet; the header is the authority and says terra.
+  expect(entry.runFacts.model).toBe('gpt-5.6-terra')
+  expect(entry.runFacts.permissionMode).toBe('auto')
+  expect(entry.runFacts.effort).toBe('xhigh')
+  expect(entry.runFacts.contextUsage?.percentUsed).toBe(25)
+})
+
+/**
+ * A cache written on session CLOSE has no header facts, and its frames still
+ * hold a live `result`. The frame scan is that path's answer, not dead code.
+ */
+test('with no header, the frame scan still answers what the frames can', () => {
+  const entry = projectPreviewTranscriptCache(
+    cache([assistantFrame('claude-sonnet-5', 0), resultFrame(42_000)]),
+  )
+  expect(entry.runFacts.model).toBe('claude-sonnet-5')
+  expect(entry.runFacts.contextUsage?.usedTokens).toBe(42_000)
+})
