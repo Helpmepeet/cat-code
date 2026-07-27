@@ -91,7 +91,7 @@ const SNAPSHOT: SettingsSnapshot = {
     {
       source: 'userSettings',
       origin: USER_FILE,
-      keys: ['effortLevel', 'theme'],
+      keys: ['reasoningDisplay', 'theme'],
     },
     {
       source: 'policySettings',
@@ -101,12 +101,12 @@ const SNAPSHOT: SettingsSnapshot = {
   ],
   resolved: [
     { key: 'bypassPermissions', source: 'policySettings', editable: false, managed: true },
-    { key: 'effortLevel', source: 'userSettings', editable: true, managed: false },
+    { key: 'reasoningDisplay', source: 'userSettings', editable: true, managed: false },
     { key: 'telemetry', source: 'policySettings', editable: false, managed: true },
     { key: 'theme', source: 'userSettings', editable: true, managed: false },
   ],
   policyOrigin: 'file',
-  editableValues: [{ key: 'effortLevel', value: 'high', source: 'userSettings' }],
+  editableValues: [{ key: 'reasoningDisplay', value: 'raw', source: 'userSettings' }],
 }
 
 /* ── Law 2: the subject is chosen ─────────────────────────────────────────── */
@@ -259,18 +259,18 @@ describe('write targeting', () => {
     const overridden: SettingsSnapshot = {
       ...SNAPSHOT,
       layers: [
-        { source: 'userSettings', origin: USER_FILE, keys: ['effortLevel'] },
+        { source: 'userSettings', origin: USER_FILE, keys: ['reasoningDisplay'] },
         {
           source: 'projectSettings',
           origin: PROJECT_FILE,
-          keys: ['effortLevel'],
+          keys: ['reasoningDisplay'],
         },
       ],
       resolved: [
-        { key: 'effortLevel', source: 'projectSettings', editable: true, managed: false },
+        { key: 'reasoningDisplay', source: 'projectSettings', editable: true, managed: false },
       ],
       editableValues: [
-        { key: 'effortLevel', value: 'low', source: 'projectSettings' },
+        { key: 'reasoningDisplay', value: 'off', source: 'projectSettings' },
       ],
     }
     const pane = decode(
@@ -289,15 +289,18 @@ describe('write targeting', () => {
     expect(destination).not.toContain(PROJECT_FILE)
     // The override is visible as an annotation…
     expect(pane).toContain("Overridden by this project's shared settings")
-    // …and the project's value is NOT presented as the user's own.
-    const effortRow = pane.slice(
-      pane.indexOf('>Reasoning effort<'),
-      pane.indexOf('>Reasoning display<'),
-    )
-    expect(effortRow).toContain('unknown')
+    // …and the project's value is NOT presented as the user's own. The row is
+    // bounded by the NEXT row's label, so a later row's control can never
+    // satisfy the count below.
+    const rowStart = pane.indexOf('>Reasoning display<')
+    const rowEnd = pane.indexOf('>Prompt suggestions<')
+    expect(rowStart).toBeGreaterThan(0)
+    expect(rowEnd).toBeGreaterThan(rowStart)
+    const displayRow = pane.slice(rowStart, rowEnd)
+    expect(displayRow).toContain('unknown')
     // No control at all for a value this scope cannot read — not a control
     // sitting at a guessed position.
-    expect(controlCount(effortRow)).toBe(0)
+    expect(controlCount(displayRow)).toBe(0)
   })
 
   test('the project scope states the Shared / Just-me choice up front', () => {

@@ -206,9 +206,12 @@ test('editableValues carries the winning value ONLY for the closed allowlist', (
     {
       source: 'userSettings',
       origin: '/home/u/.cat-code/settings.json',
-      // includeCoAuthoredBy (editable) + a NON-editable key + a secret key.
+      // includeCoAuthoredBy (editable) + a NON-editable key + a secret key +
+      // effortLevel, which is a real schema key deliberately OUTSIDE the
+      // allowlist (it is model-dependent; see settingsEditable.ts).
       settings: {
         includeCoAuthoredBy: false,
+        reasoningDisplay: 'off',
         effortLevel: 'low',
         apiKey: 'sk-live-DEADBEEF',
         model: 'opus',
@@ -217,8 +220,8 @@ test('editableValues carries the winning value ONLY for the closed allowlist', (
     {
       source: 'projectSettings',
       origin: '/repo/.cat-code/settings.json',
-      // effortLevel set higher-precedence than user → project wins.
-      settings: { effortLevel: 'high' },
+      // reasoningDisplay set higher-precedence than user → project wins.
+      settings: { reasoningDisplay: 'raw' },
     },
   ]
   const snapshot = buildSettingsSnapshot(layers, null)
@@ -230,14 +233,17 @@ test('editableValues carries the winning value ONLY for the closed allowlist', (
     value: false,
     source: 'userSettings',
   })
-  expect(byKey.get('effortLevel')).toEqual({
-    key: 'effortLevel',
-    value: 'high',
+  expect(byKey.get('reasoningDisplay')).toEqual({
+    key: 'reasoningDisplay',
+    value: 'raw',
     source: 'projectSettings',
   })
   // NON-editable / secret keys are NEVER in editableValues (only the allowlist).
   expect(byKey.has('model')).toBe(false)
   expect(byKey.has('apiKey')).toBe(false)
+  // A key dropped FROM the allowlist stops crossing the wire entirely, even
+  // though the layer above still sets it.
+  expect(byKey.has('effortLevel')).toBe(false)
   // And no secret value serializes anywhere on the frame.
   expect(JSON.stringify(snapshot)).not.toContain('sk-live')
 })
@@ -334,8 +340,10 @@ test('runVerb validates enum + int values and rejects out-of-set / out-of-range'
   useTempConfigHome()
   const domain = createSidecarSettingsDomain()
 
-  expect(domain.runVerb(write('userSettings', 'effortLevel', 'high')).ok).toBe(true)
-  expect(domain.runVerb(write('userSettings', 'effortLevel', 'ludicrous')).ok).toBe(false)
+  expect(domain.runVerb(write('userSettings', 'reasoningDisplay', 'raw')).ok).toBe(true)
+  expect(domain.runVerb(write('userSettings', 'reasoningDisplay', 'ludicrous')).ok).toBe(false)
+  // Off the allowlist: rejected on the key, before any value check.
+  expect(domain.runVerb(write('userSettings', 'effortLevel', 'high')).ok).toBe(false)
   expect(domain.runVerb(write('userSettings', 'cleanupPeriodDays', 30)).ok).toBe(true)
   expect(domain.runVerb(write('userSettings', 'cleanupPeriodDays', -1)).ok).toBe(false)
   expect(domain.runVerb(write('userSettings', 'cleanupPeriodDays', 1.5)).ok).toBe(false)

@@ -121,12 +121,12 @@ test('a flag-sourced key annotates the session flag, without a Managed badge', (
       pane="model"
       snapshot={snapshot({
         layers: [
-          { source: 'flagSettings', origin: '--settings', keys: ['effortLevel'] },
+          { source: 'flagSettings', origin: '--settings', keys: ['reasoningDisplay'] },
         ],
         resolved: [
-          { key: 'effortLevel', source: 'flagSettings', editable: false, managed: false },
+          { key: 'reasoningDisplay', source: 'flagSettings', editable: false, managed: false },
         ],
-        editableValues: [{ key: 'effortLevel', value: 'high', source: 'flagSettings' }],
+        editableValues: [{ key: 'reasoningDisplay', value: 'raw', source: 'flagSettings' }],
       })}
     />,
   )
@@ -136,7 +136,7 @@ test('a flag-sourced key annotates the session flag, without a Managed badge', (
   // produce it. The override is stated in prose instead.
   expect(html).toContain('command-line flag on the open session')
   expect(html).not.toContain('Managed') // never the policy badge
-  const noBadgeRow = html.slice(html.indexOf('>Reasoning effort<'))
+  const noBadgeRow = html.slice(html.indexOf('>Reasoning display<'))
   expect(noBadgeRow).not.toContain('>Flag<')
 
   // When the user file DOES set the key, the value on screen belongs to the
@@ -148,17 +148,17 @@ test('a flag-sourced key annotates the session flag, without a Managed badge', (
       pane="model"
       snapshot={snapshot({
         layers: [
-          { source: 'userSettings', origin: '/u.json', keys: ['effortLevel'] },
-          { source: 'flagSettings', origin: '--settings', keys: ['effortLevel'] },
+          { source: 'userSettings', origin: '/u.json', keys: ['reasoningDisplay'] },
+          { source: 'flagSettings', origin: '--settings', keys: ['reasoningDisplay'] },
         ],
         resolved: [
-          { key: 'effortLevel', source: 'flagSettings', editable: false, managed: false },
+          { key: 'reasoningDisplay', source: 'flagSettings', editable: false, managed: false },
         ],
-        editableValues: [{ key: 'effortLevel', value: 'high', source: 'flagSettings' }],
+        editableValues: [{ key: 'reasoningDisplay', value: 'raw', source: 'flagSettings' }],
       })}
     />,
   )
-  const shadowedRow = shadowed.slice(shadowed.indexOf('>Reasoning effort<'))
+  const shadowedRow = shadowed.slice(shadowed.indexOf('>Reasoning display<'))
   expect(shadowedRow).toContain('>Flag<')
   expect(shadowedRow).toContain('unknown')
 })
@@ -302,12 +302,15 @@ test('the deprecated and terminal-only keys are no longer rendered anywhere', ()
     'includeCoAuthoredBy',
     'spinnerTipsEnabled',
     'terminalTitleFromRename',
+    // Model-dependent, and this page has no model (operator ruling 2026-07-27).
+    // The model-aware control is the composer's run-control chip.
+    'effortLevel',
   ]) {
     expect(rendered).not.toContain(gone)
   }
   // …and the panes are not simply empty: the keys a person revisits stayed.
   expect(rendered).toContain('respectGitignore')
-  expect(rendered).toContain('effortLevel')
+  expect(rendered).toContain('fastMode')
   expect(rendered).toContain('outputStyle')
 
   const html = renderToStaticMarkup(

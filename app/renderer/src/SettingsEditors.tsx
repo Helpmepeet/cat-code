@@ -71,6 +71,10 @@ export type SettingWriteInput = {
  *    allowlist, and growing that allowlist is a per-key sidecar review.
  *  - `spinnerTipsEnabled` / `terminalTitleFromRename` are terminal-presentation
  *    keys (an Ink spinner, a terminal tab title) with no desktop meaning.
+ *  - `effortLevel` is model-dependent and this page has no model (operator
+ *    ruling, 2026-07-27). The reasoning behind the removal, and the pointer to
+ *    the model-aware control that replaces it, are at its former position in
+ *    `app/shared/settingsEditable.ts`.
  */
 /**
  * Renders every core value-editor for one pane, in one scope.

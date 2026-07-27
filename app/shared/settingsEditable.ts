@@ -153,18 +153,18 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     description: 'Trade some reasoning depth for lower latency (default: off).',
     control: { kind: 'boolean', default: false },
   },
-  {
-    key: 'effortLevel',
-    pane: 'model',
-    label: 'Reasoning effort',
-    description: 'Persisted effort level for supported models.',
-    control: {
-      kind: 'enum',
-      options: ['low', 'medium', 'high'],
-      optionLabels: { low: 'Low', medium: 'Medium', high: 'High' },
-      default: 'medium',
-    },
-  },
+  // `effortLevel` is deliberately NOT here (operator ruling, 2026-07-27).
+  // Reasoning effort is a property of the MODEL, and this list has no model:
+  // `modelSupportsEffort` (src/utils/effort.ts:25) is false for haiku and for
+  // sonnet/opus outside 4-6, and `getSupportedEffortLevels` (:82) returns six
+  // levels for gpt-5.6-sol/terra against the three this schema can persist
+  // (types.ts:716 + `toPersistableEffort` :127). A fixed enum with a fixed
+  // default therefore has to lie about at least one of: whether the knob
+  // applies, which levels exist, and what the value is when unset (the real
+  // fallback is `getDefaultEffortForModel` :322, which is per-model). The
+  // model-aware control is the composer's run-control chip, which reads
+  // `RunControlsSnapshot.effort` — built from those same engine functions
+  // against the session's resolved model (app/sidecar/runControlsDomain.ts:431).
   {
     key: 'reasoningDisplay',
     pane: 'model',
