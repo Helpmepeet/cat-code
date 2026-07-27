@@ -641,8 +641,17 @@ export class SessionRegistry {
    * already exists (restart / restore of a known appSessionId), refreshes its
    * advisory fields, marks it live again, and bumps `restartCount` (one bump
    * per actual re-spawn — F4: advisory-field refreshes go through
-   * `setAdvisoryRuntime`, which never touches the counter). `engineSessionId`
-   * stays null until the ready frame fills it (§4.5).
+   * `setAdvisoryRuntime`, which never touches the counter).
+   *
+   * `engineSessionId` is seeded HERE when the spawn is a resume, and otherwise
+   * stays null until the ready frame fills it (§4.5). Seeding is sound because
+   * the sidecar pins the adopted id to the requested one
+   * (`app/sidecar/sessionResume.ts` `sessionIdOverride`) and throws rather than
+   * falling through to a fresh session, so the ready frame can only ever echo
+   * the id we were handed (`app/sidecar/index.ts:124-126`). Waiting for that
+   * echo is what made an opened history session warp: for the whole spawn
+   * window its row had no engine id, so it could not be matched to its own
+   * transcript and sorted to the top of the sidebar as brand-new activity.
    *
    * Returns the appSessionIds of any terminal rows reaped to make room (F5):
    * the host emits `session-removed` for them so a live subscriber's list
@@ -652,6 +661,9 @@ export class SessionRegistry {
     appSessionId: string
     cwd: string
     title?: string
+    /** The id this spawn resumes, when it is a resume. New rows only: an
+     * existing row already carries the id (restore/restart both require it). */
+    engineSessionId?: string
     enginePid?: number
     socketPath?: string
   }): Promise<string[]> {
@@ -675,7 +687,7 @@ export class SessionRegistry {
     } else {
       this.doc.sessions.push({
         appSessionId: input.appSessionId,
-        engineSessionId: null,
+        engineSessionId: input.engineSessionId ?? null,
         cwd: input.cwd,
         ...(input.title !== undefined
           ? { title: input.title, titleUpdatedAt: now }

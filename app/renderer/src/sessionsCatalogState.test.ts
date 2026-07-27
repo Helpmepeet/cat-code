@@ -169,6 +169,35 @@ describe('selectMergedSessionRows', () => {
     })
   })
 
+  // Regression: opening a session from history mints a registry row with a FRESH
+  // appSessionId, and the host now seeds its `engineSessionId` from the resume
+  // target at spawn instead of waiting for the ready frame to echo it back
+  // (`app/host/host.ts` spawn → `registry.upsertOnSpawn`). While that id was
+  // null the descriptor could not claim its own catalog entry, so the merge
+  // emitted the history row AND a brand-new registry row, the latter with no
+  // `transcriptActivityAtMs` — which sorts on `createdAtMs` (= the click) and
+  // sent it straight to the top of the sidebar until the frame landed. The
+  // operator saw a row jump to the top on open, then drop back.
+  test('a spawning resume claims its own transcript immediately — no duplicate, no fake recency', () => {
+    const rows = selectMergedSessionRows(
+      [
+        descriptor({
+          appSessionId: 'app-new',
+          engineSessionId: 'eng-old',
+          status: 'spawning',
+          createdAt: 1_800_000_000_000, // clicked just now
+        }),
+      ],
+      snapshot([entry({ sessionId: 'eng-old', modifiedAtMs: 100 })]),
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.sessionId).toBe('eng-old')
+    // The transcript's real activity is present, so `sidebarActivityKey` keys on
+    // it rather than falling through to the just-now `createdAtMs`.
+    expect(rows[0]?.transcriptActivityAtMs).toBe(100)
+    expect(rows[0]?.lastMessageSentAt).toBeNull()
+  })
+
   test('registry row with no title falls back to the catalog title (rider surface)', () => {
     const rows = selectMergedSessionRows(
       [descriptor({ appSessionId: 'app-1', engineSessionId: 'eng-1', title: null })],

@@ -743,6 +743,28 @@ test('upsertOnSpawn creates a live row with null engineSessionId', async () => {
   expect(row.restartCount).toBe(0)
 })
 
+// A resume spawn seeds the engine id immediately instead of waiting for the
+// ready frame to echo it. Without this the row spends the whole spawn window
+// unable to be joined to its own transcript, and an opened history session
+// renders as a second brand-new row at the top of the sidebar before collapsing
+// back into place — the operator-visible "jump to top, then move back".
+test('upsertOnSpawn seeds engineSessionId when the spawn is a resume', async () => {
+  const { registry, registryPath } = makeRegistry()
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-1',
+    cwd: '/Users/pt/cat-code',
+    engineSessionId: 'engine-42',
+  })
+
+  const row = readDoc(registryPath).sessions[0]!
+  expect(row.engineSessionId).toBe('engine-42')
+  // Still a fresh spawn in every other respect — seeding the id must not fake
+  // send-recency (CC-2: only a real turn bumps `lastMessageSentAt`).
+  expect(row.lastMessageSentAt).toBeNull()
+  expect(row.shutdown).toBeNull()
+  expect(row.restartCount).toBe(0)
+})
+
 test('upsertOnSpawn on an existing appSessionId refreshes advisory fields + bumps restartCount', async () => {
   const { registry, registryPath } = makeRegistry()
   await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', enginePid: 1, socketPath: '/s0' })

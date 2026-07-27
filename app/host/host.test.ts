@@ -361,6 +361,36 @@ test('createSession spawns, persists a live row, and emits session-added', async
   expect(h.events.some(e => e.type === 'session-added')).toBe(true)
 })
 
+// Opening a session from history is a `createSession` with a resume target and a
+// FRESH appSessionId, so it takes the new-row path. Before this, the row carried
+// no engine id until the ready frame echoed one back — and for that whole window
+// the renderer could not join it to its own transcript entry
+// (`sessionsCatalogState.ts` keys the merge on `engineSessionId`), so it both
+// duplicated the history row and sorted to the top of the sidebar on
+// `createdAtMs` as if it were brand-new activity (`sidebarState.ts`
+// `sidebarActivityKey`). The visible symptom was a row jumping to the top on
+// open and then dropping back once the frame landed.
+test('a resume-create exposes engineSessionId immediately, before any ready frame', async () => {
+  const h = makeHost()
+  const result = await h.host.createSession({
+    cwd: h.cwd,
+    resumeEngineSessionId: 'engine-history-7',
+  })
+
+  expect(result.ok).toBe(true)
+  if (!result.ok) return
+  expect(result.value.status).toBe('spawning')
+  // The descriptor the renderer sees FIRST already carries the id.
+  expect(result.value.engineSessionId).toBe('engine-history-7')
+  expect(h.registry.findSession(result.value.appSessionId)?.engineSessionId).toBe(
+    'engine-history-7',
+  )
+  // And the resume still reaches the sidecar unchanged.
+  expect(
+    h.supervisor.records.get(result.value.appSessionId)?.resumeEngineSessionId,
+  ).toBe('engine-history-7')
+})
+
 test('ready frame bridges engineSessionId into the row and emits session-status', async () => {
   const h = makeHost()
   const result = await h.host.createSession({ cwd: h.cwd })

@@ -436,7 +436,19 @@ export class Host implements HostApi {
     // launch still finds a row to sweep (REGISTRY.md §4.5 write points). The
     // upsert may reap terminal rows to stay under the bound — surface those as
     // session-removed so a subscriber's projection drops them (F5).
-    const reaped = await this.registry.upsertOnSpawn({ appSessionId, cwd, title })
+    // Seed `engineSessionId` from the resume target rather than waiting for the
+    // ready frame to echo it back. Until it is set, the row cannot be joined to
+    // its own transcript, so an opened history session rendered as a SECOND,
+    // brand-new row at the top of the sidebar for the whole spawn window before
+    // collapsing back into its real place (the visible "jump then settle").
+    const reaped = await this.registry.upsertOnSpawn({
+      appSessionId,
+      cwd,
+      title,
+      ...(resumeEngineSessionId !== undefined
+        ? { engineSessionId: resumeEngineSessionId }
+        : {}),
+    })
     for (const reapedId of reaped) {
       this.emitRemoved(reapedId)
     }
