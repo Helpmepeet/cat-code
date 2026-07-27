@@ -1011,3 +1011,143 @@ test('prompt drafts are isolated by active session id', () => {
   expect(selectPromptDraft(drafts, 'session-b')).toBe('draft for B')
   expect(selectPromptDraft(drafts, null)).toBe('')
 })
+
+/**
+ * The preview rail, end to end through the real pane.
+ *
+ * The derivation is tested in `previewTranscriptState.test.ts` and the mode
+ * face in `PermissionModeChip.test.tsx`; what neither covers is the WIRING —
+ * that a preview pane actually routes those facts to the composer rail instead
+ * of the empty live seams. Without this, the whole fix could be inert and both
+ * unit suites would still be green.
+ */
+test('a previewed pane shows what the cached session really ran on', () => {
+  const props = {
+    accountsSnapshot: null,
+    accountsLastResult: null,
+    orchestratorActive: false,
+    activeConnection: { status: 'dead', inputEnabled: false },
+    activeDescriptor: undefined,
+    activeLog: {
+      inputEnabled: false,
+      messages: [],
+      retainedBytes: 0,
+      truncated: false,
+      error: null,
+      messageBytes: [],
+    },
+    activeAccount: null,
+    activeSessionId: 'session-preview',
+    isActivePane: true,
+    branch: null,
+    allowPermission: () => {},
+    // The LIVE seams are all empty, exactly as they are with no sidecar.
+    model: null,
+    reasoningEffort: null,
+    fastMode: false,
+    permissionContext: null,
+    preview: true,
+    previewRunFacts: {
+      model: 'gpt-5.6-terra',
+      effort: 'xhigh',
+      permissionMode: 'acceptEdits',
+      contextUsage: {
+        usedTokens: 42_000,
+        contextWindow: 200_000,
+        percentUsed: 21,
+      },
+    },
+    copyForLlm: () => {},
+    denyPermission: () => {},
+    history: [],
+    mentionItems: [],
+    onApprovePlan: () => {},
+    onPaste: () => {},
+    onRemovePaste: () => {},
+    onRevisePlan: () => {},
+    partialCount: 0,
+    pastes: [],
+    permissionQueue: [],
+    planReview: null,
+    askQuestion: null,
+    onAnswerQuestions: () => {},
+    onCancelQuestions: () => {},
+    prompt: '',
+    restorePermission: () => {},
+    setPermissionMode: () => {},
+    setPrompt: () => {},
+    submit: () => {},
+    transcript: createTranscriptState(),
+    transportError: null,
+  } satisfies ComponentProps<typeof SessionPane>
+
+  const html = renderToStaticMarkup(<SessionPane {...props} />)
+  expect(html).toContain('gpt-5.6-terra')
+  expect(html).toContain('Extra high') // xhigh's display label
+  expect(html).toContain('Accept edits')
+  expect(html).toContain('21%')
+})
+
+/**
+ * The other half of honest: with nothing cached, the rail says nothing rather
+ * than falling back to placeholders or a 0% donut.
+ */
+test('a previewed pane with an empty cache claims nothing', () => {
+  const props = {
+    accountsSnapshot: null,
+    accountsLastResult: null,
+    orchestratorActive: false,
+    activeConnection: { status: 'dead', inputEnabled: false },
+    activeDescriptor: undefined,
+    activeLog: {
+      inputEnabled: false,
+      messages: [],
+      retainedBytes: 0,
+      truncated: false,
+      error: null,
+      messageBytes: [],
+    },
+    activeAccount: null,
+    activeSessionId: 'session-preview',
+    isActivePane: true,
+    branch: null,
+    allowPermission: () => {},
+    model: null,
+    reasoningEffort: null,
+    fastMode: false,
+    permissionContext: null,
+    preview: true,
+    previewRunFacts: {
+      model: null,
+      effort: null,
+      permissionMode: null,
+      contextUsage: null,
+    },
+    copyForLlm: () => {},
+    denyPermission: () => {},
+    history: [],
+    mentionItems: [],
+    onApprovePlan: () => {},
+    onPaste: () => {},
+    onRemovePaste: () => {},
+    onRevisePlan: () => {},
+    partialCount: 0,
+    pastes: [],
+    permissionQueue: [],
+    planReview: null,
+    askQuestion: null,
+    onAnswerQuestions: () => {},
+    onCancelQuestions: () => {},
+    prompt: '',
+    restorePermission: () => {},
+    setPermissionMode: () => {},
+    setPrompt: () => {},
+    submit: () => {},
+    transcript: createTranscriptState(),
+    transportError: null,
+  } satisfies ComponentProps<typeof SessionPane>
+
+  const html = renderToStaticMarkup(<SessionPane {...props} />)
+  expect(html).not.toContain('Permission mode:')
+  expect(html).not.toContain('0%')
+})
