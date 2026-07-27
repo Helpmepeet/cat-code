@@ -30,6 +30,7 @@ import {
   validateEditableSettingValue,
 } from '../../shared/settingsEditable.js'
 import { Field, PaneSection } from './SettingsField.js'
+import { SETTINGS_UNREAD_NOTE, settingsWereRead } from './settingsReadState.js'
 import {
   selectAvailableOptions,
   selectEditableValue,
@@ -61,6 +62,14 @@ export function SettingsPane({
   const specs = EDITABLE_SETTINGS.filter(spec => spec.pane === pane)
   return (
     <PaneSection title={title}>
+      {/* Say WHY every control below is inert. Disabling them without this is
+       * only marginally better than the silent-discard it replaces. */}
+      {settingsWereRead(snapshot) ? null : (
+        <p className="mb-3 text-[12px] leading-4 text-text-subtle">
+          {SETTINGS_UNREAD_NOTE} These controls stay read-only until a session
+          is open.
+        </p>
+      )}
       {specs.map(spec => (
         <SettingEditor
           key={spec.key}
@@ -104,7 +113,12 @@ function SettingEditor({
   // A flag-sourced value cannot be edited from settings (P4-3 `editable` gate);
   // a managed value is locked. Everything else is editable.
   const editable = resolution?.editable ?? true
-  const disabled = managed || !editable
+  // With no snapshot the write has nowhere to go — `sendSettingWrite` returns
+  // early when there is no active session, so an enabled-looking control would
+  // accept the click and discard it with no feedback of any kind. Unread is not
+  // "editable by default" (`settingsReadState.ts`).
+  const unread = !settingsWereRead(snapshot)
+  const disabled = managed || !editable || unread
   const origin = resolution
     ? selectLayerOrigin(snapshot, resolution.source)
     : null

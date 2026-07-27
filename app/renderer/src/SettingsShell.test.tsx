@@ -61,6 +61,51 @@ test('the Managed panel renders real policy-locked keys as managed Fields', () =
   expect(html).not.toContain('>theme<')
 })
 
+// "No managed settings on this machine" is a claim about org policy, and this
+// is the pane an operator opens to check exactly that. With no session the app
+// has read no settings file, so it must not answer the question at all.
+test('the Managed panel never reports zero enforced settings it has not read', () => {
+  const unread = renderToStaticMarkup(
+    <SettingsShell initialCategory="managed" snapshot={null} />,
+  )
+  expect(unread).not.toContain('No managed settings on this machine')
+  expect(unread).toContain('No session is open')
+  expect(unread).toContain('unknown')
+  // The banner still renders — the pane degrades, it does not disappear.
+  expect(unread).toContain('Managed by your organization')
+
+  // A snapshot that WAS read and genuinely has no managed keys still gets the
+  // real answer, so the guard cannot swallow the true empty case.
+  const readEmpty = renderToStaticMarkup(
+    <SettingsShell
+      initialCategory="managed"
+      snapshot={{ layers: [], resolved: [], policyOrigin: null, editableValues: [] }}
+    />,
+  )
+  expect(readEmpty).toContain('No managed settings on this machine')
+  expect(readEmpty).not.toContain('No session is open')
+})
+
+test('editable controls are inert, and say why, when no settings have been read', () => {
+  const unread = renderToStaticMarkup(
+    <SettingsShell initialCategory="general" snapshot={null} />,
+  )
+  expect(unread).toContain('read-only until a session is open')
+
+  // With a real snapshot the same pane is live again.
+  const read = renderToStaticMarkup(
+    <SettingsShell initialCategory="general" snapshot={SNAPSHOT} />,
+  )
+  expect(read).not.toContain('read-only until a session is open')
+
+  // Count the rendered `disabled` attributes rather than merely looking for the
+  // word: an earlier version of this test passed while the guard was mutated
+  // away, because "disabled" occurs in the markup for unrelated reasons.
+  const inert = (html: string) => (html.match(/disabled=""/g) ?? []).length
+  expect(inert(unread)).toBeGreaterThan(0)
+  expect(inert(read)).toBe(0)
+})
+
 test('core value-editor categories render real editors (P4-19), deferred ones stay stubs', () => {
   // Privacy now ships real value editors over the write-seam (P4-19), no stub.
   const privacy = renderToStaticMarkup(

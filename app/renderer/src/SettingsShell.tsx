@@ -40,6 +40,10 @@ import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import { SelectControl, SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import {
+  SETTINGS_UNREAD_NOTE,
+  settingsWereRead,
+} from './settingsReadState.js'
+import {
   HooksPanel,
   McpPanel,
   PluginsPanel,
@@ -367,8 +371,9 @@ function CategoryBody({
           defaultMode={selectPermissionDefaultMode(snapshot)}
           onSetMode={() => {}}
           // No snapshot ⇒ no settings file has been read, so a null defaultMode
-          // is UNKNOWN rather than unset (see the editor's `settingsLoaded`).
-          settingsLoaded={snapshot !== null}
+          // is UNKNOWN rather than unset (`settingsReadState.ts` — the one rule
+          // this whole surface branches on).
+          settingsLoaded={settingsWereRead(snapshot)}
           showModes={false}
         />
       </PaneSection>
@@ -542,7 +547,15 @@ function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
         </div>
       </div>
       <PaneSection title="Enforced settings">
-        {managed.length === 0 ? (
+        {/* "Nothing is enforced" is a claim about org policy, and this is the
+         * pane an operator checks to find that out. It may only be made from a
+         * snapshot that was actually read — see `settingsReadState.ts`. */}
+        {!settingsWereRead(snapshot) ? (
+          <p className="text-[12.5px] text-text-subtle">
+            {SETTINGS_UNREAD_NOTE} Whether your organization enforces any
+            settings is <span className="font-mono">unknown</span> until then.
+          </p>
+        ) : managed.length === 0 ? (
           <p className="text-[12.5px] text-text-subtle">
             No managed settings on this machine.
           </p>
