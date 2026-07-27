@@ -16,10 +16,56 @@ import {
   DEFAULT_MAX_BUFFERED_FRAMES,
   FrameReplayBuffer,
   isReplayTruncationFrame,
+  STICKY_FRAME_KINDS,
 } from './replayBuffer.js'
 import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/protocol.js'
 
 const SID: SessionId = 'sess-1'
+
+/**
+ * The once-per-attach burst, in the exact order `SidecarServer.addConnection`
+ * sends it (`app/sidecar/sidecarServer.ts:510-566`). Written out here rather
+ * than derived from the buffer's own table so a reordering or a demotion to the
+ * evictable ring is a test failure, not a silently agreeing constant.
+ */
+const ATTACH_BURST_KINDS = [
+  'permission.context',
+  'settings.snapshot',
+  'agent-config.snapshot',
+  'thread-goal.snapshot',
+  'memory.snapshot',
+  'tasks.snapshot',
+  'agent-mode.snapshot',
+  'run-controls.snapshot',
+  'accounts.snapshot',
+  'workspace-trust.snapshot',
+  'diagnostics.snapshot',
+  'extensions.snapshot',
+  'remoteSettings.snapshot',
+  'slash-catalog.snapshot',
+] as const satisfies readonly ServerFrame['kind'][]
+
+/**
+ * Retention keys on `kind` alone, so a snapshot's payload is irrelevant here.
+ * One cast beats reconstructing fourteen unrelated engine snapshot shapes;
+ * `marker` stands in for "which generation of this snapshot is this".
+ */
+function attachSnapshotFrame(
+  kind: (typeof ATTACH_BURST_KINDS)[number],
+  marker = 'v1',
+  sessionId: SessionId = SID,
+): ServerFrame {
+  return {
+    kind,
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    marker,
+  } as unknown as ServerFrame
+}
+
+function markerOf(frame: ServerFrame | undefined): unknown {
+  return (frame as unknown as { marker?: unknown } | undefined)?.marker
+}
 
 function readyFrame(sessionId: SessionId = SID): ServerFrame {
   return {
@@ -135,6 +181,97 @@ test('no slash-catalog frame recorded means none is replayed (never a fabricated
   buffer.record(SID, readyFrame())
   const snapshot = buffer.snapshot()
   expect(snapshot.some(f => f.kind === 'slash-catalog.snapshot')).toBe(false)
+})
+
+/*
+ * Once-per-attach state frames (the operator-reported reattach failure).
+ *
+ * The sidecar sends each of ATTACH_BURST_KINDS exactly once per connect, right
+ * after `ready` and before history replay. Main never re-runs connect() on a
+ * renderer reload, so whatever this buffer dropped is gone: the operator saw a
+ * reattach replay plenty of transcript but leave settings claiming it had read
+ * no files, the composer's model/effort chip empty, and permission mode blank —
+ * because those frames, being the OLDEST in the ring, were the first evicted
+ * once a working session cycled it.
+ */
+
+test('every once-per-attach snapshot survives a fully cycled ring, in send order (the blank-state reattach failure)', () => {
+  const cap = 4
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  for (const kind of ATTACH_BURST_KINDS) {
+    buffer.record(SID, attachSnapshotFrame(kind))
+  }
+  // An ordinary working session: includePartialMessages makes every streamed
+  // chunk its own frame, so the ring cycles many times over.
+  for (let i = 0; i < cap * 10; i++) buffer.record(SID, pongFrame(`n${i}`))
+
+  const snapshot = buffer.snapshot()
+  const burstEnd = 1 + ATTACH_BURST_KINDS.length
+  expect(snapshot[0]?.kind).toBe('ready')
+  // After `ready`, before the truncation marker and the retained ring, in the
+  // order the sidecar sent them.
+  expect(snapshot.slice(1, burstEnd).map(f => f.kind)).toEqual([
+    ...ATTACH_BURST_KINDS,
+  ])
+  expect(isReplayTruncationFrame(snapshot[burstEnd])).toBe(true)
+  // The sticky slots were never charged against the ring's count budget.
+  expect(
+    snapshot.slice(burstEnd + 1).map(f => (f.kind === 'pong' ? f.nonce : null)),
+  ).toEqual(['n36', 'n37', 'n38', 'n39'])
+})
+
+test('a reload replays the identical once-per-attach state (nothing is consumed by the first attach)', () => {
+  const cap = 2
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  for (const kind of ATTACH_BURST_KINDS) {
+    buffer.record(SID, attachSnapshotFrame(kind))
+  }
+  for (let i = 0; i < cap + 10; i++) buffer.record(SID, pongFrame(`n${i}`))
+
+  const first = buffer.snapshot()
+  const afterReload = buffer.snapshot()
+  expect(JSON.stringify(afterReload)).toBe(JSON.stringify(first))
+})
+
+test('a later snapshot replaces its own slot and keeps its original send position', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  for (const kind of ATTACH_BURST_KINDS) {
+    buffer.record(SID, attachSnapshotFrame(kind, 'v1'))
+  }
+  // A live re-broadcast mid-session (settings write, run-control change, …).
+  buffer.record(SID, pongFrame('live'))
+  buffer.record(SID, attachSnapshotFrame('settings.snapshot', 'v2'))
+
+  const snapshot = buffer.snapshot()
+  // Replace, never append: still exactly one slot per kind, still in send order.
+  expect(snapshot.filter(f => f.kind === 'settings.snapshot')).toHaveLength(1)
+  expect(snapshot.slice(1, 1 + ATTACH_BURST_KINDS.length).map(f => f.kind)).toEqual([
+    ...ATTACH_BURST_KINDS,
+  ])
+  // The newest generation is what replays.
+  expect(markerOf(snapshot.find(f => f.kind === 'settings.snapshot'))).toBe('v2')
+})
+
+test('a sticky snapshot is not charged against the ring byte budget either', () => {
+  const pong = pongFrame('only')
+  const budget = Buffer.byteLength(JSON.stringify(pong), 'utf8')
+  const buffer = new FrameReplayBuffer(10, budget)
+  buffer.record(SID, attachSnapshotFrame('accounts.snapshot'))
+  buffer.record(SID, pong)
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot.some(isReplayTruncationFrame)).toBe(false)
+  expect(snapshot.map(f => f.kind)).toEqual(['accounts.snapshot', 'pong'])
+})
+
+test('the sticky table and the attach burst describe the same set of kinds', () => {
+  // Drift alarm: a new once-per-attach frame kind must be classified sticky AND
+  // placed at its real position in the burst above, or the ordering assertions
+  // are testing a stale list.
+  expect(new Set(STICKY_FRAME_KINDS)).toEqual(new Set(ATTACH_BURST_KINDS))
 })
 
 test('non-ready frames ring-buffer at the cap; ready is never evicted', () => {

@@ -14,15 +14,26 @@
  * (the hop the P1-0 tests otherwise cannot exercise) is unit-testable without an
  * Electron process.
  *
- * Retention: the single `ready` frame per session is kept as a permanent head
- * outside the replay budget (a late renderer must recover its session id).
- * The `slash-catalog.snapshot` frame (SLASH-6) is a second sticky slot for the
- * same reason: it is sent once per connect and is the composer's only source
- * for the rich picker, so it must survive a renderer reload even after the
- * ring buffer below has evicted it — a later snapshot replaces, never appends.
- * Non-ready, non-slash-catalog frames are bounded by BOTH count and their
- * serialized UTF-8 JSON bytes. Oldest frames are evicted until both limits
- * hold. A frame larger than the whole byte budget is not retained. Any
+ * Retention has three tiers, one per frame kind (`FRAME_RETENTION` below):
+ *
+ *  - `head` — the single `ready` frame per session, a permanent head outside
+ *    the replay budget (a late renderer must recover its session id).
+ *  - `sticky` — the once-per-attach state snapshots the sidecar sends in one
+ *    burst right after `ready` and before history replay
+ *    (`app/sidecar/sidecarServer.ts` `addConnection`). Nothing re-sends them on
+ *    a renderer reload — main never re-runs connect() — so an evicted one is
+ *    gone until the session is respawned, and the renderer reattaches with no
+ *    settings, no model/effort chip, and no permission mode. They therefore get
+ *    one slot each, outside the replay budget, replaced (never appended) by a
+ *    later snapshot of the same kind, and replayed in the order they first
+ *    arrived, which is the order the sidecar deliberately sends them in.
+ *  - `ring` — everything else (transcript `event` traffic, request-scoped
+ *    replies, lifecycle). Bounded by BOTH count and serialized UTF-8 JSON
+ *    bytes; oldest evicted until both limits hold, and a frame larger than the
+ *    whole byte budget is not retained.
+ *
+ * Sticky storage is bounded by construction: one slot per `sticky` kind in the
+ * table, so it can never grow into a second unbounded store. Any
  * eviction/omission inserts one synthetic error boundary between the sticky
  * frames and the retained ring, so consumers cannot mistake a lossy replay
  * for complete history.
@@ -34,20 +45,87 @@ import {
   type SessionId,
 } from '../shared/protocol.js'
 
-/** Default cap on retained non-ready frames per session. */
+/** Default cap on retained `ring` frames per session (`head`/`sticky` are outside it). */
 export const DEFAULT_MAX_BUFFERED_FRAMES = 512
-/** Default UTF-8 JSON byte budget for retained non-ready frames, per session. */
+/** Default UTF-8 JSON byte budget for retained `ring` frames, per session. */
 export const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024
 
 const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 const REPLAY_TRUNCATION_MESSAGE =
   'Earlier session events were omitted because the renderer replay buffer reached its retention limit.'
 
+type FrameRetention = 'head' | 'sticky' | 'ring'
+
+/**
+ * Retention tier per frame kind. Exhaustive by construction — a
+ * `Record<ServerFrame['kind'], …>` makes tsc fail when the protocol union
+ * grows, so a NEW once-per-attach snapshot has to be classified here instead of
+ * silently landing in the evictable ring (the defect this table fixes).
+ *
+ * `sticky` lists exactly the once-per-attach state frames, in the send order of
+ * `SidecarServer.addConnection`. A few of them also re-broadcast on change
+ * (settings / run-controls / accounts / goal / memory / tasks / agent-mode /
+ * workspace-trust / remoteSettings / permission.context); a re-broadcast
+ * replaces the slot's value and keeps its original position, because these are
+ * point-in-time state a reader applies wholesale, not transcript rows whose
+ * position carries meaning.
+ *
+ * `ring` covers transcript traffic (`event`), request-scoped replies
+ * (`*.result`, `pong`, `error`, `oauth.login.progress`), `lifecycle`, and the
+ * two kinds this buffer never sees: `session-title` (main consumes it and
+ * relays it to the durable registry, `main.ts:674`) and `sessions.snapshot`
+ * (catalog decision #4 — a main-supervised worker owns the catalog, the sidecar
+ * no longer emits it on attach).
+ */
+const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
+  ready: 'head',
+
+  'permission.context': 'sticky',
+  'settings.snapshot': 'sticky',
+  'agent-config.snapshot': 'sticky',
+  'thread-goal.snapshot': 'sticky',
+  'memory.snapshot': 'sticky',
+  'tasks.snapshot': 'sticky',
+  'agent-mode.snapshot': 'sticky',
+  'run-controls.snapshot': 'sticky',
+  'accounts.snapshot': 'sticky',
+  'workspace-trust.snapshot': 'sticky',
+  'diagnostics.snapshot': 'sticky',
+  'extensions.snapshot': 'sticky',
+  'remoteSettings.snapshot': 'sticky',
+  'slash-catalog.snapshot': 'sticky',
+
+  event: 'ring',
+  pong: 'ring',
+  error: 'ring',
+  lifecycle: 'ring',
+  'session-title': 'ring',
+  'sessions.snapshot': 'ring',
+  'agent-mode.set.result': 'ring',
+  'task-control.result': 'ring',
+  'run-control.result': 'ring',
+  'session-action.result': 'ring',
+  'account.result': 'ring',
+  'oauth.login.progress': 'ring',
+  'workspace.trust.result': 'ring',
+  'remoteSettings.result': 'ring',
+  'settings.result': 'ring',
+}
+
+/** The once-per-attach kinds that survive ring eviction, for tests + callers. */
+export const STICKY_FRAME_KINDS: readonly ServerFrame['kind'][] = (
+  Object.keys(FRAME_RETENTION) as ServerFrame['kind'][]
+).filter(kind => FRAME_RETENTION[kind] === 'sticky')
+
 type SessionEntry = {
   ready: ServerFrame | null
-  /** SLASH-6 — sticky like `ready`: replaced on each new snapshot, never
-   * subject to the `recent` ring buffer's count/byte eviction. */
-  slashCatalog: ServerFrame | null
+  /**
+   * One slot per `sticky` kind. Keyed by kind so a later snapshot REPLACES the
+   * earlier one; a `Map` because re-setting an existing key keeps its original
+   * insertion position, which is what preserves the sidecar's deliberate
+   * attach-burst order across a replay.
+   */
+  sticky: Map<ServerFrame['kind'], ServerFrame>
   recent: ServerFrame[]
   recentBytes: number
   truncated: boolean
@@ -62,27 +140,28 @@ export class FrameReplayBuffer {
   ) {}
 
   /**
-   * Record one frame. The `ready` and `slash-catalog.snapshot` frames each
-   * replace their own sticky slot; everything else ring-buffers.
+   * Record one frame. The `ready` head and each once-per-attach snapshot kind
+   * replace their own slot; everything else ring-buffers.
    */
   record(sessionId: SessionId, frame: ServerFrame): void {
     let entry = this.sessions.get(sessionId)
     if (!entry) {
       entry = {
         ready: null,
-        slashCatalog: null,
+        sticky: new Map(),
         recent: [],
         recentBytes: 0,
         truncated: false,
       }
       this.sessions.set(sessionId, entry)
     }
-    if (frame.kind === 'ready') {
+    const retention = FRAME_RETENTION[frame.kind]
+    if (retention === 'head') {
       entry.ready = frame
       return
     }
-    if (frame.kind === 'slash-catalog.snapshot') {
-      entry.slashCatalog = frame
+    if (retention === 'sticky') {
+      entry.sticky.set(frame.kind, frame)
       return
     }
     const frameBytes = serializedUtf8Bytes(frame)
@@ -110,32 +189,33 @@ export class FrameReplayBuffer {
    * Everything a freshly-attached (or reloaded) renderer must receive to catch
    * up, in delivery order: each session's `ready` head first, then its buffered
    * frames. P1-0 has one session; the shape is already N-session ready.
+   * Concatenates `snapshotSession` so the two can never drift apart.
    */
   snapshot(): ServerFrame[] {
     const frames: ServerFrame[] = []
-    for (const [sessionId, entry] of this.sessions) {
-      if (entry.ready) frames.push(entry.ready)
-      if (entry.slashCatalog) frames.push(entry.slashCatalog)
-      if (entry.truncated) frames.push(replayTruncationFrame(sessionId))
-      frames.push(...entry.recent)
+    for (const sessionId of this.sessions.keys()) {
+      frames.push(...this.snapshotSession(sessionId))
     }
     return frames
   }
 
   /**
-   * One session's frames in delivery order: its `ready` head, then the
-   * truncation marker if lossy, then its buffered recent frames — the single-
-   * session slice of `snapshot()`. Empty when the session was never buffered.
+   * One session's frames in delivery order: its `ready` head, then its sticky
+   * once-per-attach snapshots in first-arrival order, then the truncation marker
+   * if lossy, then its buffered recent frames — the single-session slice of
+   * `snapshot()`. Empty when the session was never buffered.
    * Used by the transcript-cache persist path (IS-A); the permanent `ready` head
    * is INCLUDED here (like `snapshot()`) and dropped by the cache's `distill`
-   * allowlist, so the ready-drop decision lives in exactly one place.
+   * allowlist, so the ready-drop decision lives in exactly one place — the same
+   * allowlist drops every sticky snapshot, so none of them reach a cached
+   * transcript.
    */
   snapshotSession(sessionId: SessionId): ServerFrame[] {
     const entry = this.sessions.get(sessionId)
     if (!entry) return []
     const frames: ServerFrame[] = []
     if (entry.ready) frames.push(entry.ready)
-    if (entry.slashCatalog) frames.push(entry.slashCatalog)
+    frames.push(...entry.sticky.values())
     if (entry.truncated) frames.push(replayTruncationFrame(sessionId))
     frames.push(...entry.recent)
     return frames

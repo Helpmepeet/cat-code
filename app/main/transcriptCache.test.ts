@@ -38,6 +38,7 @@ import {
   resolvePreview,
   writeCache,
 } from './transcriptCache.js'
+import { FrameReplayBuffer, STICKY_FRAME_KINDS } from './replayBuffer.js'
 
 const SID: SessionId = '11111111-1111-4111-8111-111111111111'
 const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
@@ -180,6 +181,34 @@ test('distill keeps message events + both truncation boundaries; drops ready/per
     REPLAY_TRUNCATION_REQUEST_ID,
     HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   ])
+})
+
+test('no sticky once-per-attach snapshot reaches a cached transcript, via the REAL buffer', () => {
+  // The buffer keeps each once-per-attach snapshot in a sticky slot so a
+  // renderer reload still gets session state. `snapshotSession` is also the
+  // persist path's input, so drive the real buffer and prove the allowlist
+  // still admits nothing but transcript rows. Driven off STICKY_FRAME_KINDS so
+  // a newly-classified sticky kind is covered without editing this test.
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  for (const kind of STICKY_FRAME_KINDS) {
+    buffer.record(SID, {
+      kind,
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SID,
+    } as unknown as ServerFrame)
+  }
+  buffer.record(SID, eventFrame(0))
+
+  const persisted = buffer.snapshotSession(SID)
+  // The sticky frames really are in the persist path's input...
+  expect(
+    STICKY_FRAME_KINDS.every(kind => persisted.some(f => f.kind === kind)),
+  ).toBe(true)
+  // ...and none of them survives distillation.
+  const cache = distill(persisted)
+  expect(cache.frames.map(f => f.kind)).toEqual(['event'])
+  expect(cache.header.appSessionId).toBe(SID)
 })
 
 test('distill reads the two-id header from the ready head, then drops it', () => {
