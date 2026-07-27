@@ -81,8 +81,10 @@ import {
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
   selectPreviewSwapSessions,
+  selectPreviewRunFactsFor,
   selectPreviewTranscript,
   selectPreviewTruncationMessage,
+  type PreviewRunFacts,
 } from './previewTranscriptState.js'
 import {
   STARTUP_PRELOAD_MAX_SESSIONS,
@@ -1909,6 +1911,10 @@ export function App() {
                   sessionId,
                 )}
                 onPreviewEngage={() => engagePreview(sessionId)}
+                previewRunFacts={selectPreviewRunFactsFor(
+                  previewTranscript,
+                  sessionId,
+                )}
 	            branch={panelBranch}
 	            model={panelRunControls?.model.current ?? null}
 	            reasoningEffort={panelRunControls?.effort.current ?? null}
@@ -2651,6 +2657,7 @@ export function SessionPane({
   preview = false,
   previewTruncationMessage = null,
   onPreviewEngage,
+  previewRunFacts = null,
   allowPermission,
   model,
   reasoningEffort,
@@ -2956,10 +2963,25 @@ export function SessionPane({
   // ContextChip is always on (`Surfaces.jsx:471-473`), so `selectContextUsage`
   // always returns — real result-frame usage once a turn provides it, a 0%
   // default-window gauge before then (never hidden).
-  const contextUsage = useMemo(
+  const liveContextUsage = useMemo(
     () => selectContextUsage(activeLog.messages, model),
     [activeLog.messages, model],
   )
+  /*
+   * The rail under a PREVIEWED session reads the cache, not the engine.
+   *
+   * A preview has no sidecar, so `runControls` / `diagnostics` are absent and
+   * every live value above is empty: the model face vanishes and the donut
+   * reports 0% for a session that plainly used context. Both are answerable
+   * from the session's own cached traffic (`previewRunFacts`), so the rail
+   * shows what it really ran on. Where the cache is silent the value stays
+   * null and the face renders nothing, which is the same rule the live rail
+   * follows before its first snapshot lands.
+   */
+  const railModel = preview ? (previewRunFacts?.model ?? null) : model
+  const contextUsage = preview
+    ? (previewRunFacts?.contextUsage ?? null)
+    : liveContextUsage
   // Dev-only raw-frame inspector (not a shipped surface, not in the Chat.jsx
   // design): hidden even in dev UNLESS a developer opts in via
   // `localStorage['catcode:devPanels'] = '1'`, so a normal dev run shows the
@@ -3430,7 +3452,7 @@ export function SessionPane({
               tone: 'info',
             })
           }
-          model={model}
+          model={railModel}
           reasoningEffort={reasoningEffort}
           fastMode={fastMode}
           runControls={runControls}
@@ -3697,6 +3719,9 @@ type SessionPaneProps = {
   previewTruncationMessage?: string | null
   /** First focus, pointer-down, or pane dwell lazily restores the real session. */
   onPreviewEngage?: () => void
+  /** What the cached transcript says this session ran on; feeds the rail while
+   * no engine exists to report it live. */
+  previewRunFacts?: PreviewRunFacts | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
   /** The RESOLVED model this session runs (`mainLoopModelForSession`); null before the snapshot. */
   model: string | null

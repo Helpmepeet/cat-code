@@ -123,6 +123,13 @@ export function PermissionModeChip({
   const current =
     context && isKnownMode(context.mode) ? MODE_META[context.mode] : null
 
+  // No context means the mode was never reported: a preview has no engine, and
+  // a live pane has not received its first `permission.context` yet. Every
+  // session HAS a mode, so naming one here would be a claim about state this
+  // pane has not read. Render nothing until it has, the same rule the rest of
+  // the rail follows (settingsReadState.ts).
+  if (!context) return null
+
   return (
     <div ref={ref} className="relative shrink-0">
       {/* Borderless quiet face (the prototype's `ColumnChipFace`,

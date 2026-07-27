@@ -5,6 +5,8 @@ import {
   type SessionId,
   type TranscriptCache,
 } from '../../shared/protocol.js'
+import type { SDKMessage } from '@cat-code/engine/sdk'
+import { selectContextUsage, type ContextUsage } from './contextUsage.js'
 import {
   batch,
   withBatch,
@@ -19,6 +21,25 @@ import {
 export type PreviewTranscriptEntry = {
   transcript: TranscriptState
   truncationMessage: string | null
+  /**
+   * What the composer rail can honestly say about a session with no engine.
+   *
+   * A previewed session has no sidecar, so every live seam the rail normally
+   * reads (`run-controls`, `diagnostics`, `permission.context`) is absent and
+   * the rail renders blank. But the cached transcript is the session's own
+   * traffic, so the model it ran on and the context it ended at are REAL and
+   * already in hand. `null` on either means the cache genuinely does not say
+   * (an empty or truncated-past-the-evidence transcript), and the rail then
+   * shows nothing rather than a zero.
+   */
+  runFacts: PreviewRunFacts
+}
+
+export type PreviewRunFacts = {
+  /** The newest assistant message's `model`, or null when none carried one. */
+  model: string | null
+  /** Context at the session's last `result`, or null when no result is cached. */
+  contextUsage: ContextUsage | null
 }
 
 export type PreviewTranscriptState = {
@@ -92,7 +113,62 @@ export function projectPreviewTranscriptCache(
   transcript = projectServerFrameBatched(transcript, batch(cacheFrames))
   const truncationMessage =
     cacheFrames.find(frame => frame.kind === 'error')?.message ?? null
-  return { transcript, truncationMessage }
+  return {
+    transcript,
+    truncationMessage,
+    runFacts: selectPreviewRunFacts(cacheFrames),
+  }
+}
+
+/**
+ * Read the run facts back out of a cached session's own frames.
+ *
+ * Runtime-narrowed with no casts, projector-style: a cache is JSON that was on
+ * disk, so nothing about its shape is guaranteed. `selectContextUsage` is the
+ * SAME function the live composer donut uses, so a previewed session's context
+ * is computed exactly as a live one's is, never approximated.
+ */
+export function selectPreviewRunFacts(
+  frames: readonly ServerFrame[],
+): PreviewRunFacts {
+  const messages: SDKMessage[] = []
+  for (const frame of frames) {
+    if (frame.kind !== 'event') continue
+    const event: unknown = frame.event
+    if (!isRecord(event) || event.type !== 'message') continue
+    const message: unknown = event.message
+    if (!isRecord(message) || typeof message.type !== 'string') continue
+    messages.push(message as SDKMessage)
+  }
+
+  let model: string | null = null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const candidate = readAssistantModel(messages[i])
+    if (candidate) {
+      model = candidate
+      break
+    }
+  }
+
+  // No cached `result` means no usage was ever reported, and a 0% donut would
+  // claim the session used nothing. `hasResult` distinguishes that from a real
+  // zero so the caller can render nothing instead.
+  const hasResult = messages.some(message => message.type === 'result')
+  return {
+    model,
+    contextUsage: hasResult ? selectContextUsage(messages, model) : null,
+  }
+}
+
+function readAssistantModel(message: SDKMessage | undefined): string | null {
+  if (!message || message.type !== 'assistant') return null
+  const inner: unknown = message.message
+  if (!isRecord(inner)) return null
+  return typeof inner.model === 'string' && inner.model ? inner.model : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 export function selectPreviewTranscript(
@@ -100,6 +176,13 @@ export function selectPreviewTranscript(
   sessionId: SessionId,
 ): TranscriptState | null {
   return state.bySession[sessionId]?.transcript ?? null
+}
+
+export function selectPreviewRunFactsFor(
+  state: PreviewTranscriptState,
+  sessionId: SessionId | null,
+): PreviewRunFacts | null {
+  return sessionId ? (state.bySession[sessionId]?.runFacts ?? null) : null
 }
 
 export function selectPreviewTruncationMessage(

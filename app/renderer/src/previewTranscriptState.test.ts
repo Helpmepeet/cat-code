@@ -248,3 +248,82 @@ test('wholesale swap leaves one live copy and zero-history swaps to empty', () =
   )
   expect(selectTranscriptRows(zeroHistoryLive, SID)).toEqual([])
 })
+
+/* ── run facts: what the composer rail can say with no engine ─────────────── */
+
+function assistantFrame(model: string, index: number): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          model,
+          content: [{ type: 'text', text: `body ${index}` }],
+        },
+        uuid: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+function resultFrame(inputTokens: number): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        usage: { input_tokens: inputTokens },
+        uuid: '00000000-0000-4000-8000-00000000ffff',
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+/**
+ * The defect: a previewed session has no sidecar, so the rail read empty live
+ * seams and showed no model plus a 0% donut for a session that plainly used
+ * context. Both answers are in the session's own cached traffic.
+ */
+test('run facts come from the cached session: newest model, real context', () => {
+  const entry = projectPreviewTranscriptCache(
+    cache([
+      assistantFrame('claude-sonnet-5', 0),
+      assistantFrame('gpt-5.6-terra', 1),
+      resultFrame(42_000),
+    ]),
+  )
+
+  // The NEWEST model, not the first: a session that switched models mid-way
+  // ran on the later one.
+  expect(entry.runFacts.model).toBe('gpt-5.6-terra')
+  expect(entry.runFacts.contextUsage?.usedTokens).toBe(42_000)
+  expect(entry.runFacts.contextUsage?.percentUsed).toBeGreaterThan(0)
+})
+
+/**
+ * The other half of the fix, and the reason `contextUsage` is nullable: with
+ * no result cached, the live selector would return a real 0% gauge, which
+ * asserts "this session used no context". Null lets the rail render nothing.
+ */
+test('a cache with no result reports no usage rather than zero', () => {
+  const entry = projectPreviewTranscriptCache(
+    cache([assistantFrame('claude-sonnet-5', 0)]),
+  )
+  expect(entry.runFacts.model).toBe('claude-sonnet-5')
+  expect(entry.runFacts.contextUsage).toBeNull()
+})
+
+test('an empty cache claims nothing at all', () => {
+  const entry = projectPreviewTranscriptCache(cache([]))
+  expect(entry.runFacts).toEqual({ model: null, contextUsage: null })
+})

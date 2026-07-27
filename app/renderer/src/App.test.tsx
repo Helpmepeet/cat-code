@@ -189,7 +189,20 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
       onRevisePlan={() => {}}
       partialCount={0}
       pastes={[]}
-      permissionContext={null}
+      // A REAL context: the mode chip renders only once the pane has been told
+      // the mode, so leaving this null would make the chip assertion below pass
+      // vacuously by never rendering the row it checks.
+      permissionContext={{
+        mode: 'default',
+        alwaysAllowRules: {},
+        alwaysDenyRules: {},
+        alwaysAskRules: {},
+        isBypassPermissionsModeAvailable: true,
+        additionalWorkingDirectories: [],
+        ruleMetadata: [],
+        managedRulesOnly: false,
+        permissionClassifierEnabled: false,
+      }}
       permissionQueue={[]}
       planReview={null}
       askQuestion={null}

@@ -47,12 +47,18 @@ test('acceptEdits maps to its friendly label + tone', () => {
   expect(html).toContain('text-emerald-400')
 })
 
-test('no context yet → disabled chip, unknown label', () => {
+/**
+ * A preview pane has no engine, and a live pane has not read
+ * `permission.context` yet. Every session HAS a mode, so a face reading
+ * "unknown" (or "none") states something about the operator's session that
+ * this pane never received. Rendering nothing is the honest answer, and it is
+ * what keeps the preview rail from showing a row of empty placeholders.
+ */
+test('no context yet → the chip renders nothing at all', () => {
   const html = renderToStaticMarkup(
     <PermissionModeChip context={null} onSetMode={() => {}} />,
   )
-  expect(html).toContain('disabled')
-  expect(html).toContain('aria-label="Permission mode: unknown"')
+  expect(html).toBe('')
 })
 
 test('bypassPermissions renders as "Bypass" (amber) — the prototype 5th mode', () => {
