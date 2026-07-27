@@ -5,6 +5,13 @@ quality audit. Source anchors are re-checked immediately before each unit;
 source wins over the audit where they disagree. `UNVERIFIED` means a layer is
 outside the automated evidence, not that it failed.
 
+**PROGRAM CLOSED 2026-07-27.** Operator decision: keep the lightweight
+`writing-cat-code-tests` skill (rewritten; republished, canonical hash
+`d8652b01…`) and the landed TE-2..TE-5 fixes; all parked/active units are
+closed as not pursued. Approval gates 1–3 are dissolved. Nothing here is
+resumable backlog. Disposition addendum:
+`docs/reports/2026-07-26-test-evidence-quality-audit.md`.
+
 ## Operating decisions
 
 - Desktop units remain on `migration`, update their dedicated STATUS row/note,
@@ -27,18 +34,22 @@ outside the automated evidence, not that it failed.
 | TE-3 | F3 deferred-continuation actual durable-barrier regression | done | `bda89ee`; materialized persisted JSONL and injected `FileHandle.sync` at the actual flush barrier; removing the await turned red. Process crash/restart, DOM, GUI, credentialed-live `UNVERIFIED`. |
 | TE-4 | F4 retired-GPT-model migration functional matrix and startup tripwire | done | `381585e`; user model/list/overrides/runtime override/idempotence matrix plus honestly classified source tripwire; early-return mutation 3 red functional failures. Live settings-file/process and higher layers `UNVERIFIED`. |
 | TE-5 | F5 classify same-process simulation and add real-process kill/survivor evidence | done | `2cb6217`; existing real cross-cwd probe retained; concurrent sidecars/SIGKILL-one/survivor-ping is process evidence; mutation killing B went red. GUI/credentialed-live `UNVERIFIED`. |
-| TE-6 | F7 WebSocket lifecycle proof | parked — approval gate 1 | Requires the same narrow happy-dom harness: DOM hook/App lifecycle, fake socket/timer and stale-socket mutation; GUI and credentialed-live remain `UNVERIFIED`. |
-| TE-7 | F1 DOM harness and interaction suite | parked — approval gate 1 | Proposed: `happy-dom` only + local mount/event helper; SSR and engine untouched. |
-| TE-8 | Strengthen independent verifier mandatory-spawn condition | parked — approval gate 2 | Proposed: remove hard-off `tengu_hive_evidence` conjunct; preserve `VERIFICATION_AGENT` compilation gate. |
+| TE-6 | F7 WebSocket lifecycle proof | closed — not pursued (2026-07-27) | Needed the declined happy-dom harness; backoff-helper coverage stands; hook/socket lifecycle remains `UNVERIFIED`. |
+| TE-7 | F1 DOM harness and interaction suite | closed — not pursued (2026-07-27) | `happy-dom` dependency declined; renderer interaction stays SSR-plus-live-GUI verified. |
+| TE-8 | Strengthen independent verifier mandatory-spawn condition | closed — not pursued (2026-07-27) | Hard-off flag conditions stand; verifier remains opt-in. |
 | TE-9 | F6 source-string guard classification | deferred as audit disposition | Keep fast tripwire; owner is next preload/boundary session. No false executable-proof claim. |
-| TE-10 | P2 shadow evaluation corpus, A/B/C runs, recommendation | active | Ten-case read-only A/B/C shadow pilot running; durable test-author handoff is now itself a scored required artifact. |
-| TE-11 | P2 hook/repository enforcement | parked — approval gate 3 | Requires TE-10 measurements and threshold decision. |
+| TE-10 | P2 shadow evaluation corpus, A/B/C runs, recommendation | closed (2026-07-27) | Read-only ten-case pilot recorded below; the larger measured shadow program is not pursued. |
+| TE-11 | P2 hook/repository enforcement | closed — not pursued (2026-07-27) | No Stop/SubagentStop hook, repository evidence check, or thresholds. |
 
 ## Required gates
 
-1. Approve the DOM dependency and narrow harness shape before TE-7.
-2. Approve the live verifier-condition code change before TE-8.
-3. Review TE-10 shadow-evaluation numbers and approve thresholds before TE-11.
+Gates 1–3 dissolved 2026-07-27: the units they guarded (TE-7, TE-8, TE-11)
+were closed as not pursued.
+
+1. ~~Approve the DOM dependency and narrow harness shape before TE-7.~~
+2. ~~Approve the live verifier-condition code change before TE-8.~~
+3. ~~Review TE-10 shadow-evaluation numbers and approve thresholds before
+   TE-11.~~
 4. Ask before any `DONE.md` write, push, or history rewrite. None is authorized
    by this program.
 
