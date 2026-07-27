@@ -116,6 +116,11 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   `env.d.ts`). The wrapper (`app/scripts/sidecar-typecheck.ts`) ignores those
   and fails only on diagnostics in owned `app/sidecar`/`app/shared` files.
   **Zero new errors in owned files** is the pass bar — do not fix upstream noise.
+- Fast Refresh boundary: production `app/renderer/src/**/*.tsx` modules export
+  React components only at runtime. Move helpers, reducers, constants, contexts,
+  and hooks into adjacent `.ts` files; type-only exports are fine. The desktop
+  dev, typecheck, and renderer-build scripts enforce this with
+  `lint:fast-refresh`, backed by `fastRefreshBoundaries.test.ts`.
 - Live baseline as of 2026-07-07 (re-measure, don't assume): `bun test app/`
   485 pass / 0 fail · app tsc clean · sidecar wrapper green (5,548 upstream
   ignored) · hardening 19 checks. The counts grow; a DROP in pass count or any
