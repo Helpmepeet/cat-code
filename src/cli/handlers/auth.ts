@@ -32,7 +32,8 @@ import {
   isUsing3PServices,
   saveCodexOAuthTokens,
   saveOAuthTokensIfNeeded,
-  validateForceLoginOrg,
+  validateForceLoginOrgForToken,
+  type OrgValidationResult,
 } from '../../utils/auth.js'
 import { saveGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -57,7 +58,7 @@ function hasAnyAnthropicScope(scopes: string[] | undefined): boolean {
   return scopes.some((s) => s.startsWith('user:') || s.startsWith('org:'))
 }
 
-function parseManualOAuthCallbackInput(
+export function parseManualOAuthCallbackInput(
   input: string,
 ): { authorizationCode?: string; state?: string } {
   const value = input.trim()
@@ -212,6 +213,24 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
 
 }
 
+export async function installOAuthTokensAfterPolicyValidation(
+  tokens: OAuthTokens,
+  dependencies: {
+    validateOrg?: typeof validateForceLoginOrgForToken
+    installTokens?: typeof installOAuthTokens
+  } = {},
+): Promise<OrgValidationResult> {
+  const validateOrg =
+    dependencies.validateOrg ?? validateForceLoginOrgForToken
+  const installTokens = dependencies.installTokens ?? installOAuthTokens
+  const orgResult = await validateOrg(tokens.accessToken)
+  if (orgResult.valid === false) {
+    return orgResult
+  }
+  await installTokens(tokens)
+  return orgResult
+}
+
 export async function authLogin({
   email,
   sso,
@@ -258,9 +277,8 @@ export async function authLogin({
       logEvent('tengu_login_from_refresh_token', {})
 
       const tokens = await refreshOAuthToken(envRefreshToken, { scopes })
-      await installOAuthTokens(tokens)
-
-      const orgResult = await validateForceLoginOrg()
+      const orgResult =
+        await installOAuthTokensAfterPolicyValidation(tokens)
       if (orgResult.valid === false) {
         process.stderr.write(orgResult.message + '\n')
         process.exit(1)
@@ -341,10 +359,9 @@ export async function authLogin({
       },
     )
 
-    await installOAuthTokens(result)
-
-    const orgResult = await validateForceLoginOrg()
-    if ('message' in orgResult) {
+    const orgResult =
+      await installOAuthTokensAfterPolicyValidation(result)
+    if (orgResult.valid === false) {
       process.stderr.write(orgResult.message + '\n')
       process.exit(1)
     }

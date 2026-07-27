@@ -4,6 +4,13 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
+import {
+  resetClaudeAccountPoolForTest,
+  seedClaudeAccountPoolForTest,
+  type ClaudePoolAccount,
+} from '../../src/services/api/claudeAccountPool.js'
+import type { OAuthTokens } from '../../src/services/oauth/types.js'
+import type { SettingsJson } from '../../src/utils/settings/types.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
   AccountsSnapshotFrame,
@@ -13,7 +20,9 @@ import type {
 import {
   buildAccountsSnapshot,
   buildAccountStatus,
+  createRealAnthropicOAuthLoginRunner,
   createSidecarAccountsDomain,
+  resolveAnthropicSubscriptionActive,
   type AccountsCommandExecutor,
   type AccountVerbResult,
   type OAuthLoginRunner,
@@ -47,6 +56,7 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
 
 afterEach(() => {
   resetCodexAccountPoolForTest()
+  resetClaudeAccountPoolForTest()
 })
 
 describe('P4-5 read-seam — redaction (the security-critical core)', () => {
@@ -95,6 +105,46 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
 })
 
 describe('P4-5 read-seam — projection semantics', () => {
+  test('snapshot includes a redacted Anthropic account pool', () => {
+    const claudeAccount: ClaudePoolAccount = {
+      accountUuid: 'claude-account-1',
+      emailAddress: 'claude@example.com',
+      accessToken: 'SECRET-claude-access',
+      refreshToken: 'SECRET-claude-refresh',
+      expiresAt: 9_999_999_999,
+      status: 'healthy',
+      alias: 'personal-claude',
+      subscriptionType: 'pro',
+      vaultFilePath: '/Users/secret/claude-vault/account.json',
+    }
+    seedClaudeAccountPoolForTest({
+      accounts: [claudeAccount],
+      activeAccountUuid: claudeAccount.accountUuid,
+    })
+
+    const snapshot = createSidecarAccountsDomain({
+      executor: fakeExecutor(),
+    }).getSnapshot()
+
+    expect(snapshot?.anthropicPoolCount).toBe(1)
+    expect(snapshot?.anthropicReadyCount).toBe(1)
+    expect(snapshot?.anthropicActiveAccountId).toBe('claude-account-1')
+    expect(snapshot?.anthropicAccounts).toEqual([
+      {
+        id: 'claude-account-1',
+        alias: 'personal-claude',
+        email: 'claude@example.com',
+        status: 'healthy',
+        isDefault: true,
+        hasVaultProfile: true,
+        subscriptionType: 'pro',
+      },
+    ])
+    const serialized = JSON.stringify(snapshot)
+    expect(serialized).not.toContain('SECRET-claude')
+    expect(serialized).not.toContain('/Users/secret')
+  })
+
   test('snapshot derives readyCount / activeAccountId / switchable', () => {
     const snapshot = buildAccountsSnapshot({
       accounts: [
@@ -122,6 +172,30 @@ describe('P4-5 read-seam — projection semantics', () => {
     expect(snapshot.accounts.find(a => a.id === 'c')?.switchable).toBe(true)
   })
 
+  test('snapshot exposes only a boolean for non-pool Anthropic route availability', () => {
+    const snapshot = buildAccountsSnapshot(
+      { accounts: [], activeIndex: 0, initialized: true },
+      Date.now(),
+      { accounts: [], activeIndex: 0, initialized: true },
+      true,
+    )
+    expect(snapshot.anthropicRouteAvailable).toBe(true)
+    expect(scanForSecrets(snapshot).ok).toBe(true)
+  })
+
+  test('subscription attribution follows effective request auth, not a retained OAuth token', () => {
+    expect(resolveAnthropicSubscriptionActive(() => false)).toBe(false)
+    const snapshot = buildAccountsSnapshot(
+      { accounts: [], activeIndex: 0, initialized: true },
+      Date.now(),
+      { accounts: [], activeIndex: 0, initialized: true },
+      true,
+      false,
+    )
+    expect(snapshot.anthropicRouteAvailable).toBe(true)
+    expect(snapshot.anthropicSubscriptionActive).toBe(false)
+  })
+
   test('getSnapshot is throw-free on an empty pool', () => {
     const domain = createSidecarAccountsDomain({ executor: fakeExecutor() })
     const snapshot = domain.getSnapshot()
@@ -135,6 +209,7 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
   const ok = (message: string): AccountVerbResult => ({ ok: true, message })
   return {
     switch: () => ok('switched'),
+    switchAnthropic: async () => ok('switched anthropic'),
     rename: () => ok('renamed'),
     delete: () => ok('deleted'),
     logout: () => ok('signed out'),
@@ -161,9 +236,11 @@ function fakeOAuthRunner(
     validateAlias?: OAuthPendingLogin['validateAlias']
     onPersist?: (alias: string | undefined) => void
     onPasteReceived?: (code: string) => void
+    validateManualCode?: OAuthLoginRunner['validateManualCode']
   } = {},
 ): OAuthLoginRunner {
   return {
+    validateManualCode: opts.validateManualCode,
     async begin({ onWaitingForLogin, waitForManualCode }) {
       onWaitingForLogin(opts.url ?? 'https://auth.example/authorize?code_challenge=abc&state=xyz')
       if (opts.requireManualCode) {
@@ -206,6 +283,41 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(out.result.ok).toBe(false)
     expect(out.poolChanged).toBe(false)
     expect(called).toBe(false)
+  })
+
+  test('Anthropic account switch resolves against the Claude pool and dispatches the provider-specific path', async () => {
+    const claudeAccount: ClaudePoolAccount = {
+      accountUuid: 'claude-b',
+      emailAddress: 'b@example.com',
+      accessToken: 'secret',
+      refreshToken: 'secret',
+      expiresAt: 9_999_999_999,
+      status: 'healthy',
+    }
+    seedClaudeAccountPoolForTest({
+      accounts: [claudeAccount],
+      activeAccountUuid: claudeAccount.accountUuid,
+    })
+    const switched: string[] = []
+    const domain = createSidecarAccountsDomain({
+      executor: fakeExecutor({
+        switchAnthropic: async id => {
+          switched.push(id)
+          return { ok: true, message: 'ok' }
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'claude-switch',
+      accountId: 'claude-b',
+      provider: 'anthropic',
+    })
+
+    expect(out.result.ok).toBe(true)
+    expect(out.poolChanged).toBe(true)
+    expect(switched).toEqual(['claude-b'])
   })
 
   test('refreshUsage delegates to the executor and returns whether usage landed', async () => {
@@ -314,6 +426,274 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     expect(captured.at(-1)?.state).toBe('success')
   })
 
+  test('Anthropic login uses the Anthropic runner and auto-persists without a Codex alias step', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const providers: string[] = []
+    const domain = createSidecarAccountsDomain({
+      executor: fakeExecutor(),
+      oauthRunner: fakeOAuthRunner({
+        failWith: 'Codex runner must not be used',
+      }),
+      anthropicOAuthRunner: {
+        async begin({ onWaitingForLogin }) {
+          providers.push('anthropic')
+          onWaitingForLogin('https://claude.ai/oauth/authorize')
+          return {
+            isExistingAccount: true,
+            validateAlias: () => ({ ok: true }),
+            persist: () => {},
+          }
+        },
+      },
+    })
+    domain.setOAuthProgressSink(p => captured.push(p))
+
+    const begin = await domain.runVerb({
+      type: 'account.login',
+      requestId: 'anthropic-login',
+      provider: 'anthropic',
+    })
+    expect(begin.result.ok).toBe(true)
+    await flush()
+
+    expect(providers).toEqual(['anthropic'])
+    expect(captured.map(p => p.state)).toEqual([
+      'starting',
+      'waiting_for_login',
+      'success',
+    ])
+  })
+
+  test('first-run login activates the chosen provider only after credential persistence', async () => {
+    const order: string[] = []
+    const domain = createSidecarAccountsDomain({
+      executor: fakeExecutor(),
+      anthropicOAuthRunner: {
+        async begin() {
+          return {
+            isExistingAccount: true,
+            validateAlias: () => ({ ok: true }),
+            persist() {
+              order.push('persist')
+            },
+          }
+        },
+      },
+      onProviderActivated(provider) {
+        order.push(`activate:${provider}`)
+      },
+      isFirstRunEligible: () => true,
+    })
+
+    await domain.runVerb({
+      type: 'account.login',
+      requestId: 'first-run-anthropic',
+      provider: 'anthropic',
+    })
+    await flush()
+
+    expect(order).toEqual(['persist', 'activate:anthropic'])
+  })
+
+  test('ordinary add-account login does not change the active provider', async () => {
+    const activated: string[] = []
+    const domain = createSidecarAccountsDomain({
+      executor: fakeExecutor(),
+      anthropicOAuthRunner: {
+        async begin() {
+          return {
+            isExistingAccount: true,
+            validateAlias: () => ({ ok: true }),
+            persist() {},
+          }
+        },
+      },
+      onProviderActivated(provider) {
+        activated.push(provider)
+      },
+      isFirstRunEligible: () => false,
+    })
+
+    await domain.runVerb({
+      type: 'account.login',
+      requestId: 'add-anthropic',
+      provider: 'anthropic',
+    })
+    await flush()
+
+    expect(activated).toEqual([])
+  })
+
+  test('sidecar-owned account state denies activation for an ordinary add-account login', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'existing-codex' })],
+      activeAccountId: 'existing-codex',
+    })
+    seedClaudeAccountPoolForTest({
+      accounts: [],
+    })
+    const activated: string[] = []
+    const domain = createSidecarAccountsDomain({
+      executor: fakeExecutor(),
+      anthropicOAuthRunner: {
+        async begin() {
+          return {
+            isExistingAccount: true,
+            validateAlias: () => ({ ok: true }),
+            persist() {},
+          }
+        },
+      },
+      onProviderActivated(provider) {
+        activated.push(provider)
+      },
+    })
+
+    await domain.runVerb({
+      type: 'account.login',
+      requestId: 'server-owned-add-account',
+      provider: 'anthropic',
+    })
+    await flush()
+
+    expect(activated).toEqual([])
+  })
+
+  test('real Anthropic runner honors managed method/org and commits only after begin returns', async () => {
+    const tokens: OAuthTokens = {
+      accessToken: 'SECRET-access',
+      refreshToken: 'SECRET-refresh',
+      expiresAt: Date.now() + 60_000,
+      scopes: ['user:inference'],
+      subscriptionType: 'pro',
+      rateLimitTier: null,
+    }
+    let oauthOptions:
+      | { loginWithClaudeAi?: boolean; orgUUID?: string }
+      | undefined
+    let installs = 0
+    let validations = 0
+    const order: string[] = []
+    const runner = createRealAnthropicOAuthLoginRunner({
+      createService: () => ({
+        async startOAuthFlow(handler, options) {
+          oauthOptions = options
+          await handler('https://auth.example/managed')
+          return tokens
+        },
+        handleManualAuthCodeInput() {},
+        cleanup() {},
+      }),
+      readSettings: () =>
+        ({
+          forceLoginMethod: 'console',
+          forceLoginOrgUUID: 'org-managed',
+        }) as SettingsJson,
+      installTokens: async installed => {
+        expect(installed).toBe(tokens)
+        order.push('install')
+        installs++
+      },
+      validateOrg: async accessToken => {
+        expect(accessToken).toBe(tokens.accessToken)
+        order.push('validate')
+        validations++
+        return { valid: true }
+      },
+    })
+    expect(runner.validateManualCode?.('incomplete')).toEqual({
+      ok: false,
+      message:
+        'Could not parse input. Paste the full callback URL or exact "<code>#<state>" value.',
+    })
+    expect(
+      runner.validateManualCode?.(
+        'https://localhost/callback?code=AUTH-CODE&state=STATE',
+      ),
+    ).toEqual({ ok: true })
+
+    const pending = await runner.begin({
+      onWaitingForLogin: () => {},
+      waitForManualCode: async () => '',
+    })
+    expect(oauthOptions).toMatchObject({
+      loginWithClaudeAi: false,
+      orgUUID: 'org-managed',
+    })
+    expect(installs).toBe(0)
+    await pending.persist(undefined)
+    expect(installs).toBe(1)
+    expect(validations).toBe(1)
+    expect(order).toEqual(['validate', 'install'])
+  })
+
+  test('real Anthropic runner rejects a wrong managed org before any credential commit', async () => {
+    const tokens: OAuthTokens = {
+      accessToken: 'SECRET-wrong-org',
+      refreshToken: 'SECRET-refresh',
+      expiresAt: Date.now() + 60_000,
+      scopes: ['user:inference'],
+      subscriptionType: 'pro',
+      rateLimitTier: null,
+    }
+    let installs = 0
+    const runner = createRealAnthropicOAuthLoginRunner({
+      createService: () => ({
+        async startOAuthFlow() {
+          return tokens
+        },
+        handleManualAuthCodeInput() {},
+        cleanup() {},
+      }),
+      readSettings: () =>
+        ({ forceLoginOrgUUID: 'org-required' }) as SettingsJson,
+      installTokens: async () => {
+        installs++
+      },
+      validateOrg: async accessToken => {
+        expect(accessToken).toBe(tokens.accessToken)
+        return { valid: false, message: 'Wrong managed organization.' }
+      },
+    })
+
+    const pending = await runner.begin({
+      onWaitingForLogin: () => {},
+      waitForManualCode: async () => '',
+    })
+    await expect(pending.persist(undefined)).rejects.toThrow(
+      'Wrong managed organization.',
+    )
+    expect(installs).toBe(0)
+  })
+
+  test('cancel before Anthropic callback settles the runner and never persists', async () => {
+    let rejectFlow: ((error: Error) => void) | null = null
+    let installs = 0
+    const runner = createRealAnthropicOAuthLoginRunner({
+      createService: () => ({
+        startOAuthFlow: () =>
+          new Promise<OAuthTokens>((_resolve, reject) => {
+            rejectFlow = reject
+          }),
+        handleManualAuthCodeInput() {},
+        cleanup() {
+          rejectFlow?.(new Error('OAuth login cancelled'))
+        },
+      }),
+      readSettings: () => ({}) as SettingsJson,
+      installTokens: async () => {
+        installs++
+      },
+    })
+    const started = runner.begin({
+      onWaitingForLogin: () => {},
+      waitForManualCode: async () => '',
+    })
+    runner.cancel?.()
+    await expect(started).rejects.toThrow('OAuth login cancelled')
+    expect(installs).toBe(0)
+  })
+
   test('empty alias = skip: persists undefined (anonymous / account email)', async () => {
     const captured: OAuthLoginProgress[] = []
     const persisted: (string | undefined)[] = []
@@ -377,6 +757,92 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     const domain = makeDomain(fakeOAuthRunner(), captured)
     const paste = await domain.runVerb({ type: 'account.oauthPasteCode', requestId: 'r', code: 'x' })
     expect(paste.result.ok).toBe(false)
+  })
+
+  test('invalid Anthropic manual input can be corrected without restarting login', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const received: string[] = []
+    const domain = makeDomain(
+      fakeOAuthRunner({
+        requireManualCode: true,
+        onPasteReceived: code => received.push(code),
+        validateManualCode(code) {
+          return code.includes('#')
+            ? { ok: true }
+            : {
+                ok: false,
+                message:
+                  'Could not parse input. Paste the full callback URL or exact "<code>#<state>" value.',
+              }
+        },
+      }),
+      captured,
+    )
+
+    await domain.runVerb({ type: 'account.login', requestId: 'manual-start' })
+    const invalid = await domain.runVerb({
+      type: 'account.oauthPasteCode',
+      requestId: 'manual-invalid',
+      code: 'incomplete',
+    })
+    expect(invalid.result).toEqual({
+      ok: false,
+      message:
+        'Could not parse input. Paste the full callback URL or exact "<code>#<state>" value.',
+    })
+
+    const corrected = await domain.runVerb({
+      type: 'account.oauthPasteCode',
+      requestId: 'manual-valid',
+      code: 'AUTH-CODE#STATE',
+    })
+    expect(corrected.result.ok).toBe(true)
+    await flush()
+    expect(received).toEqual(['AUTH-CODE#STATE'])
+    expect(captured.at(-1)?.state).toBe('waiting_for_alias')
+  })
+
+  test('a new login cannot supersede a credential write already in progress', async () => {
+    let begins = 0
+    const persistence = { finish: null as (() => void) | null }
+    const captured: OAuthLoginProgress[] = []
+    const domain = makeDomain(
+      {
+        async begin() {
+          begins++
+          return {
+            isExistingAccount: true,
+            validateAlias: () => ({ ok: true }),
+            persist: () =>
+              new Promise<void>(resolve => {
+                persistence.finish = resolve
+              }),
+          }
+        },
+      },
+      captured,
+    )
+
+    const first = await domain.runVerb({
+      type: 'account.login',
+      requestId: 'persisting-first',
+    })
+    expect(first.result.ok).toBe(true)
+    await flush()
+
+    const second = await domain.runVerb({
+      type: 'account.login',
+      requestId: 'persisting-second',
+    })
+    expect(second.result).toEqual({
+      ok: false,
+      message: 'Sign-in is already completing. Wait for it to finish.',
+    })
+    expect(begins).toBe(1)
+
+    persistence.finish?.()
+    await flush()
+    expect(captured.filter(progress => progress.state === 'success')).toHaveLength(1)
   })
 
   test('alias validation failure keeps the alias step (no persist, no success)', async () => {

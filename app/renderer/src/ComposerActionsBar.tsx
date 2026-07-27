@@ -16,9 +16,11 @@ import { PermissionModeChip } from './PermissionModeChip.js'
 import { toneClasses } from './tone.js'
 import type {
   AccountStatus,
+  AnthropicAccountStatus,
   PermissionContextSnapshot,
   PermissionSetModeMode,
   RunControlModelOption,
+  RunControlProvider,
   RunControlsSnapshot,
 } from '../../shared/protocol.js'
 
@@ -148,14 +150,18 @@ const POPOVER_PANEL_RIGHT =
 function ModelChip({
   current,
   selected,
+  provider,
+  providerSwitchLocked,
   options,
   onSelect,
   faceProps,
 }: {
   current: string | null
   selected: string | null
+  provider: RunControlProvider
+  providerSwitchLocked: boolean
   options: RunControlModelOption[]
-  onSelect: (value: string) => void
+  onSelect: (value: string | null) => void
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
@@ -183,13 +189,19 @@ function ModelChip({
           <div className={POPOVER_HEADING}>Model</div>
           {options.map(option => {
             const active = selected === option.value
+            const crossProvider =
+              (provider === 'openai') !== (option.provider === 'openai')
+            const disabled = providerSwitchLocked && crossProvider
             return (
               <button
-                key={option.value}
+                key={option.value ?? '__provider_default__'}
                 type="button"
                 role="menuitemradio"
                 aria-checked={active}
+                aria-disabled={disabled}
+                disabled={disabled}
                 onClick={() => {
+                  if (disabled) return
                   onSelect(option.value)
                   close()
                 }}
@@ -203,7 +215,7 @@ function ModelChip({
                   {option.label}
                 </span>
                 <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-subtle">
-                  {option.provider === 'openai' ? 'OpenAI' : 'Anthropic'}
+                  {formatProvider(option.provider)}
                 </span>
               </button>
             )
@@ -214,20 +226,39 @@ function ModelChip({
   )
 }
 
+function formatProvider(provider: RunControlProvider): string {
+  switch (provider) {
+    case 'anthropic':
+      return 'Anthropic'
+    case 'openai':
+      return 'OpenAI'
+    case 'bedrock':
+      return 'AWS'
+    case 'vertex':
+      return 'Vertex'
+    case 'foundry':
+      return 'Foundry'
+  }
+}
+
 /** Interactive REASONING face → a popover of the model's valid effort levels + Auto (`effort.set`). */
 function ReasoningChip({
   current,
+  selected,
   options,
   onSelect,
   faceProps,
 }: {
   current: string | null
+  selected: string | null
   options: string[]
   onSelect: (effort: string) => void
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
+  // The face shows the effective tier, while the checkmark reflects the raw
+  // selection so an env/default override never lies about what the API receives.
   const items = [
     { value: 'auto', label: 'Auto' },
     ...options.map(level => ({ value: level, label: formatEffort(level) })),
@@ -240,11 +271,17 @@ function ReasoningChip({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={current ? `Reasoning effort: ${current}` : 'Reasoning effort: auto'}
+        title={
+          current
+            ? `Reasoning effort: ${current}${selected === null ? ' (auto)' : ''}`
+            : 'Reasoning effort: auto'
+        }
         onClick={() => setOpen(value => !value)}
         className={`${RAIL_FACE} text-tone-warn hover:text-text-primary`}
       >
-        {current ? formatEffort(current) : 'Auto'}
+        {current
+          ? `${formatEffort(current)}${selected === null ? ' (Auto)' : ''}`
+          : 'Auto'}
       </button>
       {open ? (
         <div
@@ -256,7 +293,9 @@ function ReasoningChip({
           <div className={POPOVER_HEADING}>Reasoning effort</div>
           {items.map(item => {
             const active =
-              item.value === 'auto' ? current === null : current === item.value
+              item.value === 'auto'
+                ? selected === null
+                : selected === item.value
             return (
               <button
                 key={item.value}
@@ -303,7 +342,7 @@ function FastChip({
   const canEnable = supportedByModel && available
   const disabled = !active && !canEnable
   const title = active
-    ? 'Fast mode on — click to turn off'
+    ? 'Fast mode on, click to turn off'
     : canEnable
       ? 'Enable fast mode'
       : (unavailableReason ?? 'Fast mode unavailable')
@@ -661,7 +700,7 @@ function ContextChip({
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Context ${usage.percentUsed}% used — open usage`}
+        aria-label={`Context ${usage.percentUsed}% used, open usage`}
         onClick={() => setOpen(value => !value)}
         className="flex shrink-0 items-center rounded-md"
       >
@@ -685,6 +724,7 @@ export function ComposerActionsBar({
   permissionContext,
   onSetMode,
   account,
+  anthropicAccount,
   accounts,
   onSwitchAccount,
   onManageAccounts,
@@ -706,13 +746,15 @@ export function ComposerActionsBar({
    * an interactive picker; absent, it falls back to the P4-24 read-only face.
    */
   runControls?: RunControlsSnapshot | null
-  onSetModel?: (model: string) => void
+  onSetModel?: (model: string | null) => void
   onSetEffort?: (effort: string) => void
   onSetFast?: (active: boolean) => void
   permissionContext: PermissionContextSnapshot | null
   onSetMode: (mode: PermissionSetModeMode) => void
   /** The Codex pool's active account (real alias), or null before the snapshot arrives. */
   account: AccountStatus | null
+  /** Active Anthropic subscription account for an Anthropic-routed session. */
+  anthropicAccount?: AnthropicAccountStatus | null
   /** The full Codex pool (`accountsState.selectAccountRows`) for the switcher popover;
    * empty before the snapshot. With `onSwitchAccount` present, the account face becomes
    * the interactive switcher; absent, it falls back to the P4-24 read-only face. */
@@ -739,6 +781,8 @@ export function ComposerActionsBar({
   const fastInteractive = runControls != null && onSetFast != null
   const accountAlias = account?.alias ?? null
   const showAccount = account != null && accountAlias != null
+  const anthropicAccountLabel =
+    anthropicAccount?.alias ?? anthropicAccount?.email ?? null
   // Interactive switcher when the active account AND a switch handler are both
   // present; otherwise the P4-24 read-only alias face (mirrors the ModelChip gate).
   const accountInteractive = account != null && onSwitchAccount != null
@@ -851,7 +895,7 @@ export function ComposerActionsBar({
       <button
         {...faceProps('attach')}
         aria-label="Add attachment"
-        title="Add attachment — paste a large block to attach it as a collapsed chip"
+        title="Add attachment. Paste a large block to attach it as a collapsed chip"
         className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-[#3f3f46] transition-colors hover:text-text-muted disabled:opacity-50"
         disabled={attachDisabled}
         onClick={onAttach}
@@ -881,6 +925,8 @@ export function ComposerActionsBar({
             <ModelChip
               current={runControls.model.current ?? model}
               selected={runControls.model.selected}
+              provider={runControls.model.provider}
+              providerSwitchLocked={runControls.model.providerSwitchLocked}
               options={runControls.model.options}
               onSelect={onSetModel}
               faceProps={faceProps('model')}
@@ -902,6 +948,7 @@ export function ComposerActionsBar({
           <>
             <ReasoningChip
               current={runControls.effort.current ?? reasoningEffort}
+              selected={runControls.effort.selected}
               options={runControls.effort.options}
               onSelect={onSetEffort}
               faceProps={faceProps('effort')}
@@ -953,8 +1000,17 @@ export function ComposerActionsBar({
             >
               {accountAlias}
             </span>
+          ) : anthropicAccount && anthropicAccountLabel ? (
+            <span
+              className={`${RAIL_FACE} text-text-muted`}
+              title={`Active Anthropic account: ${anthropicAccountLabel} · ${anthropicAccount.status}`}
+            >
+              {anthropicAccountLabel}
+            </span>
           ) : null}
-          {(accountInteractive || showAccount) && contextUsage ? <RailSep /> : null}
+          {(accountInteractive || showAccount || anthropicAccountLabel) && contextUsage ? (
+            <RailSep />
+          ) : null}
           {contextUsage ? (
             <ContextChip
               usage={contextUsage}

@@ -5,7 +5,7 @@ export default () =>
   ({
     type: 'local-jsx',
     name: 'login',
-    description: 'Sign in with your OpenAI account',
+    description: 'Sign in with an Anthropic or OpenAI account',
     isEnabled: () => !isEnvTruthy(process.env.DISABLE_LOGIN_COMMAND),
     load: () => import('./login.js'),
   }) satisfies Command

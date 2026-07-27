@@ -391,6 +391,23 @@ export function getCacheControl({
   }
 }
 
+export function shouldSkipGlobalSystemPromptCache({
+  useGlobalCacheFeature,
+  toolCount,
+  extraToolSchemaCount,
+  hasAdvisor,
+}: {
+  useGlobalCacheFeature: boolean
+  toolCount: number
+  extraToolSchemaCount: number
+  hasAdvisor: boolean
+}): boolean {
+  return (
+    useGlobalCacheFeature &&
+    (toolCount > 0 || extraToolSchemaCount > 0 || hasAdvisor)
+  )
+}
+
 /**
  * Determines if 1h TTL should be used for prompt caching.
  *
@@ -1295,11 +1312,17 @@ async function* queryModel(
   const useGlobalCacheFeature = shouldUseGlobalCacheScope()
   const willDefer = (t: Tool) =>
     useToolSearch && (deferredToolNames.has(t.name) || shouldDeferLspTool(t))
-  // MCP tools are per-user → dynamic tool section → can't globally cache.
-  // Only gate when an MCP tool will actually render (not defer_loading).
+  // Tool definitions render before system blocks in the Anthropic API. A
+  // globally-scoped system block is therefore not a true prefix whenever any
+  // tool definition is present, even when the tools themselves have no cache
+  // marker. Keep the system prompt at org scope for every tool-bearing request.
   const needsToolBasedCacheMarker =
-    useGlobalCacheFeature &&
-    filteredTools.some(t => t.isMcp === true && !willDefer(t))
+    shouldSkipGlobalSystemPromptCache({
+      useGlobalCacheFeature,
+      toolCount: filteredTools.length,
+      extraToolSchemaCount: options.extraToolSchemas?.length ?? 0,
+      hasAdvisor: advisorModel !== undefined,
+    })
 
   // Ensure prompt_caching_scope beta header is present when global cache is enabled.
   if (

@@ -121,8 +121,8 @@ import { getModelDeprecationWarning } from './utils/model/deprecation.js';
 import { getDefaultMainLoopModel, getModelEnvOverride, getUserSpecifiedModelSetting, normalizeModelStringForAPI, parseUserSpecifiedModel } from './utils/model/model.js';
 import { ensureModelStringsInitialized } from './utils/model/modelStrings.js';
 import {
-  getProviderForModel,
-  getStartupProviderPreference,
+  getEnvAPIProvider,
+  resolveStartupProvider,
 } from './utils/model/providers.js';
 import { PERMISSION_MODES } from './utils/permissions/PermissionMode.js';
 import { checkAndDisableBypassPermissions, getAutoModeEnabledStateIfCached, initializeToolPermissionContext, initialPermissionModeFromCLI, isDefaultPermissionModeAuto, parseToolListFromCLI, removeDangerousPermissions, stripDangerousPermissionsForAutoMode, verifyAutoModeGateAccess } from './utils/permissions/permissionSetup.js';
@@ -1920,45 +1920,6 @@ async function run(): Promise<CommanderCommand> {
     let inputPrompt = await getInputPrompt(effectivePrompt, (inputFormat ?? 'text') as 'text' | 'stream-json');
     profileCheckpoint('action_after_input_prompt');
 
-    // Activate proactive mode BEFORE getTools() so SleepTool.isEnabled()
-    // (which returns isProactiveActive()) passes and Sleep is included.
-    // The later REPL-path maybeActivateProactive() calls are idempotent.
-    maybeActivateProactive(options);
-    let tools = getTools(toolPermissionContext);
-
-    // Apply coordinator mode tool filtering for headless path
-    // (mirrors useMergedTools.ts filtering for REPL/interactive path)
-    if (feature('COORDINATOR_MODE') && isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE)) {
-      const {
-        applyCoordinatorToolFilter
-      } = await import('./utils/toolPool.js');
-      tools = applyCoordinatorToolFilter(tools);
-    }
-    profileCheckpoint('action_tools_loaded');
-    let jsonSchema: ToolInputJSONSchema | undefined;
-    if (isSyntheticOutputToolEnabled({
-      isNonInteractiveSession
-    }) && options.jsonSchema) {
-      jsonSchema = jsonParse(options.jsonSchema) as ToolInputJSONSchema;
-    }
-    if (jsonSchema) {
-      const syntheticOutputResult = createSyntheticOutputTool(jsonSchema);
-      if ('tool' in syntheticOutputResult) {
-        // Add SyntheticOutputTool to the tools array AFTER getTools() filtering.
-        // This tool is excluded from normal filtering (see tools.ts) because it's
-        // an implementation detail for structured output, not a user-controlled tool.
-        tools = [...tools, syntheticOutputResult.tool];
-        logEvent('tengu_structured_output_enabled', {
-          schema_property_count: Object.keys(jsonSchema.properties as Record<string, unknown> || {}).length as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          has_required_fields: Boolean(jsonSchema.required) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
-        });
-      } else {
-        logEvent('tengu_structured_output_failure', {
-          error: 'Invalid JSON schema' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
-        });
-      }
-    }
-
     // IMPORTANT: setup() must be called before any other code that depends on the cwd or worktree setup
     profileCheckpoint('action_before_setup');
     logForDebugging('[STARTUP] Running setup()...');
@@ -2172,12 +2133,63 @@ async function run(): Promise<CommanderCommand> {
     // Compute resolved model for hooks (use user-specified model at launch)
     setInitialMainLoopModel(getUserSpecifiedModelSetting() || null);
     const initialMainLoopModel = getInitialMainLoopModel();
-    const defaultStartupModel = getStartupProviderPreference() === 'openai'
+    const implicitStartupProvider = getEnvAPIProvider();
+    const defaultStartupModel = implicitStartupProvider === 'openai'
       ? 'gpt-5.6-terra'
       : getDefaultMainLoopModel();
     const resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
-    // Derive provider from the selected model so env vars aren't required
-    setSessionProvider(getProviderForModel(resolvedInitialModel));
+    // Explicit CLI/settings/agent model selection is a provider-selection event.
+    // An implicit default is not: it must preserve env-var precedence (notably
+    // CLAUDE_CODE_USE_OPENAI) even when the saved preference is stale.
+    setSessionProvider(
+      resolveStartupProvider(
+        resolvedInitialModel,
+        initialMainLoopModel !== null,
+        implicitStartupProvider,
+      ),
+    );
+
+    // Provider-sensitive tools must be selected only after the startup model has
+    // resolved the session provider. In particular, OpenAI uses Apply_patch's
+    // custom grammar while Anthropic uses the normal Edit object schema.
+    // Selecting tools earlier can send Apply_patch to Anthropic and make the
+    // entire request fail schema validation before inference begins.
+    maybeActivateProactive(options);
+    let tools = getTools(toolPermissionContext);
+
+    // Apply coordinator mode tool filtering for headless path
+    // (mirrors useMergedTools.ts filtering for REPL/interactive path)
+    if (feature('COORDINATOR_MODE') && isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE)) {
+      const {
+        applyCoordinatorToolFilter
+      } = await import('./utils/toolPool.js');
+      tools = applyCoordinatorToolFilter(tools);
+    }
+    profileCheckpoint('action_tools_loaded');
+    let jsonSchema: ToolInputJSONSchema | undefined;
+    if (isSyntheticOutputToolEnabled({
+      isNonInteractiveSession
+    }) && options.jsonSchema) {
+      jsonSchema = jsonParse(options.jsonSchema) as ToolInputJSONSchema;
+    }
+    if (jsonSchema) {
+      const syntheticOutputResult = createSyntheticOutputTool(jsonSchema);
+      if ('tool' in syntheticOutputResult) {
+        // Add SyntheticOutputTool to the tools array AFTER getTools() filtering.
+        // This tool is excluded from normal filtering (see tools.ts) because it's
+        // an implementation detail for structured output, not a user-controlled tool.
+        tools = [...tools, syntheticOutputResult.tool];
+        logEvent('tengu_structured_output_enabled', {
+          schema_property_count: Object.keys(jsonSchema.properties as Record<string, unknown> || {}).length as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          has_required_fields: Boolean(jsonSchema.required) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+        });
+      } else {
+        logEvent('tengu_structured_output_failure', {
+          error: 'Invalid JSON schema' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+        });
+      }
+    }
+
     let advisorModel: string | undefined;
     if (isAdvisorEnabled()) {
       const advisorOption = canUserConfigureAdvisor() ? (options as {

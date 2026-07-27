@@ -16,7 +16,8 @@ domain executor seam (the `agentModeDomain` recipe), NOT a re-implementation and
   (`QueryEngine.ts:283`). The desktop sidecar's app-state store has **no `onChangeAppState`
   wired** (the REPL's is what normally syncs `AppState.mainLoopModel` → the global override at
   `onChangeAppState.ts:104-112`), so the executor sets the override **directly**:
-  `setSessionProvider(getProviderForModel(model))` + `setMainLoopModelOverride(model)`
+  `setSessionProvider(resolveModelSelectionProvider(model))` +
+  `setMainLoopModelOverride(model)`
   (`src/bootstrap/state.ts:864,878`), plus the store's `mainLoopModel` for display. N-process
   (LOCKED) scopes the process-global override to THIS session. **Session-scoped only** — NOT
   persisted to global startup preference or user settings from a composer tweak.
@@ -87,27 +88,41 @@ allowlist entry:
 
 ## Provider conditionality (from source, not the mock)
 
-- **Model options** come from the engine's `getModelOptions()` (`src/utils/model/modelOptions.ts:509`)
-  — tier/provider/allowlist-dependent; per-row provider derived from `getProviderForModel(value)`
-  (gpt-* → OpenAI, else Anthropic). The Default(null)-value option is filtered out (the verb requires
-  a concrete model; resetting to default is a deferred follow-up).
+- **Model options** come from the engine's `getModelOptions()` (`src/utils/model/modelOptions.ts`)
+  — tier/provider/allowlist-dependent. The 2026-07-13 OpenAI-only desktop filter was reversed by
+  the operator's 2026-07-27 Anthropic-restoration goal. Before a session has spent tokens, an
+  OpenAI-started session may show credentialed Anthropic options as well; selecting one resolves
+  to the configured Anthropic route (first-party, Bedrock, Vertex, or Foundry) through
+  `resolveModelSelectionProvider()`. GPT-family selections resolve to OpenAI. The
+  provider-local Default option is carried as `null`; selecting it clears the explicit model
+  override without crossing provider families.
 - **Effort options** come from `getSupportedEffortLevels(model)` and the control is shown only when
   `modelSupportsEffort(model)` — so `gpt-5.6-luna` (no `ultra`) and non-effort Anthropic models get
-  the right set, matching `ReasoningChip`'s intent.
+  the right set, matching `ReasoningChip`'s intent. The snapshot distinguishes the raw selection
+  from the effective applied tier after env/session/default precedence, so the face does not claim
+  an effort value the request path will clamp or override. A model change that does not support the
+  raw selected tier reconciles the selection back to Auto, so every visible effective tier has a
+  truthful checked-row state.
 - **Fast** is offered only when `isFastModeSupportedByModel(model)` and enabled only when
   `isFastModeAvailable()`; the real `getFastModeUnavailableReason()` becomes the disabled tooltip.
-  When off AND the model can't run fast, the ⚡ is hidden.
+  When off AND the model can't run fast, the ⚡ is hidden. The sidecar repeats both gates at the
+  mutation boundary, so a forged/stale renderer request cannot enable unavailable Fast mode.
+
+Provider-family selection locks as soon as the first submit is accepted (not after usage settlement).
+The lock is explicit session state, seeded from restored provider-bound history rather than inferred
+only from cost counters. The picker, sidecar domain, `/model`, model catalog, and `/switch-account`
+all enforce it; a rejected selection returns a correlated `run-control.result`. Resume seeds the
+provider/model from the latest real assistant message in the restored transcript (excluding
+`<synthetic>` local-command output and API-error rows) before constructing QueryEngine, so a Claude
+session cannot silently resume on today's OpenAI default (and vice versa).
 
 ## Parity (§0 flags)
 
-- **🔁 adapted** — the Fast face is offered only when the model supports fast (or it's already on so
-  it can be turned off), rather than replicating `/fast`'s auto-switch-to-Opus for an arbitrary
-  model; the user picks a fast-capable model first. Reset-to-default in the Model picker is
-  **⬜ deferred** (the `model.set` verb takes a concrete model; a Default sentinel is a follow-up).
-- **⬜ deferred** — the `run-control.result` `ok:false` outcome is not surfaced as a toast (mirrors
-  the P4-8b `agent-mode.set.result` precedent); the re-broadcast snapshot is the visible feedback,
-  and a transport failure routes to the existing `transportError` banner. A toast can be added later
-  via the `account.result`/`remoteSettings.result` `lastResult` pattern.
+- **🔁 adapted** — the Fast face is offered only when the model supports fast (or it is already on
+  so it can be turned off), rather than auto-switching an arbitrary model to Opus. The user picks a
+  fast-capable model first. Provider-local Default is built.
+- Failed `run-control.result` frames are consumed by `verbAckResultState` and surfaced as danger
+  toasts; successful writes remain silent because the live snapshot already updates the face.
 - **UNVERIFIED (operator GUI)** — the popover open/click/keyboard interaction and the live face
   update are hover/click surfaces; headless tests cover the reducer, the SSR-rendered chips, the
   boundary, and the live re-emit, but the operator drives the final GUI acceptance.

@@ -988,7 +988,7 @@ export function useVoice({
             '[voice] Failed to connect to voice_stream (no OAuth token?)',
           )
           onErrorRef.current?.(
-            'Voice mode requires an existing Claude.ai account; /login adds OpenAI accounts only.',
+            'Voice mode requires an existing Claude.ai account; run /login and choose Anthropic subscription.',
           )
           // Clear the audio buffer on failure
           audioBuffer.length = 0

@@ -9,10 +9,14 @@ import {
 } from './StartupSurfaces.js'
 
 /** Render StartupOAuth for a given view with no-op handlers. */
-function oauthHtml(view: StartupOAuthView): string {
+function oauthHtml(
+  view: StartupOAuthView,
+  provider: 'anthropic' | 'openai' = 'openai',
+): string {
   return renderToStaticMarkup(
     <StartupOAuth
       view={view}
+      provider={provider}
       onBegin={() => {}}
       onCancel={() => {}}
       onPasteCode={() => {}}
@@ -143,11 +147,12 @@ test('trust gate says the scope is unresolved rather than implying folder-only t
 
 /* ── first-run OAuth sub-states (P4-15 — each is REACHABLE + prototype-faithful) ── */
 
-test('OAuth ready phase shows the Codex provider card + browser handoff button', () => {
+test('OAuth ready phase offers both Anthropic and Codex subscription sign-in', () => {
   const html = oauthHtml({ phase: 'ready' })
-  expect(html).toContain('Sign in with Codex')
+  expect(html).toContain('Choose your provider')
+  expect(html).toContain('Anthropic · Claude subscription')
   expect(html).toContain('Codex · ChatGPT subscription')
-  expect(html).toContain('Open browser to sign in')
+  expect(html.match(/Open browser to sign in/g)?.length).toBe(2)
 })
 
 test('OAuth waiting phase (no url yet) shows the wait + cancel, no paste-code block', () => {
@@ -169,6 +174,15 @@ test('OAuth waiting phase WITH url shows the engine-minted paste-code fallback',
   expect(html).toContain('Paste authorization code')
   // The url is DISPLAY only — no token rides the renderer surface.
   expect(html).not.toContain('access_token')
+})
+
+test('OAuth waiting phase names the selected Anthropic provider', () => {
+  const html = oauthHtml(
+    { phase: 'waiting', url: 'https://claude.ai/oauth/authorize' },
+    'anthropic',
+  )
+  expect(html).toContain('Your Anthropic account appears')
+  expect(html).not.toContain('Your Codex account appears')
 })
 
 test('OAuth alias phase shows the Authorized pill + naming step (Codex waiting_for_alias)', () => {

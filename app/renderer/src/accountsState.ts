@@ -2,6 +2,7 @@ import type {
   AccountResultFrame,
   AccountsSnapshot,
   AccountStatus,
+  AnthropicAccountStatus,
   OAuthLoginProgress,
   ServerFrame,
   SessionId,
@@ -124,6 +125,14 @@ export function selectAccountRows(snapshot: AccountsSnapshot | null): AccountSta
 export function selectActiveAccount(snapshot: AccountsSnapshot | null): AccountStatus | null {
   if (!snapshot) return null
   return snapshot.accounts.find(a => a.isDefault) ?? null
+}
+
+/** The active Anthropic subscription account, or null for non-pool routes. */
+export function selectActiveAnthropicAccount(
+  snapshot: AccountsSnapshot | null,
+): AnthropicAccountStatus | null {
+  if (!snapshot) return null
+  return snapshot.anthropicAccounts.find(account => account.isDefault) ?? null
 }
 
 /** "N of M ready" header stat. */

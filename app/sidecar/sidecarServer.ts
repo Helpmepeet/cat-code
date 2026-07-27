@@ -1048,6 +1048,9 @@ export class SidecarServer {
     }
 
     const turnUuid = randomUUID()
+    // Provider-specific prompt/cache state is about to be constructed. Lock
+    // cross-provider model choices now, not later when usage accounting settles.
+    this.runControls?.lockProviderSwitches()
     this.activeTurn = true
     this.broadcastEvent(createMessageEvent({
       type: 'user',
@@ -1301,6 +1304,10 @@ export class SidecarServer {
         })
         if (poolChanged) {
           this.broadcastAccountsSnapshot()
+          // Account/credential changes can change getModelOptions() (notably
+          // adding/removing Anthropic subscription access), even though no
+          // model/effort/fast store field moved.
+          this.broadcastRunControlsSnapshot()
         }
       })
       .catch(error => {
@@ -1517,34 +1524,6 @@ export class SidecarServer {
     }
 
     const verb = parsed.data as RunControlVerbMessage
-    const snapshot = this.runControls.getSnapshot()
-    let unsupportedMessage: string | null = null
-    if (
-      verb.type === 'model.set' &&
-      verb.model !== snapshot.model.current &&
-      !snapshot.model.options.some(option => option.value === verb.model)
-    ) {
-      unsupportedMessage = `unsupported model: ${verb.model}`
-    } else if (
-      verb.type === 'effort.set' &&
-      verb.effort !== 'auto' &&
-      verb.effort !== 'unset' &&
-      verb.effort !== snapshot.effort.current &&
-      !snapshot.effort.options.includes(verb.effort)
-    ) {
-      unsupportedMessage = `unsupported effort: ${verb.effort}`
-    }
-    if (unsupportedMessage) {
-      this.sendError(
-        connection,
-        verb.requestId,
-        'bad_request',
-        unsupportedMessage,
-        false,
-      )
-      return
-    }
-
     let result: { ok: boolean; message: string; changed: boolean }
     switch (verb.type) {
       case 'model.set':
@@ -2573,6 +2552,10 @@ export class SidecarServer {
     }
     if (progress.state === 'success') {
       this.broadcastAccountsSnapshot()
+      // OAuth success changes credential-dependent model availability. Refresh
+      // an already-open picker immediately instead of requiring a respawn or an
+      // unrelated run-control mutation.
+      this.broadcastRunControlsSnapshot()
     }
   }
 
@@ -2854,12 +2837,12 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-5 account verbs (app-owned; see ACCOUNT_VERB_TYPES). Each key set is the
     // exact renderer-facing contract; anything else is rejected before the Zod
     // parse. `account.delete` requires `confirm` (destructive → fail-closed).
-    ['account.switch', new Set(['type', 'requestId', 'accountId'])],
+    ['account.switch', new Set(['type', 'requestId', 'accountId', 'provider'])],
     ['account.rename', new Set(['type', 'requestId', 'accountId', 'alias'])],
     ['account.delete', new Set(['type', 'requestId', 'accountId', 'confirm'])],
     ['account.logout', new Set(['type', 'requestId'])],
     ['account.touchAll', new Set(['type', 'requestId'])],
-    ['account.login', new Set(['type', 'requestId'])],
+    ['account.login', new Set(['type', 'requestId', 'provider'])],
     // P4-15 OAuth login sub-protocol. The renderer authors ONLY the user-typed
     // code/alias string — never a token; the engine owns every credential write.
     ['account.oauthPasteCode', new Set(['type', 'requestId', 'code'])],
@@ -3025,6 +3008,7 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('account.switch'),
     requestId: accountRequestIdSchema,
     accountId: accountIdSchema,
+    provider: z.enum(['anthropic', 'openai']).optional(),
   }),
   z.object({
     type: z.literal('account.rename'),
@@ -3049,6 +3033,7 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('account.login'),
     requestId: accountRequestIdSchema,
+    provider: z.enum(['anthropic', 'openai']).optional(),
   }),
   // P4-15 — OAuth login sub-protocol. Structural only (shape + bounds); the
   // engine re-validates the alias and consumes the code. `code`/`alias` are
@@ -3122,7 +3107,7 @@ const runControlVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('model.set'),
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-    model: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    model: z.string().min(1).max(MAX_TEXT_FIELD_CHARS).nullable(),
   }),
   z.object({
     type: z.literal('effort.set'),

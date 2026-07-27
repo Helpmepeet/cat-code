@@ -74,7 +74,7 @@ export function applyPostLoginStateRefresh(
 }
 
 export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXCommandContext): Promise<React.ReactNode> {
-  return <Login openAIOnly onDone={async (success, _mainLoopModel, provider) => {
+  return <Login onDone={async (success, _mainLoopModel, provider) => {
     if (success) {
       applyPostLoginStateRefresh(context);
     }

@@ -3,7 +3,7 @@ export const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000
 
 /** Reusable login guidance appended to bridge auth errors. */
 export const BRIDGE_LOGIN_INSTRUCTION =
-  'Remote Control requires an existing claude.ai subscription login; `/login` adds OpenAI accounts only.'
+  'Remote Control requires an existing claude.ai subscription login; run `/login` and choose Anthropic subscription.'
 
 /** Full error printed when `claude remote-control` is run without auth. */
 export const BRIDGE_LOGIN_ERROR =

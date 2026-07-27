@@ -80,7 +80,7 @@ export const RemoteTriggerTool = buildTool({
     const accessToken = getClaudeAIOAuthTokens()?.accessToken
     if (!accessToken) {
       throw new Error(
-        'Remote triggers require an existing claude.ai account; /login adds OpenAI accounts only.',
+        'Remote triggers require an existing claude.ai account; run /login and choose Anthropic subscription.',
       )
     }
     const orgUUID = await getOrganizationUUID()

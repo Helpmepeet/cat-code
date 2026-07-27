@@ -10,9 +10,16 @@ const SNAPSHOT: RunControlsSnapshot = {
   model: {
     current: 'gpt-5.6-terra',
     selected: 'gpt-5.6-terra',
+    provider: 'openai',
+    providerSwitchLocked: false,
     options: [{ value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' }],
   },
-  effort: { current: 'high', supported: true, options: ['low', 'medium', 'high'] },
+  effort: {
+    current: 'high',
+    selected: 'high',
+    supported: true,
+    options: ['low', 'medium', 'high'],
+  },
   fast: { active: false, supportedByModel: true, available: true, unavailableReason: null },
 }
 

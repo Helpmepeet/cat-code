@@ -151,7 +151,7 @@ export async function checkRemoteAgentEligibility({
 export function formatPreconditionError(error: BackgroundRemoteSessionPrecondition): string {
   switch (error.type) {
     case 'not_logged_in':
-      return 'Background remote sessions require an existing Claude.ai account; /login adds OpenAI accounts only.';
+      return 'Background remote sessions require an existing Claude.ai account; run /login and choose Anthropic subscription.';
     case 'no_remote_environment':
       return 'No cloud environment available. Set one up at https://claude.ai/code/onboarding?magic=env-setup';
     case 'not_in_git_repo':

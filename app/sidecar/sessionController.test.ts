@@ -3,14 +3,142 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import {
+  getMainLoopModelOverride,
+  getSessionProvider,
+  setMainLoopModelOverride,
+  setSessionProvider,
+} from '../../src/bootstrap/state.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { clearCommandMemoizationCaches } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
+  initializeSidecarModelProvider,
+  hasProviderBoundHistory,
   loadSidecarToolPermissionContext,
+  selectResumedProviderModel,
 } from './sessionController.js'
+
+test('desktop startup routes an explicit Claude model away from an OpenAI implicit provider', () => {
+  const previousModel = process.env.CAT_CODE_MODEL
+  const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
+  const previousProvider = getSessionProvider()
+  const previousOverride = getMainLoopModelOverride()
+  try {
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    process.env.CAT_CODE_MODEL = 'haiku'
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+
+    expect(initializeSidecarModelProvider()).toBe('haiku')
+    expect(getMainLoopModelOverride()).toBe('haiku')
+    expect(getSessionProvider()).toBe('firstParty')
+  } finally {
+    if (previousModel === undefined) delete process.env.CAT_CODE_MODEL
+    else process.env.CAT_CODE_MODEL = previousModel
+    if (previousOpenAI === undefined) delete process.env.CLAUDE_CODE_USE_OPENAI
+    else process.env.CLAUDE_CODE_USE_OPENAI = previousOpenAI
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('desktop startup preserves an implicit OpenAI provider when no model is configured', () => {
+  const previousModel = process.env.CAT_CODE_MODEL
+  const previousAnthropicModel = process.env.ANTHROPIC_MODEL
+  const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
+  const previousProvider = getSessionProvider()
+  const previousOverride = getMainLoopModelOverride()
+  try {
+    delete process.env.CAT_CODE_MODEL
+    delete process.env.ANTHROPIC_MODEL
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    // A provider-local Default masks any developer-machine settings.model so
+    // this test exercises the implicit startup path deterministically.
+    setMainLoopModelOverride(null)
+    setSessionProvider(null)
+
+    expect(initializeSidecarModelProvider()).toBeNull()
+    expect(getMainLoopModelOverride()).toBeNull()
+    expect(getSessionProvider()).toBe('openai')
+  } finally {
+    if (previousModel === undefined) delete process.env.CAT_CODE_MODEL
+    else process.env.CAT_CODE_MODEL = previousModel
+    if (previousAnthropicModel === undefined) delete process.env.ANTHROPIC_MODEL
+    else process.env.ANTHROPIC_MODEL = previousAnthropicModel
+    if (previousOpenAI === undefined) delete process.env.CLAUDE_CODE_USE_OPENAI
+    else process.env.CLAUDE_CODE_USE_OPENAI = previousOpenAI
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('desktop resume restores the transcript model instead of today’s provider default', async () => {
+  const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
+  const previousProvider = getSessionProvider()
+  const previousOverride = getMainLoopModelOverride()
+  try {
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    setSessionProvider(null)
+    setMainLoopModelOverride(null)
+
+    const { appStateStore } = await createNormalSidecarQueryEngineConfig(
+      process.cwd(),
+      [
+        {
+          type: 'assistant',
+          uuid: 'resume-model-message',
+          message: {
+            role: 'assistant',
+            model: 'claude-haiku-4-5-20251001',
+            content: [],
+          },
+        },
+      ],
+    )
+
+    expect(appStateStore.getState().mainLoopModel).toBe(
+      'claude-haiku-4-5-20251001',
+    )
+    expect(getMainLoopModelOverride()).toBe('claude-haiku-4-5-20251001')
+    expect(getSessionProvider()).toBe('firstParty')
+  } finally {
+    if (previousOpenAI === undefined) delete process.env.CLAUDE_CODE_USE_OPENAI
+    else process.env.CLAUDE_CODE_USE_OPENAI = previousOpenAI
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('desktop resume ignores a synthetic command-output tail and keeps the latest real provider model', () => {
+  const messages = [
+    {
+      type: 'assistant' as const,
+      uuid: 'real-model',
+      message: {
+        role: 'assistant' as const,
+        model: 'claude-haiku-4-5-20251001',
+        content: [],
+      },
+    },
+    {
+      type: 'assistant' as const,
+      uuid: 'cost-output',
+      message: {
+        role: 'assistant' as const,
+        model: '<synthetic>',
+        content: [],
+      },
+    },
+  ]
+
+  expect(selectResumedProviderModel(messages)).toBe(
+    'claude-haiku-4-5-20251001',
+  )
+  expect(hasProviderBoundHistory(messages)).toBe(true)
+})
 
 test('normal startup exposes the permission-context tools to the model', async () => {
   const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(

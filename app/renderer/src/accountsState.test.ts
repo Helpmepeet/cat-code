@@ -10,6 +10,7 @@ import {
   reduceAccountsState,
   selectAccountRows,
   selectActiveAccount,
+  selectActiveAnthropicAccount,
   selectCapAccount,
   selectFirstAccountsSnapshot,
   selectHasOtherSwitchable,
@@ -21,6 +22,7 @@ import type { OAuthLoginProgressFrame } from '../../shared/protocol.js'
 
 function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
+    anthropicRouteAvailable: false,
     accounts: [
       {
         id: 'a',
@@ -65,6 +67,11 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
     readyCount: 1,
     poolCount: 2,
     initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
     ...over,
   }
 }
@@ -185,6 +192,28 @@ describe('accountsState selectors', () => {
   test('selectActiveAccount / selectReadyLabel', () => {
     expect(selectActiveAccount(snap)?.id).toBe('a')
     expect(selectReadyLabel(snap)).toBe('1 of 2 ready')
+  })
+
+  test('selectActiveAnthropicAccount returns the provider-local active row', () => {
+    const anthropic = {
+      id: 'claude-a',
+      alias: 'work-claude',
+      email: 'work@example.com',
+      status: 'healthy' as const,
+      isDefault: true,
+      hasVaultProfile: true,
+      subscriptionType: 'pro',
+    }
+    expect(
+      selectActiveAnthropicAccount(
+        snapshot({
+          anthropicAccounts: [anthropic],
+          anthropicActiveAccountId: anthropic.id,
+          anthropicReadyCount: 1,
+          anthropicPoolCount: 1,
+        }),
+      ),
+    ).toEqual(anthropic)
   })
   test('selectCapAccount finds the capped account', () => {
     expect(selectCapAccount(snap)?.id).toBe('b')

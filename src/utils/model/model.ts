@@ -44,10 +44,10 @@ export function getSmallFastModel(): ModelName {
  * Provider-aware small/fast model for cheap secondary calls (WebFetch
  * post-processing, session titles, away summaries, etc).
  *
- * On the Codex/OpenAI fork the Anthropic account pool is retired, so the
- * default Haiku model from getSmallFastModel() has no working credentials and
- * every call fails with a connection error. Route those secondary calls to
- * GPT-5.6 Luna, mirroring getDefaultMainLoopModelSetting()'s Codex branch.
+ * While the active session is routed through Codex/OpenAI, the default Haiku
+ * model would be sent through the wrong provider. Route provider-neutral
+ * secondary calls to GPT-5.6 Luna, mirroring
+ * getDefaultMainLoopModelSetting()'s Codex branch.
  *
  * Anthropic-billing consumers (token estimation, claudeAiLimits) keep calling
  * getSmallFastModel() directly so the ANTHROPIC_SMALL_FAST_MODEL env var and

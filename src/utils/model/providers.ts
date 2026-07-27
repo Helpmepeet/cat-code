@@ -1,7 +1,11 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
-import { getSessionProvider } from '../../bootstrap/state.js'
+import {
+  getSessionProvider,
+  isProviderSwitchLocked,
+} from '../../bootstrap/state.js'
 import { getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { isEnvTruthy } from '../envUtils.js'
+import { isModelAlias } from './aliases.js'
 
 export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai'
 
@@ -62,6 +66,83 @@ export function getProviderForModel(model: string | null | undefined): APIProvid
   if (!model) return null
   if (model.startsWith('gpt-')) return 'openai'
   return null
+}
+
+/**
+ * Resolve the Anthropic-side provider configured by environment. Unlike
+ * `getEnvAPIProvider()`, this deliberately ignores the persisted startup
+ * preference: it is used after the user explicitly selects a non-GPT model
+ * while currently routed through OpenAI.
+ */
+export function getConfiguredAnthropicProvider(): Exclude<APIProvider, 'openai'> {
+  return isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
+    ? 'bedrock'
+    : isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
+      ? 'vertex'
+      : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
+        ? 'foundry'
+        : 'firstParty'
+}
+
+/**
+ * Resolve the provider for an explicit model-picker selection.
+ *
+ * Request routing keeps non-GPT/custom model ids ambiguous so Bedrock, Vertex,
+ * and Foundry can use their own names. An explicit picker selection is
+ * different: choosing any non-GPT option while the session is on OpenAI means
+ * "switch back to my configured Anthropic provider." Without this transition,
+ * the model string changes to `opus`/`sonnet` but the request still enters the
+ * Codex adapter.
+ */
+export function resolveModelSelectionProvider(
+  model: string | null | undefined,
+  currentProvider: APIProvider = getAPIProvider(),
+): APIProvider {
+  const impliedProvider = getProviderForModel(model)
+  if (impliedProvider) return impliedProvider
+
+  // `null` is the provider-local Default option, and arbitrary model IDs are
+  // intentionally ambiguous (OpenAI-compatible gateways and Anthropic cloud
+  // providers can both use custom names). Only an explicit Claude ID/alias is
+  // strong enough evidence to cross away from OpenAI.
+  if (!model) return currentProvider
+  const normalized = model.toLowerCase().trim()
+  const isExplicitAnthropicSelection =
+    normalized.startsWith('claude-') || isModelAlias(normalized)
+  return currentProvider === 'openai' && isExplicitAnthropicSelection
+    ? getConfiguredAnthropicProvider()
+    : currentProvider
+}
+
+/**
+ * Provider-family changes are safe only before the first request has built
+ * provider-specific prompt/cache state. Keep this check at mutation callsites,
+ * not just in the picker catalog, because `/model <alias>` bypasses the menu.
+ */
+export function canApplyModelSelection(
+  model: string | null | undefined,
+  totalInputTokens: number,
+  currentProvider: APIProvider = getAPIProvider(),
+): boolean {
+  return (
+    (!isProviderSwitchLocked() && totalInputTokens === 0) ||
+    resolveModelSelectionProvider(model, currentProvider) === currentProvider
+  )
+}
+
+/**
+ * Startup differs from an interactive picker: only an explicit CLI/settings/
+ * agent model may cross provider families. An implicit default preserves the
+ * already-resolved environment/startup provider precedence.
+ */
+export function resolveStartupProvider(
+  model: string | null | undefined,
+  hasExplicitModel: boolean,
+  implicitProvider: APIProvider = getEnvAPIProvider(),
+): APIProvider {
+  return hasExplicitModel
+    ? resolveModelSelectionProvider(model, implicitProvider)
+    : implicitProvider
 }
 
 /**

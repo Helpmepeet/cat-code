@@ -10,6 +10,7 @@ import { handleMenuRovingKeyDown } from './composerPopover.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
+  AnthropicAccountStatus,
   PermissionContextSnapshot,
   RunControlsSnapshot,
 } from '../../shared/protocol.js'
@@ -25,6 +26,8 @@ function runControls(
     model: {
       current: 'gpt-5.6-terra',
       selected: 'gpt-5.6-terra',
+      provider: 'openai',
+      providerSwitchLocked: false,
       options: [
         { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' },
         { value: 'opus', label: 'Opus', provider: 'anthropic' },
@@ -33,6 +36,7 @@ function runControls(
     },
     effort: {
       current: 'high',
+      selected: 'high',
       supported: true,
       options: ['low', 'medium', 'high'],
       ...over.effort,
@@ -69,6 +73,21 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
     lastError: null,
     planType: null,
     switchable: false,
+    ...overrides,
+  }
+}
+
+function anthropicAccount(
+  overrides: Partial<AnthropicAccountStatus> = {},
+): AnthropicAccountStatus {
+  return {
+    id: 'anthropic-1',
+    alias: 'claude-main',
+    email: 'user@example.com',
+    status: 'healthy',
+    isDefault: true,
+    hasVaultProfile: true,
+    subscriptionType: 'max',
     ...overrides,
   }
 }
@@ -140,6 +159,16 @@ test('an account with a null alias renders no alias chip (honest omission)', () 
   expect(html).not.toContain('Active account:')
 })
 
+test('an Anthropic-routed session renders its Claude account instead of a Codex account', () => {
+  const html = render({
+    account: null,
+    anthropicAccount: anthropicAccount(),
+  })
+  expect(html).toContain('claude-main')
+  expect(html).toContain('Active Anthropic account: claude-main · healthy')
+  expect(html).not.toContain('Active account: hiby')
+})
+
 test('the permission MODE chip is always present (shows the real mode label)', () => {
   // The engine `default` mode is shown as "Ask" (the prototype label), not "Default".
   const html = render({ permissionContext: permissionContext({ mode: 'default' }) })
@@ -197,7 +226,7 @@ test('P4-24c — with runControls + handlers, the MODEL face becomes an interact
     // Only the model face is interactive here (effort unsupported, fast off/unsupported),
     // so exactly TWO menu triggers render: the permission-mode chip + the model chip.
     runControls: runControls({
-      effort: { supported: false, current: null },
+      effort: { supported: false, current: null, selected: null },
       fast: { supportedByModel: false },
     }),
     onSetModel: () => {},
@@ -210,13 +239,27 @@ test('P4-24c — with runControls + handlers, the MODEL face becomes an interact
 test('P4-24c — the REASONING picker offers Auto even when no explicit tier is set', () => {
   const html = render({
     reasoningEffort: null,
-    runControls: runControls({ effort: { supported: true, current: null } }),
+    runControls: runControls({
+      effort: { supported: true, current: null, selected: null },
+    }),
     onSetEffort: () => {},
   })
   // Static path would omit the reasoning face when the tier is null; the interactive
   // picker shows the "Auto" face so the user can still pick a tier.
   expect(html).toContain('Auto')
   expect(html).toContain('Reasoning effort: auto')
+})
+
+test('P4-24c — reasoning shows the effective tier while preserving Auto selection', () => {
+  const html = render({
+    reasoningEffort: null,
+    runControls: runControls({
+      effort: { supported: true, current: 'medium', selected: null },
+    }),
+    onSetEffort: () => {},
+  })
+  expect(html).toContain('Medium (Auto)')
+  expect(html).toContain('Reasoning effort: medium (auto)')
 })
 
 test('P4-24c — the FAST toggle offers an enable affordance when off but supported', () => {

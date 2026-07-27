@@ -355,7 +355,7 @@ export async function getTeleportEvents(
     if (response.status === 401) {
       logForDiagnosticsNoPII('error', 'teleport_events_bad_token')
       throw new Error(
-        'Your Claude session authentication has expired. /login adds OpenAI accounts only; check /status.',
+        'Your Claude session authentication has expired. Run /login and choose Anthropic subscription; check /status.',
       )
     }
 
@@ -463,7 +463,7 @@ async function fetchSessionLogsFromUrl(
       logForDebugging('Auth token expired or invalid')
       logForDiagnosticsNoPII('error', 'session_get_fail_bad_token')
       throw new Error(
-        'Your Claude session authentication has expired. /login adds OpenAI accounts only; check /status.',
+        'Your Claude session authentication has expired. Run /login and choose Anthropic subscription; check /status.',
       )
     }
 

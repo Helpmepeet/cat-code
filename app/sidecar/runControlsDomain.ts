@@ -26,7 +26,10 @@
 
 import {
   getMainLoopModelOverride,
+  getTotalInputTokens,
+  isProviderSwitchLocked,
   setMainLoopModelOverride,
+  setProviderSwitchLocked,
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { applyFastMode } from '../../src/commands/fast/fast.js'
@@ -34,8 +37,11 @@ import { executeEffort } from '../../src/commands/effort/effort.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
 import {
+  convertEffortValueToLevel,
   getSupportedEffortLevels,
   modelSupportsEffort,
+  reconcileEffortForModel,
+  resolveAppliedEffort,
 } from '../../src/utils/effort.js'
 import {
   getFastModeUnavailableReason,
@@ -44,7 +50,13 @@ import {
 } from '../../src/utils/fastMode.js'
 import { getMainLoopModel } from '../../src/utils/model/model.js'
 import { getModelOptions } from '../../src/utils/model/modelOptions.js'
-import { getProviderForModel } from '../../src/utils/model/providers.js'
+import {
+  getAPIProvider,
+  getConfiguredAnthropicProvider,
+  persistStartupProviderPreference,
+  resolveModelSelectionProvider,
+  type APIProvider,
+} from '../../src/utils/model/providers.js'
 import type {
   RunControlModelOption,
   RunControlsSnapshot,
@@ -66,11 +78,13 @@ export type RunControlSetResult = {
  */
 export type RunControlExecutor = {
   /** Set this session's main-loop model (the `/model` write, session-scoped). */
-  setModel(model: string): void
+  setModel(model: string | null): void
   /** Set this session's reasoning effort (the `/effort` write); returns the outcome message. */
   setEffort(effort: string): string
   /** Toggle this session's fast mode (the `/fast` write). */
   setFast(active: boolean): void
+  /** Activate the provider chosen by first-run sign-in and its provider-local default. */
+  activateProvider?(provider: 'anthropic' | 'openai'): void
 }
 
 export function createRealRunControlExecutor(
@@ -83,8 +97,8 @@ export function createRealRunControlExecutor(
   // display). `setSessionProvider` keeps provider routing consistent (gpt-* →
   // openai). Both are in-memory + session-scoped (N-process, LOCKED); nothing is
   // persisted to global startup preference or user settings from a composer tweak.
-  function applyModelOverride(model: string): void {
-    setSessionProvider(getProviderForModel(model))
+  function applyModelOverride(model: string | null): void {
+    setSessionProvider(resolveModelSelectionProvider(model))
     setMainLoopModelOverride(model)
   }
   return {
@@ -98,6 +112,7 @@ export function createRealRunControlExecutor(
           ...prev,
           mainLoopModel: model,
           mainLoopModelForSession: null,
+          effortValue: reconcileEffortForModel(getMainLoopModel(), prev.effortValue),
           ...(fastOff ? { fastMode: false } : {}),
         }
       })
@@ -126,6 +141,21 @@ export function createRealRunControlExecutor(
         applyModelOverride(after)
       }
     },
+    activateProvider(provider) {
+      const route =
+        provider === 'openai' ? 'openai' : getConfiguredAnthropicProvider()
+      const model = provider === 'openai' ? 'gpt-5.6-terra' : null
+      setSessionProvider(route)
+      setMainLoopModelOverride(model)
+      persistStartupProviderPreference(route)
+      store.setState(prev => ({
+        ...prev,
+        mainLoopModel: model,
+        mainLoopModelForSession: null,
+        fastMode: false,
+        effortValue: reconcileEffortForModel(getMainLoopModel(), prev.effortValue),
+      }))
+    },
   }
 }
 
@@ -133,11 +163,15 @@ export type SidecarRunControlsDomain = {
   /** The live run-controls snapshot (current values + real options + availability). */
   getSnapshot(): RunControlsSnapshot
   /** Set the model through the engine's own setter; report whether a field moved. */
-  setModel(model: string): RunControlSetResult
+  setModel(model: string | null): RunControlSetResult
   /** Set the reasoning effort through the engine's own `/effort` write. */
   setEffort(effort: string): RunControlSetResult
   /** Toggle fast mode through the engine's own `/fast` write. */
   setFast(active: boolean): RunControlSetResult
+  /** Lock provider-family changes as soon as the first turn is accepted. */
+  lockProviderSwitches(): boolean
+  /** Activate the provider explicitly chosen by first-run authentication. */
+  activateProvider(provider: 'anthropic' | 'openai'): RunControlSetResult
   /**
    * Fires ONLY when a run-control-relevant app-state field actually changes
    * (change-detected — no per-token re-broadcast storm during a turn).
@@ -150,10 +184,30 @@ export function createSidecarRunControlsDomain(
   options: {
     executor?: RunControlExecutor
     buildSnapshot?: (state: AppState) => RunControlsSnapshot
+    providerSwitchLocked?: boolean
   } = {},
 ): SidecarRunControlsDomain {
   const executor = options.executor ?? createRealRunControlExecutor(store)
   const buildSnapshot = options.buildSnapshot ?? buildRunControlsSnapshot
+  let providerSwitchLocked =
+    options.providerSwitchLocked === true ||
+    isProviderSwitchLocked() ||
+    getTotalInputTokens() > 0
+  if (providerSwitchLocked) setProviderSwitchLocked(true)
+  const listeners = new Set<() => void>()
+  let unsubscribeStore: (() => void) | null = null
+
+  function snapshot(): RunControlsSnapshot {
+    const built = buildSnapshot(store.getState())
+    return {
+      ...built,
+      model: {
+        ...built.model,
+        providerSwitchLocked:
+          providerSwitchLocked || built.model.providerSwitchLocked,
+      },
+    }
+  }
 
   function runWrite(
     run: () => void,
@@ -178,13 +232,25 @@ export function createSidecarRunControlsDomain(
 
   return {
     getSnapshot() {
-      return buildSnapshot(store.getState())
+      return snapshot()
     },
     setModel(model) {
-      const snapshot = buildSnapshot(store.getState())
+      const currentSnapshot = snapshot()
+      if (
+        currentSnapshot.model.providerSwitchLocked &&
+        (currentSnapshot.model.provider === 'openai') !==
+          (resolveModelSelectionProvider(model) === 'openai')
+      ) {
+        return {
+          ok: false,
+          message:
+            'Provider cannot be changed after the first turn. Start a new session to switch providers.',
+          changed: false,
+        }
+      }
       const supported =
-        model === snapshot.model.current ||
-        snapshot.model.options.some(option => option.value === model)
+        model === currentSnapshot.model.current ||
+        currentSnapshot.model.options.some(option => option.value === model)
       if (!supported) {
         return {
           ok: false,
@@ -194,17 +260,17 @@ export function createSidecarRunControlsDomain(
       }
       return runWrite(
         () => executor.setModel(model),
-        `Model set to ${model}.`,
+        model === null ? 'Model set to provider default.' : `Model set to ${model}.`,
         'Could not set model',
       )
     },
     setEffort(effort) {
-      const snapshot = buildSnapshot(store.getState())
+      const currentSnapshot = snapshot()
       const supported =
         effort === 'auto' ||
         effort === 'unset' ||
-        effort === snapshot.effort.current ||
-        snapshot.effort.options.includes(effort)
+        effort === currentSnapshot.effort.current ||
+        currentSnapshot.effort.options.includes(effort)
       if (!supported) {
         return {
           ok: false,
@@ -227,21 +293,79 @@ export function createSidecarRunControlsDomain(
       return result.ok ? { ...result, message } : result
     },
     setFast(active) {
+      const currentSnapshot = snapshot()
+      if (active && !currentSnapshot.fast.supportedByModel) {
+        return {
+          ok: false,
+          message: 'Fast mode is not supported by the current model.',
+          changed: false,
+        }
+      }
+      if (active && !currentSnapshot.fast.available) {
+        return {
+          ok: false,
+          message:
+            currentSnapshot.fast.unavailableReason ??
+            'Fast mode is unavailable for this account.',
+          changed: false,
+        }
+      }
       return runWrite(
         () => executor.setFast(active),
         active ? 'Fast mode on.' : 'Fast mode off.',
         'Could not toggle fast mode',
       )
     },
-    subscribe(listener) {
-      let prev = runControlSignature(store.getState())
-      return store.subscribe(() => {
-        const next = runControlSignature(store.getState())
-        if (next !== prev) {
-          prev = next
-          listener()
+    activateProvider(provider) {
+      const currentSnapshot = snapshot()
+      const crossing =
+        (currentSnapshot.model.provider === 'openai') !==
+        (provider === 'openai')
+      if (currentSnapshot.model.providerSwitchLocked && crossing) {
+        return {
+          ok: false,
+          message:
+            'Provider cannot be changed after the first turn. Start a new session to switch providers.',
+          changed: false,
         }
-      })
+      }
+      return runWrite(
+        () => {
+          if (!executor.activateProvider) {
+            throw new Error('Provider activation is unavailable.')
+          }
+          executor.activateProvider(provider)
+        },
+        `Provider set to ${provider === 'openai' ? 'Codex' : 'Anthropic'}.`,
+        'Could not activate provider',
+      )
+    },
+    lockProviderSwitches() {
+      if (providerSwitchLocked) return false
+      providerSwitchLocked = true
+      setProviderSwitchLocked(true)
+      for (const listener of listeners) listener()
+      return true
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      if (!unsubscribeStore) {
+        let prev = runControlSignature(store.getState())
+        unsubscribeStore = store.subscribe(() => {
+          const next = runControlSignature(store.getState())
+          if (next !== prev) {
+            prev = next
+            for (const subscribed of listeners) subscribed()
+          }
+        })
+      }
+      return () => {
+        listeners.delete(listener)
+        if (listeners.size === 0) {
+          unsubscribeStore?.()
+          unsubscribeStore = null
+        }
+      }
     },
   }
 }
@@ -284,17 +408,12 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
     () => getModelOptions(state.fastMode ?? false),
     [],
   )
-    .filter(
-      (option): option is (typeof option) & { value: string } =>
-        typeof option.value === 'string',
-    )
-    // Desktop composer picker shows Codex/OpenAI models only — Anthropic models
-    // are removed from the list (user decision, 2026-07-13).
-    .filter(option => getProviderForModel(option.value) === 'openai')
     .map(option => ({
       value: option.value,
       label: option.label,
-      provider: 'openai' as const,
+      provider: toRunControlProvider(
+        resolveModelSelectionProvider(option.value),
+      ),
     }))
 
   const effortSupported = current
@@ -304,6 +423,20 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
     current && effortSupported
       ? safe(() => [...getSupportedEffortLevels(current)], [])
       : []
+  const selectedEffort =
+    state.effortValue == null ? null : String(state.effortValue)
+  const appliedEffort =
+    current && effortSupported
+      ? safe(
+          () => {
+            const resolved = resolveAppliedEffort(current, state.effortValue)
+            return resolved === undefined
+              ? null
+              : convertEffortValueToLevel(resolved)
+          },
+          null,
+        )
+      : null
 
   const fastActive = state.fastMode ?? false
   const fastSupportedByModel = safe(
@@ -316,9 +449,19 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
     : safe(() => getFastModeUnavailableReason(), null)
 
   return {
-    model: { current, selected, options },
+    model: {
+      current,
+      selected,
+      provider: toRunControlProvider(safe(() => getAPIProvider(), 'firstParty')),
+      providerSwitchLocked: safe(
+        () => isProviderSwitchLocked() || getTotalInputTokens() > 0,
+        false,
+      ),
+      options,
+    },
     effort: {
-      current: state.effortValue == null ? null : String(state.effortValue),
+      current: appliedEffort,
+      selected: selectedEffort,
       supported: effortSupported,
       options: effortOptions,
     },
@@ -329,4 +472,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
       unavailableReason: fastUnavailableReason,
     },
   }
+}
+
+function toRunControlProvider(provider: APIProvider): RunControlsSnapshot['model']['provider'] {
+  return provider === 'firstParty' ? 'anthropic' : provider
 }

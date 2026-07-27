@@ -1,6 +1,8 @@
 import type {
+  AccountsSnapshot,
   CatCodeBridge,
   PermissionResponseInput,
+  RunControlsSnapshot,
   SessionId,
 } from '../../shared/protocol.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
@@ -8,6 +10,38 @@ import type {
   NestedTranscriptRow,
   TranscriptRow,
 } from './transcriptProjector.js'
+
+export function shouldShowFirstRunOAuth(
+  snapshot: AccountsSnapshot | null,
+  trustGateVisible: boolean,
+): boolean {
+  return (
+    !trustGateVisible &&
+    snapshot !== null &&
+    snapshot.initialized &&
+    snapshot.anthropicInitialized &&
+    !snapshot.anthropicRouteAvailable &&
+    snapshot.poolCount + snapshot.anthropicPoolCount === 0
+  )
+}
+
+export type OAuthContext = 'first-run' | 'reauth' | 'add-account' | null
+
+export function claimOAuthContextForAccountLogin(
+  current: OAuthContext,
+): Exclude<OAuthContext, null> {
+  return current ?? 'add-account'
+}
+
+export function shouldShowAnthropicPoolAccount(
+  provider: RunControlsSnapshot['model']['provider'] | null,
+  snapshot: AccountsSnapshot | null,
+): boolean {
+  return (
+    provider === 'anthropic' &&
+    snapshot?.anthropicSubscriptionActive === true
+  )
+}
 
 export function deriveActivity(rows: NestedTranscriptRow[]): {
   verb: string

@@ -338,7 +338,7 @@ export function registerScheduleRemoteAgentsSkill(): void {
         return [
           {
             type: 'text',
-            text: 'Scheduling remote agents requires an existing claude.ai account. API accounts are not supported, and /login adds OpenAI accounts only.',
+            text: 'Scheduling remote agents requires an existing claude.ai account. API accounts are not supported; run /login and choose Anthropic subscription.',
           },
         ]
       }

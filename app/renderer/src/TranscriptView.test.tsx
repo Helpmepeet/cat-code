@@ -61,6 +61,12 @@ function pool(accounts: AccountStatus[]): AccountsSnapshot {
       .length,
     poolCount: accounts.length,
     initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
+    anthropicRouteAvailable: false,
   }
 }
 

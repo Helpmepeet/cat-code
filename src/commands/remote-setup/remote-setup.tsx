@@ -95,7 +95,7 @@ function Web({
           logEvent('tengu_remote_setup_result', {
             result: 'not_signed_in' as SafeString
           });
-          onDone('Remote setup requires an existing Claude.ai account; /login adds OpenAI accounts only.');
+          onDone('Remote setup requires an existing Claude.ai account; run /login and choose Anthropic subscription.');
           return;
         case 'gh_not_installed':
         case 'gh_not_authenticated':

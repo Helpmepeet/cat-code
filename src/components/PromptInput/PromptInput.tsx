@@ -9,7 +9,7 @@ import { type IDEAtMentioned, useIdeAtMentioned } from 'src/hooks/useIdeAtMentio
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
 import { type AppState, useAppState, useAppStateStore, useSetAppState } from 'src/state/AppState.js';
 import type { FooterItem } from 'src/state/AppStateStore.js';
-import { setSessionProvider } from 'src/bootstrap/state.js';
+import { getTotalInputTokens, setSessionProvider } from 'src/bootstrap/state.js';
 import { getCwd } from 'src/utils/cwd.js';
 import { isQueuedCommandEditable, popAllEditable } from 'src/utils/messageQueueManager.js';
 import stripAnsi from 'strip-ansi';
@@ -74,9 +74,11 @@ import { isMacosOptionChar, MACOS_OPTION_SPECIAL_CHARS } from '../../utils/keybo
 import { logError } from '../../utils/log.js';
 import { isOpus1mMergeEnabled, modelDisplayString } from '../../utils/model/model.js';
 import {
+  canApplyModelSelection,
+  getAPIProvider,
   getAPIProviderDisplayName,
-  getProviderForModel,
   persistStartupProviderPreference,
+  resolveModelSelectionProvider,
 } from '../../utils/model/providers.js';
 import { setAutoModeActive } from '../../utils/permissions/autoModeState.js';
 import { cyclePermissionMode, getNextPermissionMode } from '../../utils/permissions/getNextPermissionMode.js';
@@ -2038,8 +2040,19 @@ function PromptInput({
   // state (like notifications) changes. This prevents the inline model picker
   // from visually "jumping" when notifications arrive.
   const handleModelSelect = useCallback((model: string | null, _effort: EffortLevel | undefined) => {
+    const currentProvider = getAPIProvider();
+    if (!canApplyModelSelection(model, getTotalInputTokens(), currentProvider)) {
+      addNotification({
+        key: 'provider-switch-locked',
+        text: 'Start a new session to switch providers after the first turn',
+        priority: 'immediate',
+        timeoutMs: 5000
+      });
+      setShowModelPicker(false);
+      return;
+    }
     let wasFastModeDisabled = false;
-    const nextProvider = getProviderForModel(model);
+    const nextProvider = resolveModelSelectionProvider(model);
     setSessionProvider(nextProvider);
     persistStartupProviderPreference(nextProvider);
     setAppState(prev => {

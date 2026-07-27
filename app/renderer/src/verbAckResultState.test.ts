@@ -131,8 +131,14 @@ test('an unrelated frame kind is ignored (no consumer, no crash)', () => {
     protocolVersion: 1,
     sessionId: 's1',
     runControls: {
-      model: { current: null, selected: null, options: [] },
-      effort: { current: null, supported: false, options: [] },
+      model: {
+        current: null,
+        selected: null,
+        provider: 'anthropic',
+        providerSwitchLocked: false,
+        options: [],
+      },
+      effort: { current: null, selected: null, supported: false, options: [] },
       fast: { active: false, supportedByModel: false, available: false, unavailableReason: null },
     },
   }

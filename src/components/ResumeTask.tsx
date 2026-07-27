@@ -250,7 +250,7 @@ function renderErrorSpecificGuidance(errorType: LoadErrorType): React.ReactNode 
     case 'auth':
       return <Box marginY={1} flexDirection="column">
           <Text dimColor>Teleport requires a Claude account</Text>
-          <Text dimColor>/login adds OpenAI accounts only</Text>
+          <Text dimColor>Run /login and choose Anthropic subscription</Text>
         </Box>;
     case 'api':
       return <Box marginY={1} flexDirection="column">

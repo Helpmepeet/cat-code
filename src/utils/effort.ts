@@ -21,6 +21,24 @@ export const EFFORT_LEVELS = [
 
 export type EffortValue = EffortLevel | number
 
+/**
+ * Drop a stored raw effort when a model/provider change cannot apply it.
+ * Numeric values are model-specific token budgets and are intentionally reset.
+ */
+export function reconcileEffortForModel(
+  model: string | null,
+  effortValue: EffortValue | undefined,
+): EffortValue | undefined {
+  if (effortValue == null || !model || !modelSupportsEffort(model)) {
+    return undefined
+  }
+  return getSupportedEffortLevels(model).includes(
+    String(effortValue) as EffortLevel,
+  )
+    ? effortValue
+    : undefined
+}
+
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports the effort parameter.
 export function modelSupportsEffort(model: string): boolean {
   const m = model.toLowerCase()

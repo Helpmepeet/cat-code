@@ -9,6 +9,7 @@ import {
 } from './App.js'
 import {
   buildDebugExport,
+  claimOAuthContextForAccountLogin,
   deriveActivity,
   fmtElapsed,
   fmtTok,
@@ -16,10 +17,67 @@ import {
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
+  shouldShowAnthropicPoolAccount,
+  shouldShowFirstRunOAuth,
 } from './appModel.js'
 import { createTranscriptState } from './transcriptProjector.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
-import type { AccountStatus } from '../../shared/protocol.js'
+import type {
+  AccountsSnapshot,
+  AccountStatus,
+} from '../../shared/protocol.js'
+
+function emptyAccountsSnapshotForTest(): AccountsSnapshot {
+  return {
+    accounts: [],
+    activeAccountId: null,
+    readyCount: 0,
+    poolCount: 0,
+    initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
+    anthropicRouteAvailable: false,
+  }
+}
+
+test('first-run OAuth does not block an API-key or cloud Anthropic route', () => {
+  const emptyPools = emptyAccountsSnapshotForTest()
+  expect(shouldShowFirstRunOAuth(emptyPools, false)).toBe(true)
+  expect(
+    shouldShowFirstRunOAuth(
+      { ...emptyPools, anthropicRouteAvailable: true },
+      false,
+    ),
+  ).toBe(false)
+  expect(shouldShowFirstRunOAuth(emptyPools, true)).toBe(false)
+})
+
+test('generic account login claims an add-account OAuth owner without stealing a specific owner', () => {
+  expect(claimOAuthContextForAccountLogin(null)).toBe('add-account')
+  expect(claimOAuthContextForAccountLogin('add-account')).toBe('add-account')
+  expect(claimOAuthContextForAccountLogin('first-run')).toBe('first-run')
+  expect(claimOAuthContextForAccountLogin('reauth')).toBe('reauth')
+})
+
+test('composer attributes a Claude subscription account only to the active subscription route', () => {
+  const subscription = {
+    ...emptyAccountsSnapshotForTest(),
+    anthropicSubscriptionActive: true,
+  }
+  expect(shouldShowAnthropicPoolAccount('anthropic', subscription)).toBe(true)
+  expect(shouldShowAnthropicPoolAccount('bedrock', subscription)).toBe(false)
+  expect(shouldShowAnthropicPoolAccount('vertex', subscription)).toBe(false)
+  expect(shouldShowAnthropicPoolAccount('foundry', subscription)).toBe(false)
+  expect(
+    shouldShowAnthropicPoolAccount('anthropic', {
+      ...subscription,
+      anthropicSubscriptionActive: false,
+    }),
+  ).toBe(false)
+})
 
 test('renders the shell frame (TabBar + empty state) before any session exists', () => {
   // SSR runs no effects, so the host list never resolves — the shell mounts

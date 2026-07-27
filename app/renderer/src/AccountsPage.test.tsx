@@ -11,9 +11,11 @@ import {
 } from './AccountsPage.js'
 import {
   deleteVerb,
+  loginVerb,
   renameError,
   resultToastTone,
   selectAccountMenuItems,
+  selectAnthropicReadyLabel,
   statusDotTone,
   statusLabelTone,
   switchVerb,
@@ -66,6 +68,12 @@ function snapshot(accounts: AccountStatus[]): AccountsSnapshot {
     readyCount,
     poolCount: accounts.length,
     initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
+    anthropicRouteAvailable: false,
   }
 }
 
@@ -132,6 +140,90 @@ test('switchVerb builds an account.switch verb for the target account', () => {
   expect(verb).toMatchObject({ type: 'account.switch', accountId: 'acc-42' })
   expect(typeof verb.requestId).toBe('string')
   expect(verb.requestId.length).toBeGreaterThan(0)
+})
+
+test('switchVerb can address the Anthropic account pool', () => {
+  expect(switchVerb('claude-42', 'anthropic')).toMatchObject({
+    type: 'account.switch',
+    accountId: 'claude-42',
+    provider: 'anthropic',
+  })
+})
+
+test('loginVerb addresses the selected provider', () => {
+  expect(loginVerb('anthropic')).toMatchObject({
+    type: 'account.login',
+    provider: 'anthropic',
+  })
+  expect(loginVerb('openai')).toMatchObject({
+    type: 'account.login',
+    provider: 'openai',
+  })
+})
+
+test('renders the redacted Anthropic pool alongside Codex', () => {
+  const snap = snapshot([])
+  snap.anthropicAccounts = [
+    {
+      id: 'claude-1',
+      alias: 'personal',
+      email: 'claude@example.com',
+      status: 'healthy',
+      isDefault: true,
+      hasVaultProfile: true,
+      subscriptionType: 'pro',
+    },
+  ]
+  snap.anthropicActiveAccountId = 'claude-1'
+  snap.anthropicReadyCount = 1
+  snap.anthropicPoolCount = 1
+
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('Anthropic Pool')
+  expect(html).toContain('claude@example.com')
+  expect(html).toContain('personal')
+  expect(html).toContain('1 of 1 ready')
+})
+
+test('presents a configured non-pool Anthropic route honestly', () => {
+  const snap = snapshot([])
+  snap.anthropicRouteAvailable = true
+
+  expect(selectAnthropicReadyLabel(snap)).toBe('route configured')
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('route configured')
+  expect(html).toContain(
+    'Anthropic route configured through an API key or cloud provider.',
+  )
+  expect(html).not.toContain('No Anthropic accounts linked yet.')
+})
+
+test('an unhealthy active Anthropic account shows health over plan decoration', () => {
+  const snap = snapshot([])
+  snap.anthropicAccounts = [
+    {
+      id: 'claude-dead',
+      alias: 'expired',
+      email: 'expired@example.com',
+      status: 'dead',
+      isDefault: true,
+      hasVaultProfile: true,
+      subscriptionType: 'max',
+    },
+  ]
+  snap.anthropicActiveAccountId = 'claude-dead'
+  snap.anthropicPoolCount = 1
+
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('bg-tone-danger')
+  expect(html).toContain('>dead<')
+  expect(html).not.toContain('>max<')
 })
 
 /* ── (d) Delete dispatches account.delete with confirm:true ── */

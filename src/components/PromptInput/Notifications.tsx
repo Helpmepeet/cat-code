@@ -20,10 +20,9 @@ import type { TaskState } from '../../tasks/types.js';
 import type { Message } from '../../types/message.js';
 import {
   getApiKeyHelperElapsedMs,
-  getAuthTokenSource,
   getConfiguredApiKeyHelper,
   getSubscriptionType,
-  hasAnthropicApiKeyAuth,
+  hasAnthropicCredentials,
   hasCodexTokens,
 } from '../../utils/auth.js';
 import type { AutoUpdaterResult } from '../../utils/autoUpdater.js';
@@ -285,8 +284,7 @@ function NotificationContent({
   onChangeIsUpdating: (isUpdating: boolean) => void;
 }): ReactNode {
   const apiProvider = getAPIProvider();
-  const hasAnthropicCredentials = getAuthTokenSource().hasToken || hasAnthropicApiKeyAuth();
-  const hasAlternateProviderLogin = apiProvider === 'openai' ? hasAnthropicCredentials : hasCodexTokens();
+  const hasAlternateProviderLogin = apiProvider === 'openai' ? hasAnthropicCredentials() : hasCodexTokens();
 
   // Poll apiKeyHelper inflight state to show slow-helper notice.
   // Gated on configuration — most users never set apiKeyHelper, so the

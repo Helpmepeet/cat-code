@@ -453,7 +453,7 @@ export async function teleportResumeCodeSession(sessionId: string, onProgress?: 
       logEvent('tengu_teleport_resume_error', {
         error_type: 'no_access_token' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
-      throw new Error('Cat Code web sessions require an existing Claude.ai account. API key authentication is not sufficient. /login adds OpenAI accounts only; check your authentication status with /status.');
+      throw new Error('Cat Code web sessions require an existing Claude.ai account. API key authentication is not sufficient. Run /login and choose Anthropic subscription; check your authentication status with /status.');
     }
 
     // Get organization UUID

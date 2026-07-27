@@ -201,11 +201,16 @@ export const ACCOUNT_VERB_TYPES = [
 
 export type AccountVerbType = (typeof ACCOUNT_VERB_TYPES)[number]
 
+/** Subscription provider selected for a desktop OAuth sign-in. */
+export type AccountLoginProvider = 'anthropic' | 'openai'
+
 /** Switch the persisted active account new sessions seed from. Synchronous. */
 export type AccountSwitchMessage = {
   type: 'account.switch'
   requestId: string
   accountId: string
+  /** Pool containing the target account. Defaults to OpenAI for older clients. */
+  provider?: AccountLoginProvider
 }
 
 /** Rename a vault-backed account's alias. Alias re-validated at the sidecar. */
@@ -240,6 +245,8 @@ export type AccountTouchAllMessage = {
 export type AccountLoginMessage = {
   type: 'account.login'
   requestId: string
+  /** Defaults to OpenAI for backward compatibility with older renderer calls. */
+  provider?: AccountLoginProvider
 }
 
 /**
@@ -1195,7 +1202,8 @@ export type RunControlVerbType = (typeof RUN_CONTROL_VERB_TYPES)[number]
 export type RunControlModelSetMessage = {
   type: 'model.set'
   requestId: string
-  model: string
+  /** null restores the current provider's default model. */
+  model: string | null
 }
 
 /** Set this session's reasoning-effort tier (a level string, or `auto`/`unset` to clear). */
@@ -1242,13 +1250,20 @@ export type RunControlResultFrame = {
  * the same session with no respawn. secretGuard-clean by construction (model ids /
  * effort levels / booleans only, never a token).
  */
+export type RunControlProvider =
+  | 'anthropic'
+  | 'openai'
+  | 'bedrock'
+  | 'vertex'
+  | 'foundry'
+
 export type RunControlModelOption = {
-  /** The value a `model.set` verb sends (a `ModelSetting` string; the Default/null option is omitted). */
-  value: string
+  /** The value a `model.set` verb sends; null is provider-local Default. */
+  value: string | null
   /** Friendly label from the engine's own `getModelOptions()` (e.g. "GPT-5.6 Sol", "Opus"). */
   label: string
-  /** Display routing hint derived from the value (`getProviderForModel` — gpt-* → OpenAI). */
-  provider: 'anthropic' | 'openai'
+  /** Resolved request route if this option is selected in the current session. */
+  provider: RunControlProvider
 }
 
 export type RunControlsSnapshot = {
@@ -1257,12 +1272,18 @@ export type RunControlsSnapshot = {
     current: string | null
     /** The raw user-specified setting (`getMainLoopModelOverride()`) for option highlighting; null = provider default. */
     selected: string | null
-    /** Real selectable models (`getModelOptions()`), the Default(null)-value option filtered out. */
+    /** The authoritative provider route for the current session. */
+    provider: RunControlProvider
+    /** True once the first turn is accepted; provider-family changes are then unsafe. */
+    providerSwitchLocked: boolean
+    /** Real selectable models (`getModelOptions()`), including provider-local Default. */
     options: RunControlModelOption[]
   }
   effort: {
-    /** The session's effort tier (`AppState.effortValue` → string) or null (= auto / provider default). */
+    /** The effort tier actually applied after env/session/default precedence, or null when omitted. */
     current: string | null
+    /** The raw session selection (`AppState.effortValue`), or null when Auto is selected. */
+    selected: string | null
     /** Whether the current model accepts a reasoning-effort knob (`modelSupportsEffort`). */
     supported: boolean
     /** The valid effort levels for the current model (`getSupportedEffortLevels`); empty when unsupported. */
@@ -1463,6 +1484,17 @@ export type AccountStatus = {
   switchable: boolean
 }
 
+/** Redacted Anthropic subscription account. Tokens and vault paths never cross IPC. */
+export type AnthropicAccountStatus = {
+  id: string
+  alias: string | null
+  email: string
+  status: 'healthy' | 'dead'
+  isDefault: boolean
+  hasVaultProfile: boolean
+  subscriptionType: string | null
+}
+
 export type AccountsSnapshot = {
   /** Redacted account rows, pool order (the pool's `activeIndex` account first-class via `isDefault`). */
   accounts: AccountStatus[]
@@ -1474,6 +1506,23 @@ export type AccountsSnapshot = {
   poolCount: number
   /** Whether the engine has completed pool initialization (`getPoolStatus().initialized`). */
   initialized: boolean
+  /** Redacted Claude subscription accounts, in engine pool order. */
+  anthropicAccounts: AnthropicAccountStatus[]
+  /** The active Claude account UUID, or null. */
+  anthropicActiveAccountId: string | null
+  /** Healthy Claude account count. */
+  anthropicReadyCount: number
+  /** Total Claude subscription account count. */
+  anthropicPoolCount: number
+  /** Whether the Claude pool completed initialization. */
+  anthropicInitialized: boolean
+  /**
+   * Whether the engine has any configured Anthropic route (subscription OAuth,
+   * API key, Bedrock, Vertex, or Foundry). This contains no credential material.
+   */
+  anthropicRouteAvailable: boolean
+  /** True only when the active first-party request credential is the Claude subscription pool. */
+  anthropicSubscriptionActive?: boolean
 }
 
 /**

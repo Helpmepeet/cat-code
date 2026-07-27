@@ -4,7 +4,8 @@ import { useMainLoopModel } from '../../hooks/useMainLoopModel.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
 import { useAppState, useSetAppState } from '../../state/AppState.js';
 import type { LocalJSXCommandOnDone } from '../../types/command.js';
-import { EFFORT_LEVELS, type EffortValue, getDisplayedEffortLevel, getEffortEnvOverride, getEffortLevelLabel, getEffortValueDescription, isEffortLevel, toPersistableEffort } from '../../utils/effort.js';
+import { EFFORT_LEVELS, type EffortValue, getDisplayedEffortLevel, getEffortEnvOverride, getEffortLevelLabel, getEffortValueDescription, getSupportedEffortLevels, isEffortLevel, modelSupportsEffort, toPersistableEffort } from '../../utils/effort.js';
+import { getMainLoopModel } from '../../utils/model/model.js';
 import { updateSettingsForSource } from '../../utils/settings/settings.js';
 const COMMON_HELP_ARGS = ['help', '-h', '--help'];
 type EffortCommandResult = {
@@ -110,7 +111,10 @@ function unsetEffortLevel(): EffortCommandResult {
     }
   };
 }
-export function executeEffort(args: string): EffortCommandResult {
+export function executeEffort(
+  args: string,
+  model: string = getMainLoopModel(),
+): EffortCommandResult {
   const normalized = args.toLowerCase();
   if (normalized === 'auto' || normalized === 'unset') {
     return unsetEffortLevel();
@@ -118,6 +122,17 @@ export function executeEffort(args: string): EffortCommandResult {
   if (!isEffortLevel(normalized)) {
     return {
       message: `Invalid argument: ${args}. Valid options are: ${EFFORT_LEVELS.join(', ')}, auto`
+    };
+  }
+  if (!modelSupportsEffort(model)) {
+    return {
+      message: `Effort controls are not supported by ${model}.`,
+    };
+  }
+  const supported = getSupportedEffortLevels(model);
+  if (!supported.includes(normalized)) {
+    return {
+      message: `Effort ${normalized} is not supported by ${model}. Valid options are: ${supported.join(', ')}, auto`,
     };
   }
   return setEffortValue(normalized);

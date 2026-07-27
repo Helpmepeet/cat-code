@@ -1432,25 +1432,42 @@ function fakeRunControlsDomain(): {
   calls: string[]
 } {
   const calls: string[] = []
-  let model = 'claude-opus-4-6'
+  let model: string | null = 'claude-opus-4-6'
   let effort: string | null = null
   let fast = false
+  let providerSwitchLocked = false
   let listener: (() => void) | null = null
   const snapshot = (): RunControlsSnapshot => ({
     model: {
       current: model,
       selected: model,
+      provider: 'anthropic',
+      providerSwitchLocked,
       options: [
+        { value: null, label: 'Default', provider: 'anthropic' },
         { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' },
+        { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
         { value: 'opus', label: 'Opus', provider: 'anthropic' },
       ],
     },
-    effort: { current: effort, supported: true, options: ['low', 'medium', 'high'] },
+    effort: {
+      current: effort,
+      selected: effort,
+      supported: true,
+      options: ['low', 'medium', 'high'],
+    },
     fast: { active: fast, supportedByModel: true, available: true, unavailableReason: null },
   })
   const domain: SidecarRunControlsDomain = {
     getSnapshot: snapshot,
     setModel(next) {
+      if (!snapshot().model.options.some(option => option.value === next)) {
+        return {
+          ok: false,
+          message: `Unsupported model: ${next}.`,
+          changed: false,
+        }
+      }
       calls.push(`model:${next}`)
       const changed = next !== model
       model = next
@@ -1458,6 +1475,13 @@ function fakeRunControlsDomain(): {
       return { ok: true, message: `Model set to ${next}.`, changed }
     },
     setEffort(next) {
+      if (next !== 'auto' && !snapshot().effort.options.includes(next)) {
+        return {
+          ok: false,
+          message: `Unsupported effort: ${next}.`,
+          changed: false,
+        }
+      }
       calls.push(`effort:${next}`)
       const value = next === 'auto' ? null : next
       const changed = value !== effort
@@ -1471,6 +1495,19 @@ function fakeRunControlsDomain(): {
       fast = active
       if (changed) listener?.()
       return { ok: true, message: active ? 'on' : 'off', changed }
+    },
+    activateProvider(provider) {
+      return {
+        ok: true,
+        message: `Provider set to ${provider}.`,
+        changed: true,
+      }
+    },
+    lockProviderSwitches() {
+      if (providerSwitchLocked) return false
+      providerSwitchLocked = true
+      listener?.()
+      return true
     },
     subscribe(l) {
       listener = l
@@ -1563,6 +1600,66 @@ test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast
   expect(received.filter(f => f.kind === 'run-controls.snapshot').length).toBe(before)
 })
 
+test('P4-24c — model.set null restores provider-local Default through the strict boundary', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'model.set',
+        requestId: 'rc-default',
+        model: null,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(calls).toEqual(['model:null'])
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'run-control.result' &&
+        frame.requestId === 'rc-default' &&
+        frame.ok,
+    ),
+  ).toBe(true)
+})
+
+test('P4-24c — an accepted first submit immediately locks and re-broadcasts provider switching', () => {
+  const { server } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(
+    frame => frame.kind === 'run-controls.snapshot',
+  ).length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'app.submit',
+        requestId: 'first-turn',
+        prompt: 'hello',
+      },
+    }),
+  )
+
+  const snapshots = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> =>
+      frame.kind === 'run-controls.snapshot',
+  )
+  expect(snapshots.length).toBeGreaterThan(before)
+  expect(
+    snapshots[snapshots.length - 1]?.runControls.model.providerSwitchLocked,
+  ).toBe(true)
+})
+
 test('P4-24c — a valid effort.set + fast.set both round-trip through the domain', () => {
   const { server, calls } = makeRunControlsServer()
   const { socket, received } = makeSocket()
@@ -1594,7 +1691,7 @@ test('P4-24c — a valid effort.set + fast.set both round-trip through the domai
   expect(snaps[snaps.length - 1]?.runControls.fast.active).toBe(true)
 })
 
-test('P4-24c — rejects a well-typed unsupported model at the sidecar boundary', () => {
+test('P4-24c — a well-typed unsupported model returns a correlated failed result', () => {
   const { server, calls } = makeRunControlsServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
@@ -1612,12 +1709,18 @@ test('P4-24c — rejects a well-typed unsupported model at the sidecar boundary'
     }),
   )
 
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(
+    received.some(
+      f =>
+        f.kind === 'run-control.result' &&
+        f.requestId === 'rc-unsupported-model' &&
+        !f.ok,
+    ),
+  ).toBe(true)
   expect(calls).toEqual([])
 })
 
-test('P4-24c — rejects a well-typed unsupported effort at the sidecar boundary', () => {
+test('P4-24c — a well-typed unsupported effort returns a correlated failed result', () => {
   const { server, calls } = makeRunControlsServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
@@ -1635,8 +1738,14 @@ test('P4-24c — rejects a well-typed unsupported effort at the sidecar boundary
     }),
   )
 
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(
+    received.some(
+      f =>
+        f.kind === 'run-control.result' &&
+        f.requestId === 'rc-unsupported-effort' &&
+        !f.ok,
+    ),
+  ).toBe(true)
   expect(calls).toEqual([])
 })
 
@@ -3291,6 +3400,10 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsCommandExecutor {
   return {
     switch: () => ({ ok: true, message: 'switched' }),
+    switchAnthropic: async () => ({
+      ok: true,
+      message: 'switched anthropic',
+    }),
     rename: () => ({ ok: true, message: 'renamed' }),
     delete: () => ({ ok: true, message: 'deleted' }),
     logout: () => ({ ok: true, message: 'signed out' }),
@@ -3349,10 +3462,27 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
     activeAccountId: 'a',
   })
   const accounts = createSidecarAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { domain: runControls } = fakeRunControlsDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    accounts,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    runControls,
+  )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'accounts.snapshot').length
+  const beforeRunControls = received.filter(
+    f => f.kind === 'run-controls.snapshot',
+  ).length
 
   server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'r1', accountId: 'b' }))
   await flush()
@@ -3363,6 +3493,9 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   expect(result && result.kind === 'account.result' && result.requestId).toBe('r1')
   // pool changed → a fresh snapshot was broadcast
   expect(received.filter(f => f.kind === 'accounts.snapshot').length).toBeGreaterThan(before)
+  expect(
+    received.filter(f => f.kind === 'run-controls.snapshot').length,
+  ).toBeGreaterThan(beforeRunControls)
 })
 
 test('P4-5 — account.result never carries token material', async () => {
@@ -3478,19 +3611,148 @@ test('P4-15 — account.login emits an oauth.login.progress waiting_for_login ca
   expect(JSON.stringify(progress)).not.toContain('SECRET')
 })
 
+test('CC-17 — account.login provider:anthropic passes the strict boundary and reaches only the Anthropic runner', async () => {
+  let codexBegins = 0
+  let anthropicBegins = 0
+  const activated: string[] = []
+  const codexRunner = fakeOAuthRunner()
+  const accounts = createSidecarAccountsDomain({
+    executor: fakeExecutor(),
+    oauthRunner: {
+      ...codexRunner,
+      async begin(callbacks) {
+        codexBegins++
+        return codexRunner.begin(callbacks)
+      },
+    },
+    anthropicOAuthRunner: {
+      async begin({ onWaitingForLogin }) {
+        anthropicBegins++
+        onWaitingForLogin('https://claude.ai/oauth/authorize')
+        return {
+          isExistingAccount: true,
+          validateAlias: () => ({ ok: true }),
+          persist: () => {},
+        }
+      },
+    },
+    onProviderActivated(provider) {
+      activated.push(provider)
+    },
+    isFirstRunEligible: () => true,
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.login',
+      requestId: 'anthropic-login',
+      provider: 'anthropic',
+    }),
+  )
+  await flush()
+
+  expect(codexBegins).toBe(0)
+  expect(anthropicBegins).toBe(1)
+  expect(activated).toEqual(['anthropic'])
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'oauth.login.progress' &&
+        frame.progress.state === 'waiting_for_login' &&
+        frame.progress.url === 'https://claude.ai/oauth/authorize',
+    ),
+  ).toBe(true)
+})
+
+test('CC-17 — account.login rejects renderer-authored provider activation authority', () => {
+  const accounts = createSidecarAccountsDomain({
+    executor: fakeExecutor(),
+    oauthRunner: fakeOAuthRunner(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'account.login',
+        requestId: 'forged-activation',
+        provider: 'anthropic',
+        activateProvider: true,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(
+    received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
+  ).toBe(true)
+})
+
+test('CC-17 — account.login rejects an unknown provider at the strict boundary', () => {
+  const accounts = createSidecarAccountsDomain({
+    executor: fakeExecutor(),
+    oauthRunner: fakeOAuthRunner(),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'account.login',
+        requestId: 'bad-provider',
+        provider: 'other',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(
+    received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
+  ).toBe(true)
+})
+
 test('P4-15 — paste-code then alias completes the flow (success) and re-broadcasts the accounts snapshot', async () => {
   const received_codes: string[] = []
   const accounts = createSidecarAccountsDomain({
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner({ requireManualCode: true, onPasteReceived: c => received_codes.push(c) }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { domain: runControls } = fakeRunControlsDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    accounts,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    runControls,
+  )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
   server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
   await flush()
   const beforeSnapshots = received.filter(f => f.kind === 'accounts.snapshot').length
+  const beforeRunControls = received.filter(
+    f => f.kind === 'run-controls.snapshot',
+  ).length
 
   server.handleData(
     conn,
@@ -3508,6 +3770,9 @@ test('P4-15 — paste-code then alias completes the flow (success) and re-broadc
   expect(success?.kind).toBe('oauth.login.progress')
   // success drives an accounts re-broadcast (clears the first-run surface / banner).
   expect(received.filter(f => f.kind === 'accounts.snapshot').length).toBeGreaterThan(beforeSnapshots)
+  expect(
+    received.filter(f => f.kind === 'run-controls.snapshot').length,
+  ).toBeGreaterThan(beforeRunControls)
 })
 
 test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStrictKeys)', () => {

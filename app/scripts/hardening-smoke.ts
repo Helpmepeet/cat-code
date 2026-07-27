@@ -103,6 +103,12 @@ const gateFrames: ServerFrame[] = [
       readyCount: 0,
       poolCount: 0,
       initialized: false,
+      anthropicAccounts: [],
+      anthropicActiveAccountId: null,
+      anthropicReadyCount: 0,
+      anthropicPoolCount: 0,
+      anthropicInitialized: false,
+      anthropicRouteAvailable: false,
     },
   },
 ]

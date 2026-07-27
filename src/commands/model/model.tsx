@@ -4,27 +4,39 @@ import * as React from 'react';
 import type { CommandResultDisplay } from '../../commands.js';
 import { ModelPicker } from '../../components/ModelPicker.js';
 import { COMMON_HELP_ARGS, COMMON_INFO_ARGS } from '../../constants/xml.js';
-import { setSessionProvider } from '../../bootstrap/state.js';
+import { getTotalInputTokens, setSessionProvider } from '../../bootstrap/state.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
 import { useAppState, useSetAppState } from '../../state/AppState.js';
 import type { LocalJSXCommandCall } from '../../types/command.js';
-import type { EffortLevel } from '../../utils/effort.js';
+import { reconcileEffortForModel, type EffortLevel } from '../../utils/effort.js';
 import { isBilledAsExtraUsage } from '../../utils/extraUsage.js';
 import { clearFastModeCooldown, isFastModeAvailable, isFastModeEnabled, isFastModeSupportedByModel } from '../../utils/fastMode.js';
 import { MODEL_ALIASES } from '../../utils/model/aliases.js';
 import { checkOpus1mAccess, checkSonnet1mAccess } from '../../utils/model/check1mAccess.js';
 import { getDefaultMainLoopModelSetting, isOpus1mMergeEnabled, renderDefaultModelSetting } from '../../utils/model/model.js';
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js';
-import { getAPIProviderDisplayName, getProviderForModel, persistStartupProviderPreference } from '../../utils/model/providers.js';
+import { canApplyModelSelection, getAPIProvider, getAPIProviderDisplayName, persistStartupProviderPreference, resolveModelSelectionProvider } from '../../utils/model/providers.js';
 import { validateModel } from '../../utils/model/validateModel.js';
 
 function appendProviderLabel(message: string, model: string | null): string {
-  const provider = getProviderForModel(model)
-  if (!provider) {
-    return message
-  }
+  const provider = resolveModelSelectionProvider(model)
   return `${message} · Provider ${chalk.bold(getAPIProviderDisplayName(provider))}`
 }
+
+export function reconcileModelSelectionState<
+  T extends { effortValue?: Parameters<typeof reconcileEffortForModel>[1] },
+>(prev: T, model: string | null): T & {
+  mainLoopModel: string | null
+  mainLoopModelForSession: null
+} {
+  return {
+    ...prev,
+    mainLoopModel: model,
+    mainLoopModelForSession: null,
+    effortValue: reconcileEffortForModel(model, prev.effortValue),
+  }
+}
+
 function ModelPickerWrapper(t0) {
   const $ = _c(17);
   const {
@@ -60,14 +72,24 @@ function ModelPickerWrapper(t0) {
         from_model: mainLoopModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         to_model: model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
-      const nextProvider = getProviderForModel(model)
+      const currentProvider = getAPIProvider()
+      if (
+        !canApplyModelSelection(
+          model,
+          getTotalInputTokens(),
+          currentProvider,
+        )
+      ) {
+        onDone(
+          'Provider cannot be changed after the first turn. Start a new session to switch providers.',
+          { display: 'system' },
+        )
+        return
+      }
+      const nextProvider = resolveModelSelectionProvider(model)
       setSessionProvider(nextProvider)
       persistStartupProviderPreference(nextProvider)
-      setAppState(prev => ({
-        ...prev,
-        mainLoopModel: model,
-        mainLoopModelForSession: null
-      }));
+      setAppState(prev => reconcileModelSelectionState(prev, model));
       let message = appendProviderLabel(
         `Set model to ${chalk.bold(renderModelLabel(model))}`,
         model,
@@ -212,14 +234,24 @@ function SetModelAndClose({
       }
     }
     function setModel(modelValue: string | null): void {
-      const nextProvider = getProviderForModel(modelValue)
+      const currentProvider = getAPIProvider()
+      if (
+        !canApplyModelSelection(
+          modelValue,
+          getTotalInputTokens(),
+          currentProvider,
+        )
+      ) {
+        onDone(
+          'Provider cannot be changed after the first turn. Start a new session to switch providers.',
+          { display: 'system' },
+        )
+        return
+      }
+      const nextProvider = resolveModelSelectionProvider(modelValue)
       setSessionProvider(nextProvider)
       persistStartupProviderPreference(nextProvider)
-      setAppState(prev => ({
-        ...prev,
-        mainLoopModel: modelValue,
-        mainLoopModelForSession: null
-      }));
+      setAppState(prev => reconcileModelSelectionState(prev, modelValue));
       let message = appendProviderLabel(
         `Set model to ${chalk.bold(renderModelLabel(modelValue))}`,
         modelValue,

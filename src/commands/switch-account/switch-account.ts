@@ -18,9 +18,20 @@ import {
   syncClaudeAccountToStorage,
 } from '../../services/api/claudeAccountPool.js'
 import type { LocalCommandCall } from '../../types/command.js'
+import {
+  getTotalInputTokens,
+  isProviderSwitchLocked,
+  setMainLoopModelOverride,
+  setSessionProvider,
+} from '../../bootstrap/state.js'
 import { clearOAuthTokenCache } from '../../utils/auth.js'
+import { reconcileEffortForModel } from '../../utils/effort.js'
 import { stripSignatureBlocks } from '../../utils/messages.js'
-import { getAPIProvider } from '../../utils/model/providers.js'
+import {
+  getAPIProvider,
+  getConfiguredAnthropicProvider,
+  persistStartupProviderPreference,
+} from '../../utils/model/providers.js'
 import { resetCodexCacheContext } from '../../services/api/codex-fetch-adapter.js'
 import { emitAccountDiagnostic } from '../../services/api/accountDiagnostics.js'
 
@@ -80,12 +91,60 @@ function applyPostSwitchAccountStateRefresh(
   }))
 }
 
+function providerSwitchLockedMessage(): { type: 'text'; value: string } {
+  return {
+    type: 'text',
+    value:
+      'Provider cannot be changed after the first turn. Start a new session to switch between Claude and Codex accounts.',
+  }
+}
+
+function switchRuntimeProvider(
+  target: 'anthropic' | 'openai',
+  context: Parameters<LocalCommandCall>[1],
+): void {
+  if (target === 'openai') {
+    setSessionProvider('openai')
+    setMainLoopModelOverride('gpt-5.6-terra')
+    persistStartupProviderPreference('openai')
+    context.setAppState(prev => ({
+      ...prev,
+      mainLoopModel: 'gpt-5.6-terra',
+      mainLoopModelForSession: null,
+      effortValue: reconcileEffortForModel(
+        'gpt-5.6-terra',
+        prev.effortValue,
+      ),
+    }))
+    return
+  }
+
+  const provider = getConfiguredAnthropicProvider()
+  setSessionProvider(provider)
+  setMainLoopModelOverride(null)
+  persistStartupProviderPreference(provider)
+  context.setAppState(prev => ({
+    ...prev,
+    mainLoopModel: null,
+    mainLoopModelForSession: null,
+    fastMode: false,
+    effortValue: reconcileEffortForModel(null, prev.effortValue),
+  }))
+}
+
 async function performClaudeSwitch(
   idPrefix: string | null,
   context: Parameters<LocalCommandCall>[1],
 ): Promise<{ type: 'text'; value: string } | null> {
   const { accounts, activeIndex } = getClaudePoolStatus()
   const currentLabel = accounts[activeIndex]?.alias ?? accounts[activeIndex]?.emailAddress ?? '?'
+  const crossingProvider = getAPIProvider() === 'openai'
+  if (
+    crossingProvider &&
+    (isProviderSwitchLocked() || getTotalInputTokens() > 0)
+  ) {
+    return providerSwitchLockedMessage()
+  }
 
   const result = switchToClaudeAccount(idPrefix)
   if (!result) return null
@@ -95,6 +154,9 @@ async function performClaudeSwitch(
   clearOAuthTokenCache()
   await clearAuthRelatedCaches()
   applyPostSwitchAccountStateRefresh(context)
+  if (crossingProvider) {
+    switchRuntimeProvider('anthropic', context)
+  }
 
   const toLabel = result.alias ?? result.emailAddress
   emitManualSwitchDiagnostic({
@@ -116,6 +178,13 @@ async function performCodexSwitch(
 ): Promise<{ type: 'text'; value: string } | null> {
   const { accounts, activeIndex } = getPoolStatus()
   const current = accounts[activeIndex]
+  const crossingProvider = getAPIProvider() !== 'openai'
+  if (
+    crossingProvider &&
+    (isProviderSwitchLocked() || getTotalInputTokens() > 0)
+  ) {
+    return providerSwitchLockedMessage()
+  }
 
   // Resolve the candidate WITHOUT mutating pool.activeIndex yet, so a live-usage
   // check can refuse a capped target before we commit the switch (no revert).
@@ -177,6 +246,9 @@ async function performCodexSwitch(
   // rate-limit state, memoized tokens, and tool schema caches don't carry over.
   await clearAuthRelatedCaches()
   applyPostSwitchAccountStateRefresh(context)
+  if (crossingProvider) {
+    switchRuntimeProvider('openai', context)
+  }
   emitManualSwitchDiagnostic({
     provider: 'openai',
     pool: 'codex',
@@ -327,7 +399,7 @@ export const call: LocalCommandCall = async (args, context) => {
 
   // No arg: rotate within the current provider
   const provider = getAPIProvider()
-  const isClaudeProvider = provider === 'firstParty'
+  const isClaudeProvider = provider !== 'openai'
 
   if (isClaudeProvider && claudeHealthy > 1) {
     const result = await performClaudeSwitch(null, context)

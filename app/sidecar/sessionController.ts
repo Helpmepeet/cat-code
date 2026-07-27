@@ -4,6 +4,21 @@ import { createQueryEngineSessionController } from '../../src/app-runtime/create
 import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRuntimeBackedWebAppSession.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { getInitialEffortSetting } from '../../src/utils/effort.js'
+import {
+  getUserSpecifiedModelSetting,
+  parseUserSpecifiedModel,
+  type ModelSetting,
+} from '../../src/utils/model/model.js'
+import {
+  getEnvAPIProvider,
+  resolveStartupProvider,
+} from '../../src/utils/model/providers.js'
+import {
+  setInitialMainLoopModel,
+  setMainLoopModelOverride,
+  setProviderSwitchLocked,
+  setSessionProvider,
+} from '../../src/bootstrap/state.js'
 import { getTools } from '../../src/tools.js'
 import { getCommands, type Command } from '../../src/commands.js'
 import type { SlashCatalogEntry } from '../shared/protocol.js'
@@ -24,6 +39,7 @@ import {
   READ_FILE_STATE_CACHE_SIZE,
 } from '../../src/utils/fileStateCache.js'
 import type { Message } from '../../src/types/message.js'
+import { SYNTHETIC_MODEL } from '../../src/utils/messages.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -183,14 +199,83 @@ async function loadAgentDefinitionsForRuntime(
   }
 }
 
+/**
+ * Seed the desktop sidecar's process-local model/provider state using the same
+ * explicit-vs-implicit startup rule as the CLI. A sidecar is one process per
+ * session, so these bootstrap globals are correctly session-scoped.
+ */
+export function initializeSidecarModelProvider(
+  resumedModel?: string,
+): ModelSetting {
+  // A resumed conversation owns its prior model choice. The transcript's latest
+  // assistant message contains the provider-returned model id, so prefer it over
+  // today's global/settings default when reconstructing this session.
+  const specifiedModel = resumedModel ?? getUserSpecifiedModelSetting()
+  const selectedModel = specifiedModel ?? null
+  const implicitProvider = getEnvAPIProvider()
+  // The model argument is ignored for an implicit startup. Avoid resolving the
+  // Anthropic default here: credential-less desktop startup must still reach
+  // the first-run sign-in surface (and the test guard intentionally throws).
+  const resolvedModel =
+    specifiedModel === undefined || specifiedModel === null
+      ? null
+      : parseUserSpecifiedModel(specifiedModel)
+
+  setInitialMainLoopModel(selectedModel)
+  setMainLoopModelOverride(selectedModel)
+  setSessionProvider(
+    resolveStartupProvider(
+      resolvedModel,
+      specifiedModel !== undefined && specifiedModel !== null,
+      implicitProvider,
+    ),
+  )
+  return selectedModel
+}
+
+export function selectResumedProviderModel(
+  messages: readonly Message[],
+): string | undefined {
+  return [...messages]
+    .reverse()
+    .find(
+      (message): message is Extract<Message, { type: 'assistant' }> =>
+        message.type === 'assistant' &&
+        message.isApiErrorMessage !== true &&
+        typeof message.message.model === 'string' &&
+        message.message.model.length > 0 &&
+        message.message.model !== SYNTHETIC_MODEL,
+    )?.message.model
+}
+
+export function hasProviderBoundHistory(messages: readonly Message[]): boolean {
+  return messages.some(
+    message =>
+      (message.type === 'assistant' &&
+        message.isApiErrorMessage !== true &&
+        message.message.model !== SYNTHETIC_MODEL) ||
+      (message.type === 'user' &&
+        message.isMeta !== true &&
+        message.isVisibleInTranscriptOnly !== true),
+  )
+}
+
 export async function createNormalSidecarQueryEngineConfig(
   cwd: string,
   initialMessages?: readonly Message[],
 ) {
+  // Must run before QueryEngine construction: it captures the initial provider
+  // and model for prompt assembly and request routing.
+  const resumedModel = initialMessages
+    ? selectResumedProviderModel(initialMessages)
+    : undefined
+  const initialModelSetting = initializeSidecarModelProvider(resumedModel)
   const toolPermissionContext = await loadSidecarToolPermissionContext()
   const appStateStore = createStore({
     ...getDefaultAppState(),
     toolPermissionContext,
+    mainLoopModel: initialModelSetting,
+    mainLoopModelForSession: null,
     // Honour the user's persisted reasoning-effort setting, exactly as the CLI
     // seeds it at startup (`main.tsx:2688` — `getInitialEffortSetting()`). The
     // desktop session otherwise ran on `getDefaultAppState()`'s `undefined`
@@ -469,6 +554,13 @@ export async function createSidecarSessionController({
     slashCatalog,
     tools,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
+  const providerBoundHistory = initialMessages
+    ? hasProviderBoundHistory(initialMessages)
+    : false
+  setProviderSwitchLocked(providerBoundHistory)
+  const runControls = createSidecarRunControlsDomain(appStateStore, {
+    providerSwitchLocked: providerBoundHistory,
+  })
 
   return {
     controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
@@ -481,14 +573,19 @@ export async function createSidecarSessionController({
     goals: createSidecarGoalDomain(appStateStore),
     memory: createSidecarMemoryDomain(),
     tasks: createSidecarTasksDomain(appStateStore),
-    accounts: createSidecarAccountsDomain(),
+    accounts: createSidecarAccountsDomain({
+      onProviderActivated: provider => {
+        const result = runControls.activateProvider(provider)
+        if (!result.ok) throw new Error(result.message)
+      },
+    }),
     workspaceTrust: await createSidecarWorkspaceTrustDomain(cwd),
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
     agentMode: createSidecarAgentModeDomain(appStateStore),
     taskControl: createSidecarTaskControlDomain(appStateStore),
-    runControls: createSidecarRunControlsDomain(appStateStore),
+    runControls,
     sessionActions: createSidecarSessionActionsDomain({ tools }),
     slashCatalog,
   }

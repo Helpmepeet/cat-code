@@ -1,7 +1,7 @@
 import { c as _c } from "react/compiler-runtime";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
-import { installOAuthTokens } from '../cli/handlers/auth.js';
+import { installOAuthTokensAfterPolicyValidation } from '../cli/handlers/auth.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { setClipboard } from '../ink/termio/osc.js';
 import { useTerminalNotification } from '../ink/useTerminalNotification.js';
@@ -11,7 +11,7 @@ import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { runCodexOAuthFlow, type CodexTokens } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
-import { getOauthAccountInfo, saveCodexOAuthTokens, validateForceLoginOrg } from '../utils/auth.js';
+import { getOauthAccountInfo, saveCodexOAuthTokens } from '../utils/auth.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
 import { Select } from './CustomSelect/select.js';
@@ -340,10 +340,9 @@ export function ConsoleOAuthFlow({
           provider: 'anthropic'
         });
       } else {
-        await installOAuthTokens(result);
-        const orgResult = await validateForceLoginOrg();
-        if (!orgResult.valid) {
-          throw new Error('message' in orgResult ? (orgResult as any).message : 'Invalid organization');
+        const orgResult = await installOAuthTokensAfterPolicyValidation(result);
+        if (orgResult.valid === false) {
+          throw new Error(orgResult.message);
         }
         setOAuthStatus({
           state: 'success',

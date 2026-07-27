@@ -243,7 +243,7 @@ export const ConfigTool = buildTool({
           data: {
             success: false,
             error: !isAnthropicAuthEnabled()
-              ? 'Voice mode requires an existing Claude.ai account; /login adds OpenAI accounts only.'
+              ? 'Voice mode requires an existing Claude.ai account; run /login and choose Anthropic subscription.'
               : 'Voice mode is not available.',
           },
         }
@@ -273,7 +273,7 @@ export const ConfigTool = buildTool({
           data: {
             success: false,
             error:
-              'Voice mode requires an existing Claude.ai account; /login adds OpenAI accounts only.',
+              'Voice mode requires an existing Claude.ai account; run /login and choose Anthropic subscription.',
           },
         }
       }

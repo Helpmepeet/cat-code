@@ -45,6 +45,12 @@ function pool(accounts: AccountStatus[]): AccountsSnapshot {
     readyCount: accounts.filter(a => a.status === 'healthy' && !a.usageLimitReached).length,
     poolCount: accounts.length,
     initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
+    anthropicRouteAvailable: false,
   }
 }
 

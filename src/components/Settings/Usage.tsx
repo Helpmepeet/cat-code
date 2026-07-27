@@ -1,20 +1,26 @@
 import { c as _c } from "react/compiler-runtime";
 import * as React from 'react';
 import { useEffect, useState } from 'react';
+import { extraUsage as extraUsageCommand } from '../../commands/extra-usage/index.js';
+import { formatCost } from '../../cost-tracker.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { Box, Text } from '../../ink.js';
+import { useKeybinding } from '../../keybindings/useKeybinding.js';
+import { type ExtraUsage, fetchUtilization, type RateLimit, type Utilization } from '../../services/api/usage.js';
+import { getSubscriptionType, isClaudeAISubscriber } from '../../utils/auth.js';
 import { formatResetText } from '../../utils/format.js';
+import { logError } from '../../utils/log.js';
+import { jsonStringify } from '../../utils/slowOperations.js';
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
+import { Byline } from '../design-system/Byline.js';
 import { ProgressBar } from '../design-system/ProgressBar.js';
+import { isEligibleForOverageCreditGrant, OverageCreditUpsell } from '../LogoV2/OverageCreditUpsell.js';
 import { describeCodexAccountAvailability, hasAnyPoolAccount, getPoolStatus } from '../../services/api/codexAccountPool.js';
 import { getCodexLeaseSnapshot } from '../../services/api/codexAccountLeaseManager.js';
 import { buildPoolUsageDisplayAccounts, fetchPoolUsage, isFreePlan, sortPoolUsageDisplayAccounts, type PoolUsageSnapshot } from '../../services/api/codexUsage.js';
 type LimitBarProps = {
   title: string;
-  limit: {
-    utilization: number;
-    resets_at: string | null;
-  };
+  limit: RateLimit;
   maxWidth: number;
   showTimeInReset?: boolean;
   extraSubtext?: string;
@@ -174,15 +180,172 @@ export function Usage(): React.ReactNode {
   } = useTerminalSize();
   const availableWidth = columns - 2; // 2 for screen padding
   const maxWidth = Math.min(availableWidth, 80);
+  const showAnthropic = isClaudeAISubscriber();
+  const showCodex = hasAnyPoolAccount();
   return <Box flexDirection="column" gap={1} width="100%">
-      {hasAnyPoolAccount()
-        ? <CodexPoolUsageSection maxWidth={maxWidth} />
-        : <Text dimColor>/usage requires an OpenAI Codex account.</Text>}
+      {showAnthropic ? <AnthropicUsageSection maxWidth={maxWidth} /> : null}
+      {showCodex ? <CodexPoolUsageSection maxWidth={maxWidth} /> : null}
+      {!showAnthropic && !showCodex
+        ? <Text dimColor>/usage requires an Anthropic subscription or OpenAI Codex account.</Text>
+        : null}
 
       <Text dimColor>
         <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
       </Text>
     </Box>;
+}
+
+function AnthropicUsageSection({ maxWidth }: { maxWidth: number }): React.ReactNode {
+  const [utilization, setUtilization] = useState<Utilization | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadUtilization = React.useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await fetchUtilization();
+      if (data === null) {
+        setError('Usage data is temporarily unavailable. Retry in a moment.');
+      } else {
+        setUtilization(data);
+      }
+    } catch (err) {
+      logError(err as Error);
+      const axiosError = err as { response?: { data?: unknown } };
+      const responseBody = axiosError.response?.data
+        ? jsonStringify(axiosError.response.data)
+        : undefined;
+      setError(
+        responseBody
+          ? `Failed to load usage data: ${responseBody}`
+          : 'Failed to load usage data',
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUtilization();
+  }, [loadUtilization]);
+
+  useKeybinding('settings:retry', () => {
+    void loadUtilization();
+  }, {
+    context: 'Settings',
+    isActive: !!error && !isLoading
+  });
+
+  if (error) {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Anthropic subscription</Text>
+        <Text color="error">Error: {error}</Text>
+        <Text dimColor>
+          <Byline>
+            <ConfigurableShortcutHint action="settings:retry" context="Settings" fallback="r" description="retry" />
+          </Byline>
+        </Text>
+      </Box>
+    );
+  }
+
+  if (isLoading || !utilization) {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Anthropic subscription</Text>
+        <Text dimColor>Loading…</Text>
+      </Box>
+    );
+  }
+
+  const subscriptionType = getSubscriptionType();
+  const showSonnetBar =
+    subscriptionType === 'max' ||
+    subscriptionType === 'team' ||
+    subscriptionType === null;
+  const limits = [
+    { title: 'Current session', limit: utilization.five_hour },
+    { title: 'Current week (all models)', limit: utilization.seven_day },
+    ...(showSonnetBar
+      ? [{ title: 'Current week (Sonnet only)', limit: utilization.seven_day_sonnet }]
+      : []),
+  ];
+
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text bold>Anthropic subscription</Text>
+      {limits.some(({ limit }) => limit) ? null : (
+        <Text dimColor>Usage limits are not available for this subscription.</Text>
+      )}
+      {limits.map(({ title, limit }) =>
+        limit ? (
+          <LimitBar key={title} title={title} limit={limit} maxWidth={maxWidth} />
+        ) : null,
+      )}
+      {utilization.extra_usage ? (
+        <ExtraUsageSection
+          extraUsage={utilization.extra_usage}
+          maxWidth={maxWidth}
+        />
+      ) : null}
+      {isEligibleForOverageCreditGrant() ? (
+        <OverageCreditUpsell maxWidth={maxWidth} />
+      ) : null}
+    </Box>
+  );
+}
+
+function ExtraUsageSection({
+  extraUsage,
+  maxWidth,
+}: {
+  extraUsage: ExtraUsage;
+  maxWidth: number;
+}): React.ReactNode {
+  const subscriptionType = getSubscriptionType();
+  if (subscriptionType !== 'pro' && subscriptionType !== 'max') return null;
+
+  if (!extraUsage.is_enabled) {
+    return extraUsageCommand.isEnabled() ? (
+      <Box flexDirection="column">
+        <Text bold>Extra usage</Text>
+        <Text dimColor>Extra usage not enabled · /extra-usage to enable</Text>
+      </Box>
+    ) : null;
+  }
+  if (extraUsage.monthly_limit === null) {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Extra usage</Text>
+        <Text dimColor>Unlimited</Text>
+      </Box>
+    );
+  }
+  if (
+    typeof extraUsage.used_credits !== 'number' ||
+    typeof extraUsage.utilization !== 'number'
+  ) {
+    return null;
+  }
+
+  const now = new Date();
+  const oneMonthReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const formattedUsedCredits = formatCost(extraUsage.used_credits / 100, 2);
+  const formattedMonthlyLimit = formatCost(extraUsage.monthly_limit / 100, 2);
+  return (
+    <LimitBar
+      title="Extra usage"
+      limit={{
+        utilization: extraUsage.utilization,
+        resets_at: oneMonthReset.toISOString(),
+      }}
+      showTimeInReset={false}
+      extraSubtext={`${formattedUsedCredits} / ${formattedMonthlyLimit} spent`}
+      maxWidth={maxWidth}
+    />
+  );
 }
 
 function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactNode {

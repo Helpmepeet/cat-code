@@ -55,13 +55,35 @@ import {
   validateCodexAccountAlias,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
+import {
+  getClaudePoolStatus,
+  switchToClaudeAccount,
+  syncClaudeAccountToStorage,
+  type ClaudePoolAccount,
+} from '../../src/services/api/claudeAccountPool.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
+import {
+  installOAuthTokens,
+  parseManualOAuthCallbackInput,
+} from '../../src/cli/handlers/auth.js'
+import { OAuthService } from '../../src/services/oauth/index.js'
 import { runCodexOAuthFlow, type CodexTokens } from '../../src/services/oauth/codex-client.js'
-import { clearCodexOAuthTokens, saveCodexOAuthTokens } from '../../src/utils/auth.js'
+import {
+  clearCodexOAuthTokens,
+  clearOAuthTokenCache,
+  hasAnthropicCredentials,
+  isClaudeAISubscriber,
+  saveCodexOAuthTokens,
+  validateForceLoginOrgForToken,
+} from '../../src/utils/auth.js'
+import { clearAuthRelatedCaches } from '../../src/commands/logout/logout.js'
+import { getInitialSettings } from '../../src/utils/settings/settings.js'
 import type {
   AccountResultFrame,
+  AccountLoginProvider,
   AccountsSnapshot,
+  AnthropicAccountStatus,
   AccountStatus,
   AccountVerbMessage,
   AccountVerbType,
@@ -84,6 +106,8 @@ export type AccountVerbResult = {
 export type AccountsCommandExecutor = {
   /** Switch the persisted active account. `accountId` already re-resolved. */
   switch(accountId: string): AccountVerbResult
+  /** Switch the active Anthropic subscription account and refresh auth caches. */
+  switchAnthropic(accountId: string): Promise<AccountVerbResult>
   /** Rename a vault account. `alias` already re-validated against the live pool. */
   rename(accountId: string, alias: string): AccountVerbResult
   /** Delete a vault account profile. `accountId` already re-resolved + vault-checked. */
@@ -133,6 +157,25 @@ export type SidecarAccountsDomain = {
   setOAuthProgressSink(sink: (progress: OAuthLoginProgress) => void): void
 }
 
+function isSidecarFirstRunEligible(): boolean {
+  const codexPool = getPoolStatus()
+  const anthropicPool = getClaudePoolStatus()
+  if (
+    !codexPool.initialized ||
+    !anthropicPool.initialized ||
+    codexPool.accounts.length > 0 ||
+    anthropicPool.accounts.length > 0
+  ) {
+    return false
+  }
+  try {
+    return !hasAnthropicCredentials()
+  } catch {
+    // Credential discovery failed: do not authorize an automatic route change.
+    return false
+  }
+}
+
 /* ------------------------------------------------------------------------- *
  * OAuth login controller seam (P4-15) — the live sign-in back-channel
  * ------------------------------------------------------------------------- *
@@ -160,7 +203,7 @@ export type OAuthPendingLogin = {
   /** Validate a proposed alias with the engine's OWN rule; empty = skip (ok). */
   validateAlias(alias: string): { ok: true } | { ok: false; message: string }
   /** Persist the captured tokens (engine credential write). Empty alias = keep/anon. */
-  persist(alias: string | undefined): void
+  persist(alias: string | undefined): void | Promise<void>
 }
 
 /** Begins the real OAuth flow; the captured tokens stay inside the returned handle. */
@@ -171,6 +214,24 @@ export type OAuthLoginRunner = {
     /** Resolves when the user pastes a code (fed by the paste-code verb). */
     waitForManualCode: () => Promise<string>
   }): Promise<OAuthPendingLogin>
+  /** Validate renderer-provided manual input without consuming the retry slot. */
+  validateManualCode?(
+    code: string,
+  ): { ok: true } | { ok: false; message: string }
+  /** Best-effort teardown for an abandoned browser/manual-code flow. */
+  cancel?(): void
+}
+
+type AnthropicOAuthService = Pick<
+  OAuthService,
+  'startOAuthFlow' | 'handleManualAuthCodeInput' | 'cleanup'
+>
+
+export type AnthropicOAuthRunnerDependencies = {
+  createService?: () => AnthropicOAuthService
+  installTokens?: typeof installOAuthTokens
+  validateOrg?: typeof validateForceLoginOrgForToken
+  readSettings?: typeof getInitialSettings
 }
 
 /**
@@ -222,6 +283,84 @@ export function createRealOAuthLoginRunner(): OAuthLoginRunner {
   }
 }
 
+/**
+ * Anthropic subscription OAuth runner. It reuses the engine's canonical
+ * `OAuthService` + `installOAuthTokens` path, so profile lookup, vault writes,
+ * account-pool upsert, keychain sync, and cache invalidation stay engine-owned.
+ */
+export function createRealAnthropicOAuthLoginRunner(
+  dependencies: AnthropicOAuthRunnerDependencies = {},
+): OAuthLoginRunner {
+  const createService =
+    dependencies.createService ?? (() => new OAuthService())
+  const installTokens = dependencies.installTokens ?? installOAuthTokens
+  const validateOrg =
+    dependencies.validateOrg ?? validateForceLoginOrgForToken
+  const readSettings = dependencies.readSettings ?? getInitialSettings
+  let activeService: AnthropicOAuthService | null = null
+  return {
+    validateManualCode(rawInput) {
+      const parsed = parseManualOAuthCallbackInput(rawInput)
+      if (!parsed.authorizationCode || !parsed.state) {
+        return {
+          ok: false,
+          message:
+            'Could not parse input. Paste the full callback URL or exact "<code>#<state>" value.',
+        }
+      }
+      return { ok: true }
+    },
+    async begin({ onWaitingForLogin, waitForManualCode }) {
+      const service = createService()
+      activeService = service
+      try {
+        const settings = readSettings()
+        const tokens = await service.startOAuthFlow(
+          async url => {
+            onWaitingForLogin(url)
+            void waitForManualCode().then(rawInput => {
+              const parsed = parseManualOAuthCallbackInput(rawInput)
+              if (!parsed.authorizationCode || !parsed.state) return
+              service.handleManualAuthCodeInput({
+                authorizationCode: parsed.authorizationCode,
+                state: parsed.state,
+              })
+            })
+          },
+          {
+            loginWithClaudeAi:
+              settings.forceLoginMethod !== 'console',
+            orgUUID: settings.forceLoginOrgUUID,
+          },
+        )
+        // Keep tokens captured inside the pending handle. The domain performs
+        // the generation/cancellation check before invoking this commit.
+        return {
+          isExistingAccount: true,
+          validateAlias: () => ({ ok: true }),
+          async persist() {
+            // Managed-org validation is a PRE-COMMIT gate. Installing first
+            // leaves a rejected token active in the pool/keychain/vault even
+            // though the UI reports failure.
+            const orgResult = await validateOrg(tokens.accessToken)
+            if (orgResult.valid === false) {
+              throw new Error(orgResult.message)
+            }
+            await installTokens(tokens)
+          },
+        }
+      } finally {
+        if (activeService === service) activeService = null
+        service.cleanup()
+      }
+    },
+    cancel() {
+      activeService?.cleanup()
+      activeService = null
+    },
+  }
+}
+
 /* ------------------------------------------------------------------------- *
  * Pure projection (redaction) — the security-critical core, unit-tested
  * ------------------------------------------------------------------------- */
@@ -260,6 +399,33 @@ export function buildAccountStatus(
   }
 }
 
+/** Project one Claude pool entry through an explicit redaction whitelist. */
+export function buildAnthropicAccountStatus(
+  account: ClaudePoolAccount,
+  isDefault: boolean,
+): AnthropicAccountStatus {
+  return {
+    id: account.accountUuid,
+    alias: account.alias ?? null,
+    email: account.emailAddress,
+    status: account.status,
+    isDefault,
+    hasVaultProfile: Boolean(account.vaultFilePath),
+    subscriptionType: account.subscriptionType ?? null,
+  }
+}
+
+/** Match account attribution to the same effective auth decision as requests. */
+export function resolveAnthropicSubscriptionActive(
+  subscriberCheck: () => boolean = isClaudeAISubscriber,
+): boolean {
+  try {
+    return subscriberCheck()
+  } catch {
+    return false
+  }
+}
+
 /** Project the whole pool status to the redacted snapshot. Pure. */
 export function buildAccountsSnapshot(
   poolStatus: {
@@ -268,6 +434,9 @@ export function buildAccountsSnapshot(
     initialized: boolean
   },
   now = Date.now(),
+  anthropicPoolStatus = getClaudePoolStatus(),
+  anthropicRouteAvailable = hasAnthropicCredentials(),
+  anthropicSubscriptionActive = resolveAnthropicSubscriptionActive(),
 ): AccountsSnapshot {
   const activeAccount = poolStatus.accounts[poolStatus.activeIndex]
   const activeAccountId = activeAccount?.accountId ?? null
@@ -277,12 +446,29 @@ export function buildAccountsSnapshot(
   const readyCount = poolStatus.accounts.filter(
     a => a.status === 'healthy' && a.usageLimitReached !== true,
   ).length
+  const anthropicActive =
+    anthropicPoolStatus.accounts[anthropicPoolStatus.activeIndex]
+  const anthropicAccounts = anthropicPoolStatus.accounts.map((account, index) =>
+    buildAnthropicAccountStatus(
+      account,
+      index === anthropicPoolStatus.activeIndex,
+    ),
+  )
   return {
     accounts,
     activeAccountId,
     readyCount,
     poolCount: poolStatus.accounts.length,
     initialized: poolStatus.initialized,
+    anthropicAccounts,
+    anthropicActiveAccountId: anthropicActive?.accountUuid ?? null,
+    anthropicReadyCount: anthropicPoolStatus.accounts.filter(
+      account => account.status === 'healthy',
+    ).length,
+    anthropicPoolCount: anthropicPoolStatus.accounts.length,
+    anthropicInitialized: anthropicPoolStatus.initialized,
+    anthropicRouteAvailable,
+    anthropicSubscriptionActive,
   }
 }
 
@@ -297,6 +483,22 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
       return account
         ? { ok: true, message: `Switched to ${account.alias ?? 'account'}` }
         : { ok: false, message: 'Could not switch to that account.' }
+    },
+    async switchAnthropic(accountId) {
+      const account = switchToClaudeAccount(accountId)
+      if (!account) {
+        return {
+          ok: false,
+          message: 'Could not switch to that Anthropic account.',
+        }
+      }
+      syncClaudeAccountToStorage()
+      clearOAuthTokenCache()
+      await clearAuthRelatedCaches()
+      return {
+        ok: true,
+        message: `Switched to ${account.alias ?? account.emailAddress}`,
+      }
     },
     rename(accountId, alias) {
       const ok = setAccountAlias(accountId, alias)
@@ -352,10 +554,20 @@ export function createSidecarAccountsDomain(
     executor?: AccountsCommandExecutor
     /** Injected in tests so a headless round-trip never opens a browser / writes the vault. */
     oauthRunner?: OAuthLoginRunner
+    /** Injected Anthropic runner; headless tests never open a browser or write credentials. */
+    anthropicOAuthRunner?: OAuthLoginRunner
+    /** First-run provider choice takes effect only after credential persistence succeeds. */
+    onProviderActivated?: (provider: AccountLoginProvider) => void
+    /** Sidecar-owned first-run eligibility; injectable for deterministic boundary tests. */
+    isFirstRunEligible?: () => boolean
   } = {},
 ): SidecarAccountsDomain {
   const executor = options.executor ?? createRealAccountsExecutor()
   const oauthRunner = options.oauthRunner ?? createRealOAuthLoginRunner()
+  const anthropicOAuthRunner =
+    options.anthropicOAuthRunner ?? createRealAnthropicOAuthLoginRunner()
+  const isFirstRunEligible =
+    options.isFirstRunEligible ?? isSidecarFirstRunEligible
 
   function resolveAccount(accountId: string): PoolAccount | undefined {
     return getPoolStatus().accounts.find(a => a.accountId === accountId)
@@ -368,24 +580,41 @@ export function createSidecarAccountsDomain(
    */
   let progressSink: ((progress: OAuthLoginProgress) => void) | null = null
   let generation = 0
-  let phase: 'idle' | 'waiting_for_login' | 'waiting_for_alias' = 'idle'
+  let phase:
+    | 'idle'
+    | 'waiting_for_login'
+    | 'waiting_for_alias'
+    | 'persisting' = 'idle'
   let pending: OAuthPendingLogin | null = null
   let resolveManualCode: ((code: string) => void) | null = null
+  let activeOAuthRunner: OAuthLoginRunner | null = null
+  let pendingProviderActivation: AccountLoginProvider | null = null
 
   function emit(gen: number, progress: OAuthLoginProgress): void {
     if (gen !== generation) return
     progressSink?.(progress)
   }
 
-  function beginLogin(): AccountVerbResult {
+  function beginLogin(provider: AccountLoginProvider): AccountVerbResult {
+    if (phase === 'persisting') {
+      return {
+        ok: false,
+        message: 'Sign-in is already completing. Wait for it to finish.',
+      }
+    }
+    activeOAuthRunner?.cancel?.()
     const gen = ++generation
     pending = null
+    pendingProviderActivation = isFirstRunEligible() ? provider : null
     resolveManualCode = null
     phase = 'idle'
+    const selectedRunner =
+      provider === 'anthropic' ? anthropicOAuthRunner : oauthRunner
+    activeOAuthRunner = selectedRunner
     emit(gen, { state: 'starting' })
     void (async () => {
       try {
-        const login = await oauthRunner.begin({
+        const login = await selectedRunner.begin({
           onWaitingForLogin: url => {
             phase = 'waiting_for_login'
             emit(gen, { state: 'waiting_for_login', url })
@@ -400,7 +629,13 @@ export function createSidecarAccountsDomain(
         if (login.isExistingAccount) {
           // Reauth / re-link: keep the existing name, no naming step. `success`
           // drives the accounts re-broadcast (server), which clears the banner.
-          login.persist(undefined)
+          phase = 'persisting'
+          await login.persist(undefined)
+          if (gen !== generation) return
+          if (pendingProviderActivation) {
+            options.onProviderActivated?.(pendingProviderActivation)
+          }
+          pendingProviderActivation = null
           pending = null
           phase = 'idle'
           emit(gen, { state: 'success' })
@@ -412,12 +647,17 @@ export function createSidecarAccountsDomain(
       } catch (error) {
         if (gen !== generation) return
         pending = null
+        pendingProviderActivation = null
         resolveManualCode = null
         phase = 'idle'
         emit(gen, {
           state: 'error',
           message: error instanceof Error ? error.message : String(error),
         })
+      } finally {
+        if (gen === generation && activeOAuthRunner === selectedRunner) {
+          activeOAuthRunner = null
+        }
       }
     })()
     return { ok: true, message: 'Sign-in started.' }
@@ -427,13 +667,17 @@ export function createSidecarAccountsDomain(
     if (!resolveManualCode) {
       return { ok: false, message: 'No sign-in is waiting for a code.' }
     }
+    const validation = activeOAuthRunner?.validateManualCode?.(code)
+    if (validation?.ok === false) {
+      return validation
+    }
     const resolve = resolveManualCode
     resolveManualCode = null
     resolve(code)
     return { ok: true, message: 'Code submitted.' }
   }
 
-  function submitAlias(alias: string): AccountVerbResult {
+  async function submitAlias(alias: string): Promise<AccountVerbResult> {
     if (phase !== 'waiting_for_alias' || !pending) {
       return { ok: false, message: 'No sign-in is waiting for a name.' }
     }
@@ -443,7 +687,27 @@ export function createSidecarAccountsDomain(
       return { ok: false, message: check.message }
     }
     const gen = generation
-    pending.persist(alias.trim() || undefined)
+    const login = pending
+    phase = 'persisting'
+    try {
+      await login.persist(alias.trim() || undefined)
+    } catch (error) {
+      if (gen === generation) {
+        pending = login
+        phase = 'waiting_for_alias'
+      }
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      }
+    }
+    if (gen !== generation) {
+      return { ok: false, message: 'Sign-in was superseded.' }
+    }
+    if (pendingProviderActivation) {
+      options.onProviderActivated?.(pendingProviderActivation)
+    }
+    pendingProviderActivation = null
     pending = null
     phase = 'idle'
     emit(gen, { state: 'success' })
@@ -451,7 +715,15 @@ export function createSidecarAccountsDomain(
   }
 
   function cancelLogin(): AccountVerbResult {
+    if (phase === 'persisting') {
+      return {
+        ok: false,
+        message: 'Sign-in is already completing and can no longer be cancelled.',
+      }
+    }
     generation++ // drop any late progress from the abandoned attempt
+    activeOAuthRunner?.cancel?.()
+    activeOAuthRunner = null
     if (resolveManualCode) {
       // Unblock the real flow's manual-code wait so its callback server tears
       // down (the empty code makes the flow throw, which we then drop by gen).
@@ -460,6 +732,7 @@ export function createSidecarAccountsDomain(
       resolve('')
     }
     pending = null
+    pendingProviderActivation = null
     phase = 'idle'
     return { ok: true, message: 'Sign-in cancelled.' }
   }
@@ -467,7 +740,11 @@ export function createSidecarAccountsDomain(
   return {
     getSnapshot() {
       try {
-        return buildAccountsSnapshot(getPoolStatus())
+        return buildAccountsSnapshot(
+          getPoolStatus(),
+          Date.now(),
+          getClaudePoolStatus(),
+        )
       } catch {
         return null
       }
@@ -484,6 +761,30 @@ export function createSidecarAccountsDomain(
     async runVerb(verb) {
       switch (verb.type) {
         case 'account.switch': {
+          if (verb.provider === 'anthropic') {
+            const account = getClaudePoolStatus().accounts.find(
+              candidate => candidate.accountUuid === verb.accountId,
+            )
+            if (!account) {
+              return notFound('account.switch')
+            }
+            if (account.status !== 'healthy') {
+              return {
+                verb: 'account.switch',
+                result: {
+                  ok: false,
+                  message: 'That Anthropic account needs to be signed in again.',
+                },
+                poolChanged: false,
+              }
+            }
+            const result = await executor.switchAnthropic(account.accountUuid)
+            return {
+              verb: 'account.switch',
+              result,
+              poolChanged: result.ok,
+            }
+          }
           const account = resolveAccount(verb.accountId)
           if (!account) {
             return notFound('account.switch')
@@ -545,7 +846,11 @@ export function createSidecarAccountsDomain(
           // Begin the REAL OAuth flow; progress flows on the `oauth.login.progress`
           // frame, the account appears on the `accounts.snapshot` re-broadcast the
           // server fires on the `success` progress — never via this verb result.
-          return { verb: 'account.login', result: beginLogin(), poolChanged: false }
+          return {
+            verb: 'account.login',
+            result: beginLogin(verb.provider ?? 'openai'),
+            poolChanged: false,
+          }
         }
         case 'account.oauthPasteCode': {
           return {
@@ -557,7 +862,7 @@ export function createSidecarAccountsDomain(
         case 'account.oauthAlias': {
           return {
             verb: 'account.oauthAlias',
-            result: submitAlias(verb.alias),
+            result: await submitAlias(verb.alias),
             poolChanged: false,
           }
         }

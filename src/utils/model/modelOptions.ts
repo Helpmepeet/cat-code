@@ -1,7 +1,12 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
-import { getInitialMainLoopModel, getTotalInputTokens } from '../../bootstrap/state.js'
+import {
+  getInitialMainLoopModel,
+  getTotalInputTokens,
+  isProviderSwitchLocked,
+} from '../../bootstrap/state.js'
 import {
   hasCodexTokens,
+  hasAnthropicCredentials,
   isClaudeAISubscriber,
   isCodexSubscriber,
   isMaxSubscriber,
@@ -329,7 +334,11 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       getGpt56TerraOption(),
       getGpt56LunaOption(),
     ]
-    if (getTotalInputTokens() === 0 && isClaudeAISubscriber()) {
+    if (
+      !isProviderSwitchLocked() &&
+      getTotalInputTokens() === 0 &&
+      hasAnthropicCredentials()
+    ) {
       codexOptions.push(getSonnet46Option(), getOpus46Option(fastMode), getHaiku45Option())
     }
     return codexOptions
@@ -512,7 +521,12 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   // Before first query, show GPT models when Codex tokens exist so the user
   // can switch provider before any cache is built. After the first query,
   // lock to the current provider to avoid cache invalidation.
-  if (getTotalInputTokens() === 0 && !isCodexSubscriber() && hasCodexTokens()) {
+  if (
+    !isProviderSwitchLocked() &&
+    getTotalInputTokens() === 0 &&
+    !isCodexSubscriber() &&
+    hasCodexTokens()
+  ) {
     const gptModels = [
       getGpt56SolOption(),
       getGpt56TerraOption(),

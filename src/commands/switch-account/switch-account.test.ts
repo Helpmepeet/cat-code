@@ -4,12 +4,19 @@ import * as codexPoolModule from '../../services/api/codexAccountPool.js'
 import * as leaseManagerModule from '../../services/api/codexAccountLeaseManager.js'
 import * as codexFetchAdapterModule from '../../services/api/codex-fetch-adapter.js'
 import * as codexUsageModule from '../../services/api/codexUsage.js'
-import { setSessionProvider } from '../../bootstrap/state.js'
+import {
+  getMainLoopModelOverride,
+  getSessionProvider,
+  setProviderSwitchLocked,
+  setMainLoopModelOverride,
+  setSessionProvider,
+} from '../../bootstrap/state.js'
 import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
 } from '../../services/api/accountDiagnostics.js'
 import { call } from './switch-account.js'
+import switchAccountCommand from './index.js'
 
 function createCodexAccount(
   accountId: string,
@@ -36,7 +43,14 @@ describe('/switch-account', () => {
     _resetAccountDiagnosticStreamJsonHookForTesting()
     codexPoolModule.resetCodexAccountPoolForTest()
     claudePoolModule.resetClaudeAccountPoolForTest()
+    setMainLoopModelOverride(undefined)
+    setProviderSwitchLocked(false)
     setSessionProvider(null)
+  })
+
+  test('discovery copy advertises both Claude and Codex accounts', () => {
+    expect(switchAccountCommand.description).toContain('Claude')
+    expect(switchAccountCommand.description).toContain('Codex')
   })
 
   test('returns Already on <label> and skips Codex side effects for explicit no-op switches', async () => {
@@ -433,6 +447,83 @@ describe('/switch-account', () => {
     )
 
     expect(result).toEqual({ type: 'text', value: 'Switched to codexone' })
+    expect(getSessionProvider()).toBe('openai')
+    expect(getMainLoopModelOverride()).toBe('gpt-5.6-terra')
+  })
+
+  test('crossing from Codex to Claude clears a GPT-only effort tier', async () => {
+    setSessionProvider('openai')
+    claudePoolModule.seedClaudeAccountPoolForTest({
+      accounts: [
+        {
+          accountUuid: 'claude-target',
+          emailAddress: 'claude@example.com',
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          expiresAt: Date.now() + 60_000,
+          status: 'healthy' as const,
+          alias: 'claude-target',
+        },
+      ],
+      activeAccountUuid: 'claude-target',
+    })
+
+    spyOn(claudePoolModule, 'syncClaudeAccountToStorage').mockImplementation(() => {})
+    const logoutModule = await import('../logout/logout.js')
+    spyOn(logoutModule, 'clearAuthRelatedCaches').mockImplementation(async () => {})
+
+    let appState = {
+      authVersion: 0,
+      statusLineRefreshKey: 0,
+      mainLoopModel: 'gpt-5.6-terra' as string | null,
+      mainLoopModelForSession: null,
+      fastMode: false,
+      effortValue: 'ultra' as 'ultra' | undefined,
+    }
+
+    const result = await call(
+      'claude-target',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(
+          (updater: (prev: typeof appState) => typeof appState) => {
+            appState = updater(appState)
+          },
+        ),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result).toEqual({
+      type: 'text',
+      value: 'Switched to Claude account claude-target',
+    })
+    expect(getSessionProvider()).toBe('firstParty')
+    expect(appState.effortValue).toBeUndefined()
+  })
+
+  test('restored-history lock rejects a cross-provider account switch even with zero restored cost', async () => {
+    setSessionProvider('firstParty')
+    setProviderSwitchLocked(true)
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [createCodexAccount('codex-only', 'codexone')],
+      activeAccountId: 'codex-only',
+    })
+
+    const result = await call(
+      'codexone',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result?.type).toBe('text')
+    expect(result?.value).toContain(
+      'Provider cannot be changed after the first turn',
+    )
+    expect(getSessionProvider()).toBe('firstParty')
   })
 
   test('explicit exact Codex match wins over Claude prefix match', async () => {

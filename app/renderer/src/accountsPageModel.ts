@@ -6,6 +6,7 @@ import type {
   AccountOAuthCancelMessage,
   AccountOAuthPasteCodeMessage,
   AccountRenameMessage,
+  AccountsSnapshot,
   AccountStatus,
   AccountSwitchMessage,
   AccountTouchAllMessage,
@@ -15,8 +16,29 @@ import type { Tone } from './tone.js'
 
 const newRequestId = (): string => crypto.randomUUID()
 
-export function switchVerb(accountId: string): AccountSwitchMessage {
-  return { type: "account.switch", requestId: newRequestId(), accountId }
+export function selectAnthropicReadyLabel(
+  snapshot: AccountsSnapshot | null,
+): string {
+  if (!snapshot) return '0 of 0 ready'
+  if (
+    snapshot.anthropicPoolCount === 0 &&
+    snapshot.anthropicRouteAvailable
+  ) {
+    return 'route configured'
+  }
+  return `${snapshot.anthropicReadyCount} of ${snapshot.anthropicPoolCount} ready`
+}
+
+export function switchVerb(
+  accountId: string,
+  provider: 'anthropic' | 'openai' = 'openai',
+): AccountSwitchMessage {
+  return {
+    type: 'account.switch',
+    requestId: newRequestId(),
+    accountId,
+    provider,
+  }
 }
 
 export function renameVerb(
@@ -43,8 +65,14 @@ export function touchAllVerb(): AccountTouchAllMessage {
   return { type: 'account.touchAll', requestId: newRequestId() }
 }
 
-export function loginVerb(): AccountLoginMessage {
-  return { type: "account.login", requestId: newRequestId() }
+export function loginVerb(
+  provider: 'anthropic' | 'openai' = 'openai',
+): AccountLoginMessage {
+  return {
+    type: 'account.login',
+    requestId: newRequestId(),
+    provider,
+  }
 }
 
 export function oauthPasteCodeVerb(code: string): AccountOAuthPasteCodeMessage {

@@ -10,7 +10,18 @@ const fetchPoolUsage = mock(async () => ({
   errors: [],
   fetchedAt: Date.now(),
 }))
-const fetchUtilization = mock(async () => null)
+const fetchUtilization = mock(async () => ({
+  five_hour: {
+    utilization: 14,
+    resets_at: new Date(Date.now() + 3_600_000).toISOString(),
+  },
+  seven_day: {
+    utilization: 27,
+    resets_at: new Date(Date.now() + 86_400_000).toISOString(),
+  },
+  seven_day_sonnet: null,
+  extra_usage: null,
+}))
 
 await mock.module('../../hooks/useTerminalSize.js', () => ({
   useTerminalSize: () => ({ columns: 120, rows: 40 }),
@@ -23,6 +34,17 @@ await mock.module('../ConfigurableShortcutHint.js', () => ({
 }))
 await mock.module('../../services/api/usage.js', () => ({
   fetchUtilization,
+}))
+await mock.module('../../utils/auth.js', () => ({
+  getSubscriptionType: () => 'pro',
+  isClaudeAISubscriber: () => true,
+}))
+await mock.module('../../commands/extra-usage/index.js', () => ({
+  extraUsage: { isEnabled: () => false },
+}))
+await mock.module('../LogoV2/OverageCreditUpsell.js', () => ({
+  isEligibleForOverageCreditGrant: () => false,
+  OverageCreditUpsell: () => null,
 }))
 await mock.module('../../services/api/codexAccountPool.js', () => ({
   describeCodexAccountAvailability: () => 'Available',
@@ -119,12 +141,17 @@ afterEach(() => {
   fetchUtilization.mockClear()
 })
 
-describe('/usage Codex display', () => {
-  test('renders the main Codex account without loading Anthropic usage', async () => {
+describe('/usage provider display', () => {
+  test('renders Anthropic subscription usage and Codex pool usage together', async () => {
     const output = await renderUsage()
 
     expect(fetchPoolUsage).toHaveBeenCalledTimes(1)
-    expect(fetchUtilization).not.toHaveBeenCalled()
+    expect(fetchUtilization).toHaveBeenCalledTimes(1)
+    expect(output).toContain('Anthropic subscription')
+    expect(output).toContain('Current session')
+    expect(output).toContain('14% used')
+    expect(output).toContain('Current week (all models)')
+    expect(output).toContain('27% used')
     expect(output).toContain('Codex accounts')
     expect(output).toContain('main · Available')
     expect(output).toContain('32% used')

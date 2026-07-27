@@ -230,6 +230,18 @@ export function hasAnthropicApiKeyAuth(): boolean {
   return key !== null && source !== 'none'
 }
 
+/**
+ * Whether this process has a configured route capable of running Anthropic
+ * models, independent of the currently selected session provider.
+ */
+export function hasAnthropicCredentials(): boolean {
+  return (
+    getAuthTokenSource().hasToken ||
+    hasAnthropicApiKeyAuth() ||
+    isUsing3PServices()
+  )
+}
+
 export function getAnthropicApiKeyWithSource(
   opts: { skipRetrievingKeyFromApiKeyHelper?: boolean } = {},
 ): {
@@ -2075,6 +2087,69 @@ export type OrgValidationResult =
   | { valid: true }
   | { valid: false; message: string }
 
+async function validateAccessTokenOrganization(
+  accessToken: string,
+  requiredOrgUuid: string,
+  envVarName?: 'CLAUDE_CODE_OAUTH_TOKEN' | 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+): Promise<OrgValidationResult> {
+  const profile = await getOauthProfileFromOauthToken(accessToken)
+  if (!profile) {
+    return {
+      valid: false,
+      message:
+        `Unable to verify organization for the current authentication token.\n` +
+        `This machine requires organization ${requiredOrgUuid} but the profile could not be fetched.\n` +
+        `This may be a network error, or the token may lack the user:profile scope required for\n` +
+        `verification (tokens from 'claude setup-token' do not include this scope).\n` +
+        `Try again, or obtain a full-scope token via 'claude auth login'.`,
+    }
+  }
+
+  const tokenOrgUuid = profile.organization.uuid
+  if (tokenOrgUuid === requiredOrgUuid) {
+    return { valid: true }
+  }
+
+  if (envVarName) {
+    return {
+      valid: false,
+      message:
+        `The ${envVarName} environment variable provides a token for a\n` +
+        `different organization than required by this machine's managed settings.\n\n` +
+        `Required organization: ${requiredOrgUuid}\n` +
+        `Token organization:   ${tokenOrgUuid}\n\n` +
+        `Remove the environment variable or obtain a token for the correct organization.`,
+    }
+  }
+
+  return {
+    valid: false,
+    message:
+      `Your authentication token belongs to organization ${tokenOrgUuid},\n` +
+      `but this machine requires organization ${requiredOrgUuid}.\n\n` +
+      `Please log in with the correct organization: claude auth login`,
+  }
+}
+
+/**
+ * Validate a newly-issued OAuth token before it is installed. This is the
+ * desktop OAuth commit gate: a wrong-org token must never become active and
+ * then be "rolled back" after credential state has already escaped to disk.
+ */
+export async function validateForceLoginOrgForToken(
+  accessToken: string,
+): Promise<OrgValidationResult> {
+  if (process.env.ANTHROPIC_UNIX_SOCKET) {
+    return { valid: true }
+  }
+  const requiredOrgUuid =
+    getSettingsForSource('policySettings')?.forceLoginOrgUUID
+  if (!requiredOrgUuid) {
+    return { valid: true }
+  }
+  return validateAccessTokenOrganization(accessToken, requiredOrgUuid)
+}
+
 /**
  * Validate that the active OAuth token belongs to the organization required
  * by `forceLoginOrgUUID` in managed settings. Returns a result object
@@ -2118,48 +2193,15 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
     source === 'CLAUDE_CODE_OAUTH_TOKEN' ||
     source === 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR'
 
-  const profile = await getOauthProfileFromOauthToken(tokens.accessToken)
-  if (!profile) {
-    // Fail closed — we can't verify the org
-    return {
-      valid: false,
-      message:
-        `Unable to verify organization for the current authentication token.\n` +
-        `This machine requires organization ${requiredOrgUuid} but the profile could not be fetched.\n` +
-        `This may be a network error, or the token may lack the user:profile scope required for\n` +
-        `verification (tokens from 'claude setup-token' do not include this scope).\n` +
-        `Try again, or obtain a full-scope token via 'claude auth login'.`,
-    }
-  }
-
-  const tokenOrgUuid = profile.organization.uuid
-  if (tokenOrgUuid === requiredOrgUuid) {
-    return { valid: true }
-  }
-
-  if (isEnvVarToken) {
-    const envVarName =
-      source === 'CLAUDE_CODE_OAUTH_TOKEN'
+  return validateAccessTokenOrganization(
+    tokens.accessToken,
+    requiredOrgUuid,
+    isEnvVarToken
+      ? source === 'CLAUDE_CODE_OAUTH_TOKEN'
         ? 'CLAUDE_CODE_OAUTH_TOKEN'
         : 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR'
-    return {
-      valid: false,
-      message:
-        `The ${envVarName} environment variable provides a token for a\n` +
-        `different organization than required by this machine's managed settings.\n\n` +
-        `Required organization: ${requiredOrgUuid}\n` +
-        `Token organization:   ${tokenOrgUuid}\n\n` +
-        `Remove the environment variable or obtain a token for the correct organization.`,
-    }
-  }
-
-  return {
-    valid: false,
-    message:
-      `Your authentication token belongs to organization ${tokenOrgUuid},\n` +
-      `but this machine requires organization ${requiredOrgUuid}.\n\n` +
-      `Please log in with the correct organization: claude auth login`,
-  }
+      : undefined,
+  )
 }
 
 class GcpCredentialsTimeoutError extends Error {}

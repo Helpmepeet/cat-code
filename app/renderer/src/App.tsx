@@ -68,6 +68,8 @@ import {
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptRows,
+  type NestedTranscriptRow,
+  type TranscriptRow,
   type TranscriptState,
 } from './transcriptProjector.js'
 import {
@@ -188,6 +190,7 @@ import {
   reduceAccountsState,
   selectAccountsSnapshot,
   selectActiveAccount,
+  selectActiveAnthropicAccount,
   selectFirstAccountsSnapshot,
   selectOAuthProgress,
 } from './accountsState.js'
@@ -281,9 +284,11 @@ import type {
   AccountResultFrame,
   AccountStatus,
   AccountsSnapshot,
+  AnthropicAccountStatus,
   AccountSwitchMessage,
   AccountVerbMessage,
   AskUserQuestionAnswer,
+  CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
@@ -299,6 +304,7 @@ import type {
 } from '../../shared/hostApi.js'
 import {
   buildDebugExport,
+  claimOAuthContextForAccountLogin,
   deriveActivity,
   fmtElapsed,
   fmtTok,
@@ -306,6 +312,9 @@ import {
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
+  shouldShowAnthropicPoolAccount,
+  shouldShowFirstRunOAuth,
+  type OAuthContext,
   type PromptDraftState,
 } from './appModel.js'
 
@@ -512,10 +521,11 @@ export function App() {
   // full-screen surface from the non-blocking reauth card (both begin the SAME
   // `account.login` flow), and `oauthStarting` is the optimistic gap between the
   // begin click and the first progress frame.
-  const [oauthContext, setOauthContext] = useState<'first-run' | 'reauth' | null>(
-    null,
-  )
+  const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
   const [oauthStarting, setOauthStarting] = useState(false)
+  const [oauthProvider, setOauthProvider] = useState<'anthropic' | 'openai'>(
+    'anthropic',
+  )
   const [activeView, setActiveView] = useState<
     'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   >('chat')
@@ -1066,6 +1076,16 @@ export function App() {
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
       if (!activeSessionId) return
+      if (verb.type === 'account.login') {
+        setOauthProvider(verb.provider ?? 'openai')
+        // AccountsPage starts login through this generic verb callback rather
+        // than `beginOAuth`. Claim the attempt here so waiting/manual-code/
+        // alias/error/retry/success all keep an owning surface. A first-run or
+        // reauth caller sets its more specific context immediately beforehand,
+        // and this functional update preserves it.
+        setOauthContext(claimOAuthContextForAccountLogin)
+        setOauthStarting(true)
+      }
       getBridge().accountVerb(activeSessionId, verb)
     },
     [activeSessionId],
@@ -1078,13 +1098,17 @@ export function App() {
   // on the `accounts.snapshot` re-broadcast the sidecar fires on `success` — no
   // renderer token path. `context` tags which surface owns the flow.
   const beginOAuth = useCallback(
-    (context: 'first-run' | 'reauth') => {
+    (
+      context: 'first-run' | 'reauth' | 'add-account',
+      provider: 'anthropic' | 'openai' = 'openai',
+    ) => {
       setOauthContext(context)
       setOauthStarting(true)
+      setOauthProvider(provider)
       if (activeSessionId) {
         dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
       }
-      sendAccountVerb(loginVerb())
+      sendAccountVerb(loginVerb(provider))
     },
     [sendAccountVerb, activeSessionId],
   )
@@ -1304,7 +1328,7 @@ export function App() {
     const next = paneSessionIds.find(id => !shown.has(id))
     if (!next) {
       setLayoutNotice(
-        'No other session to open in a split — create or select another session first.',
+        'No other session to open in a split. Create or select another session first.',
       )
       return
     }
@@ -1838,6 +1862,13 @@ export function App() {
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
 	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
+	      const panelProvider = panelRunControls?.model.provider ?? null
+	      const panelActiveCodexAccount =
+	        panelProvider === 'openai' ? selectActiveAccount(panelAccounts) : null
+	      const panelActiveAnthropicAccount =
+	        shouldShowAnthropicPoolAccount(panelProvider, panelAccounts)
+	          ? selectActiveAnthropicAccount(panelAccounts)
+	          : null
       // The composer slash picker's rich catalog (name + arg-hint + description)
       // for THIS pane's session, from the `slash-catalog.snapshot` read seam.
       const panelSlashCatalog = selectSlashCatalog(slashCatalog, sessionId)
@@ -1848,9 +1879,10 @@ export function App() {
 	        content: (
 	          <SessionPane
 	            accountsSnapshot={panelAccounts}
-	            activeAccount={selectActiveAccount(panelAccounts)}
+	            activeAccount={panelActiveCodexAccount}
+	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
-            onSwitchAccount={verb => {
+            onSwitchAccount={panelProvider === 'openai' ? verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not
               // the globally-active one), mirroring the run-control verbs. The
@@ -1864,7 +1896,7 @@ export function App() {
               } catch (error) {
                 setTransportError(errorMessage(error))
               }
-            }}
+            } : undefined}
             onManageAccounts={() => setActiveView('accounts')}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
@@ -2116,11 +2148,10 @@ export function App() {
   )
   const showTrustGate =
     !!activeSessionId && activeTrustSnapshot?.trusted === false
-  const showFirstRunOAuth =
-    !showTrustGate &&
-    !!activeAccountsSnapshot &&
-    activeAccountsSnapshot.initialized &&
-    activeAccountsSnapshot.poolCount === 0
+  const showFirstRunOAuth = shouldShowFirstRunOAuth(
+    activeAccountsSnapshot,
+    showTrustGate,
+  )
 
   // P4-15 — the live OAuth progress (the back-channel) + the sub-state VIEWS
   // derived from it. The first-run surface owns starting/waiting_for_login/
@@ -2158,6 +2189,12 @@ export function App() {
     oauthContext === null &&
     oauthProgress != null &&
     oauthProgress.state !== 'success'
+
+  const showAddAccountOAuthSurface =
+    !showTrustGate &&
+    !showFirstRunOAuthSurface &&
+    oauthContext === 'add-account' &&
+    (oauthStarting || oauthProgress != null)
 
   // The reauth progress card (non-blocking). Live only while the reauth flow owns
   // the shared progress and it is a waiting/error state; `success` → toast below.
@@ -2205,11 +2242,28 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [oauthContext, oauthProgress, activeSessionId])
 
+  // Add-account `success`: keep the shared surface mounted long enough to
+  // acknowledge completion, then clear its session-scoped progress. Unlike the
+  // old orphan adoption path, retry retains the add-account owner throughout.
+  useEffect(() => {
+    if (oauthContext !== 'add-account' || oauthProgress?.state !== 'success') {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      setOauthStarting(false)
+      setOauthContext(null)
+      if (activeSessionId) {
+        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
+      }
+    }, 900)
+    return () => window.clearTimeout(timer)
+  }, [oauthContext, oauthProgress, activeSessionId])
+
   // Reauth `success`: surface a toast and clear the flow; the dead-account banner
   // clears itself on the account re-link (`accounts.snapshot` re-broadcast).
   useEffect(() => {
     if (oauthContext !== 'reauth' || oauthProgress?.state !== 'success') return
-    toast('You’re back in — account re-linked.', { tone: 'success' })
+    toast('You’re back in. Account re-linked.', { tone: 'success' })
     setOauthStarting(false)
     setOauthContext(null)
     if (activeSessionId) {
@@ -2369,15 +2423,16 @@ export function App() {
          * owning surface: adopt it into the shared OAuth surface as a top-level
          * overlay so it can complete (incl. the alias step), regardless of the
          * active view. First-run + reauth own their own surfaces above. */}
-        {adoptOrphanOAuth ? (
+        {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
           <div className="absolute inset-0 z-50">
-            <StartupOAuth
-              view={firstRunOAuthView}
-              onBegin={() => beginOAuth('first-run')}
-              onCancel={clearOAuth}
+              <StartupOAuth
+                view={firstRunOAuthView}
+                provider={oauthProvider}
+                onBegin={provider => beginOAuth('add-account', provider)}
+                onCancel={clearOAuth}
               onPasteCode={submitOAuthPasteCode}
               onSubmitAlias={submitOAuthAlias}
-              onRetry={() => beginOAuth('first-run')}
+                onRetry={() => beginOAuth('add-account', oauthProvider)}
             />
           </div>
         ) : null}
@@ -2470,11 +2525,12 @@ export function App() {
           <div className="relative flex min-h-0 flex-1">
             <StartupOAuth
               view={firstRunOAuthView}
-              onBegin={() => beginOAuth('first-run')}
+              provider={oauthProvider}
+              onBegin={provider => beginOAuth('first-run', provider)}
               onCancel={clearOAuth}
               onPasteCode={submitOAuthPasteCode}
               onSubmitAlias={submitOAuthAlias}
-              onRetry={() => beginOAuth('first-run')}
+              onRetry={() => beginOAuth('first-run', oauthProvider)}
             />
           </div>
         ) : workspacePanels.length === 0 || !activeSessionId ? (
@@ -2582,6 +2638,7 @@ function TasksStrip({
 export function SessionPane({
   accountsSnapshot,
   activeAccount,
+  activeAnthropicAccount,
   onSwitchAccount,
   onManageAccounts,
   accountsLastResult,
@@ -3383,6 +3440,7 @@ export function SessionPane({
           permissionContext={permissionContext}
           onSetMode={setPermissionMode}
           account={activeAccount}
+          anthropicAccount={activeAnthropicAccount}
           accounts={accountsSnapshot?.accounts ?? []}
           onSwitchAccount={handleSwitchAccount}
           onManageAccounts={onManageAccounts}
@@ -3613,6 +3671,8 @@ type SessionPaneProps = {
   accountsSnapshot: AccountsSnapshot | null
   /** This session's active pool account (real alias), or null before its snapshot. */
   activeAccount: AccountStatus | null
+  /** Active Anthropic subscription account when this session routes Anthropic. */
+  activeAnthropicAccount?: AnthropicAccountStatus | null
   /** Dispatch a minted `account.switch` verb (its requestId already assigned by
    * SessionPane, ACCT-5) to this session's sidecar. Absent → the account face
    * stays read-only. */
@@ -3650,7 +3710,7 @@ type SessionPaneProps = {
    * the composer picker; empty/absent falls the picker back to the names-only list. */
   slashCatalog?: readonly SlashCatalogEntry[]
   /** P4-24c — set this session's model (a value from `runControls.model.options`). */
-  onSetModel?: (model: string) => void
+  onSetModel?: (model: string | null) => void
   /** P4-24c — set this session's reasoning-effort tier (a level, or `auto` to clear). */
   onSetEffort?: (effort: string) => void
   /** P4-24c — toggle this session's fast mode on/off. */

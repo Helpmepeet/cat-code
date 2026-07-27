@@ -12,11 +12,11 @@ await mock.module('../../components/Settings/Settings.js', () => ({
 }))
 
 describe('/usage command', () => {
-  test('is available only for OpenAI sessions', async () => {
+  test('is available for Anthropic subscription and OpenAI sessions', async () => {
     const command = (await import('./index.js')).default
 
-    expect(command.description).toBe('Show Codex usage limits')
-    expect(command.availability).toEqual(['openai'])
+    expect(command.description).toBe('Show Anthropic and Codex usage limits')
+    expect(command.availability).toEqual(['claude-ai', 'openai'])
     expect(command.immediate).toBe(true)
   })
 

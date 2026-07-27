@@ -62,6 +62,7 @@ import {
   renameVerb,
   resultToastTone,
   selectAccountMenuItems,
+  selectAnthropicReadyLabel,
   statusDotTone,
   statusLabelTone,
   switchVerb,
@@ -271,7 +272,7 @@ function AddAccountDialog({
           We&apos;ll open your browser to authorize, then capture the callback
           locally on{' '}
           <code className="font-mono text-text-primary">127.0.0.1:1455</code>. No
-          API key — this is an OpenAI account (ChatGPT subscription) login.
+          API key needed: this is an OpenAI account (ChatGPT subscription) login.
         </p>
       )}
     </ALDialog>
@@ -392,7 +393,7 @@ function LogoutAccountDialog({
       <div className="text-[12.5px] leading-relaxed text-text-muted">
         The saved profile for{' '}
         <span className="font-mono text-text-primary">{alias}</span> stays on
-        disk — delete it separately to remove it entirely.
+        disk. Delete it separately to remove it entirely.
       </div>
     </ALDialog>
   )
@@ -733,6 +734,7 @@ export function AccountsPage({
   const active = selectActiveAccount(snapshot)
   const capAccount = selectCapAccount(snapshot)
   const readyLabel = selectReadyLabel(snapshot)
+  const anthropicReadyLabel = selectAnthropicReadyLabel(snapshot)
   const rest = rows.filter(a => a.id !== active?.id)
   const capSwitchTarget = capAccount
     ? rows.find(a => a.id !== capAccount.id && a.switchable) ?? null
@@ -768,8 +770,7 @@ export function AccountsPage({
               Accounts
             </h1>
             <p className="mt-1 text-[13px] text-text-faint">
-              Your Codex pool and what it&apos;s burning.{' '}
-              <span className="text-text-subtle">{readyLabel}</span>
+              Anthropic and Codex subscription accounts available to Cat Code.
             </p>
           </div>
           {active && active.status === 'healthy' ? (
@@ -824,6 +825,84 @@ export function AccountsPage({
         {!snapshot ? (
           <WaitingState />
         ) : (
+          <>
+          <section className="mb-[22px]">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-baseline gap-2.5">
+                <h2 className="text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+                  Anthropic Pool
+                </h2>
+                <span className="text-[12px] tabular-nums text-text-faint">
+                  {anthropicReadyLabel}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => submit(loginVerb('anthropic'), 'info')}
+                className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-app-bg"
+              >
+                + Add Anthropic
+              </button>
+            </div>
+            {snapshot.anthropicAccounts.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-7 text-center text-[12.5px] text-text-subtle">
+                {snapshot.anthropicRouteAvailable
+                  ? 'Anthropic route configured through an API key or cloud provider.'
+                  : 'No Anthropic accounts linked yet.'}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {snapshot.anthropicAccounts.map(account => (
+                  <div
+                    key={account.id}
+                    className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-surface-panel px-4 py-3"
+                  >
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        account.status !== 'healthy'
+                          ? 'bg-tone-danger'
+                          : account.isDefault
+                            ? 'bg-accent'
+                            : 'bg-tone-good'
+                      }`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[13px] text-text-primary">
+                          {account.alias ?? account.email}
+                        </span>
+                        {account.isDefault ? (
+                          <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-accent">
+                            active
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-0.5 text-[11.5px] text-text-subtle">
+                        {account.email}
+                      </div>
+                    </div>
+                    <span className="text-[11.5px] capitalize text-text-muted">
+                      {account.status === 'healthy'
+                        ? account.subscriptionType ?? account.status
+                        : account.status}
+                    </span>
+                    {!account.isDefault && account.status === 'healthy' ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          submit(switchVerb(account.id, 'anthropic'))
+                        }
+                        className="rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary"
+                      >
+                        Switch
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           <section className="mb-[22px]">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-baseline gap-2.5">
@@ -875,12 +954,13 @@ export function AccountsPage({
               </>
             )}
           </section>
+          </>
         )}
       </div>
 
       {dialog?.kind === 'add' ? (
         <AddAccountDialog
-          onAuthorize={() => submit(loginVerb(), 'info')}
+          onAuthorize={() => submit(loginVerb('openai'), 'info')}
           onClose={() => setDialog(null)}
         />
       ) : null}

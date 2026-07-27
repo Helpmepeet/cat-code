@@ -176,8 +176,8 @@ export class AuthCodeListener {
 
   private handleError(err: Error): void {
     logError(err)
-    this.close()
     this.reject(err)
+    this.close()
   }
 
   private resolve(authorizationCode: string): void {
@@ -197,6 +197,11 @@ export class AuthCodeListener {
   }
 
   close(): void {
+    // Closing an unused listener is cancellation, not a silent resource-only
+    // operation. Rejecting settles OAuthService.startOAuthFlow() so callers do
+    // not retain a permanently pending task after the user presses Cancel.
+    this.reject(new Error('OAuth login cancelled'))
+
     // If we have a pending response, send a redirect before closing
     if (this.pendingResponse) {
       this.handleErrorRedirect()

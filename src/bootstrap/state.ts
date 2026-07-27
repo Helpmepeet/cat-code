@@ -72,6 +72,8 @@ type State = {
   initialMainLoopModel: ModelSetting
   /** Provider derived from the selected model. When set, overrides env-var provider detection. */
   sessionProvider: SessionAPIProvider | null
+  /** Provider-family changes are unsafe once this session has provider-bound request history. */
+  providerSwitchLocked: boolean
   modelStrings: ModelStrings | null
   isInteractive: boolean
   kairosActive: boolean
@@ -302,6 +304,7 @@ function getInitialState(): State {
     mainLoopModelOverride: undefined,
     initialMainLoopModel: null,
     sessionProvider: null,
+    providerSwitchLocked: false,
     modelStrings: null,
     isInteractive: false,
     kairosActive: false,
@@ -879,6 +882,14 @@ export function setSessionProvider(
   provider: SessionAPIProvider | null,
 ): void {
   STATE.sessionProvider = provider
+}
+
+export function isProviderSwitchLocked(): boolean {
+  return STATE.providerSwitchLocked
+}
+
+export function setProviderSwitchLocked(locked: boolean): void {
+  STATE.providerSwitchLocked = locked
 }
 
 export function getSdkBetas(): string[] | undefined {
@@ -1783,4 +1794,3 @@ export function getPromptId(): string | null {
 export function setPromptId(id: string | null): void {
   STATE.promptId = id
 }
-

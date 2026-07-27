@@ -186,8 +186,8 @@ export function WorkspaceTrustGate({
         {trustRoot === null
           ? 'Cat Code could not resolve where this trust would be saved. Trust is stored per git repository, so approving may cover more than this folder.'
           : widerThanCwd
-            ? `Trust is stored per git repository. Approving saves trust for ${trustRoot} and covers every folder under it, including sibling projects — here and in the terminal CLI, which share this setting.`
-            : 'Approving trusts this folder and everything under it — here and in the terminal CLI, which share this setting.'}
+            ? `Trust is stored per git repository. Approving saves trust for ${trustRoot} and covers every folder under it, including sibling projects, both here and in the terminal CLI, which share this setting.`
+            : 'Approving trusts this folder and everything under it, both here and in the terminal CLI, which share this setting.'}
       </p>
       {errorMessage ? (
         <div
@@ -365,6 +365,7 @@ function AliasForm({ onSubmitAlias }: { onSubmitAlias: (alias: string) => void }
 
 export function StartupOAuth({
   view,
+  provider,
   onBegin,
   onCancel,
   onPasteCode,
@@ -372,7 +373,8 @@ export function StartupOAuth({
   onRetry,
 }: {
   view: StartupOAuthView
-  onBegin: () => void
+  provider: 'anthropic' | 'openai'
+  onBegin: (provider: 'anthropic' | 'openai') => void
   onCancel: () => void
   onPasteCode: (code: string) => void
   onSubmitAlias: (alias: string) => void
@@ -386,7 +388,8 @@ export function StartupOAuth({
         </h1>
         <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
           Opening browser to sign in… authorize the request, then return here.
-          Your Codex account appears once the engine captures the callback.
+          Your {provider === 'anthropic' ? 'Anthropic' : 'Codex'} account appears
+          once the engine captures the callback.
         </p>
         <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
         <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
@@ -449,29 +452,46 @@ export function StartupOAuth({
         <Pill tone="info" label="Sign in" />
       </div>
       <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
-        Sign in with Codex
+        Choose your provider
       </h1>
       <p className="mb-5 max-w-[460px] text-[13px] leading-relaxed text-text-muted">
-        Cat Code routes turns through your ChatGPT / Codex subscription. We&apos;ll
-        open your browser to authorize, then come back here. Add more accounts
-        later in Settings → Accounts.
+        Link an Anthropic Claude or ChatGPT / Codex subscription. You can switch
+        models later without signing out.
       </p>
-      <div className="mb-5 flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
-        <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-tone-info/25 bg-tone-info/10 text-[13px] font-bold text-tone-info">
-          C
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13.5px] font-semibold text-text-primary">
-            Codex · ChatGPT subscription
+      <div className="flex flex-col gap-2.5">
+        <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
+          <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-accent/25 bg-accent/10 text-[13px] font-bold text-accent">
+            A
           </span>
-          <span className="text-[11.5px] text-text-subtle">
-            OAuth via auth.openai.com · account pool, capped/dead detection
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13.5px] font-semibold text-text-primary">
+              Anthropic · Claude subscription
+            </span>
+            <span className="text-[11.5px] text-text-subtle">
+              Claude Opus, Sonnet, and Haiku via Anthropic OAuth
+            </span>
           </span>
-        </span>
+          <PrimaryButton autoFocus onClick={() => onBegin('anthropic')}>
+            Open browser to sign in
+          </PrimaryButton>
+        </div>
+        <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
+          <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-tone-info/25 bg-tone-info/10 text-[13px] font-bold text-tone-info">
+            C
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13.5px] font-semibold text-text-primary">
+              Codex · ChatGPT subscription
+            </span>
+            <span className="text-[11.5px] text-text-subtle">
+              OpenAI models via ChatGPT / Codex OAuth
+            </span>
+          </span>
+          <PrimaryButton onClick={() => onBegin('openai')}>
+            Open browser to sign in
+          </PrimaryButton>
+        </div>
       </div>
-      <PrimaryButton autoFocus onClick={onBegin}>
-        Open browser to sign in
-      </PrimaryButton>
     </StartupShell>
   )
 }

@@ -22,7 +22,7 @@ export const call: LocalCommandCall = async () => {
       return {
         type: 'text' as const,
         value:
-          'Voice mode requires an existing Claude.ai account; /login adds OpenAI accounts only.',
+          'Voice mode requires an existing Claude.ai account; run /login and choose Anthropic subscription.',
       }
     }
     return {
@@ -75,7 +75,7 @@ export const call: LocalCommandCall = async () => {
     return {
       type: 'text' as const,
       value:
-        'Voice mode requires an existing Claude.ai account; /login adds OpenAI accounts only.',
+        'Voice mode requires an existing Claude.ai account; run /login and choose Anthropic subscription.',
     }
   }
 

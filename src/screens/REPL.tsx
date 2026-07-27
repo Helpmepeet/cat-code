@@ -278,8 +278,8 @@ import { AwsAuthStatusBox } from '../components/AwsAuthStatusBox.js';
 import { useRateLimitWarningNotification } from 'src/hooks/notifs/useRateLimitWarningNotification.js';
 import {
   getAPIProvider,
-  getProviderForModel,
   persistStartupProviderPreference,
+  resolveModelSelectionProvider,
   resolveRequestProvider,
 } from '../utils/model/providers.js';
 import { useDeprecationWarningNotification } from 'src/hooks/notifs/useDeprecationWarningNotification.js';
@@ -5503,7 +5503,7 @@ export function REPL({
                 {"external" === 'ant' && focusedInputDialog === 'model-switch' && AntModelSwitchCallout && <AntModelSwitchCallout onDone={(selection: string, modelAlias?: string) => {
             setShowModelSwitchCallout(false);
             if (selection === 'switch' && modelAlias) {
-              const nextProvider = getProviderForModel(modelAlias);
+              const nextProvider = resolveModelSelectionProvider(modelAlias);
               setSessionProvider(nextProvider);
               persistStartupProviderPreference(nextProvider);
               setAppState(prev => ({
