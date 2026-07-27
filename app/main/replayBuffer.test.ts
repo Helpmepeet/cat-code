@@ -348,8 +348,23 @@ test('clearSession() drops only the restarted session replay state', () => {
 })
 
 test('default cap is the documented value', () => {
-  expect(DEFAULT_MAX_BUFFERED_FRAMES).toBe(512)
+  expect(DEFAULT_MAX_BUFFERED_FRAMES).toBe(8_000)
   expect(DEFAULT_MAX_BUFFERED_BYTES).toBe(8 * 1024 * 1024)
+})
+
+/**
+ * The sizing rule, not just the constant: the frame count must sit far enough
+ * above real session volume that the BYTE budget is what binds. Measured
+ * 2026-07-27, the largest session in this repo's transcript store was 1,413
+ * finished messages, and each becomes several frames once streamed partials
+ * are counted. A count that trips before the byte ceiling truncates early
+ * while saving no memory, which is the defect this replaced.
+ */
+test('the frame cap clears real session volume by a wide margin', () => {
+  const LARGEST_MEASURED_SESSION_MESSAGES = 1_413
+  expect(DEFAULT_MAX_BUFFERED_FRAMES).toBeGreaterThan(
+    LARGEST_MEASURED_SESSION_MESSAGES * 4,
+  )
 })
 
 test('snapshotSession returns exactly one session in delivery order (ready head + recent)', () => {

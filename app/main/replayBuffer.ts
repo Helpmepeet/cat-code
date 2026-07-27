@@ -45,8 +45,26 @@ import {
   type SessionId,
 } from '../shared/protocol.js'
 
-/** Default cap on retained `ring` frames per session (`head`/`sticky` are outside it). */
-export const DEFAULT_MAX_BUFFERED_FRAMES = 512
+/**
+ * Default cap on retained `ring` frames per session (`head`/`sticky` are
+ * outside it).
+ *
+ * Sized from MEASURED sessions, 2026-07-27. The previous 512 dated from the
+ * P1-0 walking skeleton, when a whole session was a handshake plus one probe
+ * tool call; it was never re-measured against real traffic. Six real sessions
+ * in this repo's own transcript store held 223–1,413 finished messages
+ * (assistant/user/system) for 1.3–4.2 MB on the wire, and each message is
+ * several frames once streamed partials are counted — so 512 ran out at
+ * roughly a QUARTER of one working session, which is what the operator hit.
+ *
+ * The count is therefore raised until the BYTE budget below is what actually
+ * binds: memory is the thing worth bounding, and a frame tally sitting far
+ * beneath the byte ceiling only ever truncates early without saving anything.
+ * For scale, this repo's RAM audit measured each session's engine process at a
+ * ~237 MB floor / ~467 MB working, so this buffer is a low-single-digit
+ * percentage of what the session already costs.
+ */
+export const DEFAULT_MAX_BUFFERED_FRAMES = 8_000
 /** Default UTF-8 JSON byte budget for retained `ring` frames, per session. */
 export const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024
 
