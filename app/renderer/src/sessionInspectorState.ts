@@ -1,0 +1,368 @@
+/**
+ * CC-19 §4 — the session inspector's LIVE-STATE core.
+ *
+ * The Settings redesign (`docs/migration/specs/2026-07-27-settings-redesign.md`)
+ * splits settings-shaped information by Law 1: *Settings edits sources; sessions
+ * show state*. Everything present-tense — what THIS session resolved, the live
+ * permission context, the trust of its cwd, its extra directories, the engine's
+ * doctor output, the flag layer — is a fact about a running process, so it leaves
+ * Settings and lands on `MetadataInspector`. This module is the pure half of that
+ * destination: the drawer renders, these selectors decide.
+ *
+ * Two rules it exists to enforce, both inherited with the data:
+ *
+ *  - **`settingsReadState.ts` doctrine.** A pane may not assert a fact it has not
+ *    read, and "empty" ≠ "unread". Here the distinction is THREE-valued, because
+ *    the drawer can also have been handed nothing at all: `unwired` (App passes
+ *    no `sessionState` — the drawer has been TOLD nothing), `unread` (wired, but
+ *    no snapshot exists for this session), `read` (a snapshot arrived, so an
+ *    empty result is a real answer). `selectSeamState` is the single place that
+ *    branch is made, so no section re-remembers it — and none of the three notes
+ *    is phrased as "waiting…", since with a dead/never-attached session nothing
+ *    is in flight and nothing will arrive.
+ *  - **No fact is invented to fill a gap.** Where the wire carries no answer
+ *    (IDE/LSP state; whether an extra directory is durable or ephemeral; the
+ *    session's launch argv) the selector reports the gap and the drawer states
+ *    it, citing the source that causes it.
+ *
+ * NOTHING here crosses the wire: every input is a snapshot the renderer already
+ * holds for the active session (`settingsState.ts`, `permissionState.ts`,
+ * `workspaceTrustState.ts`, `diagnosticsState.ts`), which is why hosting the
+ * moved-out Settings panes needs no protocol change (§8.10 — reuse the real
+ * seam, never a second one).
+ */
+
+import type {
+  DiagnosticsSnapshot,
+  PermissionContextSnapshot,
+  SettingSourceId,
+  SettingsSnapshot,
+  WorkspaceTrustSnapshot,
+} from '../../shared/protocol.js'
+import type { EditableSettingValue } from '../../shared/settingsEditable.js'
+import { SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
+
+/* ------------------------------------------------------------------------- *
+ * The bundle App hands the drawer
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Every live seam the inspector reads, for ONE session, in one value.
+ *
+ * One bundle rather than five sibling props on purpose: unwired, the drawer then
+ * makes ONE honest statement instead of repeating the same sentence five times
+ * — and App's later wiring is a single prop (`buildSessionInspectorState({…})`,
+ * the `buildSessionMetadataView` idiom directly above it in `App.tsx`).
+ *
+ * Each field is nullable INDEPENDENTLY of the bundle: a wired drawer whose
+ * session has no `diagnostics.snapshot` yet is a different state from an unwired
+ * one, and the two must not collapse (see `selectSeamState`).
+ */
+export type SessionInspectorState = {
+  /** The session's workspace root, from the host roster (never re-derived here). */
+  readonly cwd: string | null
+  readonly settings: SettingsSnapshot | null
+  readonly permissionContext: PermissionContextSnapshot | null
+  readonly workspaceTrust: WorkspaceTrustSnapshot | null
+  readonly diagnostics: DiagnosticsSnapshot | null
+}
+
+/** Assemble the bundle from the selectors App already calls (no new feed). */
+export function buildSessionInspectorState(input: {
+  cwd: string | null
+  settings: SettingsSnapshot | null
+  permissionContext: PermissionContextSnapshot | null
+  workspaceTrust: WorkspaceTrustSnapshot | null
+  diagnostics: DiagnosticsSnapshot | null
+}): SessionInspectorState {
+  return {
+    cwd: input.cwd,
+    settings: input.settings,
+    permissionContext: input.permissionContext,
+    workspaceTrust: input.workspaceTrust,
+    diagnostics: input.diagnostics,
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Read state — three values, never two
+ * ------------------------------------------------------------------------- */
+
+/**
+ * `unwired` = the drawer was handed no bundle, so it knows nothing and the gap is
+ * the app's (a one-line `App.tsx` change closes it). `unread` = it was handed the
+ * bundle but this session carries no such snapshot, which is terminal for a dead
+ * or never-attached session. `read` = a snapshot arrived; an empty result is now
+ * a real answer.
+ */
+export type SeamState = 'unwired' | 'unread' | 'read'
+
+export function selectSeamState(
+  bundle: SessionInspectorState | undefined,
+  pick: (state: SessionInspectorState) => unknown,
+): SeamState {
+  if (bundle === undefined) return 'unwired'
+  return pick(bundle) == null ? 'unread' : 'read'
+}
+
+/**
+ * The seams whose absence the drawer must explain. A `Record` over this union
+ * below, so adding a seam without writing its sentence is a compile error —
+ * the `SETTINGS_PROJECT_UNBOUND_NOTE` idiom.
+ */
+export type InspectorSeamId =
+  | 'settings'
+  | 'permission'
+  | 'workspaceTrust'
+  | 'diagnostics'
+
+/**
+ * Why one seam has nothing to show, for a WIRED drawer. Each names the frame that
+ * did not arrive, so the note is diagnosable rather than decorative. None
+ * promises that something is coming: these snapshots are emitted once at attach,
+ * so a session that never attached (or has died) will never produce one.
+ */
+export const INSPECTOR_SEAM_UNREAD_NOTE: Readonly<
+  Record<InspectorSeamId, string>
+> = {
+  settings:
+    'No settings snapshot has arrived for this session, so nothing is known about how its settings resolved.',
+  permission:
+    'No permission context has arrived for this session, so its live mode and effective rules are unknown.',
+  workspaceTrust:
+    'No workspace-trust snapshot has arrived for this session, so the trust of its working directory is unknown.',
+  diagnostics:
+    'No diagnostics snapshot has arrived for this session, so the engine health checks are unknown.',
+}
+
+/**
+ * The single sentence an UNWIRED drawer shows in place of every live section. It
+ * describes the app's own gap — never the operator's configuration — because
+ * nothing has been read to describe.
+ */
+export const INSPECTOR_UNWIRED_NOTE =
+  'This drawer has not been handed the session’s live seams yet, so it can show none of them. The engine already sends every one of them; App passes no sessionState.'
+
+/* ------------------------------------------------------------------------- *
+ * Effective settings — what THIS session resolved
+ * ------------------------------------------------------------------------- */
+
+export type SettingsLayerView = {
+  readonly source: SettingSourceId
+  readonly origin: string
+  readonly keyCount: number
+}
+
+/**
+ * The session's enabled settings layers, HIGHEST precedence first — the reverse
+ * of the snapshot's ascending order, matching `SETTING_SOURCE_PRECEDENCE` (which
+ * is reused, never re-declared). Empty when no settings file exists at any
+ * layer, which is a real answer once a snapshot has been read.
+ */
+export function selectSettingsLayerViews(
+  snapshot: SettingsSnapshot | null,
+): readonly SettingsLayerView[] {
+  if (!snapshot) return []
+  return [...snapshot.layers]
+    .sort(
+      (a, b) =>
+        SETTING_SOURCE_PRECEDENCE.indexOf(a.source) -
+        SETTING_SOURCE_PRECEDENCE.indexOf(b.source),
+    )
+    .map(layer => ({
+      source: layer.source,
+      origin: layer.origin,
+      keyCount: layer.keys.length,
+    }))
+}
+
+export type EffectiveSettingRow = {
+  readonly key: string
+  /** The layer that WON this key for this session. */
+  readonly source: SettingSourceId
+  readonly managed: boolean
+  readonly editable: boolean
+  /**
+   * The effective value — ONLY for keys in the P4-19 editable allowlist, which is
+   * the only part of the seam that carries values at all (`SettingsSnapshot`
+   * deliberately ships the source model, not the settings object, so no
+   * credential-bearing value ever serializes). `null` therefore means "this seam
+   * carries no value for this key", NEVER "empty" or "false" — the drawer must
+   * render it as an absence, not as a value.
+   */
+  readonly value: EditableSettingValue | null
+}
+
+/**
+ * Every top-level key this session resolved, with its winning layer and (where
+ * the seam carries one) its value. Sorted by key so the list is stable across
+ * re-renders and snapshots.
+ */
+export function selectEffectiveSettingRows(
+  snapshot: SettingsSnapshot | null,
+): readonly EffectiveSettingRow[] {
+  if (!snapshot) return []
+  const values = new Map(
+    (snapshot.editableValues ?? []).map(entry => [entry.key, entry.value]),
+  )
+  return [...snapshot.resolved]
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map(resolution => ({
+      key: resolution.key,
+      source: resolution.source,
+      managed: resolution.managed,
+      editable: resolution.editable,
+      value: values.get(resolution.key) ?? null,
+    }))
+}
+
+/** How many resolved keys carry a value on this seam (the rest are name-only). */
+export function selectValuedSettingCount(
+  rows: readonly EffectiveSettingRow[],
+): number {
+  return rows.filter(row => row.value !== null).length
+}
+
+/* ------------------------------------------------------------------------- *
+ * The flag layer + run controls
+ * ------------------------------------------------------------------------- */
+
+export type FlagLayerView = {
+  /** The `--settings` file (or SDK inline-settings descriptor) backing the layer. */
+  readonly origin: string
+  /** Top-level keys the flag layer sets. */
+  readonly keys: readonly string[]
+  /** The subset it actually WINS — a policy layer still outranks it. */
+  readonly winningKeys: readonly string[]
+}
+
+/**
+ * The session's flag layer, or null when it has none.
+ *
+ * The flag layer is NOT "the CLI flags this session was started with": engine-
+ * side it is exactly `--settings <file>` plus SDK inline settings
+ * (`src/utils/settings/settings.ts:249,293,353-354`). Every other launch flag is
+ * consumed at bootstrap and never re-surfaces as a settings layer, so it cannot
+ * appear here — and no other frame carries the session's argv either.
+ *
+ * For a DESKTOP session it is emptier still: the app spawns each sidecar as
+ * `bun run <sidecarEntry>` with no engine arguments at all
+ * (`app/main/main.ts:477`), so a desktop session has no flag layer unless the
+ * engine picks one up from the environment. The drawer says so rather than
+ * implying a launch-flag story the wire cannot support.
+ */
+export function selectFlagLayer(
+  snapshot: SettingsSnapshot | null,
+): FlagLayerView | null {
+  if (!snapshot) return null
+  const layer = snapshot.layers.find(entry => entry.source === 'flagSettings')
+  if (!layer) return null
+  return {
+    origin: layer.origin,
+    keys: layer.keys,
+    winningKeys: snapshot.resolved
+      .filter(resolution => resolution.source === 'flagSettings')
+      .map(resolution => resolution.key),
+  }
+}
+
+export type RunControlsView = {
+  /**
+   * The engine's model OVERRIDE (`AppState.mainLoopModel`, "alias, full name (as
+   * with --model or env var), or null (default)" —
+   * `src/state/AppStateStore.ts:503`). Mutable in-session: the desktop's model
+   * picker writes the same field (`app/sidecar/runControlsDomain.ts:124`), so
+   * this is the override IN EFFECT, not proof of a launch flag.
+   */
+  readonly modelOverride: string | null
+  /** The model the session actually runs (`getMainLoopModel()` resolution). */
+  readonly resolvedModel: string | null
+  /** Explicit reasoning-effort tier, or null = the provider default (not a label). */
+  readonly effort: string | null
+  readonly fastMode: boolean
+}
+
+export function selectRunControls(
+  diagnostics: DiagnosticsSnapshot | null,
+): RunControlsView | null {
+  if (!diagnostics) return null
+  return {
+    modelOverride: diagnostics.mainLoopModel,
+    resolvedModel: diagnostics.mainLoopModelForSession,
+    effort: diagnostics.reasoningEffort,
+    fastMode: diagnostics.fastMode,
+  }
+}
+
+/**
+ * Why the drawer can never say "this session was started with `--model …`". The
+ * app records no launch argv for a session (`SessionDescriptor`,
+ * `app/shared/hostApi.ts:68`, carries none) and the desktop passes the engine no
+ * arguments to begin with (`app/main/main.ts:477`), so the run controls above are
+ * the values IN EFFECT, not a launch record.
+ */
+export const LAUNCH_FLAGS_UNAVAILABLE_NOTE =
+  'No launch arguments reach the renderer: the desktop spawns each engine with none (app/main/main.ts:477) and the session registry records no argv. These are the values in effect now — the model picker rewrites the same field mid-session.'
+
+/* ------------------------------------------------------------------------- *
+ * This session's extra directories
+ * ------------------------------------------------------------------------- */
+
+export type SessionDirectoryGroup = {
+  /** The engine's `PermissionRuleSource` tag, verbatim — never re-derived. */
+  readonly source: string
+  readonly count: number
+}
+
+export type SessionDirectoriesView = {
+  readonly total: number
+  readonly groups: readonly SessionDirectoryGroup[]
+  /**
+   * True when at least one entry is tagged `cliArg`, which is the known engine
+   * defect this drawer must render honestly rather than paper over: a DURABLE
+   * `permissions.additionalDirectories` entry and an EPHEMERAL `--add-dir` are
+   * merged into one list and both tagged `destination: 'cliArg'`
+   * (`src/utils/permissions/permissionSetup.ts:1015-1035`). So while this flag is
+   * set, the split the redesign wants (durable in Settings / this-session extras
+   * here) cannot be made from the wire — it needs the engine tag fix first.
+   */
+  readonly cliArgAmbiguous: boolean
+}
+
+/**
+ * The session's additional working directories, counted per source tag. Counts
+ * rather than paths: the authoritative path list is rendered once, by the live
+ * permission-context view, and a second copy in the same drawer would be two
+ * places to disagree.
+ */
+export function selectSessionDirectories(
+  context: PermissionContextSnapshot | null,
+): SessionDirectoriesView {
+  const entries = context?.additionalWorkingDirectories ?? []
+  const counts = new Map<string, number>()
+  for (const entry of entries) {
+    counts.set(entry.source, (counts.get(entry.source) ?? 0) + 1)
+  }
+  return {
+    total: entries.length,
+    groups: [...counts.entries()]
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => a.source.localeCompare(b.source)),
+    cliArgAmbiguous: entries.some(entry => entry.source === 'cliArg'),
+  }
+}
+
+/**
+ * The cited limit the drawer prints whenever `cliArgAmbiguous` holds. Kept beside
+ * the selector that decides it so the claim and its evidence never drift apart.
+ */
+export const DIRECTORY_SOURCE_AMBIGUITY_NOTE =
+  'The engine tags a durable permissions.additionalDirectories entry and an ephemeral --add-dir identically as cliArg (src/utils/permissions/permissionSetup.ts:1015-1035), so this drawer cannot say which of these are this-session extras. Splitting them needs the engine tag fix.'
+
+/**
+ * IDE / LSP status has NO read seam: no frame in `app/shared/protocol.ts` carries
+ * editor-connection or language-server state, so the inspector states the gap
+ * instead of rendering an empty pane that reads like "nothing is connected".
+ */
+export const IDE_LSP_UNAVAILABLE_NOTE =
+  'IDE connection and language-server status reach the renderer on no frame today — no protocol seam carries them — so they are omitted rather than shown as absent.'

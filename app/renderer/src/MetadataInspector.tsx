@@ -1,18 +1,36 @@
 /**
- * P4-6b — `MetadataInspector` (`MetadataInspector.jsx`).
+ * P4-6b — `MetadataInspector` (`MetadataInspector.jsx`), grown into the session
+ * inspector of CC-19 §4.
  *
  * A read-only right drawer over the ACTIVE session's per-message + per-session
- * metadata. It reads ONLY data the renderer already holds — the retained raw
+ * state. It reads ONLY data the renderer already holds — the retained raw
  * `SDKMessage[]` (via `messageMetadata.ts`) plus the session-level read-seams
- * (`permission.context` mode, `thread-goal.snapshot`, the catalog row) — so it
- * needs no new wire frame. Every value is text; nothing is a live control
- * (read-only), degrades to `—`, and never throws on a partial message
- * (tolerant narrowing lives in the selector).
+ * (`permission.context`, `settings.snapshot`, `workspace-trust.snapshot`,
+ * `diagnostics.snapshot`, `thread-goal.snapshot`, the catalog row) — so it needs
+ * no new wire frame. Every value is text; nothing is a live control (read-only),
+ * degrades to `—`, and never throws on a partial message (tolerant narrowing
+ * lives in the selector).
+ *
+ * **Why the live halves live here** (`docs/migration/specs/2026-07-27-settings-redesign.md`
+ * §4, Law 1 — *Settings edits sources; sessions show state*): the running
+ * permission context and mode, the trust of the session's cwd and its extra
+ * directories, what the session's settings actually resolved to, the flag layer,
+ * and the engine's own doctor output are all facts about ONE running process.
+ * They were displayed under Settings headings that promise durable
+ * configuration, which is the mistake that surface is being rebuilt to remove.
+ * They are display-only here: the renderer authors no permission rule (T6b) and
+ * writes nothing from this drawer.
+ *
+ * The live sections arrive as ONE optional `sessionState` bundle
+ * (`sessionInspectorState.ts`) so that (a) App's wiring is a single prop and
+ * (b) an unwired drawer makes one honest statement instead of five. Absent
+ * bundle ≠ "this session has nothing": see `selectSeamState`.
  *
  * §0 deferrals rendered as an HONEST note, never mocked: worktree-session
- * details, file-history backups, and content-replacement records do not reach
- * the renderer on any current frame, so the inspector says so instead of
- * inventing them (the prototype's `MOCK_SESSION_META`/`MOCK_MSG_META` fields).
+ * details, file-history backups, content-replacement records, and IDE/LSP status
+ * do not reach the renderer on any current frame, so the inspector says so
+ * instead of inventing them (the prototype's `MOCK_SESSION_META`/`MOCK_MSG_META`
+ * fields).
  */
 
 import { useState, type ReactNode } from 'react'
@@ -22,7 +40,25 @@ import {
   selectMessageRefs,
   type MetadataMessageRef,
 } from './messageMetadata.js'
+import { PermissionRulesEditor } from './PermissionRulesEditor.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
+import {
+  DIRECTORY_SOURCE_AMBIGUITY_NOTE,
+  IDE_LSP_UNAVAILABLE_NOTE,
+  INSPECTOR_SEAM_UNREAD_NOTE,
+  INSPECTOR_UNWIRED_NOTE,
+  LAUNCH_FLAGS_UNAVAILABLE_NOTE,
+  selectEffectiveSettingRows,
+  selectFlagLayer,
+  selectRunControls,
+  selectSessionDirectories,
+  selectSettingsLayerViews,
+  selectValuedSettingCount,
+  type SessionInspectorState,
+} from './sessionInspectorState.js'
+import { SourceBadge } from './SettingsField.js'
+import { settingsWereRead } from './settingsReadState.js'
+import { selectPermissionDefaultMode } from './settingsState.js'
 import { toneClasses, type Tone } from './tone.js'
 
 const ROLE_TONE: Record<string, Tone> = {
@@ -43,10 +79,20 @@ export function MetadataInspector({
   session,
   log,
   onClose,
+  sessionState,
 }: {
   session: SessionMetadataView | null
   log: RawMessageSessionLog
   onClose?: () => void
+  /**
+   * CC-19 §4 — the session's live seams, in one bundle. OPTIONAL with no default
+   * on purpose: `undefined` means App has not handed this drawer anything, which
+   * is a different fact from "this session has no snapshot" and must not be
+   * rendered as one (`sessionInspectorState.ts` `selectSeamState`, the
+   * `settingsReadState.ts` doctrine). App wires it in one line:
+   * `sessionState={buildSessionInspectorState({ … })}`.
+   */
+  sessionState?: SessionInspectorState
 }): ReactNode {
   const refs = selectMessageRefs(log)
   const [picked, setPicked] = useState<string | null>(null)
@@ -123,6 +169,22 @@ export function MetadataInspector({
             )}
           </Section>
 
+          {/* CC-19 §4 — the live halves that moved off Settings. One statement
+           * when the bundle is absent; per-seam honesty when it is present. */}
+          {sessionState === undefined ? (
+            <Section title="Live session state">
+              <Empty>{INSPECTOR_UNWIRED_NOTE}</Empty>
+            </Section>
+          ) : (
+            <>
+              <WorkspaceFacts state={sessionState} />
+              <PermissionFacts state={sessionState} />
+              <EffectiveSettings state={sessionState} />
+              <SessionFlags state={sessionState} />
+              <EngineDiagnostics state={sessionState} />
+            </>
+          )}
+
           {/* Message picker */}
           <Section title="Message" count={refs.length}>
             {refs.length === 0 ? (
@@ -187,10 +249,283 @@ export function MetadataInspector({
               yet (no transcript-by-id read seam), so they are omitted rather than
               invented.
             </div>
+            <div className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
+              {IDE_LSP_UNAVAILABLE_NOTE}
+            </div>
           </Section>
         </div>
       </div>
     </>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
+ * CC-19 §4 — the live session state that moved off Settings
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Trust of the session's cwd, plus HOW MANY extra directories it runs with.
+ * Counts, never a second path list: `PermissionRulesEditor` below already
+ * renders the authoritative paths from the same `permission.context` snapshot,
+ * and two renderings of one list is two places to disagree (§10).
+ */
+function WorkspaceFacts({ state }: { state: SessionInspectorState }) {
+  const trust = state.workspaceTrust
+  const directories = selectSessionDirectories(state.permissionContext)
+  return (
+    <Section title="Workspace">
+      <Row label="Working directory" mono>
+        {state.cwd ?? '—'}
+      </Row>
+      {trust ? (
+        <>
+          <Row label="Trust">
+            <TrustState trusted={trust.trusted} />
+          </Row>
+          <Row label="Trust root" mono>
+            {trust.trustRoot ?? '—'}
+          </Row>
+          <Row label="Detected repo" mono>
+            {trust.detectedRepo ?? 'none'}
+          </Row>
+        </>
+      ) : (
+        <Empty>{INSPECTOR_SEAM_UNREAD_NOTE.workspaceTrust}</Empty>
+      )}
+      {state.permissionContext ? (
+        <Row label="Extra directories">
+          {directories.total === 0
+            ? 'none'
+            : `${directories.total} · ${directories.groups
+                .map(group => `${group.count} ${group.source}`)
+                .join(', ')}`}
+        </Row>
+      ) : null}
+      {directories.cliArgAmbiguous ? (
+        <Note>{DIRECTORY_SOURCE_AMBIGUITY_NOTE}</Note>
+      ) : null}
+    </Section>
+  )
+}
+
+/**
+ * The engine's LIVE resolved permission context for this session — reusing the
+ * canonical view (`PermissionRulesEditor`) rather than a second one, so the
+ * rule-source/match-type grammar stays in one place (§10).
+ *
+ * `showModes={false}` + `onSetMode` never invoked: this drawer is display-only,
+ * so the renderer authors no permission value (T6b). Mode switching stays on the
+ * composer's `PermissionModeChip`; the durable `permissions.defaultMode` stays a
+ * read-only row here and an editable one in Settings.
+ */
+function PermissionFacts({ state }: { state: SessionInspectorState }) {
+  return (
+    <Section title="Permissions">
+      {state.permissionContext ? (
+        <PermissionRulesEditor
+          context={state.permissionContext}
+          defaultMode={selectPermissionDefaultMode(state.settings)}
+          onSetMode={NEVER_SETS_MODE}
+          // No settings snapshot ⇒ no settings file has been read, so a null
+          // defaultMode is UNKNOWN rather than unset (`settingsReadState.ts`).
+          settingsLoaded={settingsWereRead(state.settings)}
+          showModes={false}
+        />
+      ) : (
+        <Empty>{INSPECTOR_SEAM_UNREAD_NOTE.permission}</Empty>
+      )}
+    </Section>
+  )
+}
+
+/** The drawer never writes a permission mode; this exists to satisfy the prop. */
+const NEVER_SETS_MODE = () => {}
+
+/** What this session's settings files actually resolved to, layer by layer. */
+function EffectiveSettings({ state }: { state: SessionInspectorState }) {
+  const snapshot = state.settings
+  if (!snapshot) {
+    return (
+      <Section title="Effective settings">
+        <Empty>{INSPECTOR_SEAM_UNREAD_NOTE.settings}</Empty>
+      </Section>
+    )
+  }
+  const layers = selectSettingsLayerViews(snapshot)
+  const rows = selectEffectiveSettingRows(snapshot)
+  const valued = selectValuedSettingCount(rows)
+  return (
+    <Section count={rows.length} title="Effective settings">
+      {layers.length === 0 ? (
+        <Empty>
+          No settings file exists at any layer for this session, so every value
+          is at its built-in default.
+        </Empty>
+      ) : (
+        <div className="mb-2 flex flex-col gap-1">
+          {layers.map(layer => (
+            <div className="flex items-center gap-2" key={layer.source}>
+              <SourceBadge origin={layer.origin} source={layer.source} />
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-subtle">
+                {layer.origin}
+              </span>
+              <span className="shrink-0 text-[11px] text-text-muted">
+                {layer.keyCount} {layer.keyCount === 1 ? 'key' : 'keys'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {rows.map(row => (
+        <div className="flex items-baseline gap-2 py-[3px]" key={row.key}>
+          <code className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-muted">
+            {row.key}
+          </code>
+          {row.value !== null ? (
+            <span className="shrink-0 font-mono text-[11.5px] text-text-primary">
+              {String(row.value)}
+            </span>
+          ) : null}
+          <SourceBadge source={row.source} />
+        </div>
+      ))}
+      {rows.length > 0 ? (
+        <Note>
+          {valued} of {rows.length} resolved keys carry a value on this seam. The
+          rest ride as names only — the settings snapshot carries the source
+          model, not the settings object, so no credential-bearing value ever
+          serializes. A blank value means this seam carries none for that key,
+          never that the key is unset.
+        </Note>
+      ) : null}
+    </Section>
+  )
+}
+
+/**
+ * The flag layer and the session's current run controls, kept in one section
+ * because an operator asks one question of both — *why is this session behaving
+ * differently?* — and honest about what it cannot answer (see
+ * `LAUNCH_FLAGS_UNAVAILABLE_NOTE`).
+ */
+function SessionFlags({ state }: { state: SessionInspectorState }) {
+  const flags = selectFlagLayer(state.settings)
+  const run = selectRunControls(state.diagnostics)
+  return (
+    <Section title="Flags & run controls">
+      {state.settings ? (
+        flags ? (
+          <>
+            <Row label="Flag settings" mono>
+              {flags.origin}
+            </Row>
+            <Row label="Keys set" mono>
+              {flags.keys.length > 0 ? flags.keys.join(', ') : 'none'}
+            </Row>
+            <Row label="Keys it wins" mono>
+              {flags.winningKeys.length > 0
+                ? flags.winningKeys.join(', ')
+                : 'none'}
+            </Row>
+          </>
+        ) : (
+          <Row label="Flag layer">
+            none — no --settings file or SDK inline settings
+          </Row>
+        )
+      ) : (
+        <Empty>{INSPECTOR_SEAM_UNREAD_NOTE.settings}</Empty>
+      )}
+      {run ? (
+        <>
+          <Row label="Model override" mono>
+            {run.modelOverride ?? 'none'}
+          </Row>
+          <Row label="Resolved model" mono>
+            {run.resolvedModel ?? '—'}
+          </Row>
+          <Row label="Reasoning effort" mono>
+            {run.effort ?? 'provider default'}
+          </Row>
+          <Row label="Fast mode" mono>
+            {run.fastMode ? 'on' : 'off'}
+          </Row>
+        </>
+      ) : (
+        <Empty>{INSPECTOR_SEAM_UNREAD_NOTE.diagnostics}</Empty>
+      )}
+      <Note>{LAUNCH_FLAGS_UNAVAILABLE_NOTE}</Note>
+    </Section>
+  )
+}
+
+/**
+ * The engine's own doctor/status output for THIS session. Rendered in the
+ * drawer's row grammar rather than by reusing `DiagnosticsSection`: that
+ * component also renders version/model/setting-sources, all of which this drawer
+ * already shows above, so reusing it would put three facts on screen twice.
+ * Nothing is re-derived — every value is read straight off the snapshot.
+ */
+function EngineDiagnostics({ state }: { state: SessionInspectorState }) {
+  const diagnostics = state.diagnostics
+  if (!diagnostics) {
+    return (
+      <Section title="Engine diagnostics">
+        <Empty>{INSPECTOR_SEAM_UNREAD_NOTE.diagnostics}</Empty>
+      </Section>
+    )
+  }
+  return (
+    <Section title="Engine diagnostics">
+      <Row label="Version" mono>
+        {diagnostics.version}
+      </Row>
+      <Row label="Bash sandbox" mono>
+        {diagnostics.sandboxEnabled ? 'enabled' : 'disabled'}
+      </Row>
+      <WarningRow items={diagnostics.installationWarnings} label="Installation" />
+      <WarningRow items={diagnostics.healthWarnings} label="Health" />
+      <WarningRow items={diagnostics.memoryWarnings} label="Context usage" />
+    </Section>
+  )
+}
+
+function WarningRow({
+  items,
+  label,
+}: {
+  items: readonly string[]
+  label: string
+}) {
+  return (
+    <Row label={label}>
+      {items.length === 0 ? (
+        <span className="text-tone-good">no issues</span>
+      ) : (
+        <span className="flex flex-col gap-1">
+          {/* Warning strings are not guaranteed unique — pair with the index. */}
+          {items.map((item, index) => (
+            <span className="text-tone-warn" key={`${index}:${item}`}>
+              {item}
+            </span>
+          ))}
+        </span>
+      )}
+    </Row>
+  )
+}
+
+function TrustState({ trusted }: { trusted: boolean }) {
+  const t = toneClasses(trusted ? 'good' : 'danger')
+  return <span className={t.text}>{trusted ? 'trusted' : 'untrusted'}</span>
+}
+
+/** A cited limit or caveat under a section — never a value. */
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <p className="mt-2 text-[11px] leading-relaxed text-text-subtle">
+      {children}
+    </p>
   )
 }
 
