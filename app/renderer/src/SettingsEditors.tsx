@@ -181,6 +181,7 @@ function SettingEditor({
     row.annotation.kind === 'unread' || row.annotation.kind === 'no-engine'
       ? null
       : row.annotation.origin
+  const note = settingsRowNote(row)
 
   return (
     <Field
@@ -198,9 +199,11 @@ function SettingEditor({
         snapshot={snapshot}
         spec={spec}
       />
-      <span className="block max-w-[240px] text-right text-[10.5px] leading-tight text-text-subtle">
-        {settingsRowNote(row)}
-      </span>
+      {note ? (
+        <span className="block max-w-[240px] text-right text-[10.5px] leading-tight text-text-subtle">
+          {note}
+        </span>
+      ) : null}
     </Field>
   )
 }

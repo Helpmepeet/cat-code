@@ -355,9 +355,10 @@ describe('row grammar', () => {
     expect(row.read).toEqual({ kind: 'unset' })
     expect(row.annotation).toEqual({ kind: 'unset-here', origin: USER_FILE })
     expect(row.writeTarget).toBe('userSettings')
-    expect(settingsRowNote(row)).toBe(
-      'Not set here — showing the built-in default.',
-    )
+    // The annotation still exists for anyone who needs it, but the row stays
+    // SILENT: not-set-in-the-scope-you-chose is the ordinary case, and the page
+    // already names that scope at its head.
+    expect(settingsRowNote(row)).toBeNull()
   })
 
   /** `settingsReadState.ts` doctrine: no snapshot ⇒ nothing may be asserted. */
@@ -370,7 +371,7 @@ describe('row grammar', () => {
     expect(row.read).toEqual({ kind: 'unread' })
     expect(row.writeTarget).toBeNull()
     // Not a "waiting…": with no session nothing is in flight.
-    expect(settingsRowNote(row).toLowerCase()).not.toContain('waiting')
+    expect((settingsRowNote(row) ?? '').toLowerCase()).not.toContain('waiting')
   })
 
   /**
@@ -449,9 +450,11 @@ describe('row grammar', () => {
           layer,
         }),
       )
-    expect(note('userSettings')).toBe(`Set here — ${USER_FILE}`)
+    // Set-here in the chosen scope says nothing; the SAME key seen from another
+    // scope is surprising, so THAT is where the path is spelled out.
+    expect(note('userSettings')).toBeNull()
     expect(note('projectSettings')).toBe(
-      `Inherited from your defaults — ${USER_FILE}`,
+      `Inherited from your defaults: ${USER_FILE}`,
     )
   })
 
@@ -478,9 +481,39 @@ describe('row grammar', () => {
       layer: 'userSettings',
     })
     expect(settingsRowNote(row)).toBe(
-      `Overridden by your private settings for this project — ${LOCAL_FILE}. ` +
+      `Overridden by your private settings for this project: ${LOCAL_FILE}. ` +
         'This app reads the resolved value only, so your own value here cannot be shown.',
     )
+  })
+
+  /**
+   * The silence rule must not swallow a row that genuinely cannot show its
+   * value. `set-here` is ordinary ONLY when the value was actually readable;
+   * when it was not, the row owes the operator an explanation.
+   */
+  test('a set-here row that cannot be read still explains itself', () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'userSettings', origin: USER_FILE, keys: ['fastMode'] },
+        ],
+        resolved: [
+          {
+            key: 'fastMode',
+            source: 'userSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        // No editableValues entry: resolved names the key, but no value came
+        // across the wire for it.
+      }),
+      key: 'fastMode',
+      layer: 'userSettings',
+    })
+    expect(row.annotation.kind).toBe('set-here')
+    expect(row.read.kind).toBe('unreadable')
+    expect(settingsRowNote(row)).toContain('cannot be shown')
   })
 })
 

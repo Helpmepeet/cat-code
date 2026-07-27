@@ -504,17 +504,14 @@ function ScopeBody({
       )
     case 'model':
       return (
-        <>
-          <SettingsPane
-            engine={engine}
-            layer={writeLayer}
-            noEngineNote={noEngineNote}
-            onWrite={onSettingWrite}
-            pane="model"
-            snapshot={snapshot}
-          />
-          <DeferredNote note="A default-model select belongs here; it is deferred on the model-list read-seam." />
-        </>
+        <SettingsPane
+          engine={engine}
+          layer={writeLayer}
+          noEngineNote={noEngineNote}
+          onWrite={onSettingWrite}
+          pane="model"
+          snapshot={snapshot}
+        />
       )
     case 'permissions':
       return <PermissionsPane layer={writeLayer} snapshot={snapshot} />
@@ -530,32 +527,21 @@ function ScopeBody({
             snapshot={snapshot}
           />
           {scope === 'user' ? <KeybindingsRow /> : null}
-          <DeferredNote note="Language and reduced-motion are real schema keys with no control yet; they need the shared write allowlist to grow, which is a per-key sidecar review." />
         </>
       )
     case 'privacy':
       return (
-        <>
-          <SettingsPane
-            engine={engine}
-            layer={writeLayer}
-            noEngineNote={noEngineNote}
-            onWrite={onSettingWrite}
-            pane="privacy"
-            snapshot={snapshot}
-          />
-          <DeferredNote note="Auto-memory and auto-dream toggles belong here; they need the shared write allowlist to grow, which is a per-key sidecar review." />
-        </>
+        <SettingsPane
+          engine={engine}
+          layer={writeLayer}
+          noEngineNote={noEngineNote}
+          onWrite={onSettingWrite}
+          pane="privacy"
+          snapshot={snapshot}
+        />
       )
     case 'memory':
-      return (
-        <>
-          <MemoryPage embedded snapshot={memorySnapshot} />
-          {scope === 'project' ? (
-            <DeferredNote note="This list is not filtered to the project's own CLAUDE.md files yet — every source is shown, each with its own badge." />
-          ) : null}
-        </>
-      )
+      return <MemoryPage embedded snapshot={memorySnapshot} />
     case 'agents':
       return <AgentsPage embedded snapshot={agentsSnapshot} />
     case 'skills':
@@ -568,15 +554,12 @@ function ScopeBody({
       return <HooksPanel snapshot={extensionsSnapshot} />
     case 'remote':
       return (
-        <>
-          <RemoteSettingsPage
-            embedded
-            lastResult={remoteLastResult}
-            onVerb={onRemoteVerb}
-            snapshot={remoteSnapshot}
-          />
-          <DeferredNote note="Only the saved SSH environments below are configuration. The bridge and pairing controls are live operational actions, and re-homing them beside Accounts is deferred." />
-        </>
+        <RemoteSettingsPage
+          embedded
+          lastResult={remoteLastResult}
+          onVerb={onRemoteVerb}
+          snapshot={remoteSnapshot}
+        />
       )
     default:
       // `appearance` / `notifications` / `policy` belong to the other two scopes
@@ -616,7 +599,7 @@ function PermissionsPane({
     <>
       <PaneSection title="Default mode">
         <Field
-          desc="The mode a session starts in. Read-only here — change it from the CLI; letting the renderer write a permission-family key needs a recorded permission-boundary review."
+          desc="The mode a session starts in. Change it from the CLI."
           editable={false}
           label="Default permission mode"
           origin={read && defaultMode ? selectLayerOrigin(snapshot, defaultMode.source) : null}
@@ -652,21 +635,17 @@ function PermissionsPane({
       <PaneSection title="Rules">
         <p className="text-[12.5px] leading-relaxed text-text-subtle">
           Allow, deny and ask rules live under{' '}
-          <code className="font-mono">permissions</code> in the settings file
-          this scope writes
+          <code className="font-mono">permissions</code> in
           {origin ? (
             <>
-              , <span className="font-mono text-[11px]">{origin}</span>
+              {' '}
+              <span className="font-mono text-[11px]">{origin}</span>
             </>
-          ) : null}
-          . This app never authors permission rules, and the settings snapshot
-          carries key names without their contents, so they are neither shown nor
-          editable here — edit the file, or use the CLI.
-        </p>
-        <p className="mt-2 text-[12.5px] leading-relaxed text-text-subtle">
-          The rules actually in force for a running session are a different
-          thing: they include rules added at runtime and mid-turn, so they are
-          shown per session, on the session inspector.
+          ) : (
+            <> the settings file this scope writes</>
+          )}
+          . Edit them there, or from the CLI. A running session&rsquo;s rules can
+          differ, and are shown on its session inspector.
         </p>
       </PaneSection>
     </>
@@ -680,7 +659,7 @@ function KeybindingsRow() {
   return (
     <PaneSection title="Keybindings">
       <Field
-        desc="One file for this machine; projects cannot override it. This app cannot read or edit it yet."
+        desc="One file for this machine. Not readable from this app yet."
         editable={false}
         label="Keyboard shortcuts"
       >
@@ -704,19 +683,13 @@ function AppScopeBody({ item }: { item: SettingsRailItemId }) {
     return (
       <PaneSection title="Notifications">
         <p className="text-[12.5px] leading-relaxed text-text-subtle">
-          System notifications for a finished turn or a waiting permission
-          request are not built. Today this app only raises in-window toasts,
-          which need the window to be visible.
+          Not built yet. This app raises in-window toasts only, so it needs the
+          window visible.
         </p>
       </PaneSection>
     )
   }
-  return (
-    <>
-      <TranscriptDisplaySection />
-      <DeferredNote note="Accent colour, code theme and font, and window &amp; startup behaviour belong in this scope too; none of them has an app-side setting yet, so none is shown." />
-    </>
-  )
+  return <TranscriptDisplaySection />
 }
 
 /**
@@ -730,7 +703,7 @@ function TranscriptDisplaySection() {
   return (
     <PaneSection title="Transcript">
       <Field
-        desc="How reasoning summaries are laid out in the transcript. Which reasoning is shown at all is the engine's separate “Reasoning display” setting under Model &amp; Reasoning. Stored in this app, not in your settings files."
+        desc="How reasoning summaries are laid out. Stored in this app, not in your settings files."
         label="Reasoning layout"
       >
         <SelectControl
@@ -809,9 +782,3 @@ function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
   )
 }
 
-/** An honest footnote naming what a pane deliberately does not have yet. */
-function DeferredNote({ note }: { note: ReactNode }) {
-  return (
-    <p className="mt-4 text-[11.5px] leading-relaxed text-text-subtle">{note}</p>
-  )
-}

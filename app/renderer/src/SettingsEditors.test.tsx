@@ -71,7 +71,7 @@ test('a boolean editor reflects the current editableValue (aria-checked)', () =>
   expect(html).toContain('Respect .gitignore')
 })
 
-test('an unset boolean editor falls back to the spec default, and says it is unset', () => {
+test('an unset boolean editor falls back to the spec default, and says nothing about it', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
       layer="userSettings"
@@ -82,7 +82,9 @@ test('an unset boolean editor falls back to the spec default, and says it is uns
   )
   // respectGitignore defaults to true when unset at every layer.
   expect(html).toContain('aria-checked="true"')
-  expect(html).toContain('Not set here')
+  // Unset in the scope you chose is the ordinary case, so the row spends no
+  // prose on it. The page head already names the scope and its file.
+  expect(html).not.toContain('Not set here')
 })
 
 test('a managed key renders disabled with the Managed badge and the enforced note', () => {
@@ -383,9 +385,9 @@ test('a project-overridden key writes to the user file in My defaults, and to th
     'Edits here write to your own settings file: /u/settings.json',
   )
   expect(asUser).not.toContain('write to this project')
-  // The override is still VISIBLE — it just does not redirect the write.
+  // The override is still VISIBLE; it just does not redirect the write.
   expect(asUser).toContain(
-    "Overridden by this project's shared settings — /repo/.cat-code/settings.json",
+    "Overridden by this project's shared settings: /repo/.cat-code/settings.json",
   )
 
   const asProject = decode(
@@ -397,7 +399,10 @@ test('a project-overridden key writes to the user file in My defaults, and to th
     "Edits here write to this project's shared settings file: /repo/.cat-code/settings.json",
   )
   expect(asProject).not.toContain('write to your own settings file')
-  expect(asProject).toContain('Set here')
+  // Seen from the scope that sets it, the very same key is unremarkable: no
+  // "Set here", and above all no "Overridden by" leaking from the other scope.
+  expect(asProject).not.toContain('Set here')
+  expect(asProject).not.toContain('Overridden by')
 })
 
 test('a value hidden under a higher layer shows unknown, not a guess, and offers no control', () => {

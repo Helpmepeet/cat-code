@@ -439,7 +439,7 @@ describe('Permissions — durable half only', () => {
     )
     expect(html).toContain('Default permission mode: acceptEdits')
     expect(html).toContain('>User<') // the source badge
-    expect(decode(html)).toContain('change it from the CLI')
+    expect(decode(html)).toContain('Change it from the CLI')
     // Read-only means no control of any kind, not a disabled one.
     expect(controlCount(paneMarkup(html))).toBe(0)
   })
@@ -506,7 +506,7 @@ describe('This app scope', () => {
       ),
     )
     expect(controlCount(pane)).toBe(0)
-    expect(pane).toContain('are not built')
+    expect(pane).toContain('Not built yet')
   })
 })
 

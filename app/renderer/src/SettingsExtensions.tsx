@@ -135,9 +135,8 @@ export function McpPanel({ snapshot }: { snapshot: ExtensionsSnapshot | null }) 
   return (
     <PaneSection>
       <DeferredNote>
-        MCP servers are shown from configuration only. Live connection status,
-        tool/resource counts, and connect / authenticate / reconnect / remove are
-        unavailable until the desktop MCP runtime is wired.
+        Shown from configuration only. Connection status, and connect /
+        authenticate / remove, are not available here yet.
       </DeferredNote>
       {servers === null ? (
         <EmptyRow>MCP configuration could not be read.</EmptyRow>
@@ -218,8 +217,8 @@ export function PluginsPanel({
       </div>
       {tab === 'marketplace' ? (
         <DeferredNote>
-          Marketplace browsing and installing are not available in this read-only
-          view. Discover and install plugins from the terminal for now.
+          Browsing and installing are not available here. Install plugins from
+          the terminal.
         </DeferredNote>
       ) : plugins === null ? (
         <EmptyRow>Plugins could not be loaded.</EmptyRow>

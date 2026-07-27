@@ -86,7 +86,8 @@ export const SETTINGS_SCOPE_LABEL: Record<SettingsScopeKind, string> = {
 /** One sentence per scope, stating whose files (or non-files) it edits. */
 export const SETTINGS_SCOPE_SUBTITLE: Record<SettingsScopeKind, string> = {
   user: 'Your own settings files. The same for every project on this machine.',
-  project: "One project's settings files — shared with the repo, or private to you.",
+  project:
+    "One project's settings files, shared with the repo or private to you.",
   app: 'Desktop preferences. Stored by this app, never in a settings file.',
   enforced: 'What your organization enforces. Read-only, and it wins over everything.',
 }
@@ -621,7 +622,7 @@ export const SETTINGS_LAYER_PHRASE: Record<SettingSourceId, string> = {
 }
 
 function withOrigin(base: string, origin: string | null): string {
-  return origin ? `${base} — ${origin}` : `${base}.`
+  return origin ? `${base}: ${origin}` : `${base}.`
 }
 
 export function settingsRowAnnotationText(
@@ -631,12 +632,9 @@ export function settingsRowAnnotationText(
     case 'unread':
       return SETTINGS_UNREAD_NOTE
     case 'no-engine':
-      return 'Not read — no engine is running in this project'
+      return 'Not read, because no engine is running in this project'
     case 'enforced':
-      return withOrigin(
-        'Enforced by organization policy — see Enforced',
-        annotation.origin,
-      )
+      return withOrigin('Enforced by organization policy', annotation.origin)
     case 'overridden':
       return withOrigin(
         `Overridden by ${SETTINGS_LAYER_PHRASE[annotation.by]}`,
@@ -650,7 +648,7 @@ export function settingsRowAnnotationText(
     case 'set-here':
       return withOrigin('Set here', annotation.origin)
     case 'unset-here':
-      return 'Not set here — showing the built-in default.'
+      return 'Not set here, showing the built-in default.'
     default: {
       const exhaustive: never = annotation
       return exhaustive
@@ -659,10 +657,19 @@ export function settingsRowAnnotationText(
 }
 
 /**
- * The single line a row renders. Folds in WHY an `unreadable` row shows nothing,
- * so a pane never has to re-derive that from the two fields itself.
+ * The line a row renders, or null when the row has nothing surprising to say.
+ *
+ * `set-here` / `unset-here` ARE the ordinary outcome of the scope the operator
+ * chose, so spelling them out on every row is noise the page already carries at
+ * its head ("Edits here write to …") and in the row's own SourceBadge. Prose is
+ * spent only on the cases that contradict the chosen scope: policy enforcement,
+ * a higher layer winning, a value inherited from elsewhere, an unread snapshot,
+ * or a value this app cannot show.
  */
-export function settingsRowNote(row: SettingsRowModel): string {
+export function settingsRowNote(row: SettingsRowModel): string | null {
+  const ordinary =
+    row.annotation.kind === 'set-here' || row.annotation.kind === 'unset-here'
+  if (ordinary && row.read.kind !== 'unreadable') return null
   const base = settingsRowAnnotationText(row.annotation)
   if (row.read.kind !== 'unreadable') return base
   // A path-terminated annotation carries no full stop of its own, so add one
@@ -698,7 +705,7 @@ export function settingsWriteTargetNote(
 
 /** Said once, globally, instead of implied per row (spec §2's honesty rule). */
 export const SETTINGS_APPLY_NOTE =
-  'Settings are read when a session starts, so edits apply to sessions started afterwards — not to sessions already running.'
+  'Edits apply to sessions started afterwards, not to sessions already running.'
 
 /**
  * Where the categories that left this page belong.
@@ -710,4 +717,4 @@ export const SETTINGS_APPLY_NOTE =
  * false claim this whole surface is being rebuilt to remove.
  */
 export const SETTINGS_SESSION_STATE_NOTE =
-  'Live session state — the running permission mode and context, workspace trust, IDE and LSP status, doctor output — is not configuration, so it is no longer here. Its home is the session inspector, from a tab’s ⋯ menu.'
+  'Live session state is not configuration. Its home is the session inspector, from a tab’s ⋯ menu.'
