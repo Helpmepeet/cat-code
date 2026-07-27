@@ -139,7 +139,7 @@ export function PermissionModeChip({
         onClick={() => setOpen(value => !value)}
         className={`inline-flex max-w-[170px] shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-[5px] py-[3px] text-[12.5px] font-medium transition-colors hover:text-text-primary disabled:opacity-50 ${current?.toneText ?? 'text-text-subtle'}`}
       >
-        {current?.label ?? context?.mode ?? '—'}
+        {current?.label ?? context?.mode ?? 'none'}
       </button>
 
       {open && context ? (

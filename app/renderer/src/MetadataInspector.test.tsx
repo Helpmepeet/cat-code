@@ -83,8 +83,8 @@ test('shows the honest "Not available" deferral note, never mocked worktree/file
     <MetadataInspector session={session} log={log([assistant])} onClose={noop} />,
   )
   expect(html).toContain('Not available')
-  expect(html).toContain('No per-message account is recorded upstream')
-  expect(html).toContain('no transcript-by-id read seam')
+  expect(html).toContain('No per-message account is recorded')
+  expect(html).toContain('left out rather than invented')
 })
 
 test('degrades cleanly with an empty log and no session', () => {
@@ -285,14 +285,14 @@ test('effective settings list every resolved key, high-precedence layer first', 
   // Keys sorted; only the allowlisted one carries a value.
   expect(html.indexOf('autoUpdates')).toBeLessThan(html.indexOf('>model<'))
   expect(html).toContain('gpt-5.6-luna')
-  expect(html).toContain('1 of 2 resolved keys carry a value on this seam')
+  expect(html).toContain('1 of 2 keys arrive here with a value')
 })
 
 test('flags and run controls are honest that no launch argv reaches the renderer', () => {
   const html = renderInspector(fullState)
-  expect(html).toContain('none — no --settings file or SDK inline settings')
+  expect(html).toContain('none: no --settings file or SDK inline settings')
   expect(html).toContain('Model override')
-  expect(html).toContain('app/main/main.ts:477')
+  expect(html).toContain('not a record of how the session was launched')
   expect(html).toContain('Fast mode')
   expect(html).toContain('>off<')
 })
@@ -332,7 +332,7 @@ test('a real flag layer is reported with the keys it wins', () => {
   )
   expect(html).toContain('/tmp/flag-settings.json')
   expect(html).toContain('Keys it wins')
-  expect(html).not.toContain('none — no --settings file')
+  expect(html).not.toContain('none: no --settings file')
 })
 
 test('engine diagnostics render the real warnings and a clean list as "no issues"', () => {
@@ -345,5 +345,5 @@ test('engine diagnostics render the real warnings and a clean list as "no issues
 
 test('IDE / LSP status is declared unavailable rather than shown as absent', () => {
   const html = renderInspector(fullState)
-  expect(html).toContain('IDE connection and language-server status reach the renderer on no frame')
+  expect(html).toContain('Editor and language-server status are not reported to this app yet')
 })

@@ -218,7 +218,7 @@ export function SessionsPage({
          * arrives (`catalogLoaded`). */}
         {!catalogLoaded ? (
           <div className="mb-3 rounded-lg border border-shell-seam bg-white/[0.02] px-3 py-2 text-[11.5px] text-text-subtle">
-            Terminal-session history is still loading — only desktop-tracked
+            Terminal-session history is still loading, so only desktop-tracked
             sessions are shown so far.
           </div>
         ) : null}
@@ -262,8 +262,7 @@ export function SessionsPage({
         {truncated ? (
           <div className="mt-6 rounded-lg border border-shell-seam bg-white/[0.02] px-3 py-2 text-[11.5px] text-text-subtle">
             Only the most-recent sessions are enriched with titles; older sessions
-            are not shown. Registry eviction (`MAX_REGISTRY_SESSIONS`) can also drop
-            restorable rows — an operator product decision (O2).
+            are not shown, and the oldest can drop off this list entirely.
           </div>
         ) : null}
       </div>

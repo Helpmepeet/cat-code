@@ -133,5 +133,5 @@ test('shows the truncation / registry-eviction note when truncated', () => {
       onNewSession={noop}
     />,
   )
-  expect(html).toContain('MAX_REGISTRY_SESSIONS')
+  expect(html).toContain('the oldest can drop off this list entirely')
 })

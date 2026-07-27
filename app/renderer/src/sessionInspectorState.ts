@@ -302,7 +302,7 @@ export function selectRunControls(
  * the values IN EFFECT, not a launch record.
  */
 export const LAUNCH_FLAGS_UNAVAILABLE_NOTE =
-  'No launch arguments reach the renderer: the desktop spawns each engine with none (app/main/main.ts:477) and the session registry records no argv. These are the values in effect now — the model picker rewrites the same field mid-session.'
+  'These are the values in effect now, not a record of how the session was launched. Changing the model mid-session rewrites the same field.'
 
 /* ------------------------------------------------------------------------- *
  * This session's extra directories
@@ -365,4 +365,4 @@ export const DIRECTORY_SOURCE_AMBIGUITY_NOTE =
  * instead of rendering an empty pane that reads like "nothing is connected".
  */
 export const IDE_LSP_UNAVAILABLE_NOTE =
-  'IDE connection and language-server status reach the renderer on no frame today — no protocol seam carries them — so they are omitted rather than shown as absent.'
+  'Editor and language-server status are not reported to this app yet, so they are left out rather than shown as absent.'

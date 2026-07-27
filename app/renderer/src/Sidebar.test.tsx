@@ -203,7 +203,7 @@ test('a history row WITH a resolvable workspace is openable (open-from-history)'
   // Openable: focusable, not disabled, labeled + titled for opening.
   expect(html).toContain('tabindex="0"')
   expect(html).not.toContain('aria-disabled="true"')
-  expect(html).toContain('session Terminal session — history')
+  expect(html).toContain('session Terminal session, history')
   expect(html).toContain('· open')
 })
 
@@ -225,11 +225,11 @@ test('no row renders a visible status label; status stays in aria-label only', (
     registryRow('r', { displayLabel: 'R', live: false, restorable: true, status: 'exited' }),
   )
   expect(restorable).not.toContain('>closed<')
-  expect(restorable).toContain('aria-label="session R — closed"')
+  expect(restorable).toContain('aria-label="session R, closed"')
 
   const history = renderRow(historyRow('h', { displayLabel: 'H', cwd: '/tmp/proj' }))
   expect(history).not.toContain('>history<')
-  expect(history).toContain('aria-label="session H — history"')
+  expect(history).toContain('aria-label="session H, history"')
 })
 
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────
@@ -269,7 +269,7 @@ test('a workspace header is a drag handle only when reordering is wired', () => 
   expect(wired.match(/draggable="true"/g)).toHaveLength(2)
   expect(wired).toContain('cursor-grab')
   expect(wired).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"')
-  expect(wired).toContain('title="/tmp/proj — drag to reorder, or ⌥↑/⌥↓"')
+  expect(wired).toContain('title="/tmp/proj. Drag to reorder, or ⌥↑/⌥↓"')
 
   const unwired = renderGroup([registryRow('a')])
   expect(unwired).not.toContain('draggable')

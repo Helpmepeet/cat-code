@@ -89,7 +89,7 @@ export function useToast(): ToastFn {
 
 function noopToast(): void {
   if (import.meta.env?.DEV) {
-    console.warn('useToast() called outside a <ToastHost> — toast dropped.')
+    console.warn('useToast() called outside a <ToastHost>, so the toast was dropped.')
   }
 }
 

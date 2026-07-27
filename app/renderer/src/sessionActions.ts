@@ -77,12 +77,11 @@ export type SessionActionsContext = {
 }
 
 const DEFER = {
-  rewind:
-    'Rewind deferred — no engine conversation-rewind verb (REPL-only, src/screens/REPL.tsx:4034).',
+  rewind: 'Rewind is not available in the desktop app yet.',
   notLive:
-    'Open or restore this session first — Rename, Export, and Branch run in the session’s live engine, which a closed row has stopped.',
+    'Open or restore this session first. Rename, Export and Branch run in its live engine, which a closed session has stopped.',
   notOpen:
-    'Open this session first — its transcript is only available while it is the attached tab (cross-session read seam deferred).',
+    'Open this session first. Its transcript is only readable while it is the attached tab.',
 } as const
 
 /**
@@ -108,7 +107,7 @@ export function resolveSessionActions(
         ? {}
         : {
             reason:
-              'Not restorable from the desktop yet — history-only row has no registry entry (P4-6b host-API gap).',
+              'Not restorable from the desktop yet. This session came from terminal history.',
           }),
     },
     {

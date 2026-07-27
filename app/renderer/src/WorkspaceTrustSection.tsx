@@ -48,7 +48,7 @@ export function WorkspaceTrustSection({
             <button
               className="cursor-not-allowed rounded-md border border-shell-seam px-2.5 py-1 text-[11px] text-text-subtle"
               disabled
-              title="Trust changes at session-create time (P4-15) — not wired here"
+              title="Trust is set when a session is created, and cannot be changed here"
               type="button"
             >
               {snapshot?.trusted ? 'Untrust' : 'Trust'}
@@ -57,7 +57,7 @@ export function WorkspaceTrustSection({
         </Field>
         <Field desc="Root of the active workspace" label="Working directory">
           <code className="rounded-[5px] bg-shell-hover px-2 py-0.5 font-mono text-[12px] text-text-muted">
-            {cwd ?? '—'}
+            {cwd ?? 'none'}
           </code>
         </Field>
         <Field desc="Git remote origin" label="Detected repo">

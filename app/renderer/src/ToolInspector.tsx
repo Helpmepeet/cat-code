@@ -98,7 +98,7 @@ function deriveSummary(input: Record<string, unknown>): string {
       return value.length > 200 ? `${value.slice(0, 200)}…` : value
     }
   }
-  return '—'
+  return 'none'
 }
 
 export function ToolInspector({

@@ -300,6 +300,30 @@ new inbound frame.
 
 ## 7. Coding conventions (checkable)
 
+### User-visible text (operator rules, 2026-07-27)
+
+Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`,
+`aria-label`, toasts, disabled-reasons, empty states, console warnings.
+
+- **No em dash (—) in any of it. Ever.** Rewrite the sentence: split it in two,
+  or use a comma or colon. This includes the `'—'` no-value placeholder (write
+  `none`) and ` — ` as an aria-label separator (write `, `). Check with
+  `rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining
+  hit is a code comment. Code comments and `docs/` are NOT a text surface and
+  are unaffected.
+- **Never render engineering notes.** No `file.ts:123` citations, no session
+  ids (`P4-6b`, `CC-19`), no internal vocabulary (read seam, write allowlist,
+  sidecar review, registry row, host-API gap, `MAX_*` constant names). A
+  deviation belongs in your report and the STATUS row, which is what §9 asks
+  for; a component that exists to print your to-do list on the page is the bug
+  (`DeferredNote`, deleted 2026-07-27 after the operator rejected the page).
+- **Say only what is surprising.** Restating the state the user just chose is
+  noise; spend prose on what contradicts it. See `settingsRowNote`
+  (`app/renderer/src/settingsScope.ts`), which returns null for the ordinary
+  case.
+- Tell the user what to DO ("Change it from the CLI"), not why we have not
+  built it ("needs a recorded permission-boundary review").
+
 - **TypeScript everywhere; scripts are plain Bun TS.** Root tsconfig is
   `strict: false` — do NOT enable strict flags or drive-by-fix unrelated type
   errors in `src/`. `app/` IS strict — keep it that way.

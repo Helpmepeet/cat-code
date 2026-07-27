@@ -112,8 +112,8 @@ test('session rows carry an identity+state aria-label and correct run wiring', (
 
   const live = items.find(item => item.id === 'session:live-1')
   const dead = items.find(item => item.id === 'session:dead-1')
-  expect(live?.ariaLabel).toBe('session Alpha — live')
-  expect(dead?.ariaLabel).toBe('session Bravo — crashed, restorable')
+  expect(live?.ariaLabel).toBe('session Alpha, live')
+  expect(dead?.ariaLabel).toBe('session Bravo, crashed, restorable')
 
   // A live row focuses its tab; a restorable row re-spawns via restoreSession.
   live?.run()

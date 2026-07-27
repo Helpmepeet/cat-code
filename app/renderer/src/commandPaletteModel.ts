@@ -184,7 +184,7 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
       detail: descriptor.cwd,
       state: label,
       tone,
-      ariaLabel: `session ${title} — ${label}${
+      ariaLabel: `session ${title}, ${label}${
         restorable ? ', restorable' : ''
       }`,
       keywords: `${descriptor.cwd} ${descriptor.engineSessionId ?? ''} ${label}`,

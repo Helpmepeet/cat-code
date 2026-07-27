@@ -67,7 +67,7 @@ describe('resolveSessionActions', () => {
       ),
     ).get('open')!
     expect(historyOnly.enabled).toBe(false)
-    expect(historyOnly.reason).toContain('host-API gap')
+    expect(historyOnly.reason).toContain('came from terminal history')
   })
 
   test('Open reads "Restore" for a restorable (not-live) registry row', () => {
@@ -116,7 +116,7 @@ describe('resolveSessionActions', () => {
   test('Rewind stays deferred (disabled) — no engine conversation-rewind verb', () => {
     const items = byKind(resolveSessionActions(row(), { isActiveOpen: true }))
     expect(items.get('rewind')!.enabled).toBe(false)
-    expect(items.get('rewind')!.reason).toContain('REPL.tsx:4034')
+    expect(items.get('rewind')!.reason).toContain('not available in the desktop app yet')
   })
 
   test('every item belongs to a known section', () => {

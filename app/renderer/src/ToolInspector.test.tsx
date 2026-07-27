@@ -76,13 +76,13 @@ test('a FileEdit result exposes the narrowed diff', () => {
   expect(model.diff?.hunks[0].lines).toEqual(['-old', '+new'])
 })
 
-test('narrows tolerantly: empty input → "—", a non-record input degrades to {}', () => {
-  expect(describeToolForInspector(mkToolRow({ input: {} })).summary).toBe('—')
+test('narrows tolerantly: empty input has no summary, a non-record input degrades to {}', () => {
+  expect(describeToolForInspector(mkToolRow({ input: {} })).summary).toBe('none')
   // A junk input shape (defensive — the wire is unknown) must not crash.
   const junk = mkToolRow({ input: 42 as unknown as Record<string, unknown> })
   const model = describeToolForInspector(junk)
   expect(model.input).toEqual({})
-  expect(model.summary).toBe('—')
+  expect(model.summary).toBe('none')
 })
 
 test('falls back to the first string value when no priority key is present', () => {

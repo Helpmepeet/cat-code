@@ -533,7 +533,7 @@ export function resolvePendingSubmit(connection: {
 
 /** Shown when a parked prompt is released — the text is visibly back, not gone. */
 export const PENDING_SUBMIT_RELEASED_MESSAGE =
-  'The session did not connect, so your message was not sent — it is back in the composer.'
+  'The session did not connect, so your message was not sent. It is back in the composer.'
 
 /**
  * Give a released prompt back to the composer without clobbering whatever the

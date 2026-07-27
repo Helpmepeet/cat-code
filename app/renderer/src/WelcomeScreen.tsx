@@ -120,7 +120,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                 <span className="text-[13px] text-text-muted">Locally</span>
               </MetaCol>
               {/* Branch is a SESSION-variant column only: read-only (HC1), the real
-                  `gitBranch` from the session log ('—' outside a repo / pre-catalog).
+                  `gitBranch` from the session log (absent outside a repo / pre-catalog).
                   The launcher's interactive branch chooser was CUT (D5, worktree
                   option cut), so it keeps 3 columns. */}
               {props.variant === 'session' ? (
@@ -128,7 +128,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                   <div className="w-px bg-shell-seam" />
                   <MetaCol icon={<BranchIcon />} label="Branch">
                     <span className="truncate font-mono text-[13px] text-text-muted">
-                      {props.branch ?? '—'}
+                      {props.branch ?? 'none'}
                     </span>
                   </MetaCol>
                 </>
@@ -321,7 +321,7 @@ function RecentItem({
   return (
     <div
       className="flex w-full cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left opacity-60"
-      title="Open this project from the terminal — desktop restore needs a registry row (P4-6b)."
+      title="Open this project from the terminal. The desktop cannot restore it yet."
     >
       {body}
     </div>
@@ -393,7 +393,7 @@ export function OrchestratorReflect({
       role="switch"
       aria-checked={active}
       aria-readonly="true"
-      title="Reflects the focused session's Agent Mode (read-only — set at session start)."
+      title="Reflects the focused session's Agent Mode, which is set at session start."
       className="inline-flex items-center gap-2.5"
     >
       {visual}

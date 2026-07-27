@@ -217,7 +217,7 @@ export function PlanPanel({
                * here does NOT pre-authorize them — each still prompts per use
                * (deviation flagged: PARITY-LEDGER.md §24). */}
               <div className="mb-1.5 text-[10px] text-text-subtle/70">
-                Listed for context — each is still confirmed when it runs.
+                Listed for context. Each is still confirmed when it runs.
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {review.data.allowedPrompts.map((prompt, index) => (

@@ -125,7 +125,7 @@ export function WorkspaceLayout({
           'flex min-h-0 flex-1 overflow-hidden ' +
           (resize ? 'cursor-col-resize select-none' : '')
         }
-        aria-label={`Workspace layout — ${panels.length} panel${panels.length === 1 ? '' : 's'}`}
+        aria-label={`Workspace layout, ${panels.length} panel${panels.length === 1 ? '' : 's'}`}
         onDragOver={event => {
           if (
             event.dataTransfer.types.some(
@@ -294,7 +294,7 @@ function PanelHeader({
       <select
         className="min-w-0 flex-1 truncate rounded border border-shell-seam bg-app-bg px-2 py-1 text-xs text-text-primary"
         value={panel.sessionId}
-        aria-label={`Panel ${index + 1} session selector; current ${sessionIdentity(panel)} — ${sessionState(panel)}`}
+        aria-label={`Panel ${index + 1} session selector; current ${sessionIdentity(panel)}, ${sessionState(panel)}`}
         onChange={event => onSelectSession(index, event.target.value)}
       >
         {sessions.map(session => {
@@ -309,14 +309,14 @@ function PanelHeader({
               disabled={duplicate}
             >
               {tabLabel(session)}
-              {duplicate ? ` — open in panel ${openIndex + 1}` : ''}
+              {duplicate ? `, open in panel ${openIndex + 1}` : ''}
             </option>
           )
         })}
       </select>
       <button
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:bg-white/10 hover:text-text-primary"
-        aria-label={`Close panel ${index + 1} showing ${sessionIdentity(panel)} — ${sessionState(panel)}`}
+        aria-label={`Close panel ${index + 1} showing ${sessionIdentity(panel)}, ${sessionState(panel)}`}
         title="Close panel"
         type="button"
         onClick={event => {
@@ -360,7 +360,7 @@ function DropEdge({
         ' ' +
         (active && !disabled ? 'bg-accent/20' : 'bg-transparent')
       }
-      aria-label={`Drop tab on ${edge} edge of panel ${index + 1} showing ${sessionIdentity(panel)} — ${sessionState(panel)} to split`}
+      aria-label={`Drop tab on ${edge} edge of panel ${index + 1} showing ${sessionIdentity(panel)}, ${sessionState(panel)} to split`}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
       onDrop={event => {
@@ -393,7 +393,7 @@ function Divider({
       }
       role="separator"
       aria-orientation="vertical"
-      aria-label={`Resize split between panel ${index + 1} session ${sessionIdentity(left)} — ${sessionState(left)} and panel ${index + 2} session ${sessionIdentity(right)} — ${sessionState(right)}`}
+      aria-label={`Resize split between panel ${index + 1} session ${sessionIdentity(left)}, ${sessionState(left)} and panel ${index + 2} session ${sessionIdentity(right)}, ${sessionState(right)}`}
       tabIndex={0}
       onKeyDown={onKeyDown}
       onMouseDown={onMouseDown}
@@ -414,7 +414,7 @@ function panelAriaLabel(
   index: number,
   active: boolean,
 ): string {
-  return `Panel ${index + 1} session ${sessionIdentity(panel)} — ${sessionState(panel)}, ${active ? 'active' : 'inactive'}`
+  return `Panel ${index + 1} session ${sessionIdentity(panel)}, ${sessionState(panel)}, ${active ? 'active' : 'inactive'}`
 }
 
 function sessionIdentity(panel: WorkspacePanelView): string {

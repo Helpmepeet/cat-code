@@ -115,7 +115,7 @@ export function MetadataInspector({
           <div className="min-w-0 flex-1">
             <div className="text-[14px] font-semibold text-text-primary">Metadata</div>
             <div className="mt-0.5 truncate font-mono text-[11px] text-text-subtle">
-              {meta?.messageId ?? meta?.uuid ?? '—'} · {session?.sessionId ?? 'session'}
+              {meta?.messageId ?? meta?.uuid ?? 'none'} · {session?.sessionId ?? 'session'}
             </div>
           </div>
           <span className="shrink-0 rounded border border-shell-seam px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-text-subtle">
@@ -136,14 +136,14 @@ export function MetadataInspector({
         <div className="flex-1 overflow-y-auto px-5 py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* Session */}
           <Section title="Session">
-            <Row label="Session ID" mono>{session?.sessionId ?? '—'}</Row>
-            <Row label="Mode">{session?.mode ?? '—'}</Row>
-            <Row label="Permission mode" mono>{session?.permissionMode ?? '—'}</Row>
+            <Row label="Session ID" mono>{session?.sessionId ?? 'none'}</Row>
+            <Row label="Mode">{session?.mode ?? 'none'}</Row>
+            <Row label="Permission mode" mono>{session?.permissionMode ?? 'none'}</Row>
             <Row label="Tag">
               {session?.tag ? (
                 <span className="font-mono text-accent">#{session.tag}</span>
               ) : (
-                '—'
+                'none'
               )}
             </Row>
           </Section>
@@ -152,7 +152,7 @@ export function MetadataInspector({
           <Section title="Thread goal">
             {session?.threadGoal ? (
               <>
-                <Row label="Objective">{session.threadGoal.objective || '—'}</Row>
+                <Row label="Objective">{session.threadGoal.objective || 'none'}</Row>
                 <Row label="Status">
                   <GoalStatus status={session.threadGoal.status} />
                 </Row>
@@ -206,13 +206,13 @@ export function MetadataInspector({
                 <Row label="Kind">
                   <RolePill role={meta.role} subtype={meta.subtype} />
                 </Row>
-                <Row label="Message ID" mono>{meta.messageId ?? '—'}</Row>
+                <Row label="Message ID" mono>{meta.messageId ?? 'none'}</Row>
                 <Row label="Frame UUID" mono>{meta.uuid}</Row>
-                <Row label="Model" mono>{meta.model ?? '—'}</Row>
-                <Row label="Request ID" mono>{meta.requestId ?? '—'}</Row>
-                <Row label="Timestamp" mono>{meta.timestamp ?? '—'}</Row>
-                <Row label="Parent tool use" mono>{meta.parentToolUseId ?? '—'}</Row>
-                <Row label="Stop reason" mono>{meta.stopReason ?? '—'}</Row>
+                <Row label="Model" mono>{meta.model ?? 'none'}</Row>
+                <Row label="Request ID" mono>{meta.requestId ?? 'none'}</Row>
+                <Row label="Timestamp" mono>{meta.timestamp ?? 'none'}</Row>
+                <Row label="Parent tool use" mono>{meta.parentToolUseId ?? 'none'}</Row>
+                <Row label="Stop reason" mono>{meta.stopReason ?? 'none'}</Row>
               </>
             ) : null}
           </Section>
@@ -224,10 +224,10 @@ export function MetadataInspector({
               <Row label="Output tokens" mono>{numOr(meta.usage?.outputTokens)}</Row>
               <Row label="Total tokens" mono>{numOr(meta.usage?.totalTokens)}</Row>
               <Row label="Cost (USD)" mono>
-                {meta.totalCostUsd != null ? `$${meta.totalCostUsd.toFixed(4)}` : '—'}
+                {meta.totalCostUsd != null ? `$${meta.totalCostUsd.toFixed(4)}` : 'none'}
               </Row>
               <Row label="Duration" mono>
-                {meta.durationMs != null ? `${meta.durationMs} ms` : '—'}
+                {meta.durationMs != null ? `${meta.durationMs} ms` : 'none'}
               </Row>
             </Section>
           ) : null}
@@ -235,7 +235,7 @@ export function MetadataInspector({
           {/* Context collapse — compact boundary frames */}
           {meta?.compaction ? (
             <Section title="Context collapse">
-              <Row label="Trigger" mono>{meta.compaction.trigger ?? '—'}</Row>
+              <Row label="Trigger" mono>{meta.compaction.trigger ?? 'none'}</Row>
               <Row label="Tokens at boundary" mono>{numOr(meta.compaction.preTokens)}</Row>
             </Section>
           ) : null}
@@ -243,11 +243,10 @@ export function MetadataInspector({
           {/* Attribution + deferrals — honest, source-cited notes (never mocked). */}
           <Section title="Not available">
             <div className="text-[11.5px] leading-relaxed text-text-subtle">
-              No per-message account is recorded upstream — attribution is model +
-              surface only. Worktree-session, file-history backups and
-              content-replacement metadata are not carried on any desktop frame
-              yet (no transcript-by-id read seam), so they are omitted rather than
-              invented.
+              No per-message account is recorded, so attribution is model and
+              surface only. Worktree, file-history and content-replacement
+              details are not carried on any frame yet, so they are left out
+              rather than invented.
             </div>
             <div className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
               {IDE_LSP_UNAVAILABLE_NOTE}
@@ -275,7 +274,7 @@ function WorkspaceFacts({ state }: { state: SessionInspectorState }) {
   return (
     <Section title="Workspace">
       <Row label="Working directory" mono>
-        {state.cwd ?? '—'}
+        {state.cwd ?? 'none'}
       </Row>
       {trust ? (
         <>
@@ -283,7 +282,7 @@ function WorkspaceFacts({ state }: { state: SessionInspectorState }) {
             <TrustState trusted={trust.trusted} />
           </Row>
           <Row label="Trust root" mono>
-            {trust.trustRoot ?? '—'}
+            {trust.trustRoot ?? 'none'}
           </Row>
           <Row label="Detected repo" mono>
             {trust.detectedRepo ?? 'none'}
@@ -391,11 +390,9 @@ function EffectiveSettings({ state }: { state: SessionInspectorState }) {
       ))}
       {rows.length > 0 ? (
         <Note>
-          {valued} of {rows.length} resolved keys carry a value on this seam. The
-          rest ride as names only — the settings snapshot carries the source
-          model, not the settings object, so no credential-bearing value ever
-          serializes. A blank value means this seam carries none for that key,
-          never that the key is unset.
+          {valued} of {rows.length} keys arrive here with a value; the rest
+          arrive as names only, so that no secret is ever sent to this window. A
+          blank value means it was not sent, not that the key is unset.
         </Note>
       ) : null}
     </Section>
@@ -430,7 +427,7 @@ function SessionFlags({ state }: { state: SessionInspectorState }) {
           </>
         ) : (
           <Row label="Flag layer">
-            none — no --settings file or SDK inline settings
+            none: no --settings file or SDK inline settings
           </Row>
         )
       ) : (
@@ -442,7 +439,7 @@ function SessionFlags({ state }: { state: SessionInspectorState }) {
             {run.modelOverride ?? 'none'}
           </Row>
           <Row label="Resolved model" mono>
-            {run.resolvedModel ?? '—'}
+            {run.resolvedModel ?? 'none'}
           </Row>
           <Row label="Reasoning effort" mono>
             {run.effort ?? 'provider default'}
@@ -628,7 +625,7 @@ function Empty({ children }: { children: ReactNode }) {
 }
 
 function numOr(value: number | null | undefined): string {
-  return typeof value === 'number' ? String(value) : '—'
+  return typeof value === 'number' ? String(value) : 'none'
 }
 
 function fmtK(tokens: number): string {

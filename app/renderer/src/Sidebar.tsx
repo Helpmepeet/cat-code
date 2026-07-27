@@ -634,7 +634,7 @@ export function SessionGroup({
           aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
           title={
             reorderable
-              ? `${group.cwd} — drag to reorder, or ⌥↑/⌥↓`
+              ? `${group.cwd}. Drag to reorder, or ⌥↑/⌥↓`
               : group.cwd || 'Sessions with no recorded workspace'
           }
           className="flex min-w-0 flex-1 items-center gap-1"
@@ -765,7 +765,7 @@ export function SidebarRowItem({
       tabIndex={openable ? 0 : -1}
       aria-current={isActive ? 'true' : undefined}
       aria-disabled={openable ? undefined : 'true'}
-      aria-label={`session ${title} — ${visual.label}${openable ? '' : ', open from terminal'}`}
+      aria-label={`session ${title}, ${visual.label}${openable ? '' : ', open from terminal'}`}
       title={
         openable
           ? `${row.cwd || title}${
@@ -775,7 +775,7 @@ export function SidebarRowItem({
                   ? ' · open'
                   : ''
             }`
-          : 'This session has no recorded workspace — open it from the terminal.'
+          : 'This session has no recorded workspace. Open it from the terminal.'
       }
       onClick={openable ? activate : undefined}
       onContextMenu={
@@ -877,7 +877,7 @@ function NavItemExpanded({
         type="button"
         disabled
         aria-disabled="true"
-        title={`${item.label} — not yet migrated`}
+        title={`${item.label}: not yet migrated`}
         className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
       >
         <span className="flex h-5 w-8 shrink-0 items-center justify-center">
@@ -929,7 +929,7 @@ function NavItemRail({
         disabled
         aria-disabled="true"
         aria-label={item.label}
-        title={`${item.label} — not yet migrated`}
+        title={`${item.label}: not yet migrated`}
         className="flex h-8 w-8 items-center justify-center rounded-md text-text-subtle/55"
       >
         {item.icon}

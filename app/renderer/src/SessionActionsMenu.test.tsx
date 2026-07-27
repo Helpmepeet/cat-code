@@ -67,7 +67,7 @@ test('a still-deferred verb (Rewind) renders disabled with a "soon" tag and the 
   expect(html).toContain('soon')
   // Rewind stays deferred (no engine conversation-rewind verb); its source-cited
   // reason rides the disabled row's title attribute.
-  expect(html).toContain('REPL.tsx:4034')
+  expect(html).toContain('not available in the desktop app yet')
 })
 
 test('P4-6b wired verbs (Rename/Export/Branch) render as live buttons for a LIVE row', () => {
@@ -100,7 +100,7 @@ test('cut verbs never render (no Tag/Archive/Delete)', () => {
 
 test('history-only row: Open is disabled, not a clickable button label', () => {
   const html = render(false, row({ appSessionId: null, inRegistry: false, live: false, status: 'history' }))
-  expect(html).toContain('host-API gap')
+  expect(html).toContain('came from terminal history')
 })
 
 test('SessionRenamePopover prefills the input with the current title', () => {

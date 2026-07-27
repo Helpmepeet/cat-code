@@ -407,8 +407,8 @@ export function HooksPanel({
     <PaneSection>
       <div className="mb-4 text-[11.5px] leading-relaxed text-text-subtle">
         {total} hook{total === 1 ? '' : 's'} across {groups.length} event
-        {groups.length === 1 ? '' : 's'}. Last-run results are not shown —
-        cat-code does not persist per-hook run history.
+        {groups.length === 1 ? '' : 's'}. Last-run results are not shown, because
+        cat-code does not keep per-hook run history.
       </div>
       {total === 0 ? (
         <EmptyRow>No hooks configured.</EmptyRow>
