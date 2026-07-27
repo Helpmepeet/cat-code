@@ -174,9 +174,10 @@ const CAT_SCOPE: Record<SettingsCategoryId, SettingsScope> = {
 
 /**
  * Rail order. `resolved` leads because it holds 13 of the 18 categories and
- * because `general` — the pane the screen opens on — is inside it; putting the
- * two small scopes first would push the whole familiar rail down the screen for
- * no navigational gain.
+ * because the pane the screen opens on is inside it either way (`agents`, which
+ * App passes, and `general`, this shell's own default); putting the two small
+ * scopes first would push the whole familiar rail down the screen for no
+ * navigational gain.
  */
 const SCOPE_ORDER: readonly SettingsScope[] = ['resolved', 'project', 'machine']
 

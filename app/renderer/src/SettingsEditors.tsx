@@ -29,7 +29,7 @@ import {
   isEditableSettingSource,
   validateEditableSettingValue,
 } from '../../shared/settingsEditable.js'
-import { Field, PaneSection } from './SettingsField.js'
+import { Field, PaneSection, SOURCE_LABEL } from './SettingsField.js'
 import { SETTINGS_UNREAD_NOTE, settingsWereRead } from './settingsReadState.js'
 import {
   selectAvailableOptions,
@@ -99,6 +99,29 @@ function targetSourceFor(
   return 'userSettings'
 }
 
+/**
+ * Write-target disclosure text — the fix for "the row shows where a value
+ * comes from, never where a click will land." Quiet/uncolored for the
+ * unsurprising case (the operator's own user file); spelled out with the
+ * real settings-file path for the surprising one (a project/local override,
+ * which `targetSourceFor` keeps writing back into — invisible outside that
+ * one project). Built from `SOURCE_LABEL` (the same vocabulary as the source
+ * badge) so the two can never drift apart.
+ */
+function writeTargetLabel(target: EditableSettingSource): string {
+  return target === 'userSettings'
+    ? 'Writes to your settings'
+    : `Writes to ${SOURCE_LABEL[target]} settings, not yours`
+}
+
+/** Static per-target classes (never interpolated) so Tailwind's scanner keeps
+ * them; reuses the same `--color-source-*` tokens as the source badges. */
+const WRITE_TARGET_CLASS: Record<EditableSettingSource, string> = {
+  userSettings: 'text-text-subtle',
+  projectSettings: 'text-source-project font-medium',
+  localSettings: 'text-source-local font-medium',
+}
+
 function SettingEditor({
   spec,
   snapshot,
@@ -125,12 +148,18 @@ function SettingEditor({
   const current = selectEditableValue(snapshot, spec.key)
   const source = resolution?.source
 
+  const target = targetSourceFor(snapshot, spec.key)
   const write = (value: EditableSettingValue) => {
-    onWrite({ source: targetSourceFor(snapshot, spec.key), key: spec.key, value })
+    onWrite({ source: target, key: spec.key, value })
   }
 
   const control = spec.control
   let controlNode: ReactNode = null
+  // A dynamic-enum with no live options disables itself for a second reason
+  // (below); `finalDisabled` tracks whichever control actually renders so the
+  // write-target note (set after this block) never claims a destination for a
+  // control that cannot in fact be clicked.
+  let finalDisabled = disabled
   if (control.kind === 'boolean') {
     const value = typeof current === 'boolean' ? current : control.default
     controlNode = (
@@ -169,9 +198,10 @@ function SettingEditor({
       : [value, ...optionValues]
     const optionLabels: Record<string, string> = {}
     for (const option of available) optionLabels[option.value] = option.label
+    finalDisabled = disabled || available.length === 0
     controlNode = (
       <SelectControl
-        disabled={disabled || available.length === 0}
+        disabled={finalDisabled}
         label={spec.label}
         onChange={next => write(next)}
         optionLabels={optionLabels}
@@ -192,6 +222,15 @@ function SettingEditor({
     )
   }
 
+  // Only assert a destination once a click could actually land somewhere:
+  // `finalDisabled` folds in unread (per `settingsReadState.ts`), managed,
+  // non-editable, AND (dynamic-enum) an empty live option set.
+  const showWriteTarget = !finalDisabled
+  const writeTargetOrigin =
+    showWriteTarget && target !== 'userSettings'
+      ? selectLayerOrigin(snapshot, target)
+      : null
+
   return (
     <Field
       desc={spec.description}
@@ -202,7 +241,31 @@ function SettingEditor({
       source={source}
     >
       {controlNode}
+      {showWriteTarget ? (
+        <WriteTargetNote origin={writeTargetOrigin} target={target} />
+      ) : null}
     </Field>
+  )
+}
+
+/** The write-target line under a control — see `writeTargetLabel` for why
+ * it exists. `origin` is only shown for a non-`userSettings` destination:
+ * that is precisely the case with no other visible cue today. */
+function WriteTargetNote({
+  target,
+  origin,
+}: {
+  target: EditableSettingSource
+  origin: string | null
+}) {
+  const detail = target !== 'userSettings' && origin ? ` — ${origin}` : ''
+  return (
+    <span
+      className={`block max-w-[200px] text-right text-[10.5px] leading-tight ${WRITE_TARGET_CLASS[target]}`}
+    >
+      {writeTargetLabel(target)}
+      {detail}
+    </span>
   )
 }
 
