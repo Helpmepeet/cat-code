@@ -92,6 +92,25 @@ bun run --cwd app test:hardening       # security-baseline smoke; ALL checks mus
 bun run --cwd app renderer:build       # when renderer build inputs changed
 ```
 
+**Running the app** — `cd /Users/pt/cat-code && bun run --cwd app dev` builds
+main+preload, starts Vite on `:5173`, then launches Electron against it; Ctrl-C
+tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
+
+- Dev loads the renderer from the **Vite server**, not `app/renderer/dist`
+  (`app/main/main.ts:644` `loadURL(CATCODE_RENDERER_URL ?? localhost:5173)`;
+  `dist` is only the packaged path at `:646`). So `renderer:build` is a build
+  gate, NOT what makes your renderer change visible — a running dev app already
+  serves current source. Conversely, a dev app left open across your edits is
+  showing HMR state, so send the operator to a fresh launch before they judge a
+  layout or effect change.
+- Launching it is a **GUI action on the operator's machine** (§8): give them the
+  command, don't run it yourself without authorization for that run. It steals
+  focus and it is often already open with their live work.
+- `lsof -ti:5173` and `pgrep -lf "Cat Code Dev"` tell you whether it is up. If
+  something you spawned hangs, report the PID you recorded — never sweep for it
+  with a `ps` pattern match; other sessions and the operator's own app share
+  this machine.
+
 - Known-red baseline: raw `tsc -p app/sidecar/tsconfig.json` fails with ~5.5k
   pre-existing upstream-engine diagnostics (the include-override drops root
   `env.d.ts`). The wrapper (`app/scripts/sidecar-typecheck.ts`) ignores those
