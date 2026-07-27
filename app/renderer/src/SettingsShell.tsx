@@ -500,7 +500,6 @@ function ScopeBody({
           onWrite={onSettingWrite}
           pane="general"
           snapshot={snapshot}
-          title="General"
         />
       )
     case 'model':
@@ -513,7 +512,6 @@ function ScopeBody({
             onWrite={onSettingWrite}
             pane="model"
             snapshot={snapshot}
-            title="Model &amp; reasoning"
           />
           <DeferredNote note="A default-model select belongs here; it is deferred on the model-list read-seam." />
         </>
@@ -530,7 +528,6 @@ function ScopeBody({
             onWrite={onSettingWrite}
             pane="theme"
             snapshot={snapshot}
-            title="Interface"
           />
           {scope === 'user' ? <KeybindingsRow /> : null}
           <DeferredNote note="Language and reduced-motion are real schema keys with no control yet; they need the shared write allowlist to grow, which is a per-key sidecar review." />
@@ -546,7 +543,6 @@ function ScopeBody({
             onWrite={onSettingWrite}
             pane="privacy"
             snapshot={snapshot}
-            title="Privacy &amp; data"
           />
           <DeferredNote note="Auto-memory and auto-dream toggles belong here; they need the shared write allowlist to grow, which is a per-key sidecar review." />
         </>

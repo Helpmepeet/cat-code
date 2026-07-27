@@ -289,7 +289,7 @@ const RAIL_ITEMS: Record<SettingsRailItemId, SettingsRailItem> = {
   interface: {
     id: 'interface',
     label: 'Interface',
-    desc: 'Output style, syntax highlighting, and keybindings',
+    desc: 'Output style and syntax highlighting',
   },
   privacy: {
     id: 'privacy',
