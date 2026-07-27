@@ -1,8 +1,13 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionId } from '../../shared/protocol.js'
-import { SessionGroup, SidebarRowItem } from './Sidebar.js'
+import {
+  SessionGroup,
+  SidebarRowItem,
+  type WorkspaceReorderHandlers,
+} from './Sidebar.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
+import type { WorkspaceDropEdge } from './sidebarWorkspaceOrder.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
 // SESSIONS-UNIFICATION). It collapses to the rail by default under
@@ -57,8 +62,11 @@ function historyRow(
 
 const noop = () => {}
 
-function group(rows: MergedSessionRow[]): WorkspaceGroup {
-  return { cwd: '/tmp/proj', name: 'proj', current: false, rows }
+function group(
+  rows: MergedSessionRow[],
+  over: Partial<WorkspaceGroup> = {},
+): WorkspaceGroup {
+  return { cwd: '/tmp/proj', name: 'proj', current: false, rows, ...over }
 }
 
 function renderRow(
@@ -80,22 +88,38 @@ function renderRow(
   )
 }
 
+const REORDER: WorkspaceReorderHandlers = {
+  onDragStart: noop,
+  onDragOver: noop,
+  onDrop: noop,
+  onDragEnd: noop,
+  onStep: noop,
+}
+
 function renderGroup(
   rows: MergedSessionRow[],
   {
     onNewSessionInWorkspace,
     onOpenRowActions,
+    reorder,
+    dragging,
+    dropEdge,
+    groupOver,
   }: {
     onNewSessionInWorkspace?: (repId: SessionId) => void
     onOpenRowActions?: (
       sessionId: SessionId,
       anchor: { top: number; left: number },
     ) => void
+    reorder?: WorkspaceReorderHandlers
+    dragging?: boolean
+    dropEdge?: WorkspaceDropEdge | null
+    groupOver?: Partial<WorkspaceGroup>
   } = {},
 ): string {
   return renderToStaticMarkup(
     <SessionGroup
-      group={group(rows)}
+      group={group(rows, groupOver)}
       activeSessionId={null}
       collapsed={false}
       onToggle={noop}
@@ -104,6 +128,9 @@ function renderGroup(
       onOpenHistory={noop}
       onNewSessionInWorkspace={onNewSessionInWorkspace}
       onOpenRowActions={onOpenRowActions}
+      reorder={reorder}
+      dragging={dragging}
+      dropEdge={dropEdge}
     />,
   )
 }
@@ -228,4 +255,66 @@ test('a pure-terminal-history group hides the "+" (HC1: no registry id to name)'
     { onNewSessionInWorkspace: noop },
   )
   expect(html).not.toContain('New session in this workspace')
+})
+
+// ── ➕ workspace reordering (operator, 2026-07-26) ────────────────────────────
+// The ordering logic itself is proven in `sidebarWorkspaceOrder.test.ts`; these
+// assert the DOM wiring over it. The live gesture is operator-GUI only — this
+// suite is SSR (`renderToStaticMarkup`) and cannot fire a drag.
+
+test('a workspace header is a drag handle only when reordering is wired', () => {
+  const wired = renderGroup([registryRow('a')], { reorder: REORDER })
+  // The header row AND the label button — so the whole label is a grab surface,
+  // not just the row's padding.
+  expect(wired.match(/draggable="true"/g)).toHaveLength(2)
+  expect(wired).toContain('cursor-grab')
+  expect(wired).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"')
+  expect(wired).toContain('title="/tmp/proj — drag to reorder, or ⌥↑/⌥↓"')
+
+  const unwired = renderGroup([registryRow('a')])
+  expect(unwired).not.toContain('draggable')
+  expect(unwired).not.toContain('cursor-grab')
+  expect(unwired).not.toContain('aria-keyshortcuts')
+  expect(unwired).toContain('title="/tmp/proj"')
+})
+
+test('the "Unknown workspace" bucket is not a drag handle even when wired', () => {
+  const html = renderGroup([historyRow('h', { cwd: '' })], {
+    reorder: REORDER,
+    groupOver: { cwd: '', name: 'Unknown workspace' },
+  })
+  expect(html).not.toContain('draggable')
+  expect(html).not.toContain('cursor-grab')
+  expect(html).not.toContain('aria-keyshortcuts')
+  expect(html).toContain('title="Sessions with no recorded workspace"')
+})
+
+test('the drop indicator renders on the edge the drop would land on', () => {
+  const before = renderGroup([registryRow('a')], {
+    reorder: REORDER,
+    dropEdge: 'before',
+  })
+  expect(before).toContain('absolute inset-x-1 top-0 h-[2px] rounded-full bg-accent')
+  expect(before).not.toContain('bottom-0 h-[2px] rounded-full bg-accent')
+
+  const after = renderGroup([registryRow('a')], {
+    reorder: REORDER,
+    dropEdge: 'after',
+  })
+  expect(after).toContain(
+    'absolute inset-x-1 bottom-0 h-[2px] rounded-full bg-accent',
+  )
+  expect(after).not.toContain('top-0 h-[2px] rounded-full bg-accent')
+
+  const idle = renderGroup([registryRow('a')], { reorder: REORDER })
+  expect(idle).not.toContain('h-[2px] rounded-full bg-accent')
+})
+
+test('the dragged header is dimmed with a STATIC class (no interpolated arbitrary value)', () => {
+  expect(
+    renderGroup([registryRow('a')], { reorder: REORDER, dragging: true }),
+  ).toContain('opacity-50')
+  expect(
+    renderGroup([registryRow('a')], { reorder: REORDER, dragging: false }),
+  ).not.toContain('opacity-50')
 })

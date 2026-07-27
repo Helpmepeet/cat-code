@@ -44,6 +44,13 @@
  *    TabBar "+" still uses the native picker (`onNewSession`), unchanged.
  *  - Session-row drag-to-panel is omitted; the built split model is drag-tab-to-
  *    edge (P3-6), which stays intact.
+ *  - ➕ real-added (operator, 2026-07-26): the workspace GROUP HEADERS are
+ *    drag-reorderable, and the chosen order persists across restarts. The
+ *    prototype has no such affordance, so there is nothing to match here. The
+ *    order is renderer-local (`sidebarWorkspaceOrder.ts`), keyed on `cwd` (never
+ *    the derived label), applied on the SIDEBAR side of the shared
+ *    `groupByWorkspace` so the Sessions page keeps frozen-alphabetical, and it
+ *    never consults `activeCwd` — CC-2 warp-freedom is intact.
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -58,6 +65,18 @@ import {
   sidebarActivityKey,
   sortSidebarSessionRows,
 } from './sidebarState.js'
+import {
+  createWorkspaceOrder,
+  readWorkspaceOrderFromStorage,
+  reduceWorkspaceOrderMoved,
+  reduceWorkspaceOrderStepped,
+  selectOrderedWorkspaceGroups,
+  selectWorkspaceDropEdge,
+  WORKSPACE_ORDER_DRAG_MIME,
+  writeWorkspaceOrderToStorage,
+  type WorkspaceDropEdge,
+  type WorkspaceOrder,
+} from './sidebarWorkspaceOrder.js'
 import {
   groupByWorkspace,
   type MergedSessionRow,
@@ -75,6 +94,32 @@ const HIDE_DELAY = 200
  * The active session is always kept visible even when it falls past the cap.
  */
 const SIDEBAR_GROUP_ROW_LIMIT = 6
+
+type OrderStorage = Pick<Storage, 'getItem' | 'setItem'>
+
+/** The renderer's own `localStorage`, or `null` under SSR / a locked-down
+ * renderer — the `ReasoningLayoutProvider.tsx:26-33` helper, verbatim. */
+function defaultOrderStorage(): OrderStorage | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The five callbacks a workspace header needs to take part in reordering. Passed
+ * as one optional object (the `onOpenRowActions` idiom: additive, so a headless
+ * test that omits it renders the pre-existing, non-draggable header).
+ */
+export type WorkspaceReorderHandlers = {
+  onDragStart: (cwd: string) => void
+  onDragOver: (cwd: string) => void
+  onDrop: (cwd: string) => void
+  onDragEnd: () => void
+  onStep: (cwd: string, direction: 'up' | 'down') => void
+}
 
 type NavItem = {
   id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
@@ -109,6 +154,7 @@ export function Sidebar({
   onOpenRowActions,
   onNewSessionInWorkspace,
   modelForSession,
+  storage,
 }: {
   rows: MergedSessionRow[]
   activeSessionId: SessionId | null
@@ -145,6 +191,10 @@ export function Sidebar({
   /** Resolved model for a session (the subtitle's "· model", prototype grammar);
    * null when unknown — e.g. a restorable row that never attached this run. */
   modelForSession?: (id: SessionId) => string | null
+  /** Where the operator's workspace order is persisted. Injectable for tests
+   * (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
+   * renderer's own `localStorage`, and `null` disables persistence entirely. */
+  storage?: OrderStorage | null
 }) {
   const [search, setSearch] = useState('')
   const [pinned, setPinned] = useState(false)
@@ -152,6 +202,16 @@ export function Sidebar({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
+  const orderStore = storage === undefined ? defaultOrderStorage() : storage
+  const [workspaceOrder, setWorkspaceOrder] = useState<WorkspaceOrder>(
+    () => readWorkspaceOrderFromStorage(orderStore) ?? createWorkspaceOrder(),
+  )
+  /** The in-flight header drag: the group being dragged and the one under the
+   * pointer. Only the indicator reads it; the order itself changes on drop. */
+  const [headerDrag, setHeaderDrag] = useState<{
+    from: string
+    over: string
+  } | null>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -200,8 +260,55 @@ export function Sidebar({
             row.cwd.toLowerCase().includes(query),
         )
       : ordered
-    return groupByWorkspace(filtered, activeCwd)
-  }, [rows, query, activeCwd])
+    // ➕ The operator's custom order is applied HERE, on the sidebar side of the
+    // shared selector — `groupByWorkspace` itself stays frozen-alphabetical for
+    // the Sessions page, which uses the same call.
+    return selectOrderedWorkspaceGroups(
+      groupByWorkspace(filtered, activeCwd),
+      workspaceOrder,
+    )
+  }, [rows, query, activeCwd, workspaceOrder])
+
+  // The rendered sequence a reorder is expressed against (what the operator is
+  // looking at, search filter included).
+  const groupCwds = useMemo(() => groups.map(group => group.cwd), [groups])
+
+  const commitWorkspaceOrder = (next: WorkspaceOrder) => {
+    if (next === workspaceOrder) return
+    setWorkspaceOrder(next)
+    writeWorkspaceOrderToStorage(orderStore, next)
+  }
+
+  const reorderHandlers: WorkspaceReorderHandlers = {
+    onDragStart: cwd => setHeaderDrag({ from: cwd, over: cwd }),
+    onDragOver: cwd =>
+      setHeaderDrag(drag =>
+        drag == null || drag.over === cwd ? drag : { ...drag, over: cwd },
+      ),
+    onDrop: cwd => {
+      if (headerDrag) {
+        commitWorkspaceOrder(
+          reduceWorkspaceOrderMoved(
+            workspaceOrder,
+            groupCwds,
+            headerDrag.from,
+            cwd,
+          ),
+        )
+      }
+      setHeaderDrag(null)
+    },
+    onDragEnd: () => setHeaderDrag(null),
+    onStep: (cwd, direction) =>
+      commitWorkspaceOrder(
+        reduceWorkspaceOrderStepped(
+          workspaceOrder,
+          groupCwds,
+          cwd,
+          direction,
+        ),
+      ),
+  }
 
   return (
     <>
@@ -301,6 +408,17 @@ export function Sidebar({
                     onOpenRowActions={onOpenRowActions}
                     onNewSessionInWorkspace={onNewSessionInWorkspace}
                     modelForSession={modelForSession}
+                    reorder={reorderHandlers}
+                    dragging={headerDrag?.from === group.cwd}
+                    dropEdge={
+                      headerDrag != null && headerDrag.over === group.cwd
+                        ? selectWorkspaceDropEdge(
+                            groupCwds,
+                            headerDrag.from,
+                            group.cwd,
+                          )
+                        : null
+                    }
                   />
                 ))
               )}
@@ -362,6 +480,9 @@ export function SessionGroup({
   onOpenRowActions,
   onNewSessionInWorkspace,
   modelForSession,
+  reorder,
+  dragging = false,
+  dropEdge = null,
 }: {
   group: WorkspaceGroup
   activeSessionId: SessionId | null
@@ -376,6 +497,13 @@ export function SessionGroup({
   ) => void
   onNewSessionInWorkspace?: (repId: SessionId) => void
   modelForSession?: (id: SessionId) => string | null
+  /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
+   * header is a plain, non-draggable header when this is absent. */
+  reorder?: WorkspaceReorderHandlers
+  /** This group is the one being dragged (drawn dimmed). */
+  dragging?: boolean
+  /** This group is the drop target; which edge the dragged group would land on. */
+  dropEdge?: WorkspaceDropEdge | null
 }) {
   // "Show more" cap — a long single-project session list buries the rest of the
   // rail. Pure logic (tested in sidebarState.test) keeps the active session
@@ -404,16 +532,111 @@ export function SessionGroup({
     group.rows.find(r => r.appSessionId != null)?.appSessionId ??
     null
 
+  // ➕ Reordering is offered for a real workspace only — the "Unknown workspace"
+  // bucket (cwd === '') is pinned last by `selectOrderedWorkspaceGroups` and is
+  // neither a drag source nor a drop target.
+  const reorderable = reorder != null && group.cwd.trim().length > 0
+
   return (
     <div className="mb-4">
       {/* Header row: collapse toggle (flex-1) + the #10 per-workspace "+" so the
-       * "+" sits flush-right of the workspace label (prototype Sidebar.jsx:219). */}
-      <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
+       * "+" sits flush-right of the workspace label (prototype Sidebar.jsx:219).
+       * ➕ The row is also the workspace drag handle + drop target. */}
+      <div
+        className={
+          'relative flex select-none items-center gap-1 px-1 pb-1.5 pt-0.5 ' +
+          (reorderable ? 'cursor-grab ' : '') +
+          (dragging ? 'opacity-50' : '')
+        }
+        draggable={reorderable ? true : undefined}
+        onDragStart={
+          reorderable
+            ? event => {
+                event.dataTransfer.setData(
+                  WORKSPACE_ORDER_DRAG_MIME,
+                  group.cwd,
+                )
+                event.dataTransfer.effectAllowed = 'move'
+                reorder?.onDragStart(group.cwd)
+              }
+            : undefined
+        }
+        onDragOver={
+          reorderable
+            ? event => {
+                // Only a workspace drag is accepted — a tab dragged for a split
+                // carries `text/sessionId` and must fall through untouched.
+                if (
+                  !event.dataTransfer.types.some(
+                    type => type.toLowerCase() === WORKSPACE_ORDER_DRAG_MIME,
+                  )
+                ) {
+                  return
+                }
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                reorder?.onDragOver(group.cwd)
+              }
+            : undefined
+        }
+        onDrop={
+          reorderable
+            ? event => {
+                event.preventDefault()
+                reorder?.onDrop(group.cwd)
+              }
+            : undefined
+        }
+        onDragEnd={reorderable ? () => reorder?.onDragEnd() : undefined}
+      >
+        {/* Drop indicator — a static 2px accent rule on the edge the dragged
+         * group would land on, matching the TabBar's active-tab underline
+         * idiom (`TabBar.tsx:271`). Static classes only: an interpolated
+         * arbitrary-value class silently no-ops in this Tailwind v4 setup. */}
+        {dropEdge === 'before' ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-1 top-0 h-[2px] rounded-full bg-accent"
+          />
+        ) : null}
+        {dropEdge === 'after' ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-1 bottom-0 h-[2px] rounded-full bg-accent"
+          />
+        ) : null}
         <button
           type="button"
+          // Also draggable so the whole label — not just the header's padding —
+          // is a grab surface; `dragstart` bubbles, so the row above owns the
+          // one handler.
+          draggable={reorderable ? true : undefined}
           onClick={onToggle}
+          onKeyDown={
+            reorderable
+              ? event => {
+                  // Keyboard path for a drag-only affordance: ⌥↑/⌥↓ moves the
+                  // workspace one slot. The header is already focusable, and
+                  // Alt+Arrow is unclaimed elsewhere in the renderer.
+                  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+                    return
+                  }
+                  if (!event.altKey) return
+                  event.preventDefault()
+                  reorder?.onStep(
+                    group.cwd,
+                    event.key === 'ArrowUp' ? 'up' : 'down',
+                  )
+                }
+              : undefined
+          }
           aria-expanded={!collapsed}
-          title={group.cwd || 'Sessions with no recorded workspace'}
+          aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
+          title={
+            reorderable
+              ? `${group.cwd} — drag to reorder, or ⌥↑/⌥↓`
+              : group.cwd || 'Sessions with no recorded workspace'
+          }
           className="flex min-w-0 flex-1 items-center gap-1"
         >
           <span
