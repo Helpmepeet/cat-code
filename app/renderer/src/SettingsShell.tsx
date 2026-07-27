@@ -10,6 +10,12 @@
  * are honest stubs here (the prototype uses the same `StubPanel` idiom); the
  * MANAGED panel and the resolution legend/layer summary render REAL snapshot
  * data — the primitives demonstrated over engine truth, not fixtures.
+ *
+ * The category rail is grouped by SCOPE (see `SETTINGS_CATEGORIES` /
+ * `CAT_SCOPE`), not by the prototype's functional headings, because the screen
+ * mixes settings that are identical on every machine with settings that
+ * silently describe whichever session is focused, and nothing on screen told
+ * the operator which was which.
  */
 
 import { useContext, useState } from 'react'
@@ -40,6 +46,10 @@ import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import { SelectControl, SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import {
+  SETTINGS_PROJECT_UNBOUND_NOTE,
+  type SettingsProjectBinding,
+} from './settingsProjectBinding.js'
+import {
   SETTINGS_UNREAD_NOTE,
   settingsWereRead,
 } from './settingsReadState.js'
@@ -65,55 +75,182 @@ import {
 import { WorkspaceTrustSection } from './WorkspaceTrustSection.js'
 
 type NavItem = { id: string; label: string; locked?: boolean }
-type NavGroup = { group: string; items: NavItem[] }
+
+/**
+ * What the open project can do to a category's values.
+ *
+ *  - `machine` — no project layer exists anywhere in the resolver, so the values
+ *    are the same whatever session is focused.
+ *  - `project` — every field is cwd/session-derived; nothing global is inside.
+ *  - `resolved` — your user config with the open project's layers stacked on
+ *    top, per row.
+ *
+ * The three-way split is the point: a heading may say *"depends on the open
+ * project"*, which is a possibility claim the `SourceBadge` on each row then
+ * repairs into the exact answer, but it may NOT say *"applies everywhere"* about
+ * a category a project layer can override — that is a universal claim, and no
+ * per-row badge can repair a heading that already promised it. So a category
+ * whose scope is uncertain belongs in `resolved`, the weaker claim.
+ */
+type SettingsScope = 'resolved' | 'project' | 'machine'
+
+type NavGroup = {
+  scope: SettingsScope
+  heading: string
+  /** Why no project could be named. Rendered only under the heading that would
+   * otherwise have named one. */
+  note?: string
+  /** The bound project's cwd — its identity, behind the truncated label. */
+  cwd?: string
+  items: readonly NavItem[]
+}
 
 /**
  * Category rail, ported from the prototype's `SETTINGS_NAV` minus the CUT groups
  * (the `Prototype` demo group and `native`, both dropped — INVENTORY CUT list /
- * Settings.jsx note). Every non-Managed body is a P4-x stub for now.
+ * Settings.jsx note). Several bodies are still P4-x stubs.
+ *
+ * Kept as ONE ordered list because scope, not function, now groups the rail: the
+ * prototype's `Interface`/`Extensions`/`System`/`Organization` headings are
+ * subordinated (an operator-approved deviation from prototype parity), and this
+ * order is what survives of them — each category keeps its relative position
+ * inside whichever scope group it lands in, so the rail reads the way it did.
  */
-const SETTINGS_NAV: NavGroup[] = [
-  {
-    group: '',
-    items: [
-      { id: 'general', label: 'General' },
-      { id: 'model', label: 'Model & Inference' },
-      { id: 'permissions', label: 'Permissions' },
-      { id: 'workspace', label: 'Workspace' },
-      { id: 'memory', label: 'Memory' },
-      { id: 'privacy', label: 'Privacy' },
-    ],
-  },
-  {
-    group: 'Interface',
-    items: [
-      { id: 'keybindings', label: 'Keybindings' },
-      { id: 'theme', label: 'Theme & Output' },
-    ],
-  },
-  {
-    group: 'Extensions',
-    items: [
-      { id: 'agents', label: 'Agents' },
-      { id: 'mcp', label: 'MCP' },
-      { id: 'plugins', label: 'Plugins' },
-      { id: 'skills', label: 'Skills' },
-      { id: 'hooks', label: 'Hooks' },
-    ],
-  },
-  {
-    group: 'System',
-    items: [
-      { id: 'ide', label: 'IDE & LSP' },
-      { id: 'remote', label: 'Remote' },
-      { id: 'diagnostics', label: 'Diagnostics' },
-    ],
-  },
-  {
-    group: 'Organization',
-    items: [{ id: 'managed', label: 'Managed', locked: true }],
-  },
-]
+const SETTINGS_CATEGORIES = [
+  { id: 'general', label: 'General' },
+  { id: 'model', label: 'Model & Inference' },
+  { id: 'permissions', label: 'Permissions' },
+  { id: 'workspace', label: 'Workspace' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'privacy', label: 'Privacy' },
+  { id: 'keybindings', label: 'Keybindings' },
+  { id: 'theme', label: 'Theme & Output' },
+  { id: 'transcript', label: 'Transcript' },
+  { id: 'agents', label: 'Agents' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'plugins', label: 'Plugins' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'hooks', label: 'Hooks' },
+  { id: 'ide', label: 'IDE & LSP' },
+  { id: 'remote', label: 'Remote' },
+  { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'managed', label: 'Managed', locked: true },
+] as const satisfies readonly NavItem[]
+
+type SettingsCategoryId = (typeof SETTINGS_CATEGORIES)[number]['id']
+
+/**
+ * Every category's scope, from a source-level read of each pane's resolver (not
+ * from its heading, which is what made the mixture invisible in the first
+ * place). A `Record` over the id union, so adding a category without deciding
+ * its scope is a compile error rather than a silent drop out of the rail.
+ *
+ * `ide` is the one JUDGEMENT call: it is an unbuilt stub with no read-seam, so
+ * its scope is genuinely unknown. It sits in `resolved` because that is the
+ * claim that cannot be falsified by whatever seam it eventually grows — a
+ * machine-wide IDE setting is simply one the project layers never override.
+ * Re-decide it when the seam lands.
+ */
+const CAT_SCOPE: Record<SettingsCategoryId, SettingsScope> = {
+  general: 'resolved',
+  model: 'resolved',
+  permissions: 'resolved',
+  workspace: 'project',
+  memory: 'resolved',
+  privacy: 'resolved',
+  keybindings: 'machine',
+  theme: 'resolved',
+  transcript: 'machine',
+  agents: 'resolved',
+  mcp: 'resolved',
+  plugins: 'resolved',
+  skills: 'resolved',
+  hooks: 'resolved',
+  ide: 'resolved',
+  remote: 'project',
+  diagnostics: 'resolved',
+  managed: 'machine',
+}
+
+/**
+ * Rail order. `resolved` leads because it holds 13 of the 18 categories and
+ * because `general` — the pane the screen opens on — is inside it; putting the
+ * two small scopes first would push the whole familiar rail down the screen for
+ * no navigational gain.
+ */
+const SCOPE_ORDER: readonly SettingsScope[] = ['resolved', 'project', 'machine']
+
+/**
+ * The heading for one scope group.
+ *
+ * Only `resolved` names the project, and only when one is bound. Unbound it
+ * falls back to a statement about HOW these settings resolve rather than a
+ * placeholder name or an empty heading — the `settingsReadState.ts` rule
+ * (nothing is in flight, so nothing may promise a resolution) applied to the
+ * other fact this surface silently assumes.
+ */
+function scopeHeading(
+  scope: SettingsScope,
+  binding: SettingsProjectBinding,
+): string {
+  switch (scope) {
+    case 'machine':
+      return 'This machine'
+    case 'project':
+      return 'This project'
+    case 'resolved':
+      return binding.bound
+        ? `Resolved for ${binding.name}`
+        : 'Resolved per project'
+    default: {
+      const exhaustive: never = scope
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * The rail: every category placed in its scope group and matched against the
+ * search box, in one pure pass.
+ *
+ * Exported because the search box is the one part of this shell the SSR-only
+ * renderer suite cannot drive (no events), and a filter that quietly stopped
+ * reaching the third group would look identical in the markup to one that
+ * worked. Groups emptied by the query drop out entirely — heading, note and all
+ * — so no heading is left standing over nothing.
+ */
+export function selectSettingsNavGroups(
+  binding: SettingsProjectBinding,
+  query: string,
+): NavGroup[] {
+  const q = query.trim().toLowerCase()
+  return SCOPE_ORDER.map(scope => ({
+    scope,
+    heading: scopeHeading(scope, binding),
+    note:
+      scope === 'resolved' && !binding.bound
+        ? SETTINGS_PROJECT_UNBOUND_NOTE[binding.reason]
+        : undefined,
+    cwd: scope === 'resolved' && binding.bound ? binding.cwd : undefined,
+    items: SETTINGS_CATEGORIES.filter(
+      item =>
+        CAT_SCOPE[item.id] === scope &&
+        (!q || item.label.toLowerCase().includes(q)),
+    ),
+  })).filter(group => group.items.length > 0)
+}
+
+/**
+ * Until `App.tsx` passes `selectSettingsProjectBinding(rows, activeSessionId)`
+ * — a one-line change, deliberately left out of this commit because App is
+ * mid-edit in another session — the shell names no project. The default is the
+ * resting state of a launched app with every tab closed, which is also the state
+ * every test that omits the prop is exercising.
+ */
+const UNBOUND_PROJECT: SettingsProjectBinding = {
+  bound: false,
+  reason: 'no-session',
+}
 
 const CAT_DESC: Record<string, string> = {
   general: 'Identity, editor, startup, and update behavior',
@@ -124,6 +261,7 @@ const CAT_DESC: Record<string, string> = {
   privacy: 'Retention, sharing, and crash reporting',
   keybindings: 'Composer mode and keyboard shortcuts',
   theme: 'Accent, syntax highlighting, and output style',
+  transcript: 'How this app lays out reasoning in the transcript',
   agents: 'Agent definitions by source, with overrides and precedence',
   mcp: 'Connected Model Context Protocol servers',
   plugins: 'Installed plugins and the marketplace',
@@ -165,6 +303,7 @@ export function SettingsShell({
   remoteLastResult,
   onRemoteVerb,
   onSettingWrite,
+  projectBinding = UNBOUND_PROJECT,
   initialCategory = 'general',
 }: {
   snapshot: SettingsSnapshot | null
@@ -190,22 +329,17 @@ export function SettingsShell({
   onRemoteVerb?: (verb: RemoteVerbMessage) => void
   /** P4-19 — send one editable-setting write to the sidecar. */
   onSettingWrite?: (input: SettingWriteInput) => void
+  /** Which project this screen is describing (`settingsProjectBinding.ts`).
+   * Optional so App can wire `selectSettingsProjectBinding(rows,
+   * activeSessionId)` in one line later; the default names nothing. */
+  projectBinding?: SettingsProjectBinding
   initialCategory?: string
 }) {
   const [active, setActive] = useState(initialCategory)
   const [query, setQuery] = useState('')
-  const q = query.trim().toLowerCase()
 
-  const filteredNav = SETTINGS_NAV.map(group => ({
-    ...group,
-    items: group.items.filter(
-      item => !q || item.label.toLowerCase().includes(q),
-    ),
-  })).filter(group => group.items.length > 0)
-
-  const activeItem = SETTINGS_NAV.flatMap(group => group.items).find(
-    item => item.id === active,
-  )
+  const filteredNav = selectSettingsNavGroups(projectBinding, query)
+  const activeItem = SETTINGS_CATEGORIES.find(item => item.id === active)
 
   return (
     <div className="flex min-w-0 flex-1 overflow-hidden" aria-label="Settings">
@@ -224,11 +358,22 @@ export function SettingsShell({
           value={query}
         />
         {filteredNav.map(group => (
-          <div className="mb-3" key={group.group || 'core'}>
-            {group.group ? (
-              <div className="mb-1.5 px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-subtle">
-                {group.group}
-              </div>
+          <div
+            aria-label={group.heading}
+            className="mb-3"
+            key={group.scope}
+            role="group"
+          >
+            <div
+              className="mb-1.5 truncate px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-subtle"
+              title={group.cwd}
+            >
+              {group.heading}
+            </div>
+            {group.note ? (
+              <p className="mb-1.5 px-2 text-[10.5px] leading-relaxed text-text-subtle">
+                {group.note}
+              </p>
             ) : null}
             <div className="flex flex-col gap-px">
               {group.items.map(item => {
@@ -388,6 +533,9 @@ function CategoryBody({
       />
     )
   }
+  if (category === 'transcript') {
+    return <TranscriptDisplaySection />
+  }
   if (category === 'diagnostics') {
     return <DiagnosticsSection settingsSnapshot={snapshot} snapshot={diagnosticsSnapshot} />
   }
@@ -444,7 +592,6 @@ function CategoryBody({
           snapshot={snapshot}
           title="Theme & output"
         />
-        <TranscriptDisplaySection />
         <DeferredEditorsNote note="Accent swatch, code theme/font, and output-style select are deferred (need theming / available-styles seams)." />
       </>
     )
@@ -459,11 +606,16 @@ function CategoryBody({
  * layout, not a `SettingsSchema` key the sidecar writes, and the description
  * says so rather than letting it read as an engine setting that failed to
  * resolve. Reads and writes the same context the transcript reads.
+ *
+ * Its own category under `This machine`, not a section of `Theme & Output`,
+ * where it used to sit: having no settings layer at all, it is the one control
+ * on this screen that genuinely cannot vary by project, and it was the only such
+ * control filed under a heading that promised the opposite.
  */
 function TranscriptDisplaySection() {
   const { mode, setMode } = useContext(ReasoningLayoutContext)
   return (
-    <PaneSection title="Transcript">
+    <PaneSection title="Reasoning">
       <Field
         desc="How reasoning summaries are laid out in the transcript. Which reasoning is shown at all is the engine's separate “Reasoning display” setting under Model &amp; Inference. Stored in this app, not in your settings files."
         label="Reasoning layout"
