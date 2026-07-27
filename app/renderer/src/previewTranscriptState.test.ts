@@ -271,6 +271,40 @@ function assistantFrame(model: string, index: number): ServerFrame {
   }
 }
 
+function userFrame(permissionMode: string, index: number): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        message: { role: 'user', content: `ask ${index}` },
+        permissionMode,
+        uuid: `00000000-0000-4000-8000-${String(900 + index).padStart(12, '0')}`,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+function sendPathFrame(effort: string, index: number): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'system',
+        subtype: 'codex_send_path',
+        effort,
+        uuid: `00000000-0000-4000-8000-${String(800 + index).padStart(12, '0')}`,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
 function resultFrame(inputTokens: number): ServerFrame {
   return {
     kind: 'event',
@@ -325,5 +359,78 @@ test('a cache with no result reports no usage rather than zero', () => {
 
 test('an empty cache claims nothing at all', () => {
   const entry = projectPreviewTranscriptCache(cache([]))
-  expect(entry.runFacts).toEqual({ model: null, contextUsage: null })
+  expect(entry.runFacts).toEqual({
+    model: null,
+    contextUsage: null,
+    permissionMode: null,
+    effort: null,
+  })
+})
+
+/**
+ * Mode and effort are not on the message types that declare them: verified
+ * against real transcripts (2026-07-27), `permissionMode` rides USER messages
+ * and `effort` rides `system`/`codex_send_path`. Both are read positionally,
+ * so this test is the guard that the positions are the REAL ones and not the
+ * ones the type snapshot suggests.
+ */
+test('mode and effort are read from where the engine actually writes them', () => {
+  const entry = projectPreviewTranscriptCache(
+    cache([
+      userFrame('plan', 0),
+      sendPathFrame('high', 1),
+      userFrame('acceptEdits', 2),
+      sendPathFrame('xhigh', 3),
+    ]),
+  )
+  // Newest of each, again: a session that escalated mid-way ran on the later.
+  expect(entry.runFacts.permissionMode).toBe('acceptEdits')
+  expect(entry.runFacts.effort).toBe('xhigh')
+})
+
+/**
+ * An engine-internal mode the picker cannot offer (`auto`, permissions.ts:28)
+ * is still what the session ran under, and real transcripts are full of it.
+ * It must survive to the rail rather than being filtered to null for not
+ * being a settable mode.
+ */
+test('an engine-internal mode survives to the rail', () => {
+  const entry = projectPreviewTranscriptCache(cache([userFrame('auto', 0)]))
+  expect(entry.runFacts.permissionMode).toBe('auto')
+})
+
+/** An Anthropic session has no codex send-path record, so effort stays null. */
+test('a session with no effort record reports none', () => {
+  const entry = projectPreviewTranscriptCache(
+    cache([assistantFrame('claude-sonnet-5', 0)]),
+  )
+  expect(entry.runFacts.effort).toBeNull()
+})
+
+/**
+ * The subtype guard is load-bearing, not decoration. Real transcripts carry
+ * several `system` subtypes (`turn_duration`, `informational`, …); only
+ * `codex_send_path` records the effort a request was SENT with. Reading
+ * `effort` off any system message would silently adopt an unrelated field.
+ */
+test('effort is ignored on a system message of another subtype', () => {
+  const stray: ServerFrame = {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'system',
+        subtype: 'turn_duration',
+        effort: 'low',
+        uuid: '00000000-0000-4000-8000-0000000000cc',
+      } as unknown as SDKMessage,
+    },
+  }
+  const entry = projectPreviewTranscriptCache(
+    cache([sendPathFrame('xhigh', 0), stray]),
+  )
+  // The stray is NEWER, so a missing guard would return its 'low'.
+  expect(entry.runFacts.effort).toBe('xhigh')
 })

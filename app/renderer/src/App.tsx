@@ -2979,6 +2979,10 @@ export function SessionPane({
    * follows before its first snapshot lands.
    */
   const railModel = preview ? (previewRunFacts?.model ?? null) : model
+  const railEffort = preview ? (previewRunFacts?.effort ?? null) : reasoningEffort
+  const railPermissionMode = preview
+    ? (previewRunFacts?.permissionMode ?? null)
+    : null
   const contextUsage = preview
     ? (previewRunFacts?.contextUsage ?? null)
     : liveContextUsage
@@ -3453,7 +3457,8 @@ export function SessionPane({
             })
           }
           model={railModel}
-          reasoningEffort={reasoningEffort}
+          reasoningEffort={railEffort}
+          permissionModeReadOnly={railPermissionMode}
           fastMode={fastMode}
           runControls={runControls}
           onSetModel={onSetModel}

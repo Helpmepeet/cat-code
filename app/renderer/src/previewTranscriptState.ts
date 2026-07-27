@@ -40,6 +40,21 @@ export type PreviewRunFacts = {
   model: string | null
   /** Context at the session's last `result`, or null when no result is cached. */
   contextUsage: ContextUsage | null
+  /**
+   * The newest `permissionMode` the transcript carries. Verified against real
+   * transcripts (2026-07-27): it rides USER messages, not the `system`/`init`
+   * frame the type snapshot declares it on, so it is read positionally off any
+   * message that carries it rather than bound to a declared message type. The
+   * value may be an engine-internal mode such as `auto` that the mode PICKER
+   * cannot select, which is exactly why this is display-only.
+   */
+  permissionMode: string | null
+  /**
+   * The newest reasoning effort actually sent, off `system`/`codex_send_path`.
+   * Codex/GPT sessions only; an Anthropic session carries no effort record and
+   * leaves this null.
+   */
+  effort: string | null
 }
 
 export type PreviewTranscriptState = {
@@ -141,13 +156,19 @@ export function selectPreviewRunFacts(
     messages.push(message as SDKMessage)
   }
 
+  // One backwards pass: each fact is the NEWEST the transcript records, since a
+  // session can switch model, mode, or effort part-way through and what it ran
+  // on last is what the rail should say. Stop as soon as all three are known.
   let model: string | null = null
+  let permissionMode: string | null = null
+  let effort: string | null = null
   for (let i = messages.length - 1; i >= 0; i--) {
-    const candidate = readAssistantModel(messages[i])
-    if (candidate) {
-      model = candidate
-      break
-    }
+    const message = messages[i]
+    if (!message) continue
+    model ??= readAssistantModel(message)
+    permissionMode ??= readStringField(message, 'permissionMode')
+    effort ??= readSendPathEffort(message)
+    if (model && permissionMode && effort) break
   }
 
   // No cached `result` means no usage was ever reported, and a 0% donut would
@@ -157,14 +178,37 @@ export function selectPreviewRunFacts(
   return {
     model,
     contextUsage: hasResult ? selectContextUsage(messages, model) : null,
+    permissionMode,
+    effort,
   }
 }
 
-function readAssistantModel(message: SDKMessage | undefined): string | null {
-  if (!message || message.type !== 'assistant') return null
+function readAssistantModel(message: SDKMessage): string | null {
+  if (message.type !== 'assistant') return null
   const inner: unknown = message.message
   if (!isRecord(inner)) return null
   return typeof inner.model === 'string' && inner.model ? inner.model : null
+}
+
+/** The effort a request was actually sent with (`system`/`codex_send_path`). */
+function readSendPathEffort(message: SDKMessage): string | null {
+  if (message.type !== 'system') return null
+  // Read `subtype` positionally: `codex_send_path` is real in transcripts but
+  // absent from the snapshot's declared subtype union, so comparing against the
+  // typed field is a compile error AND would narrow to never at runtime.
+  if (readStringField(message, 'subtype') !== 'codex_send_path') return null
+  return readStringField(message, 'effort')
+}
+
+/**
+ * Read a top-level string off a message whose declared type does not admit it.
+ * The cache is JSON that was on disk and the snapshot types are known to lag
+ * what the engine actually writes, so this narrows rather than casts.
+ */
+function readStringField(message: SDKMessage, field: string): string | null {
+  if (!isRecord(message)) return null
+  const value: unknown = message[field]
+  return typeof value === 'string' && value ? value : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

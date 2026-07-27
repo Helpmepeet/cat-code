@@ -100,3 +100,35 @@ test('the trigger stays a menu button and still spreads the roving-tabindex face
   expect(html).toContain('data-composer-face="mode"')
   expect(html).toContain('tabindex="0"')
 })
+
+/**
+ * A previewed session has no engine, but its cached transcript records the
+ * mode it ran under. That is real data, so the rail shows it as a quiet face
+ * rather than a gap — read-only, because there is no engine here to switch.
+ */
+test('no context but a cached mode → a read-only face, not a picker', () => {
+  const html = renderToStaticMarkup(
+    <PermissionModeChip
+      context={null}
+      readOnlyMode="acceptEdits"
+      onSetMode={() => {}}
+    />,
+  )
+  expect(html).toContain('Accept edits')
+  // No trigger, so nothing suggests it can be changed.
+  expect(html).not.toContain('<button')
+  expect(html).not.toContain('aria-haspopup')
+})
+
+/**
+ * `auto` is engine-internal and cannot be selected in the picker
+ * (`permissions.ts:28`), but real transcripts are full of it. It is what the
+ * session ran under, so it must reach the rail rather than being dropped for
+ * failing the settable-mode test.
+ */
+test('an engine-internal mode still renders, under its own name', () => {
+  const html = renderToStaticMarkup(
+    <PermissionModeChip context={null} readOnlyMode="auto" onSetMode={() => {}} />,
+  )
+  expect(html).toContain('auto')
+})

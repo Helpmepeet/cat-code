@@ -40,6 +40,11 @@ type ModeMeta = {
 // engine's `default` mode is presented as "Ask" ("confirm before each tool"),
 // its friendlier name in the prototype (the engine's own title is "Default",
 // `PermissionMode.ts:46` — the prototype is the design target here).
+/** The rail's quiet read-only face geometry (ComposerActionsBar `RAIL_FACE`),
+ * duplicated as a constant rather than imported to keep this chip standalone. */
+const READ_ONLY_FACE =
+  'inline-flex max-w-[170px] shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-[5px] py-[3px] text-[12.5px] font-medium'
+
 const MODE_META = {
   default: {
     label: 'Ask',
@@ -105,10 +110,14 @@ function isKnownMode(mode: string): mode is PermissionSetModeMode {
 export function PermissionModeChip({
   context,
   onSetMode,
+  readOnlyMode = null,
   faceProps,
 }: {
   context: PermissionContextSnapshot | null
   onSetMode: (mode: PermissionSetModeMode) => void
+  /** The mode a session with no live context ran under, from its cached
+   * transcript. Display-only: there is no engine here to switch. */
+  readOnlyMode?: string | null
   /** Feature #4 — roving-tabindex props from the composer action bar's toolbar
    * (data-composer-face + tabIndex + onFocus). Spread on the trigger so the chip
    * joins the arrow-key roving group; absent (standalone use) → an unmanaged face. */
@@ -123,12 +132,25 @@ export function PermissionModeChip({
   const current =
     context && isKnownMode(context.mode) ? MODE_META[context.mode] : null
 
-  // No context means the mode was never reported: a preview has no engine, and
-  // a live pane has not received its first `permission.context` yet. Every
-  // session HAS a mode, so naming one here would be a claim about state this
-  // pane has not read. Render nothing until it has, the same rule the rest of
-  // the rail follows (settingsReadState.ts).
-  if (!context) return null
+  // No live context. A PREVIEWED session still knows the mode it ran under,
+  // from its own cached transcript, so show it as a quiet read-only face: there
+  // is no engine to switch, and the value may be an engine-internal mode the
+  // picker could not offer anyway. With nothing cached either, the mode was
+  // never reported — and since every session HAS one, naming it would be a
+  // claim about state this pane never read, so render nothing at all.
+  if (!context) {
+    if (!readOnlyMode) return null
+    const meta = isKnownMode(readOnlyMode) ? MODE_META[readOnlyMode] : null
+    const label = meta?.label ?? readOnlyMode
+    return (
+      <span
+        className={`${READ_ONLY_FACE} ${meta?.toneText ?? 'text-text-muted'}`}
+        title={`Permission mode: ${meta?.title ?? readOnlyMode}`}
+      >
+        {label}
+      </span>
+    )
+  }
 
   return (
     <div ref={ref} className="relative shrink-0">

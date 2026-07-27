@@ -722,6 +722,7 @@ export function ComposerActionsBar({
   onSetEffort,
   onSetFast,
   permissionContext,
+  permissionModeReadOnly = null,
   onSetMode,
   account,
   anthropicAccount,
@@ -750,6 +751,9 @@ export function ComposerActionsBar({
   onSetEffort?: (effort: string) => void
   onSetFast?: (active: boolean) => void
   permissionContext: PermissionContextSnapshot | null
+  /** The mode a session with no live context ran under, from its cached
+   * transcript (preview panes). Display-only. */
+  permissionModeReadOnly?: string | null
   onSetMode: (mode: PermissionSetModeMode) => void
   /** The Codex pool's active account (real alias), or null before the snapshot arrives. */
   account: AccountStatus | null
@@ -969,6 +973,7 @@ export function ComposerActionsBar({
         <PermissionModeChip
           context={permissionContext}
           onSetMode={onSetMode}
+          readOnlyMode={permissionModeReadOnly}
           faceProps={faceProps('mode')}
         />
         {fastInteractive && runControls && onSetFast ? (
