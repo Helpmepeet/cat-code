@@ -69,6 +69,19 @@ import { parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
 export const TRANSCRIPT_CACHE_GUARD_VERSION = 1
 
 /**
+ * Which generation of run-facts derivation this build writes. Bump whenever
+ * `readTranscriptRunFacts` learns to derive a NEW fact, so caches carrying the
+ * older, thinner facts are refreshed instead of counting as done.
+ *
+ * Unlike `TRANSCRIPT_CACHE_GUARD_VERSION`, a bump here never discards a cache:
+ * it only re-reads the transcript to enrich the header. That is the whole point
+ * of a separate stamp.
+ *
+ * 1: model, permissionMode, effort, usedTokens, contextWindow.
+ */
+export const TRANSCRIPT_CACHE_RUN_FACTS_VERSION = 1
+
+/**
  * Stamped for diagnostics only — reads gate on `protocolVersion` + `guardVersion`,
  * never on this (transcript frames are protocol-versioned, and an app update must
  * not silently nuke every cached transcript). Matches `app/package.json` version.
@@ -162,22 +175,33 @@ export function createTranscriptCache(
       appVersion: TRANSCRIPT_CACHE_APP_VERSION,
       guardVersion: TRANSCRIPT_CACHE_GUARD_VERSION,
       writtenAt: Date.now(),
-      ...(runFacts ? { runFacts } : {}),
+      ...(runFacts
+        ? { runFacts, runFactsVersion: TRANSCRIPT_CACHE_RUN_FACTS_VERSION }
+        : {}),
     },
     frames,
   }
 }
 
 /**
- * Whether a cache already carries run facts.
+ * Whether a cache carries CURRENT run facts.
  *
- * Backfill discovery uses this to REFRESH a cache written before the field
- * existed, instead of discarding it: an old cache still previews correctly, so
- * destroying it to gain a display detail would be a strictly worse trade.
+ * Backfill discovery uses this to REFRESH a cache whose facts predate the
+ * current derivation, instead of discarding it: an old cache still previews
+ * correctly, so destroying it to gain a display detail would be a strictly
+ * worse trade. (Bumping `TRANSCRIPT_CACHE_GUARD_VERSION` would do exactly that
+ * destroying, since `readCache` discards on guard mismatch. Never use it here.)
+ *
+ * Version, not presence. Presence was the bug: adding `contextWindow` to run
+ * facts left 30 of 44 live caches permanently null, because each already had a
+ * `runFacts` object and so was never re-read.
  */
-export function cacheHasRunFacts(dir: string, id: SessionId): boolean {
+export function cacheHasCurrentRunFacts(dir: string, id: SessionId): boolean {
   const prefix = readHeaderPrefix(dir, id)
-  return prefix !== null && prefix.includes(RUN_FACTS_MARKER)
+  if (prefix === null) return false
+  const match = RUN_FACTS_VERSION_RE.exec(prefix.toString('utf8'))
+  // `>=`, so a cache written by a NEWER build is not churned by an older one.
+  return match !== null && Number(match[1]) >= TRANSCRIPT_CACHE_RUN_FACTS_VERSION
 }
 
 /**
@@ -231,7 +255,8 @@ function readHeaderPrefix(dir: string, id: SessionId): Buffer | null {
 
 /** Header-sized window: the header is the first object of the file. */
 const HEADER_PROBE_BYTES = 4096
-const RUN_FACTS_MARKER = Buffer.from('"runFacts"', 'utf8')
+/** Real headers run ~330 bytes, so the stamp is always inside the probe window. */
+const RUN_FACTS_VERSION_RE = /"runFactsVersion"\s*:\s*(\d{1,9})/
 
 /** `<registryDir>/transcript-cache` — main passes its real registry dir. */
 export function transcriptCacheDir(registryDir: string): string {
@@ -398,6 +423,14 @@ function parseTranscriptCache(value: unknown): TranscriptCache | null {
   if (
     header.runFacts !== undefined &&
     parseTranscriptRunFacts(header.runFacts) === null
+  ) {
+    return null
+  }
+  if (
+    header.runFactsVersion !== undefined &&
+    (typeof header.runFactsVersion !== 'number' ||
+      !Number.isInteger(header.runFactsVersion) ||
+      header.runFactsVersion < 0)
   ) {
     return null
   }

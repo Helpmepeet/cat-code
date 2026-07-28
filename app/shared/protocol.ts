@@ -2276,7 +2276,13 @@ export type TranscriptRunFacts = {
   effort: string | null
   /** Context tokens at the newest turn that reported usage. */
   usedTokens: number | null
-  /** The model's context window at that turn, when the source stated one. */
+  /**
+   * The context window for `model`, RESOLVED at write time by the engine's
+   * `getContextWindowForModel` rather than read: no transcript record states a
+   * window (the live donut's comes off a `result` frame, which is never
+   * persisted). Null when the transcript named no model, or the resolver was
+   * unavailable, in which case the renderer falls back to its default window.
+   */
   contextWindow: number | null
 }
 
@@ -2296,6 +2302,17 @@ export type TranscriptCacheHeader = {
    * discarded, so no transcript is ever destroyed to gain a display detail.
    */
   runFacts?: TranscriptRunFacts
+  /**
+   * Which generation of run-facts derivation wrote `runFacts`. Absent on a
+   * cache written before this field existed.
+   *
+   * Backfill discovery refreshes a cache whose version is behind the current
+   * one. Keying on PRESENCE of `runFacts` instead was a silent bug: when a new
+   * fact was added, every existing cache already had a `runFacts` object, so it
+   * counted as done and kept the new fact null forever (`contextWindow`, which
+   * shipped null on 30 of 44 live caches before this existed).
+   */
+  runFactsVersion?: number
 }
 
 export type TranscriptCache = {

@@ -60,7 +60,7 @@ import {
 import {
   deleteCache,
   distill,
-  cacheHasRunFacts,
+  cacheHasCurrentRunFacts,
   cacheWrittenAt,
   listCachedSessionIds,
   readCache,
@@ -372,8 +372,8 @@ async function backfillTranscriptCaches(): Promise<void> {
   const items = selectTranscriptBackfillCandidates({
     sessions: h.listSessions(),
     hasCache: appSessionId => cachedIds.has(appSessionId),
-    cacheHasRunFacts: appSessionId =>
-      cacheHasRunFacts(TRANSCRIPT_CACHE_DIR, appSessionId),
+    cacheHasCurrentRunFacts: appSessionId =>
+      cacheHasCurrentRunFacts(TRANSCRIPT_CACHE_DIR, appSessionId),
     isTranscriptNewerThanCache,
     transcriptPath: (session, engineSessionId) =>
       defaultTranscriptPath(session.cwd, engineSessionId),

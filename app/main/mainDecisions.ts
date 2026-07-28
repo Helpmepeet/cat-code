@@ -119,7 +119,7 @@ export function createCwdTokenStore(
 export type TranscriptBackfillCandidateSources = {
   sessions: SessionDescriptor[]
   hasCache: (appSessionId: SessionId) => boolean
-  cacheHasRunFacts: (appSessionId: SessionId) => boolean
+  cacheHasCurrentRunFacts: (appSessionId: SessionId) => boolean
   isTranscriptNewerThanCache: (session: SessionDescriptor) => boolean
   transcriptPath: (session: SessionDescriptor, engineSessionId: string) => string
   limit: number
@@ -128,8 +128,12 @@ export type TranscriptBackfillCandidateSources = {
 /**
  * PL-B — which rows the backfill worker should read, most recently attached
  * first and bounded by `limit`. Only restorable rows with an engine transcript
- * qualify; a row whose cache already carries run facts is skipped unless its
+ * qualify; a row whose cache carries CURRENT run facts is skipped unless its
  * engine transcript has since moved on (a session continued in the terminal).
+ *
+ * Current, not merely present: a cache built before a fact existed still has a
+ * `runFacts` object, and skipping on presence pinned those caches to the older,
+ * thinner facts forever.
  */
 export function selectTranscriptBackfillCandidates(
   sources: TranscriptBackfillCandidateSources,
@@ -140,7 +144,7 @@ export function selectTranscriptBackfillCandidates(
         session.restorable &&
         session.engineSessionId !== null &&
         (!sources.hasCache(session.appSessionId) ||
-          !sources.cacheHasRunFacts(session.appSessionId) ||
+          !sources.cacheHasCurrentRunFacts(session.appSessionId) ||
           sources.isTranscriptNewerThanCache(session)),
     )
     .sort((a, b) => b.lastAttachedAt - a.lastAttachedAt)

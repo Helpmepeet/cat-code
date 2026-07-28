@@ -32,9 +32,20 @@ import type { TranscriptRunFacts } from '../shared/protocol.js'
  * is RESOLVED FROM the newest model instead of read, via `resolveContextWindow`
  * — which the worker binds to the engine's own `getContextWindowForModel`, the
  * very function whose output the live path consumes (`src/cost-tracker.ts:107`).
- * Same function, same model string, so a previewed session's denominator is the
- * live one's. Callers that pass no resolver claim no window, and the renderer's
- * 200k fallback still applies.
+ *
+ * Same function; its two inputs are believed equivalent today but are not the
+ * same objects, so do not read this as a guarantee. (1) The model string here is
+ * the transcript's echoed `.message.model`, where the live donut keys off the
+ * run-controls main-loop model. (2) Betas: the worker's `getSdkBetas()` is
+ * structurally undefined, since nothing in `app/` ever sets it. Both differences
+ * are unreachable while `app/` exposes no `[1m]` model, and both fail toward the
+ * old default rather than a wrong larger window — but enabling 1M on the desktop
+ * means revisiting this.
+ *
+ * The resolver is REQUIRED, not optional: a caller that could silently omit it
+ * would reproduce the exact defect this closes, a field declared and never
+ * populated with nothing failing. Pass `() => null` to deliberately claim no
+ * window and leave the renderer its fallback.
  *
  * Best-effort by construction: an unreadable or malformed transcript yields all
  * nulls rather than failing the backfill, since the transcript FRAMES are the
@@ -42,7 +53,7 @@ import type { TranscriptRunFacts } from '../shared/protocol.js'
  */
 export function readTranscriptRunFacts(
   path: string,
-  resolveContextWindow?: (model: string) => number | null | undefined,
+  resolveContextWindow: (model: string) => number | null,
 ): TranscriptRunFacts {
   const empty: TranscriptRunFacts = {
     model: null,
@@ -94,7 +105,7 @@ export function readTranscriptRunFacts(
   // `facts.model`, which the exit condition already requires, so an exit can
   // never skip it. Resolving here rather than per-record also means one lookup
   // per transcript instead of one per assistant record.
-  if (facts.model !== null && resolveContextWindow) {
+  if (facts.model !== null) {
     facts.contextWindow = readContextWindow(facts.model, resolveContextWindow)
   }
   return facts
@@ -103,12 +114,16 @@ export function readTranscriptRunFacts(
 /**
  * A resolver that throws or answers nonsense costs the donut its exact
  * denominator (the renderer falls back to 200k), never the whole backfill.
+ *
+ * Defence in depth only: the worker logs the throw at its injection site, where
+ * stderr exists. A failure here is never one session's bad data, it is the
+ * engine lookup being broken for the whole batch, so it must not be silent.
  */
 function readContextWindow(
   model: string,
-  resolve: (model: string) => number | null | undefined,
+  resolve: (model: string) => number | null,
 ): number | null {
-  let window: number | null | undefined
+  let window: number | null
   try {
     window = resolve(model)
   } catch {

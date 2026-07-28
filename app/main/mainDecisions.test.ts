@@ -178,7 +178,7 @@ function select(
   sessions: SessionDescriptor[],
   overrides: {
     hasCache?: (id: string) => boolean
-    cacheHasRunFacts?: (id: string) => boolean
+    cacheHasCurrentRunFacts?: (id: string) => boolean
     isTranscriptNewerThanCache?: (session: SessionDescriptor) => boolean
     limit?: number
   } = {},
@@ -186,7 +186,7 @@ function select(
   return selectTranscriptBackfillCandidates({
     sessions,
     hasCache: overrides.hasCache ?? (() => false),
-    cacheHasRunFacts: overrides.cacheHasRunFacts ?? (() => false),
+    cacheHasCurrentRunFacts: overrides.cacheHasCurrentRunFacts ?? (() => false),
     isTranscriptNewerThanCache: overrides.isTranscriptNewerThanCache ?? (() => false),
     transcriptPath: (session, engineSessionId) =>
       `${session.cwd}/${engineSessionId}.jsonl`,
@@ -214,20 +214,20 @@ describe('selectTranscriptBackfillCandidates (PL-B)', () => {
     ).toEqual([])
   })
 
-  test('skips a cached row that already carries run facts', () => {
+  test('skips a cached row that already carries current run facts', () => {
     expect(
       select([row({ appSessionId: 'a' })], {
         hasCache: () => true,
-        cacheHasRunFacts: () => true,
+        cacheHasCurrentRunFacts: () => true,
       }),
     ).toEqual([])
   })
 
-  test('re-reads a cached row whose cache predates run facts', () => {
+  test('re-reads a cached row whose cache predates the current run-facts derivation', () => {
     expect(
       select([row({ appSessionId: 'a' })], {
         hasCache: () => true,
-        cacheHasRunFacts: () => false,
+        cacheHasCurrentRunFacts: () => false,
       }),
     ).toHaveLength(1)
   })
@@ -236,7 +236,7 @@ describe('selectTranscriptBackfillCandidates (PL-B)', () => {
     expect(
       select([row({ appSessionId: 'a' })], {
         hasCache: () => true,
-        cacheHasRunFacts: () => true,
+        cacheHasCurrentRunFacts: () => true,
         isTranscriptNewerThanCache: () => true,
       }),
     ).toHaveLength(1)

@@ -20,6 +20,7 @@ import {
   type TranscriptBackfillSessionResult,
 } from '../shared/transcriptBackfill.js'
 import {
+  TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
   createTranscriptCache,
   readCache,
   writeCache,
@@ -89,15 +90,18 @@ export function persistTranscriptBackfillResult(
   // treats a readable cache as a preview and holds a loading placeholder for a
   // transcript that will never arrive.
   if (result.frames.length === 0) return 'ineligible'
-  // A cache written BEFORE run facts existed is refreshed rather than kept:
-  // it previews fine but can say nothing about what the session ran on, and
-  // the worker has just read that from the raw transcript. A cache that
-  // already has them is left alone unless the caller says the transcript moved
-  // on, so a re-run is still a no-op.
+  // A cache whose run facts predate the current derivation is refreshed rather
+  // than kept: it previews fine but can say nothing (or nothing complete) about
+  // what the session ran on, and the worker has just read that from the raw
+  // transcript. A cache already at the current version is left alone unless the
+  // caller says the transcript moved on, so a re-run is still a no-op.
+  //
+  // VERSION, not presence: this gate and `cacheHasCurrentRunFacts` must agree,
+  // or discovery queues a session that persistence then refuses to write.
   const existing = readCache(options.cacheDir, result.appSessionId)
   if (
     existing !== null &&
-    existing.header.runFacts !== undefined &&
+    (existing.header.runFactsVersion ?? 0) >= TRANSCRIPT_CACHE_RUN_FACTS_VERSION &&
     !(options.isCacheStale?.(current, existing.header.writtenAt) ?? false)
   ) {
     return 'already_cached'

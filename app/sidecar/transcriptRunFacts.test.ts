@@ -46,6 +46,8 @@ const sendPath = (effort: string) => ({
   subtype: 'codex_send_path',
   effort,
 })
+/** Deliberately claims no window, for the tests that are about the other facts. */
+const noWindow = () => null
 
 test('every fact is read from the record shape the engine really writes', () => {
   const facts = readTranscriptRunFacts(
@@ -62,6 +64,7 @@ test('every fact is read from the record shape the engine really writes', () => 
         cache_creation_input_tokens: 0,
       }),
     ]),
+    noWindow,
   )
   // Newest of each, independently.
   expect(facts.model).toBe('gpt-5.6-terra')
@@ -71,7 +74,7 @@ test('every fact is read from the record shape the engine really writes', () => 
 })
 
 test('an engine-internal mode survives, since it is what the session ran under', () => {
-  const facts = readTranscriptRunFacts(transcriptOf([user('auto')]))
+  const facts = readTranscriptRunFacts(transcriptOf([user('auto')]), noWindow)
   expect(facts.permissionMode).toBe('auto')
 })
 
@@ -87,6 +90,7 @@ test('all-zero usage is skipped in favour of a turn that really reported', () =>
         cache_creation_input_tokens: 0,
       }),
     ]),
+    noWindow,
   )
   expect(facts.usedTokens).toBe(1_000)
 })
@@ -97,6 +101,7 @@ test('effort is ignored on a system record of another subtype', () => {
       sendPath('xhigh'),
       { type: 'system', subtype: 'turn_duration', effort: 'low' },
     ]),
+    noWindow,
   )
   expect(facts.effort).toBe('xhigh')
 })
@@ -124,8 +129,11 @@ test('the window is resolved from the newest model, so a non-200k one is real', 
   expect(facts.usedTokens).toBe(171_000)
 })
 
-test('with no resolver the window stays null, leaving the renderer its fallback', () => {
-  const facts = readTranscriptRunFacts(transcriptOf([assistant('gpt-5.6-terra')]))
+test('a resolver that claims no window leaves the renderer its fallback', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([assistant('gpt-5.6-terra')]),
+    noWindow,
+  )
   expect(facts.model).toBe('gpt-5.6-terra')
   expect(facts.contextWindow).toBeNull()
 })
@@ -158,20 +166,20 @@ test.each([
 })
 
 test('a silent or unreadable transcript claims nothing, and never throws', () => {
-  expect(readTranscriptRunFacts(transcriptOf([]))).toEqual({
+  expect(readTranscriptRunFacts(transcriptOf([]), noWindow)).toEqual({
     model: null,
     permissionMode: null,
     effort: null,
     usedTokens: null,
     contextWindow: null,
   })
-  expect(readTranscriptRunFacts('/no/such/transcript.jsonl').model).toBeNull()
+  expect(readTranscriptRunFacts('/no/such/transcript.jsonl', noWindow).model).toBeNull()
 })
 
 test('a corrupt line is skipped rather than failing the whole read', () => {
   const dir = mkdtempSync(join(tmpdir(), 'runfacts-bad-'))
   const file = join(dir, 't.jsonl')
   writeFileSync(file, `{not json\n${JSON.stringify(user('plan'))}\n`, 'utf8')
-  expect(readTranscriptRunFacts(file).permissionMode).toBe('plan')
+  expect(readTranscriptRunFacts(file, noWindow).permissionMode).toBe('plan')
   rmSync(dir, { recursive: true, force: true })
 })

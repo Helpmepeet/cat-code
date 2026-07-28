@@ -7,7 +7,11 @@ import { fileURLToPath } from 'node:url'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { TranscriptBackfillSessionResult } from '../shared/transcriptBackfill.js'
-import { readCache } from './transcriptCache.js'
+import {
+  TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
+  readCache,
+  writeCache,
+} from './transcriptCache.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -104,6 +108,63 @@ test('fresh restorable row writes once and round-trips through readCache', () =>
         transcriptExists: () => true,
       },
       result(),
+    ),
+  ).toBe('already_cached')
+})
+
+/**
+ * The bug this closes, measured on the real registry: 30 of 44 caches carried
+ * run facts with `contextWindow: null`, because this gate asked whether a
+ * `runFacts` object EXISTED. It did, so every one of them counted as done and
+ * the newly-derivable window could never reach them. Keying on the derivation
+ * VERSION is what lets a new fact land on caches that already exist.
+ */
+test('a cache whose run facts predate the current derivation is refreshed, not kept', () => {
+  const dir = cacheDir()
+  const stale = result()
+  writeCache(dir, {
+    header: {
+      appSessionId: APP_ID,
+      engineSessionId: ENGINE_ID,
+      protocolVersion: PROTOCOL_VERSION,
+      appVersion: '0.0.0',
+      guardVersion: 1,
+      writtenAt: 1,
+      // Exactly the shape a pre-version build wrote: facts present, no stamp.
+      runFacts: NO_RUN_FACTS,
+    },
+    frames: stale.frames,
+  })
+  expect(readCache(dir, APP_ID)?.header.runFactsVersion).toBeUndefined()
+
+  const fresh = {
+    ...result(),
+    runFacts: { ...NO_RUN_FACTS, model: 'gpt-5.6-terra', contextWindow: 372_000 },
+  }
+  expect(
+    persistTranscriptBackfillResult(
+      {
+        cacheDir: dir,
+        getCurrentSession: () => descriptor(true),
+        transcriptExists: () => true,
+      },
+      fresh,
+    ),
+  ).toBe('written')
+
+  const rewritten = readCache(dir, APP_ID)
+  expect(rewritten?.header.runFactsVersion).toBe(TRANSCRIPT_CACHE_RUN_FACTS_VERSION)
+  expect(rewritten?.header.runFacts?.contextWindow).toBe(372_000)
+
+  // Now at the current version, so a re-run is a no-op again.
+  expect(
+    persistTranscriptBackfillResult(
+      {
+        cacheDir: dir,
+        getCurrentSession: () => descriptor(true),
+        transcriptExists: () => true,
+      },
+      fresh,
     ),
   ).toBe('already_cached')
 })

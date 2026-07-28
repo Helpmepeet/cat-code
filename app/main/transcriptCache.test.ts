@@ -31,6 +31,9 @@ import {
 import {
   MAX_TRANSCRIPT_CACHE_BYTES,
   TRANSCRIPT_CACHE_GUARD_VERSION,
+  TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
+  cacheHasCurrentRunFacts,
+  createTranscriptCache,
   deleteCache,
   distill,
   listCachedSessionIds,
@@ -319,6 +322,69 @@ test('a schema-drift cache (a non-allowlisted frame kind) is discarded and delet
     frames: [settingsSnapshotFrame()],
   }
   writeFileSync(path, JSON.stringify(bad))
+  expect(readCache(dir, SID)).toBeNull()
+  expect(fileExists(path)).toBe(false)
+})
+
+/**
+ * Discovery's refresh gate. It reads a bounded byte PREFIX rather than parsing
+ * the cache, so the stamp has to survive that scan, and the whole point is that
+ * "carries run facts" and "carries CURRENT run facts" are different questions:
+ * asking the first is what left 30 of 44 real caches with a null contextWindow.
+ */
+test('the refresh gate reads the run-facts version from the header prefix', () => {
+  const dir = tempDir()
+  const runFacts = {
+    model: 'gpt-5.6-terra',
+    permissionMode: null,
+    effort: null,
+    usedTokens: 186_000,
+    contextWindow: 372_000,
+  }
+
+  // No cache at all.
+  expect(cacheHasCurrentRunFacts(dir, SID)).toBe(false)
+
+  // A cache with NO run facts (the on-close shape).
+  writeCache(dir, createTranscriptCache(SID, 'engine-abc', [eventFrame(0)]))
+  expect(cacheHasCurrentRunFacts(dir, SID)).toBe(false)
+
+  // A pre-version cache: run facts present, no stamp. This is the case the old
+  // presence check got wrong, and the one that must still refresh.
+  const stamped = createTranscriptCache(SID, 'engine-abc', [eventFrame(0)], runFacts)
+  const unstamped: TranscriptCache = {
+    header: { ...stamped.header, runFactsVersion: undefined },
+    frames: stamped.frames,
+  }
+  writeFileSync(cachePath(dir), JSON.stringify(unstamped))
+  expect(readCache(dir, SID)?.header.runFacts).toEqual(runFacts)
+  expect(cacheHasCurrentRunFacts(dir, SID)).toBe(false)
+
+  // Current.
+  writeCache(dir, stamped)
+  expect(cacheHasCurrentRunFacts(dir, SID)).toBe(true)
+
+  // Written by a NEWER build: not churned by this one.
+  writeFileSync(
+    cachePath(dir),
+    JSON.stringify({
+      header: {
+        ...stamped.header,
+        runFactsVersion: TRANSCRIPT_CACHE_RUN_FACTS_VERSION + 1,
+      },
+      frames: stamped.frames,
+    }),
+  )
+  expect(cacheHasCurrentRunFacts(dir, SID)).toBe(true)
+})
+
+test('a non-integer run-facts stamp is corrupt and fails the read', () => {
+  const dir = tempDir()
+  const path = cachePath(dir)
+  writeFileSync(
+    path,
+    JSON.stringify({ header: { ...header(), runFactsVersion: 'one' }, frames: [] }),
+  )
   expect(readCache(dir, SID)).toBeNull()
   expect(fileExists(path)).toBe(false)
 })

@@ -82,6 +82,27 @@ async function main(): Promise<void> {
   ensureEngineMacro()
   enableConfigs()
 
+  // The engine's OWN window lookup, the same call the live donut's number comes
+  // from (`src/cost-tracker.ts:107`), rather than a second window table in the
+  // app. If it breaks (engine drift, a bad import under the bare/SIMPLE
+  // bootstrap) it breaks for EVERY session in the batch and the whole feature
+  // reverts to the renderer's default window, so it is reported once instead of
+  // failing silently the way a per-session data gap would.
+  let contextWindowResolverFailed = false
+  const resolveContextWindow = (model: string): number | null => {
+    try {
+      return getContextWindowForModel(model, getSdkBetas())
+    } catch (error) {
+      if (!contextWindowResolverFailed) {
+        contextWindowResolverFailed = true
+        process.stderr.write(
+          `[backfill-worker] context-window resolver failed, previews fall back to the default window: ${errorText(error)}\n`,
+        )
+      }
+      return null
+    }
+  }
+
   for (const item of request.items) {
     try {
       let isFile = false
@@ -131,12 +152,8 @@ async function main(): Promise<void> {
         // telemetry these come from, so by that point they no longer exist.
         //
         // The context window is the exception: nothing persists it, so it is
-        // resolved from the model with the engine's OWN function — the same
-        // call the live donut's number comes from (`src/cost-tracker.ts:107`),
-        // rather than a second 200k/272k/1M table in the app (§10).
-        runFacts: readTranscriptRunFacts(item.transcriptPath, model =>
-          getContextWindowForModel(model, getSdkBetas()),
-        ),
+        // resolved from the model (see `resolveContextWindow` above).
+        runFacts: readTranscriptRunFacts(item.transcriptPath, resolveContextWindow),
       }
       const secret = scanForSecrets(result)
       if (!secret.ok) {
