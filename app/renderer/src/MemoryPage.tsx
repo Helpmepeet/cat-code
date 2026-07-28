@@ -56,15 +56,21 @@ function MemoryHeader() {
   )
 }
 
+/**
+ * The read is session-keyed (`selectMemorySnapshot`), so this state is reached
+ * with no session selected as often as it is mid-load, and a failed engine-side
+ * read never sends a frame at all. The copy it replaced promised the panel
+ * would fill as soon as the engine sent the data, which is untrue in both of
+ * those cases, and it named internals the user should never read (CLAUDE.md §7).
+ */
 function WaitingState() {
   return (
     <section className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center">
       <div className="text-sm font-semibold text-text-muted">
-        Waiting for the engine's memory snapshot…
+        No memory loaded
       </div>
       <p className="mx-auto mt-2 max-w-[420px] text-[12.5px] leading-relaxed text-text-subtle">
-        This panel does not use prototype fixtures. It fills once the sidecar
-        sends real memory metadata for the selected session.
+        Open a session to see the instruction files and memories it uses.
       </p>
     </section>
   )

@@ -135,6 +135,12 @@ test('renders every memory instruction and auto-memory type', () => {
 test('renders memory waiting state without fixtures', () => {
   const html = renderToStaticMarkup(<MemoryPage embedded snapshot={null} />)
 
-  expect(html).toContain("Waiting for the engine&#x27;s memory snapshot")
+  expect(html).toContain('No memory loaded')
+  expect(html).toContain('Open a session')
   expect(html).not.toContain('MOCK')
+  // CLAUDE.md §7 — the empty state must not print internal vocabulary at the
+  // user (the copy it replaced named the sidecar and the prototype fixtures).
+  for (const leak of ['sidecar', 'prototype', 'redacted', 'snapshot']) {
+    expect(html).not.toContain(leak)
+  }
 })
