@@ -1763,8 +1763,6 @@ export type ExtensionsSnapshot = {
   skills: SkillEntry[] | null
   /** Configured hooks in canonical event order (null if the read failed). */
   hooks: HookEntry[] | null
-  /** Human-readable deferral / flag notes surfaced in the UI. */
-  notes: string[]
 }
 
 /**

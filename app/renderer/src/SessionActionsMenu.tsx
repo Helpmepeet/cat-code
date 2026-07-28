@@ -53,6 +53,8 @@ export function SessionActionsMenu({
           onClose()
         }}
       />
+      {/* §0 EXCEPTION: data-driven geometry Tailwind can't express — the
+          measured anchor of the row that opened this menu. */}
       <div
         role="menu"
         aria-label="Session actions"
@@ -109,6 +111,8 @@ export function SessionRenamePopover({
         aria-hidden="true"
         onClick={onCancel}
       />
+      {/* §0 EXCEPTION: data-driven geometry Tailwind can't express — the
+          measured anchor of the row being renamed. */}
       <div
         role="dialog"
         aria-label="Rename session"

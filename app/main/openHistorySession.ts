@@ -99,14 +99,14 @@ export function resolveOpenHistorySession(
   if (!entry) {
     return reject(
       'session_not_found',
-      'no recorded session for that id — open it from the terminal',
+      'no recorded session for that id. Open it from the terminal.',
     )
   }
   if (typeof entry.cwd !== 'string' || entry.cwd.trim().length === 0) {
     // MAJOR-1: a transcript whose workspace could not be reconciled. Never guess.
     return reject(
       'invalid_cwd',
-      'that session has no recorded workspace — open it from the terminal',
+      'that session has no recorded workspace. Open it from the terminal.',
     )
   }
 

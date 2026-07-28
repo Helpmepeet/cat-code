@@ -142,6 +142,8 @@ export function WorkspaceLayout({
           const next = panels[index + 1]
           return (
             <Fragment key={panel.sessionId}>
+              {/* §0 EXCEPTION: data-driven geometry Tailwind can't express — the
+                  drag-resolved split percentage. */}
               <div
                 className="flex min-w-0 shrink-0 flex-col overflow-hidden"
                 style={{ flexBasis: `${width}%` }}

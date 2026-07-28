@@ -87,26 +87,19 @@ export async function loadExtensionsSnapshot({
   /** The runtime's app-state (hooks resolve off the same settings the engine reads). */
   appState: AppState
 }): Promise<ExtensionsSnapshot> {
-  const notes: string[] = [
-    'Read-only config snapshot. Adding, editing, enabling/disabling, updating, and installing are deferred to a safe settings writer.',
-  ]
+  const mcp = await readMcpSlice()
+  const skills = readSkillsSlice(commands)
+  const plugins = await readPluginsSlice(commands, agentDefinitions)
+  const hooks = readHooksSlice(appState)
 
-  const mcp = await readMcpSlice(notes)
-  const skills = readSkillsSlice(commands, notes)
-  const plugins = await readPluginsSlice(commands, agentDefinitions, notes)
-  const hooks = readHooksSlice(appState, notes)
-
-  return { mcp, plugins, skills, hooks, notes }
+  return { mcp, plugins, skills, hooks }
 }
 
 /* ----------------------------- MCP ----------------------------- */
 
-async function readMcpSlice(notes: string[]): Promise<McpConfigEntry[] | null> {
+async function readMcpSlice(): Promise<McpConfigEntry[] | null> {
   try {
     const { servers } = await getClaudeCodeMcpConfigs()
-    notes.push(
-      'MCP servers are shown from configuration only — live connection status, tool/resource counts, and reconnect/authenticate/enable/remove are unavailable until the desktop MCP runtime is wired (see the sessionController empty-mcpClients flag).',
-    )
     return Object.entries(servers)
       .map(([name, config]) => buildMcpEntry(name, config))
       .sort((a, b) => a.name.localeCompare(b.name))
@@ -148,15 +141,11 @@ const SKILL_LOADED_FROM = new Set([
   'mcp',
 ])
 
-function readSkillsSlice(
-  commands: readonly Command[],
-  notes: string[],
-): SkillEntry[] | null {
+function readSkillsSlice(commands: readonly Command[]): SkillEntry[] | null {
   try {
     return buildSkillEntries(commands)
   } catch (error) {
     logSkip('skills', error)
-    notes.push('Skills could not be read from the loaded command catalog.')
     return null
   }
 }
@@ -198,7 +187,6 @@ export function buildSkillEntries(commands: readonly Command[]): SkillEntry[] {
 async function readPluginsSlice(
   commands: readonly Command[],
   agentDefinitions: readonly AgentDefinition[],
-  notes: string[],
 ): Promise<PluginEntry[] | null> {
   try {
     const { enabled, disabled, errors } = await loadAllPlugins()
@@ -208,9 +196,6 @@ async function readPluginsSlice(
     } catch {
       pending = []
     }
-    notes.push(
-      'Plugin marketplace browsing and per-plugin update checks are not shown — the "Update" signal is limited to updates already staged on disk awaiting a restart.',
-    )
     return buildPluginEntries({
       loaded: [
         ...enabled.map(plugin => ({ plugin, enabled: true })),
@@ -337,14 +322,8 @@ function correlatePluginError(
 
 /* ----------------------------- Hooks --------------------------- */
 
-function readHooksSlice(
-  appState: AppState,
-  notes: string[],
-): HookEntry[] | null {
+function readHooksSlice(appState: AppState): HookEntry[] | null {
   try {
-    notes.push(
-      'Hook last-run results are not shown — cat-code does not persist per-hook run history (results are a transient per-invocation value).',
-    )
     return buildHookEntries(getAllHooks(appState))
   } catch (error) {
     logSkip('hooks', error)

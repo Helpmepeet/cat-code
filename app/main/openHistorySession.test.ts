@@ -98,6 +98,20 @@ describe('resolveOpenHistorySession (open-from-history boundary)', () => {
     }
   })
 
+  // These messages are rendered verbatim by the renderer, but they are composed
+  // in main, outside `userVisibleText.test.ts`'s `app/renderer/src` scan root.
+  test('reject messages carry no em dash (user-visible text rule)', () => {
+    const messages = [
+      resolveOpenHistorySession(OTHER_ID, [], catalog([entry()])),
+      resolveOpenHistorySession(ENGINE_ID, [], catalog([entry({ cwd: '' })])),
+    ].map(result => (result.kind === 'reject' ? result.error.message : ''))
+    expect(messages).toHaveLength(2)
+    for (const message of messages) {
+      expect(message.length).toBeGreaterThan(0)
+      expect(message).not.toContain('—')
+    }
+  })
+
   test('rejects everything when the catalog is null (no cache at all)', () => {
     const result = resolveOpenHistorySession(ENGINE_ID, [], null)
     expect(result.kind).toBe('reject')

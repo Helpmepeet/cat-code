@@ -25,7 +25,7 @@ function skill(fields: Partial<SkillEntry> & { name: string; source: SkillEntry[
 }
 
 function snapshot(fields: Partial<ExtensionsSnapshot> = {}): ExtensionsSnapshot {
-  return { mcp: [], plugins: [], skills: [], hooks: [], notes: [], ...fields }
+  return { mcp: [], plugins: [], skills: [], hooks: [], ...fields }
 }
 
 function frame(sessionId: string, extensions: ExtensionsSnapshot): ExtensionsSnapshotFrame {
@@ -34,10 +34,29 @@ function frame(sessionId: string, extensions: ExtensionsSnapshot): ExtensionsSna
 
 test('reducer stores the snapshot per session and select reads it back', () => {
   let state = createExtensionsState()
-  state = reduceExtensionsState(state, { type: 'frame', frame: frame('s1', snapshot({ notes: ['n'] })) })
-  expect(selectExtensionsSnapshot(state, 's1')?.notes).toEqual(['n'])
+  state = reduceExtensionsState(state, { type: 'frame', frame: frame('s1', snapshot({ skills: [] })) })
+  expect(selectExtensionsSnapshot(state, 's1')?.skills).toEqual([])
   expect(selectExtensionsSnapshot(state, 's2')).toBeNull()
   expect(selectExtensionsSnapshot(state, null)).toBeNull()
+})
+
+// Every slice on this frame must reach a panel. A field that crosses the wire
+// and renders nowhere is the defect this record catches: adding one without a
+// panel leaves a key missing here and fails tsc.
+const RENDERED_EXTENSIONS_SLICES: Record<keyof ExtensionsSnapshot, true> = {
+  mcp: true,
+  plugins: true,
+  skills: true,
+  hooks: true,
+}
+
+test('every extensions slice on the wire has a panel that renders it', () => {
+  expect(Object.keys(RENDERED_EXTENSIONS_SLICES).sort()).toEqual([
+    'hooks',
+    'mcp',
+    'plugins',
+    'skills',
+  ])
 })
 
 test('a lifecycle frame drops the stale snapshot only for a tracked session', () => {

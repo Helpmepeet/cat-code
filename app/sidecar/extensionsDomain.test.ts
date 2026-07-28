@@ -304,7 +304,7 @@ test('a full extensions frame carries no secret material', () => {
     kind: 'extensions.snapshot',
     protocolVersion: 1,
     sessionId: 'sess-1',
-    extensions: { mcp, plugins, skills, hooks, notes: [] },
+    extensions: { mcp, plugins, skills, hooks },
   }
   const serialized = JSON.stringify(frame)
   expect(serialized).not.toContain('sk-live')
