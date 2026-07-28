@@ -190,6 +190,11 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
   expect(run.code).toBe(0)
   expect(run.elapsedMs).toBeLessThan(30_000)
   expect(existsSync(markerPath)).toBe(false)
+  // NOTE: this run shares its config home with the two `init()`-running
+  // fixtures above, so it cannot also assert the worker's observation-only
+  // bootstrap. `sessionsCatalogWorker.probe.test.ts` proves that on a clean
+  // home; what this asserts is that the transcript read still works without
+  // the full bootstrap.
 
   const records = run.stdout
     .trim()

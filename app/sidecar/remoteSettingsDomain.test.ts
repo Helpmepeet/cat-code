@@ -275,3 +275,56 @@ test('directConnect failure degrades to an ok:false result, never a thrown error
   expect(result.message).toContain('ECONNREFUSED')
   expect(flagChanged).toBe(false)
 })
+
+/*
+ * `withTimeout` rejects after 15 s but ABANDONS the underlying fetch (it has no
+ * signal), so without a latch a renderer looping at the inbound rate cap against
+ * a black-holing host piles up sockets inside the privileged sidecar until the
+ * OS TCP timeout. The frame caps bound frames, not in-flight work per verb.
+ */
+test('directConnect refuses a second attempt while one is still in flight', async () => {
+  const store = makeStore()
+  let attempts = 0
+  let release = () => {}
+  const gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const domain = createSidecarRemoteSettingsDomain({
+    appStateStore: store,
+    cwd: '/tmp/proj',
+    commands: [],
+    executor: fakeExecutor({
+      directConnect: async () => {
+        attempts += 1
+        await gate
+        return { sessionId: 's', wsUrl: 'ws://host/ws' }
+      },
+    }),
+  })
+
+  const first = domain.runVerb({
+    type: 'remoteSettings.directConnect',
+    requestId: 'r8',
+    serverUrl: 'https://host.tld',
+  })
+  const second = await domain.runVerb({
+    type: 'remoteSettings.directConnect',
+    requestId: 'r9',
+    serverUrl: 'https://host.tld',
+  })
+
+  expect(second.result.ok).toBe(false)
+  expect(attempts).toBe(1)
+
+  release()
+  expect((await first).result.ok).toBe(true)
+
+  // The latch releases: a later attempt runs normally.
+  const third = await domain.runVerb({
+    type: 'remoteSettings.directConnect',
+    requestId: 'r10',
+    serverUrl: 'https://host.tld',
+  })
+  expect(third.result.ok).toBe(true)
+  expect(attempts).toBe(2)
+})
