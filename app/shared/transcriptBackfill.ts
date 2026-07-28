@@ -382,6 +382,11 @@ const BACKFILL_CONTENT_BLOCK_TYPES = new Set([
   'bash_code_execution_tool_result',
   'text_editor_code_execution_tool_result',
   'tool_search_tool_result',
+  // Tool-search discovery block. It appears ONLY nested inside `tool_result`
+  // content (`src/utils/toolSearch.ts:569`), never at the top level, and its
+  // guard there is `{ type: 'tool_reference'; tool_name: string }` (:493).
+  // Omitting it made every session that ever ran a tool search unvalidatable.
+  'tool_reference',
   'container_upload',
 ])
 
@@ -434,6 +439,8 @@ function isBackfillContentBlock(value: unknown): boolean {
           (Array.isArray(value.content) &&
             value.content.every(isBackfillContentBlock)))
       )
+    case 'tool_reference':
+      return typeof value.tool_name === 'string'
     case 'container_upload':
       return typeof value.file_id === 'string'
     case 'web_search_tool_result':

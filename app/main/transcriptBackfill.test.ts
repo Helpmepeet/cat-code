@@ -165,6 +165,41 @@ test('runner accepts several complete NDJSON records coalesced into one stdout c
   expect(accepted).toHaveLength(2)
 })
 
+/**
+ * Regression (2026-07-28): a record main cannot parse TERMINATES the run, so a
+ * single atypical session abandoned every session queued behind it (30 of 32
+ * caches went unrefreshed). The worker now self-checks with main's own parser
+ * and reports such a session as a `failure` instead. That downgrade is only
+ * worth anything if a `failure` lets the run continue, which is what this pins:
+ * the item after a failed one is still accepted.
+ */
+test('a failed session does not abandon the sessions queued behind it', async () => {
+  const accepted: TranscriptBackfillSessionResult[] = []
+  const summary = await runTranscriptBackfill({
+    items: [
+      {
+        appSessionId: APP_ID,
+        engineSessionId: ENGINE_ID,
+        transcriptPath: join('/tmp', `${ENGINE_ID}.jsonl`),
+      },
+      {
+        appSessionId: APP_ID_TWO,
+        engineSessionId: ENGINE_ID_TWO,
+        transcriptPath: join('/tmp', `${ENGINE_ID_TWO}.jsonl`),
+      },
+    ],
+    command: 'bun',
+    args: ['run', join(here, 'transcriptBackfillRunner.fixture.ts')],
+    cwd: process.cwd(),
+    env: { CATCODE_FIXTURE_FAIL_FIRST: '1' },
+    timeoutMs: 10_000,
+    onSession: value => accepted.push(value),
+  })
+  expect(summary).toEqual({ attempted: 2, accepted: 1, failed: 1, rejected: 0 })
+  // The specific claim: the SECOND session survived the first one's failure.
+  expect(accepted.map(value => value.appSessionId)).toEqual([APP_ID_TWO])
+})
+
 test('runner reports a spawn failure without an unhandled stdin error', async () => {
   await expect(
     runTranscriptBackfill({

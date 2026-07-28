@@ -17,6 +17,7 @@ import {
   MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES,
   TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
   parseTranscriptBackfillRequest,
+  parseTranscriptBackfillResult,
   type TranscriptBackfillFailureResult,
   type TranscriptBackfillResult,
   type TranscriptBackfillSessionResult,
@@ -122,6 +123,27 @@ async function main(): Promise<void> {
       if (!secret.ok) {
         process.stderr.write(
           `[backfill-worker] blocked secret-keyed result for ${item.appSessionId}\n`,
+        )
+        await emit({ ...failureIdentity(item), type: 'failure', reason: 'invalid' })
+        continue
+      }
+      // Self-check against main's OWN parser before emitting.
+      //
+      // Main is fail-closed on this boundary: a record it cannot validate does
+      // not just get dropped, it TERMINATES the run (`transcriptBackfill.ts`,
+      // the `parseTranscriptBackfillResult` reject branch), so every session
+      // still queued behind this one is silently abandoned. That is the right
+      // posture toward a worker that has proven untrustworthy, but it makes the
+      // batch only as complete as its least-typical session: one unknown
+      // content block cost 30 sessions their run facts (2026-07-28).
+      //
+      // Validating here converts that class of drift into a `failure` record,
+      // which the runner already counts and steps past. Main's own validation
+      // is unchanged and still authoritative; this only ensures the record it
+      // rejects is one this worker already knows is bad.
+      if (!parseTranscriptBackfillResult(result)) {
+        process.stderr.write(
+          `[backfill-worker] result failed boundary validation for ${item.appSessionId}\n`,
         )
         await emit({ ...failureIdentity(item), type: 'failure', reason: 'invalid' })
         continue

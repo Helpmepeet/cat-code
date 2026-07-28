@@ -1,4 +1,10 @@
-/** Test-only child that writes session+done NDJSON in one stdout write. */
+/**
+ * Test-only child that writes session+done NDJSON in one stdout write.
+ *
+ * With `CATCODE_FIXTURE_FAIL_FIRST=1` the first item is emitted as a `failure`
+ * record instead, standing in for a session the worker could not turn into a
+ * valid result.
+ */
 
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 
@@ -6,7 +12,17 @@ async function main(): Promise<void> {
   const request = JSON.parse(await new Response(Bun.stdin.stream()).text()) as {
     items: Array<{ appSessionId: string; engineSessionId: string }>
   }
-  const sessions = request.items.map(item => ({
+  const failFirst = process.env.CATCODE_FIXTURE_FAIL_FIRST === '1'
+  const sessions = request.items.map((item, index) => {
+    if (failFirst && index === 0) {
+      return {
+        type: 'failure',
+        appSessionId: item.appSessionId,
+        engineSessionId: item.engineSessionId,
+        reason: 'invalid',
+      }
+    }
+    return {
       type: 'session',
       appSessionId: item.appSessionId,
       engineSessionId: item.engineSessionId,
@@ -37,7 +53,8 @@ async function main(): Promise<void> {
         usedTokens: null,
         contextWindow: null,
       },
-    }))
+    }
+  })
   process.stdout.write(
     `${sessions.map(session => JSON.stringify(session)).join('\n')}\n${JSON.stringify({ type: 'done', attempted: sessions.length })}\n`,
   )

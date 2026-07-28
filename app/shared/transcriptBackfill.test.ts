@@ -125,6 +125,63 @@ test('only the existing visible history-truncation error may precede replay even
   ).toBeNull()
 })
 
+/**
+ * Regression (2026-07-28): a tool-search `tool_reference` block nested in a
+ * `tool_result` was not in the allowlist, so any session that ever ran a tool
+ * search failed validation. Because main terminates the run on a record it
+ * cannot parse, ONE such block abandoned every session queued behind it: 30 of
+ * 32 caches never got their run facts. Shape is the engine's own guard,
+ * `src/utils/toolSearch.ts:493`, and it appears only nested (:569).
+ */
+test('a tool_reference nested in tool_result validates, and a malformed one does not', () => {
+  const frame = eventFrame() as Extract<ServerFrame, { kind: 'event' }>
+  const withReference = (reference: unknown) => ({
+    type: 'session',
+    appSessionId: APP_ID,
+    engineSessionId: ENGINE_ID,
+    frames: [
+      {
+        ...frame,
+        event: {
+          type: 'message',
+          message: {
+            type: 'user',
+            session_id: ENGINE_ID,
+            uuid: '44444444-4444-4444-8444-444444444444',
+            parent_tool_use_id: null,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'call_Yz5gQlAzBAS44hNRgoW1sVP2',
+                  content: [reference],
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    runFacts: NO_RUN_FACTS,
+  })
+
+  expect(
+    parseTranscriptBackfillResult(
+      withReference({ type: 'tool_reference', tool_name: 'TodoWrite' }),
+    ),
+  ).not.toBeNull()
+  // Still fail-closed: the type being known does not exempt it from validation.
+  expect(
+    parseTranscriptBackfillResult(withReference({ type: 'tool_reference' })),
+  ).toBeNull()
+  expect(
+    parseTranscriptBackfillResult(
+      withReference({ type: 'tool_reference', tool_name: 42 }),
+    ),
+  ).toBeNull()
+})
+
 test('backfill result rejects discriminant-only and unsupported SDK messages', () => {
   for (const message of [
     { type: 'user', session_id: ENGINE_ID },
