@@ -9,15 +9,30 @@ import type {
 } from '../../shared/protocol.js'
 
 /**
- * Renderer projection of the P4-5 accounts read-seam. The Codex pool is
- * process-GLOBAL, but each session's sidecar reports it addressed to that
- * session, so snapshots are kept per session (uniform with the other domains);
- * the Accounts page reads the ACTIVE session's snapshot. `lastResult` carries the
- * most recent `account.result` so the page can toast + dismiss a dialog on the
- * verb's real outcome (never an optimistic guess). Read-only: no token is ever
- * present on any field the reducer stores (secretGuard-clean by construction).
+ * Renderer projection of the P4-5 accounts read-seam.
+ *
+ * TWO feeds, deliberately:
+ *  - `pool` is the GLOBAL one (accounts owner,
+ *    `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`): main polls a disposable
+ *    worker and delivers an `accounts-pool` HOST EVENT, so it exists with no
+ *    session open and refreshes on a timer. The Accounts page reads THIS.
+ *  - `sessions` keeps each sidecar's own `accounts.snapshot`, which in-session
+ *    surfaces (reauth banner, composer account chip) still read. It is emitted
+ *    at attach and after that session's own pool-mutating verbs, so it is
+ *    session-scoped and refresh-poor by construction — never treat it as the
+ *    global pool view.
+ *
+ * `lastResult` carries the most recent `account.result` so the page can toast +
+ * dismiss a dialog on the verb's real outcome (never an optimistic guess).
+ * Read-only: no token is ever present on any field the reducer stores
+ * (secretGuard-clean by construction).
  */
 export type AccountsState = {
+  /**
+   * The global pool from the host event. Null until main's first worker run
+   * lands; a failed run keeps the last good value rather than blanking it.
+   */
+  pool: AccountsSnapshot | null
   sessions: Record<SessionId, AccountsSnapshot | null>
   lastResult: AccountResultFrame | null
   /**
@@ -33,15 +48,21 @@ export type AccountsAction =
   | { type: 'frame'; frame: ServerFrame }
   /** Cancel/back cleared the OAuth surface locally (also sends the cancel verb). */
   | { type: 'oauthReset'; sessionId: SessionId }
+  /** The global `accounts-pool` host event (accounts owner). Session-independent. */
+  | { type: 'pool'; pool: AccountsSnapshot }
 
 export function createAccountsState(): AccountsState {
-  return { sessions: {}, lastResult: null, oauthProgress: {} }
+  return { pool: null, sessions: {}, lastResult: null, oauthProgress: {} }
 }
 
 export function reduceAccountsState(
   state: AccountsState,
   action: AccountsAction,
 ): AccountsState {
+  if (action.type === 'pool') {
+    return { ...state, pool: action.pool }
+  }
+
   if (action.type === 'oauthReset') {
     if (state.oauthProgress[action.sessionId] == null) return state
     return {
@@ -114,6 +135,24 @@ export function selectFirstAccountsSnapshot(
     if (snapshot) return snapshot
   }
   return null
+}
+
+/**
+ * The session-INDEPENDENT pool view (accounts owner). Prefers the polled global
+ * snapshot from the `accounts-pool` host event; falls back to any session's own
+ * snapshot only to cover the launch gap before main's first worker run lands, so
+ * a session that is already attached fills the page immediately instead of
+ * showing an empty state for the first few seconds. Null only when neither feed
+ * has reported.
+ *
+ * Surfaces that must work with NO session open (the Accounts page, the launcher)
+ * read this. It never consults `activeSessionId` — that coupling is the defect
+ * ACCOUNTS-OWNERSHIP removed.
+ */
+export function selectGlobalAccountsSnapshot(
+  state: AccountsState,
+): AccountsSnapshot | null {
+  return state.pool ?? selectFirstAccountsSnapshot(state)
 }
 
 /** The rows in pool order (the active account is flagged via `isDefault`). */

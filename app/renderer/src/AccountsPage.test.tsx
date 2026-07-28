@@ -245,8 +245,13 @@ test('a null snapshot renders the waiting state without throwing', () => {
     <AccountsPage snapshot={null} lastResult={null} onVerb={noop} />,
   )
   expect(html).toContain('Accounts')
-  expect(html).toContain('Waiting for the engine')
+  expect(html).toContain('Loading accounts')
   expect(html).not.toContain('MOCK')
+  // CLAUDE.md §7 — the empty state must not print internal vocabulary at the
+  // user (the copy it replaced named the sidecar and the prototype fixtures).
+  for (const leak of ['sidecar', 'prototype', 'redacted', 'snapshot']) {
+    expect(html).not.toContain(leak)
+  }
 })
 
 /* ── (f) result correlation → toast tone; page accepts a lastResult prop ── */

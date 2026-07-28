@@ -194,6 +194,7 @@ import {
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectFirstAccountsSnapshot,
+  selectGlobalAccountsSnapshot,
   selectOAuthProgress,
 } from './accountsState.js'
 import {
@@ -711,6 +712,13 @@ export function App() {
       // catalog store and return BEFORE the roster logic reads `event.session`.
       if (event.type === 'sessions-catalog') {
         dispatchSessionsCatalog({ type: 'catalog', snapshot: event.catalog })
+        return
+      }
+      // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): the global account pool
+      // arrives the same way, on main's timer, independent of any session. Also
+      // NOT a roster row — fold it and return before the roster logic runs.
+      if (event.type === 'accounts-pool') {
+        dispatchAccounts({ type: 'pool', pool: event.pool })
         return
       }
       // A new/restored tab appears in the bar but does NOT steal the pane — a
@@ -2480,7 +2488,7 @@ export function App() {
           />
         ) : activeView === 'accounts' ? (
           <AccountsPage
-            snapshot={selectAccountsSnapshot(accounts, activeSessionId)}
+            snapshot={selectGlobalAccountsSnapshot(accounts)}
             lastResult={accounts.lastResult}
             onVerb={sendAccountVerb}
           />
@@ -2545,7 +2553,7 @@ export function App() {
           // (HC1 id-only) and the HC1 folder picker (post-spawn trust gate).
           <WelcomeScreen
             recents={welcomeRecents}
-            accounts={activeAccountsSnapshot ?? selectFirstAccountsSnapshot(accounts)}
+            accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}
             orchestratorActive={
               selectAgentModeSnapshot(orchestrator, activeSessionId)?.active ?? false
             }
@@ -3486,7 +3494,7 @@ export function SessionPane({
          * facts" from "the rail got them and did not render" — the ambiguity
          * that made this bug expensive to find. Delete once the rail settles. */}
         {import.meta.env.DEV ? (
-          <div className="mt-2 select-all px-1 font-mono text-[10px] leading-tight text-[#3f3f46]">
+          <div className="mt-2 select-all rounded-[4px] bg-white/[0.04] px-2 py-1 font-mono text-[11px] leading-tight text-[#a1a1aa]">
             app {activeSessionId ?? 'none'} · engine{' '}
             {activeDescriptor?.engineSessionId ?? 'none'}
             {preview

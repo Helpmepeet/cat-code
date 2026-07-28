@@ -13,6 +13,7 @@ import {
   selectActiveAnthropicAccount,
   selectCapAccount,
   selectFirstAccountsSnapshot,
+  selectGlobalAccountsSnapshot,
   selectHasOtherSwitchable,
   selectOAuthProgress,
   selectReadyLabel,
@@ -184,6 +185,92 @@ describe('P4-15 OAuth login progress projection', () => {
       } as never,
     })
     expect(selectOAuthProgress(state, 's1')).toBeNull()
+  })
+})
+
+/**
+ * Accounts owner (`decisions/ACCOUNTS-OWNERSHIP.md`). The defect these cover:
+ * the Accounts page is an unconditional sidebar item, but the pool read used to
+ * be keyed on the ACTIVE session, so opening the page with no session showed an
+ * empty state forever even though the pool is process-global vault state.
+ */
+describe('global accounts pool (session-independent feed)', () => {
+  test('the pool host event populates state with NO session ever reporting', () => {
+    let state = createAccountsState()
+    expect(selectGlobalAccountsSnapshot(state)).toBeNull()
+
+    const snap = snapshot()
+    state = reduceAccountsState(state, { type: 'pool', pool: snap })
+
+    // No session key was ever written, which is the whole point.
+    expect(state.sessions).toEqual({})
+    expect(selectGlobalAccountsSnapshot(state)).toEqual(snap)
+  })
+
+  test('a later pool event replaces the previous one (the poll keeps it fresh)', () => {
+    let state = createAccountsState()
+    state = reduceAccountsState(state, { type: 'pool', pool: snapshot() })
+    const refreshed = snapshot({ readyCount: 0 })
+    state = reduceAccountsState(state, { type: 'pool', pool: refreshed })
+    expect(selectGlobalAccountsSnapshot(state)?.readyCount).toBe(0)
+  })
+
+  test('the global pool outranks a session snapshot (freshness beats spawn-time)', () => {
+    const sessionSnap = snapshot({ readyCount: 2 })
+    const globalSnap = snapshot({ readyCount: 0 })
+    let state = createAccountsState()
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'accounts.snapshot',
+        protocolVersion: 1,
+        sessionId: 's1',
+        accounts: sessionSnap,
+      } as AccountsSnapshotFrame,
+    })
+    state = reduceAccountsState(state, { type: 'pool', pool: globalSnap })
+    expect(selectGlobalAccountsSnapshot(state)?.readyCount).toBe(0)
+  })
+
+  test('before the first poll lands, an attached session covers the launch gap', () => {
+    const sessionSnap = snapshot({ readyCount: 2 })
+    let state = createAccountsState()
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'accounts.snapshot',
+        protocolVersion: 1,
+        sessionId: 's1',
+        accounts: sessionSnap,
+      } as AccountsSnapshotFrame,
+    })
+    expect(state.pool).toBeNull()
+    expect(selectGlobalAccountsSnapshot(state)?.readyCount).toBe(2)
+  })
+
+  test('a session teardown never clears the global pool', () => {
+    let state = createAccountsState()
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'accounts.snapshot',
+        protocolVersion: 1,
+        sessionId: 's1',
+        accounts: snapshot(),
+      } as AccountsSnapshotFrame,
+    })
+    state = reduceAccountsState(state, { type: 'pool', pool: snapshot() })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'lifecycle',
+        protocolVersion: 1,
+        sessionId: 's1',
+        status: 'exited',
+      } as LifecycleFrame,
+    })
+    expect(state.sessions.s1).toBeNull()
+    expect(selectGlobalAccountsSnapshot(state)).not.toBeNull()
   })
 })
 

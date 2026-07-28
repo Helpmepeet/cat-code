@@ -24,7 +24,11 @@
  * conflating them erases which layer failed.
  */
 
-import type { SessionId, SessionsCatalogSnapshot } from './protocol.js'
+import type {
+  AccountsSnapshot,
+  SessionId,
+  SessionsCatalogSnapshot,
+} from './protocol.js'
 
 /* ------------------------------------------------------------------------- *
  * Requests / responses (REGISTRY.md §6.1)
@@ -154,6 +158,15 @@ export type HostResult<T> = { ok: true; value: T } | { ok: false; error: HostErr
  *    Read-only OUTBOUND display metadata (C3 precedent) — NOT a roster row and
  *    NOT a renderer-authored write; carries no session descriptor. `secretGuard`
  *    ran on it at the worker and again at main's parse boundary.
+ *  - `accounts-pool` — the global account pool (Codex + Anthropic) refreshed.
+ *    Accounts owner (`docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`): the pool
+ *    is process-GLOBAL vault state with no session input, so main re-spawns a
+ *    disposable engine-graph worker on a timer exactly as it does for the
+ *    catalog, and delivers the accepted snapshot here. This is what lets the
+ *    Accounts page show live usage with NO session open. Read-only OUTBOUND and
+ *    ALREADY redacted (no token, no vault path by construction); `secretGuard`
+ *    ran on it at the worker and again at main's parse boundary. Account WRITES
+ *    remain session-plane `account.*` verbs — this event never carries one.
  *
  * The first three carry the full descriptor (except `removed`, which carries only
  * the id) so a subscriber can update without a follow-up read.
@@ -163,6 +176,7 @@ export type HostEvent =
   | { type: 'session-status'; session: SessionDescriptor }
   | { type: 'session-removed'; appSessionId: SessionId }
   | { type: 'sessions-catalog'; catalog: SessionsCatalogSnapshot }
+  | { type: 'accounts-pool'; pool: AccountsSnapshot }
 
 /* ------------------------------------------------------------------------- *
  * Bounds (HC4 + title cap)

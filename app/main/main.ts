@@ -75,6 +75,11 @@ import {
   type SessionsCatalogDriver,
 } from './sessionsCatalogRunner.js'
 import {
+  createAccountsPoolDriver,
+  runAccountsPoolWorker,
+  type AccountsPoolDriver,
+} from './accountsPoolRunner.js'
+import {
   createIdleParkDriver,
   type IdleParkDriver,
 } from './idleParkDriver.js'
@@ -230,6 +235,15 @@ const TRANSCRIPT_BACKFILL_START_DELAY_MS = 250
  * until armed; re-armable after a window-all-closed/reactivate cycle.
  */
 let sessionsCatalogDriver: SessionsCatalogDriver | null = null
+
+/**
+ * Accounts owner (`decisions/ACCOUNTS-OWNERSHIP.md`): the account pool is
+ * process-GLOBAL state, so its read is main-owned rather than per-session — one
+ * single-flight driver per app process, armed after first paint, delivering each
+ * accepted redacted snapshot as a read-only `accounts-pool` host event. Same
+ * lifecycle as `sessionsCatalogDriver`.
+ */
+let accountsPoolDriver: AccountsPoolDriver | null = null
 
 /**
  * IDLE-PARK (decisions/IDLE-PARK.md §4) — one main-supervised policy driver per
@@ -415,6 +429,34 @@ function startSessionsCatalogRefresh(): void {
 }
 
 /**
+ * Accounts owner (`decisions/ACCOUNTS-OWNERSHIP.md`) — arm the single-flight,
+ * self-rescheduling pool refresh after first paint, alongside the catalog. Each
+ * run spawns ONE disposable engine-graph worker (`--bare`); on an accepted,
+ * secret-clean snapshot main emits a read-only `accounts-pool` host event (C3
+ * precedent, no inbound verb). A failed run keeps the last good pool (no event
+ * emitted). The immediate first run means the Accounts page is populated without
+ * requiring a session to exist, which is the whole point of moving this read off
+ * the per-session plane.
+ */
+function startAccountsPoolRefresh(): void {
+  if (accountsPoolDriver) return
+  accountsPoolDriver = createAccountsPoolDriver({
+    run: () =>
+      runAccountsPoolWorker({
+        command: process.env.CATCODE_BUN_BIN ?? 'bun',
+        args: ['run', ACCOUNTS_POOL_WORKER_ENTRY, '--bare'],
+        cwd: process.cwd(),
+        onPool: pool => {
+          sendHostEvent({ type: 'accounts-pool', pool })
+        },
+        log: line => process.stderr.write(`${line}\n`),
+      }),
+    log: line => process.stderr.write(`${line}\n`),
+  })
+  accountsPoolDriver.start()
+}
+
+/**
  * IDLE-PARK (decisions/IDLE-PARK.md §4) — arm the policy driver after first paint
  * (alongside the catalog refresh), off the launch critical path. It captures the
  * CURRENT host + supervisor (both rebuilt as a unit on reactivate), reads the
@@ -481,6 +523,15 @@ const SESSIONS_CATALOG_WORKER_ENTRY = join(
   'app',
   'sidecar',
   'sessionsCatalogWorker.ts',
+)
+/** Accounts owner: the disposable account-pool worker entry. */
+const ACCOUNTS_POOL_WORKER_ENTRY = join(
+  __dirname,
+  '..',
+  '..',
+  'app',
+  'sidecar',
+  'accountsPoolWorker.ts',
 )
 
 function createSupervisor(): SidecarSupervisor {
@@ -649,6 +700,9 @@ function createWindow(): void {
     // off the launch critical path, so its first run fills the sidebar and it
     // then self-reschedules — replacing the per-sidecar catalog enumeration.
     setTimeout(startSessionsCatalogRefresh, TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): arm the pool refresh the
+    // same way, so the Accounts page has live data with no session open.
+    setTimeout(startAccountsPoolRefresh, TRANSCRIPT_BACKFILL_START_DELAY_MS)
     // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
     // here too, off the launch critical path; it self-reschedules its TTL sweep
     // and re-evaluates the cap on host events.
@@ -1635,6 +1689,9 @@ app.on('window-all-closed', () => {
   // `activate` re-arms it after the next paint.
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  // Accounts owner: same window-scoped lifetime as the catalog driver.
+  accountsPoolDriver?.stop()
+  accountsPoolDriver = null
   // IDLE-PARK: stop the policy driver with the window (it holds the now-dead host/
   // supervisor); a fresh `activate` re-arms it against the rebuilt host.
   idleParkDriver?.stop()
@@ -1668,6 +1725,8 @@ app.on('before-quit', () => {
   transcriptBackfillAbort = null
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  accountsPoolDriver?.stop()
+  accountsPoolDriver = null
   idleParkDriver?.stop()
   idleParkDriver = null
 })

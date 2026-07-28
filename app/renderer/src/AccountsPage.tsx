@@ -677,16 +677,18 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
   )
 }
 
+/**
+ * Shown only until the first pool refresh lands (accounts owner: main polls a
+ * disposable worker, `decisions/ACCOUNTS-OWNERSHIP.md`), so this is a brief load
+ * rather than a "needs a session" state. Copy carries no internal vocabulary
+ * per CLAUDE.md §7: what the page is waiting on is our problem, not the user's.
+ */
 function WaitingState() {
   return (
     <section className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center">
       <div className="text-sm font-semibold text-text-muted">
-        Waiting for the engine&apos;s account pool snapshot…
+        Loading accounts…
       </div>
-      <p className="mx-auto mt-2 max-w-[420px] text-[12.5px] leading-relaxed text-text-subtle">
-        This page does not use prototype fixtures. It fills once the sidecar sends
-        the real redacted Codex account pool for the active session.
-      </p>
     </section>
   )
 }
