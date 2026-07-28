@@ -2005,7 +2005,13 @@ export async function flushCurrentTranscriptDurably(
   expectedUuid?: string,
 ): Promise<void> {
   await flushSessionStorage()
-  const transcriptPath = getTranscriptPath()
+  // Resolve through the owned path, not getTranscriptPath(): under
+  // `cleanupPeriodDays: 0` / `--no-session-persistence` no `.jsonl` is ever
+  // created, so deriving a path from the session id and opening it raised a
+  // bare ENOENT at the deferred-continuation callsites. Nothing was written,
+  // so there is nothing to make durable.
+  const transcriptPath = getOwnedTranscriptPath()
+  if (transcriptPath === null) return
   const handle = await fsOpen(
     transcriptPath,
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),

@@ -33,7 +33,15 @@ export function reconcileModelSelectionState<
     ...prev,
     mainLoopModel: model,
     mainLoopModelForSession: null,
-    effortValue: reconcileEffortForModel(model, prev.effortValue),
+    // The Default row resolves to whatever model the provider picks, so there
+    // is nothing to reconcile the effort against here. Dropping it discarded
+    // the effort the picker had just written to settings while the
+    // confirmation line still claimed it was set; resolveAppliedEffort applies
+    // the per-model clamp when the request is built.
+    effortValue:
+      model === null
+        ? prev.effortValue
+        : reconcileEffortForModel(model, prev.effortValue),
   }
 }
 

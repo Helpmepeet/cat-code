@@ -35,4 +35,20 @@ describe('/model state reconciliation', () => {
       ).effortValue,
     ).toBe('ultra')
   })
+
+  // Picking the Default row after choosing an effort dropped the effort:
+  // ModelPicker had already written it to settings.json and to app state, and
+  // the confirmation line still said "with low effort", so the session ran on
+  // the model default while disk said otherwise and the level reappeared next
+  // launch. There is no model to reconcile against here.
+  test('keeps the chosen effort when selecting the Default row', () => {
+    setSessionProvider('openai')
+    expect(
+      reconcileModelSelectionState({ effortValue: 'low' as const }, null),
+    ).toEqual({
+      mainLoopModel: null,
+      mainLoopModelForSession: null,
+      effortValue: 'low',
+    })
+  })
 })

@@ -12,11 +12,11 @@ import {
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { clearCommandMemoizationCaches } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
+import { hasProviderBoundHistory } from '../../src/utils/model/providers.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
   initializeSidecarModelProvider,
-  hasProviderBoundHistory,
   loadSidecarToolPermissionContext,
   selectResumedProviderModel,
 } from './sessionController.js'

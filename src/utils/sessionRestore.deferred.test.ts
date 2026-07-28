@@ -2,6 +2,10 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rm, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  isProviderSwitchLocked,
+  setProviderSwitchLocked,
+} from '../bootstrap/state.js'
+import {
   acquireDeferredContinuationLocks,
   createPendingDeferredContinuation,
   DEFERRED_LOCK_STALE_MS,
@@ -88,6 +92,17 @@ function deferredJob() {
     attempt: { number: 1, messageUuid: '33333333-3333-4333-8333-333333333333' },
     transientRetries: 0,
   }
+}
+
+function resumeContext() {
+  return {
+    modeApi: null,
+    mainThreadAgentDefinition: undefined,
+    agentDefinitions: { activeAgents: [], allAgents: [] },
+    currentCwd: process.cwd(),
+    cliAgents: [],
+    initialState: {},
+  } as never
 }
 
 async function withStore(fn: () => Promise<void>): Promise<void> {
@@ -199,6 +214,55 @@ describe('resume against a deferred continuation session lock', () => {
         expect(adopted).toBe(false)
       } finally {
         await held.release()
+      }
+    })
+  })
+
+  // The CLI never armed setProviderSwitchLocked: its only caller lived in the
+  // desktop sidecar, so `cat-code --resume` of a GPT conversation offered the
+  // Anthropic model rows (getTotalInputTokens() is 0 in a fresh process) and
+  // selecting one switched provider mid-transcript. Drives the real resume
+  // funnel rather than the predicate, because the predicate was never the part
+  // that was missing.
+  test('adopting a transcript with real turns arms the provider-switch lock', async () => {
+    await withStore(async () => {
+      const previous = isProviderSwitchLocked()
+      try {
+        setProviderSwitchLocked(false)
+        await processResumedConversation(
+          {
+            messages: [
+              {
+                type: 'assistant',
+                uuid: 'a',
+                message: { role: 'assistant', model: 'gpt-5.6-terra', content: [] },
+              },
+            ],
+            sessionId: SESSION_ID as `${string}-${string}-${string}-${string}-${string}`,
+          } as never,
+          { forkSession: false },
+          resumeContext(),
+        )
+        expect(isProviderSwitchLocked()).toBe(true)
+      } finally {
+        setProviderSwitchLocked(previous)
+      }
+    })
+  })
+
+  test('adopting a transcript with nothing but metadata leaves the lock open', async () => {
+    await withStore(async () => {
+      const previous = isProviderSwitchLocked()
+      try {
+        setProviderSwitchLocked(true)
+        await processResumedConversation(
+          { messages: [], sessionId: SESSION_ID as `${string}-${string}-${string}-${string}-${string}` } as never,
+          { forkSession: false },
+          resumeContext(),
+        )
+        expect(isProviderSwitchLocked()).toBe(false)
+      } finally {
+        setProviderSwitchLocked(previous)
       }
     })
   })

@@ -185,14 +185,31 @@ describe('session storage', () => {
 
   test('durable transcript barrier requires the accepted UUID to be readable', async () => {
     const acceptedUuid = randomUUID()
-    await writeFile(
-      getTranscriptPathForSession(sessionId),
-      `${JSON.stringify({ type: 'user', uuid: acceptedUuid })}\n`,
-    )
+    // Record through the real writer so the session takes ownership of the
+    // transcript, which is what the barrier now resolves its target from.
+    await recordTranscript([
+      createUserMessage({ content: 'accepted', uuid: acceptedUuid }),
+    ])
     await expect(flushCurrentTranscriptDurably(acceptedUuid)).resolves.toBeUndefined()
     await expect(flushCurrentTranscriptDurably(randomUUID())).rejects.toThrow(
       'UUID is not durable',
     )
+  })
+
+  // Under `cleanupPeriodDays: 0` / `--no-session-persistence` (and the test env)
+  // no .jsonl is ever created, but the barrier derived its target from the
+  // session id and opened it read-only, so a deferred continuation reaching it
+  // died on a bare ENOENT with nothing explaining why. Nothing was written, so
+  // there is nothing to make durable.
+  test('durable transcript barrier is a no-op when no transcript is owned', async () => {
+    delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    await recordTranscript([
+      createUserMessage({ content: 'suppressed', uuid: randomUUID() }),
+    ])
+    await flushSessionStorage()
+
+    expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+    await expect(flushCurrentTranscriptDurably()).resolves.toBeUndefined()
   })
 
   test('deferred result persistence is exact, sanitized, and session-bound', async () => {

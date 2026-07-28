@@ -128,7 +128,10 @@ function switchRuntimeProvider(
     mainLoopModel: null,
     mainLoopModelForSession: null,
     fastMode: false,
-    effortValue: reconcileEffortForModel(null, prev.effortValue),
+    // A null model is the provider's own default, so there is no model to
+    // reconcile the effort against. Reconciling here silently discarded the
+    // user's stored effort level while settings.json kept it.
+    effortValue: prev.effortValue,
   }))
 }
 

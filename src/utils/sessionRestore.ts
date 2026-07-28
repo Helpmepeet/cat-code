@@ -8,6 +8,7 @@ import {
   setMainLoopModelOverride,
   setMainThreadAgentType,
   setOriginalCwd,
+  setProviderSwitchLocked,
   switchSession,
 } from '../bootstrap/state.js'
 import { clearSystemPromptSections } from '../constants/systemPromptSections.js'
@@ -51,6 +52,7 @@ import type { FileHistorySnapshot } from './fileHistory.js'
 import { fileHistoryRestoreStateFromLog } from './fileHistory.js'
 import { createSystemMessage } from './messages.js'
 import { parseUserSpecifiedModel } from './model/model.js'
+import { hasProviderBoundHistory } from './model/providers.js'
 import { getPlansDirectory } from './plans.js'
 import { setCwd } from './Shell.js'
 import {
@@ -708,6 +710,14 @@ export async function processResumedConversation(
     // the fresh ID, so loadTranscriptFile's keyed lookup will match.
     await recordContentReplacement(result.contentReplacements)
   }
+
+  // Arm the provider-switch lock from the transcript the session is adopting.
+  // A restored process has no accumulated cost, so `getTotalInputTokens()` is 0
+  // and the model catalog would otherwise offer a cross-provider switch on a
+  // conversation that already has provider-shaped state. Not scoped to the
+  // adopt branch: --fork-session loads the same messages into context, so it
+  // carries the same binding.
+  setProviderSwitchLocked(hasProviderBoundHistory(result.messages))
 
   // Restore session metadata so /status shows the saved name and metadata
   // is re-appended on session exit. Fork doesn't take ownership of the

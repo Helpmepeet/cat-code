@@ -3,8 +3,10 @@ import {
   getSessionProvider,
   isProviderSwitchLocked,
 } from '../../bootstrap/state.js'
+import type { Message } from '../../types/message.js'
 import { getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { isEnvTruthy } from '../envUtils.js'
+import { SYNTHETIC_MODEL } from '../messages.js'
 import { isModelAlias } from './aliases.js'
 
 export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai'
@@ -131,15 +133,47 @@ export function canApplyModelSelection(
 }
 
 /**
- * Startup differs from an interactive picker: only an explicit CLI/settings/
- * agent model may cross provider families. An implicit default preserves the
- * already-resolved environment/startup provider precedence.
+ * True when the loaded transcript already holds provider-shaped conversation
+ * state: a real assistant turn, or a real user turn that the next request will
+ * replay. Restoring one of those must arm `setProviderSwitchLocked`, because a
+ * restored process starts at `getTotalInputTokens() === 0` and the token count
+ * alone would present the pre-first-turn "any provider" catalog.
+ *
+ * One predicate for both planes: the terminal engine arms the lock from
+ * `sessionRestore.processResumedConversation`, the desktop sidecar from
+ * `sessionController.createSessionDomains`.
+ */
+export function hasProviderBoundHistory(messages: readonly Message[]): boolean {
+  return messages.some(
+    message =>
+      (message.type === 'assistant' &&
+        message.isApiErrorMessage !== true &&
+        message.message.model !== SYNTHETIC_MODEL) ||
+      (message.type === 'user' &&
+        message.isMeta !== true &&
+        message.isVisibleInTranscriptOnly !== true),
+  )
+}
+
+/**
+ * Startup differs from an interactive picker: only a model chosen for this
+ * launch (CLI flag, model env var, or agent definition) may cross provider
+ * families. An implicit default — including a model that only sits in a
+ * settings file — preserves the already-resolved environment/startup provider
+ * precedence.
+ *
+ * The model implication is checked first and is never gated by that flag:
+ * request routing sends every `gpt-*` id to OpenAI regardless of the session
+ * provider, and provider-shaped tools are selected from this result, so a
+ * settings-file GPT model must still land on OpenAI.
  */
 export function resolveStartupProvider(
   model: string | null | undefined,
   hasExplicitModel: boolean,
   implicitProvider: APIProvider = getEnvAPIProvider(),
 ): APIProvider {
+  const impliedProvider = getProviderForModel(model)
+  if (impliedProvider) return impliedProvider
   return hasExplicitModel
     ? resolveModelSelectionProvider(model, implicitProvider)
     : implicitProvider

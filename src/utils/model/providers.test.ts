@@ -4,8 +4,10 @@ import {
   setProviderSwitchLocked,
 } from '../../bootstrap/state.js'
 
+import type { Message } from '../../types/message.js'
 import {
   canApplyModelSelection,
+  hasProviderBoundHistory,
   resolveModelSelectionProvider,
   resolveStartupProvider,
 } from './providers.js'
@@ -76,5 +78,49 @@ describe('resolveModelSelectionProvider', () => {
       resolveStartupProvider('claude-sonnet-4-6', false, 'openai'),
     ).toBe('openai')
     expect(resolveStartupProvider('opus', true, 'openai')).toBe('firstParty')
+  })
+
+  // A settings-file model reaches startup as "not explicit" so that
+  // CLAUDE_CODE_USE_* keeps precedence over saved settings. That must not cost
+  // the GPT implication: request routing sends every gpt-* id to OpenAI, and
+  // the provider-shaped tool set (Apply_patch vs Edit) is chosen from this
+  // result, so a settings-file `{"model":"gpt-5.6-terra"}` still has to land on
+  // OpenAI. Before the fix this returned the implicit provider.
+  test('a model-implied provider survives an implicit startup', () => {
+    expect(resolveStartupProvider('gpt-5.6-terra', false, 'firstParty')).toBe(
+      'openai',
+    )
+    expect(resolveStartupProvider('gpt-5.6-terra', false, 'bedrock')).toBe(
+      'openai',
+    )
+  })
+})
+
+describe('hasProviderBoundHistory', () => {
+  function assistant(model: string): Message {
+    return {
+      type: 'assistant',
+      uuid: 'a',
+      message: { role: 'assistant', model, content: [] },
+    } as unknown as Message
+  }
+
+  test('a real assistant turn binds the session to its provider', () => {
+    expect(hasProviderBoundHistory([assistant('gpt-5.6-terra')])).toBe(true)
+  })
+
+  test('cost-output and meta rows alone leave the session unbound', () => {
+    expect(hasProviderBoundHistory([])).toBe(false)
+    expect(hasProviderBoundHistory([assistant('<synthetic>')])).toBe(false)
+    expect(
+      hasProviderBoundHistory([
+        {
+          type: 'user',
+          uuid: 'u',
+          isMeta: true,
+          message: { role: 'user', content: [] },
+        } as unknown as Message,
+      ]),
+    ).toBe(false)
   })
 })

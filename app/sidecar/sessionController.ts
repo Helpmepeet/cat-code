@@ -11,6 +11,7 @@ import {
 } from '../../src/utils/model/model.js'
 import {
   getEnvAPIProvider,
+  hasProviderBoundHistory,
   resolveStartupProvider,
 } from '../../src/utils/model/providers.js'
 import {
@@ -246,18 +247,6 @@ export function selectResumedProviderModel(
         message.message.model.length > 0 &&
         message.message.model !== SYNTHETIC_MODEL,
     )?.message.model
-}
-
-export function hasProviderBoundHistory(messages: readonly Message[]): boolean {
-  return messages.some(
-    message =>
-      (message.type === 'assistant' &&
-        message.isApiErrorMessage !== true &&
-        message.message.model !== SYNTHETIC_MODEL) ||
-      (message.type === 'user' &&
-        message.isMeta !== true &&
-        message.isVisibleInTranscriptOnly !== true),
-  )
 }
 
 export async function createNormalSidecarQueryEngineConfig(

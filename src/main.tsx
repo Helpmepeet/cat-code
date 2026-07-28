@@ -2138,13 +2138,19 @@ async function run(): Promise<CommanderCommand> {
       ? 'gpt-5.6-terra'
       : getDefaultMainLoopModel();
     const resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
-    // Explicit CLI/settings/agent model selection is a provider-selection event.
-    // An implicit default is not: it must preserve env-var precedence (notably
-    // CLAUDE_CODE_USE_OPENAI) even when the saved preference is stale.
+    // A model chosen for THIS launch (--model, CAT_CODE_MODEL/ANTHROPIC_MODEL,
+    // or the active agent) is a provider-selection event. A model that only
+    // sits in a settings FILE is not: CLAUDE_CODE_USE_* outranks saved
+    // settings, so `{"model":"sonnet"}` must not silently pull a
+    // CLAUDE_CODE_USE_OPENAI=1 session onto Anthropic. A GPT id still routes to
+    // OpenAI wherever it came from — resolveStartupProvider keeps the model
+    // implication ahead of this flag.
+    const hasExplicitStartupModel =
+      effectiveModel !== undefined || getModelEnvOverride() !== undefined;
     setSessionProvider(
       resolveStartupProvider(
         resolvedInitialModel,
-        initialMainLoopModel !== null,
+        hasExplicitStartupModel,
         implicitStartupProvider,
       ),
     );

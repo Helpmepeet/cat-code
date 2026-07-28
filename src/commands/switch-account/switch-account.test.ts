@@ -451,7 +451,12 @@ describe('/switch-account', () => {
     expect(getMainLoopModelOverride()).toBe('gpt-5.6-terra')
   })
 
-  test('crossing from Codex to Claude clears a GPT-only effort tier', async () => {
+  // This used to assert the effort was cleared. Crossing to Claude sets the
+  // model to null, which is the provider's own default, so there is no model to
+  // check the level against and clearing it silently threw away a level that
+  // settings.json still held. resolveAppliedEffort applies the per-model clamp
+  // when the request is built.
+  test('crossing from Codex to Claude keeps the stored effort level', async () => {
     setSessionProvider('openai')
     claudePoolModule.seedClaudeAccountPoolForTest({
       accounts: [
@@ -499,7 +504,7 @@ describe('/switch-account', () => {
       value: 'Switched to Claude account claude-target',
     })
     expect(getSessionProvider()).toBe('firstParty')
-    expect(appState.effortValue).toBeUndefined()
+    expect(appState.effortValue).toBe('ultra')
   })
 
   test('restored-history lock rejects a cross-provider account switch even with zero restored cost', async () => {
