@@ -15,12 +15,26 @@ let cleanupEffect: (() => void) | undefined
 
 // Every mock spreads the real module: these specifiers are shared by unrelated
 // importers in this process, and replacing a whole module drops exports they
-// need.
+// need. Spreading is not enough on its own, because bun installs mock.module
+// during the import phase of every file in an invocation and never restores it,
+// so a stub that is always live also rewrites behaviour other suites assert on.
+// Each stub is therefore gated on this file's own tests being in flight; every
+// other file in the same run gets the real function. The real implementation
+// must be captured into a local binding BEFORE the mock is installed, because
+// mock.module rewrites the live namespace object and reading it back off the
+// namespace afterwards yields the stub.
+let stubsActive = false
+
 const actualReact = await import('react')
+const realUseEffect = actualReact.useEffect
 mock.module('react', () => ({
   ...actualReact,
   default: actualReact.default,
-  useEffect: (effect: () => void | (() => void)) => {
+  useEffect: (
+    effect: () => void | (() => void),
+    deps?: readonly unknown[],
+  ) => {
+    if (!stubsActive) return realUseEffect(effect, deps)
     runEffect = () => {
       cleanupEffect = (effect() as (() => void) | undefined) ?? undefined
     }
@@ -85,24 +99,34 @@ let notices: (DeferredContinuationNoticeV1 | null)[] = []
 let noticeError: Error | null = null
 
 const actualState = await import('../bootstrap/state.js')
+const realGetSessionId = actualState.getSessionId
 mock.module('../bootstrap/state.js', () => ({
   ...actualState,
-  getSessionId: () => SESSION_ID,
+  getSessionId: () => (stubsActive ? SESSION_ID : realGetSessionId()),
 }))
 
 const actualQueue = await import('../utils/messageQueueManager.js')
+const realEnqueue = actualQueue.enqueue
 mock.module('../utils/messageQueueManager.js', () => ({
   ...actualQueue,
   enqueue: (command: QueuedCommand) => {
+    if (!stubsActive) return realEnqueue(command)
     enqueued.push(command)
   },
 }))
 
 const actualStore = await import('../services/deferredContinuation.js')
+const realReadPending = actualStore.readPendingDeferredContinuation
+const realTakeNotice = actualStore.takeDeferredContinuationNotice
 mock.module('../services/deferredContinuation.js', () => ({
   ...actualStore,
-  readPendingDeferredContinuation: async () => pendingJob,
-  takeDeferredContinuationNotice: async () => {
+  readPendingDeferredContinuation: async (
+    ...args: Parameters<typeof realReadPending>
+  ) => (stubsActive ? pendingJob : realReadPending(...args)),
+  takeDeferredContinuationNotice: async (
+    ...args: Parameters<typeof realTakeNotice>
+  ) => {
+    if (!stubsActive) return realTakeNotice(...args)
     if (noticeError) {
       const error = noticeError
       noticeError = null
@@ -113,22 +137,35 @@ mock.module('../services/deferredContinuation.js', () => ({
 }))
 
 const actualRunner = await import('../services/deferredContinuationRunner.js')
+const realBeginForeground = actualRunner.beginForegroundDeferredContinuation
+const realReconcileJob = actualRunner.reconcileDeferredContinuationJob
 mock.module('../services/deferredContinuationRunner.js', () => ({
   ...actualRunner,
-  beginForegroundDeferredContinuation: async () => {
+  beginForegroundDeferredContinuation: async (
+    ...args: Parameters<typeof realBeginForeground>
+  ) => {
+    if (!stubsActive) return realBeginForeground(...args)
     beginCalls++
     const finished = new Promise<void>(resolve => {
       finishAttempt = resolve
     })
     return { command: continuationCommand, finished }
   },
-  reconcileDeferredContinuationJob: async () => {},
+  reconcileDeferredContinuationJob: async (
+    ...args: Parameters<typeof realReconcileJob>
+  ) => {
+    if (!stubsActive) return realReconcileJob(...args)
+  },
 }))
 
 const actualLaunchAgent = await import('../services/deferredContinuationLaunchAgent.js')
+const realBackgroundStatus =
+  actualLaunchAgent.getDeferredContinuationBackgroundStatus
 mock.module('../services/deferredContinuationLaunchAgent.js', () => ({
   ...actualLaunchAgent,
-  getDeferredContinuationBackgroundStatus: async () => ({ state: 'disabled' }),
+  getDeferredContinuationBackgroundStatus: async (
+    ...args: Parameters<typeof realBackgroundStatus>
+  ) => (stubsActive ? { state: 'disabled' } : realBackgroundStatus(...args)),
 }))
 
 const { useDeferredContinuation } = await import('./useDeferredContinuation.js')
@@ -147,6 +184,7 @@ async function mountAndSettle(): Promise<void> {
 }
 
 beforeEach(() => {
+  stubsActive = true
   messages = []
   enqueued = []
   beginCalls = 0
@@ -160,6 +198,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanupEffect?.()
+  stubsActive = false
 })
 
 describe('useDeferredContinuation', () => {

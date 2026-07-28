@@ -1,27 +1,54 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { Command } from '../commands.js'
 import type { Message } from '../types/message.js'
 
 // Mocked at the module boundary before the subject is imported. The real module
 // is spread because this specifier is shared with unrelated importers in this
-// process.
+// process. Spreading is not enough on its own: bun installs mock.module during
+// the import phase of every file in an invocation and never restores it, so a
+// stub that is always live also rewrites behaviour other suites assert on. Each
+// stub is therefore gated on this file's own tests being in flight; every other
+// file in the same run gets the real function. The real implementation must be
+// captured into a local binding BEFORE the mock is installed, because
+// mock.module rewrites the live namespace object and reading it back off the
+// namespace afterwards yields the stub.
 let prepareCalls = 0
+let stubsActive = false
+
+beforeEach(() => {
+  stubsActive = true
+})
+
+afterEach(() => {
+  stubsActive = false
+})
+
 const actualStore = await import('../services/deferredContinuation.js')
+const realPrepareHumanPrompt =
+  actualStore.prepareHumanPromptAgainstDeferredContinuation
+const realTakeNotice = actualStore.takeDeferredContinuationNotice
 mock.module('../services/deferredContinuation.js', () => ({
   ...actualStore,
-  prepareHumanPromptAgainstDeferredContinuation: async () => {
+  prepareHumanPromptAgainstDeferredContinuation: async (
+    ...args: Parameters<typeof realPrepareHumanPrompt>
+  ) => {
+    if (!stubsActive) return realPrepareHumanPrompt(...args)
     prepareCalls++
     // Blocking returns early, which keeps this test on the decision and off the
     // rest of the submit pipeline.
     return { action: 'block' as const, notice: 'blocked for test' }
   },
-  takeDeferredContinuationNotice: async () => null,
+  takeDeferredContinuationNotice: async (
+    ...args: Parameters<typeof realTakeNotice>
+  ) => (stubsActive ? null : realTakeNotice(...args)),
 }))
 
 const actualState = await import('../bootstrap/state.js')
+const realGetSessionId = actualState.getSessionId
 mock.module('../bootstrap/state.js', () => ({
   ...actualState,
-  getSessionId: () => '22222222-2222-4222-8222-222222222222',
+  getSessionId: () =>
+    stubsActive ? '22222222-2222-4222-8222-222222222222' : realGetSessionId(),
 }))
 
 const { handlePromptSubmit, invalidatesDeferredContinuation } = await import(

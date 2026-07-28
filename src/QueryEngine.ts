@@ -168,6 +168,16 @@ export type QueryEngineConfig = {
   deferredAttemptUuid?: string
   deferredJobId?: string
   /**
+   * Transcript writers, defaulting to the real session-storage functions.
+   * Injectable so the deferred durability barrier can be exercised with a
+   * failing writer: bun installs `mock.module` during the import phase of every
+   * file in a test invocation and never restores it, so stubbing
+   * `sessionStorage.js` breaks the durable-barrier coverage in the sibling
+   * deferred-continuation suites when they run together.
+   */
+  recordTranscript?: typeof recordTranscript
+  flushCurrentTranscriptDurably?: typeof flushCurrentTranscriptDurably
+  /**
    * Snip-boundary handler: receives each yielded system message plus the
    * current mutableMessages store. Returns undefined if the message is not a
    * snip boundary; otherwise returns the replayed snip result. Injected by
@@ -247,6 +257,9 @@ export class QueryEngine {
       orphanedPermission,
       deferredAttemptUuid,
       deferredJobId,
+      recordTranscript: recordTranscriptFn = recordTranscript,
+      flushCurrentTranscriptDurably:
+        flushCurrentTranscriptDurablyFn = flushCurrentTranscriptDurably,
     } = this.config
 
     this.discoveredSkillNames.clear()
@@ -487,7 +500,7 @@ export class QueryEngine {
     // — the single largest controllable critical-path cost after module eval.
     // Transcript is still written (for post-hoc debugging); just not blocking.
     if (persistSession && messagesFromUserInput.length > 0) {
-      const transcriptPromise = recordTranscript(messages)
+      const transcriptPromise = recordTranscriptFn(messages)
       if (isBareMode()) {
         void transcriptPromise
       } else {
@@ -509,7 +522,7 @@ export class QueryEngine {
       if (!accepted) {
         throw new Error('Deferred continuation UUID did not match accepted input')
       }
-      await flushCurrentTranscriptDurably(deferredAttemptUuid)
+      await flushCurrentTranscriptDurablyFn(deferredAttemptUuid)
     }
 
     // Filter messages that should be acknowledged after transcript
@@ -694,7 +707,7 @@ export class QueryEngine {
       }
 
       if (persistSession) {
-        await recordTranscript(messages)
+        await recordTranscriptFn(messages)
         if (
           isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
           isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -797,7 +810,7 @@ export class QueryEngine {
               m => m.uuid === tailUuid,
             )
             if (tailIdx !== -1) {
-              await recordTranscript(this.mutableMessages.slice(0, tailIdx + 1))
+              await recordTranscriptFn(this.mutableMessages.slice(0, tailIdx + 1))
             }
           }
         }
@@ -813,9 +826,9 @@ export class QueryEngine {
           // useLogMessages.ts fire-and-forgets. enqueueWrite is
           // order-preserving so fire-and-forget here is safe.
           if (message.type === 'assistant') {
-            void recordTranscript(messages)
+            void recordTranscriptFn(messages)
           } else {
-            await recordTranscript(messages)
+            await recordTranscriptFn(messages)
           }
         }
 
@@ -868,7 +881,7 @@ export class QueryEngine {
           // forking the chain and orphaning the conversation on resume.
           if (persistSession) {
             messages.push(message)
-            void recordTranscript(messages)
+            void recordTranscriptFn(messages)
           }
           yield* normalizeMessage(message)
           break
@@ -922,7 +935,7 @@ export class QueryEngine {
           // Record inline (same reason as progress above).
           if (persistSession) {
             messages.push(message)
-            void recordTranscript(messages)
+            void recordTranscriptFn(messages)
           }
 
           // Extract structured output from StructuredOutput tool calls
