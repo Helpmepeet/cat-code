@@ -146,6 +146,17 @@ const POPOVER_HEADING =
 const POPOVER_PANEL_RIGHT =
   'absolute bottom-full right-0 z-40 mb-2 overflow-hidden rounded-lg border border-shell-seam bg-surface-raised shadow-lg'
 
+/**
+ * A Claude account reports only healthy/dead, with no `availabilityLabel` of its
+ * own; these are the same words the Codex pool's label uses for the same two
+ * states (`describeCodexAccountAvailability`, `codexAccountPool.ts:1526-1531`),
+ * so the two account faces read alike.
+ */
+const ANTHROPIC_STATUS_LABEL: Record<AnthropicAccountStatus['status'], string> = {
+  healthy: 'Ready',
+  dead: 'Needs re-login',
+}
+
 /** Interactive MODEL face → a popover of the REAL selectable models (`model.set`). */
 function ModelChip({
   current,
@@ -547,7 +558,7 @@ function AccountChip({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`Active account: ${alias} · ${active.status}`}
+        title={`Active account: ${alias} · ${active.availabilityLabel}`}
         onClick={() => setOpen(value => !value)}
         className={`${RAIL_FACE} gap-1.5 text-text-muted hover:text-text-primary`}
       >
@@ -1001,14 +1012,14 @@ export function ComposerActionsBar({
           ) : showAccount ? (
             <span
               className={`${RAIL_FACE} text-text-muted`}
-              title={`Active account: ${accountAlias} · ${account.status}`}
+              title={`Active account: ${accountAlias} · ${account.availabilityLabel}`}
             >
               {accountAlias}
             </span>
           ) : anthropicAccount && anthropicAccountLabel ? (
             <span
               className={`${RAIL_FACE} text-text-muted`}
-              title={`Active Anthropic account: ${anthropicAccountLabel} · ${anthropicAccount.status}`}
+              title={`Active Anthropic account: ${anthropicAccountLabel} · ${ANTHROPIC_STATUS_LABEL[anthropicAccount.status]}`}
             >
               {anthropicAccountLabel}
             </span>

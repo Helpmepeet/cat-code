@@ -73,6 +73,32 @@ export function stoppableTaskIdAt(
   return target.id
 }
 
+export type TasksDialogKeyAction = 'close' | 'next' | 'previous' | 'stop'
+
+/**
+ * What a keypress means to the open Tasks dialog, or null for "not ours".
+ *
+ * A chord is NEVER ours: ⌘K reopens the command palette, and `event.key` is
+ * still `'k'` while Meta is held, so an unguarded `k` test destroys the first
+ * running task on the way to the palette. Same shape and same modifier bail as
+ * `permissionActionForKey` (`permissionPromptModel.ts`), and pure for the same
+ * reason as `stoppableTaskIdAt` above: the renderer suite is SSR-only and can
+ * never press a key.
+ */
+export function tasksDialogKeyAction(event: {
+  key: string
+  altKey?: boolean
+  ctrlKey?: boolean
+  metaKey?: boolean
+}): TasksDialogKeyAction | null {
+  if (event.altKey || event.ctrlKey || event.metaKey) return null
+  if (event.key === 'Escape') return 'close'
+  if (event.key === 'ArrowDown') return 'next'
+  if (event.key === 'ArrowUp') return 'previous'
+  if (event.key === 'k' || event.key === 'K') return 'stop'
+  return null
+}
+
 /** Running-first, then newest — mirrors `BackgroundTasksDialog.tsx`'s sort. */
 export function sortTaskItems(items: readonly TaskSnapshotItem[]): TaskSnapshotItem[] {
   return [...items].sort((a, b) => {

@@ -9,16 +9,25 @@ import { describeSuggestion } from './permissionPromptModel.js'
  *                      THIS request's engine-minted suggestions; shown only
  *                      when the engine actually minted any)
  *   Deny             → deny with the feedback text (the model-visible refusal)
+ *
+ * `denyOnly` drops both allow paths. An AskUserQuestion whose questions cannot
+ * be read falls back to this card, and a bare allow there would run the tool
+ * with NO answers — the thing `permissionState.ts`'s `selectVisiblePermission`
+ * comment forbids and the keyboard path already refuses
+ * (decisions/ASK-USER-QUESTION-ANSWER.md). Mouse and keyboard must agree.
  */
 export function PermissionPrompt({
   request,
   submitted,
+  denyOnly,
   onAllow,
   onDeny,
 }: {
   request: PermissionRequest
   /** True while an answer for this card is in flight. */
   submitted?: boolean
+  /** Hide every allow path: this request can only be answered by denying it. */
+  denyOnly?: boolean
   onAllow: (applySuggestions: number[]) => void
   onDeny: (message?: string) => void
 }) {
@@ -68,6 +77,12 @@ export function PermissionPrompt({
               Path: {request.request.blocked_path}
             </p>
           ) : null}
+          {denyOnly ? (
+            <p className="mt-1 text-xs text-text-subtle">
+              This question could not be read, so it can only be denied. Add a
+              note below to say what you wanted.
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 gap-2">
           <button
@@ -78,14 +93,16 @@ export function PermissionPrompt({
           >
             Deny
           </button>
-          <button
-            className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
-            disabled={submitted}
-            onClick={() => onAllow([])}
-            type="button"
-          >
-            Allow
-          </button>
+          {denyOnly ? null : (
+            <button
+              className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+              disabled={submitted}
+              onClick={() => onAllow([])}
+              type="button"
+            >
+              Allow
+            </button>
+          )}
         </div>
       </div>
 
@@ -93,7 +110,7 @@ export function PermissionPrompt({
         {JSON.stringify(request.request.input, null, 2)}
       </pre>
 
-      {suggestions.length > 0 ? (
+      {!denyOnly && suggestions.length > 0 ? (
         <div aria-label="Always allow options" className="mt-2 flex flex-col gap-1">
           {suggestions.map((suggestion, index) => (
             <button
@@ -119,9 +136,13 @@ export function PermissionPrompt({
         value={denyMessage}
       />
 
-      <p className="mt-2 font-mono text-[11px] text-text-subtle">
-        Enter allow · N / ⌫ deny · Esc snooze
-      </p>
+      {/* The generic shortcuts skip this request entirely (`selectVisiblePermission`),
+       * so advertising them on a deny-only card would be a dead affordance. */}
+      {denyOnly ? null : (
+        <p className="mt-2 font-mono text-[11px] text-text-subtle">
+          Enter allow · N / ⌫ deny · Esc snooze
+        </p>
+      )}
     </section>
   )
 }

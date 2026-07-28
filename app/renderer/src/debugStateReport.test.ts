@@ -111,7 +111,7 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
         toolName: 'Bash',
         displayTitle: 'Run command?',
         toolDisplayName: 'Shell',
-        suggestionLabels: ['Always allow: allow Bash(date) · userSettings'],
+        suggestionLabels: ['Always allow: allow Bash(date) · User settings'],
       },
     ],
   })

@@ -198,7 +198,7 @@ export function PermissionModeChip({
                 disabled={unavailable}
                 title={
                   unavailable
-                    ? 'Launch with CATCODE_ALLOW_BYPASS=1 to enable bypass mode'
+                    ? 'Bypass mode has to be turned on when Cat Code starts. Enable it from the command line, then open a new session.'
                     : undefined
                 }
                 onClick={() => {

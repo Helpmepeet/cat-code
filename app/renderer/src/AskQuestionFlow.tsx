@@ -19,6 +19,7 @@ import { MAX_QUESTION_ANSWER_CHARS } from '../../shared/limits.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 import type { AskQuestion } from './askQuestionState.js'
 import {
+  abandonOtherText,
   buildAskAnswerPayload,
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
@@ -135,7 +136,7 @@ export function AskQuestionFlow({
         if (key === 'Escape') {
           event.preventDefault()
           setOtherActive(false)
-          setOtherText('')
+          setDraft(abandonOtherText(draft))
           return
         }
         if (key === 'Enter') {
@@ -174,6 +175,15 @@ export function AskQuestionFlow({
           setCursor(otherIndex)
           setOtherActive(true)
         }
+        return
+      }
+      // "Other…" also answers to its own letter: past 8 options its row number is
+      // two digits, which no single keypress can reach (and which the row's own
+      // marker cannot show).
+      if (key === 'o' || key === 'O') {
+        event.preventDefault()
+        setCursor(otherIndex)
+        setOtherActive(true)
         return
       }
       if (key === 'ArrowDown' || key === 'j' || (event.ctrlKey && key === 'n')) {
@@ -315,7 +325,10 @@ export function AskQuestionFlow({
                 : 'bg-text-primary/[0.06] text-text-subtle'
             }`}
           >
-            {otherIndex + 1}
+            {/* The row number IS the shortcut, so it may only claim a key that
+             * exists: past 8 options the marker shows the letter key instead of
+             * an unreachable two-digit number. */}
+            {otherIndex < 9 ? otherIndex + 1 : 'o'}
           </span>
           {otherActive ? (
             <input

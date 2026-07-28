@@ -1,5 +1,8 @@
 import { PermissionPrompt } from './PermissionPrompt.js'
-import type { PermissionQueueItem } from './permissionState.js'
+import {
+  isAskUserQuestionRequest,
+  type PermissionQueueItem,
+} from './permissionState.js'
 
 /**
  * The pending-permission queue (P2-4, adapts the prototype's
@@ -36,6 +39,11 @@ export function PermissionQueue({
 
       {active.map(item => (
         <PermissionPrompt
+          // An AskUserQuestion only reaches this generic queue when its questions
+          // could not be read, so there is nothing to answer and an allow would
+          // run the tool with empty answers. Deny is the only honest control, and
+          // it is already the only one the keyboard offers for these requests.
+          denyOnly={isAskUserQuestionRequest(item.request)}
           key={item.request.requestId}
           onAllow={applySuggestions =>
             onAllow(item.request.requestId, applySuggestions)

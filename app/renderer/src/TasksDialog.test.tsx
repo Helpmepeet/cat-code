@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { TaskSnapshotItem, TasksSnapshot } from '../../shared/protocol.js'
 import { TasksDialog } from './TasksDialog.js'
+import { tasksDialogKeyAction } from './tasksState.js'
 
 /**
  * This package has no DOM test harness (see AccountsPage.test.tsx's header) —
@@ -99,4 +100,31 @@ test('P4-8b — the "K stop" footer hint appears ONLY when a stop handler is wir
   expect(withoutStop).toContain('select')
   expect(withoutStop).toContain('close')
   expect(withoutStop).not.toContain('stop')
+})
+
+/**
+ * The dialog's keyboard contract. The component reads it through
+ * `tasksDialogKeyAction`, which lives in `tasksState.ts` because a `.tsx` may
+ * only export components (`lint:fast-refresh`); the dialog's own window listener
+ * is installed in an effect, and this suite renders with `renderToStaticMarkup`,
+ * which never runs effects.
+ */
+test('⌘K reaches the command palette instead of stopping the selected task', () => {
+  // The bug: `event.key` is still 'k' while Meta is held, so opening the palette
+  // from the dialog ALSO killed the first running task, with no confirmation.
+  expect(tasksDialogKeyAction({ key: 'k', metaKey: true })).toBeNull()
+  expect(tasksDialogKeyAction({ key: 'K', metaKey: true })).toBeNull()
+  expect(tasksDialogKeyAction({ key: 'k', ctrlKey: true })).toBeNull()
+  expect(tasksDialogKeyAction({ key: 'k', altKey: true })).toBeNull()
+  // Chorded navigation/dismissal is the app's too (⌥↑/⌥↓ reorder workspaces).
+  expect(tasksDialogKeyAction({ key: 'Escape', metaKey: true })).toBeNull()
+  expect(tasksDialogKeyAction({ key: 'ArrowDown', altKey: true })).toBeNull()
+  expect(tasksDialogKeyAction({ key: 'ArrowUp', ctrlKey: true })).toBeNull()
+  // Unchorded keys still do exactly what the footer advertises.
+  expect(tasksDialogKeyAction({ key: 'k' })).toBe('stop')
+  expect(tasksDialogKeyAction({ key: 'K' })).toBe('stop')
+  expect(tasksDialogKeyAction({ key: 'Escape' })).toBe('close')
+  expect(tasksDialogKeyAction({ key: 'ArrowDown' })).toBe('next')
+  expect(tasksDialogKeyAction({ key: 'ArrowUp' })).toBe('previous')
+  expect(tasksDialogKeyAction({ key: 'x' })).toBeNull()
 })

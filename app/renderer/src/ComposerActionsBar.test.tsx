@@ -137,15 +137,27 @@ test('renders the REAL active-account alias from the snapshot fixture', () => {
   expect(html).toContain('hiby')
   // Borderless face (the prototype's ColumnChipFace) — the real status rides the
   // title; healthy shows the quiet grey tone, not a dot.
-  expect(html).toContain('Active account: hiby · healthy')
+  expect(html).toContain('Active account: hiby · Available')
 })
 
-test('the account alias is always the prototype grey face; real status rides the title, not a tint', () => {
-  const capped = render({ account: account({ status: 'capped' }) })
-  expect(capped).toContain('Active account: hiby · capped')
+test('the account tooltip reads the pool label, never the raw status word', () => {
+  // The tooltip used to append `account.status`, so a user hovering a limited
+  // account read the word "capped" — an internal enum, not the pool's own
+  // sentence about it (the same label the switcher rows already show).
+  const capped = render({
+    account: account({
+      status: 'capped',
+      availabilityLabel: 'Limit reached (resets in 2h)',
+    }),
+  })
+  expect(capped).toContain('Active account: hiby · Limit reached (resets in 2h)')
+  expect(capped).not.toContain('· capped')
   expect(capped).not.toContain('text-tone-warn')
-  const dead = render({ account: account({ status: 'dead' }) })
-  expect(dead).toContain('Active account: hiby · dead')
+  const dead = render({
+    account: account({ status: 'dead', availabilityLabel: 'Needs re-login' }),
+  })
+  expect(dead).toContain('Active account: hiby · Needs re-login')
+  expect(dead).not.toContain('· dead')
   expect(dead).not.toContain('text-tone-danger')
 })
 
@@ -165,8 +177,17 @@ test('an Anthropic-routed session renders its Claude account instead of a Codex 
     anthropicAccount: anthropicAccount(),
   })
   expect(html).toContain('claude-main')
-  expect(html).toContain('Active Anthropic account: claude-main · healthy')
+  // A named state, not the raw `healthy`/`dead` enum the wire carries.
+  expect(html).toContain('Active Anthropic account: claude-main · Ready')
+  expect(html).not.toContain('· healthy')
   expect(html).not.toContain('Active account: hiby')
+
+  const dead = render({
+    account: null,
+    anthropicAccount: anthropicAccount({ status: 'dead' }),
+  })
+  expect(dead).toContain('Active Anthropic account: claude-main · Needs re-login')
+  expect(dead).not.toContain('· dead')
 })
 
 test('the permission MODE chip is always present (shows the real mode label)', () => {
@@ -323,7 +344,7 @@ test('with a switch handler, the account face becomes an interactive menu trigge
   expect(countOccurrences(interactive, 'aria-haspopup="menu"')).toBe(2)
   // Same alias + title contract as the read-only face (real status on the title).
   expect(interactive).toContain('hiby')
-  expect(interactive).toContain('Active account: hiby · healthy')
+  expect(interactive).toContain('Active account: hiby · Available')
 })
 
 function pool(): AccountStatus[] {

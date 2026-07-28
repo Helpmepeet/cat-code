@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AskQuestionFlow } from './AskQuestionFlow.js'
-import { buildAskAnswerPayload } from './askQuestionFlowModel.js'
+import {
+  abandonOtherText,
+  buildAskAnswerPayload,
+} from './askQuestionFlowModel.js'
 import type { AskQuestion } from './askQuestionState.js'
 
 const SINGLE: AskQuestion[] = [
@@ -77,6 +80,28 @@ test('renders the preview badge for an option carrying a preview, and the focuse
 test('renders the built-in "Other…" freeform row', () => {
   const html = render(SINGLE)
   expect(html).toContain('Other…')
+  // 2 options → the Other row is number 3, a key that exists.
+  expect(html).toContain('>3<')
+})
+
+test('the Other row never shows a number no key can produce', () => {
+  const many: AskQuestion[] = [
+    {
+      question: 'Which one?',
+      header: 'Pick',
+      multiSelect: false,
+      options: Array.from({ length: 9 }, (_, i) => ({
+        label: `option ${i + 1}`,
+        description: '',
+        preview: null,
+      })),
+    },
+  ]
+  const html = render(many)
+  // 9 options put the Other row at 10: two digits in a 16px circle, and
+  // unreachable from the digit shortcuts, which stop at 9.
+  expect(html).not.toContain('>10<')
+  expect(html).toContain('>o<')
 })
 
 test('single question shows a Submit footer + single-select key hints, no stepper', () => {
@@ -123,4 +148,24 @@ test('buildAskAnswerPayload trims and carries a real freeform answer', () => {
   expect(
     buildAskAnswerPayload([{ optionIndices: [], other: '  moment  ' }]),
   ).toEqual([{ optionIndices: [], other: 'moment' }])
+})
+
+test('leaving the freeform field keeps the option the user already picked', () => {
+  // Escape out of "Other…" used to run the TYPING transition, which for a
+  // single-select question clears the pick (one option supersedes freeform, and
+  // freeform supersedes the option). Pressing 1 then the Other digit then Escape
+  // therefore silently deselected option 1 and greyed out Submit.
+  expect(abandonOtherText({ optionIndices: [0], other: 'mome' })).toEqual({
+    optionIndices: [0],
+    other: '',
+  })
+  // Multi-select keeps every pick too, and an untouched draft is unchanged.
+  expect(abandonOtherText({ optionIndices: [0, 2], other: 'x' })).toEqual({
+    optionIndices: [0, 2],
+    other: '',
+  })
+  expect(abandonOtherText({ optionIndices: [], other: '' })).toEqual({
+    optionIndices: [],
+    other: '',
+  })
 })

@@ -25,6 +25,7 @@ import {
   taskColorClass,
   taskDisplayState,
   taskKindMeta,
+  tasksDialogKeyAction,
 } from './tasksState.js'
 
 export function TasksDialog({
@@ -64,17 +65,20 @@ export function TasksDialog({
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      // A modifier chord belongs to the app, not to this dialog — `tasksDialogKeyAction`
+      // owns that bail so ⌘K can reach the command palette without stopping a task.
+      const action = tasksDialogKeyAction(event)
+      if (action === 'close') {
         event.preventDefault()
         onClose()
         return
       }
-      if (event.key === 'ArrowDown') {
+      if (action === 'next') {
         event.preventDefault()
         setSelected(index => Math.min(flat.length - 1, index + 1))
         return
       }
-      if (event.key === 'ArrowUp') {
+      if (action === 'previous') {
         event.preventDefault()
         setSelected(index => Math.max(0, index - 1))
         return
@@ -83,7 +87,7 @@ export function TasksDialog({
       // (`TasksPage.jsx:109` gates on `!isTerminal(t)`); a terminal row / absent
       // handler is a no-op, never a dead action. The gate is the pure
       // `stoppableTaskIdAt` selector (unit-tested — the SSR harness can't press K).
-      if (event.key === 'k' || event.key === 'K') {
+      if (action === 'stop') {
         const targetId = onStopTask ? stoppableTaskIdAt(flat, selected) : null
         if (onStopTask && targetId) {
           event.preventDefault()
