@@ -185,7 +185,10 @@ function renderInspector(sessionState?: Parameters<typeof MetadataInspector>[0][
 test('an unwired drawer says so ONCE and shows no live section at all', () => {
   const html = renderInspector(undefined)
   expect(html).toContain('Live session state')
-  expect(html).toContain('App passes no sessionState')
+  // A directive with no reason. The copy it replaced named a module and a prop
+  // and explained our own wiring gap (CLAUDE.md §7).
+  expect(html).toContain('See these from the CLI')
+  expect(html).not.toContain('sessionState')
   // The five live sections must not render at all — an unwired drawer that
   // printed empty Workspace/Permissions headings would read as "this session
   // has none of these".
@@ -244,8 +247,11 @@ test('extra directories are counted per source and the cliArg ambiguity is state
   expect(html).toContain('Extra directories')
   expect(html).toContain('2 · 1 cliArg, 1 session')
   expect(html).toContain(
-    'src/utils/permissions/permissionSetup.ts:1015-1035',
+    'cannot tell which of these directories are just for this session',
   )
+  // The evidence for that claim is a source path with a line range, which is
+  // the one thing §7 names outright. It belongs in the code comment.
+  expect(html).not.toContain('permissionSetup.ts')
 })
 
 test('no cliArg directory means the ambiguity caveat is NOT printed', () => {
@@ -264,16 +270,16 @@ test('no cliArg directory means the ambiguity caveat is NOT printed', () => {
 
 test('the live permission context renders read-only: mode, rules, classifier, no mode buttons', () => {
   const html = renderInspector(fullState)
-  expect(html).toContain('Current permission mode: acceptEdits')
+  expect(html).toContain('Current permission mode: Accept edits')
   expect(html).toContain('Bash(ls:*)')
-  expect(html).toContain('prefix')
+  expect(html).toContain('starts with')
   expect(html).toContain('Permission classifier: on')
   // T6b — this drawer never offers a mode control. `aria-pressed` is only ever
   // emitted by PermissionRulesEditor's mode buttons, so its absence proves
   // `showModes={false}` reached the component.
   expect(html).not.toContain('aria-pressed')
   // The durable default still shows, badged with the layer it came from.
-  expect(html).toContain('Default permission mode: plan')
+  expect(html).toContain('Default permission mode: Plan')
 })
 
 test('effective settings list every resolved key, high-precedence layer first', () => {
@@ -344,7 +350,10 @@ test('engine diagnostics render the real warnings and a clean list as "no issues
   expect(html).toContain('>enabled<')
 })
 
-test('IDE / LSP status is declared unavailable rather than shown as absent', () => {
+test('IDE / LSP status is simply absent, with no note about why', () => {
   const html = renderInspector(fullState)
-  expect(html).toContain('Editor and language-server status are not reported to this app yet')
+  // An absent section is not a surprise worth a sentence, and the sentence that
+  // was there explained our own gap rather than anything the user can act on.
+  expect(html).not.toContain('language-server')
+  expect(html).not.toContain('Editor and language')
 })

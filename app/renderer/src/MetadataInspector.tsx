@@ -44,7 +44,6 @@ import { PermissionRulesEditor } from './PermissionRulesEditor.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
 import {
   DIRECTORY_SOURCE_AMBIGUITY_NOTE,
-  IDE_LSP_UNAVAILABLE_NOTE,
   INSPECTOR_SEAM_UNREAD_NOTE,
   INSPECTOR_UNWIRED_NOTE,
   LAUNCH_FLAGS_UNAVAILABLE_NOTE,
@@ -247,9 +246,6 @@ export function MetadataInspector({
               surface only. Worktree, file-history and content-replacement
               details are not carried on any frame yet, so they are left out
               rather than invented.
-            </div>
-            <div className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
-              {IDE_LSP_UNAVAILABLE_NOTE}
             </div>
           </Section>
         </div>

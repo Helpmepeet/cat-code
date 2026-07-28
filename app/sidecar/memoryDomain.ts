@@ -56,11 +56,12 @@ export function buildMemorySnapshot({
     autoMemoryEntrypoint,
     instructionFiles: instructionFiles.map(instructionFileSnapshot),
     autoMemories: autoMemories.map(autoMemoryHeaderSnapshot),
-    notes: [
-      'Instruction file contents are withheld; the renderer receives paths, types, and include metadata only.',
-      'Auto-memory rows are frontmatter headers from the real memdir scan; memory bodies stay engine-side.',
-      'Goals and memory writes remain deferred until a safe desktop writer boundary is designed.',
-    ],
+    // Empty, not removed: `notes` is a required field of the wire contract
+    // (`app/shared/protocol.ts` MemorySnapshot) and that file is versioned. The
+    // three sentences that used to sit here described our own build — what the
+    // read withholds and which writers are undesigned — and the Memory panel
+    // rendered them verbatim under a heading called "Scope" (CLAUDE.md §7).
+    notes: [],
   }
 }
 

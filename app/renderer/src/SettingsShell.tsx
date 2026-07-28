@@ -64,7 +64,7 @@ import type { SettingWriteInput } from './SettingsEditors.js'
 import type { SettingsProjectBinding } from './settingsProjectBinding.js'
 import {
   SETTINGS_UNKNOWN_VALUE,
-  SETTINGS_UNREAD_NOTE,
+  settingsUnreadNote,
   settingsWereRead,
 } from './settingsReadState.js'
 import {
@@ -76,6 +76,7 @@ import {
   SETTINGS_SCOPE_LABEL,
   SETTINGS_SCOPE_SUBTITLE,
   SETTINGS_SESSION_STATE_NOTE,
+  selectPermissionDefaultModeRow,
   selectProjectEngine,
   selectSettingsProjects,
   selectSettingsRail,
@@ -83,6 +84,7 @@ import {
   selectSettingsWriteLayer,
   settingsNoEngineNote,
   settingsRailItem,
+  settingsRowNote,
   type SettingsProjectEngine,
   type SettingsProjectLayer,
   type SettingsProjectOption,
@@ -96,11 +98,7 @@ import {
   SkillsPanel,
 } from './SettingsExtensions.js'
 import { Field, LockIcon, PaneSection, SourceBadge } from './SettingsField.js'
-import {
-  selectLayerOrigin,
-  selectManagedFields,
-  selectPermissionDefaultMode,
-} from './settingsState.js'
+import { selectLayerOrigin, selectManagedFields } from './settingsState.js'
 
 export function SettingsShell({
   snapshot,
@@ -165,6 +163,11 @@ export function SettingsShell({
     useState<SettingsProjectLayer>('projectSettings')
   const [projectCwd, setProjectCwd] = useState<string | null>(null)
 
+  // Whether a session is ATTACHED, which is not the same question as whether
+  // its settings arrived: a spawn-time read that threw, the attach window, and a
+  // process reset all leave a running session with no snapshot. Only the cwd
+  // answers it, so the unread copy is picked from here rather than from `null`.
+  const sessionOpen = typeof cwd === 'string' && cwd.trim().length > 0
   const activeCwd =
     cwd && cwd.trim().length > 0
       ? cwd
@@ -352,6 +355,7 @@ export function SettingsShell({
               remoteLastResult={remoteLastResult ?? null}
               remoteSnapshot={remoteSnapshot ?? null}
               scope={scope}
+              sessionOpen={sessionOpen}
               snapshot={snapshot}
             />
           </div>
@@ -455,12 +459,14 @@ function ScopeBody({
   remoteLastResult,
   onRemoteVerb,
   onSettingWrite,
+  sessionOpen,
 }: {
   scope: SettingsScopeKind
   item: SettingsRailItemId
   layer: ReturnType<typeof selectSettingsWriteLayer>
   engine: SettingsProjectEngine
   projectName: string
+  sessionOpen: boolean
   snapshot: SettingsSnapshot | null
   agentsSnapshot: AgentConfigSnapshot | null
   extensionsSnapshot: ExtensionsSnapshot | null
@@ -471,7 +477,8 @@ function ScopeBody({
   onSettingWrite: (input: SettingWriteInput) => void
 }) {
   if (scope === 'app') return <AppScopeBody item={item} />
-  if (scope === 'enforced') return <ManagedPanel snapshot={snapshot} />
+  if (scope === 'enforced')
+    return <ManagedPanel sessionOpen={sessionOpen} snapshot={snapshot} />
 
   // One gate for the whole project scope: nothing in this window has read the
   // chosen project's files, so no pane may show values from the focused
@@ -499,6 +506,7 @@ function ScopeBody({
           noEngineNote={noEngineNote}
           onWrite={onSettingWrite}
           pane="general"
+          sessionOpen={sessionOpen}
           snapshot={snapshot}
         />
       )
@@ -510,11 +518,19 @@ function ScopeBody({
           noEngineNote={noEngineNote}
           onWrite={onSettingWrite}
           pane="model"
+          sessionOpen={sessionOpen}
           snapshot={snapshot}
         />
       )
     case 'permissions':
-      return <PermissionsPane layer={writeLayer} snapshot={snapshot} />
+      return (
+        <PermissionsPane
+          engine={engine}
+          layer={writeLayer}
+          sessionOpen={sessionOpen}
+          snapshot={snapshot}
+        />
+      )
     case 'interface':
       return (
         <>
@@ -524,6 +540,7 @@ function ScopeBody({
             noEngineNote={noEngineNote}
             onWrite={onSettingWrite}
             pane="theme"
+            sessionOpen={sessionOpen}
             snapshot={snapshot}
           />
           {scope === 'user' ? <KeybindingsRow /> : null}
@@ -537,6 +554,7 @@ function ScopeBody({
           noEngineNote={noEngineNote}
           onWrite={onSettingWrite}
           pane="privacy"
+          sessionOpen={sessionOpen}
           snapshot={snapshot}
         />
       )
@@ -588,13 +606,36 @@ function ScopeBody({
 function PermissionsPane({
   snapshot,
   layer,
+  engine,
+  sessionOpen,
 }: {
   snapshot: SettingsSnapshot | null
   layer: NonNullable<ReturnType<typeof selectSettingsWriteLayer>>
+  engine: SettingsProjectEngine
+  sessionOpen: boolean
 }) {
-  const defaultMode = selectPermissionDefaultMode(snapshot)
-  const read = settingsWereRead(snapshot)
+  // Scope-relative, like every other row on the page: a project's default must
+  // not render under My defaults as if the user file held it.
+  const row = selectPermissionDefaultModeRow({
+    snapshot,
+    layer,
+    engine,
+    sessionOpen,
+  })
   const origin = selectLayerOrigin(snapshot, layer)
+  const value =
+    row.read.kind === 'set'
+      ? String(row.read.value)
+      : row.read.kind === 'unset'
+        ? 'not set'
+        : SETTINGS_UNKNOWN_VALUE
+  const badgeSource =
+    row.read.kind === 'set'
+      ? row.read.source
+      : row.read.kind === 'unreadable'
+        ? (row.read.by ?? undefined)
+        : undefined
+  const note = settingsRowNote(row)
   return (
     <>
       <PaneSection title="Default mode">
@@ -602,35 +643,31 @@ function PermissionsPane({
           desc="The mode a session starts in. Change it from the CLI."
           editable={false}
           label="Default permission mode"
-          origin={read && defaultMode ? selectLayerOrigin(snapshot, defaultMode.source) : null}
-          source={defaultMode?.source}
+          managed={row.annotation.kind === 'enforced'}
+          origin={badgeSource ? selectLayerOrigin(snapshot, badgeSource) : null}
+          source={badgeSource}
         >
           <span
-            aria-label={`Default permission mode: ${
-              defaultMode ? defaultMode.value : read ? 'not set' : SETTINGS_UNKNOWN_VALUE
-            }`}
+            aria-label={`Default permission mode: ${value}`}
             className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-[12.5px] text-text-primary"
           >
-            {defaultMode
-              ? defaultMode.value
-              : read
-                ? 'not set'
-                : SETTINGS_UNKNOWN_VALUE}
+            {value}
           </span>
         </Field>
-        {/* Only a snapshot that WAS read may speak about the settings files. */}
-        {read && !defaultMode ? (
+        {/* Only an `unset-here` row may say the files hold nothing: that
+          * annotation is reached only from a snapshot that WAS read and that
+          * resolves the key nowhere. */}
+        {row.annotation.kind === 'unset-here' ? (
           <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
             <code className="font-mono">permissions.defaultMode</code> is not set
             in any settings file, so the engine chooses each session's opening
             mode.
           </p>
-        ) : null}
-        {read ? null : (
+        ) : note ? (
           <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
-            {SETTINGS_UNREAD_NOTE}
+            {note}
           </p>
-        )}
+        ) : null}
       </PaneSection>
       <PaneSection title="Rules">
         <p className="text-[12.5px] leading-relaxed text-text-subtle">
@@ -721,7 +758,13 @@ function TranscriptDisplaySection() {
 }
 
 /** The Enforced scope: the machine's read-only policy floor. */
-function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
+function ManagedPanel({
+  snapshot,
+  sessionOpen,
+}: {
+  snapshot: SettingsSnapshot | null
+  sessionOpen: boolean
+}) {
   const managed = selectManagedFields(snapshot)
   const policyOrigin = snapshot?.policyOrigin ?? null
   const layerOrigin = selectLayerOrigin(snapshot, 'policySettings')
@@ -753,8 +796,8 @@ function ManagedPanel({ snapshot }: { snapshot: SettingsSnapshot | null }) {
          * snapshot that was actually read — see `settingsReadState.ts`. */}
         {!settingsWereRead(snapshot) ? (
           <p className="text-[12.5px] text-text-subtle">
-            {SETTINGS_UNREAD_NOTE} Whether your organization enforces any
-            settings is{' '}
+            {settingsUnreadNote(sessionOpen)} Whether your organization enforces
+            any settings is{' '}
             <span className="font-mono">{SETTINGS_UNKNOWN_VALUE}</span> until
             then.
           </p>

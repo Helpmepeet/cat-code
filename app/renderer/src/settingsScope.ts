@@ -52,10 +52,12 @@ import type {
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import type {
+  EditableSettingPane,
   EditableSettingSource,
   EditableSettingValue,
 } from '../../shared/settingsEditable.js'
-import { SETTINGS_UNREAD_NOTE } from './settingsReadState.js'
+import { settingsUnreadNote } from './settingsReadState.js'
+import { settingsPaneSpecs } from './settingsEditorModel.js'
 import { selectEditableValue, selectLayerOrigin, SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 
 /* ── scope ────────────────────────────────────────────────────────────────── */
@@ -399,6 +401,36 @@ const RAIL: Record<
 }
 
 /**
+ * Which editor pane each rail item hosts, for search. Only the four items that
+ * render `SettingsPane` appear; the rest carry no editable-setting rows, so a
+ * query can only reach them through their own label and description.
+ */
+const RAIL_ITEM_PANE: Partial<Record<SettingsRailItemId, EditableSettingPane>> =
+  {
+    general: 'general',
+    model: 'model',
+    privacy: 'privacy',
+    interface: 'theme',
+  }
+
+/**
+ * What a query is matched against for one rail item: its own label and
+ * description, plus the LABELS OF THE SETTINGS IT CONTAINS.
+ *
+ * Matching the category label alone made the box unusable for its actual job —
+ * every real setting name ("Respect .gitignore", "Output style", "Transcript
+ * retention") returned nothing, because none of them is a category. The setting
+ * labels come from `settingsPaneSpecs`, i.e. the specs the pane will really
+ * render, so search can never route to a pane that then does not show the row
+ * the operator searched for.
+ */
+function railItemSearchText(item: SettingsRailItem): string {
+  const pane = RAIL_ITEM_PANE[item.id]
+  const settings = pane ? settingsPaneSpecs(pane).map(spec => spec.label) : []
+  return [item.label, item.desc, ...settings].join(' ').toLowerCase()
+}
+
+/**
  * The rail for one scope, matched against the search box in the same pass.
  *
  * Exported because search is the one part of the rail the SSR-only suite cannot
@@ -416,7 +448,7 @@ export function selectSettingsRail(
       heading: group.heading,
       items: group.items
         .map(id => RAIL_ITEMS[id])
-        .filter(item => !q || item.label.toLowerCase().includes(q)),
+        .filter(item => !q || railItemSearchText(item).includes(q)),
     }))
     .filter(group => group.items.length > 0)
 }
@@ -467,7 +499,9 @@ export type SettingsRowRead =
 
 /** The one annotation line, in the spec's priority order (§3, Row grammar). */
 export type SettingsRowAnnotation =
-  | { readonly kind: 'unread' }
+  /** `sessionOpen` picks between the two unread sentences — a running session
+   * whose files were never read must not be told no session is open. */
+  | { readonly kind: 'unread'; readonly sessionOpen: boolean }
   | { readonly kind: 'no-engine' }
   | { readonly kind: 'enforced'; readonly origin: string | null }
   | {
@@ -508,6 +542,28 @@ function layerDefines(
 }
 
 /**
+ * ONE layer's own value for a key, or null when the snapshot carries no value
+ * attributed to that layer.
+ *
+ * `selectEditableValue` answers "what does this key resolve to", which is the
+ * WINNER's value. This answers "what does MY scope's file say", which is a
+ * different question and the only one an overridden row may show. It returns
+ * null wherever the snapshot only carries the winner, so the row falls back to
+ * stating the value as unknown rather than borrowing another layer's.
+ */
+function layerValue(
+  snapshot: SettingsSnapshot,
+  source: SettingSourceId,
+  key: string,
+): EditableSettingValue | null {
+  return (
+    (snapshot.editableValues ?? []).find(
+      entry => entry.key === key && entry.source === source,
+    )?.value ?? null
+  )
+}
+
+/**
  * One row's read + annotation + write target, for the chosen scope's `layer`.
  *
  * The branch order IS the spec's annotation priority: enforced → overridden →
@@ -518,11 +574,15 @@ export function selectSettingsRow({
   key,
   layer,
   engine = 'live',
+  sessionOpen = false,
 }: {
   snapshot: SettingsSnapshot | null
   key: string
   layer: EditableSettingSource
   engine?: SettingsProjectEngine
+  /** Whether a session is attached at all, which the shell knows from its cwd.
+   * Only ever changes the WORDING of the unread case. */
+  sessionOpen?: boolean
 }): SettingsRowModel {
   if (engine === 'absent') {
     return {
@@ -534,7 +594,7 @@ export function selectSettingsRow({
   if (!snapshot) {
     return {
       read: { kind: 'unread' },
-      annotation: { kind: 'unread' },
+      annotation: { kind: 'unread', sessionOpen },
       writeTarget: null,
     }
   }
@@ -555,19 +615,27 @@ export function selectSettingsRow({
   }
 
   if (winner && rank(winner.source) < rank(layer)) {
-    // A higher layer wins. If THIS layer also sets the key, its own value is
-    // hidden underneath and must not be guessed at; if it does not, this scope
-    // genuinely contributes the built-in default and stays writable — Law 3's
-    // "editing in My defaults while a project overrides it still writes the
-    // user file, with an annotation".
+    // A higher layer wins. This scope's own value is shown when the snapshot
+    // attributes one to this layer, and stated as unknown when it does not —
+    // never guessed at from the winner.
+    //
+    // The write target is THIS LAYER either way (Law 3: "editing in My defaults
+    // while a project overrides it still writes the user file, with an
+    // annotation"). Making it null once the layer defines the key was a trap
+    // that sprang on the operator's own edit: writing an overridden row is what
+    // makes `definesHere` true, so the very next snapshot turned the control
+    // they had just used into an unwritable, unreadable row with no way back.
     const origin = selectLayerOrigin(snapshot, winner.source)
     const definesHere = layerDefines(snapshot, layer, key)
+    const own = definesHere ? layerValue(snapshot, layer, key) : null
     return {
-      read: definesHere
-        ? { kind: 'unreadable', by: winner.source, origin }
-        : { kind: 'unset' },
+      read: !definesHere
+        ? { kind: 'unset' }
+        : own === null
+          ? { kind: 'unreadable', by: winner.source, origin }
+          : { kind: 'set', value: own, source: layer },
       annotation: { kind: 'overridden', by: winner.source, origin },
-      writeTarget: definesHere ? null : layer,
+      writeTarget: layer,
     }
   }
 
@@ -608,6 +676,107 @@ export function selectSettingsRow({
 }
 
 /**
+ * The Permissions pane's "Default mode" row, in the CHOSEN scope.
+ *
+ * `permissions.defaultMode` is nested, so the sidecar resolves it on its own
+ * axis and the snapshot carries only the winning layer's value — it never
+ * appears in `resolved`/`layers[].keys` and so cannot go through
+ * `selectSettingsRow`. Reading `permissionDefaultMode` straight, as this pane
+ * did, produced the one row on the page that ignored the scope: a project's
+ * `acceptEdits` rendered under a head reading "Your own settings files", and the
+ * follow-on "is not set in any settings file" was asserted from a cross-scope
+ * read.
+ *
+ * So the same row grammar is applied to it here. `writeTarget` is always null:
+ * making the default writable means adding a permission-family key to the
+ * sidecar's write allowlist, which needs its own review (spec §7.1).
+ */
+export function selectPermissionDefaultModeRow({
+  snapshot,
+  layer,
+  engine = 'live',
+  sessionOpen = false,
+}: {
+  snapshot: SettingsSnapshot | null
+  layer: EditableSettingSource
+  engine?: SettingsProjectEngine
+  sessionOpen?: boolean
+}): SettingsRowModel {
+  if (engine === 'absent') {
+    return {
+      read: { kind: 'no-engine' },
+      annotation: { kind: 'no-engine' },
+      writeTarget: null,
+    }
+  }
+  if (!snapshot) {
+    return {
+      read: { kind: 'unread' },
+      annotation: { kind: 'unread', sessionOpen },
+      writeTarget: null,
+    }
+  }
+
+  const winner = snapshot.permissionDefaultMode ?? null
+  if (!winner) {
+    return {
+      read: { kind: 'unset' },
+      annotation: {
+        kind: 'unset-here',
+        origin: selectLayerOrigin(snapshot, layer),
+      },
+      writeTarget: null,
+    }
+  }
+
+  const origin = selectLayerOrigin(snapshot, winner.source)
+  if (winner.source === 'policySettings') {
+    return {
+      read: { kind: 'set', value: winner.value, source: winner.source },
+      annotation: { kind: 'enforced', origin },
+      writeTarget: null,
+    }
+  }
+  if (winner.source === layer) {
+    return {
+      read: { kind: 'set', value: winner.value, source: layer },
+      annotation: { kind: 'set-here', origin },
+      writeTarget: null,
+    }
+  }
+  if (rank(winner.source) < rank(layer)) {
+    // A higher layer wins, and the snapshot carries no per-layer default mode,
+    // so this scope's own value is genuinely unknown.
+    return {
+      read: { kind: 'unreadable', by: winner.source, origin },
+      annotation: { kind: 'overridden', by: winner.source, origin },
+      writeTarget: null,
+    }
+  }
+  return {
+    read: { kind: 'set', value: winner.value, source: winner.source },
+    annotation: { kind: 'inherited', from: winner.source, origin },
+    writeTarget: null,
+  }
+}
+
+/**
+ * Whether a control must send its value even when that value equals the one
+ * already on screen.
+ *
+ * True exactly for a writable UNSET row, because what such a row displays is the
+ * BUILT-IN DEFAULT, not something any file holds. "Same as displayed" therefore
+ * does not mean "already saved", and the ordinary no-change guards silently ate
+ * the one edit that matters here: pinning a setting at its current value in your
+ * own file so a later change elsewhere cannot move it. The operator typed the
+ * number, blurred, nothing was sent, and the row went on saying the built-in
+ * default applies.
+ */
+export function settingsRowCommitsUnchanged(row: SettingsRowModel): boolean {
+  return row.read.kind === 'unset' && row.writeTarget !== null
+}
+
+/**
  * How each layer is NAMED inside a sentence. Deliberately not the badge
  * vocabulary (`SOURCE_LABEL`): a badge is a token, an annotation is prose, and
  * `flagSettings` in particular has to read as session state rather than as
@@ -630,7 +799,7 @@ export function settingsRowAnnotationText(
 ): string {
   switch (annotation.kind) {
     case 'unread':
-      return SETTINGS_UNREAD_NOTE
+      return settingsUnreadNote(annotation.sessionOpen)
     case 'no-engine':
       return 'Not read, because no engine is running in this project'
     case 'enforced':

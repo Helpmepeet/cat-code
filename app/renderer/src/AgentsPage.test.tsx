@@ -57,7 +57,7 @@ const SNAPSHOT: AgentConfigSnapshot = {
   notes: [],
 }
 
-test('renders real agent definition groups and scope flags', () => {
+test('renders real agent definition groups, with no note about our own build', () => {
   const html = renderToStaticMarkup(<AgentsPage embedded snapshot={SNAPSHOT} />)
 
   expect(html).toContain('2 agent definitions')
@@ -68,8 +68,12 @@ test('renders real agent definition groups and scope flags', () => {
   expect(html).toContain('inactive')
   expect(html).toContain('overridden')
   expect(html).toContain('Read-only')
-  expect(html).toContain('System prompt bodies')
-  expect(html).toContain('runtime-selected')
+  // The landing pane of Settings is the first thing the operator sees, so the
+  // deferral list that used to sit here — withheld payloads, undesigned writers
+  // — is gone rather than reworded (CLAUDE.md §7).
+  expect(html).not.toContain('Scope flags')
+  expect(html).not.toContain('System prompt bodies')
+  expect(html).not.toContain('deferred')
 })
 
 test('with no session, says what to do rather than naming the missing frame', () => {

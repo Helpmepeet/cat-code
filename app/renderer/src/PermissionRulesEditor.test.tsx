@@ -31,8 +31,11 @@ test('showModes=false: the read-only current-mode pill renders, the interactive 
     />,
   )
   // D1: the pill is a pure DISPLAY of the current mode — present read-only.
-  expect(html).toContain('Current permission mode: plan')
-  expect(html).toContain('>plan<')
+  // The mode reads in the same vocabulary the mode chip beside it uses, never
+  // the engine's own key.
+  expect(html).toContain('Current permission mode: Plan')
+  expect(html).toContain('>Plan<')
+  expect(html).not.toContain('>plan<')
   // T6b: no interactive mode selector — no set-mode control (aria-pressed
   // buttons) is rendered when showModes=false.
   expect(html).not.toContain('aria-pressed')
@@ -43,7 +46,10 @@ test('showModes=true: the pill AND the interactive selector both render', () => 
     <PermissionRulesEditor context={CONTEXT} onSetMode={() => {}} showModes />,
   )
   // The read-only pill is still shown (rendered unconditionally)…
-  expect(html).toContain('Current permission mode: plan')
+  expect(html).toContain('Current permission mode: Plan')
+  // The mode buttons read as labels too, not as `dontAsk`/`acceptEdits`.
+  expect(html).toContain('>Accept edits<')
+  expect(html).not.toContain('>acceptEdits<')
   // …plus the interactive selector (aria-pressed mode buttons).
   expect(html).toContain('aria-pressed')
 })
@@ -64,7 +70,7 @@ test('CC-13: with NO session attached the pane still renders its default-mode co
     />,
   )
   // The settings-backed default renders, with its provenance.
-  expect(html).toContain('Default permission mode: acceptEdits')
+  expect(html).toContain('Default permission mode: Accept edits')
   expect(html).toContain('User')
   // …and the pane is NOT an indefinite wait.
   expect(html).not.toContain('Waiting for the engine')
@@ -86,11 +92,11 @@ test('CC-13: the Default mode section shows the SETTING, not the session mode', 
   )
   expect(CONTEXT.mode).toBe('plan')
   // Heading promises a default; the default is what it shows.
-  expect(html).toContain('Default permission mode: acceptEdits')
+  expect(html).toContain('Default permission mode: Accept edits')
   expect(html).toContain('Project')
   // The session's live mode is still shown — but labelled as this session's.
   expect(html).toContain('This session')
-  expect(html).toContain('Current permission mode: plan')
+  expect(html).toContain('Current permission mode: Plan')
 })
 
 test('CC-13: an unset defaultMode renders an explicit unset state, never a fake value', () => {
@@ -104,8 +110,8 @@ test('CC-13: an unset defaultMode renders an explicit unset state, never a fake 
   )
   expect(html).toContain('Default permission mode: not set')
   // The session's mode must NOT be borrowed as the default.
-  expect(html).not.toContain('Default permission mode: plan')
-  expect(html).toContain('Current permission mode: plan')
+  expect(html).not.toContain('Default permission mode: Plan')
+  expect(html).toContain('Current permission mode: Plan')
 })
 
 // "Unset at every layer" and "no settings file has been read yet" are different
@@ -151,7 +157,7 @@ test('CC-13 + T6b: the settings-backed default is never a control, even with sho
       showModes
     />,
   )
-  expect(html).toContain('Default permission mode: plan')
+  expect(html).toContain('Default permission mode: Plan')
   expect(html).not.toContain('aria-pressed')
   expect(html).not.toContain('<button')
 })
@@ -179,7 +185,10 @@ test('renders engine-derived match type and read-only managed/classifier facts',
       showModes={false}
     />,
   )
-  expect(html).toContain('>exact<')
+  // The match type reads in words; the engine's `exact`/`prefix` tokens do not
+  // reach the page.
+  expect(html).toContain('>exact match<')
+  expect(html).not.toContain('>exact<')
   expect(html).toContain(
     'Managed-rules-only enforcement: on, managed read-only',
   )

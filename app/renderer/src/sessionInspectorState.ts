@@ -141,12 +141,15 @@ export const INSPECTOR_SEAM_UNREAD_NOTE: Readonly<
 }
 
 /**
- * The single sentence an UNWIRED drawer shows in place of every live section. It
- * describes the app's own gap — never the operator's configuration — because
- * nothing has been read to describe.
+ * The single line an UNWIRED drawer shows in place of every live section.
+ *
+ * It says what to do instead, and nothing about why. The copy it replaced named
+ * a module and a prop and explained our own wiring gap — the class of rendered
+ * engineering note the operator rejected outright on 2026-07-27 (CLAUDE.md §7).
+ * A deviation belongs in a report, never on the page.
  */
 export const INSPECTOR_UNWIRED_NOTE =
-  'This drawer has not been handed the session’s live seams yet, so it can show none of them. The engine already sends every one of them; App passes no sessionState.'
+  'See these from the CLI with /doctor and /permissions.'
 
 /* ------------------------------------------------------------------------- *
  * Effective settings — what THIS session resolved
@@ -358,16 +361,17 @@ export function selectSessionDirectories(
 }
 
 /**
- * The cited limit the drawer prints whenever `cliArgAmbiguous` holds. Kept beside
- * the selector that decides it so the claim and its evidence never drift apart.
+ * The limit the drawer prints whenever `cliArgAmbiguous` holds.
+ *
+ * The evidence, which used to be printed ON SCREEN: a durable
+ * `permissions.additionalDirectories` entry and an ephemeral `--add-dir` are
+ * tagged identically as `cliArg` by the engine
+ * (`src/utils/permissions/permissionSetup.ts:1015-1035`), so the two cannot be
+ * told apart here. Splitting them needs that engine tag fixed first. A source
+ * path with a line range, and a to-do addressed to a future engineer, are the
+ * single most explicit thing CLAUDE.md §7 forbids rendering; they live in this
+ * comment, beside the selector that decides the claim, so evidence and claim
+ * still cannot drift apart.
  */
 export const DIRECTORY_SOURCE_AMBIGUITY_NOTE =
-  'The engine tags a durable permissions.additionalDirectories entry and an ephemeral --add-dir identically as cliArg (src/utils/permissions/permissionSetup.ts:1015-1035), so this drawer cannot say which of these are this-session extras. Splitting them needs the engine tag fix.'
-
-/**
- * IDE / LSP status has NO read seam: no frame in `app/shared/protocol.ts` carries
- * editor-connection or language-server state, so the inspector states the gap
- * instead of rendering an empty pane that reads like "nothing is connected".
- */
-export const IDE_LSP_UNAVAILABLE_NOTE =
-  'Editor and language-server status are not reported to this app yet, so they are left out rather than shown as absent.'
+  'Cat Code cannot tell which of these directories are just for this session.'

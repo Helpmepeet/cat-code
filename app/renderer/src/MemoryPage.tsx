@@ -3,6 +3,25 @@ import {
   selectInstructionFilesByType,
   selectMemoryInstructionCounts,
 } from './goalMemoryState.js'
+import { formatRelativeTime } from './sessionsCatalogState.js'
+
+/**
+ * `AutoMem` / `TeamMem` are the engine's own type tokens. They are readable as
+ * code and not as English, so they are expanded wherever the page prints them —
+ * both the summary counts and the group headings above the file lists.
+ */
+const INSTRUCTION_TYPE_LABEL: Record<string, string> = {
+  Managed: 'Managed',
+  User: 'User',
+  Project: 'Project',
+  Local: 'Local',
+  AutoMem: 'Auto memory',
+  TeamMem: 'Team memory',
+}
+
+function instructionTypeLabel(type: string): string {
+  return INSTRUCTION_TYPE_LABEL[type] ?? type
+}
 
 export function MemoryPage({
   embedded = false,
@@ -20,7 +39,6 @@ export function MemoryPage({
           <MemorySummary snapshot={snapshot} />
           <InstructionFiles snapshot={snapshot} />
           <AutoMemories snapshot={snapshot} />
-          <Notes snapshot={snapshot} />
         </>
       )}
     </>
@@ -99,12 +117,12 @@ function MemorySummary({ snapshot }: { snapshot: MemorySnapshot }) {
         </div>
       </div>
       <div className="grid gap-2 text-[12px] sm:grid-cols-3">
-        <Count label="Managed" value={counts.managed} />
-        <Count label="User" value={counts.user} />
-        <Count label="Project" value={counts.project} />
-        <Count label="Local" value={counts.local} />
-        <Count label="AutoMem" value={counts.autoMem} />
-        <Count label="TeamMem" value={counts.teamMem} />
+        <Count label={instructionTypeLabel('Managed')} value={counts.managed} />
+        <Count label={instructionTypeLabel('User')} value={counts.user} />
+        <Count label={instructionTypeLabel('Project')} value={counts.project} />
+        <Count label={instructionTypeLabel('Local')} value={counts.local} />
+        <Count label={instructionTypeLabel('AutoMem')} value={counts.autoMem} />
+        <Count label={instructionTypeLabel('TeamMem')} value={counts.teamMem} />
       </div>
       <div className="mt-3 space-y-1 font-mono text-[11px] text-text-subtle">
         <div className="truncate">dir: {snapshot.autoMemoryDir}</div>
@@ -139,7 +157,7 @@ function InstructionFiles({ snapshot }: { snapshot: MemorySnapshot }) {
           {groups.map(group => (
             <div key={group.type}>
               <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">
-                {group.type}
+                {instructionTypeLabel(group.type)}
               </div>
               <div className="space-y-1.5">
                 {group.files.map(file => (
@@ -190,6 +208,7 @@ function MemTypeChip({ type }: { type: string }) {
 }
 
 function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
+  const now = Date.now()
   return (
     <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -202,7 +221,7 @@ function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
       </div>
       {snapshot.autoMemories.length === 0 ? (
         <p className="text-[12.5px] text-text-subtle">
-          No typed auto-memory files were found in the real memdir scan.
+          No auto-memory files found.
         </p>
       ) : (
         <div className="space-y-1.5">
@@ -222,29 +241,13 @@ function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
                   {memory.description}
                 </p>
               ) : null}
-              <div className="mt-1 font-mono text-[10.5px] text-text-subtle">
-                {new Date(memory.mtimeMs).toISOString()}
+              <div className="mt-1 text-[10.5px] text-text-subtle">
+                {formatRelativeTime(memory.mtimeMs, now)}
               </div>
             </div>
           ))}
         </div>
       )}
-    </section>
-  )
-}
-
-function Notes({ snapshot }: { snapshot: MemorySnapshot }) {
-  if (snapshot.notes.length === 0) return null
-  return (
-    <section className="rounded-lg border border-shell-seam bg-shell-hover/40 px-4 py-3">
-      <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.08em] text-text-subtle">
-        Scope
-      </div>
-      <ul className="list-disc space-y-1 pl-4 text-[12px] leading-relaxed text-text-subtle">
-        {snapshot.notes.map(note => (
-          <li key={note}>{note}</li>
-        ))}
-      </ul>
     </section>
   )
 }

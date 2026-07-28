@@ -15,15 +15,21 @@ import { describe, expect, test } from 'bun:test'
 import type { SettingsSnapshot } from '../../shared/protocol.js'
 import {
   SETTINGS_SCOPE_KINDS,
+  selectPermissionDefaultModeRow,
   selectProjectEngine,
   selectSettingsProjects,
   selectSettingsRail,
   selectSettingsRailItem,
   selectSettingsRow,
   selectSettingsWriteLayer,
+  settingsRowCommitsUnchanged,
   settingsRowNote,
   settingsWriteTargetNote,
 } from './settingsScope.js'
+import {
+  SETTINGS_UNREAD_WITH_SESSION_NOTE,
+  settingsUnreadNote,
+} from './settingsReadState.js'
 
 const USER_FILE = '/Users/pt/.cat-code/settings.json'
 const PROJECT_FILE = '/repo/.cat-code/settings.json'
@@ -99,14 +105,178 @@ describe('Law 3 — the chosen scope decides the write target', () => {
     // …and yet nothing about this row points a write at that file. The old
     // behavior would have produced 'projectSettings' here.
     expect(row.writeTarget).not.toBe('projectSettings')
-    // The user file DOES set this key, so its own value is hidden underneath —
-    // which blocks the write rather than guessing a value to send.
+    // The user file DOES set this key, and the snapshot carries only the
+    // winner's value, so this scope's own value is stated as unknown rather
+    // than borrowed from the project.
     expect(row.read).toEqual({
       kind: 'unreadable',
       by: 'projectSettings',
       origin: PROJECT_FILE,
     })
-    expect(row.writeTarget).toBeNull()
+    // The row is still WRITABLE, at the user file. It used to be null here, and
+    // that is the trap the transition test below drives.
+    expect(row.writeTarget).toBe('userSettings')
+  })
+
+  /**
+   * The step BETWEEN the two tests around this one, which nothing drove before.
+   *
+   * Both endpoints were asserted in isolation — "not set here, writable" above
+   * and "set here but overridden" before it — while the move from the first to
+   * the second is made by the operator's own edit, and that is what broke.
+   * Scope = My defaults, the project sets `respectGitignore`, the user file does
+   * not: the row renders enabled, the operator flips it, the write lands in the
+   * user file, and the next snapshot has the user layer defining the key too.
+   * With `writeTarget` blanked at that point, the control the operator had just
+   * used was gone and the row could never be changed from the app again.
+   *
+   * SSR-only limit, stated rather than glossed: this drives the SELECTOR across
+   * the two snapshots, not the DOM. It proves the model no longer strands the
+   * row. It cannot prove a rendered control survives the round trip, which needs
+   * a real click on a real toggle.
+   */
+  test('writing an overridden row leaves it writable on the next snapshot', () => {
+    const projectLayer = {
+      source: 'projectSettings' as const,
+      origin: PROJECT_FILE,
+      keys: ['respectGitignore'],
+    }
+    const resolved = [
+      {
+        key: 'respectGitignore',
+        source: 'projectSettings' as const,
+        editable: true,
+        managed: false,
+      },
+    ]
+
+    // Before the edit: the user file does not set the key.
+    const before = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [projectLayer],
+        resolved,
+        editableValues: [
+          { key: 'respectGitignore', value: true, source: 'projectSettings' },
+        ],
+      }),
+      key: 'respectGitignore',
+      layer: 'userSettings',
+    })
+    expect(before.read).toEqual({ kind: 'unset' })
+    expect(before.writeTarget).toBe('userSettings')
+
+    // After the edit: the user file now sets it too, and the project still wins.
+    const after = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: USER_FILE,
+            keys: ['respectGitignore'],
+          },
+          projectLayer,
+        ],
+        resolved,
+        editableValues: [
+          { key: 'respectGitignore', value: true, source: 'projectSettings' },
+        ],
+      }),
+      key: 'respectGitignore',
+      layer: 'userSettings',
+    })
+    expect(after.annotation.kind).toBe('overridden')
+    expect(after.writeTarget).toBe('userSettings')
+  })
+
+  /**
+   * The other half of the same repair, and the contract the snapshot must meet
+   * for the operator to SEE their own value again.
+   *
+   * The row above is writable but still reads as unknown, because the snapshot
+   * carries a value only for the layer that won. Once it also carries this
+   * layer's own entry, the row reads that value and renders a live control at
+   * the operator's real setting instead of the word "unknown".
+   */
+  test("an overridden row reads its own layer's value when the snapshot carries one", () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: USER_FILE,
+            keys: ['respectGitignore'],
+          },
+          {
+            source: 'projectSettings',
+            origin: PROJECT_FILE,
+            keys: ['respectGitignore'],
+          },
+        ],
+        resolved: [
+          {
+            key: 'respectGitignore',
+            source: 'projectSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        editableValues: [
+          { key: 'respectGitignore', value: true, source: 'projectSettings' },
+          { key: 'respectGitignore', value: false, source: 'userSettings' },
+        ],
+      }),
+      key: 'respectGitignore',
+      layer: 'userSettings',
+    })
+    // The user's OWN value, never the project's.
+    expect(row.read).toEqual({
+      kind: 'set',
+      value: false,
+      source: 'userSettings',
+    })
+    expect(row.writeTarget).toBe('userSettings')
+    // The annotation still says the project wins, so the row is not pretending
+    // the user's value is in effect.
+    expect(row.annotation.kind).toBe('overridden')
+  })
+
+  /**
+   * The same snapshot now carries an entry PER LAYER, so every read that is not
+   * scope-specific must still land on the winner. A lower layer's value must
+   * never be picked up by the inherited branch just because it sorts later.
+   */
+  test('a key carried at several layers still resolves to the winner elsewhere', () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'userSettings', origin: USER_FILE, keys: ['fastMode'] },
+          { source: 'projectSettings', origin: PROJECT_FILE, keys: ['fastMode'] },
+        ],
+        resolved: [
+          {
+            key: 'fastMode',
+            source: 'projectSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        // Winner first, matching the high→low walk that builds this list.
+        editableValues: [
+          { key: 'fastMode', value: true, source: 'projectSettings' },
+          { key: 'fastMode', value: false, source: 'userSettings' },
+        ],
+      }),
+      key: 'fastMode',
+      // Reading from a layer BELOW the winner: the value shown is the one in
+      // force, not this layer's own.
+      layer: 'localSettings',
+    })
+    expect(row.annotation.kind).toBe('inherited')
+    expect(row.read).toEqual({
+      kind: 'set',
+      value: true,
+      source: 'projectSettings',
+    })
   })
 
   test('an overridden key the user file does NOT set stays writable, at the user file', () => {
@@ -542,6 +712,216 @@ describe('write-target disclosure', () => {
   })
 })
 
+/* ── the permission default-mode row ──────────────────────────────────────── */
+
+/**
+ * `permissions.defaultMode` is nested, so it never appears in `resolved` and
+ * cannot go through `selectSettingsRow`. It was therefore read straight off the
+ * snapshot — which resolves it across ALL layers — and became the one row on a
+ * scope-relative page that ignored the scope.
+ */
+describe('permission default mode, per scope', () => {
+  const withMode = (
+    value: string,
+    source: SettingsSnapshot['layers'][number]['source'],
+  ) =>
+    snapshot({
+      layers: [
+        { source: 'userSettings', origin: USER_FILE, keys: [] },
+        { source: 'projectSettings', origin: PROJECT_FILE, keys: [] },
+        { source: 'policySettings', origin: POLICY_FILE, keys: [] },
+      ],
+      permissionDefaultMode: { value, source },
+    })
+
+  test("a project's default does not render as MY default", () => {
+    const row = selectPermissionDefaultModeRow({
+      snapshot: withMode('acceptEdits', 'projectSettings'),
+      layer: 'userSettings',
+    })
+    // The user file's own default is genuinely unknown here, so the value the
+    // project set is NOT shown under "Your own settings files".
+    expect(row.read.kind).toBe('unreadable')
+    expect(row.annotation).toEqual({
+      kind: 'overridden',
+      by: 'projectSettings',
+      origin: PROJECT_FILE,
+    })
+    // …and the row must not claim the files hold nothing, which is what the
+    // cross-scope read licensed.
+    expect(row.annotation.kind).not.toBe('unset-here')
+
+    // The same snapshot, read in the scope that DOES set it, shows the value.
+    const inProject = selectPermissionDefaultModeRow({
+      snapshot: withMode('acceptEdits', 'projectSettings'),
+      layer: 'projectSettings',
+    })
+    expect(inProject.read).toEqual({
+      kind: 'set',
+      value: 'acceptEdits',
+      source: 'projectSettings',
+    })
+    expect(inProject.annotation.kind).toBe('set-here')
+  })
+
+  test('a lower layer is inherited, and policy is enforced', () => {
+    const inherited = selectPermissionDefaultModeRow({
+      snapshot: withMode('plan', 'userSettings'),
+      layer: 'projectSettings',
+    })
+    expect(inherited.read).toEqual({
+      kind: 'set',
+      value: 'plan',
+      source: 'userSettings',
+    })
+    expect(inherited.annotation.kind).toBe('inherited')
+
+    const managed = selectPermissionDefaultModeRow({
+      snapshot: withMode('plan', 'policySettings'),
+      layer: 'userSettings',
+    })
+    expect(managed.annotation.kind).toBe('enforced')
+  })
+
+  test('unset, unread and no-engine stay three different answers', () => {
+    expect(
+      selectPermissionDefaultModeRow({
+        snapshot: snapshot({}),
+        layer: 'userSettings',
+      }).annotation.kind,
+    ).toBe('unset-here')
+    expect(
+      selectPermissionDefaultModeRow({ snapshot: null, layer: 'userSettings' })
+        .annotation.kind,
+    ).toBe('unread')
+    expect(
+      selectPermissionDefaultModeRow({
+        snapshot: snapshot({}),
+        layer: 'projectSettings',
+        engine: 'absent',
+      }).annotation.kind,
+    ).toBe('no-engine')
+  })
+
+  test('the row is never writable, in any scope', () => {
+    for (const layer of ['userSettings', 'projectSettings', 'localSettings'] as const) {
+      expect(
+        selectPermissionDefaultModeRow({
+          snapshot: withMode('plan', 'userSettings'),
+          layer,
+        }).writeTarget,
+      ).toBeNull()
+    }
+  })
+})
+
+/* ── unread wording ───────────────────────────────────────────────────────── */
+
+/**
+ * A null snapshot is NOT proof that no session exists — the spawn-time read can
+ * throw, the attach window has not delivered one, and a process reset clears the
+ * one already held. So a running session was told "No session is open", denying
+ * the tab the operator was looking at.
+ */
+describe('the unread sentence', () => {
+  test('stops claiming no session is open when one is', () => {
+    const attached = selectSettingsRow({
+      snapshot: null,
+      key: 'fastMode',
+      layer: 'userSettings',
+      sessionOpen: true,
+    })
+    expect(attached.read.kind).toBe('unread')
+    expect(settingsRowNote(attached)).not.toContain('No session is open')
+    expect(settingsRowNote(attached)).toBe(SETTINGS_UNREAD_WITH_SESSION_NOTE)
+
+    // With nothing attached the original sentence is correct and survives.
+    const detached = selectSettingsRow({
+      snapshot: null,
+      key: 'fastMode',
+      layer: 'userSettings',
+    })
+    expect(settingsRowNote(detached)).toContain('No session is open')
+
+    // The whole point is that the two differ.
+    expect(settingsRowNote(attached)).not.toBe(settingsRowNote(detached))
+  })
+
+  test('neither sentence promises anything is on its way', () => {
+    for (const open of [true, false]) {
+      expect(settingsUnreadNote(open).toLowerCase()).not.toContain('waiting')
+      expect(settingsUnreadNote(open).toLowerCase()).not.toContain('will')
+    }
+  })
+
+  test('the follow-on directive is only appended where it is true', () => {
+    expect(settingsUnreadNote(false, 'Open a session to read them.')).toContain(
+      'Open a session to read them.',
+    )
+    // Telling someone to open a session while one IS open is the same false
+    // claim one clause later.
+    expect(settingsUnreadNote(true, 'Open a session to read them.')).not.toContain(
+      'Open a session',
+    )
+  })
+})
+
+/* ── committing an unset row ──────────────────────────────────────────────── */
+
+describe('an unset row can persist the value it is showing', () => {
+  const unsetRow = () =>
+    selectSettingsRow({
+      snapshot: snapshot({}),
+      key: 'cleanupPeriodDays',
+      layer: 'userSettings',
+    })
+
+  test('an unset writable row commits even an unchanged value', () => {
+    const row = unsetRow()
+    expect(row.read).toEqual({ kind: 'unset' })
+    // What it DISPLAYS is the built-in default, which no file holds — so
+    // re-entering it is a real change and must be sent. The ordinary no-change
+    // guard swallowed it silently, with no error and no state change.
+    expect(settingsRowCommitsUnchanged(row)).toBe(true)
+  })
+
+  test('a row with a real value, or no write target, does not', () => {
+    const set = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: USER_FILE,
+            keys: ['cleanupPeriodDays'],
+          },
+        ],
+        resolved: [
+          {
+            key: 'cleanupPeriodDays',
+            source: 'userSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        editableValues: [
+          { key: 'cleanupPeriodDays', value: 30, source: 'userSettings' },
+        ],
+      }),
+      key: 'cleanupPeriodDays',
+      layer: 'userSettings',
+    })
+    expect(settingsRowCommitsUnchanged(set)).toBe(false)
+
+    const noEngine = selectSettingsRow({
+      snapshot: snapshot({}),
+      key: 'cleanupPeriodDays',
+      layer: 'projectSettings',
+      engine: 'absent',
+    })
+    expect(settingsRowCommitsUnchanged(noEngine)).toBe(false)
+  })
+})
+
 /* ── the rail ─────────────────────────────────────────────────────────────── */
 
 describe('functional rail', () => {
@@ -604,6 +984,31 @@ describe('functional rail', () => {
         expect(headings).not.toContain(banned)
       }
     }
+  })
+
+  /**
+   * The box is labelled "Search settings", and it could not find a setting.
+   *
+   * `item` is a rail CATEGORY, so matching `item.label` alone meant every real
+   * setting name returned "No matches" — the operator typed the name printed on
+   * the row they wanted and the rail emptied. Each query below is a word off an
+   * actual control or an actual category description.
+   */
+  test('search finds SETTINGS, not only category names', () => {
+    const found = (query: string) =>
+      selectSettingsRail('user', query).flatMap(group =>
+        group.items.map(item => item.label),
+      )
+    // Control labels, none of which is a category name.
+    expect(found('gitignore')).toEqual(['General'])
+    expect(found('output style')).toEqual(['Interface'])
+    expect(found('retention')).toEqual(['Privacy & Data'])
+    expect(found('thinking')).toContain('Model & Reasoning')
+    // A word that lives only in a category's own description.
+    expect(found('effort')).toEqual(['Model & Reasoning'])
+    // Category names still work, and nonsense still finds nothing.
+    expect(found('memory')).toContain('Memory')
+    expect(found('zzz')).toEqual([])
   })
 
   test('search reaches every group, and empties none by halves', () => {

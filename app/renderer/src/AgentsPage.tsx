@@ -113,15 +113,6 @@ export function AgentsPage({
         <SummaryCard label="Overridden" value={counts.overridden} />
       </div>
 
-      <div className="mb-5 rounded-lg border border-shell-seam bg-shell-hover/35 px-3 py-2.5 text-[11.5px] leading-relaxed text-text-subtle">
-        <div className="mb-1 font-semibold text-text-muted">Scope flags</div>
-        <ul className="ml-4 list-disc space-y-1">
-          <li>New, edit, duplicate, and delete actions are deferred until a safe writer is wired.</li>
-          <li>System prompt bodies, hook payloads, and inline MCP configs are withheld at the boundary.</li>
-          <li>Provider is runtime-selected; definitions only persist the model alias.</li>
-        </ul>
-      </div>
-
       {snapshot?.failedFiles.length ? (
         <div className="mb-5 rounded-lg border border-tone-warn/25 bg-tone-warn/10 px-3 py-2 text-[12px] text-tone-warn">
           {snapshot.failedFiles.length} agent file{snapshot.failedFiles.length === 1 ? '' : 's'} failed to parse.
@@ -334,7 +325,7 @@ function AgentInspectDrawer({
         <footer className="flex shrink-0 items-center gap-2 border-t border-shell-seam px-5 py-3.5">
           <span className="inline-flex items-center gap-1.5 text-[12px] text-text-subtle">
             <LockIcon className="h-[11px] w-[11px]" />
-            Editing is intentionally deferred for P4-7.
+            Read-only here. Edit agent files from the CLI.
           </span>
         </footer>
       </aside>

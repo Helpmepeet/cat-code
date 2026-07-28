@@ -86,9 +86,12 @@ test('renders memory metadata without file contents', () => {
   expect(html).toContain('/repo/CLAUDE.md')
   expect(html).toContain('feedback_testing.md')
   expect(html).toContain('Testing preference')
-  expect(html).toContain('Memory bodies stay engine-side')
   expect(html).not.toContain('do not expose')
   expect(html).not.toContain('MOCK')
+  // The panel used to render three sentences about what the read withholds and
+  // which writers are undesigned, under a heading called "Scope" (CLAUDE.md §7).
+  expect(html).not.toContain('Memory bodies stay engine-side')
+  expect(html).not.toContain('>Scope<')
 })
 
 test('renders every memory instruction and auto-memory type', () => {
@@ -123,10 +126,18 @@ test('renders every memory instruction and auto-memory type', () => {
   }
 
   const html = renderToStaticMarkup(<MemoryPage embedded snapshot={memory} />)
-  for (const label of instructionTypes) {
+  // The engine's own type tokens are expanded before they reach the page.
+  const LABEL: Record<string, string> = {
+    AutoMem: 'Auto memory',
+    TeamMem: 'Team memory',
+  }
+  for (const type of instructionTypes) {
+    const label = LABEL[type] ?? type
     expect(html).toContain(label)
     expect(html).toContain(`${label}</span><span class="float-right font-mono text-text-muted">1</span>`)
   }
+  expect(html).not.toContain('>AutoMem<')
+  expect(html).not.toContain('>TeamMem<')
   for (const label of autoMemoryTypes) {
     expect(html).toContain(`${label}.md`)
   }

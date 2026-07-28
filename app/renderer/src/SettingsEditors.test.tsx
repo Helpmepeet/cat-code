@@ -446,6 +446,94 @@ test('a value hidden under a higher layer shows unknown, not a guess, and offers
   expect(decode(html)).toContain('your own value here cannot be shown')
 })
 
+/**
+ * The other side of the row above, and the one the operator reaches by USING the
+ * app: they flip a control in My defaults while a project overrides the key, the
+ * write lands in their own file, and the next snapshot has their layer defining
+ * it too. That row must not become an uneditable word.
+ *
+ * SSR-only limit, said plainly: this renders the SECOND snapshot directly. It
+ * cannot click the control on the first one and watch the row survive, which is
+ * the only thing that would prove the round trip.
+ */
+test('a row this scope wrote is still shown and still editable under an override', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="privacy"
+      snapshot={snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: '/u/settings.json',
+            keys: ['cleanupPeriodDays'],
+          },
+          {
+            source: 'localSettings',
+            origin: '/repo/.cat-code/settings.local.json',
+            keys: ['cleanupPeriodDays'],
+          },
+        ],
+        resolved: [
+          { key: 'cleanupPeriodDays', source: 'localSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'cleanupPeriodDays', value: 3, source: 'localSettings' },
+          { key: 'cleanupPeriodDays', value: 45, source: 'userSettings' },
+        ],
+      })}
+    />,
+  )
+  // The operator's OWN value, live and editable — not the word "unknown".
+  expect(html).toContain('value="45"')
+  expect(html).not.toContain('unknown')
+  expect(controlCount(html)).toBe(1)
+  expect(html).not.toContain('disabled=""')
+  // The badge names the operator's own layer, and its tooltip names that
+  // layer's file rather than the overriding one.
+  expect(html).toContain('title="/u/settings.json"')
+  // The overriding layer's value is still never presented as theirs.
+  expect(html).not.toContain('value="3"')
+  // …and the row still says the override is in force.
+  expect(decode(html)).toContain('Overridden by')
+})
+
+/**
+ * An unset row shows the BUILT-IN DEFAULT. Choosing that same option is a real
+ * edit ("pin it in my file so a later change elsewhere cannot move it"), but a
+ * `<select>` fires no `change` event for the option already selected, so it was
+ * unreachable and the operator got no feedback of any kind.
+ */
+test('an unset select offers a way to save the option it is already showing', () => {
+  const unset = renderToStaticMarkup(
+    <SettingsPane layer="userSettings" onWrite={noop} pane="model" snapshot={snapshot({})} />,
+  )
+  expect(unset).toContain('aria-label="Save Reasoning display"')
+
+  // A row with a real saved value has nothing to pin, so the affordance is not
+  // there to be misread as unsaved state.
+  const set = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u/settings.json', keys: ['reasoningDisplay'] },
+        ],
+        resolved: [
+          { key: 'reasoningDisplay', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'reasoningDisplay', value: 'raw', source: 'userSettings' },
+        ],
+      })}
+    />,
+  )
+  expect(set).not.toContain('aria-label="Save Reasoning display"')
+})
+
 test('with nothing read the pane offers no control at all, and says why', () => {
   const html = renderToStaticMarkup(
     <SettingsPane layer="userSettings" onWrite={noop} pane="general" snapshot={null} />,

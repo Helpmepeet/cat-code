@@ -5,6 +5,53 @@ import type {
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import { SourceBadge } from './SettingsField.js'
+import { settingsUnreadNote } from './settingsReadState.js'
+
+/**
+ * Human names for the engine's mode keys. `PermissionModeChip` renders its own
+ * copy of these labels an inch away, so printing `dontAsk` / `acceptEdits` /
+ * `bypassPermissions` here put two vocabularies for one thing on one screen.
+ * Duplicated rather than imported because that chip's table is not exported and
+ * belongs to another surface.
+ */
+const MODE_LABEL: Record<string, string> = {
+  default: 'Ask',
+  acceptEdits: 'Accept edits',
+  plan: 'Plan',
+  dontAsk: 'Auto',
+  bypassPermissions: 'Bypass',
+}
+
+function modeLabel(mode: string): string {
+  return MODE_LABEL[mode] ?? mode
+}
+
+/**
+ * Human names for where a rule or directory came from. Wider than the settings
+ * layers: the engine's permission sources also include runtime origins
+ * (`src/types/permissions.ts:54-62`) that no settings file can produce.
+ */
+const RULE_SOURCE_LABEL: Record<string, string> = {
+  userSettings: 'your defaults',
+  projectSettings: 'this project',
+  localSettings: 'private to you',
+  flagSettings: 'a launch flag',
+  policySettings: 'organization policy',
+  cliArg: 'a launch flag',
+  command: 'a command',
+  session: 'this session',
+}
+
+function ruleSourceLabel(source: string): string {
+  return RULE_SOURCE_LABEL[source] ?? source
+}
+
+/** How a rule is matched, in words rather than the engine's own token. */
+const MATCH_TYPE_LABEL: Record<string, string> = {
+  exact: 'exact match',
+  prefix: 'starts with',
+  wildcard: 'pattern',
+}
 
 /**
  * Read-only permission rules/context surface (P2-4, adapts the prototype's
@@ -95,10 +142,10 @@ export function PermissionRulesEditor({
           {defaultMode ? (
             <>
               <span
-                aria-label={`Default permission mode: ${defaultMode.value}`}
-                className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-primary"
+                aria-label={`Default permission mode: ${modeLabel(defaultMode.value)}`}
+                className="rounded border border-shell-seam bg-surface-raised px-2 py-1 text-text-primary"
               >
-                {defaultMode.value}
+                {modeLabel(defaultMode.value)}
               </span>
               <SourceBadge source={defaultMode.source} />
             </>
@@ -125,8 +172,10 @@ export function PermissionRulesEditor({
         )}
         {settingsLoaded ? null : (
           <p className="mt-1.5 text-[11px] leading-4 text-text-subtle">
-            No session is open, so your settings files have not been read yet.
-            Open a session to see the saved default.
+            {settingsUnreadNote(
+              context !== null,
+              'Open a session to see the saved default.',
+            )}
           </p>
         )}
       </section>
@@ -148,10 +197,10 @@ export function PermissionRulesEditor({
                * (`showModes={false}`); the interactive selector below is the only
                * thing that authors a mode, and it stays gated on `showModes`. */}
               <span
-                aria-label={`Current permission mode: ${context.mode}`}
-                className="rounded border border-shell-seam bg-surface-raised px-2 py-1 font-mono text-text-primary"
+                aria-label={`Current permission mode: ${modeLabel(context.mode)}`}
+                className="rounded border border-shell-seam bg-surface-raised px-2 py-1 text-text-primary"
               >
-                {context.mode}
+                {modeLabel(context.mode)}
               </span>
               {showModes
                 ? PERMISSION_SET_MODE_MODES.map(mode => (
@@ -166,7 +215,7 @@ export function PermissionRulesEditor({
                       onClick={() => onSetMode(mode)}
                       type="button"
                     >
-                      {mode}
+                      {modeLabel(mode)}
                     </button>
                   ))
                 : null}
@@ -234,7 +283,7 @@ export function PermissionRulesEditor({
                   >
                     {directory.path}{' '}
                     <span className="text-text-subtle">
-                      ({directory.source})
+                      (from {ruleSourceLabel(directory.source)})
                     </span>
                   </li>
                 ))}
@@ -327,11 +376,11 @@ function RuleGroup({
                 <code className="min-w-0 flex-1 truncate font-mono text-text-primary">
                   {rule}
                 </code>
-                <span className="shrink-0 font-mono text-[9.5px] text-text-faint">
-                  {matchType}
+                <span className="shrink-0 text-[9.5px] text-text-faint">
+                  {MATCH_TYPE_LABEL[matchType] ?? matchType}
                 </span>
                 <span className="shrink-0 rounded bg-shell-hover px-1.5 py-0.5 text-[9px] text-text-subtle">
-                  {source}
+                  {ruleSourceLabel(source)}
                 </span>
               </li>
             )

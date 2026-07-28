@@ -260,9 +260,14 @@ describe('selectSessionDirectories', () => {
     expect(view.cliArgAmbiguous).toBe(false)
   })
 
-  test('the ambiguity note cites the engine line that causes it', () => {
+  test('the ambiguity note states the limit without citing our source', () => {
+    // The evidence moved to the comment beside the selector. A `file.ts:123`
+    // citation on screen is the most explicit thing CLAUDE.md §7 rules out, and
+    // this assertion used to REQUIRE one.
     expect(DIRECTORY_SOURCE_AMBIGUITY_NOTE).toContain(
-      'src/utils/permissions/permissionSetup.ts:1015-1035',
+      'just for this session',
     )
+    expect(DIRECTORY_SOURCE_AMBIGUITY_NOTE).not.toContain('.ts:')
+    expect(DIRECTORY_SOURCE_AMBIGUITY_NOTE).not.toContain('src/')
   })
 })

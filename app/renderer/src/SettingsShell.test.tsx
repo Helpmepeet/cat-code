@@ -463,6 +463,61 @@ describe('Permissions — durable half only', () => {
     // Neither promises anything is on its way.
     expect(unread).not.toContain('Waiting for')
   })
+
+  /**
+   * Every other row on this page is scope-relative. This one read the resolved
+   * `permissions.defaultMode` across ALL layers, so a project's setting rendered
+   * under a head that reads "Your own settings files", and switching scope
+   * changed nothing.
+   */
+  test('the default mode obeys the chosen scope', () => {
+    const projectDefault: SettingsSnapshot = {
+      ...SNAPSHOT,
+      layers: [
+        ...SNAPSHOT.layers,
+        { source: 'projectSettings', origin: '/repo/.cat-code/settings.json', keys: [] },
+      ],
+      permissionDefaultMode: { value: 'acceptEdits', source: 'projectSettings' },
+    }
+
+    const mine = renderToStaticMarkup(
+      <SettingsShell initialCategory="permissions" snapshot={projectDefault} />,
+    )
+    // My defaults does not hold this value, so it is not shown as if it did…
+    expect(mine).not.toContain('Default permission mode: acceptEdits')
+    expect(mine).toContain('Default permission mode: unknown')
+    // …and the cross-scope read no longer licenses a claim about the files.
+    expect(mine).not.toContain('is not set in any settings file')
+    expect(decode(mine)).toContain('Overridden by')
+
+    // The project scope, which DOES hold it, shows it.
+    const theirs = renderToStaticMarkup(
+      <SettingsShell
+        cwd="/repo"
+        initialCategory="permissions"
+        initialScope="project"
+        snapshot={projectDefault}
+      />,
+    )
+    expect(theirs).toContain('Default permission mode: acceptEdits')
+    // The whole bug was the two scopes rendering the same answer.
+    expect(mine).not.toBe(theirs)
+  })
+
+  /**
+   * A null snapshot is not proof that no session exists: the spawn-time read can
+   * throw and send no frame at all, so a RUNNING session sat under "No session
+   * is open" forever.
+   */
+  test('a session with unread settings is not told that no session is open', () => {
+    const attached = renderToStaticMarkup(
+      <SettingsShell cwd="/repo" initialCategory="permissions" snapshot={null} />,
+    )
+    expect(attached).not.toContain('No session is open')
+    expect(attached).toContain('have not been read for this session')
+    // The value is still honestly unknown; only the explanation changed.
+    expect(attached).toContain('Default permission mode: unknown')
+  })
 })
 
 /* ── This app ─────────────────────────────────────────────────────────────── */
@@ -586,7 +641,6 @@ const EXTENSIONS: ExtensionsSnapshot = {
       displayLine: 'run-check',
     },
   ],
-  notes: [],
 }
 
 test('the Extensions group renders the real library, not stubs', () => {

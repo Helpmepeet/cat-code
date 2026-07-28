@@ -40,10 +40,11 @@ import {
 import { Field, PaneSection } from './SettingsField.js'
 import {
   SETTINGS_UNKNOWN_VALUE,
-  SETTINGS_UNREAD_NOTE,
+  settingsUnreadNote,
 } from './settingsReadState.js'
 import {
   selectSettingsRow,
+  settingsRowCommitsUnchanged,
   settingsRowNote,
   settingsWriteTargetNote,
   type SettingsProjectEngine,
@@ -91,6 +92,7 @@ export function SettingsPane({
   layer,
   engine = 'live',
   noEngineNote,
+  sessionOpen = false,
 }: {
   pane: EditableSettingPane
   title?: string
@@ -100,6 +102,9 @@ export function SettingsPane({
   engine?: SettingsProjectEngine
   /** Names the project that has no engine; falls back to a generic sentence. */
   noEngineNote?: string
+  /** Whether a session is attached, so the unread sentence can stop claiming
+   * none is (`settingsReadState.ts`). */
+  sessionOpen?: boolean
 }) {
   const specs = settingsPaneSpecs(pane)
   const unavailable =
@@ -108,7 +113,7 @@ export function SettingsPane({
         'No engine is running in this project, so its settings files have not been read.')
       : snapshot
         ? null
-        : `${SETTINGS_UNREAD_NOTE} Open a session to read and edit them.`
+        : settingsUnreadNote(sessionOpen, 'Open a session to read and edit them.')
 
   return (
     <PaneSection title={title}>
@@ -130,6 +135,7 @@ export function SettingsPane({
           key={spec.key}
           layer={layer}
           onWrite={onWrite}
+          sessionOpen={sessionOpen}
           snapshot={snapshot}
           spec={spec}
         />
@@ -144,14 +150,22 @@ function SettingEditor({
   onWrite,
   layer,
   engine,
+  sessionOpen,
 }: {
   spec: EditableSettingSpec
   snapshot: SettingsSnapshot | null
   onWrite: (input: SettingWriteInput) => void
   layer: EditableSettingSource
   engine: SettingsProjectEngine
+  sessionOpen: boolean
 }) {
-  const row = selectSettingsRow({ snapshot, key: spec.key, layer, engine })
+  const row = selectSettingsRow({
+    snapshot,
+    key: spec.key,
+    layer,
+    engine,
+    sessionOpen,
+  })
   const managed = row.annotation.kind === 'enforced'
   const write = (value: EditableSettingValue) => {
     if (!row.writeTarget) return
@@ -166,10 +180,10 @@ function SettingEditor({
       : row.read.kind === 'unreadable'
         ? (row.read.by ?? undefined)
         : undefined
-  const badgeOrigin =
-    row.annotation.kind === 'unread' || row.annotation.kind === 'no-engine'
-      ? null
-      : row.annotation.origin
+  // The tooltip must name the file the BADGE names. Taking it from the
+  // annotation instead put the overriding layer's path under a badge reading
+  // "User" the moment an overridden row could show the user's own value.
+  const badgeOrigin = badgeSource ? selectLayerOrigin(snapshot, badgeSource) : null
   const note = settingsRowNote(row)
 
   return (
@@ -227,6 +241,12 @@ function SettingControl({
   }
   const current = row.read.kind === 'set' ? row.read.value : null
   const disabled = row.writeTarget === null
+  // An UNSET row displays the built-in default, which is not a value anyone's
+  // file holds. So "same as what is displayed" is not "already saved" here, and
+  // the controls must be able to commit it: `IntField`'s no-change guard is
+  // lifted, and a select gets an explicit button because re-picking the option
+  // that is already selected fires no `change` event at all.
+  const pinnable = settingsRowCommitsUnchanged(row)
 
   const control = spec.control
   if (control.kind === 'boolean') {
@@ -246,12 +266,13 @@ function SettingControl({
         ? current
         : control.default
     return (
-      <SelectControl
+      <SaveableSelect
         disabled={disabled}
         label={spec.label}
         onChange={next => onWrite(next)}
         optionLabels={control.optionLabels}
         options={control.options}
+        showSave={pinnable}
         value={value}
       />
     )
@@ -269,12 +290,13 @@ function SettingControl({
     const optionLabels: Record<string, string> = {}
     for (const option of available) optionLabels[option.value] = option.label
     return (
-      <SelectControl
+      <SaveableSelect
         disabled={disabled || available.length === 0}
         label={spec.label}
         onChange={next => onWrite(next)}
         optionLabels={optionLabels}
         options={options}
+        showSave={pinnable && available.length > 0}
         value={value}
       />
     )
@@ -282,6 +304,7 @@ function SettingControl({
   const value = typeof current === 'number' ? current : control.default
   return (
     <IntField
+      commitUnchanged={pinnable}
       disabled={disabled}
       keyName={engineKey}
       label={spec.label}
@@ -360,6 +383,57 @@ export function SelectControl({
 }
 
 /**
+ * A select plus, for an UNSET row only, a button that saves the option already
+ * showing.
+ *
+ * Without it that value is unreachable: a `<select>` fires `change` only on a
+ * DIFFERENT option, so "keep this setting at what it is now, in my own file, so
+ * a later change elsewhere cannot move it" could not be expressed at all — the
+ * operator picked the option, nothing happened, and the row went on saying the
+ * built-in default applies.
+ */
+function SaveableSelect({
+  value,
+  options,
+  optionLabels,
+  onChange,
+  disabled,
+  label,
+  showSave,
+}: {
+  value: string
+  options: readonly string[]
+  optionLabels?: Readonly<Record<string, string>>
+  onChange: (next: string) => void
+  disabled?: boolean
+  label: string
+  showSave: boolean
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <SelectControl
+        disabled={disabled}
+        label={label}
+        onChange={onChange}
+        optionLabels={optionLabels}
+        options={options}
+        value={value}
+      />
+      {showSave ? (
+        <button
+          aria-label={`Save ${label}`}
+          className="shrink-0 rounded-lg border border-shell-seam px-2.5 py-1.5 text-[11.5px] text-text-muted transition-colors hover:bg-shell-hover"
+          onClick={() => onChange(value)}
+          type="button"
+        >
+          Save
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
  * A validated integer field. Local edit state so an in-progress / invalid entry
  * shows the inline error and is NOT written; a valid value commits on blur or
  * Enter.
@@ -370,12 +444,17 @@ function IntField({
   disabled,
   label,
   keyName,
+  commitUnchanged = false,
 }: {
   value: number
   onCommit: (next: number) => void
   disabled?: boolean
   label: string
   keyName: string
+  /** Send the value even when it equals what is displayed. True for an unset
+   * row, whose displayed value is the built-in default rather than a saved one,
+   * so re-typing it IS a change to the file. */
+  commitUnchanged?: boolean
 }) {
   const [draft, setDraft] = useState<string>(String(value))
   const [error, setError] = useState<string | null>(null)
@@ -397,7 +476,7 @@ function IntField({
       return
     }
     setError(null)
-    if (validation.value !== value) {
+    if (commitUnchanged || validation.value !== value) {
       onCommit(validation.value as number)
     }
   }

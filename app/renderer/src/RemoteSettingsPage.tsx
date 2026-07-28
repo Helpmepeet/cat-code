@@ -213,7 +213,7 @@ function CommandFilterSection({
       </p>
       <div className="grid grid-cols-2 gap-2.5">
         <FilterCard note="prompt-type commands expand to text" title="Allowed: skills" tone="good" commands={filter.skillSafe} />
-        <FilterCard note="BRIDGE_SAFE_COMMANDS allowlist" title="Allowed: opt-in" tone="warn" commands={filter.optIn} />
+        <FilterCard note="only after you opt in" title="Allowed: opt-in" tone="warn" commands={filter.optIn} />
         <FilterCard full note="local-jsx renders a terminal picker" title="Blocked: Ink UI" tone="danger" commands={filter.blocked} />
       </div>
     </PaneSection>
