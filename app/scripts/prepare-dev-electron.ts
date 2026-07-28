@@ -34,6 +34,19 @@ const cacheDir = join(appRoot, '.dev-electron')
 const targetApp = join(cacheDir, `${DEV_APP_NAME}.app`)
 const versionMarker = join(cacheDir, '.electron-version')
 
+/**
+ * The Info.plist keys the rebrand rewrites. Exported so the invariant is
+ * testable: CFBundleExecutable must never join this list (see the loop below).
+ */
+export const REBRANDED_PLIST_KEYS = ['CFBundleName', 'CFBundleDisplayName'] as const
+
+/**
+ * The path prepareDevElectron() hands back. Its BASENAME is load-bearing:
+ * Electron lowercases `basename(process.execPath)` to decide `app.isPackaged`,
+ * so it has to stay `Electron` (see the loop below).
+ */
+export const DEV_ELECTRON_BINARY = join(targetApp, 'Contents', 'MacOS', 'Electron')
+
 function electronVersion(): string {
   const pkg = JSON.parse(
     readFileSync(join(appRoot, 'node_modules', 'electron', 'package.json'), 'utf8'),
@@ -79,7 +92,7 @@ export function prepareDevElectron(): string | null {
     // reads those, which is all the rebrand was ever for. CFBundleExecutable is
     // excluded too: it must keep naming the file that actually exists.
     const plist = join(targetApp, 'Contents', 'Info.plist')
-    for (const key of ['CFBundleName', 'CFBundleDisplayName']) {
+    for (const key of REBRANDED_PLIST_KEYS) {
       run('/usr/libexec/PlistBuddy', ['-c', `Set :${key} ${DEV_APP_NAME}`, plist])
     }
     // Editing Info.plist invalidates the ad-hoc signature Electron ships with
@@ -88,7 +101,7 @@ export function prepareDevElectron(): string | null {
     run('codesign', ['--sign', '-', '--force', '--deep', targetApp])
     writeFileSync(versionMarker, version)
   }
-  return join(targetApp, 'Contents', 'MacOS', 'Electron')
+  return DEV_ELECTRON_BINARY
 }
 
 if (import.meta.main) {

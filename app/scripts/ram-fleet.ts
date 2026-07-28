@@ -153,10 +153,19 @@ function descendantPids(pid: number): number[] {
   return [...kids, ...kids.flatMap(descendantPids)]
 }
 
-/** Kill `pid` and all descendants, leaves first so a dead parent can't re-fork. */
-function killTree(pid: number): void {
-  for (const kid of childPids(pid)) killTree(kid)
+/**
+ * SIGKILL one raw pid. Only ever called for a descendant captured while its
+ * parent was provably alive: a fleet victim exits minutes before cleanup runs
+ * (step 4), so its number is free for the OS to hand to an unrelated process,
+ * and signalling it by number could kill the operator's own app.
+ */
+function killPid(pid: number): void {
   try { execFileSync('kill', ['-9', String(pid)]) } catch { /* already gone */ }
+}
+
+/** True once Bun has reaped the child — its pid must not be signalled again. */
+function hasExited(proc: ReturnType<typeof bunSpawn>): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null
 }
 
 // ---------------------------------------------------------------------------
@@ -180,14 +189,23 @@ const fleet: Sidecar[] = []
 const openSocks = new Set<Socket>()
 let cleaned = false
 
+/**
+ * Kill one still-running fleet member through its Bun handle — never by pid, so
+ * an already-exited victim can never be confused with whatever process now owns
+ * that number. Descendants are gathered first, while the parent is alive.
+ */
+function killSidecar(sc: Sidecar): void {
+  if (hasExited(sc.proc)) return
+  const pid = sc.proc.pid
+  if (pid) for (const kid of descendantPids(pid)) killPid(kid)
+  sc.proc.kill(9)
+}
+
 function emergencyCleanup(): void {
   if (cleaned) return
   cleaned = true
   for (const s of openSocks) { try { s.destroy() } catch { /* ignore */ } }
-  for (const sc of fleet) {
-    const pid = sc.proc?.pid
-    if (pid) killTree(pid)
-  }
+  for (const sc of fleet) killSidecar(sc)
 }
 
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -353,7 +371,9 @@ async function run(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   const n = Number(args.n ?? '6')
   const cap = Number(args.cap ?? '2')
-  const outDir = args.out ?? join(process.cwd(), '.ram-scratch', 'fleet')
+  // Inside the app package, where .gitignore covers .ram-scratch/ whatever cwd
+  // the probe was invoked from (the documented usage runs it from the repo root).
+  const outDir = args.out ?? join(here, '..', '.ram-scratch', 'fleet')
   const sharedConfigDir = args['config-dir'] // optional shared corpus; else per-sidecar empty
   const settleMs = Number(args['settle-ms'] ?? '2500')
   const readyTimeoutMs = Number(args['ready-timeout-ms'] ?? '45000')
@@ -448,19 +468,18 @@ async function run(): Promise<void> {
     // ---- 7. Kill + verify EVERY remaining sidecar (ram-probe.ts:322-338). --
     cleaned = true // a late signal must not re-run cleanup on top of this
     for (const s of openSocks) { try { s.destroy() } catch { /* ignore */ } }
-    // Gather full trees BEFORE killing (dead parents lose their children).
+    // Gather full trees BEFORE killing (dead parents lose their children), and
+    // only for members Bun still holds: a parked victim's pid may already belong
+    // to someone else, so it is neither inspected nor watched.
     const allPids: number[] = []
     const trees: number[] = []
     for (const sc of fleet) {
       const pid = sc.proc.pid
-      if (!pid) continue
+      if (!pid || hasExited(sc.proc)) continue
       allPids.push(pid)
       trees.push(...descendantPids(pid))
     }
-    for (const sc of fleet) {
-      const pid = sc.proc.pid
-      if (pid && isAlive(pid)) killTree(pid)
-    }
+    for (const sc of fleet) killSidecar(sc)
     const watch = [...new Set([...allPids, ...trees])]
     const waitStart = Date.now()
     while (watch.some(isAlive) && Date.now() - waitStart < 5000) {

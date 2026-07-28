@@ -80,7 +80,9 @@ function rotate<T>(arr: T[], n: number): T[] {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2))
-  const outDir = args.out ?? join(process.cwd(), '.ram-scratch', 'measure')
+  // Inside the app package, where .gitignore covers .ram-scratch/ whatever cwd
+  // the runner was invoked from (the documented usage runs it from the repo root).
+  const outDir = args.out ?? join(here, '..', '.ram-scratch', 'measure')
   const reps = Number(args.reps ?? '3')
   const dwellMs = args['dwell-ms'] ?? '240000'
   const sampleMs = args['sample-ms'] ?? '30000'

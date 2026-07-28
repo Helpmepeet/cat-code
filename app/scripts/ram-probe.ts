@@ -157,18 +157,33 @@ function descendantPids(pid: number): number[] {
   return [...kids, ...kids.flatMap(descendantPids)]
 }
 
-/** Kill `pid` and all descendants, leaves first so a dead parent can't re-fork. */
-function killTree(pid: number): void {
-  for (const kid of childPids(pid)) killTree(kid)
+/**
+ * SIGKILL one raw pid. Only ever called for a descendant captured while its
+ * parent was provably alive — a pid whose process has exited is free for the OS
+ * to reuse, so signalling it by number could hit an unrelated process.
+ */
+function killPid(pid: number): void {
   try { execFileSync('kill', ['-9', String(pid)]) } catch { /* already gone */ }
+}
+
+/** True once Bun has reaped the child — its pid must not be signalled again. */
+function hasExited(proc: ReturnType<typeof bunSpawn>): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null
+}
+
+/** Kill the sidecar through its Bun handle (never by pid), descendants first. */
+function killSidecar(proc: ReturnType<typeof bunSpawn>): void {
+  if (hasExited(proc)) return
+  const pid = proc.pid
+  if (pid) for (const kid of descendantPids(pid)) killPid(kid)
+  proc.kill(9)
 }
 
 function emergencyCleanup(): void {
   if (cleaned) return
   cleaned = true
   try { activeSock?.destroy() } catch { /* ignore */ }
-  const pid = activeProc?.pid
-  if (pid) killTree(pid)
+  if (activeProc) killSidecar(activeProc)
 }
 
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -182,7 +197,9 @@ async function run(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   const configDir = args['config-dir']
   const label = args.label ?? 'run'
-  const outDir = args.out ?? join(process.cwd(), '.ram-scratch', 'out')
+  // Inside the app package, where .gitignore covers .ram-scratch/ whatever cwd
+  // the probe was invoked from (the documented usage runs it from the repo root).
+  const outDir = args.out ?? join(here, '..', '.ram-scratch', 'out')
   const mode = args.mode ?? 'real' // real | probe
   const attach = args.attach === 'true' || args.attach === undefined ? args.attach === 'true' : false
   const doAttach = 'attach' in args
@@ -323,10 +340,15 @@ async function run(): Promise<void> {
     // ---- Kill + verify the FULL process tree (lifecycle safety, review F2) ----
     cleaned = true // a late signal must not re-run cleanup on top of this
     try { sock?.destroy() } catch { /* ignore */ }
-    const pid = proc?.pid
-    if (pid) {
+    if (proc && hasExited(proc)) {
+      // The sidecar exited on its own (crash / self-exit). Nothing survives, and
+      // its pid may already belong to another process, so it is not touched.
+      killVerified = true
+      appendFileSync(pidFile, 'killVerified=true survivors=none (exited on its own)\n')
+    } else if (proc?.pid) {
+      const pid = proc.pid
       const tree = descendantPids(pid) // gather BEFORE killing — dead parents lose their children
-      killTree(pid)
+      killSidecar(proc)
       // Wait for the OS to reap.
       const waitStart = Date.now()
       while ([pid, ...tree].some(isAlive) && Date.now() - waitStart < 5000) {
