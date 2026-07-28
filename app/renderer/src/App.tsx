@@ -3475,6 +3475,34 @@ export function SessionPane({
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
+
+        {/* TEMPORARY debug line, dev builds only (2026-07-28, operator request).
+         *
+         * NOT a shipped surface: it prints session ids, which §7 forbids on any
+         * real text surface. It takes the same posture as the raw-event
+         * inspector below, so Vite DCE's it out of a production build. On a
+         * preview it also names which run facts the rail actually RECEIVED,
+         * which is the one signal that separates "the cache never got the
+         * facts" from "the rail got them and did not render" — the ambiguity
+         * that made this bug expensive to find. Delete once the rail settles. */}
+        {import.meta.env.DEV ? (
+          <div className="mt-2 select-all px-1 font-mono text-[10px] leading-tight text-[#3f3f46]">
+            app {activeSessionId ?? 'none'} · engine{' '}
+            {activeDescriptor?.engineSessionId ?? 'none'}
+            {preview
+              ? ` · facts ${
+                  [
+                    previewRunFacts?.model ? 'model' : null,
+                    previewRunFacts?.permissionMode ? 'mode' : null,
+                    previewRunFacts?.effort ? 'effort' : null,
+                    previewRunFacts?.contextUsage ? 'ctx' : null,
+                  ]
+                    .filter(Boolean)
+                    .join(',') || 'none'
+                }`
+              : ''}
+          </div>
+        ) : null}
       </form>
       </div>
 
