@@ -5,6 +5,7 @@ import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRu
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { getInitialEffortSetting } from '../../src/utils/effort.js'
 import {
+  getModelEnvOverride,
   getUserSpecifiedModelSetting,
   parseUserSpecifiedModel,
   type ModelSetting,
@@ -214,20 +215,33 @@ export function initializeSidecarModelProvider(
   const specifiedModel = resumedModel ?? getUserSpecifiedModelSetting()
   const selectedModel = specifiedModel ?? null
   const implicitProvider = getEnvAPIProvider()
-  // The model argument is ignored for an implicit startup. Avoid resolving the
-  // Anthropic default here: credential-less desktop startup must still reach
-  // the first-run sign-in surface (and the test guard intentionally throws).
+  // Avoid resolving the Anthropic default here: credential-less desktop startup
+  // must still reach the first-run sign-in surface (and the test guard
+  // intentionally throws).
   const resolvedModel =
     specifiedModel === undefined || specifiedModel === null
       ? null
       : parseUserSpecifiedModel(specifiedModel)
+  // A model chosen for THIS session — the resumed transcript's own model, or
+  // CAT_CODE_MODEL/ANTHROPIC_MODEL — is a provider-selection event. A model
+  // that only sits in a settings FILE is not: CLAUDE_CODE_USE_* outranks saved
+  // settings, so `{"model":"sonnet"}` must not silently pull a
+  // CLAUDE_CODE_USE_OPENAI=1 desktop session onto Anthropic. Desktop half of
+  // the CLI rule at `src/main.tsx:2147`. Narrowing the flag alone would have
+  // cost a settings-file `gpt-*` model its provider; it does not, because
+  // `resolveStartupProvider` checks the model implication ahead of this flag
+  // (`src/utils/model/providers.ts:175`) — required, since request routing
+  // sends every `gpt-*` id to OpenAI regardless of the session provider and the
+  // provider-shaped tool set is chosen from this result.
+  const hasExplicitStartupModel =
+    resumedModel !== undefined || getModelEnvOverride() !== undefined
 
   setInitialMainLoopModel(selectedModel)
   setMainLoopModelOverride(selectedModel)
   setSessionProvider(
     resolveStartupProvider(
       resolvedModel,
-      specifiedModel !== undefined && specifiedModel !== null,
+      hasExplicitStartupModel,
       implicitProvider,
     ),
   )

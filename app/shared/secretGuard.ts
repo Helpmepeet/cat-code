@@ -10,8 +10,14 @@
  * `{accessToken:"..."}` object is structurally valid JSON, so `checkJsonSafe`
  * passes it; this guard is what stops it.
  *
- * Applied to EVERY outbound frame (events AND the `ready` handshake), because the
- * ready payload embeds session state that is a plausible accidental leak site.
+ * Applied to every outbound frame the sidecar sends EXCEPT `error` (see
+ * `sidecarServer.ts` `send`): a blocked frame is reported as an error frame, so
+ * scanning those too would let the guard's own report re-enter the guard. The
+ * exemption holds only while error frames stay sidecar-authored and carry no
+ * session payload — an error frame that ever echoes engine data would need the
+ * scan back. Everything else is covered, `ready` included, because the
+ * handshake payload embeds session state that is a plausible accidental leak
+ * site.
  */
 
 /**

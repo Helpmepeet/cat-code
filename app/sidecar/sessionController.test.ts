@@ -75,6 +75,80 @@ test('desktop startup preserves an implicit OpenAI provider when no model is con
   }
 })
 
+/**
+ * Run `body` with a user settings.json holding `settings`, no model env lever,
+ * and the given `CLAUDE_CODE_USE_*` var set. Restores every global it moves.
+ */
+function withSettingsFileStartup(
+  settings: Record<string, unknown>,
+  providerEnvVar: 'CLAUDE_CODE_USE_OPENAI' | 'CLAUDE_CODE_USE_BEDROCK',
+  body: () => void,
+): void {
+  const configDir = mkdtempSync(join(tmpdir(), 'catcode-w3f-model-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const previousModel = process.env.CAT_CODE_MODEL
+  const previousAnthropicModel = process.env.ANTHROPIC_MODEL
+  const previousProviderEnv = process.env[providerEnvVar]
+  const previousProvider = getSessionProvider()
+  const previousOverride = getMainLoopModelOverride()
+  try {
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify(settings))
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    delete process.env.CAT_CODE_MODEL
+    delete process.env.ANTHROPIC_MODEL
+    process.env[providerEnvVar] = '1'
+    // undefined, not null: a null override IS the provider-local Default and
+    // would mask the settings file this test is about.
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+    resetSettingsCache()
+
+    body()
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    if (previousModel === undefined) delete process.env.CAT_CODE_MODEL
+    else process.env.CAT_CODE_MODEL = previousModel
+    if (previousAnthropicModel === undefined) delete process.env.ANTHROPIC_MODEL
+    else process.env.ANTHROPIC_MODEL = previousAnthropicModel
+    if (previousProviderEnv === undefined) delete process.env[providerEnvVar]
+    else process.env[providerEnvVar] = previousProviderEnv
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+    resetSettingsCache()
+    rmSync(configDir, { recursive: true, force: true })
+  }
+}
+
+// The desktop half of the CLI rule fixed in `c20ce67` (`src/main.tsx:2147`).
+// The flag came from getUserSpecifiedModelSetting(), which folds in the
+// settings FILE, so `{"model":"sonnet"}` counted as a provider-selection event
+// and pulled a CLAUDE_CODE_USE_OPENAI=1 desktop session onto Anthropic while
+// the user had asked for OpenAI. Env levers outrank saved settings.
+test('a settings-file model does not beat CLAUDE_CODE_USE_OPENAI on desktop startup', () => {
+  withSettingsFileStartup({ model: 'sonnet' }, 'CLAUDE_CODE_USE_OPENAI', () => {
+    expect(initializeSidecarModelProvider()).toBe('sonnet')
+    expect(getSessionProvider()).toBe('openai')
+  })
+})
+
+// The trap in narrowing the flag: a settings-file GPT id must KEEP its implied
+// provider. Request routing sends every `gpt-*` id to OpenAI regardless of the
+// session provider, so a session left on the implicit provider here would pick
+// the Anthropic-shaped tool set (Edit) for requests the Codex adapter serves
+// (Apply_patch). Bedrock is the implicit provider because an env var is
+// deterministic where the saved startup preference is not.
+test('a settings-file GPT model still selects OpenAI on desktop startup', () => {
+  withSettingsFileStartup(
+    { model: 'gpt-5.6-terra' },
+    'CLAUDE_CODE_USE_BEDROCK',
+    () => {
+      expect(initializeSidecarModelProvider()).toBe('gpt-5.6-terra')
+      expect(getSessionProvider()).toBe('openai')
+    },
+  )
+})
+
 test('desktop resume restores the transcript model instead of today’s provider default', async () => {
   const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
   const previousProvider = getSessionProvider()

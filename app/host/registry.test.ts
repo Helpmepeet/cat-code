@@ -1130,3 +1130,67 @@ test('F6: defaultTranscriptPath NFC-normalizes the cwd so a decomposed-Unicode p
     else process.env.CLAUDE_CONFIG_DIR = priorConfig
   }
 })
+
+/* ------------------------------------------------------------------------- *
+ * user-visible text rule — registry diagnostics carry no em dash
+ * ------------------------------------------------------------------------- */
+
+// CLAUDE.md §7 bans the em dash from text a user reads. These lines are
+// main-process diagnostics rather than a rendered surface, but they are the
+// only prose this file emits and they sit outside the renderer text guard's
+// scan root, which is how four of them survived the repo-wide sweep. Drive the
+// paths that assemble a message from more than one fragment, so a REWRITTEN
+// message is checked too rather than only today's spelling.
+test('registry diagnostics carry no em dash (user-visible text rule)', async () => {
+  const corruptDir = tempDir()
+  writeFileSync(join(corruptDir, 'registry.json'), '{ this is not valid json ')
+  const corrupt = makeRegistry({ storageDir: corruptDir })
+  await corrupt.registry.launch()
+
+  const reapDir = tempDir()
+  writeTranscript(reapDir, 'engine-real')
+  seed(join(reapDir, 'registry.json'), [
+    baseRow({
+      appSessionId: 'app-real',
+      engineSessionId: 'engine-real',
+      shutdown: 'clean',
+    }),
+    baseRow({
+      appSessionId: 'app-empty',
+      engineSessionId: null,
+      shutdown: 'clean',
+    }),
+  ])
+  const reap = makeRegistry({ storageDir: reapDir })
+  await reap.registry.launch()
+
+  const lockLogs: string[] = []
+  const locked = new SessionRegistry({
+    storageDir: tempDir(),
+    log: line => lockLogs.push(line),
+    acquireLock: async () => {
+      throw new Error('ELOCKED (simulated held lock)')
+    },
+  })
+  await locked.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a' })
+
+  // A storage dir that cannot be created: its parent is a regular file.
+  const blockedParent = join(tempDir(), 'not-a-dir')
+  writeFileSync(blockedParent, 'x')
+  const dirLogs: string[] = []
+  const blocked = new SessionRegistry({
+    storageDir: join(blockedParent, 'registry'),
+    log: line => dirLogs.push(line),
+  })
+  await blocked.upsertOnSpawn({ appSessionId: 'app-2', cwd: '/b' })
+
+  const lines = [...corrupt.logs, ...reap.logs, ...lockLogs, ...dirLogs]
+  // Pin that each message actually ran, so an empty sweep cannot pass.
+  expect(lines.some(l => l.includes('CORRUPT'))).toBe(true)
+  expect(lines.some(l => l.includes('never acquired content'))).toBe(true)
+  expect(lines.some(l => l.includes('could not acquire lock'))).toBe(true)
+  expect(lines.some(l => l.includes('could not ensure'))).toBe(true)
+  for (const line of lines) {
+    expect(line).not.toContain('—')
+  }
+})

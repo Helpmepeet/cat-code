@@ -482,7 +482,7 @@ export class SessionRegistry {
     try {
       renameSync(this.path, target)
       this.log(
-        `[registry] CORRUPT registry (${reason}) — moved aside to ${target}; starting empty. ` +
+        `[registry] CORRUPT registry (${reason}): moved aside to ${target}; starting empty. ` +
           'The engine transcript catalog remains the recovery path.',
       )
     } catch (error) {
@@ -553,7 +553,7 @@ export class SessionRegistry {
     this.doc.sessions = this.doc.sessions.filter(row => {
       if (row.shutdown === 'clean' && row.engineSessionId === null) {
         this.log(
-          `[registry] reaped clean row with no engineSessionId (${row.appSessionId}) — ` +
+          `[registry] reaped clean row with no engineSessionId (${row.appSessionId}): ` +
             'never acquired content, not restorable',
         )
         return false
@@ -899,7 +899,7 @@ export class SessionRegistry {
       this.writeFailed = true
       this.log(
         `[registry] could not ensure ${this.dir} (${errText(error)}); ` +
-          'skipping this write — session unaffected',
+          'skipping this write, session unaffected',
       )
       return
     }
@@ -911,7 +911,7 @@ export class SessionRegistry {
       this.writeFailed = true
       this.log(
         `[registry] could not acquire lock for ${this.path} (${errText(error)}); ` +
-          'skipping this write — session unaffected',
+          'skipping this write, session unaffected',
       )
       return
     }
