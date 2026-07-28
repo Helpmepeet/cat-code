@@ -315,7 +315,7 @@ function DirectConnectSection({
           disabled={connecting}
           id="remote-server-url"
           onChange={event => setServerUrl(event.target.value)}
-          placeholder="cc://host:8200"
+          placeholder="https://host:8200"
           value={serverUrl}
         />
         <button

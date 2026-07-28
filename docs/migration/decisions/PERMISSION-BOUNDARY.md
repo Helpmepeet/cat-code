@@ -300,7 +300,8 @@ export type PermissionContextFrame = {
 carries `ruleMetadata` (behavior/source/rule plus engine-parser-derived
 `exact|prefix|wildcard`), `managedRulesOnly` (from
 `shouldAllowManagedPermissionRulesOnly`), and `permissionClassifierEnabled`
-(from the compiled feature plus the engine's live gate). These are read-only
+(from the engine's live gate alone; the sidecar is spawned unbundled, so the
+build-time feature macro it used to be combined with always read false there). These are read-only
 engine facts for prototype-parity display. They add no inbound vocabulary and
 do not weaken the rule-authorship prohibition above.
 
