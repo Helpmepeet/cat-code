@@ -255,8 +255,7 @@ export function getDeferredContinuationPaths(
   }
 }
 
-async function ensurePrivateDirectory(path: string): Promise<void> {
-  await mkdir(path, { recursive: true, mode: 0o700 })
+async function validatePrivateDirectory(path: string): Promise<void> {
   const info = await lstat(path)
   if (!info.isDirectory() || info.isSymbolicLink()) {
     throw new Error('Deferred continuation storage is not a private directory')
@@ -269,6 +268,11 @@ async function ensurePrivateDirectory(path: string): Promise<void> {
   }
 }
 
+async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 })
+  await validatePrivateDirectory(path)
+}
+
 export async function ensureDeferredContinuationStore(paths = getDeferredContinuationPaths()): Promise<void> {
   await ensurePrivateDirectory(paths.root)
   await Promise.all([
@@ -277,6 +281,41 @@ export async function ensureDeferredContinuationStore(paths = getDeferredContinu
     ensurePrivateDirectory(paths.locks),
     ensurePrivateDirectory(paths.tmp),
   ])
+}
+
+/**
+ * Read-side store check: validates the queue root but never creates it.
+ *
+ * Reads run on a timer in every mounted session whether or not the feature was
+ * ever used, so making them go through `ensureDeferredContinuationStore` cost
+ * five `mkdir`s plus five `lstat`s per call and materialized an empty queue on
+ * every machine. A store that does not exist holds no records, which is the
+ * same answer the read itself would produce.
+ */
+async function validateDeferredContinuationStoreForRead(paths: StorePaths): Promise<void> {
+  try {
+    await validatePrivateDirectory(paths.root)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+}
+
+/**
+ * The queue itself, or the identity used to address it, cannot be used at all.
+ *
+ * Distinct from a record that exists but cannot be parsed. An unreadable record
+ * means a schedule may be running, so callers fail closed; an unusable store
+ * provably holds no schedule for this session, because nothing this process can
+ * write ever reached it. Collapsing the two made a single `sudo cat-code` run
+ * refuse every prompt in every later session with no exit, since the advertised
+ * recovery opens the same store.
+ */
+export class DeferredContinuationStoreUnusableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = 'DeferredContinuationStoreUnusableError'
+  }
 }
 
 async function syncDirectory(path: string): Promise<void> {
@@ -360,11 +399,15 @@ export async function readPendingDeferredContinuation(
   sessionId: string,
   paths = getDeferredContinuationPaths(),
 ): Promise<DeferredContinuationJobV1 | null> {
-  await ensureDeferredContinuationStore(paths)
+  let recordPath: string
   try {
-    const job = deferredContinuationJobSchema.parse(
-      await readPrivateJson(pendingPath(paths, sessionId)),
-    )
+    await validateDeferredContinuationStoreForRead(paths)
+    recordPath = pendingPath(paths, sessionId)
+  } catch (error) {
+    throw new DeferredContinuationStoreUnusableError(error)
+  }
+  try {
+    const job = deferredContinuationJobSchema.parse(await readPrivateJson(recordPath))
     return (await terminalHistoryExists(job, paths)) ? null : job
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -589,9 +632,13 @@ export async function pruneDeferredContinuationHistory(
 }
 
 export function getDeferredContinuationLockTargets(
-  job: Pick<DeferredContinuationJobV1, 'sessionId'>,
+  job: Pick<DeferredContinuationJobV1, 'jobId' | 'sessionId'>,
   paths = getDeferredContinuationPaths(),
 ): { job: string; session: string } {
+  // Both halves are validated: a caller honouring a `sessionId`-only signature
+  // would silently address `job-undefined`, collapsing per-job mutual exclusion
+  // into one global lock shared by every session.
+  if (!uuid.safeParse(job.jobId).success) throw new Error('Invalid job ID')
   if (!uuid.safeParse(job.sessionId).success) throw new Error('Invalid session ID')
   return {
     job: join(paths.locks, `job-${job.jobId}`),
@@ -707,7 +754,7 @@ export async function takeDeferredContinuationNotice(
   sessionId: string,
   paths = getDeferredContinuationPaths(),
 ): Promise<DeferredContinuationNoticeV1 | null> {
-  await ensureDeferredContinuationStore(paths)
+  await validateDeferredContinuationStoreForRead(paths)
   const path = noticePath(paths, sessionId)
   try {
     const notice = deferredContinuationNoticeSchema.parse(await readPrivateJson(path))
@@ -731,7 +778,14 @@ export async function prepareHumanPromptAgainstDeferredContinuation(
   let existing: DeferredContinuationJobV1 | null
   try {
     existing = await readPendingDeferredContinuation(sessionId)
-  } catch {
+  } catch (error) {
+    // An unusable queue holds no schedule for this session, so there is nothing
+    // to fail closed against. Refusing here blocked every prompt in every
+    // session after one `sudo cat-code` run, and named an exit that opens the
+    // same queue and throws the same error.
+    if (error instanceof DeferredContinuationStoreUnusableError) {
+      return { action: 'allow' }
+    }
     // Fail closed: an unreadable record cannot prove nothing is running, so the
     // prompt is refused. But it must name a real exit — `cancel` can discard an
     // unreadable record under the session lock. The old copy said "continue
@@ -770,6 +824,10 @@ export async function prepareHumanPromptAgainstDeferredContinuation(
       case 'pending':
       case 'ambiguous': {
         const observedAt = Date.now()
+        // A REPL suspended past the stale window lets a worker steal the lock
+        // and start, so every durable write below re-asserts ownership rather
+        // than tombstone a job the new owner is actively running.
+        guard.assertHealthy()
         await recordDeferredContinuationNotice({
           version: 1,
           sessionId,
@@ -781,6 +839,8 @@ export async function prepareHumanPromptAgainstDeferredContinuation(
           'canceled',
           'human_message',
           observedAt,
+          undefined,
+          guard,
         )
         return {
           action: 'allow_after_cancel',

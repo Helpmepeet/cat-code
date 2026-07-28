@@ -153,7 +153,19 @@ export function classifyDeferredHeadlessResult(
         message => message.type === 'user' && message.uuid === attemptUuid,
       )
     : -1
-  if (attemptUuid && attemptIndex < 0) return { outcome: 'unknown', observedAt }
+  // Autocompaction drops every message before the boundary from this same array
+  // in place, so a turn that ran fine can finish with its own attempt message
+  // already gone. Quota limits happen on long conversations, which is exactly
+  // when the continuation turn compacts, so treating the missing message as
+  // "no evidence" reported successful work as needing attention. A surviving
+  // boundary explains the absence; everything after it still belongs to this
+  // attempt, because the attempt is what pushed the array past the threshold.
+  const compacted = messages.some(
+    message => message.type === 'system' && message.subtype === 'compact_boundary',
+  )
+  if (attemptUuid && attemptIndex < 0 && !compacted) {
+    return { outcome: 'unknown', observedAt }
+  }
   const attemptMessages = attemptIndex >= 0 ? messages.slice(attemptIndex + 1) : messages
   const terminal = findLatestMainTerminalFailure(attemptMessages)
   if (terminal) {
@@ -579,7 +591,10 @@ async function applyAttemptResult(
         Number.isFinite(resetAt) &&
         resetAt > (job.resetAt ?? 0)
       ) {
-        const notBefore = resetAt + 60_000
+        // Same clamp the scheduler applies: a stale reset hint that is still
+        // advancing can land in the past, and an unclamped notBefore burns a
+        // real model turn immediately instead of waiting for the reset.
+        const notBefore = Math.max(result.observedAt, resetAt + 60_000)
         authority.assertHealthy()
         await recordDeferredContinuationNotice({
           version: 1,
@@ -668,38 +683,6 @@ async function applyAttemptResult(
   }
 }
 
-export async function runDeferredContinuationAttempt(options: {
-  job: DeferredContinuationJobV1
-  execute: (
-    job: DeferredContinuationJobV1,
-    prompt: string,
-  ) => Promise<DeferredAttemptResult>
-  now?: number
-}): Promise<'skipped' | 'completed'> {
-  const guard = await acquireDeferredContinuationLocks(options.job)
-  try {
-    guard.assertHealthy()
-    const current = await readPendingDeferredContinuation(options.job.sessionId)
-    const now = options.now ?? Date.now()
-    if (!current || current.jobId !== options.job.jobId || current.state !== 'pending' || current.notBefore > now) {
-      return 'skipped'
-    }
-    const submitted: DeferredContinuationJobV1 = {
-      ...current,
-      state: 'submitted',
-      attempt: { ...current.attempt, submittedAt: now },
-    }
-    guard.assertHealthy()
-    await writePendingDeferredContinuation(submitted)
-    guard.assertHealthy()
-    const result = await options.execute(submitted, getContinuationPrompt(submitted))
-    await finalizeDeferredAttempt(submitted, result, guard)
-    return 'completed'
-  } finally {
-    await guard.release()
-  }
-}
-
 export async function beginForegroundDeferredContinuation(
   job: DeferredContinuationJobV1,
   now = Date.now(),
@@ -753,7 +736,23 @@ export async function reconcileDeferredContinuationJob(
     guard.assertHealthy()
     const current = await readPendingDeferredContinuation(job.sessionId)
     if (!current || current.jobId !== job.jobId || current.state !== 'submitted') return
-    const entries = await readTrustedDeferredTranscript(current)
+    let entries: unknown[]
+    try {
+      entries = await readTrustedDeferredTranscript(current)
+    } catch {
+      // Reconciliation is the only exit from `submitted`: cancel refuses it, the
+      // human-prompt guard blocks on it, and the due scan never returns it. A
+      // transcript this process cannot read therefore has to end the job here,
+      // or the session refuses every message for good. Same shape as the pending
+      // path above, so the ownership re-assert comes by construction.
+      await stopDeferredContinuationForAttention(
+        current,
+        'session_restore',
+        Date.now(),
+        guard,
+      )
+      return
+    }
     const reconciliation = reconcileSubmittedDeferredContinuation(current, entries)
     if (reconciliation.action === 'return_pending') {
       guard.assertHealthy()
@@ -782,20 +781,6 @@ export async function reconcileDeferredContinuationJob(
   } finally {
     await guard.release()
   }
-}
-
-export async function runOneDeferredContinuationWorker(
-  execute: (
-    job: DeferredContinuationJobV1,
-    prompt: string,
-  ) => Promise<DeferredAttemptResult>,
-  now = Date.now(),
-): Promise<'empty' | 'skipped' | 'completed'> {
-  const due = await listDueDeferredContinuations(now)
-  if (!due[0]) return 'empty'
-  const target = getDeferredContinuationLockTargets(due[0]).job
-  if (!(await shouldScannerAttemptLock(target, now))) return 'skipped'
-  return runDeferredContinuationAttempt({ job: due[0], execute, now })
 }
 
 export const _forTest = {

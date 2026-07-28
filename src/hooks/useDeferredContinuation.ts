@@ -19,6 +19,14 @@ type Props = {
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
 }
 
+// Idle backoff. The hook is mounted for every session whether or not the
+// feature is ever used, and the no-job branch is the steady state, so a flat
+// one-second poll meant a wakeup and a filesystem round trip every second for
+// the process lifetime. Anything that proves work exists resets it, so a real
+// job is still noticed within a second.
+const IDLE_POLL_MIN_MS = 1_000
+const IDLE_POLL_MAX_MS = 60_000
+
 export { formatDeferredContinuationNotice }
 
 export function useDeferredContinuation({ setMessages }: Props): void {
@@ -27,6 +35,7 @@ export function useDeferredContinuation({ setMessages }: Props): void {
     let canceled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let hasPolled = false
+    let idleDelay = IDLE_POLL_MIN_MS
     const mountedAt = Date.now()
     const sessionId = activeSessionId
 
@@ -48,6 +57,7 @@ export function useDeferredContinuation({ setMessages }: Props): void {
       try {
         const notice = await takeDeferredContinuationNotice(sessionId)
         if (notice) {
+          idleDelay = IDLE_POLL_MIN_MS
           let text = formatDeferredContinuationNotice(notice)
           if (
             notice.kind === 'network_retry' ||
@@ -70,13 +80,19 @@ export function useDeferredContinuation({ setMessages }: Props): void {
       try {
         job = await readPendingDeferredContinuation(sessionId)
       } catch {
-        show(
-          'Status: Stopped — needs you\nCat Code could not validate the scheduled continuation safely. Review the latest transcript and continue manually. Automatic retry: Off.',
-        )
+        // A background worker's write-then-rename makes this read throw while
+        // the job is perfectly healthy, so a stop is the wrong conclusion and
+        // returning without a timer kills the loop for the session's lifetime.
+        // Nothing durable changed; retry. The human-prompt guard is what states
+        // a genuinely unreadable record, and history stays the authority
+        // `/continue-after-limit status` reads.
+        timer = setTimeout(() => void check(), IDLE_POLL_MIN_MS)
+        timer.unref?.()
         return
       }
       const firstPoll = !hasPolled
       hasPolled = true
+      if (job) idleDelay = IDLE_POLL_MIN_MS
       if (job?.state === 'submitted') {
         try {
           await reconcileDeferredContinuationJob(job)
