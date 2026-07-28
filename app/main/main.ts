@@ -29,7 +29,6 @@ import { existsSync, realpathSync, statSync } from 'node:fs'
 import {
   isSidecarSendError,
   SidecarSupervisor,
-  type SupervisorEvent,
 } from '../supervisor/supervisor.js'
 import {
   defaultTranscriptPath,
@@ -52,6 +51,12 @@ import {
   AttachmentGate,
   LAZY_REPLAY_FLUSH_MS,
 } from './attachmentGate.js'
+import {
+  createCwdTokenStore,
+  isTerminalLifecycleFrame,
+  selectTranscriptBackfillCandidates,
+  supervisorEventToServerFrame,
+} from './mainDecisions.js'
 import {
   deleteCache,
   distill,
@@ -358,29 +363,22 @@ async function backfillTranscriptCaches(): Promise<void> {
   // already have an artifact; strict readCache validation still runs at the
   // preload boundary and after every backfill write.
   const cachedIds = new Set(listCachedSessionIds(TRANSCRIPT_CACHE_DIR))
-  const items = h
-    .listSessions()
-    .filter(
-      session =>
-        session.restorable &&
-        session.engineSessionId !== null &&
-        // A cached row is skipped only when its cache can already speak for the
-        // session. One written before run facts existed is re-derived here, and
-        // `persistTranscriptBackfillResult` keeps the write idempotent.
-        (!cachedIds.has(session.appSessionId) ||
-          !cacheHasRunFacts(TRANSCRIPT_CACHE_DIR, session.appSessionId) ||
-          // Since sessions were unified, the sidebar lists terminal-created
-          // sessions too, and those keep growing outside this app. A cache is
-          // stale the moment the engine transcript is newer than it.
-          isTranscriptNewerThanCache(session)),
-    )
-    .sort((a, b) => b.lastAttachedAt - a.lastAttachedAt)
-    .slice(0, MAX_TRANSCRIPT_BACKFILL_SESSIONS)
-    .map(session => ({
-      appSessionId: session.appSessionId,
-      engineSessionId: session.engineSessionId!,
-      transcriptPath: defaultTranscriptPath(session.cwd, session.engineSessionId!),
-    }))
+  // A cached row is skipped only when its cache can already speak for the
+  // session. One written before run facts existed is re-derived here, and
+  // `persistTranscriptBackfillResult` keeps the write idempotent. Since sessions
+  // were unified, the sidebar lists terminal-created sessions too, and those keep
+  // growing outside this app: a cache is stale the moment the engine transcript
+  // is newer than it.
+  const items = selectTranscriptBackfillCandidates({
+    sessions: h.listSessions(),
+    hasCache: appSessionId => cachedIds.has(appSessionId),
+    cacheHasRunFacts: appSessionId =>
+      cacheHasRunFacts(TRANSCRIPT_CACHE_DIR, appSessionId),
+    isTranscriptNewerThanCache,
+    transcriptPath: (session, engineSessionId) =>
+      defaultTranscriptPath(session.cwd, engineSessionId),
+    limit: MAX_TRANSCRIPT_BACKFILL_SESSIONS,
+  })
   if (items.length === 0) return
 
   const abort = new AbortController()
@@ -855,41 +853,6 @@ function sendHostEvent(event: HostEvent): void {
   if (contents) contents.send(CH_HOST_EVENT, event)
 }
 
-function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | null {
-  if (event.type === 'frame') return event.frame
-  if (event.type === 'exit') {
-    return {
-      kind: 'lifecycle',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: event.sessionId,
-      status: 'exited',
-      exit: { code: event.code, signal: event.signal },
-    }
-  }
-  if (
-    event.status === 'disconnected' ||
-    event.status === 'failed' ||
-    event.status === 'exited'
-  ) {
-    return {
-      kind: 'lifecycle',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: event.sessionId,
-      status: event.status,
-    }
-  }
-  return null
-}
-
-function isTerminalLifecycleFrame(frame: ServerFrame): boolean {
-  return (
-    frame.kind === 'lifecycle' &&
-    (frame.status === 'disconnected' ||
-      frame.status === 'failed' ||
-      frame.status === 'exited')
-  )
-}
-
 /**
  * Register the renderer→supervisor IPC handlers ONCE. They read the module-level
  * `supervisor`, so they keep working across a host rebuild (F5) without
@@ -1166,6 +1129,13 @@ function registerIpcHandlers(): void {
 }
 
 /**
+ * HC1 — the picker's single-use directory tokens (`mainDecisions.ts`). One store
+ * per app process: a token minted by `pickDirectory` is spent by `createSession`,
+ * so the renderer only ever holds an opaque handle to a path the USER chose.
+ */
+const cwdTokens = createCwdTokenStore()
+
+/**
  * Control-plane IPC (HC3 — fixed, per-method structured senders; no generic
  * invoke, no renderer-controlled channel names, no method returning filesystem
  * contents). Each returns a typed `HostResult` (or the picker's single realpath)
@@ -1188,7 +1158,7 @@ function registerHostControlPlane(): void {
     async (_event, activeSessionId?: unknown): Promise<string | null> => {
       if (devPickerBypass.enabled) {
         const bypassed = devPickerBypass.pick()
-        return bypassed ? mintCwdToken(bypassed) : null
+        return bypassed ? cwdTokens.mint(bypassed) : null
       }
       const defaultPath = resolvePickerDefaultPath(
         host?.listSessions() ?? [],
@@ -1207,7 +1177,7 @@ function registerHostControlPlane(): void {
       if (result.canceled || result.filePaths.length === 0) return null
       const chosen = validateCwd(result.filePaths[0])
       if (!chosen.ok) return null
-      return mintCwdToken(chosen.realpath)
+      return cwdTokens.mint(chosen.realpath)
     },
   )
 
@@ -1220,7 +1190,7 @@ function registerHostControlPlane(): void {
       // invalid cwd. The renderer can neither author a path nor forge a resume id
       // (resume is only reachable via restoreSession → a registry row).
       const token = readString(input, 'cwdToken')
-      const cwd = token ? consumeCwdToken(token) : undefined
+      const cwd = token ? cwdTokens.consume(token) : undefined
       if (!cwd) {
         return Promise.resolve({
           ok: false,
@@ -1447,32 +1417,6 @@ function writeDebugStateExport(): void {
   } catch (error) {
     process.stderr.write(`[main] debug-state write failed: ${errText(error)}\n`)
   }
-}
-
-/* ------------------------------------------------------------------------- *
- * HC1 directory-token store. A `pickDirectory()` result is a one-time token
- * bound to a realpath MAIN validated; `createSession` consumes it. This makes
- * the renderer structurally incapable of authoring a cwd string — it only ever
- * holds an opaque token that main issued for a path the USER chose in the native
- * dialog. Tokens are single-use and short-lived.
- * ------------------------------------------------------------------------- */
-
-const CWD_TOKEN_TTL_MS = 5 * 60 * 1000
-const cwdTokens = new Map<string, { realpath: string; expiresAt: number }>()
-
-function mintCwdToken(realpath: string): string {
-  const token = randomUUID()
-  cwdTokens.set(token, { realpath, expiresAt: Date.now() + CWD_TOKEN_TTL_MS })
-  return token
-}
-
-/** Resolve + INVALIDATE a token (single use). Undefined if unknown/expired. */
-function consumeCwdToken(token: string): string | undefined {
-  const entry = cwdTokens.get(token)
-  if (!entry) return undefined
-  cwdTokens.delete(token)
-  if (entry.expiresAt < Date.now()) return undefined
-  return entry.realpath
 }
 
 /** Read a string field off an unknown IPC payload, or undefined. */

@@ -193,10 +193,28 @@ test('swap observations cover replay batches and ready zero-history batches', ()
   expect(selectPreviewSwapSessions([messageFrame(0, false)], previewing)).toEqual([])
 })
 
-test('focus, pointer-down, and dwell can claim one lazy restore only once', () => {
+// LAYER HONESTY. This exercises the claim helper alone: the first call for a
+// session wins and every later one loses, independently per session. It says
+// NOTHING about which interactions reach it. Its previous name promised three
+// ("focus, pointer-down, and dwell"), but the body called one function three
+// times with identical arguments, so detaching `onPointerDown` from the composer
+// would lose click-to-restore with this test still green.
+//
+// The companion test — render the pane and fire the real handlers — cannot be
+// written here. `App`/`SessionPane` call hooks and this suite renders to static
+// markup only, so no handler is ever attached to fire. The wiring that is
+// therefore UNPROVEN by any test: the composer's `onFocus` and `onPointerDown`
+// (both `engagePreviewPane` in App.tsx), and the cache-miss branch of
+// `performRestore`. Those are the three live callers today; the 300 ms pane
+// dwell the old name referred to was removed (cut-list §I.1, ruling #3).
+test('claimLazyRestore is idempotent per session', () => {
   const claimed = new Set<string>()
   expect(claimLazyRestore(claimed, SID)).toBe(true)
   expect(claimLazyRestore(claimed, SID)).toBe(false)
+  expect(claimLazyRestore(claimed, SID)).toBe(false)
+  // Per session, not global: a second session still gets its one claim.
+  expect(claimLazyRestore(claimed, 'other-session')).toBe(true)
+  expect(claimLazyRestore(claimed, 'other-session')).toBe(false)
   expect(claimLazyRestore(claimed, SID)).toBe(false)
 })
 
