@@ -483,6 +483,38 @@ test('header run facts win over the frames, which cannot know mode or effort', (
 })
 
 /**
+ * The header's window used to be structurally null (the worker declared the
+ * field and never assigned it), so every backfilled donut silently divided by
+ * the 200k fallback. Now that the worker resolves a real one, the denominator
+ * has to follow it rather than the constant.
+ */
+test('a header window other than 200k drives the donut, not the fallback', () => {
+  const withWindow = (contextWindow: number | null): TranscriptCache => ({
+    ...cache([assistantFrame('gpt-5.6-terra', 0)]),
+    header: {
+      ...cache([]).header,
+      runFacts: {
+        model: 'gpt-5.6-terra',
+        permissionMode: null,
+        effort: null,
+        usedTokens: 186_000,
+        contextWindow,
+      },
+    },
+  })
+
+  const real = projectPreviewTranscriptCache(withWindow(372_000)).runFacts
+  expect(real.contextUsage?.contextWindow).toBe(372_000)
+  expect(real.contextUsage?.percentUsed).toBe(50)
+
+  // A source that stated no window still falls back, so an older cache written
+  // before the worker resolved one keeps rendering exactly as it did.
+  const unstated = projectPreviewTranscriptCache(withWindow(null)).runFacts
+  expect(unstated.contextUsage?.contextWindow).toBe(200_000)
+  expect(unstated.contextUsage?.percentUsed).toBe(93)
+})
+
+/**
  * A cache written on session CLOSE has no header facts, and its frames still
  * hold a live `result`. The frame scan is that path's answer, not dead code.
  */

@@ -24,11 +24,26 @@ import type { TranscriptRunFacts } from '../shared/protocol.js'
  * Newest wins for each, independently, because a session can change model,
  * escalate its mode, or switch effort part-way through.
  *
+ * The context WINDOW is the one fact no record carries. The live donut reads it
+ * off `modelUsage[model].contextWindow` on a `result` frame (`contextUsage.ts`),
+ * and a `result` is a runtime frame that is never persisted: across all 167
+ * transcripts on this machine (~40k records, 2026-07-28) there are zero `result`
+ * records and zero structural `modelUsage`/`contextWindow` keys. So the window
+ * is RESOLVED FROM the newest model instead of read, via `resolveContextWindow`
+ * — which the worker binds to the engine's own `getContextWindowForModel`, the
+ * very function whose output the live path consumes (`src/cost-tracker.ts:107`).
+ * Same function, same model string, so a previewed session's denominator is the
+ * live one's. Callers that pass no resolver claim no window, and the renderer's
+ * 200k fallback still applies.
+ *
  * Best-effort by construction: an unreadable or malformed transcript yields all
  * nulls rather than failing the backfill, since the transcript FRAMES are the
  * artifact that matters and these are a display detail on top.
  */
-export function readTranscriptRunFacts(path: string): TranscriptRunFacts {
+export function readTranscriptRunFacts(
+  path: string,
+  resolveContextWindow?: (model: string) => number | null | undefined,
+): TranscriptRunFacts {
   const empty: TranscriptRunFacts = {
     model: null,
     permissionMode: null,
@@ -74,7 +89,34 @@ export function readTranscriptRunFacts(path: string): TranscriptRunFacts {
       break
     }
   }
+
+  // Deliberately NOT part of the early-exit above: the window is derived from
+  // `facts.model`, which the exit condition already requires, so an exit can
+  // never skip it. Resolving here rather than per-record also means one lookup
+  // per transcript instead of one per assistant record.
+  if (facts.model !== null && resolveContextWindow) {
+    facts.contextWindow = readContextWindow(facts.model, resolveContextWindow)
+  }
   return facts
+}
+
+/**
+ * A resolver that throws or answers nonsense costs the donut its exact
+ * denominator (the renderer falls back to 200k), never the whole backfill.
+ */
+function readContextWindow(
+  model: string,
+  resolve: (model: string) => number | null | undefined,
+): number | null {
+  let window: number | null | undefined
+  try {
+    window = resolve(model)
+  } catch {
+    return null
+  }
+  return typeof window === 'number' && Number.isFinite(window) && window > 0
+    ? window
+    : null
 }
 
 /** The live donut's sum (`contextUsage.ts`): input + both cache buckets. */

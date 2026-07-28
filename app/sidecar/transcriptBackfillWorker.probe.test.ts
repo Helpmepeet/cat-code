@@ -210,6 +210,13 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
     expect(result).toBeDefined()
     expect(result!.engineSessionId).toBe(expected.engineSessionId)
     expect(JSON.stringify(result)).toContain(expected.nonce)
+    // Nothing in a transcript states the context window, so the worker resolves
+    // it from the model through the engine's real `getContextWindowForModel`.
+    // Only a real process proves that import is reachable under bare/SIMPLE
+    // mode; a fixture test injects a fake and cannot. It was null on every
+    // backfilled session before this wiring existed.
+    expect(result!.runFacts.model).toBeTruthy()
+    expect(result!.runFacts.contextWindow).toBeGreaterThan(0)
     for (const frame of result!.frames) {
       if (frame.kind === 'event' && frame.event.type === 'message') {
         expect((frame.event.message as { session_id?: string }).session_id).toBe(

@@ -8,6 +8,12 @@
  *   effort          `.effort` on `system`/`codex_send_path`
  *   usedTokens      `.message.usage` on an `assistant` record
  *
+ * The context WINDOW is measurably absent from all of them (0 `result` records,
+ * 0 structural `modelUsage`/`contextWindow` keys across 167 transcripts), so it
+ * is resolved from the newest model by an injected function — the worker's is
+ * the engine's `getContextWindowForModel`. Injecting it is what keeps this
+ * module, and this file, free of the engine graph the worker pulls in.
+ *
  * This file exists because the first attempt at this feature derived from the
  * CACHE instead, which no longer carries any of it: the engine's
  * `toSDKMessages` conversion keeps conversation turns and drops the telemetry.
@@ -93,6 +99,62 @@ test('effort is ignored on a system record of another subtype', () => {
     ]),
   )
   expect(facts.effort).toBe('xhigh')
+})
+
+/**
+ * The defect this closes: `contextWindow` was declared and never assigned, so
+ * every backfilled preview divided by the renderer's 200k fallback. A 372k
+ * gpt-5.6 session therefore read ~86% full when it was ~46%.
+ */
+test('the window is resolved from the newest model, so a non-200k one is real', () => {
+  const asked: string[] = []
+  const facts = readTranscriptRunFacts(
+    transcriptOf([
+      assistant('claude-sonnet-5', { input_tokens: 10 }),
+      assistant('gpt-5.6-terra', { input_tokens: 171_000 }),
+    ]),
+    model => {
+      asked.push(model)
+      return model === 'gpt-5.6-terra' ? 372_000 : 200_000
+    },
+  )
+  // Asked about the model the session ENDED on, once, not per record.
+  expect(asked).toEqual(['gpt-5.6-terra'])
+  expect(facts.contextWindow).toBe(372_000)
+  expect(facts.usedTokens).toBe(171_000)
+})
+
+test('with no resolver the window stays null, leaving the renderer its fallback', () => {
+  const facts = readTranscriptRunFacts(transcriptOf([assistant('gpt-5.6-terra')]))
+  expect(facts.model).toBe('gpt-5.6-terra')
+  expect(facts.contextWindow).toBeNull()
+})
+
+test('a transcript with no model never asks for a window', () => {
+  let asked = false
+  const facts = readTranscriptRunFacts(transcriptOf([user('plan')]), () => {
+    asked = true
+    return 372_000
+  })
+  expect(asked).toBe(false)
+  expect(facts.contextWindow).toBeNull()
+})
+
+/** Best-effort contract: the window is a display detail, never a backfill risk. */
+test.each([
+  ['throws', () => { throw new Error('model table unavailable') }],
+  ['answers nothing', () => null],
+  ['answers a non-number', () => Number.NaN],
+  ['answers zero', () => 0],
+])('a resolver that %s yields null rather than failing the read', (_label, resolve) => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([assistant('gpt-5.6-terra', { input_tokens: 10 })]),
+    resolve as (model: string) => number | null,
+  )
+  expect(facts.contextWindow).toBeNull()
+  // The rest of the read is unaffected.
+  expect(facts.model).toBe('gpt-5.6-terra')
+  expect(facts.usedTokens).toBe(10)
 })
 
 test('a silent or unreadable transcript claims nothing, and never throws', () => {

@@ -56,12 +56,13 @@ async function main(): Promise<void> {
 
   // Engine imports happen only after SIMPLE/bare is fixed for the process.
   const [
-    { switchSession },
+    { switchSession, getSdkBetas },
     { loadConversationForResume },
     { toSDKMessages },
     { createMessageEvent },
     { ensureEngineMacro },
     { enableConfigs },
+    { getContextWindowForModel },
   ] = await Promise.all([
     import('../../src/bootstrap/state.js'),
     import('../../src/utils/conversationRecovery.js'),
@@ -69,6 +70,7 @@ async function main(): Promise<void> {
     import('../../src/app-runtime/sessionEvents.js'),
     import('./initializeRuntime.js'),
     import('../../src/utils/config.js'),
+    import('../../src/utils/context.js'),
   ])
   // OBSERVATION-ONLY BOOTSTRAP, same reasoning as `accountsPoolWorker.ts`: the
   // full `init()` this used to run fires `void initAccountPool()`
@@ -127,7 +129,14 @@ async function main(): Promise<void> {
         // Read from the RAW transcript, not from `history` above: the
         // `toSDKMessages` conversion keeps conversation turns and drops the
         // telemetry these come from, so by that point they no longer exist.
-        runFacts: readTranscriptRunFacts(item.transcriptPath),
+        //
+        // The context window is the exception: nothing persists it, so it is
+        // resolved from the model with the engine's OWN function — the same
+        // call the live donut's number comes from (`src/cost-tracker.ts:107`),
+        // rather than a second 200k/272k/1M table in the app (§10).
+        runFacts: readTranscriptRunFacts(item.transcriptPath, model =>
+          getContextWindowForModel(model, getSdkBetas()),
+        ),
       }
       const secret = scanForSecrets(result)
       if (!secret.ok) {
