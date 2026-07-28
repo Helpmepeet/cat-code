@@ -106,11 +106,6 @@ export function buildAgentConfigSnapshot({
     definitions,
     failedFiles: result.failedFiles ?? [],
     availableMcpServers: [...availableMcpServers].sort((a, b) => a.localeCompare(b)),
-    notes: [
-      'System prompt bodies, hooks payloads, and inline MCP configs are withheld at the sidecar boundary.',
-      'Provider is runtime-selected; agent definitions persist model aliases only.',
-      'All definitions are read-only in P4-7 until a safe full-fidelity writer is wired.',
-    ],
   }
 }
 

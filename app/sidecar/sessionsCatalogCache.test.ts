@@ -41,7 +41,6 @@ const snapshot: SessionsCatalogSnapshot = {
     },
   ],
   truncated: false,
-  notes: ['All discovered sessions are enriched.'],
   capturedAtMs: 1700,
 }
 

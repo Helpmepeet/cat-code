@@ -54,7 +54,6 @@ const SNAPSHOT: AgentConfigSnapshot = {
   ],
   failedFiles: [],
   availableMcpServers: ['linear-prod'],
-  notes: [],
 }
 
 test('renders real agent definition groups, with no note about our own build', () => {

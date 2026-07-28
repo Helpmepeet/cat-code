@@ -46,8 +46,25 @@ function snapshot(
   entries: SessionCatalogEntry[],
   capturedAtMs = 5000,
 ): SessionsCatalogSnapshot {
-  return { entries, truncated: false, notes: [], capturedAtMs }
+  return { entries, truncated: false, capturedAtMs }
 }
+
+// Every slice on this snapshot must reach the renderer. A field that crosses the
+// wire and is read by nothing is the defect this record catches: adding one
+// leaves a key missing here and fails tsc. `notes` was removed for exactly that.
+const READ_CATALOG_SLICES: Record<keyof SessionsCatalogSnapshot, true> = {
+  entries: true,
+  truncated: true,
+  capturedAtMs: true,
+}
+
+test('every sessions-catalog slice on the wire is read by the renderer', () => {
+  expect(Object.keys(READ_CATALOG_SLICES).sort()).toEqual([
+    'capturedAtMs',
+    'entries',
+    'truncated',
+  ])
+})
 
 function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string }): SessionDescriptor {
   return {

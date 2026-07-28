@@ -814,7 +814,6 @@ export type AgentConfigSnapshot = {
   definitions: AgentConfigDefinition[]
   failedFiles: Array<{ path: string; error: string }>
   availableMcpServers: string[]
-  notes: string[]
 }
 
 /**
@@ -2119,7 +2118,6 @@ export type SessionsCatalogSnapshot = {
   entries: SessionCatalogEntry[]
   /** True when the enumeration hit `SESSIONS_CATALOG_LIMIT` (older rows dropped). */
   truncated: boolean
-  notes: string[]
   /**
    * Wall-clock at which this enumeration STARTED — the recency half of the
    * title-precedence rule (`sessionsCatalogState.ts` `pickTitle`). A transcript

@@ -249,7 +249,6 @@ describe('buildSessionsCatalogSnapshot', () => {
     )
     expect(snapshot.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
     expect(snapshot.truncated).toBe(true)
-    expect(snapshot.notes.length).toBeGreaterThan(0)
   })
 
   test('carries the injected capturedAtMs, and defaults to a real clock reading', () => {
@@ -286,7 +285,6 @@ describe('buildSessionsCatalogSnapshot', () => {
     })
     expect(snapshot.entries).toHaveLength(1)
     expect(snapshot.truncated).toBe(false)
-    expect(snapshot.notes.join(' ')).toContain('All discovered sessions are enriched')
   })
 
   test('B1 — carries far more than the old 50-row cap (older work sessions appear)', () => {

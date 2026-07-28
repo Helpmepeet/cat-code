@@ -93,8 +93,8 @@ export function parseSessionsCatalogSnapshot(
   // the record with OR without it, but no OTHER key — the closed-vocabulary gate
   // stands. Absent ⇒ 0 (unknown age ⇒ never outranks a registry title).
   if (
-    !hasExactKeys(value, ['entries', 'truncated', 'notes', 'capturedAtMs']) &&
-    !hasExactKeys(value, ['entries', 'truncated', 'notes'])
+    !hasExactKeys(value, ['entries', 'truncated', 'capturedAtMs']) &&
+    !hasExactKeys(value, ['entries', 'truncated'])
   ) {
     return null
   }
@@ -104,19 +104,13 @@ export function parseSessionsCatalogSnapshot(
     return null
   }
   const capturedAtMs = value.capturedAtMs === undefined ? 0 : value.capturedAtMs
-  if (
-    !Array.isArray(value.notes) ||
-    !value.notes.every(note => typeof note === 'string')
-  ) {
-    return null
-  }
   const entries: SessionCatalogEntry[] = []
   for (const candidate of value.entries) {
     const entry = parseEntry(candidate)
     if (!entry) return null
     entries.push(entry)
   }
-  return { entries, truncated: value.truncated, notes: value.notes, capturedAtMs }
+  return { entries, truncated: value.truncated, capturedAtMs }
 }
 
 function parseEntry(value: unknown): SessionCatalogEntry | null {

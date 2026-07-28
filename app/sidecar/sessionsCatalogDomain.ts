@@ -163,13 +163,7 @@ export function buildSessionsCatalogSnapshot(
   // `nextIndex` is where enrichment actually stopped scanning, which is the honest
   // signal (`sessionStorage.ts` enrichLogs).
   const truncated = result.nextIndex < result.allStatLogs.length
-  const notes = [
-    'Message counts and mode require a full transcript read and are not carried on this bounded catalog.',
-    truncated
-      ? `Only the ${entries.length} most-recent sessions are enriched; older sessions are omitted.`
-      : 'All discovered sessions are enriched.',
-  ]
-  return { entries, truncated, notes, capturedAtMs }
+  return { entries, truncated, capturedAtMs }
 }
 
 export function mapLogOptionToCatalogEntry(

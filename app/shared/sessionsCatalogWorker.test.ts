@@ -29,7 +29,7 @@ function catalogResult(entries: SessionCatalogEntry[]) {
   return {
     type: 'catalog' as const,
     version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
-    catalog: { entries, truncated: false, notes: ['ok'] },
+    catalog: { entries, truncated: false },
   }
 }
 
@@ -91,7 +91,7 @@ describe('parseSessionsCatalogWorkerResult — reject invalid (fail closed)', ()
       parseSessionsCatalogWorkerResult({
         type: 'partial',
         version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
-        catalog: { entries: [], truncated: false, notes: [] },
+        catalog: { entries: [], truncated: false },
       }),
     ).toBeNull()
   })
@@ -132,7 +132,6 @@ describe('parseSessionsCatalogWorkerResult — reject invalid (fail closed)', ()
     const parsed = parseSessionsCatalogSnapshot({
       entries: [{ ...entry({ sessionId: 'a' }), mode: 'boss' }],
       truncated: false,
-      notes: [],
     })
     expect(parsed).toBeNull()
   })
@@ -143,7 +142,6 @@ describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
     const parsed = parseSessionsCatalogSnapshot({
       entries: [{ ...entry({ sessionId: 'a' }), cwdExists: false }],
       truncated: false,
-      notes: [],
     })
     expect(parsed?.entries[0]?.cwdExists).toBe(false)
   })
@@ -154,7 +152,6 @@ describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
     const parsed = parseSessionsCatalogSnapshot({
       entries: [withoutFlag],
       truncated: false,
-      notes: [],
     })
     expect(parsed?.entries[0]?.cwdExists).toBe(true)
   })
@@ -163,7 +160,6 @@ describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
     const parsed = parseSessionsCatalogSnapshot({
       entries: [{ ...entry({ sessionId: 'a' }), cwdExists: 'yes' }],
       truncated: false,
-      notes: [],
     })
     expect(parsed).toBeNull()
   })
@@ -174,7 +170,6 @@ describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, 
     const parsed = parseSessionsCatalogSnapshot({
       entries: [{ ...entry({ sessionId: 'a' }), transcriptTitle: 'Renamed in the terminal' }],
       truncated: false,
-      notes: [],
       capturedAtMs: 1234,
     })
     expect(parsed?.capturedAtMs).toBe(1234)
@@ -188,7 +183,6 @@ describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, 
     const parsed = parseSessionsCatalogSnapshot({
       entries: [legacyEntry],
       truncated: false,
-      notes: [],
     })
     expect(parsed?.capturedAtMs).toBe(0)
     expect(parsed?.entries[0]?.transcriptTitle).toBeNull()
@@ -199,7 +193,6 @@ describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, 
       parseSessionsCatalogSnapshot({
         entries: [entry({ sessionId: 'a' })],
         truncated: false,
-        notes: [],
         capturedAtMs: 'soon',
       }),
     ).toBeNull()
@@ -210,7 +203,6 @@ describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, 
       parseSessionsCatalogSnapshot({
         entries: [{ ...entry({ sessionId: 'a' }), transcriptTitle: 7 }],
         truncated: false,
-        notes: [],
       }),
     ).toBeNull()
   })
@@ -220,7 +212,6 @@ describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, 
       parseSessionsCatalogSnapshot({
         entries: [entry({ sessionId: 'a' })],
         truncated: false,
-        notes: [],
         capturedAtMs: 1,
         smuggled: 'x',
       }),

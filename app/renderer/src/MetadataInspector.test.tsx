@@ -245,13 +245,32 @@ test('an untrusted workspace renders as untrusted', () => {
 test('extra directories are counted per source and the cliArg ambiguity is stated', () => {
   const html = renderInspector(fullState)
   expect(html).toContain('Extra directories')
-  expect(html).toContain('2 · 1 cliArg, 1 session')
+  // Each count names its origin in words. The engine's own source tokens
+  // (`cliArg`) are code vocabulary and must never reach the drawer (§7).
+  expect(html).toContain('2 · 1 from a launch flag, 1 from this session')
+  expect(html).not.toContain('cliArg')
   expect(html).toContain(
     'cannot tell which of these directories are just for this session',
   )
   // The evidence for that claim is a source path with a line range, which is
   // the one thing §7 names outright. It belongs in the code comment.
   expect(html).not.toContain('permissionSetup.ts')
+})
+
+test('an unrecognized directory source is described, never printed as its token', () => {
+  const html = renderInspector(
+    buildSessionInspectorState({
+      ...fullState,
+      permissionContext: {
+        ...permissionContext,
+        additionalWorkingDirectories: [{ path: '/tmp/x', source: 'mcpConfig' }],
+      },
+    }),
+  )
+  expect(html).toContain('1 · 1 from another source')
+  // Scoped to the counted row: the authoritative path list below it is
+  // `PermissionRulesEditor`'s, which labels its own sources.
+  expect(html).not.toContain('1 mcpConfig')
 })
 
 test('no cliArg directory means the ambiguity caveat is NOT printed', () => {
@@ -264,7 +283,7 @@ test('no cliArg directory means the ambiguity caveat is NOT printed', () => {
       },
     }),
   )
-  expect(html).toContain('1 · 1 session')
+  expect(html).toContain('1 · 1 from this session')
   expect(html).not.toContain('permissionSetup.ts')
 })
 

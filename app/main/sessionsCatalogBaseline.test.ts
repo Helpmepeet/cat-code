@@ -45,7 +45,6 @@ const validSnapshot: SessionsCatalogSnapshot = {
     },
   ],
   truncated: false,
-  notes: ['All discovered sessions are enriched.'],
   capturedAtMs: 1700,
 }
 
@@ -57,6 +56,15 @@ describe('readSessionsCatalogCache', () => {
   test('a valid cache round-trips to the snapshot', () => {
     const dir = tempDir()
     writeRaw(dir, JSON.stringify(validSnapshot))
+    expect(readSessionsCatalogCache(dir)).toEqual(validSnapshot)
+  })
+
+  // `notes` was dropped from the snapshot (nothing rendered it). A cache file
+  // written by a build that still carried it must keep reading — dropping a field
+  // must not blank the operator's history on the first launch after upgrade.
+  test('a cache file carrying the removed notes field still reads', () => {
+    const dir = tempDir()
+    writeRaw(dir, JSON.stringify({ ...validSnapshot, notes: ['whatever'] }))
     expect(readSessionsCatalogCache(dir)).toEqual(validSnapshot)
   })
 

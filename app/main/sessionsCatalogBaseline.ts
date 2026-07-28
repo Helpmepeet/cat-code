@@ -72,16 +72,13 @@ function parseSnapshot(value: unknown): SessionsCatalogSnapshot | null {
     return null
   }
   const capturedAtMs = value.capturedAtMs === undefined ? 0 : value.capturedAtMs
-  if (!Array.isArray(value.notes) || !value.notes.every(n => typeof n === 'string')) {
-    return null
-  }
   const entries: SessionCatalogEntry[] = []
   for (const candidate of value.entries) {
     const entry = parseEntry(candidate)
     if (!entry) return null
     entries.push(entry)
   }
-  return { entries, truncated: value.truncated, notes: value.notes, capturedAtMs }
+  return { entries, truncated: value.truncated, capturedAtMs }
 }
 
 function parseEntry(value: unknown): SessionCatalogEntry | null {

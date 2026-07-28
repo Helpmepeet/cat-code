@@ -32,7 +32,7 @@ function entry(over: Partial<SessionCatalogEntry> = {}): SessionCatalogEntry {
 }
 
 function catalog(entries: SessionCatalogEntry[]): SessionsCatalogSnapshot {
-  return { entries, truncated: false, notes: [], capturedAtMs: 1000 }
+  return { entries, truncated: false, capturedAtMs: 1000 }
 }
 
 function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {

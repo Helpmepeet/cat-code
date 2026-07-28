@@ -1661,7 +1661,7 @@ export class SidecarServer {
             verb: verbName,
             ok: false,
             message:
-              'Transcript is too large to export over the desktop transport — use the terminal /export.',
+              'Transcript is too large to export from the app. Use /export in the terminal.',
           })
           return
         }

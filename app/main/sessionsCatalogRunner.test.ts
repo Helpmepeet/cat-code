@@ -30,7 +30,6 @@ function catalog(ids: string[]): SessionsCatalogSnapshot {
       prRepository: null,
     })),
     truncated: false,
-    notes: [],
     capturedAtMs: 1,
   }
 }

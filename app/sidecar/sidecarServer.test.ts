@@ -31,6 +31,7 @@ import {
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
   MAX_TEXT_FIELD_CHARS,
 } from '../shared/limits.js'
@@ -5251,6 +5252,60 @@ test('P4-6b — a valid session.export returns the rendered text on the result',
   const result = received.find(f => f.kind === 'session-action.result')
   expect(result && result.kind === 'session-action.result' && result.verb).toBe('export')
   expect(result && result.kind === 'session-action.result' && result.exportText).toBe('HELLO')
+})
+
+test('an over-cap export is refused in words the operator can act on', async () => {
+  const oversized = 'x'.repeat(MAX_OUTBOUND_FRAME_BYTES - 64 * 1024 + 1)
+  const domain: SidecarSessionActionsDomain = {
+    async rename(title) {
+      return { ok: true, message: `Renamed to ${title}.` }
+    },
+    async export() {
+      return { ok: true, message: 'Transcript exported.', exportText: oversized }
+    },
+    async branch() {
+      return { ok: true, message: 'Branched.', branchEngineSessionId: 'fork-id' }
+    },
+  }
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.export',
+        requestId: 'se-big',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'session-action.result')
+  expect(result && result.kind === 'session-action.result' && result.ok).toBe(false)
+  const message =
+    result && result.kind === 'session-action.result' ? result.message : ''
+  expect(message).not.toContain('—')
+  // "desktop transport" is our own plumbing, not something the operator can act on.
+  expect(message).not.toContain('transport')
+  expect(message).toContain('/export in the terminal')
 })
 
 test('P4-6b — a valid session.branch returns the new fork engine session id', async () => {

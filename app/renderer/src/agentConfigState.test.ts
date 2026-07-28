@@ -56,7 +56,6 @@ const SNAPSHOT: AgentConfigSnapshot = {
   ],
   failedFiles: [],
   availableMcpServers: [],
-  notes: [],
 }
 
 function snapshotFrame(sessionId: SessionId, agents: AgentConfigSnapshot): ServerFrame {
@@ -67,6 +66,29 @@ function snapshotFrame(sessionId: SessionId, agents: AgentConfigSnapshot): Serve
     agents,
   }
 }
+
+// Every slice on this frame must reach a panel. A field that crosses the wire
+// and renders nowhere is the defect this record catches: adding one leaves a key
+// missing here and fails tsc, and classifying it `unread` is a deliberate
+// admission rather than an oversight. `notes` was removed for exactly that.
+const AGENT_CONFIG_SLICE_CONSUMER: Record<
+  keyof AgentConfigSnapshot,
+  'panel' | 'unread'
+> = {
+  definitions: 'panel',
+  failedFiles: 'panel',
+  // Nothing reads the snapshot-level list; the sidecar uses its own input to
+  // derive each definition's `missingMcpServers` / `available` before sending.
+  availableMcpServers: 'unread',
+}
+
+test('every agent-config slice on the wire is classified by what reads it', () => {
+  expect(Object.keys(AGENT_CONFIG_SLICE_CONSUMER).sort()).toEqual([
+    'availableMcpServers',
+    'definitions',
+    'failedFiles',
+  ])
+})
 
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
   return {
