@@ -712,6 +712,18 @@ function createWindow(): void {
   if (IS_DEV) {
     void window.loadURL(APP_ORIGIN_DEV)
   } else {
+    // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
+    // launching. Reaching the packaged branch anyway means the dev launcher
+    // believes this is a dev run and main disagrees, so the window is about to
+    // load a STALE `dist` while a live Vite server sits unused. Say so: the
+    // 2026-07-28 instance cost hours precisely because it was silent. This only
+    // reports the contradiction; the packaged branch still wins, so a real
+    // packaged build can never be talked onto a remote origin by an env var.
+    if (process.env.CATCODE_RENDERER_URL) {
+      process.stderr.write(
+        `[main] CATCODE_RENDERER_URL is set (${process.env.CATCODE_RENDERER_URL}) but app.isPackaged is true, so the packaged renderer is being loaded from disk. Renderer edits will NOT appear until "renderer:build" is re-run. Expected a dev launch? Check that the Electron executable is still named "electron".\n`,
+      )
+    }
     void window.loadFile(PACKAGED_INDEX_PATH)
   }
 }

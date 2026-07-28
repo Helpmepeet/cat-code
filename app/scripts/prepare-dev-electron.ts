@@ -23,6 +23,12 @@ const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
 
 const DEV_APP_NAME = 'Cat Code Dev'
+/**
+ * Bump when the rebrand STEPS change, not when Electron does. The cache key was
+ * the Electron version alone, so editing this recipe left every existing
+ * `.dev-electron` bundle stale and the change silently did nothing.
+ */
+const REBRAND_RECIPE = 2
 const sourceApp = join(appRoot, 'node_modules', 'electron', 'dist', 'Electron.app')
 const cacheDir = join(appRoot, '.dev-electron')
 const targetApp = join(cacheDir, `${DEV_APP_NAME}.app`)
@@ -51,7 +57,7 @@ export function prepareDevElectron(): string | null {
   if (process.platform !== 'darwin') return null
   if (!existsSync(sourceApp)) return null
 
-  const version = electronVersion()
+  const version = `${electronVersion()} r${REBRAND_RECIPE}`
   const isCached =
     existsSync(targetApp) &&
     existsSync(versionMarker) &&
@@ -62,21 +68,27 @@ export function prepareDevElectron(): string | null {
     // -c clones on APFS (fast, exact attrs/xattrs); falls back to a plain copy
     // if the volume doesn't support it.
     run('cp', ['-Rc', sourceApp, targetApp])
-    run('mv', [
-      join(targetApp, 'Contents', 'MacOS', 'Electron'),
-      join(targetApp, 'Contents', 'MacOS', DEV_APP_NAME),
-    ])
+    // The EXECUTABLE deliberately keeps Electron's own name.
+    //
+    // Electron derives `app.isPackaged` from `basename(process.execPath)`: any
+    // name other than `electron` reports PACKAGED. Renaming it here therefore
+    // told main.ts it was a production build, so `IS_DEV` went false and the
+    // window loaded `renderer/dist` instead of the Vite server dev.ts had just
+    // started — silently killing HMR and every `import.meta.env.DEV` surface
+    // (found 2026-07-28). Only the display keys need to change; the Dock tile
+    // reads those, which is all the rebrand was ever for. CFBundleExecutable is
+    // excluded too: it must keep naming the file that actually exists.
     const plist = join(targetApp, 'Contents', 'Info.plist')
-    for (const key of ['CFBundleName', 'CFBundleDisplayName', 'CFBundleExecutable']) {
+    for (const key of ['CFBundleName', 'CFBundleDisplayName']) {
       run('/usr/libexec/PlistBuddy', ['-c', `Set :${key} ${DEV_APP_NAME}`, plist])
     }
-    // Renaming the executable invalidates the ad-hoc signature Electron
-    // ships with (it was ad-hoc/unsigned already — see codesign -dv on the
-    // stock bundle — so re-signing ad-hoc doesn't change its trust level).
+    // Editing Info.plist invalidates the ad-hoc signature Electron ships with
+    // (it was ad-hoc/unsigned already — see codesign -dv on the stock bundle —
+    // so re-signing ad-hoc doesn't change its trust level).
     run('codesign', ['--sign', '-', '--force', '--deep', targetApp])
     writeFileSync(versionMarker, version)
   }
-  return join(targetApp, 'Contents', 'MacOS', DEV_APP_NAME)
+  return join(targetApp, 'Contents', 'MacOS', 'Electron')
 }
 
 if (import.meta.main) {

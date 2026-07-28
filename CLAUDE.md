@@ -97,12 +97,24 @@ main+preload, starts Vite on `:5173`, then launches Electron against it; Ctrl-C
 tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
 
 - Dev loads the renderer from the **Vite server**, not `app/renderer/dist`
-  (`app/main/main.ts:644` `loadURL(CATCODE_RENDERER_URL ?? localhost:5173)`;
-  `dist` is only the packaged path at `:646`). So `renderer:build` is a build
-  gate, NOT what makes your renderer change visible — a running dev app already
-  serves current source. Conversely, a dev app left open across your edits is
-  showing HMR state, so send the operator to a fresh launch before they judge a
-  layout or effect change.
+  (`app/main/main.ts` `loadURL(CATCODE_RENDERER_URL ?? localhost:5173)`; `dist`
+  is only the packaged branch). So `renderer:build` is a build gate, NOT what
+  makes your renderer change visible — a running dev app already serves current
+  source. Conversely, a dev app left open across your edits is showing HMR
+  state, so send the operator to a fresh launch before they judge a layout or
+  effect change.
+- **That whole paragraph is conditional on `IS_DEV = !app.isPackaged`, and
+  `app.isPackaged` is derived from the EXECUTABLE'S NAME.** Electron reports
+  packaged for any executable not named `electron`, so renaming the dev binary
+  silently flips the app to the packaged branch: it loads a stale `dist`, HMR
+  never applies, `import.meta.env.DEV` is false (killing every dev-gated
+  surface), and Vite runs unused. `prepare-dev-electron.ts` rebrands via the
+  Info.plist display keys ONLY, and keeps the executable named `electron`, for
+  exactly this reason — do not "tidy" that. Symptom when it breaks: renderer
+  edits do not appear no matter how many times you relaunch. Checks: the window
+  title is `Cat Code Dev` (`app.setName` runs only under `IS_DEV`), and main
+  logs a loud warning when `CATCODE_RENDERER_URL` is set but the packaged branch
+  wins. Cost the first time this happened, undiagnosed: hours (2026-07-28).
 - Launching it is a **GUI action on the operator's machine** (§8): give them the
   command, don't run it yourself without authorization for that run. It steals
   focus and it is often already open with their live work.
