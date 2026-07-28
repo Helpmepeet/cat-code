@@ -990,7 +990,12 @@ export function App() {
     }
   }, [hostSnapshotReady, queueTranscriptPreload])
 
-  const rosterKey = [...paneSessionIds, ...restorableIds].join(' ')
+  // The two lists are joined with a SEPARATOR, never flattened into one: a bare
+  // concatenation makes pane=[X]/restorable=[Y] and pane=[X,Y]/restorable=[]
+  // produce the identical key, so the restore effect below never re-runs as
+  // sessions move from restorable to live — the saved split never re-forms and
+  // the persist effect stays blocked behind `pendingRestore` for the whole run.
+  const rosterKey = `${paneSessionIds.join(' ')}|${restorableIds.join(' ')}`
   useEffect(() => {
     if (!pendingRestore || !hostSnapshotReady) return
     const ready = readyToRestoreLayout(pendingRestore, paneSessionIds)
