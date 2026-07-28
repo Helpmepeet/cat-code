@@ -94,6 +94,33 @@ describe('adversarial scorer evidence', () => {
   })
 })
 
+describe('recall-run CLI args', () => {
+  test('allows the read tools every non-h5 case needs to verify its ground truth', () => {
+    const args = _forTest.buildRunArgs('gpt-5.6-luna', 'low', caseById('agree'))
+    const allowedTools = args[args.indexOf('--allowedTools') + 1] ?? ''
+    for (const tool of ['Read', 'Grep', 'Glob', 'Bash(git log:*)']) {
+      expect(allowedTools).toContain(tool)
+    }
+  })
+
+  test('states the headless denial policy explicitly, like the save-side harness', () => {
+    const args = _forTest.buildRunArgs('gpt-5.6-luna', null, caseById('h1'))
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk')
+  })
+})
+
+describe('raw transcript filenames', () => {
+  test('two efforts of one model do not write to the same file', () => {
+    expect(_forTest.rawFileName('gpt-5.6-luna', 'low', 'h1', 1)).not.toBe(
+      _forTest.rawFileName('gpt-5.6-luna', 'high', 'h1', 1),
+    )
+  })
+
+  test('a model with no effort keeps the plain name', () => {
+    expect(_forTest.rawFileName('sonnet', null, 'h1', 1)).toBe('sonnet-h1-r1.json')
+  })
+})
+
 describe('--repeats validation (EVAL-5)', () => {
   test('rejects non-integer, zero, negative, and fractional values', () => {
     for (const repeats of [NaN, 0, -1, 1.5]) {

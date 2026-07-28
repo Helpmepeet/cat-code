@@ -302,3 +302,33 @@ describe('save-side --score-existing missing artifacts (EVAL-7)', () => {
     expect(result.stderr.toString()).not.toContain('ENOENT')
   })
 })
+
+describe('session transcript cleanup', () => {
+  test('reads the session id out of the json+verbose message array', () => {
+    // This harness always spawns with `--output-format json --verbose`, and
+    // that combination prints jsonStringify(messages) — an array, not the
+    // result object (src/cli/print.ts needsFullArray).
+    const stdout = JSON.stringify([
+      { type: 'system', subtype: 'init', session_id: 'aaaaaaaa-1111-2222-3333-444444444444' },
+      { type: 'assistant' },
+      { type: 'result', subtype: 'success', session_id: 'aaaaaaaa-1111-2222-3333-444444444444' },
+    ])
+    expect(_forTest.extractSessionId(stdout)).toBe(
+      'aaaaaaaa-1111-2222-3333-444444444444',
+    )
+  })
+
+  test('still reads a bare result object', () => {
+    expect(
+      _forTest.extractSessionId(
+        JSON.stringify({ type: 'result', session_id: 'bbbbbbbb-5555-6666-7777-888888888888' }),
+      ),
+    ).toBe('bbbbbbbb-5555-6666-7777-888888888888')
+  })
+
+  test('returns null when stdout carries no session id', () => {
+    expect(_forTest.extractSessionId('not json at all')).toBeNull()
+    expect(_forTest.extractSessionId(JSON.stringify([{ type: 'assistant' }]))).toBeNull()
+    expect(_forTest.extractSessionId(JSON.stringify({ type: 'result' }))).toBeNull()
+  })
+})

@@ -45,6 +45,34 @@ function deleteSessionTranscript(sessionId: string): void {
 }
 
 /**
+ * Read the run's session id out of `-p` stdout. This harness always spawns with
+ * `--output-format json --verbose`, and that combination prints the whole
+ * message ARRAY (src/cli/print.ts `needsFullArray` / `jsonStringify(messages)`),
+ * not the result object, so the id has to be found inside the array.
+ */
+function extractSessionId(stdout: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  const sessionIdOf = (value: unknown): string | null => {
+    if (!value || typeof value !== 'object') return null
+    const sessionId = (value as { session_id?: unknown }).session_id
+    return typeof sessionId === 'string' ? sessionId : null
+  }
+  if (Array.isArray(parsed)) {
+    for (const message of parsed) {
+      const sessionId = sessionIdOf(message)
+      if (sessionId) return sessionId
+    }
+    return null
+  }
+  return sessionIdOf(parsed)
+}
+
+/**
  * Live save-behavior evaluator. Direct lanes force background extraction off;
  * extraction lanes suppress primary-agent tools and require the real forked
  * extractor to start and finish. Use --list to inspect the run plan without
@@ -787,12 +815,8 @@ async function main(): Promise<void> {
 
     // Clean up the transcript this run wrote to the real session catalog — the
     // harness isolates memory but not session storage (deleteSessionTranscript).
-    try {
-      const sid = JSON.parse(stdout)?.session_id
-      if (typeof sid === 'string') deleteSessionTranscript(sid)
-    } catch {
-      // non-JSON stdout (error path) — no session id to clean up
-    }
+    const sessionId = extractSessionId(stdout)
+    if (sessionId) deleteSessionTranscript(sessionId)
 
     const debugLog = existsSync(debugFile)
       ? readFileSync(debugFile, 'utf8')
@@ -906,6 +930,7 @@ export const _forTest = {
   CASES,
   buildForcedGateOverrides,
   buildRuns,
+  extractSessionId,
   inspectExecution,
   scoreExecution,
 }

@@ -235,6 +235,52 @@ describe('buildCodexStatus', () => {
     expect(result.decision.reason_code).toBe('quota_blocked_reset_known')
   })
 
+  test('a usage poll supplies the reset even when the cap post-dates it', async () => {
+    // The cappedAt chronology rule is the pool owner's rule for the STORED
+    // usageResetAt hint (codexAccountPool.ts getHard429QuotaBelief). A usage
+    // poll is separate evidence the pool lets override a hard-429 belief on its
+    // own terms (canUsagePollUncapHard429), so advisory status must not reject
+    // a polled reset with the stored-hint rule.
+    const polledReset = NOW / 1000 - 60 // window rolled over just before the cap
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-polled-reset',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: NOW,
+          usageResetAt: 0,
+        }),
+      ],
+    })
+
+    const result = await buildCodexStatus({
+      now: NOW,
+      refresh: 'auto',
+      loadPool: false,
+      fetchUsage: liveSnapshot([
+        buildUsage({
+          accountId: 'acct-polled-reset',
+          allowed: false,
+          limitReached: true,
+          primaryWindow: {
+            usedPercent: 100,
+            limitWindowSeconds: 18_000,
+            resetAfterSeconds: 0,
+            resetAt: polledReset,
+          },
+        }),
+      ]),
+    })
+
+    const expectedReset = new Date(polledReset * 1000).toISOString()
+    expect(result.pool.quota_blocked).toBe(1)
+    expect(result.pool.earliest_known_reset_at).toBe(expectedReset)
+    expect(result.decision.action).toBe('wait')
+    expect(result.decision.reason_code).toBe('quota_blocked_reset_known')
+    expect(result.decision.not_before).toBe(expectedReset)
+  })
+
   test('(4) transient/unknown observation → attempt', async () => {
     seedCodexAccountPoolForTest({
       accounts: [

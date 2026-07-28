@@ -339,12 +339,25 @@ function quotaResetSeconds(
   account: PoolAccount,
   usage: AccountUsage | undefined,
 ): number | null {
-  const primaryReset = usage ? usage.primaryWindow.resetAt : account.usageResetAt
+  // A poll snapshot is evidence in its own right, and the pool owner scopes the
+  // hard-429 chronology rule below to the STORED `account.usageResetAt` hint
+  // only: a usage poll gets to override a hard-429 belief on separate terms
+  // (codexAccountPool.ts canUsagePollUncapHard429 / canQuotaObservationOverride).
+  // Re-applying the stored-hint rule to a poll result would be inventing a
+  // third rule the pool does not have.
+  if (usage) {
+    const polledReset = usage.primaryWindow.resetAt
+    return typeof polledReset === 'number' && Number.isFinite(polledReset) && polledReset > 0
+      ? polledReset
+      : null
+  }
+
+  const storedReset = account.usageResetAt
   const cappedAt =
     typeof account.cappedAt === 'number' && Number.isFinite(account.cappedAt)
       ? account.cappedAt
       : null
-  if (typeof primaryReset === 'number' && Number.isFinite(primaryReset) && primaryReset > 0) {
+  if (typeof storedReset === 'number' && Number.isFinite(storedReset) && storedReset > 0) {
     // Mirror the pool owner's hard-429 chronology rule
     // (codexAccountPool.ts getHard429QuotaBelief): a usage cap carries reset
     // evidence only when the reset provably post-dates the cap. Missing
@@ -353,11 +366,11 @@ function quotaResetSeconds(
     // The `>= cappedAt` accept (i.e. reject only when strictly earlier) is
     // deliberate and matches the pool — do not tighten it to a strict `>`.
     if (account.status === 'capped' && account.statusReason === 'usage_cap') {
-      if (cappedAt === null || primaryReset * 1000 < cappedAt) {
+      if (cappedAt === null || storedReset * 1000 < cappedAt) {
         return null
       }
     }
-    return primaryReset
+    return storedReset
   }
   return null
 }

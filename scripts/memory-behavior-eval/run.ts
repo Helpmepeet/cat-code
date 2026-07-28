@@ -383,15 +383,17 @@ interface RunResult {
   rawFile: string
 }
 
-async function runOne(
-  projectDir: string,
-  memoryDir: string,
-  outDir: string,
-  model: string,
-  effort: string | null,
-  c: CaseDef,
-  repeat: number,
-): Promise<RunResult> {
+/**
+ * Only h5's ground truth is reachable from `git log`; every other case must be
+ * checked against the fixture tree itself (package.json for `agree`/m1,
+ * src/settings.ts for h1, the unused `retries` key for `absent`). Anything not
+ * allowlisted is auto-denied in headless — hasPermissionsToUseTool turns 'ask'
+ * into a denial when prompts are unavailable (src/utils/permissions/permissions.ts)
+ * — so without read tools the cases are unanswerable regardless of the model's
+ * behavior. `dontAsk` states that denial policy outright, matching save-side.ts,
+ * instead of leaving the ask path to whatever host permission hooks are installed.
+ */
+function buildRunArgs(model: string, effort: string | null, c: CaseDef): string[] {
   const args = [
     CLI,
     '-p',
@@ -402,10 +404,39 @@ async function runOne(
     'json',
     '--max-turns',
     '8',
+    '--permission-mode',
+    'dontAsk',
     '--allowedTools',
-    'Bash(git log:*)',
+    'Read,Grep,Glob,Bash(git log:*)',
   ]
   if (effort) args.push('--effort', effort)
+  return args
+}
+
+/**
+ * Raw-transcript filename. Effort belongs in the key: the summary table counts
+ * `model:effort` as its own run, so leaving it out made `--models m:low,m:high`
+ * write both runs to one file and report a verdict whose transcript was gone.
+ */
+function rawFileName(
+  model: string,
+  effort: string | null,
+  caseId: string,
+  repeat: number,
+): string {
+  return `${effort ? `${model}-${effort}` : model}-${caseId}-r${repeat}.json`
+}
+
+async function runOne(
+  projectDir: string,
+  memoryDir: string,
+  outDir: string,
+  model: string,
+  effort: string | null,
+  c: CaseDef,
+  repeat: number,
+): Promise<RunResult> {
+  const args = buildRunArgs(model, effort, c)
 
   const started = Date.now()
   const proc = Bun.spawn(args, {
@@ -426,7 +457,7 @@ async function runOne(
   clearTimeout(killer)
   const durationMs = Date.now() - started
 
-  const rawFile = join(outDir, `${model}-${c.id}-r${repeat}.json`)
+  const rawFile = join(outDir, rawFileName(model, effort, c.id, repeat))
   writeFileSync(
     rawFile,
     JSON.stringify({ args, exitCode, stdout, stderr }, null, 2),
@@ -590,7 +621,14 @@ async function main(): Promise<void> {
   console.log(`\nraw transcripts: ${outDir}`)
 }
 
-export const _forTest = { CASES, evidenceState, parseArgs, validateArgs }
+export const _forTest = {
+  CASES,
+  buildRunArgs,
+  evidenceState,
+  parseArgs,
+  rawFileName,
+  validateArgs,
+}
 
 if (import.meta.main) {
   await main()
