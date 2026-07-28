@@ -97,10 +97,27 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   expect(html).not.toContain('Transcript (projected)')
 })
 
-test('PL-A startup preload is after-paint/store-only and restore is store-first', () => {
+test('PL-A wiring tripwire: the startup preload and restore call the parts they claim to', () => {
+  // LAYER HONESTY: this is a WIRING tripwire, not behaviour. App owns hooks and
+  // effects, and the renderer suite is SSR-only (no DOM — see
+  // AccountsPage.test.tsx), so App cannot be mounted and none of these effects
+  // can be executed here. It therefore only asserts things source text can
+  // actually decide: that a named call site exists, and the exact shape of a
+  // nesting. It CANNOT tell whether the effect ever mounts, and the earlier
+  // version of this test claimed it could — asserting the two schedulers appear
+  // somewhere in the body says nothing about which wraps which. Slices are
+  // anchored on CODE, never on a comment: rewording a comment must not break a
+  // test, and must not silently widen the slice either.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const preloadStart = source.indexOf('// PL-A: roster hydration unlocks')
-  const preloadEnd = source.indexOf('\n  const rosterKey', preloadStart)
+  const preloadStart = source.indexOf(
+    'if (!hostSnapshotReady || startupPreloadStartedRef.current) return',
+  )
+  const preloadEnd = source.indexOf(
+    '\n  }, [hostSnapshotReady, queueTranscriptPreload])',
+    preloadStart,
+  )
+  expect(preloadStart).toBeGreaterThan(-1)
+  expect(preloadEnd).toBeGreaterThan(preloadStart)
   const preloadBody = source.slice(preloadStart, preloadEnd)
   const admissionStart = source.indexOf('const queueTranscriptPreload = useCallback(')
   const admissionEnd = source.indexOf('\n\n  useEffect(() => {', admissionStart)
@@ -112,8 +129,11 @@ test('PL-A startup preload is after-paint/store-only and restore is store-first'
   expect(source).toContain(
     'onRestore={sessionId => void performRestore(sessionId)}',
   )
-  expect(preloadBody).toContain('window.requestAnimationFrame')
-  expect(preloadBody).toContain('window.setTimeout')
+  // The paint yield is a frame THEN a timer: the exact nesting, not two loose
+  // mentions that a reversed pair would satisfy just as well.
+  expect(preloadBody).toContain(
+    'window.requestAnimationFrame(() => {\n      timer = window.setTimeout(() => {',
+  )
   expect(preloadBody).toContain('queueTranscriptPreload(descriptors)')
   expect(preloadBody).not.toContain("dispatchShell({ type: 'preview-open'")
   expect(admissionBody).toContain('preloadQueueRef.current.then(')
@@ -574,7 +594,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // "typeable" can never drift apart from "sendable" again.
   expect(source).toContain('readOnly={!composerGate.editable}')
   expect(source).toContain(
-    'disabled={!composerGate.editable || prompt.trim().length === 0}',
+    'disabled={\n              !composerGate.editable ||\n              prompt.trim().length === 0 ||\n              pendingSubmit !== null\n            }',
   )
   expect(source).toContain('attachDisabled={!composerGate.editable}')
   // …and nothing instructs the user to act on a not-yet-connected session.
@@ -1150,4 +1170,239 @@ test('a previewed pane with an empty cache claims nothing', () => {
   const html = renderToStaticMarkup(<SessionPane {...props} />)
   expect(html).not.toContain('Permission mode:')
   expect(html).not.toContain('0%')
+})
+
+/* ------------------------------------------------------------------------- *
+ * 2026-07-28 repair wave — FIX-5
+ * ------------------------------------------------------------------------- */
+
+/** A minimal live, idle session pane. Spread and override the one field a test
+ *  is about, so a prop added to SessionPane fails compilation once, here. */
+function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
+  return {
+    accountsSnapshot: null,
+    accountsLastResult: null,
+    orchestratorActive: false,
+    activeConnection: { status: 'ready', inputEnabled: true },
+    activeDescriptor: undefined,
+    activeLog: {
+      inputEnabled: true,
+      messages: [],
+      retainedBytes: 0,
+      truncated: false,
+      error: null,
+      messageBytes: [],
+    },
+    activeAccount: null,
+    activeSessionId: 'session-1',
+    isActivePane: true,
+    branch: null,
+    allowPermission: () => {},
+    model: null,
+    reasoningEffort: null,
+    fastMode: false,
+    copyForLlm: () => {},
+    denyPermission: () => {},
+    history: [],
+    mentionItems: [],
+    onApprovePlan: () => {},
+    onPaste: () => {},
+    onRemovePaste: () => {},
+    onRevisePlan: () => {},
+    partialCount: 0,
+    pastes: [],
+    permissionContext: null,
+    permissionQueue: [],
+    planReview: null,
+    askQuestion: null,
+    onAnswerQuestions: () => {},
+    onCancelQuestions: () => {},
+    prompt: '',
+    restorePermission: () => {},
+    setPermissionMode: () => {},
+    setPrompt: () => {},
+    submit: () => {},
+    transcript: createTranscriptState(),
+    transportError: null,
+  } satisfies ComponentProps<typeof SessionPane>
+}
+
+test('a truncated transcript is styled as a warning, with a tone the theme actually defines', () => {
+  // `tone-warning` is not a token: theme.css declares --color-tone-warn (and
+  // -danger/-good/-success/-info), so Tailwind emitted NOTHING for
+  // text-tone-warning / border-tone-warning and the only signal that a
+  // transcript is incomplete rendered as ordinary body text.
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      preview
+      previewTruncationMessage="Earlier restored history was omitted."
+      activeLog={{
+        inputEnabled: true,
+        messages: [],
+        retainedBytes: 0,
+        truncated: true,
+        error: null,
+        messageBytes: [],
+      }}
+    />,
+  )
+
+  expect(html).toContain('Earlier restored history was omitted.')
+  expect(html).toContain('Raw message history was truncated')
+  expect(html).not.toContain('tone-warning')
+  // The trailing delimiters matter: `text-tone-warning` contains `text-tone-warn`,
+  // so a bare substring check would pass on the broken class too.
+  expect(html).toContain('text-tone-warn"')
+  expect(html).toContain('border-tone-warn ')
+})
+
+test('a parked prompt is visible, and the send arrow says so', () => {
+  // CC-16 parks a prompt submitted before the engine can take it, and clears the
+  // composer as if it had been sent. Nothing rendered the parked text, so the
+  // message simply vanished; and a second Enter was a silent no-op while the
+  // send arrow stayed lit.
+  const idle = renderToStaticMarkup(<SessionPane {...idleSessionPaneProps()} />)
+  expect(idle).not.toContain('Queued')
+
+  const parked = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      prompt="ship it"
+      pendingSubmit="run the migration"
+    />,
+  )
+  expect(parked).toContain('run the migration')
+  expect(parked).toContain('Queued')
+  const sendButton =
+    parked.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+  expect(sendButton).toContain('disabled=""')
+
+  // …and with nothing parked the very same draft still sends.
+  const sendable = renderToStaticMarkup(
+    <SessionPane {...idleSessionPaneProps()} prompt="ship it" />,
+  )
+  const liveButton =
+    sendable.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+  expect(liveButton).not.toContain('disabled=""')
+})
+
+test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused control and to a dedicated flow', () => {
+  // LAYER HONESTY: these two defects live in a `document` keydown listener
+  // registered by an App effect. The renderer suite is SSR-only (no DOM — see
+  // AccountsPage.test.tsx) and App cannot be mounted, so the handler cannot be
+  // executed here and no test in this package can press a key. This asserts only
+  // what source text can decide — which guard the handler applies, and that the
+  // listener is not attached while another surface owns the keyboard. Executable
+  // coverage needs the predicate to live in a .ts module and a DOM harness; both
+  // are flagged in the report.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const effectStart = source.indexOf(
+    'const dedicatedFlowOwnsKeyboard =',
+  )
+  const effectEnd = source.indexOf(
+    "document.addEventListener('keydown', handleKeyDown)",
+    effectStart,
+  )
+  expect(effectStart).toBeGreaterThan(-1)
+  expect(effectEnd).toBeGreaterThan(effectStart)
+  const effectBody = source.slice(effectStart, effectEnd)
+
+  // A tag-name test let Enter on the card's own Deny button bubble to document
+  // and be answered as an ALLOW, because preventDefault() suppressed the
+  // browser's Enter → click. The guard must cover any control that acts on the
+  // key itself, buttons above all.
+  expect(effectBody).not.toContain("target.tagName === 'INPUT'")
+  expect(effectBody).toContain('target.closest(FOCUSED_KEY_OWNER_SELECTOR)')
+  expect(source).toContain('const FOCUSED_KEY_OWNER_SELECTOR =')
+  const selectorStart = source.indexOf('const FOCUSED_KEY_OWNER_SELECTOR =')
+  const selector = source.slice(selectorStart, source.indexOf('\n\n', selectorStart))
+  for (const owner of [
+    'button',
+    'input',
+    'textarea',
+    '[role="menuitem"]',
+    '[role="menuitemradio"]',
+    '[role="alertdialog"]',
+  ]) {
+    expect(selector).toContain(owner)
+  }
+
+  // Propagation is target → document → window, so this document listener fires
+  // BEFORE AskQuestionFlow's and PlanPanel's own window listeners: one Enter
+  // would allow a parallel Bash call and answer the question.
+  expect(effectBody).toContain(
+    'selectAskQuestion(permissions, activeSessionId) !== null',
+  )
+  expect(effectBody).toContain(
+    'selectPlanReview(permissions, activeSessionId) !== null',
+  )
+  expect(effectBody).toContain('if (dedicatedFlowOwnsKeyboard) return')
+  expect(source).toContain('    dedicatedFlowOwnsKeyboard,\n  ])')
+
+  // One answer per request: a second response is rejected by the sidecar as
+  // unknown, and that rejection un-marks the card, re-enabling Allow/Deny on an
+  // already-decided request.
+  const respondStart = source.indexOf('const respondToPermission = useCallback(')
+  const respondBody = source.slice(
+    respondStart,
+    source.indexOf('\n  const allowPermission', respondStart),
+  )
+  expect(respondBody).toContain(
+    'selectPermissionQueue(permissions, sessionId).some(',
+  )
+  expect(respondBody).toContain('if (answered) return')
+  expect(
+    respondBody.indexOf('if (answered) return'),
+  ).toBeLessThan(respondBody.indexOf('sendPermissionResponse('))
+})
+
+test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page and the caret read the right source', () => {
+  // LAYER HONESTY: each of these lives inside App's render/effect body, which
+  // this SSR-only suite cannot mount or feed. Source text can decide which
+  // selector a call site reads and whether a prop is passed at all, which is
+  // exactly what these four defects were; it cannot prove the resulting UI.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // `row.sessionId` holds the engineSessionId once one is assigned, so matching
+  // a panel's appSessionId against it missed every ready session and the
+  // in-session meta strip read "none" forever.
+  expect(source).not.toContain('sessionCatalogRows.find(r => r.sessionId === sessionId)')
+  expect(source).toContain('sessionCatalogRows.find(r => r.appSessionId === sessionId)')
+
+  // Without `sessionState` the drawer renders none of the five live panes that
+  // the Settings rebuild moved into it.
+  const inspectorStart = source.indexOf('<MetadataInspector')
+  const inspectorBody = source.slice(
+    inspectorStart,
+    source.indexOf('/>', inspectorStart),
+  )
+  expect(inspectorBody).toContain('sessionState={buildSessionInspectorState({')
+  expect(inspectorBody).toContain('selectSettingsSnapshot(settings, activeSessionId)')
+  expect(inspectorBody).toContain('selectWorkspaceTrustSnapshot(')
+  expect(inspectorBody).toContain('selectDiagnosticsSnapshot(diagnostics, activeSessionId)')
+
+  // An account verb with no session open used to return before sending
+  // anything, so the page's confirmation dialog waited forever for a result
+  // that could never arrive.
+  const verbStart = source.indexOf('const sendAccountVerb = useCallback(')
+  const verbBody = source.slice(
+    verbStart,
+    source.indexOf('\n  // The Accounts page reads', verbStart),
+  )
+  expect(verbBody).not.toContain('if (!activeSessionId) return')
+  expect(verbBody).toContain("kind: 'account.result'")
+  expect(verbBody).toContain('requestId: verb.requestId')
+  expect(verbBody).toContain('ok: false')
+
+  // The Accounts page reads the polled pool, which refreshes on a timer; the
+  // post-verb snapshot landed in the per-session map the page no longer reads.
+  expect(source).toContain(
+    "dispatchAccounts({ type: 'pool', pool: snapshot })",
+  )
+
+  // Reassigning a controlled textarea's value drops the selection to the end,
+  // so an at-caret paste and the atomic pill-delete both threw the caret away.
+  expect(source).toContain('el.setSelectionRange(caret, caret)')
+  expect(source).toContain('pendingCaretRef.current = {')
 })

@@ -263,6 +263,7 @@ import {
 } from './StartupSurfaces.js'
 import { SessionsPage } from './SessionsPage.js'
 import { MetadataInspector } from './MetadataInspector.js'
+import { buildSessionInspectorState } from './sessionInspectorState.js'
 import { buildSessionMetadataView } from './messageMetadata.js'
 import {
   SessionActionsMenu,
@@ -283,6 +284,7 @@ import {
 } from './verbAckResultState.js'
 import { SettingsShell } from './SettingsShell.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import type {
   AccountResultFrame,
   AccountStatus,
@@ -341,6 +343,22 @@ const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
 const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
 /** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
+
+/**
+ * Elements that already act on Enter/Escape themselves. The plain-key permission
+ * shortcuts are a shortcut for "focus is on nothing"; whenever focus sits inside
+ * one of these the focused control decides, so Enter on the card's own Deny
+ * button denies instead of being swallowed and answered as an allow.
+ *
+ * A tag-name test is not enough: buttons, menu items and dialog contents all
+ * carry their own Enter semantics, and `preventDefault()` here suppresses the
+ * browser's Enter → click.
+ */
+const FOCUSED_KEY_OWNER_SELECTOR =
+  'a[href], button, input, select, textarea, [contenteditable], ' +
+  '[role="button"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
+  '[role="menuitemcheckbox"], [role="option"], [role="listbox"], ' +
+  '[role="dialog"], [role="alertdialog"]'
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
@@ -1090,7 +1108,26 @@ export function App() {
   // as an `account.result` frame (→ accountsState.lastResult).
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
-      if (!activeSessionId) return
+      if (!activeSessionId) {
+        // The Accounts page is reachable with no session open, but a verb needs
+        // an engine process to carry it. Answer with a real outcome instead of
+        // dropping the click: the page waits for one before it closes its
+        // confirmation dialog, so returning silently leaves that dialog up
+        // forever. Renderer-local — this result never crosses the wire.
+        dispatchAccounts({
+          type: 'frame',
+          frame: {
+            kind: 'account.result',
+            protocolVersion: PROTOCOL_VERSION,
+            sessionId: '',
+            requestId: verb.requestId,
+            verb: verb.type,
+            ok: false,
+            message: 'Open a session first, then change accounts from there.',
+          },
+        })
+        return
+      }
       if (verb.type === 'account.login') {
         setOauthProvider(verb.provider ?? 'openai')
         // AccountsPage starts login through this generic verb callback rather
@@ -1105,6 +1142,25 @@ export function App() {
     },
     [activeSessionId],
   )
+
+  // The Accounts page reads the polled global pool, which only refreshes on the
+  // accounts owner's timer — so a rename toasts success while the row keeps the
+  // old alias for up to a minute. The sidecar re-broadcasts its own snapshot with
+  // the change already applied straight after a pool-mutating verb, so adopt that
+  // as the pool view the moment it lands. It arrives AFTER the result frame
+  // (sidecarServer.ts sends the result, then re-broadcasts), which is why this
+  // tracks the promoted snapshot's identity rather than firing once on the result.
+  const promotedAccountsSnapshotRef = useRef<AccountsSnapshot | null>(null)
+  useEffect(() => {
+    const result = accounts.lastResult
+    if (!result || !result.ok) return
+    const snapshot = selectAccountsSnapshot(accounts, result.sessionId)
+    if (!snapshot || snapshot === promotedAccountsSnapshotRef.current) return
+    promotedAccountsSnapshotRef.current = snapshot
+    if (snapshot !== accounts.pool) {
+      dispatchAccounts({ type: 'pool', pool: snapshot })
+    }
+  }, [accounts])
 
   // P4-15 — the reauth banner's "Re-authenticate" action and the first-run OAuth
   // surface both begin the SAME engine OAuth flow (the `account.login` verb;
@@ -1695,6 +1751,13 @@ export function App() {
       requestId: string,
       response: PermissionResponseInput,
     ) => {
+      // One answer per request. A second response for the same id is rejected by
+      // the sidecar as unknown, and that rejection un-marks the card as answered,
+      // re-enabling Allow/Deny on a request that is already decided.
+      const answered = selectPermissionQueue(permissions, sessionId).some(
+        item => item.request.requestId === requestId && item.submitted,
+      )
+      if (answered) return
       dispatchPermission({ type: 'submitted', sessionId, requestId })
       const error = sendPermissionResponse(
         getBridge(),
@@ -1709,7 +1772,7 @@ export function App() {
         setTransportError(null)
       }
     },
-    [],
+    [permissions],
   )
 
   const allowPermission = useCallback(
@@ -1737,15 +1800,27 @@ export function App() {
 	    [activeSessionId, respondToPermission],
   )
 
+  // A request with its OWN dedicated renderer owns the keyboard while it is up:
+  // AskQuestionFlow and PlanPanel each register a `window` keydown listener, and
+  // a key event reaches `document` BEFORE `window`. Leaving this listener
+  // attached alongside one of them makes a single Enter resolve two unrelated
+  // requests — answering a question would also allow a parallel Bash call.
+  const dedicatedFlowOwnsKeyboard =
+    selectAskQuestion(permissions, activeSessionId) !== null ||
+    selectPlanReview(permissions, activeSessionId) !== null
+
   useEffect(() => {
     if (!pendingPermission || !activeSessionId) return
+    if (dedicatedFlowOwnsKeyboard) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Never hijack keys while the user is typing (e.g. deny feedback).
-      const target = event.target as HTMLElement | null
+      // Never hijack a key the focused element already acts on: the deny
+      // feedback field, and every button/menu item whose own Enter this would
+      // otherwise suppress.
+      const target = event.target
       if (
-        target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+        target instanceof Element &&
+        target.closest(FOCUSED_KEY_OWNER_SELECTOR)
       ) {
         return
       }
@@ -1773,6 +1848,7 @@ export function App() {
     denyPermission,
     pendingPermission,
     activeSessionId,
+    dedicatedFlowOwnsKeyboard,
   ])
 
   // Shell keyboard: keyboard-first tab switching + create/close, matching the
@@ -1870,8 +1946,12 @@ export function App() {
 	        selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false
 	      // Read-only git branch for the empty-state meta strip — from the session
 	      // log's `gitBranch` (shared catalog seam), keyed by this panel's session.
+	      // Matched on `appSessionId` for the same reason `activeSessionRow` is
+	      // (:911): `row.sessionId` holds the engineSessionId once one is assigned,
+	      // so matching on it misses every session that has reached ready.
 	      const panelBranch =
-	        sessionCatalogRows.find(r => r.sessionId === sessionId)?.gitBranch ?? null
+	        sessionCatalogRows.find(r => r.appSessionId === sessionId)?.gitBranch ??
+	        null
 	      // P4-24c — the LIVE composer run-controls seam (Model/effort/fast + the
 	      // real picker options), re-broadcast on every change so the faces reflect
 	      // this session's current state with no respawn. Supersedes the P4-24 read
@@ -2096,6 +2176,7 @@ export function App() {
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
 	            )}
 	            pastes={selectSessionPasteList(pasteState, sessionId)}
+	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
 	            history={selectHistory(historyState, sessionId)}
 	            onPaste={(content, selectionStart, selectionEnd) =>
 	              addSessionPaste(
@@ -2403,6 +2484,19 @@ export function App() {
                 null,
               threadGoal: selectThreadGoalSnapshot(goalMemory, activeSessionId),
             })}
+            sessionState={buildSessionInspectorState({
+              cwd: tabDescriptorsById.get(activeSessionId)?.cwd ?? null,
+              settings: selectSettingsSnapshot(settings, activeSessionId),
+              permissionContext: selectPermissionContext(
+                permissions,
+                activeSessionId,
+              ),
+              workspaceTrust: selectWorkspaceTrustSnapshot(
+                workspaceTrust,
+                activeSessionId,
+              ),
+              diagnostics: selectDiagnosticsSnapshot(diagnostics, activeSessionId),
+            })}
             log={selectRawMessageLog(state, activeSessionId)}
             onClose={() => setMetadataOpen(false)}
           />
@@ -2695,6 +2789,7 @@ export function SessionPane({
   onToggleOrchestrator,
   partialCount,
   pastes,
+  pendingSubmit = null,
   permissionContext,
   permissionQueue,
   planReview,
@@ -2823,6 +2918,16 @@ export function SessionPane({
   // history); `isComposingRef` guards Enter/arrows during IME composition
   // (parity `Chat.jsx:716`, `src/hooks/useTextInput.ts`).
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (at-caret
+  // paste, whole-token Backspace). Reassigning a controlled textarea's `value`
+  // drops the selection to the end of the text, so without this the next
+  // keystroke lands at the end of the draft instead of where the edit happened —
+  // and a second Backspace eats the last character rather than continuing.
+  // `base` is the offset the edit ends at in the OLD draft; the new caret is that
+  // offset shifted by however much the rewrite changed the length.
+  const pendingCaretRef = useRef<{ base: number; prevLength: number } | null>(
+    null,
+  )
   // Feature #4 — the composer action bar's toolbar node, so Tab / ArrowDown-when-
   // empty can move focus from the textarea into the first chip face.
   const actionBarRef = useRef<HTMLDivElement>(null)
@@ -2854,6 +2959,21 @@ export function SessionPane({
     const max = Math.round(window.innerHeight * 0.38)
     el.style.height = `${Math.min(el.scrollHeight, max)}px`
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
+  }, [prompt])
+
+  // Put the caret back where the programmatic rewrite left off (see
+  // `pendingCaretRef`). Same passive-effect DOM write as the auto-resize above.
+  useEffect(() => {
+    const pending = pendingCaretRef.current
+    if (!pending) return
+    pendingCaretRef.current = null
+    const el = composerRef.current
+    if (!el) return
+    const caret = Math.max(
+      0,
+      Math.min(prompt.length, pending.base + (prompt.length - pending.prevLength)),
+    )
+    el.setSelectionRange(caret, caret)
   }, [prompt])
 
   // PlanPanel open/close (P4-11): renderer-local, resets when the pane
@@ -3041,6 +3161,10 @@ export function SessionPane({
     const text = event.clipboardData.getData('text')
     if (!text || !shouldCollapsePaste(text)) return
     event.preventDefault()
+    pendingCaretRef.current = {
+      base: event.currentTarget.selectionEnd,
+      prevLength: prompt.length,
+    }
     onPaste(text, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)
   }
 
@@ -3146,6 +3270,10 @@ export function SessionPane({
         const range = pasteTokenBeforeCaret(prompt, el.selectionStart)
         if (range) {
           event.preventDefault()
+          pendingCaretRef.current = {
+            base: range.end,
+            prevLength: prompt.length,
+          }
           setPrompt(prompt.slice(0, range.start) + prompt.slice(range.end))
           return
         }
@@ -3204,7 +3332,7 @@ export function SessionPane({
         >
           {previewTruncationMessage ? (
             <div
-              className="mx-auto mb-3 w-full max-w-[740px] border-l-2 border-tone-warning px-3 py-2 text-xs text-tone-warning"
+              className="mx-auto mb-3 w-full max-w-[740px] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
               role="status"
             >
               {previewTruncationMessage}
@@ -3304,8 +3432,23 @@ export function SessionPane({
       ) : null}
 
       {activeLog.truncated ? (
-        <div className="text-sm text-tone-warning">
+        <div className="text-sm text-tone-warn">
           Raw message history was truncated to the renderer retention budget.
+        </div>
+      ) : null}
+
+      {/* CC-16 — the parked prompt is the only sign the message still exists:
+       * the composer was cleared on submit, so without this row the text looks
+       * lost until the session finishes connecting. */}
+      {pendingSubmit ? (
+        <div className="flex items-baseline gap-2 text-xs" role="status">
+          <span className="shrink-0 font-medium text-text-muted">Queued</span>
+          <span className="min-w-0 flex-1 truncate text-text-subtle">
+            {pendingSubmit}
+          </span>
+          <span className="shrink-0 text-text-subtle">
+            Sends when the session is ready.
+          </span>
         </div>
       ) : null}
 
@@ -3413,6 +3556,9 @@ export function SessionPane({
                 // A genuine keystroke abandons any active ↑/↓ recall cursor
                 // (parity with the prototype resetting historyIdx on input) and
                 // prunes pastes whose token was actually deleted (reason 'edit').
+                // A real keystroke also abandons any caret a programmatic
+                // rewrite was about to restore: the browser already placed it.
+                pendingCaretRef.current = null
                 setHistoryNav(EMPTY_HISTORY_NAV)
                 setPrompt(event.target.value)
               }}
@@ -3433,7 +3579,11 @@ export function SessionPane({
             aria-label="Send prompt"
             title="Send"
             className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
-            disabled={!composerGate.editable || prompt.trim().length === 0}
+            disabled={
+              !composerGate.editable ||
+              prompt.trim().length === 0 ||
+              pendingSubmit !== null
+            }
             type="submit"
           >
             <svg
@@ -3817,6 +3967,9 @@ type SessionPaneProps = {
   mentionItems: MentionItem[]
   /** Collapsed pastes held aside for this session, oldest first. */
   pastes: PasteEntry[]
+  /** CC-16 — a prompt submitted before the engine could accept it, held until it
+   * can. Present = the composer is empty because the text is queued, not lost. */
+  pendingSubmit?: string | null
   /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
   history: string[]
   /** Store a large paste as a collapsed chip and splice its token in at the
