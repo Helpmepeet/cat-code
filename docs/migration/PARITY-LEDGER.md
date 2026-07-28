@@ -1677,7 +1677,7 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Memory-sources count grid (Managed/User/Project/Local/AutoMem/TeamMem) | summary | ➕ real-added | `MemoryPage.tsx:95-102`, `goalMemoryState.ts:65-108` | Real per-scope roll-up; not in prototype. |
 | "Read-only snapshot" header pill | chrome/badge | ➕ real-added | `MemoryPage.tsx:52-54` | Signals the deliberate read-only scope; no prototype equivalent. |
 | Waiting/empty state (null snapshot) | ux-state/loading | ➕ real-added | `MemoryPage.tsx:59-71` | "Waiting for the engine's memory snapshot…"; prototype always has mock so has none. |
-| "Scope" notes list | chrome/notes | ➕ real-added | `MemoryPage.tsx:209-223`, `memoryDomain.ts:59-63` | Renders engine `notes` documenting withheld-content + deferred-writes scope. |
+| "Scope" notes list | chrome/notes | ✂️ cut 2026-07-27 | (no render site) | **The mount is GONE. Do not code against this row.** The three notes explained withheld payloads and undesigned writers, which the 2026-07-27 operator text rules bar from any user surface; `eb7dc4e`/`2e71168` deleted the `<Notes>` component and `MemoryPage.tsx` now contains no reference to `notes` at all. `memoryDomain.ts:64` still sends `notes: []` only because the field is required by the wire contract, and nothing reads it. |
 | `autoMemoryEnabled` state line ("Auto-memory is enabled/disabled") | ux-state/data-binding | ➕ real-added | `MemoryPage.tsx:82-84`, `protocol.ts:456` | Real toggle state surfaced; not in prototype. |
 
 ### 24. PlanPanel.jsx — reopenable plan-mode review drawer (PlanBar + PlanPanel) with file path, editable/checklist steps, requested permissions, and mode-based approve/revise
