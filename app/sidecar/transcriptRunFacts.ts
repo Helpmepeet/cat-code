@@ -14,8 +14,17 @@ import type { TranscriptRunFacts } from '../shared/protocol.js'
 /**
  * Derive a session's run facts by scanning its transcript JSONL directly.
  *
- * Deliberately independent of the engine's message pipeline. Each fact lives on
- * a different record shape, verified against real transcripts (2026-07-28):
+ * Two tiers, in order. AUTHORITATIVE: a `system`/`run_facts` record, which the
+ * engine writes per main-thread turn (deduplicated on change) carrying model,
+ * permission mode, effort and the context window it actually ran with. The
+ * newest one wins as a UNIT, because its value is that the four coexisted in one
+ * request. LEGACY: every transcript written before that record existed, which is
+ * every session already on disk, so the byproduct scan below is not dead code
+ * and cannot be deleted.
+ *
+ * The legacy tier is deliberately independent of the engine's message pipeline.
+ * Each fact lives on a different record shape, verified against real transcripts
+ * (2026-07-28):
  *   - model             `.message.model` on an `assistant` record
  *   - permissionMode    `.permissionMode`, which rides USER records
  *   - effort            `.effort` on a `system`/`codex_send_path` record
@@ -70,6 +79,7 @@ export function readTranscriptRunFacts(
   }
 
   const facts = { ...empty }
+  let snapshot: RunFactsSnapshot | null = null
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]
     if (!line) continue
@@ -80,6 +90,20 @@ export function readTranscriptRunFacts(
       continue
     }
     if (!isRecord(record)) continue
+
+    if (
+      snapshot === null &&
+      record.type === 'system' &&
+      record.subtype === 'run_facts'
+    ) {
+      snapshot = {
+        model: readString(record.model),
+        permissionMode: readString(record.permissionMode),
+        effort: readString(record.effort),
+        contextWindow: readPositiveNumber(record.contextWindow),
+      }
+      continue
+    }
 
     facts.permissionMode ??= readString(record.permissionMode)
     if (record.type === 'system' && record.subtype === 'codex_send_path') {
@@ -95,20 +119,47 @@ export function readTranscriptRunFacts(
       facts.model !== null &&
       facts.permissionMode !== null &&
       facts.effort !== null &&
-      facts.usedTokens !== null
+      facts.usedTokens !== null &&
+      snapshot !== null
     ) {
       break
     }
   }
 
+  if (snapshot !== null) {
+    // Wholesale, not field-by-field: the point of the snapshot is that its four
+    // values coexisted in one request. Merging a newer byproduct record over it
+    // would rebuild the incoherence it exists to remove. Cost: a mode change
+    // made after the last main-thread turn is missed until the next turn writes
+    // a fresh snapshot, which is a bounded staleness, not a wrong pairing.
+    facts.model = snapshot.model
+    facts.permissionMode = snapshot.permissionMode
+    facts.effort = snapshot.effort
+  }
   // Deliberately NOT part of the early-exit above: the window is derived from
   // `facts.model`, which the exit condition already requires, so an exit can
   // never skip it. Resolving here rather than per-record also means one lookup
   // per transcript instead of one per assistant record.
-  if (facts.model !== null) {
-    facts.contextWindow = readContextWindow(facts.model, resolveContextWindow)
-  }
+  //
+  // The snapshot's own window is preferred because the engine captured it AT RUN
+  // TIME. Resolving instead reads today's environment (1M betas, capability
+  // data, overrides), which for a historic run reports a window that was never
+  // in force. The resolver stays as the tier for transcripts written before the
+  // engine recorded run facts, which is every session already on disk.
+  facts.contextWindow =
+    snapshot?.contextWindow ??
+    (facts.model !== null
+      ? readContextWindow(facts.model, resolveContextWindow)
+      : null)
   return facts
+}
+
+/** One request's coherent facts, as the engine recorded them (`run_facts`). */
+type RunFactsSnapshot = {
+  model: string | null
+  permissionMode: string | null
+  effort: string | null
+  contextWindow: number | null
 }
 
 /**
@@ -149,6 +200,12 @@ function readUsedTokens(usage: unknown): number | null {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function readPositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
 }
 
 function readNumber(value: unknown): number {

@@ -183,3 +183,85 @@ test('a corrupt line is skipped rather than failing the whole read', () => {
   expect(readTranscriptRunFacts(file, noWindow).permissionMode).toBe('plan')
   rmSync(dir, { recursive: true, force: true })
 })
+
+const runFacts = (
+  model: string,
+  permissionMode: string,
+  effort: string | null,
+  contextWindow: number,
+) => ({
+  type: 'system',
+  subtype: 'run_facts',
+  model,
+  permissionMode,
+  effort,
+  contextWindow,
+})
+
+/** Never called: a transcript carrying a snapshot must not consult the resolver. */
+const forbiddenResolver = () => {
+  throw new Error('resolver consulted despite a recorded window')
+}
+
+test('a run_facts snapshot wins over the byproduct records, window included', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([
+      user('plan'),
+      sendPath('low'),
+      assistant('gpt-5.5', { input_tokens: 1000 }),
+      runFacts('gpt-5.6-luna', 'auto', 'high', 372_000),
+    ]),
+    forbiddenResolver,
+  )
+  expect(facts.model).toBe('gpt-5.6-luna')
+  expect(facts.permissionMode).toBe('auto')
+  expect(facts.effort).toBe('high')
+  // Captured at run time, not resolved from today's environment.
+  expect(facts.contextWindow).toBe(372_000)
+  // usedTokens is a MEASUREMENT, so it still comes from the assistant record.
+  expect(facts.usedTokens).toBe(1000)
+})
+
+test('the snapshot is taken as a unit, not merged with newer byproducts', () => {
+  // The send-path record is NEWER than the snapshot. Letting it win would pair
+  // an effort from one turn with a model from another — the incoherence the
+  // snapshot exists to remove.
+  const facts = readTranscriptRunFacts(
+    transcriptOf([
+      runFacts('gpt-5.6-luna', 'auto', 'high', 372_000),
+      sendPath('xhigh'),
+    ]),
+    forbiddenResolver,
+  )
+  expect(facts.effort).toBe('high')
+})
+
+test('the newest snapshot wins when a session changed mid-run', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([
+      runFacts('claude-sonnet-5', 'default', null, 200_000),
+      runFacts('gpt-5.6-sol', 'auto', 'xhigh', 372_000),
+    ]),
+    forbiddenResolver,
+  )
+  expect(facts.model).toBe('gpt-5.6-sol')
+  expect(facts.effort).toBe('xhigh')
+  expect(facts.contextWindow).toBe(372_000)
+})
+
+test('a legacy transcript still resolves its window from the model', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([user('plan'), assistant('gpt-5.5', { input_tokens: 10 })]),
+    model => (model === 'gpt-5.5' ? 272_000 : null),
+  )
+  expect(facts.model).toBe('gpt-5.5')
+  expect(facts.contextWindow).toBe(272_000)
+})
+
+test('a snapshot with an unusable window falls back to the resolver', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([runFacts('gpt-5.5', 'auto', 'high', 0)]),
+    model => (model === 'gpt-5.5' ? 272_000 : null),
+  )
+  expect(facts.contextWindow).toBe(272_000)
+})

@@ -591,6 +591,70 @@ function getOwnedAgentTranscriptPath(agentId: AgentId): string | null {
   }
 }
 
+/** Last snapshot written, so an unchanged run records once rather than per request. */
+let lastRunFactsSnapshot: string | null = null
+
+/**
+ * Append a run_facts snapshot — the model, permission mode, effort and context
+ * window one request actually ran with — to the current session JSONL.
+ *
+ * These four are otherwise only recoverable as byproducts of unrelated records:
+ * model from an `assistant` message, permission mode from a typed user prompt,
+ * effort from Codex WS completion telemetry (`recordCodexSendPath`, hence absent
+ * on Anthropic, HTTP-fallback and aborted turns), and the context window not at
+ * all. A reader assembling them independently can pair facts from turns that
+ * never coexisted — a synthetic assistant's model beside an earlier turn's
+ * usage. Writing all four from ONE resolved request keeps the snapshot coherent
+ * by construction.
+ *
+ * `contextWindow` is captured here rather than re-derived at read time because
+ * `getContextWindowForModel()` branches on the CURRENT environment (1M betas,
+ * capability data, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`), so resolving a historic
+ * run against today's environment reports a window that was never in force.
+ *
+ * No-op unless the transcript has an owner — see `getOwnedTranscriptPath()`.
+ * Resolved that way rather than through `getProject()`, which would construct
+ * the Project (and register its cleanup handler) as a diagnostic side effect.
+ *
+ * Sync and best-effort — never throws. Safe to call from the API path.
+ */
+export function recordRunFacts(entry: {
+  model: string
+  permissionMode: string
+  effort: string | null
+  contextWindow: number
+}): void {
+  try {
+    const transcriptPath = getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    const sessionId = getSessionId()
+    const snapshot = JSON.stringify([
+      sessionId,
+      entry.model,
+      entry.permissionMode,
+      entry.effort,
+      entry.contextWindow,
+    ])
+    if (snapshot === lastRunFactsSnapshot) return
+    lastRunFactsSnapshot = snapshot
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype: 'run_facts',
+      sessionId,
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/** Clear the dedupe so one test's writes don't depend on a prior test's. */
+export function resetRunFactsDedupeForTest(): void {
+  lastRunFactsSnapshot = null
+}
+
 /**
  * Append a prompt_cache_break diagnostic entry to the current session JSONL.
  * Records confirmed prompt cache misses with structured cause metadata so

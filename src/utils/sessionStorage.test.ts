@@ -8,7 +8,7 @@ import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/
 import { asAgentId, asSessionId } from '../types/ids.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordTranscript, resetProjectForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordRunFacts, recordTranscript, resetProjectForTesting, resetRunFactsDedupeForTest } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -298,6 +298,68 @@ describe('session storage', () => {
       expect(text).toContain('"subtype":"codex_stream_surface"')
       expect(text).toContain('abc123')
       expect(text).toContain('gpt-5.6-luna')
+    })
+  })
+
+  describe('run facts', () => {
+    const facts = {
+      model: 'gpt-5.6-luna',
+      permissionMode: 'auto',
+      effort: 'high',
+      contextWindow: 372_000,
+    }
+
+    beforeEach(() => {
+      resetRunFactsDedupeForTest()
+    })
+
+    test('no owning session writes nothing', () => {
+      expect(readdirSync(tempDir)).toHaveLength(0)
+
+      recordRunFacts(facts)
+
+      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+      expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    test('an owning session writes all four facts as one record', async () => {
+      await recordTranscript([
+        createUserMessage({ content: 'real turn', uuid: randomUUID() }),
+      ])
+      await flushSessionStorage()
+
+      recordRunFacts(facts)
+
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      const line = text
+        .split('\n')
+        .find(l => l.includes('"subtype":"run_facts"'))
+      expect(line).toBeDefined()
+      // One record carries all four, which is the point: a reader takes the
+      // snapshot whole instead of pairing facts from turns that never coexisted.
+      const record = JSON.parse(line!)
+      expect(record.model).toBe('gpt-5.6-luna')
+      expect(record.permissionMode).toBe('auto')
+      expect(record.effort).toBe('high')
+      expect(record.contextWindow).toBe(372_000)
+    })
+
+    test('an unchanged run records once; a change records again', async () => {
+      await recordTranscript([
+        createUserMessage({ content: 'real turn', uuid: randomUUID() }),
+      ])
+      await flushSessionStorage()
+
+      recordRunFacts(facts)
+      recordRunFacts(facts)
+      recordRunFacts({ ...facts, effort: 'low' })
+
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      const written = text
+        .split('\n')
+        .filter(l => l.includes('"subtype":"run_facts"'))
+      expect(written).toHaveLength(2)
+      expect(written[1]).toContain('"effort":"low"')
     })
   })
 
