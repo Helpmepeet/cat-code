@@ -238,6 +238,55 @@ test('an agent-group item passes through and breaks a run', () => {
   expect(grouped[1]).toMatchObject({ id: 'agent-group:k', members })
 })
 
+// ── derivation identity: what lets the ReasoningStep memo hit ───────────────
+
+test('steps are derived once per row, so an unchanged row keeps its step identity', () => {
+  const row = thinking('a', 'First look\n\nSecond look')
+
+  const first = reasoningStepsForRow(row)
+  expect(reasoningStepsForRow(row)).toBe(first)
+  expect(reasoningStepsForRow(row)[1]).toBe(first[1])
+
+  // A rebuilt row (same content, new object) derives fresh steps — the cache is
+  // identity, never a stale value.
+  const rebuilt = thinking('a', 'First look\n\nSecond look')
+  expect(reasoningStepsForRow(rebuilt)).not.toBe(first)
+  expect(reasoningStepsForRow(rebuilt)).toEqual(first)
+})
+
+test('a run is derived once per items array, so an unrelated re-render reuses its steps', () => {
+  const items = toDisplayItems([thinking('a', 'One'), thinking('b', 'Two')])
+
+  const first = groupReasoningRuns(items)
+  const second = groupReasoningRuns(items)
+  expect(second).toBe(first)
+  expect(second[0]).toBe(first[0])
+  expect(stepsOf(second[0])).toBe(stepsOf(first[0]))
+  expect(stepsOf(second[0])[0]).toBe(stepsOf(first[0])[0])
+
+  // A different items array still groups from scratch.
+  const changed = toDisplayItems([
+    thinking('a', 'One'),
+    thinking('b', 'Two'),
+    thinking('c', 'Three'),
+  ])
+  const third = groupReasoningRuns(changed)
+  expect(third).not.toBe(first)
+  expect(stepsOf(third[0]).map(step => step.kind === 'heading' && step.text)).toEqual([
+    'One',
+    'Two',
+    'Three',
+  ])
+})
+
+test('wrapping nested rows is derived once per rows array', () => {
+  const rows = [thinking('a'), toolRow('t')]
+
+  const first = toDisplayItems(rows)
+  expect(toDisplayItems(rows)).toBe(first)
+  expect(toDisplayItems([...rows])).not.toBe(first)
+})
+
 test('grouping never drops or reorders content', () => {
   const rows = [thinking('a', 'A'), redacted('b'), toolRow('t'), thinking('c', 'C')]
   const grouped = groupReasoningRuns(toDisplayItems(rows))

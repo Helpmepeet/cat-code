@@ -71,7 +71,7 @@ function agent(
 function snapshot(
   definitions: AgentConfigSnapshot['definitions'],
 ): AgentConfigSnapshot {
-  return { definitions, failedFiles: [], availableMcpServers: [], notes: [] }
+  return { definitions, failedFiles: [], availableMcpServers: [] }
 }
 
 describe('@-mention detection', () => {

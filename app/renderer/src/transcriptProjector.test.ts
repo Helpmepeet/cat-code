@@ -1320,6 +1320,60 @@ test('an is_error tool_result resolves the card to the error status', () => {
   expect(row.result?.isError).toBe(true)
 })
 
+test('a redelivered user frame is a total no-op, correlation side effect included', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_dedupe_1',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_dedupe_1', name: 'Read', input: { file_path: '/a' } },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d0001',
+    }),
+  )
+  const userFrame = messageFrame('session-1', {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_dedupe_1',
+          content: [{ type: 'text', text: 'file contents' }],
+          is_error: false,
+        },
+        { type: 'text', text: 'now summarize it' },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000d0002',
+  })
+  state = projectServerFrame(state, userFrame)
+
+  const before = state
+  const rowsBefore = selectTranscriptRows(state, 'session-1')
+  const nestedBefore = selectNestedTranscriptRows(state, 'session-1')
+  const itemsBefore = selectTranscriptDisplayItems(state, 'session-1')
+
+  // Replay-buffer double-delivery of the SAME frame.
+  state = projectServerFrame(state, userFrame)
+
+  expect(state).toBe(before)
+  expect(selectTranscriptRows(state, 'session-1')).toEqual(rowsBefore)
+  // Re-folding would mint a fresh result object under the same id, replacing the
+  // session slice; the slice-keyed read caches would then all miss and the whole
+  // transcript would re-render for a frame that changed nothing.
+  expect(selectNestedTranscriptRows(state, 'session-1')).toBe(nestedBefore)
+  expect(selectTranscriptDisplayItems(state, 'session-1')).toBe(itemsBefore)
+})
+
 test('a tool_result with no matching tool_use is tolerated (correlated but orphaned, no crash)', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

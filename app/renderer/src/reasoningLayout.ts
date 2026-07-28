@@ -167,6 +167,23 @@ export function isHeadingLike(text: string): boolean {
   )
 }
 
+// Perf (2026-07-28): the same input-reference caching `groupAgentDelegates`
+// uses (`transcriptProjector.ts:485-540`). Every derivation below is pure in its
+// single argument, and the projector keeps rows and display-item arrays stable
+// while nothing changed, so an unrelated re-render (a delta elsewhere in the
+// transcript, opening the inspector) hands back the IDENTICAL step objects —
+// which is the only way the `ReasoningStep` memo can hit instead of re-parsing
+// every prose step's markdown. WeakMap ⇒ evicts with the input, no leak.
+const stepsByRow = new WeakMap<ReasoningRunMember, ReasoningStepModel[]>()
+const runsByItems = new WeakMap<
+  readonly TranscriptDisplayItem[],
+  ReasoningLayoutItem[]
+>()
+const displayItemsByRows = new WeakMap<
+  readonly NestedTranscriptRow[],
+  TranscriptDisplayItem[]
+>()
+
 /**
  * One reasoning ROW → its steps. A blank body is `withheld` (the encrypted-only
  * shape), a provider-stated raw trace is always prose, and a summary body splits
@@ -176,6 +193,14 @@ export function isHeadingLike(text: string): boolean {
 export function reasoningStepsForRow(
   row: ReasoningRunMember,
 ): ReasoningStepModel[] {
+  const cached = stepsByRow.get(row)
+  if (cached) return cached
+  const steps = deriveReasoningSteps(row)
+  stepsByRow.set(row, steps)
+  return steps
+}
+
+function deriveReasoningSteps(row: ReasoningRunMember): ReasoningStepModel[] {
   if (row.kind === 'redacted-thinking' || row.content.trim().length === 0) {
     return [{ key: `${row.id}:withheld`, kind: 'withheld' }]
   }
@@ -213,6 +238,9 @@ export function reasoningStepsForRow(
 export function groupReasoningRuns(
   items: readonly TranscriptDisplayItem[],
 ): ReasoningLayoutItem[] {
+  const cached = runsByItems.get(items)
+  if (cached) return cached
+
   const grouped: ReasoningLayoutItem[] = []
   let run: ReasoningRunMember[] = []
 
@@ -235,6 +263,7 @@ export function groupReasoningRuns(
     grouped.push(item)
   }
   flush()
+  runsByItems.set(items, grouped)
   return grouped
 }
 
@@ -244,5 +273,12 @@ export function groupReasoningRuns(
 export function toDisplayItems(
   rows: readonly NestedTranscriptRow[],
 ): TranscriptDisplayItem[] {
-  return rows.map(row => ({ kind: 'single', row }))
+  const cached = displayItemsByRows.get(rows)
+  if (cached) return cached
+  const items: TranscriptDisplayItem[] = rows.map(row => ({
+    kind: 'single',
+    row,
+  }))
+  displayItemsByRows.set(rows, items)
+  return items
 }

@@ -604,12 +604,10 @@ function projectMessage(
 
     case 'user':
       // User frames may carry both visible P2-1 content and P2-2 tool_result
-      // blocks. Fold correlation first, then project visible user rows.
-      return projectUserFrame(
-        sessionId,
-        correlateToolResults(state, message),
-        message,
-      )
+      // blocks; `projectUserFrame` folds correlation itself, AFTER its dedupe
+      // check, so a replayed frame stays a total no-op (same ordering as the
+      // assistant path).
+      return projectUserFrame(sessionId, state, message)
 
     case 'result':
       // Result is the only turn-end marker: prune orphan previews before
@@ -784,12 +782,25 @@ function projectUserFrame(
   state: TranscriptSessionState,
   message: Extract<SDKMessage, { type: 'user' }>,
 ): TranscriptSessionState {
+  const frameId = nonEmptyString(message.uuid)
+  // Dedupe BEFORE folding results, exactly as the assistant path does (:705): a
+  // replayed duplicate frame must be a total no-op, including its
+  // result-correlation side effect. Re-folding mints a fresh
+  // ToolResultProjection per id, which makes every read clone its tool-use rows
+  // and drops the nested-row/display-item caches — a whole-transcript
+  // re-render for a frame that changed nothing.
+  if (frameId && state.seenFrameIds[frameId]) return state
+  // Fold correlation next, ahead of every early return below: a tool_result-only
+  // frame projects no visible row, and `isSynthetic` is `isMeta ||
+  // isVisibleInTranscriptOnly` on a mapper that attaches `tool_use_result` to
+  // that same frame (`src/utils/messages/mappers.ts:200-206`), so neither shape
+  // may lose its result.
+  state = correlateToolResults(state, message)
+
   if (message.isSynthetic === true) return state
 
-  const frameId = nonEmptyString(message.uuid)
   const body: unknown = message.message
   if (!frameId || !isRecord(body)) return state
-  if (state.seenFrameIds[frameId]) return state
 
   const rawContent = body.content
   const blocks: unknown[] =
