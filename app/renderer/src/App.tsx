@@ -3484,16 +3484,24 @@ export function SessionPane({
           onFocusComposer={() => composerRef.current?.focus()}
         />
 
-        {/* TEMPORARY debug line, dev builds only (2026-07-28, operator request).
+        {/* TEMPORARY debug line (2026-07-28, operator request). DELETE ME.
          *
-         * NOT a shipped surface: it prints session ids, which §7 forbids on any
-         * real text surface. It takes the same posture as the raw-event
-         * inspector below, so Vite DCE's it out of a production build. On a
+         * It prints session ids, which §7 forbids on a real text surface, so it
+         * must not survive. It cannot be dev-gated today: `bun run dev` launches
+         * a REBRANDED Electron binary, which makes `app.isPackaged` true, so
+         * `main.ts` IS_DEV is false and the window loads `renderer/dist` instead
+         * of the Vite server. A renderer edit therefore needs `renderer:build` +
+         * relaunch, HMR never applies, and `import.meta.env.DEV` is false. On a
          * preview it also names which run facts the rail actually RECEIVED,
          * which is the one signal that separates "the cache never got the
          * facts" from "the rail got them and did not render" — the ambiguity
          * that made this bug expensive to find. Delete once the rail settles. */}
-        {import.meta.env.DEV ? (
+        {/* NOTE: deliberately NOT gated on `import.meta.env.DEV`. The dev app
+         * runs a PRODUCTION renderer bundle (see the block comment above), so
+         * that flag is false and any dev-gated UI is dead. Unconditional is the
+         * only thing that works until the dev/packaged detection is fixed,
+         * which is exactly why this must be deleted, not left to rot. */}
+        {true ? (
           <div className="mt-2 select-all rounded-[4px] bg-white/[0.04] px-2 py-1 font-mono text-[11px] leading-tight text-[#a1a1aa]">
             app {activeSessionId ?? 'none'} · engine{' '}
             {activeDescriptor?.engineSessionId ?? 'none'}
