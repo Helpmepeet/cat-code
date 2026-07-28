@@ -7,8 +7,10 @@
 
 import { afterEach, expect, test } from 'bun:test'
 import {
+  appendFileSync,
   existsSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -27,6 +29,7 @@ import {
 import {
   TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
   parseTranscriptBackfillResult,
+  type TranscriptBackfillFailureResult,
   type TranscriptBackfillSessionResult,
 } from '../shared/transcriptBackfill.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
@@ -237,4 +240,86 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
   expect(readCache(cacheDir, sessions[0]!.appSessionId)?.frames).toEqual(
     first.frames,
   )
+}, 120_000)
+
+test('a session the shared parser rejects becomes a failure record instead of an unvalidatable session record', async () => {
+  const configHome = temp('catcode-plb-drift-config-')
+  const cwd = temp('catcode-plb-drift-cwd-')
+  const engineSessionId = randomUUID()
+  const appSessionId = randomUUID()
+
+  const mint = await spawnAndCollect(
+    ['bun', 'run', minter, engineSessionId, `plb-drift-${randomUUID()}`],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: configHome,
+        TEST_ENABLE_SESSION_PERSISTENCE: '1',
+      },
+    },
+  )
+  expect(mint.code).toBe(0)
+  const transcriptLine = mint.stdout
+    .split('\n')
+    .find(line => line.startsWith('MINTED_TRANSCRIPT_PATH='))
+  expect(transcriptLine).toBeDefined()
+  const transcriptPath = transcriptLine!.slice('MINTED_TRANSCRIPT_PATH='.length)
+
+  // Stand in for engine drift: a content block whose type the shared parser's
+  // vocabulary does not know. That is the exact shape that cost 30 of 32
+  // sessions their run facts (2026-07-28) — main terminates the whole run on a
+  // record it cannot validate, so the worker must never emit one.
+  const records = readFileSync(transcriptPath, 'utf8')
+    .split('\n')
+    .filter(line => line.trim().length > 0)
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+  const tail = records[records.length - 1]!
+  appendFileSync(
+    transcriptPath,
+    `${JSON.stringify({
+      ...tail,
+      parentUuid: tail.uuid,
+      uuid: randomUUID(),
+      message: {
+        ...(tail.message as Record<string, unknown>),
+        id: randomUUID(),
+        content: [{ type: 'catcode_unknown_block', payload: 'drifted' }],
+      },
+    })}\n`,
+  )
+
+  const run = await spawnAndCollect(
+    ['bun', 'run', worker, '--bare'],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        CLAUDE_CONFIG_DIR: configHome,
+      },
+    },
+    JSON.stringify({
+      version: TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+      items: [{ appSessionId, engineSessionId, transcriptPath }],
+    }),
+  )
+  expect(run.code).toBe(0)
+
+  const emitted = run.stdout
+    .trim()
+    .split('\n')
+    .map(line => parseTranscriptBackfillResult(JSON.parse(line)))
+  // Every line the worker wrote must itself survive main's parser, or main
+  // aborts the batch and abandons every session still queued behind this one.
+  expect(emitted.every(Boolean)).toBe(true)
+  expect(emitted.some(record => record?.type === 'session')).toBe(false)
+  const failures = emitted.filter(
+    (record): record is TranscriptBackfillFailureResult =>
+      record?.type === 'failure',
+  )
+  expect(failures).toHaveLength(1)
+  expect(failures[0]!.appSessionId).toBe(appSessionId)
+  expect(failures[0]!.reason).toBe('invalid')
+  expect(emitted[emitted.length - 1]).toEqual({ type: 'done', attempted: 1 })
 }, 120_000)

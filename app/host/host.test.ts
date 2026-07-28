@@ -261,10 +261,23 @@ function writeTranscript(storageDir: string, engineSessionId: string): void {
  * so a test that drives an event must let that settle. Poll briefly until
  * `predicate` holds (host event emitted / row updated) rather than guessing a
  * fixed number of microtask hops.
+ *
+ * Throwing on exhaustion is the whole point (matching `waitFor` in
+ * `sidecarServer.test.ts`): a wait that gives up quietly lets the assertion
+ * after it pass for the OPPOSITE reason, because the state it was waiting for
+ * never arriving usually satisfies the same "not yet / still false" check.
  */
 async function settle(predicate: () => boolean, tries = 100): Promise<void> {
   for (let i = 0; i < tries; i++) {
     if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+  throw new Error(`settle: predicate never held after ${tries} tries`)
+}
+
+/** A deliberate drain: give an async task room to run so a test can then prove it did NOT. */
+async function drain(tries = 25): Promise<void> {
+  for (let i = 0; i < tries; i++) {
     await new Promise(resolve => setTimeout(resolve, 2))
   }
 }
@@ -441,7 +454,7 @@ test('CC-2: a live result event frame stamps lastMessageSentAt and surfaces it; 
   })
   h.supervisor.emitEventFrame(appSessionId, { type: 'goal.snapshot', snapshot: null })
   // Let any (erroneous) async bump drain, then assert it never happened.
-  await settle(() => false, 25)
+  await drain()
   expect(h.registry.findSession(appSessionId)?.lastMessageSentAt).toBeNull()
 
   // A live (non-replay) `result` frame = a turn actually ran → stamp + surface
