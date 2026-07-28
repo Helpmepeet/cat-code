@@ -56,6 +56,7 @@ import {
   deleteCache,
   distill,
   cacheHasRunFacts,
+  cacheWrittenAt,
   listCachedSessionIds,
   readCache,
   resolvePreview,
@@ -246,6 +247,18 @@ let sessionsCatalogDriver: SessionsCatalogDriver | null = null
 let accountsPoolDriver: AccountsPoolDriver | null = null
 
 /**
+ * Kill switch for the worker a driver may have IN FLIGHT at teardown. `stop()`
+ * only cancels the next scheduled run: it cannot reach a child process already
+ * spawned, and that child is a full engine graph whose own watchdog timer dies
+ * with Electron. Nothing else can reap it either — the launch sweep and
+ * `scripts/reap-orphan-sidecars.ts` both match the sidecar entry marker, which a
+ * catalog/accounts worker does not carry. Armed with the driver, aborted beside
+ * every `stop()`, exactly like `transcriptBackfillAbort`.
+ */
+let sessionsCatalogAbort: AbortController | null = null
+let accountsPoolAbort: AbortController | null = null
+
+/**
  * IDLE-PARK (decisions/IDLE-PARK.md §4) — one main-supervised policy driver per
  * app process, mirroring `sessionsCatalogDriver`'s lifecycle: armed after first
  * paint, torn down with the window, re-armable on reactivate. It parks idle /
@@ -268,6 +281,12 @@ function persistTranscriptCache(appSessionId: SessionId): void {
     if (frames.length === 0) return
     const cache = distill(frames)
     if (cache.header.engineSessionId === null) return
+    // The pre-distill snapshot always has a head plus state snapshots, so the
+    // check above never catches a session closed before its first turn. Distilling
+    // drops all of those, and a cache with no transcript frames is worse than no
+    // cache: the renderer treats a readable cache as a preview and shows a
+    // loading placeholder for a transcript that will never arrive.
+    if (cache.frames.length === 0) return
     writeCache(TRANSCRIPT_CACHE_DIR, cache)
   } catch (error) {
     process.stderr.write(
@@ -291,6 +310,33 @@ function gcTranscriptCache(): void {
   } catch (error) {
     process.stderr.write(`[main] transcript-cache GC failed: ${errText(error)}\n`)
   }
+}
+
+/**
+ * Last-write time of a restorable row's engine transcript, or 0 when it cannot
+ * be read. Only ever compared against a cache stamp, so "unknown" reads as
+ * "not newer" and leaves the existing cache alone.
+ */
+function transcriptMtimeMs(session: SessionDescriptor): number {
+  if (session.engineSessionId === null) return 0
+  try {
+    return statSync(defaultTranscriptPath(session.cwd, session.engineSessionId))
+      .mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Whether a row's engine transcript has grown since its cache was written. A
+ * session continued in the terminal after the desktop app cached it otherwise
+ * previews that old conversation, and shows that old model/effort/usage beside
+ * it, for as long as the cache survives.
+ */
+function isTranscriptNewerThanCache(session: SessionDescriptor): boolean {
+  const writtenAt = cacheWrittenAt(TRANSCRIPT_CACHE_DIR, session.appSessionId)
+  if (writtenAt === null) return false
+  return transcriptMtimeMs(session) > writtenAt
 }
 
 /**
@@ -322,7 +368,11 @@ async function backfillTranscriptCaches(): Promise<void> {
         // session. One written before run facts existed is re-derived here, and
         // `persistTranscriptBackfillResult` keeps the write idempotent.
         (!cachedIds.has(session.appSessionId) ||
-          !cacheHasRunFacts(TRANSCRIPT_CACHE_DIR, session.appSessionId)),
+          !cacheHasRunFacts(TRANSCRIPT_CACHE_DIR, session.appSessionId) ||
+          // Since sessions were unified, the sidebar lists terminal-created
+          // sessions too, and those keep growing outside this app. A cache is
+          // stale the moment the engine transcript is newer than it.
+          isTranscriptNewerThanCache(session)),
     )
     .sort((a, b) => b.lastAttachedAt - a.lastAttachedAt)
     .slice(0, MAX_TRANSCRIPT_BACKFILL_SESSIONS)
@@ -359,6 +409,8 @@ async function backfillTranscriptCaches(): Promise<void> {
             transcriptExists: session =>
               session.engineSessionId !== null &&
               existsSync(defaultTranscriptPath(session.cwd, session.engineSessionId)),
+            isCacheStale: (session, writtenAt) =>
+              transcriptMtimeMs(session) > writtenAt,
           },
           result,
         )
@@ -412,12 +464,15 @@ async function backfillTranscriptCaches(): Promise<void> {
  */
 function startSessionsCatalogRefresh(): void {
   if (sessionsCatalogDriver) return
+  const abort = new AbortController()
+  sessionsCatalogAbort = abort
   sessionsCatalogDriver = createSessionsCatalogDriver({
     run: () =>
       runSessionsCatalogWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
         args: ['run', SESSIONS_CATALOG_WORKER_ENTRY, '--bare'],
         cwd: process.cwd(),
+        signal: abort.signal,
         onCatalog: catalog => {
           sendHostEvent({ type: 'sessions-catalog', catalog })
         },
@@ -440,12 +495,15 @@ function startSessionsCatalogRefresh(): void {
  */
 function startAccountsPoolRefresh(): void {
   if (accountsPoolDriver) return
+  const abort = new AbortController()
+  accountsPoolAbort = abort
   accountsPoolDriver = createAccountsPoolDriver({
     run: () =>
       runAccountsPoolWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
         args: ['run', ACCOUNTS_POOL_WORKER_ENTRY, '--bare'],
         cwd: process.cwd(),
+        signal: abort.signal,
         onPool: pool => {
           sendHostEvent({ type: 'accounts-pool', pool })
         },
@@ -1698,12 +1756,17 @@ app.on('window-all-closed', () => {
   transcriptBackfillAbort?.abort()
   transcriptBackfillAbort = null
   // Catalog owner (decision #4): stop the refresh driver with the window; a fresh
-  // `activate` re-arms it after the next paint.
+  // `activate` re-arms it after the next paint. `stop()` cancels only the NEXT
+  // run, so abort beside it to kill a worker already in flight.
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  sessionsCatalogAbort?.abort()
+  sessionsCatalogAbort = null
   // Accounts owner: same window-scoped lifetime as the catalog driver.
   accountsPoolDriver?.stop()
   accountsPoolDriver = null
+  accountsPoolAbort?.abort()
+  accountsPoolAbort = null
   // IDLE-PARK: stop the policy driver with the window (it holds the now-dead host/
   // supervisor); a fresh `activate` re-arms it against the rebuilt host.
   idleParkDriver?.stop()
@@ -1737,8 +1800,12 @@ app.on('before-quit', () => {
   transcriptBackfillAbort = null
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  sessionsCatalogAbort?.abort()
+  sessionsCatalogAbort = null
   accountsPoolDriver?.stop()
   accountsPoolDriver = null
+  accountsPoolAbort?.abort()
+  accountsPoolAbort = null
   idleParkDriver?.stop()
   idleParkDriver = null
 })

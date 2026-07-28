@@ -1068,4 +1068,60 @@ describe('account recovery diagnostics', () => {
       code: 'quota_exhausted',
     })
   })
+
+  test('a half-dead pool capping its last live account reports needs-repair, not wait-for-reset', async () => {
+    // One account is dead (auth), the other returns 429. The pool is NOT fully
+    // capped, so re-authenticating the dead account restores service; waiting
+    // for a quota reset never would. The diagnostic and the durable envelope
+    // must both say so.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-one',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-one', alias: 'main' }),
+        buildPoolAccount({
+          accountId: 'account-two',
+          alias: 'backup',
+          status: 'dead',
+          lastError: 'credentials rejected',
+        }),
+      ],
+    })
+
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          throw new CodexAccountCapError('account-one')
+        },
+        {
+          maxRetries: 0,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // unreachable
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    // Precondition: the 429 capped the live account and nothing rotated.
+    expect(
+      getPoolStatus().accounts.find(
+        account => account.accountId === 'account-one',
+      )?.status,
+    ).toBe('capped')
+
+    const codes = diagnostics.map(diagnostic => diagnostic.code)
+    expect(codes).toContain('account.pool.unavailable')
+    expect(codes).not.toContain('quota.exhausted')
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).deferredTerminalFailure).toMatchObject({
+      version: 1,
+      provider: 'openai',
+      code: 'account_recovery',
+    })
+  })
 })

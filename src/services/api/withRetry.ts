@@ -164,6 +164,31 @@ function emitClaudeDiagnostic(
   })
 }
 
+function getCodexExhaustionDiagnosticCode(): 'auth.missing' | 'account.pool.unavailable' | 'quota.exhausted' {
+  const counts = countStatuses(getPoolStatus().accounts)
+  if (!counts) {
+    return 'auth.missing'
+  }
+  const capped = counts.capped ?? 0
+  if (capped === counts.total) {
+    return 'quota.exhausted'
+  }
+  return 'account.pool.unavailable'
+}
+
+/**
+ * Keep the durable terminal code aligned with the diagnostic the same branch
+ * just emitted. Only a fully capped pool means wait-for-reset; a pool that
+ * still holds a dead or unconfigured account needs repair, and reporting
+ * `quota_exhausted` there sends the caller to wait for a reset that will not
+ * fix it. Mirrors `throwNoHealthyCodexAccount` in `client.ts`.
+ */
+function terminalCodeForCodexExhaustion(
+  code: ReturnType<typeof getCodexExhaustionDiagnosticCode>,
+): DeferredTerminalFailureV1['code'] {
+  return code === 'quota.exhausted' ? 'quota_exhausted' : 'account_recovery'
+}
+
 function getClaudeUnavailableDiagnosticCode(): 'auth.missing' | 'account.pool.unavailable' {
   return countStatuses(getClaudePoolStatus().accounts) ? 'account.pool.unavailable' : 'auth.missing'
 }
@@ -596,8 +621,9 @@ export async function* withRetry<T>(
             if (failoverError instanceof CannotRetryError) {
               throw failoverError
             }
+            const exhaustionCode = getCodexExhaustionDiagnosticCode()
             emitCodexDiagnostic({
-              code: 'quota.exhausted',
+              code: exhaustionCode,
               severity: 'error',
               recoverable: false,
               account_ref: error.accountId,
@@ -610,7 +636,7 @@ export async function* withRetry<T>(
                 : new Error(getCodexLeaseExhaustedMessage()),
               attempt,
               error.accountId,
-              'quota_exhausted',
+              terminalCodeForCodexExhaustion(exhaustionCode),
             )
           }
         }
@@ -639,8 +665,9 @@ export async function* withRetry<T>(
             }
           }
 
+          const exhaustionCode = getCodexExhaustionDiagnosticCode()
           emitCodexDiagnostic({
-            code: 'quota.exhausted',
+            code: exhaustionCode,
             severity: 'error',
             recoverable: false,
             account_ref: error.accountId,
@@ -651,7 +678,7 @@ export async function* withRetry<T>(
             new Error(getCodexLeaseExhaustedMessage()),
             attempt,
             error.accountId,
-            'quota_exhausted',
+            terminalCodeForCodexExhaustion(exhaustionCode),
           )
         }
       }

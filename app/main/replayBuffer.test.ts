@@ -317,6 +317,28 @@ test('a single frame larger than the byte budget is not retained and still marks
   expect(isReplayTruncationFrame(snapshot[1])).toBe(true)
 })
 
+// `MAX_OUTBOUND_FRAME_BYTES` is 32 MiB precisely so a base64 image or a big tool
+// result is delivered rather than dropped, while this ring's budget is 8 MiB —
+// so a single frame over the ring budget is reachable in an ordinary session.
+// It must cost that one frame, not the whole conversation: clearing the ring
+// here made a renderer reload replay `ready` plus a lone truncation banner, and
+// `persistTranscriptCache` then distilled the emptied buffer into a stub cache.
+test('an oversized frame drops only itself and keeps the frames recorded before it', () => {
+  const buffer = new FrameReplayBuffer(10, 512)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, pongFrame('early-1'))
+  buffer.record(SID, pongFrame('early-2'))
+  buffer.record(SID, pongFrame('界'.repeat(400)))
+  buffer.record(SID, pongFrame('late-1'))
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot[0]?.kind).toBe('ready')
+  expect(isReplayTruncationFrame(snapshot[1])).toBe(true)
+  expect(
+    snapshot.slice(2).map(frame => (frame.kind === 'pong' ? frame.nonce : null)),
+  ).toEqual(['early-1', 'early-2', 'late-1'])
+})
+
 test('buffers each session independently and replays them all', () => {
   const buffer = new FrameReplayBuffer()
   buffer.record('s-a', readyFrame('s-a'))

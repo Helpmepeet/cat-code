@@ -64,6 +64,16 @@ export function persistTranscriptBackfillResult(
     cacheDir: string
     getCurrentSession: (appSessionId: string) => SessionDescriptor | undefined
     transcriptExists: (session: SessionDescriptor) => boolean
+    /**
+     * Whether a complete existing cache should still be replaced. Main sets this
+     * for a row whose engine transcript has grown since the cache was written —
+     * a session continued outside the desktop app — which is the only path that
+     * refreshes a cache already carrying run facts. Absent means never.
+     */
+    isCacheStale?: (
+      session: SessionDescriptor,
+      existingWrittenAt: number,
+    ) => boolean
   },
   result: TranscriptBackfillSessionResult,
 ): TranscriptBackfillPersistResult {
@@ -75,12 +85,21 @@ export function persistTranscriptBackfillResult(
   ) {
     return 'ineligible'
   }
+  // A cache with no transcript frames is worse than no cache: the renderer
+  // treats a readable cache as a preview and holds a loading placeholder for a
+  // transcript that will never arrive.
+  if (result.frames.length === 0) return 'ineligible'
   // A cache written BEFORE run facts existed is refreshed rather than kept:
   // it previews fine but can say nothing about what the session ran on, and
   // the worker has just read that from the raw transcript. A cache that
-  // already has them is left alone, so a re-run is still a no-op.
+  // already has them is left alone unless the caller says the transcript moved
+  // on, so a re-run is still a no-op.
   const existing = readCache(options.cacheDir, result.appSessionId)
-  if (existing !== null && existing.header.runFacts !== undefined) {
+  if (
+    existing !== null &&
+    existing.header.runFacts !== undefined &&
+    !(options.isCacheStale?.(current, existing.header.writtenAt) ?? false)
+  ) {
     return 'already_cached'
   }
   writeCache(

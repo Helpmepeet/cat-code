@@ -60,9 +60,14 @@ import {
  * The count is therefore raised until the BYTE budget below is what actually
  * binds: memory is the thing worth bounding, and a frame tally sitting far
  * beneath the byte ceiling only ever truncates early without saving anything.
- * For scale, this repo's RAM audit measured each session's engine process at a
- * ~237 MB floor / ~467 MB working, so this buffer is a low-single-digit
- * percentage of what the session already costs.
+ *
+ * The bound this costs is the ELECTRON MAIN process, not an engine process: the
+ * engines are N separate processes, while `FrameReplayBuffer.sessions` is one
+ * Map in main. The true ceiling is therefore
+ * `MAX_LIVE_SESSIONS` (32, `app/shared/hostApi.ts`) × `DEFAULT_MAX_BUFFERED_BYTES`
+ * (8 MiB) = 256 MiB of serialized JSON held as parsed objects, all in main.
+ * Steady state is far below it — idle-park frees a parked session's buffer — but
+ * 256 MiB is the number to reason about before raising either constant.
  */
 export const DEFAULT_MAX_BUFFERED_FRAMES = 8_000
 /** Default UTF-8 JSON byte budget for retained `ring` frames, per session. */
@@ -184,8 +189,12 @@ export class FrameReplayBuffer {
     }
     const frameBytes = serializedUtf8Bytes(frame)
     if (frameBytes > this.maxRecentBytes) {
-      entry.recent = []
-      entry.recentBytes = 0
+      // Drop ONLY the oversized frame. `MAX_OUTBOUND_FRAME_BYTES` (32 MiB) is
+      // deliberately four times this ring's default budget so a base64 image or
+      // a large tool result still reaches the renderer, which makes this branch
+      // reachable in a healthy session — clearing the ring here would erase an
+      // entire session's replayable transcript (and, via `persistTranscriptCache`,
+      // its at-rest preview) because one frame was big.
       entry.truncated = true
       return
     }

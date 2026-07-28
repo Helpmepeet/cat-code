@@ -176,23 +176,48 @@ export function createTranscriptCache(
  * destroying it to gain a display detail would be a strictly worse trade.
  */
 export function cacheHasRunFacts(dir: string, id: SessionId): boolean {
+  const prefix = readHeaderPrefix(dir, id)
+  return prefix !== null && prefix.includes(RUN_FACTS_MARKER)
+}
+
+/**
+ * When a cache was last written, from the same bounded prefix read. Returns null
+ * when the file is missing, unreadable, or the stamp is not in the header window,
+ * so an unknown cache is never mistaken for a fresh one.
+ *
+ * Backfill discovery compares this against the engine transcript's mtime: a
+ * session continued outside the desktop app grows its transcript long after its
+ * cache was built, and nothing else re-reads a cache that already carries run
+ * facts, so without this comparison the preview and the run facts beside it stay
+ * pinned to the day the cache was written.
+ */
+export function cacheWrittenAt(dir: string, id: SessionId): number | null {
+  const prefix = readHeaderPrefix(dir, id)
+  if (prefix === null) return null
+  const match = /"writtenAt"\s*:\s*(\d{1,15})/.exec(prefix.toString('utf8'))
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * A bounded PREFIX read, never `readCache`: discovery runs on Electron's main
+ * thread for every restorable row, and parsing plus recursively secret-scanning
+ * multi-MB caches there is the exact cost the enumeration above is written to
+ * avoid. The header is the first object in the file, so a header field is inside
+ * this window or the cache predates it. Null when the file cannot be read: the
+ * row is then re-backfilled rather than silently left stale, and a genuinely
+ * broken file fails the real read anyway.
+ */
+function readHeaderPrefix(dir: string, id: SessionId): Buffer | null {
   const filePath = cacheFilePath(dir, id)
-  if (!filePath) return false
+  if (!filePath) return null
   let handle: number | undefined
   try {
-    // A bounded PREFIX read, never `readCache`: discovery runs on Electron's
-    // main thread for every restorable row, and parsing plus recursively
-    // secret-scanning multi-MB caches there is the exact cost the enumeration
-    // above is written to avoid. The header is the first object in the file, so
-    // the marker is inside this window or the cache predates the field.
     handle = openSync(filePath, 'r')
-    const buffer = Buffer.alloc(RUN_FACTS_PROBE_BYTES)
-    const read = readSync(handle, buffer, 0, RUN_FACTS_PROBE_BYTES, 0)
-    return buffer.subarray(0, read).includes(RUN_FACTS_MARKER)
+    const buffer = Buffer.alloc(HEADER_PROBE_BYTES)
+    const read = readSync(handle, buffer, 0, HEADER_PROBE_BYTES, 0)
+    return buffer.subarray(0, read)
   } catch {
-    // Unreadable: treat as missing so the row is re-backfilled rather than
-    // silently left stale. A genuinely broken file fails the real read anyway.
-    return false
+    return null
   } finally {
     if (handle !== undefined) {
       try {
@@ -204,8 +229,8 @@ export function cacheHasRunFacts(dir: string, id: SessionId): boolean {
   }
 }
 
-/** Header-sized window: `runFacts` sits in the first object of the file. */
-const RUN_FACTS_PROBE_BYTES = 4096
+/** Header-sized window: the header is the first object of the file. */
+const HEADER_PROBE_BYTES = 4096
 const RUN_FACTS_MARKER = Buffer.from('"runFacts"', 'utf8')
 
 /** `<registryDir>/transcript-cache` — main passes its real registry dir. */

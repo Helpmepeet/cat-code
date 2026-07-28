@@ -309,10 +309,14 @@ import {
   fileHistoryGetDiffStats,
 } from 'src/utils/fileHistory.js'
 import {
-  checkDeferredContinuationResume,
   restoreAgentFromSession,
   restoreSessionStateFromLog,
 } from 'src/utils/sessionRestore.js'
+import {
+  prepareHumanPromptAgainstDeferredContinuation,
+  takeDeferredContinuationNotice,
+  type DeferredHumanPromptDecision,
+} from 'src/services/deferredContinuation.js'
 import { SandboxManager } from 'src/utils/sandbox/sandbox-adapter.js'
 import {
   headlessProfilerStartTurn,
@@ -454,6 +458,30 @@ export function canBatchWith(
     next.workload === head.workload &&
     next.isMeta === head.isMeta
   )
+}
+
+/**
+ * Headless resume never reaches handlePromptSubmit, so this is the only place
+ * that keeps `--print --resume` off a session a background continuation is
+ * already writing. A headless invocation IS a human turn, so it must cancel a
+ * merely pending job the same way an interactive submit does: probing the lock
+ * and releasing it would let the worker become due mid-run and append to the
+ * same transcript this process is writing.
+ *
+ * `isDeferredWorker` is true only when this process IS that continuation
+ * (main.tsx routes the worker through headless resume while it already holds
+ * the locks) — cancelling there would abort it against itself.
+ */
+export async function resolveHeadlessDeferredContinuation(
+  sessionId: string,
+  isDeferredWorker: boolean,
+): Promise<DeferredHumanPromptDecision> {
+  if (isDeferredWorker) return { action: 'allow' }
+  const decision = await prepareHumanPromptAgainstDeferredContinuation(sessionId)
+  if (decision.action === 'allow_after_cancel') {
+    await takeDeferredContinuationNotice(sessionId).catch(() => null)
+  }
+  return decision
 }
 
 export async function runHeadless(
@@ -722,19 +750,18 @@ export async function runHeadless(
     restoredWorkerState: structuredIO.restoredWorkerState,
   })
 
-  // Headless resume never reaches handlePromptSubmit, so this is the only place
-  // that keeps `--print --resume` off a session a background continuation is
-  // already writing. deferredJobId is set only when this process IS that
-  // continuation (main.tsx routes the worker through headless resume while it
-  // already holds the locks) — probing there would deadlock it against itself.
   // Nothing is appended before this point, so exiting here leaves no trace.
-  if (!options.deferredJobId) {
-    const deferred = await checkDeferredContinuationResume(getSessionId())
-    if (deferred.action === 'block') {
-      process.stderr.write(`Error: ${deferred.notice}\n`)
-      gracefulShutdownSync(1)
-      return
-    }
+  const deferred = await resolveHeadlessDeferredContinuation(
+    getSessionId(),
+    Boolean(options.deferredJobId),
+  )
+  if (deferred.action === 'block') {
+    process.stderr.write(`Error: ${deferred.notice}\n`)
+    gracefulShutdownSync(1)
+    return
+  }
+  if (deferred.action === 'allow_after_cancel') {
+    process.stderr.write(`${deferred.notice}\n`)
   }
 
   // SessionStart hooks can emit initialUserMessage — the first user turn for
