@@ -71,7 +71,7 @@ export function DiagnosticsSection({
   if (!snapshot) {
     return (
       <p className="text-[12.5px] text-text-subtle">
-        Waiting for the engine's diagnostics snapshot…
+        Open a session to see its diagnostics.
       </p>
     )
   }

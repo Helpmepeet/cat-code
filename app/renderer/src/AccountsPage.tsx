@@ -265,7 +265,7 @@ function AddAccountDialog({
       {submitting ? (
         <div className="flex items-center gap-2.5 text-[13px] text-text-muted">
           <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-text-ghost border-t-accent" />
-          Handing off to the engine's sign-in flow…
+          Opening your browser…
         </div>
       ) : (
         <p className="text-[12.5px] leading-relaxed text-text-muted">

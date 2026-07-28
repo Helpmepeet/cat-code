@@ -493,15 +493,17 @@ function EmptyState({
       : tagged
         ? 'No sessions with this tag'
         : 'No sessions yet'
+  // The loading case gets no subtext: "Loading sessions…" already says it, and
+  // the line it replaced described our plumbing rather than anything actionable.
   const subtext = !catalogLoaded
-    ? 'Waiting for the engine to enumerate your transcript history.'
+    ? null
     : searching || tagged
       ? 'Try a different filter.'
       : 'Start a new session to see it here.'
   return (
     <div className="py-14 text-center">
       <div className="mb-1 text-sm font-medium text-text-subtle">{headline}</div>
-      <div className="text-xs text-text-subtle/75">{subtext}</div>
+      {subtext ? <div className="text-xs text-text-subtle/75">{subtext}</div> : null}
     </div>
   )
 }

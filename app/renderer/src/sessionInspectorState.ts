@@ -117,22 +117,27 @@ export type InspectorSeamId =
   | 'diagnostics'
 
 /**
- * Why one seam has nothing to show, for a WIRED drawer. Each names the frame that
- * did not arrive, so the note is diagnosable rather than decorative. None
- * promises that something is coming: these snapshots are emitted once at attach,
- * so a session that never attached (or has died) will never produce one.
+ * Why one seam has nothing to show, for a WIRED drawer.
+ *
+ * These deliberately do NOT name the frame that failed to arrive. The earlier
+ * copy did, on the theory that naming it made the note diagnosable, but a frame
+ * name is an engineering note and CLAUDE.md §7 forbids rendering one at the
+ * user; `userVisibleText.test.ts` now enforces that repo-wide. Each states the
+ * CONDITION under which the data exists instead, which is both true and
+ * actionable. None promises that something is coming: this data is read while a
+ * session is open, so one that never attached (or has died) will never have it.
  */
 export const INSPECTOR_SEAM_UNREAD_NOTE: Readonly<
   Record<InspectorSeamId, string>
 > = {
   settings:
-    'No settings snapshot has arrived for this session, so nothing is known about how its settings resolved.',
+    'Settings are unavailable for this session. They load while the session is open.',
   permission:
-    'No permission context has arrived for this session, so its live mode and effective rules are unknown.',
+    'Permission mode and rules are unavailable for this session. They load while the session is open.',
   workspaceTrust:
-    'No workspace-trust snapshot has arrived for this session, so the trust of its working directory is unknown.',
+    'Trust state is unavailable for this session. It loads while the session is open.',
   diagnostics:
-    'No diagnostics snapshot has arrived for this session, so the engine health checks are unknown.',
+    'Diagnostics are unavailable for this session. They load while the session is open.',
 }
 
 /**

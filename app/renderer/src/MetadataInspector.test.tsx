@@ -195,7 +195,7 @@ test('an unwired drawer says so ONCE and shows no live section at all', () => {
   expect(html).not.toContain('Flags')
 })
 
-test('a wired drawer with no snapshots names each missing seam, not the app gap', () => {
+test('a wired drawer with nothing read states each seam as unavailable, not the app gap', () => {
   const html = renderInspector(
     buildSessionInspectorState({
       cwd: '/repo',
@@ -206,10 +206,11 @@ test('a wired drawer with no snapshots names each missing seam, not the app gap'
     }),
   )
   expect(html).not.toContain('App passes no sessionState')
-  expect(html).toContain('No settings snapshot has arrived for this session')
-  expect(html).toContain('No permission context has arrived for this session')
-  expect(html).toContain('No workspace-trust snapshot has arrived for this session')
-  expect(html).toContain('No diagnostics snapshot has arrived for this session')
+  // Each names the CONDITION, never the frame that failed to arrive (§7).
+  expect(html).toContain('Settings are unavailable for this session')
+  expect(html).toContain('Permission mode and rules are unavailable for this session')
+  expect(html).toContain('Trust state is unavailable for this session')
+  expect(html).toContain('Diagnostics are unavailable for this session')
   // The cwd IS known even with every snapshot missing — it comes off the roster.
   expect(html).toContain('Working directory')
   expect(html).toContain('/repo')

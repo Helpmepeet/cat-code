@@ -67,13 +67,16 @@ test('renders real agent definition groups and scope flags', () => {
   expect(html).toContain('active')
   expect(html).toContain('inactive')
   expect(html).toContain('overridden')
-  expect(html).toContain('Read-only snapshot')
+  expect(html).toContain('Read-only')
   expect(html).toContain('System prompt bodies')
   expect(html).toContain('runtime-selected')
 })
 
-test('renders waiting state without fixtures', () => {
+test('with no session, says what to do rather than naming the missing frame', () => {
   const html = renderToStaticMarkup(<AgentsPage embedded snapshot={null} />)
-  expect(html).toContain("Waiting for the engine&#x27;s agent config snapshot")
+  // The read is session-keyed but Settings renders with no session, so this is a
+  // no-session state, not a load. The copy it replaced promised a fill that
+  // never came and named internals (CLAUDE.md §7).
+  expect(html).toContain('Open a session to see its agent definitions')
   expect(html).not.toContain('MOCK')
 })

@@ -97,7 +97,7 @@ export function AgentsPage({
           </div>
         )}
         <span className="rounded-lg border border-dashed border-shell-seam px-3 py-1.5 text-[12px] text-text-subtle">
-          Read-only snapshot
+          Read-only
         </span>
       </div>
 
@@ -129,9 +129,12 @@ export function AgentsPage({
       ) : null}
 
       {!snapshot ? (
-        <EmptyState title="Waiting for the engine's agent config snapshot…" />
+        <EmptyState title="Open a session to see its agent definitions" />
       ) : snapshot.definitions.length === 0 ? (
-        <EmptyState title="No agent definitions" />
+        <EmptyState
+          title="No agent definitions"
+          hint="Add agent files to this workspace or your user config to see them here."
+        />
       ) : (
         groups.map(group => (
           <AgentGroup
@@ -168,13 +171,11 @@ function SummaryCard({ label, value }: { label: string; value: number }) {
   )
 }
 
-function EmptyState({ title }: { title: string }) {
+function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="py-14 text-center">
       <div className="mb-1 text-sm font-medium text-text-subtle">{title}</div>
-      <div className="text-xs text-text-subtle/75">
-        Create or install agent definitions in the real engine config to populate this view.
-      </div>
+      {hint ? <div className="text-xs text-text-subtle/75">{hint}</div> : null}
     </div>
   )
 }
@@ -325,8 +326,7 @@ function AgentInspectDrawer({
 
           <DetailSection title="System prompt">
             <div className="rounded-lg border border-shell-seam bg-white/[0.02] px-3.5 py-3 font-mono text-[12px] leading-relaxed text-text-subtle">
-              Prompt body is available in the engine definition but withheld from the
-              desktop snapshot to avoid moving credential material across the IPC boundary.
+              Not shown here. Open the agent&rsquo;s own file to read its system prompt.
             </div>
           </DetailSection>
         </div>

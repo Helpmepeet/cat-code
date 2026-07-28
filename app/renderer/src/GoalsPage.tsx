@@ -25,16 +25,15 @@ export function GoalsPage({
             ) : null}
           </div>
           <span className="rounded-full border border-shell-seam bg-shell-hover px-2.5 py-1 text-[11px] font-medium text-text-subtle">
-            Read-only snapshot
+            Read-only
           </span>
         </header>
 
         {!snapshot ? <EmptyGoal /> : <GoalCard goal={snapshot} />}
 
         <div className="mt-4 rounded-lg border border-shell-seam bg-shell-hover/40 px-4 py-3 text-[12px] leading-relaxed text-text-subtle">
-          Create, replace, pause, resume, and clear remain on the engine's
-          existing <code className="font-mono">/goal</code> command path. No
-          desktop writer boundary is exposed in this tranche.
+          Use the <code className="font-mono">/goal</code> command to create,
+          replace, pause, resume, or clear a goal.
         </div>
       </div>
     </main>
@@ -48,8 +47,8 @@ function EmptyGoal() {
         No active thread goal
       </div>
       <p className="mx-auto mt-2 max-w-[420px] text-[12.5px] leading-relaxed text-text-subtle">
-        This session has no persisted goal snapshot. Goals appear here after the
-        engine creates one through its real goal machinery.
+        Set one with the <code className="font-mono">/goal</code> command and it
+        appears here.
       </p>
     </section>
   )

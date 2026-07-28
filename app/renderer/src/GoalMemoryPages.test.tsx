@@ -59,7 +59,7 @@ test('renders the current thread goal snapshot', () => {
   expect(html).toContain('Ship P4-10 Goals + Memory panels')
   expect(html).toContain('25,000')
   expect(html).toContain('1,250')
-  expect(html).toContain('Read-only snapshot')
+  expect(html).toContain('Read-only')
   expect(html).toContain('/goal')
 })
 

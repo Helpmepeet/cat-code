@@ -75,7 +75,7 @@ function RemoteSettingsHeader() {
 function WaitingState() {
   return (
     <p className="text-[12.5px] text-text-subtle">
-      Waiting for the engine's remote settings snapshot…
+      Open a session to see Remote Control settings.
     </p>
   )
 }

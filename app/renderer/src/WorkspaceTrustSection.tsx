@@ -29,7 +29,7 @@ export function WorkspaceTrustSection({
               ? snapshot.trusted
                 ? 'Tools, plugins, and file access are enabled for this workspace'
                 : 'Read-only: tools and file access are blocked for this workspace'
-              : "Waiting for the engine's workspace-trust snapshot…"
+              : 'Open a session to see its trust state'
           }
           label="Trust state"
         >

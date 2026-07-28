@@ -111,7 +111,7 @@ function DeferredNote({ children }: { children: ReactNode }) {
 
 function WaitingRow() {
   return (
-    <EmptyRow>Waiting for the engine&rsquo;s extensions snapshot&hellip;</EmptyRow>
+    <EmptyRow>Open a session to see its extensions.</EmptyRow>
   )
 }
 

@@ -50,7 +50,7 @@ function MemoryHeader() {
         </p>
       </div>
       <span className="rounded-full border border-shell-seam bg-shell-hover px-2.5 py-1 text-[11px] font-medium text-text-subtle">
-        Read-only snapshot
+        Read-only
       </span>
     </header>
   )
