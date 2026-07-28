@@ -91,6 +91,7 @@ function renderRow(
 const REORDER: WorkspaceReorderHandlers = {
   onDragStart: noop,
   onDragOver: noop,
+  onDragLeave: noop,
   onDrop: noop,
   onDragEnd: noop,
   onStep: noop,

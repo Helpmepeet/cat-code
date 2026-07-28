@@ -53,7 +53,14 @@
  *    never consults `activeCwd` — CC-2 warp-freedom is intact.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import type { SessionId } from '../../shared/protocol.js'
 import {
   deriveMergedRowVisual,
@@ -109,13 +116,16 @@ function defaultOrderStorage(): OrderStorage | null {
 }
 
 /**
- * The five callbacks a workspace header needs to take part in reordering. Passed
- * as one optional object (the `onOpenRowActions` idiom: additive, so a headless
+ * The callbacks a workspace group needs to take part in reordering. Passed as
+ * one optional object (the `onOpenRowActions` idiom: additive, so a headless
  * test that omits it renders the pre-existing, non-draggable header).
  */
 export type WorkspaceReorderHandlers = {
   onDragStart: (cwd: string) => void
   onDragOver: (cwd: string) => void
+  /** The pointer left this group entirely — clear its drop indicator, which
+   * otherwise stays painted over a group release will not drop onto. */
+  onDragLeave: (cwd: string) => void
   onDrop: (cwd: string) => void
   onDragEnd: () => void
   onStep: (cwd: string, direction: 'up' | 'down') => void
@@ -214,6 +224,10 @@ export function Sidebar({
   } | null>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Live workspace-header buttons by cwd, and the one a keyboard step just
+   * moved — see the re-focus effect below `reorderHandlers`. */
+  const headerRefs = useRef(new Map<string, HTMLButtonElement>())
+  const refocusCwd = useRef<string | null>(null)
 
   const open = pinned || hovering
 
@@ -248,30 +262,48 @@ export function Sidebar({
         : rows.find(row => row.appSessionId === activeSessionId)?.cwd ?? null,
     [rows, activeSessionId],
   )
+  // Hide dead-workspace history rows from the rail (bug-sweep #1) BEFORE the
+  // text filter/group — registry rows and empty-cwd "Unknown workspace" rows
+  // stay (`isSidebarVisibleRow`). The Sessions page is unaffected (lists all).
+  const railRows = useMemo(
+    () => sortSidebarSessionRows(rows).filter(isSidebarVisibleRow),
+    [rows],
+  )
+  // ➕ The operator's custom order is applied HERE, on the sidebar side of the
+  // shared selector — `groupByWorkspace` itself stays frozen-alphabetical for
+  // the Sessions page, which uses the same call.
+  //
+  // The UNFILTERED group sequence. A reorder is expressed against what is on
+  // screen, but it FREEZES this one, so groups the search box is hiding keep
+  // their current position instead of falling behind the two that were dragged.
+  const allGroups = useMemo(
+    () =>
+      selectOrderedWorkspaceGroups(
+        groupByWorkspace(railRows, activeCwd),
+        workspaceOrder,
+      ),
+    [railRows, activeCwd, workspaceOrder],
+  )
   const groups = useMemo(() => {
-    // Hide dead-workspace history rows from the rail (bug-sweep #1) BEFORE the
-    // text filter/group — registry rows and empty-cwd "Unknown workspace" rows
-    // stay (`isSidebarVisibleRow`). The Sessions page is unaffected (lists all).
-    const ordered = sortSidebarSessionRows(rows).filter(isSidebarVisibleRow)
-    const filtered = query
-      ? ordered.filter(
-          row =>
-            row.displayLabel.toLowerCase().includes(query) ||
-            row.cwd.toLowerCase().includes(query),
-        )
-      : ordered
-    // ➕ The operator's custom order is applied HERE, on the sidebar side of the
-    // shared selector — `groupByWorkspace` itself stays frozen-alphabetical for
-    // the Sessions page, which uses the same call.
+    if (!query) return allGroups
+    const filtered = railRows.filter(
+      row =>
+        row.displayLabel.toLowerCase().includes(query) ||
+        row.cwd.toLowerCase().includes(query),
+    )
     return selectOrderedWorkspaceGroups(
       groupByWorkspace(filtered, activeCwd),
       workspaceOrder,
     )
-  }, [rows, query, activeCwd, workspaceOrder])
+  }, [allGroups, railRows, query, activeCwd, workspaceOrder])
 
   // The rendered sequence a reorder is expressed against (what the operator is
   // looking at, search filter included).
   const groupCwds = useMemo(() => groups.map(group => group.cwd), [groups])
+  const allGroupCwds = useMemo(
+    () => allGroups.map(group => group.cwd),
+    [allGroups],
+  )
 
   const commitWorkspaceOrder = (next: WorkspaceOrder) => {
     if (next === workspaceOrder) return
@@ -285,6 +317,13 @@ export function Sidebar({
       setHeaderDrag(drag =>
         drag == null || drag.over === cwd ? drag : { ...drag, over: cwd },
       ),
+    // Park the indicator back on the dragged group itself (which draws none, a
+    // group cannot drop onto itself), so it is never left promising a landing
+    // spot the pointer has already left.
+    onDragLeave: cwd =>
+      setHeaderDrag(drag =>
+        drag == null || drag.over !== cwd ? drag : { ...drag, over: drag.from },
+      ),
     onDrop: cwd => {
       if (headerDrag) {
         commitWorkspaceOrder(
@@ -293,22 +332,36 @@ export function Sidebar({
             groupCwds,
             headerDrag.from,
             cwd,
+            allGroupCwds,
           ),
         )
       }
       setHeaderDrag(null)
     },
     onDragEnd: () => setHeaderDrag(null),
-    onStep: (cwd, direction) =>
-      commitWorkspaceOrder(
-        reduceWorkspaceOrderStepped(
-          workspaceOrder,
-          groupCwds,
-          cwd,
-          direction,
-        ),
-      ),
+    onStep: (cwd, direction) => {
+      const next = reduceWorkspaceOrderStepped(
+        workspaceOrder,
+        groupCwds,
+        cwd,
+        direction,
+        allGroupCwds,
+      )
+      if (next === workspaceOrder) return
+      // React's keyed diff moves the stepped header by re-inserting its node,
+      // which drops focus to the body — so a second ⌥↓ would go nowhere. Ask
+      // for it back once the new order has rendered.
+      refocusCwd.current = cwd
+      commitWorkspaceOrder(next)
+    },
   }
+
+  useLayoutEffect(() => {
+    const cwd = refocusCwd.current
+    if (cwd == null) return
+    refocusCwd.current = null
+    headerRefs.current.get(cwd)?.focus()
+  }, [workspaceOrder])
 
   return (
     <>
@@ -409,6 +462,10 @@ export function Sidebar({
                     onNewSessionInWorkspace={onNewSessionInWorkspace}
                     modelForSession={modelForSession}
                     reorder={reorderHandlers}
+                    headerRef={element => {
+                      if (element) headerRefs.current.set(group.cwd, element)
+                      else headerRefs.current.delete(group.cwd)
+                    }}
                     dragging={headerDrag?.from === group.cwd}
                     dropEdge={
                       headerDrag != null && headerDrag.over === group.cwd
@@ -481,6 +538,7 @@ export function SessionGroup({
   onNewSessionInWorkspace,
   modelForSession,
   reorder,
+  headerRef,
   dragging = false,
   dropEdge = null,
 }: {
@@ -500,6 +558,9 @@ export function SessionGroup({
   /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
    * header is a plain, non-draggable header when this is absent. */
   reorder?: WorkspaceReorderHandlers
+  /** The header button, so a keyboard step can put focus back on the workspace
+   * it just moved (the TabBar's per-tab `ref` idiom). */
+  headerRef?: (element: HTMLButtonElement | null) => void
   /** This group is the one being dragged (drawn dimmed). */
   dragging?: boolean
   /** This group is the drop target; which edge the dragged group would land on. */
@@ -538,13 +599,73 @@ export function SessionGroup({
   const reorderable = reorder != null && group.cwd.trim().length > 0
 
   return (
-    <div className="mb-4">
+    /* The WHOLE group (header + rows + "Show more") is the drop target, not just
+     * the ~20px header strip: the pointer spends most of a drag over the session
+     * rows, and a dragover the rows swallowed left a stale indicator painted on a
+     * group that release would not have dropped onto. It is also what physically
+     * MOVES, so the drop indicator belongs on its edges too. */
+    <div
+      className="relative mb-4"
+      onDragOver={
+        reorderable
+          ? event => {
+              // Only a workspace drag is accepted — a tab dragged for a split
+              // carries `text/sessionId` and must fall through untouched.
+              if (
+                !event.dataTransfer.types.some(
+                  type => type.toLowerCase() === WORKSPACE_ORDER_DRAG_MIME,
+                )
+              ) {
+                return
+              }
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              reorder?.onDragOver(group.cwd)
+            }
+          : undefined
+      }
+      onDragLeave={
+        reorderable
+          ? event => {
+              // `dragleave` also fires when the pointer crosses between this
+              // group's own children; only a move OUT of the group counts.
+              const entering = event.relatedTarget as Node | null
+              if (entering && event.currentTarget.contains(entering)) return
+              reorder?.onDragLeave(group.cwd)
+            }
+          : undefined
+      }
+      onDrop={
+        reorderable
+          ? event => {
+              event.preventDefault()
+              reorder?.onDrop(group.cwd)
+            }
+          : undefined
+      }
+    >
+      {/* Drop indicator — a static 2px accent rule on the edge the dragged
+       * group would land on, matching the TabBar's active-tab underline
+       * idiom (`TabBar.tsx:271`). Static classes only: an interpolated
+       * arbitrary-value class silently no-ops in this Tailwind v4 setup. */}
+      {dropEdge === 'before' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 top-0 h-[2px] rounded-full bg-accent"
+        />
+      ) : null}
+      {dropEdge === 'after' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 bottom-0 h-[2px] rounded-full bg-accent"
+        />
+      ) : null}
       {/* Header row: collapse toggle (flex-1) + the #10 per-workspace "+" so the
        * "+" sits flush-right of the workspace label (prototype Sidebar.jsx:219).
-       * ➕ The row is also the workspace drag handle + drop target. */}
+       * ➕ The row is also the workspace drag handle. */}
       <div
         className={
-          'relative flex select-none items-center gap-1 px-1 pb-1.5 pt-0.5 ' +
+          'flex select-none items-center gap-1 px-1 pb-1.5 pt-0.5 ' +
           (reorderable ? 'cursor-grab ' : '') +
           (dragging ? 'opacity-50' : '')
         }
@@ -561,52 +682,11 @@ export function SessionGroup({
               }
             : undefined
         }
-        onDragOver={
-          reorderable
-            ? event => {
-                // Only a workspace drag is accepted — a tab dragged for a split
-                // carries `text/sessionId` and must fall through untouched.
-                if (
-                  !event.dataTransfer.types.some(
-                    type => type.toLowerCase() === WORKSPACE_ORDER_DRAG_MIME,
-                  )
-                ) {
-                  return
-                }
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'move'
-                reorder?.onDragOver(group.cwd)
-              }
-            : undefined
-        }
-        onDrop={
-          reorderable
-            ? event => {
-                event.preventDefault()
-                reorder?.onDrop(group.cwd)
-              }
-            : undefined
-        }
         onDragEnd={reorderable ? () => reorder?.onDragEnd() : undefined}
       >
-        {/* Drop indicator — a static 2px accent rule on the edge the dragged
-         * group would land on, matching the TabBar's active-tab underline
-         * idiom (`TabBar.tsx:271`). Static classes only: an interpolated
-         * arbitrary-value class silently no-ops in this Tailwind v4 setup. */}
-        {dropEdge === 'before' ? (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-1 top-0 h-[2px] rounded-full bg-accent"
-          />
-        ) : null}
-        {dropEdge === 'after' ? (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-1 bottom-0 h-[2px] rounded-full bg-accent"
-          />
-        ) : null}
         <button
           type="button"
+          ref={headerRef}
           // Also draggable so the whole label — not just the header's padding —
           // is a grab surface; `dragstart` bubbles, so the row above owns the
           // one handler.
@@ -877,7 +957,7 @@ function NavItemExpanded({
         type="button"
         disabled
         aria-disabled="true"
-        title={`${item.label}: not yet migrated`}
+        title={`${item.label} is not available yet`}
         className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
       >
         <span className="flex h-5 w-8 shrink-0 items-center justify-center">
@@ -929,7 +1009,7 @@ function NavItemRail({
         disabled
         aria-disabled="true"
         aria-label={item.label}
-        title={`${item.label}: not yet migrated`}
+        title={`${item.label} is not available yet`}
         className="flex h-8 w-8 items-center justify-center rounded-md text-text-subtle/55"
       >
         {item.icon}

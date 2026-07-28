@@ -258,7 +258,7 @@ function Tab({
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
       title={`${descriptor.cwd}${shortcut}`}
-      aria-label={`Session ${title} (${id}), ${visual.label}${visual.needsAttention ? ', permission request waiting' : ''}`}
+      aria-label={`Session ${title}, ${visual.label}${visual.needsAttention ? ', permission request waiting' : ''}`}
       draggable
       onClick={() => onSelect(id)}
       onDragStart={event => {

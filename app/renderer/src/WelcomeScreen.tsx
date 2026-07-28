@@ -292,8 +292,15 @@ function RecentItem({
       <span className="flex shrink-0 text-text-subtle">
         <FolderIcon />
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text-muted">
-        {recent.cwd}
+      {/* The disambiguated project label, not the raw path: two projects that
+          share a basename get told apart by leading path, and each carries its
+          own trust badge, so one name must never stand for both. The full path
+          stays one hover away. */}
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text-muted"
+        title={recent.cwd}
+      >
+        {recent.name}
       </span>
       {untrusted ? (
         <span className="shrink-0 rounded border border-tone-warn/20 bg-tone-warn/10 px-[5px] py-px text-[8.5px] font-bold uppercase tracking-wide text-tone-warn">

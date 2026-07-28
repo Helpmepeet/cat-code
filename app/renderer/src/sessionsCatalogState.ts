@@ -597,6 +597,13 @@ export function selectRecentWorkspaces(
 ): RecentWorkspace[] {
   const byCwd = new Map<string, RecentWorkspace>()
   for (const row of rows) {
+    // A recent is a PROJECT the operator can open. A row whose workspace could
+    // not be reconciled (MAJOR-1, `cwd === ''`) names no project, and it would
+    // render as a nameless entry: `basename('') || ''` is the empty string, so
+    // both the picker's trigger and its row would come out blank. The sidebar
+    // buckets those rows under "Unknown workspace" instead; here there is
+    // nothing to open, so they are left out.
+    if (row.cwd.trim().length === 0) continue
     const existing = byCwd.get(row.cwd)
     if (!existing) {
       byCwd.set(row.cwd, {

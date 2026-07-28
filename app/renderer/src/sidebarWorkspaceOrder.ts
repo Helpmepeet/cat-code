@@ -207,12 +207,19 @@ export function selectWorkspaceDropEdge(
 /**
  * Move `fromCwd` onto `overCwd` and return the next order.
  *
- * `cwds` is the sequence the operator is looking at (the rendered group order).
- * Every rankable cwd in it is folded into the order first, so the very first
- * drag freezes the visible alphabetical order into an explicit one and the
- * result matches what was on screen. Entries already in `order` keep their slot,
- * INCLUDING ones not currently rendered — a group hidden by the search box does
- * not lose its rank because the operator reordered two visible neighbours.
+ * `cwds` is the sequence the operator is looking at (the rendered group order),
+ * and it alone decides the drop edge and the insertion point.
+ *
+ * `allCwds` is the UNFILTERED group sequence (defaults to `cwds`), and is what
+ * gets frozen into the order: the first drag must freeze every group's current
+ * position, not just the ones the search box happens to be showing. Freezing
+ * only the filtered sequence would leave every hidden group unranked, and an
+ * unranked group sorts BEHIND every ranked one — so reordering two search hits
+ * would silently demote the untouched groups above them, permanently.
+ *
+ * Entries already in `order` keep their slot, INCLUDING ones not currently
+ * rendered — a group hidden by the search box does not lose its rank because
+ * the operator reordered two visible neighbours.
  *
  * Returns the SAME reference on a no-op so the caller can skip a state write.
  */
@@ -221,10 +228,11 @@ export function reduceWorkspaceOrderMoved(
   cwds: readonly string[],
   fromCwd: string,
   overCwd: string,
+  allCwds: readonly string[] = cwds,
 ): WorkspaceOrder {
   const edge = selectWorkspaceDropEdge(cwds, fromCwd, overCwd)
   if (!edge) return order
-  const covered = dedupeCwds([...order, ...cwds])
+  const covered = dedupeCwds([...order, ...allCwds, ...cwds])
   const without = covered.filter(cwd => cwd !== fromCwd)
   const at = without.indexOf(overCwd)
   if (at < 0) return order
@@ -251,10 +259,11 @@ export function reduceWorkspaceOrderStepped(
   cwds: readonly string[],
   cwd: string,
   direction: 'up' | 'down',
+  allCwds: readonly string[] = cwds,
 ): WorkspaceOrder {
   const index = cwds.indexOf(cwd)
   if (index < 0) return order
   const target = direction === 'up' ? index - 1 : index + 1
   if (target < 0 || target >= cwds.length) return order
-  return reduceWorkspaceOrderMoved(order, cwds, cwd, cwds[target])
+  return reduceWorkspaceOrderMoved(order, cwds, cwd, cwds[target], allCwds)
 }

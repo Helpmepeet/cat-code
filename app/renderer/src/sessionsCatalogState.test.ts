@@ -871,8 +871,26 @@ describe('selectRecentWorkspaces label disambiguation (CC-15)', () => {
     expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
     // basename('/') is '' — the pre-existing `|| cwd` fallback still applies.
     expect(byCwd.get('/')).toBe('/')
-    // An unreconciled cwd (MAJOR-1) has no path to widen; unchanged by this fix.
-    expect(byCwd.get('')).toBe('')
-    expect(recents).toHaveLength(4)
+    // An unreconciled cwd (MAJOR-1) names no openable project, so it is not a
+    // recent at all — see the dedicated test below.
+    expect(byCwd.has('')).toBe(false)
+    expect(recents).toHaveLength(3)
+  })
+
+  test('a row with no reconciled workspace is not a recent (it would render nameless)', () => {
+    // The bug this pins: `name` was `basename('') || ''` = `''`, and the empty
+    // cwd survived to the head of the list whenever its row was the newest. The
+    // launcher then rendered a blank trigger label and a blank picker row — a
+    // folder icon with nothing beside it, and nothing to open.
+    const recents = recentsFor([
+      { cwd: '', modifiedAtMs: 9000 },
+      { cwd: '/Users/pt/cat-code', modifiedAtMs: 5000 },
+    ])
+    expect(recents.map(r => r.cwd)).toEqual(['/Users/pt/cat-code'])
+    expect(recents.every(r => r.name.length > 0)).toBe(true)
+
+    // Whitespace-only is the same non-workspace, and an all-orphan roster is
+    // simply empty rather than a list of blanks.
+    expect(recentsFor([{ cwd: '   ', modifiedAtMs: 9000 }])).toEqual([])
   })
 })
