@@ -40,13 +40,24 @@ async function main(): Promise<void> {
   const [
     { enumerateSessionsCatalog },
     { writeSessionsCatalogCache },
-    { initializeSidecarRuntime },
+    { ensureEngineMacro },
+    { enableConfigs },
   ] = await Promise.all([
     import('./sessionsCatalogDomain.js'),
     import('./sessionsCatalogCache.js'),
     import('./initializeRuntime.js'),
+    import('../../src/utils/config.js'),
   ])
-  await initializeSidecarRuntime()
+  // OBSERVATION-ONLY BOOTSTRAP, same reasoning as `accountsPoolWorker.ts`: the
+  // full `init()` this used to run fires `void initAccountPool()`
+  // (`src/entrypoints/init.ts:86-90`), which starts periodic token refresh, a
+  // 1-second quarantine probe, and a usage POST with real OAuth tokens. Main
+  // re-spawns this worker every 30 s, so that drove real credential machinery
+  // from a throwaway process on a loop, and the unconditional `process.exit(0)`
+  // below could hard-kill a refresh it had just started. Enumeration needs the
+  // MACRO shim plus config reads and nothing else.
+  ensureEngineMacro()
+  enableConfigs()
 
   const catalog = await enumerateSessionsCatalog()
   if (!catalog) {
@@ -89,9 +100,9 @@ async function main(): Promise<void> {
     process.exit(0)
   }
   await emit(result)
-  // `init()` registers long-lived engine handles (account/config watchers). This
-  // is a disposable single-shot process, so terminate explicitly instead of
-  // waiting for those unrelated handles to drain (mirrors the backfill worker).
+  // The engine registers long-lived handles (config watchers). This is a
+  // disposable single-shot process, so terminate explicitly instead of waiting
+  // for those unrelated handles to drain (mirrors the sibling workers).
   process.exit(0)
 }
 

@@ -49,6 +49,7 @@ import {
   getPoolStatus,
   isCodexAccountSwitchable,
   removeCodexAccount,
+  loadPoolForObservation,
   saveCodexTokenToVault,
   setAccountAlias,
   switchToAccount,
@@ -155,6 +156,15 @@ export type SidecarAccountsDomain = {
    * unset sink silently drops progress (e.g. a test that only asserts the ack).
    */
   setOAuthProgressSink(sink: (progress: OAuthLoginProgress) => void): void
+  /**
+   * IDLE-PARK — true while a sign-in is under way. `account.login` acks
+   * immediately and the real flow (browser, callback listener, credential
+   * write) keeps running in the background, so the server cannot infer this
+   * from the verb promise; killing the process here abandons a half-finished
+   * login. Covers the synchronous dispatch window too, not just the phases
+   * after the authorize url arrives.
+   */
+  isOAuthLoginInFlight(): boolean
 }
 
 function isSidecarFirstRunEligible(): boolean {
@@ -560,6 +570,12 @@ export function createSidecarAccountsDomain(
     onProviderActivated?: (provider: AccountLoginProvider) => void
     /** Sidecar-owned first-run eligibility; injectable for deterministic boundary tests. */
     isFirstRunEligible?: () => boolean
+    /**
+     * Re-read the pool from disk before an account-targeting WRITE. Defaults to
+     * the engine's own observation-only load; injectable so a test can stand in
+     * for another process changing the vault.
+     */
+    reloadPool?: () => Promise<void>
   } = {},
 ): SidecarAccountsDomain {
   const executor = options.executor ?? createRealAccountsExecutor()
@@ -568,9 +584,37 @@ export function createSidecarAccountsDomain(
     options.anthropicOAuthRunner ?? createRealAnthropicOAuthLoginRunner()
   const isFirstRunEligible =
     options.isFirstRunEligible ?? isSidecarFirstRunEligible
+  const reloadPool = options.reloadPool ?? loadPoolForObservation
 
   function resolveAccount(accountId: string): PoolAccount | undefined {
     return getPoolStatus().accounts.find(a => a.accountId === accountId)
+  }
+
+  /**
+   * Resolve a WRITE target, re-reading the vault once if the first look misses.
+   *
+   * `getPoolStatus()` is the process-local singleton, populated once at spawn
+   * and never refreshed here, while the accounts page the operator is looking
+   * at comes from the accounts worker's 60 s re-read. So an account signed in
+   * from another window or from the CLI shows up in the list within a minute,
+   * and every write aimed at it from an older session is refused with "that
+   * account is no longer in the pool" for as long as that session lives. The
+   * second look closes that: the re-read is disk-only (no token refresh, no
+   * network) and is paid ONLY on a miss, so the ordinary hit costs nothing and
+   * the in-memory usage hints the pool accumulated are not thrown away on every
+   * verb. A failed re-read is non-fatal; the miss is then reported as before.
+   */
+  async function resolveAccountForWrite(
+    accountId: string,
+  ): Promise<PoolAccount | undefined> {
+    const known = resolveAccount(accountId)
+    if (known) return known
+    try {
+      await reloadPool()
+    } catch {
+      // Keep the last known pool; the caller reports the miss.
+    }
+    return resolveAccount(accountId)
   }
 
   /* ── OAuth login controller (P4-15) ──────────────────────────────────────
@@ -758,6 +802,13 @@ export function createSidecarAccountsDomain(
       progressSink = sink
     },
 
+    isOAuthLoginInFlight() {
+      // `activeOAuthRunner` is set synchronously inside `beginLogin`, before
+      // the flow's first await, and cleared when it settles or is cancelled;
+      // `phase` covers the steps after `begin()` resolves (alias, persist).
+      return activeOAuthRunner !== null || phase !== 'idle'
+    },
+
     async runVerb(verb) {
       switch (verb.type) {
         case 'account.switch': {
@@ -785,18 +836,24 @@ export function createSidecarAccountsDomain(
               poolChanged: result.ok,
             }
           }
-          const account = resolveAccount(verb.accountId)
+          const account = await resolveAccountForWrite(verb.accountId)
           if (!account) {
             return notFound('account.switch')
           }
+          // `switchToAccount` returns null when the target is not uniquely
+          // resolvable or not switchable, so the switch can fail here. Report
+          // what actually happened, as the Anthropic arm above already does:
+          // an unconditional `true` re-broadcasts a pool change to every
+          // connection for a switch that never took place.
+          const result = executor.switch(account.accountId)
           return {
             verb: 'account.switch',
-            result: executor.switch(account.accountId),
-            poolChanged: true,
+            result,
+            poolChanged: result.ok,
           }
         }
         case 'account.rename': {
-          const account = resolveAccount(verb.accountId)
+          const account = await resolveAccountForWrite(verb.accountId)
           if (!account) {
             return notFound('account.rename')
           }
@@ -820,7 +877,7 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.rename', result, poolChanged: result.ok }
         }
         case 'account.delete': {
-          const account = resolveAccount(verb.accountId)
+          const account = await resolveAccountForWrite(verb.accountId)
           if (!account) {
             return notFound('account.delete')
           }

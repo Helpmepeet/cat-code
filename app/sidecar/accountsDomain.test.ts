@@ -59,6 +59,18 @@ afterEach(() => {
   resetClaudeAccountPoolForTest()
 })
 
+/**
+ * The domain re-reads the vault from disk when a write target misses the
+ * in-process pool. Stub that by default so no test in this file can reach the
+ * real vault (and so a seeded fixture pool is never overwritten by it); the
+ * tests that exercise the re-read pass their own.
+ */
+function makeAccountsDomain(
+  options: NonNullable<Parameters<typeof createSidecarAccountsDomain>[0]> = {},
+) {
+  return createSidecarAccountsDomain({ reloadPool: async () => {}, ...options })
+}
+
 describe('P4-5 read-seam — redaction (the security-critical core)', () => {
   test('projection strips every credential field — no token, no vault path', () => {
     const status = buildAccountStatus(poolAccount(), true)
@@ -122,7 +134,7 @@ describe('P4-5 read-seam — projection semantics', () => {
       activeAccountUuid: claudeAccount.accountUuid,
     })
 
-    const snapshot = createSidecarAccountsDomain({
+    const snapshot = makeAccountsDomain({
       executor: fakeExecutor(),
     }).getSnapshot()
 
@@ -197,7 +209,7 @@ describe('P4-5 read-seam — projection semantics', () => {
   })
 
   test('getSnapshot is throw-free on an empty pool', () => {
-    const domain = createSidecarAccountsDomain({ executor: fakeExecutor() })
+    const domain = makeAccountsDomain({ executor: fakeExecutor() })
     const snapshot = domain.getSnapshot()
     expect(snapshot).not.toBeNull()
     expect(snapshot?.poolCount).toBe(0)
@@ -264,7 +276,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
       activeAccountId: 'a',
     })
     const switched: string[] = []
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor({ switch: id => { switched.push(id); return { ok: true, message: 'ok' } } }),
     })
     const out = await domain.runVerb({ type: 'account.switch', requestId: 'r1', accountId: 'b' })
@@ -276,13 +288,130 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
   test('a verb targeting an account no longer in the pool fails closed (no dispatch)', async () => {
     seedCodexAccountPoolForTest({ accounts: [poolAccount({ accountId: 'a' })], activeAccountId: 'a' })
     let called = false
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor({ switch: () => { called = true; return { ok: true, message: 'ok' } } }),
     })
     const out = await domain.runVerb({ type: 'account.switch', requestId: 'r', accountId: 'ghost' })
     expect(out.result.ok).toBe(false)
     expect(out.poolChanged).toBe(false)
     expect(called).toBe(false)
+  })
+
+  /*
+   * `getPoolStatus()` is the process-local pool, populated once at spawn, while
+   * the accounts page the operator is looking at comes from the accounts
+   * worker's 60 s re-read. So an account signed in from another window shows up
+   * in the list within a minute and every write aimed at it from an older
+   * session was refused for that session's whole life.
+   */
+  test('a write against an account this process has not seen re-reads the vault once and then dispatches', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a', alias: 'a' })],
+      activeAccountId: 'a',
+    })
+    let reloads = 0
+    const switched: string[] = []
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        switch: id => {
+          switched.push(id)
+          return { ok: true, message: 'ok' }
+        },
+      }),
+      // Stands in for another process having signed in account `b`.
+      reloadPool: async () => {
+        reloads += 1
+        seedCodexAccountPoolForTest({
+          accounts: [
+            poolAccount({ accountId: 'a', alias: 'a' }),
+            poolAccount({ accountId: 'b', alias: 'b' }),
+          ],
+          activeAccountId: 'a',
+        })
+      },
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'r1',
+      accountId: 'b',
+    })
+
+    expect(out.result.ok).toBe(true)
+    expect(switched).toEqual(['b'])
+    expect(reloads).toBe(1)
+  })
+
+  test('a write against an account already in this process does NOT pay a vault re-read', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a', alias: 'a' }), poolAccount({ accountId: 'b', alias: 'b' })],
+      activeAccountId: 'a',
+    })
+    let reloads = 0
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor(),
+      reloadPool: async () => {
+        reloads += 1
+      },
+    })
+
+    await domain.runVerb({ type: 'account.switch', requestId: 'r1', accountId: 'b' })
+
+    // The ordinary path stays a pure in-memory resolve, so the pool's live
+    // usage hints are not thrown away on every verb.
+    expect(reloads).toBe(0)
+  })
+
+  test('a still-missing account after the re-read fails closed, and the re-read runs only once', async () => {
+    seedCodexAccountPoolForTest({ accounts: [poolAccount({ accountId: 'a' })], activeAccountId: 'a' })
+    let reloads = 0
+    let called = false
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        switch: () => {
+          called = true
+          return { ok: true, message: 'ok' }
+        },
+      }),
+      reloadPool: async () => {
+        reloads += 1
+      },
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'r',
+      accountId: 'ghost',
+    })
+
+    expect(out.result.ok).toBe(false)
+    expect(called).toBe(false)
+    expect(reloads).toBe(1)
+  })
+
+  test('a failed Codex switch does NOT report the pool as changed', async () => {
+    // `switchToAccount` returns null when the target is not uniquely resolvable
+    // or not switchable, so an unconditional `poolChanged: true` re-broadcast a
+    // pool change to every connection for a switch that never happened. The
+    // Anthropic arm already keyed this on the result.
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a' }), poolAccount({ accountId: 'b' })],
+      activeAccountId: 'a',
+    })
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        switch: () => ({ ok: false, message: 'Could not switch to that account.' }),
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'r1',
+      accountId: 'b',
+    })
+
+    expect(out.result.ok).toBe(false)
+    expect(out.poolChanged).toBe(false)
   })
 
   test('Anthropic account switch resolves against the Claude pool and dispatches the provider-specific path', async () => {
@@ -299,7 +428,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
       activeAccountUuid: claudeAccount.accountUuid,
     })
     const switched: string[] = []
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor({
         switchAnthropic: async id => {
           switched.push(id)
@@ -326,7 +455,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     // domain forwards to the executor and propagates its "did usage change" bit
     // (the sidecar re-broadcasts only on true).
     let calls = 0
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor({
         refreshUsage: async () => {
           calls += 1
@@ -337,7 +466,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(await domain.refreshUsage()).toBe(true)
     expect(calls).toBe(1)
 
-    const empty = createSidecarAccountsDomain({
+    const empty = makeAccountsDomain({
       executor: fakeExecutor({ refreshUsage: async () => false }),
     })
     expect(await empty.refreshUsage()).toBe(false)
@@ -352,7 +481,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
       activeAccountId: 'a',
     })
     let renamed = false
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor({ rename: () => { renamed = true; return { ok: true, message: 'ok' } } }),
     })
     const out = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'taken' })
@@ -362,7 +491,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
 
   test('rename rejects an invalid alias (regex) before dispatch', async () => {
     seedCodexAccountPoolForTest({ accounts: [poolAccount({ accountId: 'a', alias: 'keep' })], activeAccountId: 'a' })
-    const domain = createSidecarAccountsDomain({ executor: fakeExecutor() })
+    const domain = makeAccountsDomain({ executor: fakeExecutor() })
     const out = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'bad alias!' })
     expect(out.result.ok).toBe(false)
   })
@@ -372,7 +501,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
       accounts: [poolAccount({ accountId: 'a', source: 'config', vaultFilePath: undefined })],
       activeAccountId: 'a',
     })
-    const domain = createSidecarAccountsDomain({ executor: fakeExecutor() })
+    const domain = makeAccountsDomain({ executor: fakeExecutor() })
     const rename = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'new' })
     const del = await domain.runVerb({ type: 'account.delete', requestId: 'r', accountId: 'a', confirm: true })
     expect(rename.result.ok).toBe(false)
@@ -380,7 +509,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
   })
 
   test('touchAll surfaces per-account results and marks the pool changed', async () => {
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor({
         touchAll: async () => ({
           ok: true,
@@ -398,7 +527,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
 
 describe('P4-15 OAuth login controller — the live sign-in back-channel', () => {
   function makeDomain(runner: OAuthLoginRunner, captured: OAuthLoginProgress[]) {
-    const domain = createSidecarAccountsDomain({ executor: fakeExecutor(), oauthRunner: runner })
+    const domain = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: runner })
     domain.setOAuthProgressSink(p => captured.push(p))
     return domain
   }
@@ -429,7 +558,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
   test('Anthropic login uses the Anthropic runner and auto-persists without a Codex alias step', async () => {
     const captured: OAuthLoginProgress[] = []
     const providers: string[] = []
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor(),
       oauthRunner: fakeOAuthRunner({
         failWith: 'Codex runner must not be used',
@@ -466,7 +595,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
 
   test('first-run login activates the chosen provider only after credential persistence', async () => {
     const order: string[] = []
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor(),
       anthropicOAuthRunner: {
         async begin() {
@@ -497,7 +626,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
 
   test('ordinary add-account login does not change the active provider', async () => {
     const activated: string[] = []
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor(),
       anthropicOAuthRunner: {
         async begin() {
@@ -533,7 +662,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
       accounts: [],
     })
     const activated: string[] = []
-    const domain = createSidecarAccountsDomain({
+    const domain = makeAccountsDomain({
       executor: fakeExecutor(),
       anthropicOAuthRunner: {
         async begin() {

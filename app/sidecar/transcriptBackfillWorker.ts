@@ -60,15 +60,25 @@ async function main(): Promise<void> {
     { loadConversationForResume },
     { toSDKMessages },
     { createMessageEvent },
-    { initializeSidecarRuntime },
+    { ensureEngineMacro },
+    { enableConfigs },
   ] = await Promise.all([
     import('../../src/bootstrap/state.js'),
     import('../../src/utils/conversationRecovery.js'),
     import('../../src/utils/messages/mappers.js'),
     import('../../src/app-runtime/sessionEvents.js'),
     import('./initializeRuntime.js'),
+    import('../../src/utils/config.js'),
   ])
-  await initializeSidecarRuntime()
+  // OBSERVATION-ONLY BOOTSTRAP, same reasoning as `accountsPoolWorker.ts`: the
+  // full `init()` this used to run fires `void initAccountPool()`
+  // (`src/entrypoints/init.ts:86-90`), which starts periodic token refresh, a
+  // 1-second quarantine probe, and a usage POST with real OAuth tokens — none of
+  // which a transcript read needs, and any of which the unconditional
+  // `process.exit(0)` below can hard-kill mid-write. Reading transcripts needs
+  // the MACRO shim plus config reads and nothing else.
+  ensureEngineMacro()
+  enableConfigs()
 
   for (const item of request.items) {
     try {
@@ -157,8 +167,8 @@ async function main(): Promise<void> {
     }
   }
   await emit({ type: 'done', attempted: request.items.length })
-  // init() registers long-lived engine handles (account/config watchers). This
-  // is a disposable batch process, so a clean result must terminate explicitly
+  // The engine registers long-lived handles (config watchers). This is a
+  // disposable batch process, so a clean result must terminate explicitly
   // instead of waiting for those unrelated handles to drain.
   process.exit(0)
 }

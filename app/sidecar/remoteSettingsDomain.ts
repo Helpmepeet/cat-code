@@ -226,6 +226,14 @@ export function createSidecarRemoteSettingsDomain(options: {
   const { appStateStore, cwd, commands } = options
   const executor = options.executor ?? createRealRemoteSettingsExecutor()
 
+  // One direct connect at a time per session. `withTimeout` above rejects after
+  // 15 s but ABANDONS the underlying fetch (it has no signal), so without this
+  // latch a renderer looping at the inbound rate cap against a black-holing host
+  // accumulates thousands of sockets inside the privileged sidecar, held until
+  // the OS TCP timeout. The frame caps bound frames, not in-flight work per verb.
+  // Mirrors the `phase === 'persisting'` guard in `accountsDomain.ts`.
+  let directConnectInFlight = false
+
   return {
     getSnapshot() {
       try {
@@ -246,7 +254,22 @@ export function createSidecarRemoteSettingsDomain(options: {
           return runBridgeToggle(verb, appStateStore, executor)
         }
         case 'remoteSettings.directConnect': {
-          return runDirectConnect(verb, cwd, executor)
+          if (directConnectInFlight) {
+            return {
+              verb: 'remoteSettings.directConnect',
+              result: {
+                ok: false,
+                message: 'Already connecting. Wait for that attempt to finish.',
+              },
+              flagChanged: false,
+            }
+          }
+          directConnectInFlight = true
+          try {
+            return await runDirectConnect(verb, cwd, executor)
+          } finally {
+            directConnectInFlight = false
+          }
         }
         default: {
           // Exhaustiveness tripwire — a new verb must extend this switch.

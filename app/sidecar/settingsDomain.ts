@@ -140,8 +140,20 @@ export function buildSettingsSnapshot(
 
   const resolved: SettingsSnapshot['resolved'] = []
   // editableValues carries VALUES — but ONLY for the closed non-secret allowlist
-  // (EDITABLE_SETTING_KEYS); every other key stays values-free. The winning
-  // (highest-precedence) layer's value is captured in the same high→low walk.
+  // (EDITABLE_SETTING_KEYS); every other key stays values-free.
+  //
+  // Deliberately NOT gated on the shared `seen` set, for the same reason as
+  // `permissionDefaultMode` below: `seen` answers "which layer WINS this key",
+  // which is the right question for `resolved` and the wrong one here. The
+  // settings UI is scope-relative — the operator picks a layer and edits that
+  // layer's own value — so a key set at two layers needs an entry for EACH,
+  // not just the winner's. Gating it meant an overridden row could show no
+  // value at its own scope and lose its editor.
+  //
+  // The walk runs high→low precedence and `sort` is stable, so among entries
+  // for one key the WINNER stays first. `selectEditableValue` (the renderer's
+  // key-only lookup) therefore keeps resolving to the winning value unchanged;
+  // a scope-aware reader matches on `{key, source}`.
   const editableValues: SettingsSnapshot['editableValues'] = []
   // CC-13 — `permissions.defaultMode` is resolved on its OWN axis, deliberately
   // NOT gated on the `seen` top-level set: the engine deep-merges settings
@@ -160,14 +172,6 @@ export function buildSettingsSnapshot(
       }
     }
     for (const key of Object.keys(layer.settings)) {
-      if (seen.has(key)) continue
-      seen.add(key)
-      resolved.push({
-        key,
-        source: layer.source,
-        managed: layer.source === 'policySettings',
-        editable: !READ_ONLY_SOURCES.has(layer.source),
-      })
       if (EDITABLE_SETTING_KEYS.has(key)) {
         // Only emit a value that matches the key's declared scalar control —
         // never an unexpected shape (belt-and-suspenders against a hand-edited
@@ -178,6 +182,14 @@ export function buildSettingsSnapshot(
           editableValues.push({ key, value: validation.value, source: layer.source })
         }
       }
+      if (seen.has(key)) continue
+      seen.add(key)
+      resolved.push({
+        key,
+        source: layer.source,
+        managed: layer.source === 'policySettings',
+        editable: !READ_ONLY_SOURCES.has(layer.source),
+      })
     }
   }
   resolved.sort((a, b) => a.key.localeCompare(b.key))

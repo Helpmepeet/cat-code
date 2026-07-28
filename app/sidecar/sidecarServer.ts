@@ -333,6 +333,15 @@ export class SidecarServer {
    * sidecar is exiting.
    */
   private parking = false
+  /**
+   * IDLE-PARK — count of accepted verbs whose DURABLE write is still in flight
+   * (account ops, session actions). The turn/permission/task gates below see
+   * none of these: they are dispatched fire-and-forget, and several of them
+   * (vault token refresh, fork transcript write) leave a lockfile or a
+   * half-written file behind if the process exits mid-flight. Incremented
+   * synchronously at dispatch, decremented when the promise settles.
+   */
+  private inFlightDurableWrites = 0
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
@@ -1156,11 +1165,25 @@ export class SidecarServer {
    *      local_agent (parking over a running foregrounded agent-mode worker would
    *      kill a live turn — a no-turn-loss breach). Covers background + foreground
    *      workers alike. Do not re-derive.
+   *
+   * Two more gates, same rule (no half-finished durable write):
+   *   4. no accepted verb whose durable write is still in flight. A token
+   *      refresh holds a cross-process lockfile and marks the vault record
+   *      `in_flight` before a 15 s network call
+   *      (`src/services/api/codexTokenRefresh.ts`); exiting there orphans the
+   *      lock and gets the account quarantined by the next refresher, with no
+   *      auth failure anywhere. A fork's transcript write has the same shape.
+   *   5. no OAuth sign-in under way. That verb returns immediately and the
+   *      real flow (browser + callback listener + credential write) continues
+   *      in the background, so the counter above cannot see it; the domain
+   *      reports its own liveness instead.
    */
   private isParkGateOpen(): boolean {
     if (this.activeTurn) return false
     if (this.controller.getPendingPermissionRequests().length > 0) return false
     if (this.tasks && this.tasks.hasLiveWork()) return false
+    if (this.inFlightDurableWrites > 0) return false
+    if (this.accounts?.isOAuthLoginInFlight()) return false
     return true
   }
 
@@ -1287,6 +1310,8 @@ export class SidecarServer {
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
     const verb = parsed.data as AccountVerbMessage
+    // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
+    this.inFlightDurableWrites += 1
     void this.accounts
       .runVerb(verb)
       .then(({ verb: verbType, result, poolChanged }) => {
@@ -1318,6 +1343,9 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error),
           false,
         )
+      })
+      .finally(() => {
+        this.inFlightDurableWrites -= 1
       })
   }
 
@@ -1610,6 +1638,9 @@ export class SidecarServer {
           ? domain.export()
           : domain.branch()
 
+    // IDLE-PARK gate 4: a fork writes a new transcript, so hold the park off
+    // until this settles (see isParkGateOpen).
+    this.inFlightDurableWrites += 1
     void run
       .then(result => {
         // Export can produce a very large transcript. The outbound size cap
@@ -1671,6 +1702,9 @@ export class SidecarServer {
             error instanceof Error ? error.message : String(error)
           }`,
         })
+      })
+      .finally(() => {
+        this.inFlightDurableWrites -= 1
       })
   }
 
@@ -2775,6 +2809,15 @@ export class SidecarServer {
     }
   }
 
+  /**
+   * Error frames are the ONE outbound kind `send` exempts from the secret-key
+   * guard (loop avoidance, see `send`), and several call sites forward raw
+   * engine text — `String(error)` from a rejected verb. A failed vault unlink
+   * carries the vault file path in its message, and `vaultFilePath` is a
+   * SECURITY-MINIMUM §4 forbidden crossing. The guard would not have caught it
+   * either way (it scans KEY names, not values), so bound the text and strip
+   * absolute paths before it leaves.
+   */
   private sendError(
     connection: Connection,
     requestId: string | undefined,
@@ -2788,7 +2831,7 @@ export class SidecarServer {
       sessionId: this.sessionId,
       requestId,
       code,
-      message,
+      message: redactErrorMessage(message),
       retryable,
     })
   }
@@ -2802,6 +2845,33 @@ export class SidecarServer {
     connection.rateCount += 1
     return connection.rateCount <= MAX_FRAMES_PER_WINDOW
   }
+}
+
+/**
+ * Outbound bound on an error frame's `message`. Errors are diagnostics, not a
+ * data channel; the full text still reaches the sidecar's own stderr log.
+ */
+const MAX_ERROR_MESSAGE_CHARS = 1_000
+
+/**
+ * An absolute POSIX path appearing anywhere in an error string, optionally
+ * wrapped in the quotes/brackets Node's `EACCES: … unlink '<path>'` messages
+ * use. Requires a second `/` so a bare root token is not matched, and stops at
+ * whitespace or a closing delimiter. A URL is not matched: it starts at its
+ * scheme, not at a slash.
+ */
+const ABSOLUTE_PATH_PATTERN =
+  /(^|[\s'"`([{<])(\/[^\s'"`)\]}>,]*\/[^\s'"`)\]}>,]*)/g
+
+/** See `SidecarServer.sendError` — strip filesystem paths, then bound. */
+function redactErrorMessage(message: string): string {
+  const stripped = message.replace(
+    ABSOLUTE_PATH_PATTERN,
+    (_match, prefix: string) => `${prefix}<path>`,
+  )
+  return stripped.length > MAX_ERROR_MESSAGE_CHARS
+    ? `${stripped.slice(0, MAX_ERROR_MESSAGE_CHARS)}…`
+    : stripped
 }
 
 /**
@@ -3149,12 +3219,54 @@ const sessionActionVerbMessageSchema = z.discriminatedUnion('type', [
 /**
  * P4-13 — sidecar-LOCAL schemas for the RemoteSettings verbs (protocol.ts:
  * REMOTE_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
- * Structural only: shape + bounds. `serverUrl` is length-bounded like every
- * other renderer-controlled string; the domain re-derives everything else
+ * Structural only: shape + bounds; the domain re-derives everything else
  * (the real bridge flag, the real cwd) rather than trusting the frame.
  */
 const remoteRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
-const remoteServerUrlSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+
+/**
+ * `serverUrl` is the one renderer-authored string this boundary turns into a
+ * real outbound request from the PRIVILEGED sidecar: the domain hands it to
+ * `createDirectConnectSession`, which POSTs `{cwd}` to `${serverUrl}/sessions`
+ * (`src/server/createDirectConnectSession.ts`). A length-only bound therefore
+ * gave a compromised renderer exactly the egress channel SECURITY-MINIMUM T3
+ * relies on `connect-src 'self'` to deny, plus the session cwd. Validate the
+ * shape HERE, at the trust boundary, never in the domain (§2 R2):
+ *
+ *   - it must parse as an absolute URL;
+ *   - `http:`/`https:` only. That is what `fetch` accepts, so nothing that
+ *     could ever have worked is lost;
+ *   - no embedded `user:pass@` credentials — they would ride the request;
+ *   - no query and no fragment. The engine appends `/sessions` to this exact
+ *     string, so neither can be meaningful here, and both are free-form
+ *     attacker-controlled capacity;
+ *   - a non-empty host.
+ *
+ * What is deliberately NOT decided here: which HOSTS are reachable (loopback
+ * only? an operator-configured list?). That is a product decision, so this
+ * closes the shape hole without inventing a policy.
+ */
+function isAllowedRemoteServerUrl(raw: string): boolean {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  if (url.username !== '' || url.password !== '') return false
+  if (url.search !== '' || url.hash !== '') return false
+  return url.hostname !== ''
+}
+
+const remoteServerUrlSchema = z
+  .string()
+  .min(1)
+  .max(MAX_TEXT_FIELD_CHARS)
+  .refine(isAllowedRemoteServerUrl, {
+    message:
+      'Enter an http or https address with no username, password, query, or fragment.',
+  })
 
 const remoteVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -3383,6 +3495,13 @@ type NarrowedGatedQuestion = {
  * the answer reconstruction needs, defensively (the request came from the
  * engine, but the boundary stays defensive about shape — same posture as
  * `extractGatedToolInput`). Returns undefined if the shape is unexpected.
+ *
+ * Duplicate question TEXT counts as unexpected: the reconstruction below keys
+ * the tool's answer map by that text, so two identically-worded questions would
+ * pass the arity check, each validate, and then collapse onto one entry — the
+ * engine receiving a partially answered tool result while the boundary reported
+ * success. `AskUserQuestionTool` allows 1-4 questions with no uniqueness rule,
+ * so fail closed here (surfaces as the existing `bad_request`).
  */
 function narrowGatedQuestions(
   gatedInput: Record<string, unknown> | undefined,
@@ -3390,10 +3509,13 @@ function narrowGatedQuestions(
   const raw = gatedInput?.questions
   if (!Array.isArray(raw)) return undefined
   const questions: NarrowedGatedQuestion[] = []
+  const seenQuestions = new Set<string>()
   for (const entry of raw) {
     if (typeof entry !== 'object' || entry === null) return undefined
     const record = entry as Record<string, unknown>
     if (typeof record.question !== 'string') return undefined
+    if (seenQuestions.has(record.question)) return undefined
+    seenQuestions.add(record.question)
     if (!Array.isArray(record.options)) return undefined
     const options: string[] = []
     for (const option of record.options) {

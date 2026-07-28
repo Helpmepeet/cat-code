@@ -11,9 +11,9 @@
  * sidecar accounts domain emits) rather than re-deriving the shape
  * (CLAUDE.md §8 rule 10).
  *
- * OBSERVATION-ONLY BOOTSTRAP — the one deliberate difference from its two
- * sibling workers, which both call `initializeSidecarRuntime()`. Full `init()`
- * fires `void initAccountPool()` (`src/entrypoints/init.ts:90`), which starts
+ * OBSERVATION-ONLY BOOTSTRAP — now shared by all three disposable workers (the
+ * two siblings adopted it after shipping the full bootstrap for a while). Full
+ * `init()` fires `void initAccountPool()` (`src/entrypoints/init.ts:90`), which starts
  * periodic token refresh, quarantine probes, and a startup `touchAll()`. On a
  * 60 s timer that would drive real cross-process credential rotation against the
  * vault forever. So this worker takes the engine's OWN observation-only entry
@@ -87,9 +87,26 @@ async function main(): Promise<void> {
     )
   }
 
+  // `CLAUDE_CODE_SIMPLE` above buys "skip hooks and the live-session machinery",
+  // but the same switch ALSO means "hermetic auth" to the engine: under it
+  // `getAuthTokenSource` and `getAnthropicApiKeyWithSource` return early
+  // (`src/utils/auth.ts`) and `getClaudeAIOAuthTokens` returns null, so the two
+  // Anthropic route booleans `buildAccountsSnapshot` derives by default would
+  // read false for every signed-in user, every run. The renderer prefers this
+  // snapshot over the session's, so that hides the account chip and re-asserts
+  // the first-run sign-in surface on a fully authenticated app. Read them the
+  // way a normal session sidecar does instead, and pass them in explicitly.
+  const anthropic = await readAnthropicRouteFacts()
+
   let pool
   try {
-    pool = buildAccountsSnapshot(getPoolStatus())
+    pool = buildAccountsSnapshot(
+      getPoolStatus(),
+      Date.now(),
+      undefined,
+      anthropic.routeAvailable,
+      anthropic.subscriptionActive,
+    )
   } catch (error) {
     // A read failure degrades to "no pool" — main keeps its last good snapshot
     // (the renderer never blanks). Report it explicitly so the runner
@@ -123,6 +140,51 @@ async function main(): Promise<void> {
   // disposable single-shot process, so terminate explicitly instead of waiting
   // for those unrelated handles to drain (mirrors the sibling workers).
   process.exit(0)
+}
+
+/**
+ * The two Anthropic route booleans, read with the minimal-mode switch lifted for
+ * exactly the duration of the read. This is the SAME pair a live session sidecar
+ * reads (`accountsDomain.buildAccountsSnapshot` defaults), so no new credential
+ * surface is introduced here; it is only being taken outside the hermetic-auth
+ * gate that `CLAUDE_CODE_SIMPLE` also turns on. The memoized OAuth token read is
+ * cleared on both sides so neither a stale bare-mode `null` is reused nor a
+ * non-bare token is left cached in this process. Degrades to false on any
+ * failure: the snapshot must never claim a route the process could not confirm.
+ */
+async function readAnthropicRouteFacts(): Promise<{
+  routeAvailable: boolean
+  subscriptionActive: boolean
+}> {
+  const [{ clearOAuthTokenCache, hasAnthropicCredentials }, { resolveAnthropicSubscriptionActive }] =
+    await Promise.all([
+      import('../../src/utils/auth.js'),
+      import('./accountsDomain.js'),
+    ])
+  // `isBareMode()` reads BOTH the env var and argv (`src/utils/envUtils.ts`),
+  // and main launches this worker with `--bare` on the command line, so lifting
+  // one without the other changes nothing. Nothing awaits inside the window, so
+  // no other code observes the temporarily-restored argv.
+  const minimal = process.env.CLAUDE_CODE_SIMPLE
+  const argv = process.argv
+  delete process.env.CLAUDE_CODE_SIMPLE
+  process.argv = argv.filter(arg => arg !== '--bare')
+  try {
+    clearOAuthTokenCache()
+    return {
+      routeAvailable: hasAnthropicCredentials(),
+      subscriptionActive: resolveAnthropicSubscriptionActive(),
+    }
+  } catch (error) {
+    process.stderr.write(
+      `[accounts-worker] anthropic route read failed: ${errorText(error)}\n`,
+    )
+    return { routeAvailable: false, subscriptionActive: false }
+  } finally {
+    if (minimal !== undefined) process.env.CLAUDE_CODE_SIMPLE = minimal
+    process.argv = argv
+    clearOAuthTokenCache()
+  }
 }
 
 function emit(result: AccountsPoolWorkerResult): Promise<void> {

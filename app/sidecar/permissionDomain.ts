@@ -17,7 +17,6 @@
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
-import { feature } from 'bun:bundle'
 import {
   isAutoModeGateEnabled,
   transitionPermissionMode,
@@ -30,12 +29,31 @@ export type PermissionDisplayFacts = {
   permissionClassifierEnabled: boolean
 }
 
+/**
+ * `permissionClassifierEnabled` used to be `feature('TRANSCRIPT_CLASSIFIER') &&
+ * isAutoModeGateEnabled()`. `feature(...)` is a BUILD-TIME macro resolved by
+ * `scripts/build.ts`, and the sidecar is spawned unbundled (`bun run
+ * app/sidecar/index.ts`, `app/main/main.ts`), where every `feature(...)` call
+ * evaluates false — so the flag was a hard-coded false and the rules viewer told
+ * the user the classifier was unavailable even when the engine's gate said
+ * otherwise. `isAutoModeGateEnabled()` is the live engine gate and is already
+ * null-safe on the optional auto-mode module, so ask it directly.
+ *
+ * It is NOT throw-free, though: it resolves the main-loop model, which reaches
+ * credential discovery and can raise. This runs on every app-state notification
+ * and on the attach path, so a raise here would take the session down over a
+ * display flag. Degrade to "unavailable" instead.
+ */
 function readPermissionDisplayFacts(): PermissionDisplayFacts {
+  let permissionClassifierEnabled = false
+  try {
+    permissionClassifierEnabled = isAutoModeGateEnabled()
+  } catch {
+    permissionClassifierEnabled = false
+  }
   return {
     managedRulesOnly: shouldAllowManagedPermissionRulesOnly(),
-    permissionClassifierEnabled: feature('TRANSCRIPT_CLASSIFIER')
-      ? isAutoModeGateEnabled()
-      : false,
+    permissionClassifierEnabled,
   }
 }
 

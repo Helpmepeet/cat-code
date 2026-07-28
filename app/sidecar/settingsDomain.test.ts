@@ -201,7 +201,7 @@ test('carries no secret material even when a source holds tokens (redaction proo
 
 /* ── P4-19 editableValues (bounded, non-secret) ─────────────────────────────── */
 
-test('editableValues carries the winning value ONLY for the closed allowlist', () => {
+test('editableValues carries EVERY layer that sets an allowlisted key, winner first', () => {
   const layers: SettingsSourceLayer[] = [
     {
       source: 'userSettings',
@@ -225,20 +225,34 @@ test('editableValues carries the winning value ONLY for the closed allowlist', (
     },
   ]
   const snapshot = buildSettingsSnapshot(layers, null)
-  const byKey = new Map(snapshot.editableValues.map(e => [e.key, e]))
+  const entriesFor = (key: string) =>
+    snapshot.editableValues.filter(entry => entry.key === key)
 
-  // Editable keys ride with their winning value + source.
-  expect(byKey.get('includeCoAuthoredBy')).toEqual({
-    key: 'includeCoAuthoredBy',
-    value: false,
-    source: 'userSettings',
-  })
-  expect(byKey.get('reasoningDisplay')).toEqual({
-    key: 'reasoningDisplay',
-    value: 'raw',
-    source: 'projectSettings',
-  })
+  // A key only one layer sets rides once, with that layer's value + source.
+  expect(entriesFor('includeCoAuthoredBy')).toEqual([
+    { key: 'includeCoAuthoredBy', value: false, source: 'userSettings' },
+  ])
+  // The settings UI is scope-relative: a key set at TWO layers must carry both,
+  // or the losing layer's row has no value to show at its own scope and loses
+  // its editor. The winner stays FIRST, so the renderer's key-only lookup keeps
+  // resolving to the resolved value.
+  expect(entriesFor('reasoningDisplay')).toEqual([
+    { key: 'reasoningDisplay', value: 'raw', source: 'projectSettings' },
+    { key: 'reasoningDisplay', value: 'off', source: 'userSettings' },
+  ])
+  // `resolved` is unaffected: it still answers "which layer WINS this key", once.
+  expect(
+    snapshot.resolved.filter(entry => entry.key === 'reasoningDisplay'),
+  ).toEqual([
+    {
+      key: 'reasoningDisplay',
+      source: 'projectSettings',
+      managed: false,
+      editable: true,
+    },
+  ])
   // NON-editable / secret keys are NEVER in editableValues (only the allowlist).
+  const byKey = new Map(snapshot.editableValues.map(e => [e.key, e]))
   expect(byKey.has('model')).toBe(false)
   expect(byKey.has('apiKey')).toBe(false)
   // A key dropped FROM the allowlist stops crossing the wire entirely, even
