@@ -70,21 +70,12 @@ export type PaletteInput = {
 }
 
 /**
- * P4-33 — the composer's slash picker routes through this SAME map (the
- * prototype's `onCommandRoute`, AppV2.jsx:325 → Chat.jsx:703), so the ⌘K palette
- * and the composer can never drift into two answers for `/accounts` (§10).
- *
- * Returns undefined for a command with no app surface, which means "leave it
- * alone": the draft completes normally and the engine handles the command. Also
- * undefined for `chat`, because the commands that map there (`tasks`, `bashes`)
- * earn a dedicated palette action rather than a navigation, and swallowing them
- * in the composer would trade a real engine command for a no-op.
+ * Palette-only. P4-33 tried to reuse this for the COMPOSER's slash picker (the
+ * prototype's `onCommandRoute`) and reverted: in the palette, picking a row means
+ * "take me there", but in the composer it means "run this command", and every
+ * command reachable there has a real engine implementation to run. See the
+ * ledger row for §06 `onCommandRoute`.
  */
-export function resolveCommandPage(name: string): PalettePage | undefined {
-  const page = PAGE_NAV_BY_COMMAND[name.replace(/^\/+/, '')]
-  return page === 'chat' ? undefined : page
-}
-
 const PAGE_NAV_BY_COMMAND: Readonly<Record<string, PalettePage>> = {
   accounts: 'accounts',
   'switch-account': 'accounts',
