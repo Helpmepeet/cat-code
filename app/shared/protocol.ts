@@ -897,12 +897,38 @@ export type AutoMemoryHeader = {
   type?: AutoMemoryType
 }
 
+/**
+ * P4-34 — read-only metadata for one real agent definition that carries a
+ * persistent memory directory. Additive to the existing `memory.snapshot`
+ * read seam (the C3 precedent, `decisions/PERMISSION-BOUNDARY.md`).
+ *
+ * Per-agent memory is an engine feature, not a prototype invention:
+ * `src/tools/AgentTool/agentMemory.ts:13` defines the scope and `:52`
+ * `getAgentMemoryDir` resolves the directory; agent definitions declare it at
+ * `src/tools/AgentTool/loadAgentsDir.ts` (`memory: z.enum([...]).optional()`).
+ *
+ * Directory path and file COUNT only — memory bodies never cross the boundary,
+ * exactly as the auto-memory rows above withhold theirs.
+ *
+ * `fileCount: null` means the directory could not be read (a permission error on
+ * a project- or local-scope dir under the session cwd, say). The row still ships
+ * with its scope and path: an unreadable directory is a fact about ONE agent, and
+ * must not cost the reader the rest of the page.
+ */
+export type AgentMemorySnapshot = {
+  agentType: string
+  scope: 'user' | 'project' | 'local'
+  directory: string
+  fileCount: number | null
+}
+
 export type MemorySnapshot = {
   autoMemoryEnabled: boolean
   autoMemoryDir: string
   autoMemoryEntrypoint: string
   instructionFiles: MemoryInstructionFile[]
   autoMemories: AutoMemoryHeader[]
+  agentMemories: AgentMemorySnapshot[]
   notes: string[]
 }
 
@@ -2019,7 +2045,7 @@ export type WorkspaceTrustSnapshot = {
    * engine read failed (display degrades; it never affects `trusted`).
    *
    * Additive (2026-07-26) and load-bearing for INFORMED CONSENT, not cosmetics.
-   * D4 (`decisions/STARTUP-GATES.md §1.1`) makes the desktop trust gate
+   * D4 (`docs/migration/decisions/STARTUP-GATES.md §1.1`) makes the desktop trust gate
    * per-session-CREATE, so it *presents* as per-folder — but the storage it
    * writes to is per-REPO: `saveCurrentProjectConfig` keys the write at
    * `getProjectPathForConfig()` (`config.ts:1675`) and `isPathTrusted` walks UP
@@ -2052,7 +2078,7 @@ export type WorkspaceTrustSnapshotFrame = {
  * P4-15 — workspace-trust WRITE verb (the session-create trust gate's accept)
  * ------------------------------------------------------------------------- *
  *
- * The D4 ruling (`decisions/STARTUP-GATES.md §1.1`) makes trust a per-session-
+ * The D4 ruling (`docs/migration/decisions/STARTUP-GATES.md §1.1`) makes trust a per-session-
  * create gate: an untrusted session's `workspace-trust.snapshot` reports
  * `trusted:false`, the renderer shows the trust dialog, and ACCEPT persists trust
  * for that session's cwd. Like the P4-5 account verbs and the P4-19 settings

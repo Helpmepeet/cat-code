@@ -12,6 +12,7 @@ import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { SOURCE_LABEL } from '../renderer/src/settingsFieldModel.js'
 import { SETTING_SOURCE_PRECEDENCE } from '../renderer/src/settingsState.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { SETTINGS_ENGINE_DEFAULT } from '../shared/settingsEditable.js'
 import type {
   SettingsSnapshotFrame,
   SettingSourceId,
@@ -253,8 +254,14 @@ test('editableValues carries EVERY layer that sets an allowlisted key, winner fi
   ])
   // NON-editable / secret keys are NEVER in editableValues (only the allowlist).
   const byKey = new Map(snapshot.editableValues.map(e => [e.key, e]))
-  expect(byKey.has('model')).toBe(false)
   expect(byKey.has('apiKey')).toBe(false)
+  // `model` joined the allowlist with the default-model select (P4-34), so it
+  // rides with its layer's real value — it is a preference, not a credential.
+  expect(byKey.get('model')).toEqual({
+    key: 'model',
+    value: 'opus',
+    source: 'userSettings',
+  })
   // A key dropped FROM the allowlist stops crossing the wire entirely, even
   // though the layer above still sets it.
   expect(byKey.has('effortLevel')).toBe(false)
@@ -445,6 +452,87 @@ test('runVerb persists an output-style write and the re-read reflects value + pr
     value: 'Explanatory',
     source: 'userSettings',
   })
+})
+
+/* ── default-model select + the engine-default token (P4-34) ──────────────── */
+
+const MODEL_OPTIONS: AvailableSettingOptions = [
+  {
+    key: 'model',
+    options: [
+      { value: SETTINGS_ENGINE_DEFAULT, label: 'Default (recommended)' },
+      { value: 'opus', label: 'Opus' },
+      { value: 'sonnet', label: 'Sonnet' },
+    ],
+  },
+]
+
+test('a model write persists the chosen model id', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain(MODEL_OPTIONS)
+
+  expect(domain.runVerb(write('userSettings', 'model', 'opus')).ok).toBe(true)
+  expect(JSON.parse(readFileSync(settingsFile, 'utf8')).model).toBe('opus')
+})
+
+test('choosing the engine default REMOVES the key rather than writing the token', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain(MODEL_OPTIONS)
+
+  expect(domain.runVerb(write('userSettings', 'model', 'opus')).ok).toBe(true)
+  const result = domain.runVerb(
+    write('userSettings', 'model', SETTINGS_ENGINE_DEFAULT),
+  )
+  expect(result).toEqual({
+    ok: true,
+    message: 'Cleared model.',
+    changed: true,
+  })
+
+  // The override is GONE — not the token, not an empty string. A settings file
+  // holding the token would be a model id no engine knows.
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect('model' in onDisk).toBe(false)
+  expect(readFileSync(settingsFile, 'utf8')).not.toContain(
+    SETTINGS_ENGINE_DEFAULT,
+  )
+  expect(
+    domain.getSnapshot()?.editableValues.some(e => e.key === 'model'),
+  ).toBe(false)
+})
+
+test('clearing one key leaves the other keys in the same file alone', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain(MODEL_OPTIONS)
+
+  expect(domain.runVerb(write('userSettings', 'model', 'sonnet')).ok).toBe(true)
+  expect(
+    domain.runVerb(write('userSettings', 'includeCoAuthoredBy', false)).ok,
+  ).toBe(true)
+  expect(
+    domain.runVerb(write('userSettings', 'model', SETTINGS_ENGINE_DEFAULT)).ok,
+  ).toBe(true)
+
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect('model' in onDisk).toBe(false)
+  expect(onDisk.includeCoAuthoredBy).toBe(false)
+})
+
+test('the engine-default token is still membership-gated, like any other option', () => {
+  useTempConfigHome()
+  // A domain whose captured model options do NOT offer the token (e.g. a
+  // registry that reported only concrete ids) must refuse to clear.
+  const domain = createSidecarSettingsDomain([
+    { key: 'model', options: [{ value: 'opus', label: 'Opus' }] },
+  ])
+  const result = domain.runVerb(
+    write('userSettings', 'model', SETTINGS_ENGINE_DEFAULT),
+  )
+  expect(result.ok).toBe(false)
+  expect(result.changed).toBe(false)
+  // The message reaches a toast, so it must not echo the reserved token back at
+  // the user as if it were a model name (CLAUDE.md §7).
+  expect(result.message).not.toContain(SETTINGS_ENGINE_DEFAULT)
 })
 
 test('availableOptions carries no secret material (secretGuard-clean)', () => {

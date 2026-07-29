@@ -142,8 +142,16 @@ whether even that blocks or just disables submit is §5-Q2.
 > `selectAuthSubmitBlocked` and the banner/wall state), their `App.tsx` render + derivation +
 > submit-gate sites, and the `localStorage['catcode:dismissedReauth']` /
 > `['catcode:acknowledgedReauthWall']` keys. The reauth OAuth-progress card (`ReauthOAuthProgress`,
-> the in-flight re-link surface) is a different thing and stays. A nicer proactive treatment is
-> deferred (out of scope). Operator GUI eyeball owed at the all-accounts-dead stage: confirm
+> the in-flight re-link surface) was kept at the time as a different thing.
+>
+> **P4-34 follow-up (2026-07-30).** That card is now deleted too. It was gated on
+> `oauthContext === 'reauth'`, and after #12 removed the banner the only remaining caller of
+> `beginOAuth('reauth')` was the card's own Retry button — so nothing could open it. Giving it a
+> launcher would have reversed #12, which is not a drive-by decision, so the orphan went instead:
+> the `'reauth'` context is gone from `OAuthContext` (`app/renderer/src/appModel.ts`), and
+> re-linking an account runs through the same `StartupOAuth` / add-account surfaces as any other
+> sign-in. Pinned by `app/renderer/src/StartupSurfaces.test.tsx`. A nicer proactive treatment is
+> still deferred (out of scope). Operator GUI eyeball owed at the all-accounts-dead stage: confirm
 > nothing renders and a send proceeds to the request-time pool error.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still

@@ -257,10 +257,8 @@ import {
   switchVerb,
 } from './accountsPageModel.js'
 import {
-  ReauthOAuthProgress,
   StartupOAuth,
   WorkspaceTrustGate,
-  type ReauthOAuthView,
   type StartupOAuthView,
 } from './StartupSurfaces.js'
 import { SessionsPage } from './SessionsPage.js'
@@ -590,7 +588,7 @@ export function App() {
   // P4-15 OAuth flow-local state. The sub-states themselves are DRIVEN by the
   // `oauth.login.progress` back-channel (`accountsState.oauthProgress`); these two
   // are the renderer-local framing: `oauthContext` distinguishes the first-run
-  // full-screen surface from the non-blocking reauth card (both begin the SAME
+  // full-screen surface from the add-account overlay (both begin the SAME
   // `account.login` flow), and `oauthStarting` is the optimistic gap between the
   // begin click and the first progress frame.
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
@@ -1183,9 +1181,9 @@ export function App() {
         setOauthProvider(verb.provider ?? 'openai')
         // AccountsPage starts login through this generic verb callback rather
         // than `beginOAuth`. Claim the attempt here so waiting/manual-code/
-        // alias/error/retry/success all keep an owning surface. A first-run or
-        // reauth caller sets its more specific context immediately beforehand,
-        // and this functional update preserves it.
+        // alias/error/retry/success all keep an owning surface. A first-run
+        // caller sets its more specific context immediately beforehand, and this
+        // functional update preserves it.
         setOauthContext(claimOAuthContextForAccountLogin)
         setOauthStarting(true)
       }
@@ -1213,15 +1211,15 @@ export function App() {
     }
   }, [accounts])
 
-  // P4-15 — the reauth banner's "Re-authenticate" action and the first-run OAuth
-  // surface both begin the SAME engine OAuth flow (the `account.login` verb;
-  // browser handoff, the engine owns the token write). Progress flows back on the
-  // `oauth.login.progress` frame, driving the sub-states below; the account lands
-  // on the `accounts.snapshot` re-broadcast the sidecar fires on `success` — no
-  // renderer token path. `context` tags which surface owns the flow.
+  // P4-15 — the first-run surface and the add-account dialog both begin the SAME
+  // engine OAuth flow (the `account.login` verb; browser handoff, the engine owns
+  // the token write). Progress flows back on the `oauth.login.progress` frame,
+  // driving the sub-states below; the account lands on the `accounts.snapshot`
+  // re-broadcast the sidecar fires on `success` — no renderer token path.
+  // `context` tags which surface owns the flow.
   const beginOAuth = useCallback(
     (
-      context: 'first-run' | 'reauth' | 'add-account',
+      context: Exclude<OAuthContext, null>,
       provider: 'anthropic' | 'openai' = 'openai',
     ) => {
       setOauthContext(context)
@@ -2390,9 +2388,10 @@ export function App() {
   )
 
   // P4-15 — the live OAuth progress (the back-channel) + the sub-state VIEWS
-  // derived from it. The first-run surface owns starting/waiting_for_login/
-  // waiting_for_alias/success/error; the reauth card owns waiting/error only (its
-  // success is a toast + banner clear — the blocking modal is CUT).
+  // derived from it. One view now: the first-run surface (and the add-account
+  // overlay, which reuses it) owns starting/waiting_for_login/waiting_for_alias/
+  // success/error. The reauth card that used to own waiting/error is deleted
+  // (P4-34); the blocking modal was already CUT.
   const oauthProgress = selectOAuthProgress(accounts, activeSessionId)
   const firstRunOAuthView: StartupOAuthView = oauthProgress
     ? oauthProgress.state === 'waiting_for_login'
@@ -2431,23 +2430,6 @@ export function App() {
     !showFirstRunOAuthSurface &&
     oauthContext === 'add-account' &&
     (oauthStarting || oauthProgress != null)
-
-  // The reauth progress card (non-blocking). Live only while the reauth flow owns
-  // the shared progress and it is a waiting/error state; `success` → toast below.
-  const reauthOAuthView: ReauthOAuthView | null =
-    oauthContext === 'reauth' && oauthProgress && !showFirstRunOAuthSurface
-      ? oauthProgress.state === 'error'
-        ? { phase: 'error', message: oauthProgress.message }
-        : oauthProgress.state === 'success'
-          ? null
-          : {
-              phase: 'waiting',
-              url:
-                oauthProgress.state === 'waiting_for_login'
-                  ? oauthProgress.url
-                  : null,
-            }
-      : null
 
   // Reset flow-local framing once the first-run surface should no longer show and
   // its progress has cleared (e.g. an account was added out of band), so a later
@@ -2494,18 +2476,6 @@ export function App() {
     }, 900)
     return () => window.clearTimeout(timer)
   }, [oauthContext, oauthProgress, activeSessionId])
-
-  // Reauth `success`: surface a toast and clear the flow; the dead-account banner
-  // clears itself on the account re-link (`accounts.snapshot` re-broadcast).
-  useEffect(() => {
-    if (oauthContext !== 'reauth' || oauthProgress?.state !== 'success') return
-    toast('You’re back in. Account re-linked.', { tone: 'success' })
-    setOauthStarting(false)
-    setOauthContext(null)
-    if (activeSessionId) {
-      dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-    }
-  }, [oauthContext, oauthProgress, activeSessionId, toast])
 
   return (
     <div className="flex h-screen bg-app-bg font-sans text-text-primary">
@@ -2725,34 +2695,21 @@ export function App() {
           </div>
         ) : null}
 
-        {/* Reauth OAuth-progress overlay (Q2). The all-dead wall, per-account
-         * reauth banners, and the collapsed chip were REMOVED entirely (#12,
-         * 2026-07-20 — `decisions/STARTUP-GATES.md`): zero-healthy no longer
+        {/* The all-dead wall, per-account reauth banners, and the collapsed chip
+         * were REMOVED entirely (#12, 2026-07-20 —
+         * `docs/migration/decisions/STARTUP-GATES.md`): zero-healthy no longer
          * renders a surface or blocks submit; the pool error surfaces inline at
-         * request time. Only the reauth OAuth flow's live progress remains here.
-         * It FLOATS just below the TabBar (`top-10`) rather than reflowing the
-         * panels; `pointer-events-none` lets clicks pass through any gutter, the
-         * card itself re-enables them. */}
-        <div className="pointer-events-none absolute inset-x-0 top-10 z-40">
-          <div className="pointer-events-auto">
-            {/* The reauth flow's live progress, NON-BLOCKING (the prototype's
-             * blocking ReauthGate modal is CUT). Reuses the shared OAuth
-             * waiting/paste-code UX; `success` is the toast. */}
-            {reauthOAuthView ? (
-              <ReauthOAuthProgress
-                view={reauthOAuthView}
-                onPasteCode={submitOAuthPasteCode}
-                onCancel={clearOAuth}
-                onRetry={() => beginOAuth('reauth')}
-              />
-            ) : null}
-          </div>
-        </div>
+         * request time. P4-34 removed the last remnant, a floating
+         * `ReauthOAuthProgress` card: with the banner gone, the only thing that
+         * could put the OAuth flow into a `'reauth'` context was that card's own
+         * Retry button, so nothing could ever open it. Re-authentication now runs
+         * through the same `StartupOAuth`/add-account surfaces as any other
+         * sign-in. */}
 
         {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
          * owning surface: adopt it into the shared OAuth surface as a top-level
          * overlay so it can complete (incl. the alias step), regardless of the
-         * active view. First-run + reauth own their own surfaces above. */}
+         * active view. First-run owns its own surface above. */}
         {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
           <div className="absolute inset-0 z-50">
               <StartupOAuth

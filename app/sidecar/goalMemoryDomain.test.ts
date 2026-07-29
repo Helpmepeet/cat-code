@@ -1,4 +1,8 @@
 import { expect, test } from 'bun:test'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { getAgentMemoryDir } from '../../src/tools/AgentTool/agentMemory.js'
 import {
   MEMORY_TYPES,
   type MemoryType as AutoMemoryType,
@@ -16,7 +20,7 @@ import type {
   ThreadGoalSnapshotFrame,
 } from '../shared/protocol.js'
 import { threadGoalSnapshot } from './goalDomain.js'
-import { buildMemorySnapshot } from './memoryDomain.js'
+import { buildMemorySnapshot, readAgentMemories } from './memoryDomain.js'
 
 type AssertAssignable<T extends true> = T
 type ProtocolCoversEngineGoalStatuses = AssertAssignable<
@@ -217,4 +221,128 @@ test('covers every instruction-file and auto-memory type from the engine scanner
   expect(snapshot.instructionFiles.find(file => file.type === 'AutoMem')).toMatchObject({
     contentDiffersFromDisk: true,
   })
+})
+
+/* ── per-agent memory directories (P4-34) ─────────────────────────────────── */
+
+/**
+ * A LIVE-PATH test: real directories on disk, resolved by the ENGINE's own
+ * `getAgentMemoryDir` rather than by a path this test spells out, and counted by
+ * the real `readdir`. A shape-only test would pass against a stub resolver and
+ * miss the thing that matters — that the app reports the directory the running
+ * agent would actually write to.
+ */
+test('agent-memory rows carry the engine-resolved directory and a real recursive file count', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'p4-34-agent-memory-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = home
+  try {
+    const dir = getAgentMemoryDir('Explore', 'user')
+    mkdirSync(join(dir, 'nested'), { recursive: true })
+    writeFileSync(join(dir, 'MEMORY.md'), 'body stays engine-side')
+    writeFileSync(join(dir, 'nested', 'note.md'), 'also engine-side')
+
+    const rows = await readAgentMemories([
+      { agentType: 'Explore', memory: 'user' },
+      // No `memory` declared → the agent has no memory dir and no row.
+      { agentType: 'Plan' },
+      // Declared but never written to → a real row reading zero, not a drop.
+      { agentType: 'Never-Run', memory: 'user' },
+    ])
+
+    expect(rows).toEqual([
+      { agentType: 'Explore', scope: 'user', directory: dir, fileCount: 2 },
+      {
+        agentType: 'Never-Run',
+        scope: 'user',
+        directory: getAgentMemoryDir('Never-Run', 'user'),
+        fileCount: 0,
+      },
+    ])
+    // Counts and paths only: no memory body crosses the boundary.
+    expect(JSON.stringify(rows)).not.toContain('engine-side')
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+/**
+ * The CC-13 bug class, at its source. `readAgentMemories` runs inside a
+ * `Promise.all` whose rejection makes `readMemorySnapshotOnce` return null, and a
+ * null snapshot means no `memory.snapshot` frame and a Memory page stuck on its
+ * waiting state. So an unreadable directory must resolve, not throw.
+ */
+test('an unreadable agent directory resolves to an unknown count instead of rejecting', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'p4-34-agent-memory-perm-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = home
+  try {
+    const readable = getAgentMemoryDir('Explore', 'user')
+    mkdirSync(readable, { recursive: true })
+    writeFileSync(join(readable, 'MEMORY.md'), 'x')
+
+    // A real EACCES: a directory the process may not list.
+    const denied = getAgentMemoryDir('Locked', 'user')
+    mkdirSync(denied, { recursive: true })
+    writeFileSync(join(denied, 'MEMORY.md'), 'x')
+    chmodSync(denied, 0o000)
+
+    const rows = await readAgentMemories([
+      { agentType: 'Explore', memory: 'user' },
+      { agentType: 'Locked', memory: 'user' },
+    ])
+
+    // Neither row is lost, and only the unreadable one loses its count.
+    expect(rows.map(row => row.agentType)).toEqual(['Explore', 'Locked'])
+    expect(rows[0]?.fileCount).toBe(1)
+    expect(rows[1]?.fileCount).toBeNull()
+    // Still a real row: scope and path survive, so the reader learns the
+    // directory exists and cannot be read.
+    expect(rows[1]?.directory).toBe(denied)
+    expect(rows[1]?.scope).toBe('user')
+
+    chmodSync(denied, 0o700)
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a memory frame carrying agent rows is still secretGuard-clean', () => {
+  const snapshot = buildMemorySnapshot({
+    autoMemoryEnabled: true,
+    autoMemoryDir: '/config/memory/',
+    autoMemoryEntrypoint: '/config/memory/MEMORY.md',
+    instructionFiles: [],
+    autoMemories: [],
+    agentMemories: [
+      {
+        agentType: 'Explore',
+        scope: 'user',
+        directory: '/config/agent-memory/Explore/',
+        fileCount: 2,
+      },
+    ],
+  })
+  const frame: MemorySnapshotFrame = {
+    kind: 'memory.snapshot',
+    protocolVersion: 1,
+    sessionId: 'sess-1',
+    memory: snapshot,
+  }
+  expect(scanForSecrets(frame).ok).toBe(true)
+})
+
+test('a snapshot with no memory-carrying agents carries an empty list, never a missing field', () => {
+  const snapshot = buildMemorySnapshot({
+    autoMemoryEnabled: true,
+    autoMemoryDir: '/config/memory/',
+    autoMemoryEntrypoint: '/config/memory/MEMORY.md',
+    instructionFiles: [],
+    autoMemories: [],
+  })
+  expect(snapshot.agentMemories).toEqual([])
 })

@@ -60,7 +60,6 @@ test('generic account login claims an add-account OAuth owner without stealing a
   expect(claimOAuthContextForAccountLogin(null)).toBe('add-account')
   expect(claimOAuthContextForAccountLogin('add-account')).toBe('add-account')
   expect(claimOAuthContextForAccountLogin('first-run')).toBe('first-run')
-  expect(claimOAuthContextForAccountLogin('reauth')).toBe('reauth')
 })
 
 test('composer attributes a Claude subscription account only to the active subscription route', () => {

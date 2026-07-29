@@ -1,10 +1,9 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import * as startupSurfaces from './StartupSurfaces.js'
 import {
-  ReauthOAuthProgress,
   StartupOAuth,
   WorkspaceTrustGate,
-  type ReauthOAuthView,
   type StartupOAuthView,
 } from './StartupSurfaces.js'
 
@@ -21,17 +20,6 @@ function oauthHtml(
       onCancel={() => {}}
       onPasteCode={() => {}}
       onSubmitAlias={() => {}}
-      onRetry={() => {}}
-    />,
-  )
-}
-
-function reauthHtml(view: ReauthOAuthView): string {
-  return renderToStaticMarkup(
-    <ReauthOAuthProgress
-      view={view}
-      onPasteCode={() => {}}
-      onCancel={() => {}}
       onRetry={() => {}}
     />,
   )
@@ -220,21 +208,16 @@ test('OAuth surface has no "Simulate failure" demo control (prototype DEMO CUT)'
   }
 })
 
-/* ── reauth OAuth progress (non-blocking; the blocking modal is CUT) ─────────── */
+/* ── the reauth card is gone, and stays gone ───────────────────────────────── */
 
-test('reauth waiting card reuses the shared OAuth waiting UX (non-blocking)', () => {
-  const html = reauthHtml({ phase: 'waiting', url: null })
-  expect(html).toContain('Continue in your browser')
-  expect(html).toContain('Waiting for browser authorization')
-  expect(html).toContain('Cancel')
-  // NOT the blocking modal (no fixed full-screen backdrop wrapper).
-  expect(html).not.toContain('Sign in again to continue')
-})
-
-test('reauth error card binds the real message + retry/dismiss', () => {
-  const html = reauthHtml({ phase: 'error', message: 'invalid_grant' })
-  expect(html).toContain('OAuth error')
-  expect(html).toContain('invalid_grant')
-  expect(html).toContain('Retry')
-  expect(html).toContain('Dismiss')
+/**
+ * P4-34. `ReauthOAuthProgress` outlived its launcher: the reauth banner was
+ * deleted by ruling #12 (`docs/migration/decisions/STARTUP-GATES.md`), leaving a
+ * card whose `'reauth'` context only its own Retry button could set, so it could
+ * never open. Re-adding it without a launcher would rebuild that dead end, and
+ * adding a launcher would reverse #12 — either belongs to a decision, not to a
+ * drive-by import.
+ */
+test('the orphaned reauth OAuth card is not exported', () => {
+  expect(Object.keys(startupSurfaces)).not.toContain('ReauthOAuthProgress')
 })

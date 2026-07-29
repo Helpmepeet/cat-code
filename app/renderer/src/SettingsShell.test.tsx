@@ -21,9 +21,17 @@ import type {
 } from '../../shared/protocol.js'
 import { SettingsShell } from './SettingsShell.js'
 import {
+  ACCENT_KEYS,
+  ACCENT_LABELS,
+  ACCENT_SWATCH_CLASS,
+  AccentThemeContext,
+  DEFAULT_ACCENT,
+} from './accentTheme.js'
+import {
   CODE_THEME_KEYS,
   CODE_THEME_LABELS,
   CodeThemeContext,
+  DEFAULT_CODE_THEME,
 } from './codeTheme.js'
 import {
   ReasoningLayoutContext,
@@ -651,6 +659,73 @@ describe('This app scope', () => {
     expect(pane).toContain('Code theme')
     expect(selectTag(pane, 'Code theme')).not.toContain('disabled=""')
     expect(decode(pane)).not.toContain('Turn it back on under Interface')
+  })
+
+  test('the accent picker offers all five swatches, marks the live one, and is app-local', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(
+        <AccentThemeContext.Provider value={{ accent: 'blue', setAccent: () => {} }}>
+          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+        </AccentThemeContext.Provider>,
+      ),
+    )
+    expect(decode(pane)).toContain('Accent color')
+    for (const key of ACCENT_KEYS) {
+      expect(pane).toContain(`aria-label="${ACCENT_LABELS[key]}"`)
+      // A STATIC colour class, or Tailwind emits no rule and the swatch is
+      // invisible with nothing in the markup to notice (the dynamic-class trap).
+      expect(pane).toContain(ACCENT_SWATCH_CLASS[key])
+    }
+    // One choice, not five buttons, and the current one is checked.
+    expect(pane).toContain('role="radiogroup"')
+    expect(
+      /aria-checked="true" aria-label="Blue"/.test(pane) ||
+        /aria-label="Blue"[^>]*aria-checked="true"/.test(pane),
+    ).toBe(true)
+    expect((pane.match(/aria-checked="true"/g) ?? []).length).toBe(1)
+    expect(decode(pane)).toContain('not in your settings files')
+  })
+
+  test('the accent is above the transcript preferences, as in the prototype', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={SNAPSHOT} />),
+    )
+    expect(decode(pane).indexOf('Accent color')).toBeLessThan(
+      decode(pane).indexOf('Code theme'),
+    )
+    // Still under the hero the whole pane opens on.
+    expect(pane.indexOf('hljs-keyword')).toBeLessThan(
+      decode(pane).indexOf('Accent color'),
+    )
+  })
+
+  test('the default accent offers no reset, an off-default one does', () => {
+    // BOTH renders are the Appearance pane, so the only difference between them
+    // is the accent itself. (Standing on Notifications would have asserted pane
+    // isolation while claiming to test the reset affordance.)
+    const onDefault = paneMarkup(
+      renderToStaticMarkup(
+        <AccentThemeContext.Provider value={{ accent: DEFAULT_ACCENT, setAccent: () => {} }}>
+          <CodeThemeContext.Provider value={{ theme: DEFAULT_CODE_THEME, setTheme: () => {} }}>
+            <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          </CodeThemeContext.Provider>
+        </AccentThemeContext.Provider>,
+      ),
+    )
+    // Its neighbour is also at its default, so the pane offers no reset at all.
+    expect(onDefault).not.toContain('Reset to default')
+
+    const changed = paneMarkup(
+      renderToStaticMarkup(
+        <AccentThemeContext.Provider value={{ accent: 'amber', setAccent: () => {} }}>
+          <CodeThemeContext.Provider value={{ theme: DEFAULT_CODE_THEME, setTheme: () => {} }}>
+            <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          </CodeThemeContext.Provider>
+        </AccentThemeContext.Provider>,
+      ),
+    )
+    // Same pane, same neighbour default: the reset can only be the accent's.
+    expect(changed).toContain('Reset to default')
   })
 
   test('an unbuilt app preference is named, not faked', () => {

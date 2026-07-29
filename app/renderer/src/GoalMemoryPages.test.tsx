@@ -50,6 +50,14 @@ const MEMORY: MemorySnapshot = {
       type: 'feedback',
     },
   ],
+  agentMemories: [
+    {
+      agentType: 'Explore',
+      scope: 'user',
+      directory: '/config/agent-memory/Explore/',
+      fileCount: 3,
+    },
+  ],
   notes: ['Memory bodies stay engine-side.'],
 }
 
@@ -141,6 +149,106 @@ test('renders every memory instruction and auto-memory type', () => {
   for (const label of autoMemoryTypes) {
     expect(html).toContain(`${label}.md`)
   }
+})
+
+/* ── agent memory (P4-34) ─────────────────────────────────────────────────── */
+
+test('agent-memory rows name both a known role and a user-defined one, each as a chip', () => {
+  const memory: MemorySnapshot = {
+    ...MEMORY,
+    agentMemories: [
+      {
+        agentType: 'Explore',
+        scope: 'user',
+        directory: '/config/agent-memory/Explore/',
+        fileCount: 4,
+      },
+      {
+        agentType: 'my-plugin-reviewer',
+        scope: 'project',
+        directory: '/repo/.cat-code/agent-memory/my-plugin-reviewer/',
+        fileCount: 1,
+      },
+    ],
+  }
+  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={memory} />)
+
+  expect(html).toContain('Agent memory')
+  expect(html).toContain('2 agents')
+  expect(html).toContain('/config/agent-memory/Explore/')
+  expect(html).toContain('/repo/.cat-code/agent-memory/my-plugin-reviewer/')
+  // A role outside the known palette is NOT dropped and NOT plain text: it gets
+  // the same chip, labelled with the type, because `agentTypeMeta` synthesises a
+  // neutral meta rather than returning null. Both names must therefore appear
+  // inside a chip element, not merely somewhere in the markup.
+  const chips = [...html.matchAll(/<span class="[^"]*uppercase[^"]*">([^<]*)<\/span>/g)].map(
+    match => match[1],
+  )
+  expect(chips).toContain('Explore')
+  expect(chips).toContain('my-plugin-reviewer')
+  // Counts are pluralised per row, not once for the section.
+  expect(html).toContain('4 files')
+  expect(html).toContain('1 file')
+})
+
+/**
+ * The CC-13 bug class: one unreadable directory used to reject the whole
+ * snapshot read, so the sidecar sent no frame and this page sat on its waiting
+ * state forever, taking the instruction files and auto-memories with it.
+ */
+test('an unreadable agent directory costs that row its count, not the page', () => {
+  const html = renderToStaticMarkup(
+    <MemoryPage
+      embedded
+      snapshot={{
+        ...MEMORY,
+        agentMemories: [
+          {
+            agentType: 'Explore',
+            scope: 'project',
+            directory: '/repo/.cat-code/agent-memory/Explore/',
+            fileCount: null,
+          },
+        ],
+      }}
+    />,
+  )
+  // The row is present, scoped and named, and does not claim zero files.
+  expect(html).toContain('/repo/.cat-code/agent-memory/Explore/')
+  expect(html).toContain('unreadable')
+  expect(html).not.toContain('0 files')
+  // And the sections that have nothing to do with agent memory still render.
+  expect(html).toContain('/repo/CLAUDE.md')
+  expect(html).toContain('feedback_testing.md')
+  expect(html).not.toContain('No memory loaded')
+})
+
+test('one agent reads as one agent, and none renders no section at all', () => {
+  const one = renderToStaticMarkup(
+    <MemoryPage
+      embedded
+      snapshot={{
+        ...MEMORY,
+        agentMemories: [
+          {
+            agentType: 'Explore',
+            scope: 'local',
+            directory: '/repo/.cat-code/agent-memory-local/Explore/',
+            fileCount: 0,
+          },
+        ],
+      }}
+    />,
+  )
+  expect(one).toContain('1 agent')
+  expect(one).not.toContain('1 agents')
+  // A declared scope that has never been written to is a real row reading zero.
+  expect(one).toContain('0 files')
+
+  const none = renderToStaticMarkup(
+    <MemoryPage embedded snapshot={{ ...MEMORY, agentMemories: [] }} />,
+  )
+  expect(none).not.toContain('Agent memory')
 })
 
 test('renders memory waiting state without fixtures', () => {

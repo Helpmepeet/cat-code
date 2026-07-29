@@ -49,11 +49,13 @@ import {
   updateSettingsForSource,
 } from '../../src/utils/settings/settings.js'
 import { getAllOutputStyles } from '../../src/constants/outputStyles.js'
+import { getModelOptions } from '../../src/utils/model/modelOptions.js'
 import type { EditableSettingSource } from '../shared/settingsEditable.js'
 import {
   EDITABLE_SETTING_KEYS,
   EDITABLE_SETTINGS_BY_KEY,
   isEditableSettingSource,
+  SETTINGS_ENGINE_DEFAULT,
   validateEditableSettingValue,
 } from '../shared/settingsEditable.js'
 import type {
@@ -291,27 +293,44 @@ function applySettingsVerb(
   if (EDITABLE_SETTINGS_BY_KEY.get(verb.key)?.control.kind === 'dynamic-enum') {
     const options = availableOptions.find(entry => entry.key === verb.key)?.options
     if (!options?.some(option => option.value === value)) {
+      // The rejected value is NOT echoed. This message reaches a toast, and the
+      // one value that can plausibly be rejected here is the reserved
+      // `SETTINGS_ENGINE_DEFAULT` token, which is internal vocabulary no user
+      // should ever read (CLAUDE.md §7). The renderer offered the option, so
+      // repeating it back adds nothing anyway.
       return {
         ok: false,
-        message: `not an available option for ${verb.key}: ${String(value)}`,
+        message: `not an available option for ${verb.key}`,
         changed: false,
       }
     }
   }
   const source: EditableSettingSource = verb.source
+  // `SETTINGS_ENGINE_DEFAULT` is a chooser, not a value: it means "this file
+  // should carry no override", so the key is REMOVED rather than written. It
+  // reaches here only because it is one of the captured options above, and it can
+  // never reach a settings file — a settings file holding the token would be a
+  // model name no engine knows.
+  const clearsKey = value === SETTINGS_ENGINE_DEFAULT
   // The SettingsUpdater FUNCTION form (settings.ts:461/480): the engine invokes
   // this under the cross-process lock with the FRESH on-disk settings, and writes
-  // the return VERBATIM (no merge). Computing `{ ...current, [key]: value }` from
-  // that under-lock `current` is the exact P3-5a/DR-2 no-lost-update fix — a value
+  // the return VERBATIM (no merge). Computing the next object from that
+  // under-lock `current` is the exact P3-5a/DR-2 no-lost-update fix — a value
   // computed from a pre-lock read would clobber a concurrent write.
-  const { error } = updateSettingsForSource(source, current => ({
-    ...(current ?? {}),
-    [verb.key]: value,
-  }))
+  const { error } = updateSettingsForSource(source, current => {
+    const next = { ...(current ?? {}) } as Record<string, unknown>
+    if (clearsKey) delete next[verb.key]
+    else next[verb.key] = value
+    return next
+  })
   if (error) {
     return { ok: false, message: error.message, changed: false }
   }
-  return { ok: true, message: `Updated ${verb.key}.`, changed: true }
+  return {
+    ok: true,
+    message: clearsKey ? `Cleared ${verb.key}.` : `Updated ${verb.key}.`,
+    changed: true,
+  }
 }
 
 /**
@@ -355,13 +374,40 @@ function readSettingsSnapshotOnce(
  * `getAllOutputStyles(cwd)` (built-in default/Explanatory/Learning + any custom
  * dir + plugin styles), rooted at the session cwd so project/plugin styles are
  * the SESSION's. The option `value` is the style NAME, which is exactly what
- * `settings.outputStyle` stores (outputStyles.ts:209). Fails soft: on any read
- * error the key simply carries no options (its select renders disabled).
+ * `settings.outputStyle` stores (outputStyles.ts:209).
+ *
+ * `model` comes from `getModelOptions()` (`src/utils/model/modelOptions.ts:651`),
+ * the same list the engine's own model picker is built from, so the roster
+ * reflects this machine's real credentials rather than a hard-coded table. It is
+ * taken UNFILTERED: the composer's run-control picker narrows to the session's
+ * live provider, but this key is the persisted default for sessions that do not
+ * exist yet.
+ *
+ * Fails soft per registry: a failed slice simply carries no options, and its
+ * select renders disabled.
  */
 export async function loadAvailableSettingOptions(
   cwd: string,
 ): Promise<AvailableSettingOptions> {
   const available: AvailableSettingOptions = []
+  try {
+    // `getModelOptions` returns `value: ModelSetting` (`string | null`), and the
+    // null row is the engine's own "Default (recommended)" — the state of having
+    // no override. It maps onto the reserved token so the select can offer it
+    // and the write path can clear the key; every other row is a real model id.
+    const options = getModelOptions().map(option => ({
+      value: option.value ?? SETTINGS_ENGINE_DEFAULT,
+      label: option.label,
+      ...(option.description ? { description: option.description } : {}),
+    }))
+    if (options.length > 0) available.push({ key: 'model', options })
+  } catch (error) {
+    process.stderr.write(
+      `[sidecar] model options read failed (the default-model select renders disabled): ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
   try {
     const styles = await getAllOutputStyles(cwd)
     const options = Object.entries(styles).map(([name, config]) => ({

@@ -574,7 +574,10 @@ export async function createSidecarSessionController({
       availableMcpServers,
     }),
     goals: createSidecarGoalDomain(appStateStore),
-    memory: createSidecarMemoryDomain(),
+    // P4-34 — the SAME active-agent list the query engine receives above
+    // (`agents: agentDefinitions.activeAgents`), so the memory page reports the
+    // agents this session actually runs, never a re-derived catalog.
+    memory: createSidecarMemoryDomain(agentDefinitions.activeAgents),
     tasks: createSidecarTasksDomain(appStateStore),
     accounts: createSidecarAccountsDomain({
       onProviderActivated: provider => {

@@ -73,6 +73,26 @@ export type EditableSettingControl =
       default: string
     }
 
+/**
+ * The reserved `dynamic-enum` option meaning "no override in this file" — the
+ * engine decides.
+ *
+ * Some engine keys are OPTIONAL and resolve at runtime rather than to a fixed
+ * documented default (`model` is the first: `src/utils/settings/types.ts:388`
+ * `z.string().optional()`, resolved per account/provider by
+ * `getDefaultOptionForUser`, `src/utils/model/modelOptions.ts:56`, which is
+ * itself a real option carrying `value: null`). A select over such a key needs a
+ * row for that state, or picking a model becomes a one-way door with no way back
+ * to the engine's choice.
+ *
+ * It is a TOKEN, never a value: the sidecar offers it as an available option and
+ * REMOVES the key when it is chosen (`app/sidecar/settingsDomain.ts`), so this
+ * string is never written to a settings file. Deliberately not the empty string
+ * — `validateEditableSettingValue` rejects zero-length input (a T7 bound) and
+ * that bound stays as it is.
+ */
+export const SETTINGS_ENGINE_DEFAULT = '__catcode.engineDefault__'
+
 export type EditableSettingSpec = {
   /** The exact `SettingsSchema` key this editor writes. */
   key: string
@@ -83,13 +103,22 @@ export type EditableSettingSpec = {
 }
 
 /**
- * The core value-editors P4-19 wires. Each key is real (`SettingsSchema`); the
- * `default` mirrors the engine's documented default so an unset key renders at
- * its true default. `outputStyle` is a `dynamic-enum` whose live options ride
- * `SettingsSnapshot.availableOptions` (the sidecar captures the real style
- * registry at spawn). Keybindings / IDE / LSP / default-model / accent-swatch /
- * code-theme+font remain DEFERRED (separate config file, live-status read-seams,
- * provider-routing, or no engine key) — see the P4-19 report §deferred.
+ * The core value-editors. Each key is real (`SettingsSchema`); the `default`
+ * mirrors the engine's documented default so an unset key renders at its true
+ * default, except where the engine has no fixed default at all (see
+ * `SETTINGS_ENGINE_DEFAULT`).
+ *
+ * `model` and `outputStyle` are `dynamic-enum`s whose live options ride
+ * `SettingsSnapshot.availableOptions`; the sidecar captures the engine's real
+ * model and output-style registries at spawn.
+ *
+ * Still absent, and why: **keybindings / IDE / LSP** need read-seams this package
+ * does not have; **code font** has no engine key. **Accent and code theme are not
+ * missing** — they are renderer view preferences with no settings layer, and live
+ * on the This-app scope (`app/renderer/src/accentTheme.ts`,
+ * `app/renderer/src/codeTheme.ts`), so they are deliberately not in this
+ * engine-key allowlist. (This note previously listed default-model, accent and
+ * code-theme as DEFERRED; all three shipped, default-model twenty lines below.)
  */
 export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
   // ── General ──────────────────────────────────────────────────────────────
@@ -138,6 +167,23 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     },
   },
   // ── Model & Inference ──────────────────────────────────────────────────────
+  {
+    key: 'model',
+    pane: 'model',
+    label: 'Default model',
+    description:
+      'Model for sessions started afterwards. Leave it on the default to let Cat Code choose per account.',
+    control: {
+      kind: 'dynamic-enum',
+      maxLength: 200,
+      // The engine's own "no override" row, not a model name — see
+      // SETTINGS_ENGINE_DEFAULT. `model` is optional in the schema
+      // (`src/utils/settings/types.ts:388`) and the engine resolves an unset
+      // value per account and provider, so there is no default string to mirror
+      // here and naming one would make the row claim a choice nobody made.
+      default: SETTINGS_ENGINE_DEFAULT,
+    },
+  },
   {
     key: 'alwaysThinkingEnabled',
     pane: 'model',
