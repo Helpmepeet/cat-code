@@ -6,18 +6,31 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 // credentials. It branches on isCodexSubscriber(), so we mock auth.js to flip
 // that without needing real Codex tokens or an OpenAI session.
 
-let codexSubscriber = false
+// `null` means "this file is not controlling the value": the override passes
+// through to the real implementation. `mock.restore()` does NOT unregister a
+// `mock.module`, so the registration below outlives this file and is what every
+// later file in the process sees; a plain `false` default would pin
+// isCodexSubscriber() to false for all of them.
+let codexSubscriber: boolean | null = null
+
+// `mock.module` MUTATES the namespace object a prior `import` returned, so a
+// pass-through written as `actualAuth.isCodexSubscriber()` calls the mock itself
+// and recurses forever. Capture the implementation before registering anything.
+const actualAuth = await import('../auth.js')
+const real = {
+  isCodexSubscriber: actualAuth.isCodexSubscriber,
+}
 
 beforeEach(async () => {
-  const actualAuth = await import('../auth.js')
   await mock.module('src/utils/auth.js', () => ({
     ...actualAuth,
-    isCodexSubscriber: () => codexSubscriber,
+    isCodexSubscriber: () =>
+      codexSubscriber === null ? real.isCodexSubscriber() : codexSubscriber,
   }))
 })
 
 afterEach(() => {
-  codexSubscriber = false
+  codexSubscriber = null
   delete process.env.ANTHROPIC_SMALL_FAST_MODEL
   mock.restore()
 })
