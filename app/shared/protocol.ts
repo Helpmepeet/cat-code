@@ -22,7 +22,8 @@
  *  - **New outbound facts grow an existing snapshot; they never repurpose a
  *    field.** `PROTOCOL_VERSION` stays put for an addition because no reader's
  *    existing field changes shape. `RunControlsSnapshot.model.currentLabel` and
- *    `.contextWindow` (2026-07-29) are that kind of addition: display facts
+ *    `.contextWindow` (2026-07-29), and `RunControlsSnapshot.autoCompact`
+ *    (2026-07-30), are that kind of addition: display facts
  *    about the CURRENT model that ONLY the engine can compute (a marketing
  *    name; a context window that depends on betas, model capabilities, and env
  *    overrides). They exist because the composer face printed a canonical model
@@ -1355,6 +1356,43 @@ export type RunControlsSnapshot = {
     available: boolean
     /** `getFastModeUnavailableReason()` display string, or null when available. */
     unavailableReason: string | null
+  }
+  /**
+   * P4-33 — the two token counts the composer's auto-compact warning glyph
+   * compares the live context against. Additive display facts about the CURRENT
+   * model, resolved at the sidecar by the engine's own
+   * `calculateTokenWarningState` inputs (`src/services/compact/autoCompact.ts:246`).
+   *
+   * They ship from the engine because the renderer CANNOT re-derive either one.
+   * The denominator is `getEffectiveContextWindowSize`
+   * (`autoCompact.ts:40`), which is NOT the gauge's `contextWindow`: it
+   * subtracts reserved summary tokens and honours a `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+   * cap. The auto-compact buffer is model-dependent too
+   * (`getAutoCompactBufferTokens`, `autoCompact.ts:204`), not the flat 13k the
+   * prototype hard-codes. Mirroring either in the renderer would print a
+   * percentage that disagrees with the engine that actually compacts.
+   */
+  autoCompact: {
+    /**
+     * `isAutoCompactEnabled()` (`autoCompact.ts:288`) — env kill-switches plus
+     * the user's `autoCompactEnabled` setting. Selects which sentence the glyph
+     * shows, and (engine-side) which threshold the percentage runs against.
+     */
+    enabled: boolean
+    /**
+     * The engine's `threshold` (`autoCompact.ts:257-259`): the auto-compact
+     * threshold when auto-compact is on, else the effective context window. The
+     * DENOMINATOR of `percentLeft`, so the readout hits 0% at the compact point
+     * rather than at the raw window. null when resolution failed.
+     */
+    threshold: number | null
+    /**
+     * `threshold - WARNING_THRESHOLD_BUFFER_TOKENS` (`autoCompact.ts:266`) — the
+     * point at or above which the engine reports `isAboveWarningThreshold` and
+     * the glyph appears. Below it the glyph renders nothing at all. null when
+     * resolution failed, which keeps the glyph hidden.
+     */
+    warningThreshold: number | null
   }
 }
 

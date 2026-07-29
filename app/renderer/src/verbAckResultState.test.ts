@@ -142,6 +142,7 @@ test('an unrelated frame kind is ignored (no consumer, no crash)', () => {
       },
       effort: { current: null, selected: null, supported: false, options: [] },
       fast: { active: false, supportedByModel: false, available: false, unavailableReason: null },
+      autoCompact: { enabled: true, threshold: null, warningThreshold: null },
     },
   }
   state = reduceVerbAckResultState(state, { type: 'frame', frame: unrelated })

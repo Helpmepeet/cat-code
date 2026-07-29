@@ -20,6 +20,7 @@ function runControls(
     model?: Partial<RunControlsSnapshot['model']>
     effort?: Partial<RunControlsSnapshot['effort']>
     fast?: Partial<RunControlsSnapshot['fast']>
+    autoCompact?: Partial<RunControlsSnapshot['autoCompact']>
   } = {},
 ): RunControlsSnapshot {
   return {
@@ -49,6 +50,15 @@ function runControls(
       available: true,
       unavailableReason: null,
       ...over.fast,
+    },
+    autoCompact: {
+      // Default: thresholds absent, so the warning glyph stays hidden and the
+      // pre-existing rail assertions keep counting only the faces they were
+      // written for.
+      enabled: true,
+      threshold: null,
+      warningThreshold: null,
+      ...over.autoCompact,
     },
   }
 }
@@ -737,4 +747,76 @@ test('AccountSwitcherPanel rows carry no native `disabled`, so roving includes t
   )
   expect(html).not.toContain('disabled=""')
   expect(countOccurrences(html, 'aria-disabled="true"')).toBe(2)
+})
+
+/* --------------------------------------------------------------------------- *
+ * P4-33 — the auto-compact warning glyph (the prototype's `TokenWarning`,
+ * Surfaces.jsx:415, in the rail at `:779`). The glyph is INVISIBLE below the
+ * threshold, so a fresh-session render proves nothing on its own: every test
+ * below names which side of the threshold it is on.
+ * --------------------------------------------------------------------------- */
+
+/** Illustrative thresholds (see tokenWarning.test.ts) — the sidecar supplies the
+ * real ones. Warning at 167k, auto-compact at 187k. */
+const WARN_THRESHOLDS = {
+  enabled: true,
+  threshold: 187_000,
+  warningThreshold: 167_000,
+} as const
+
+test('P4-33 — BELOW the threshold the warning glyph is absent entirely', () => {
+  const html = render({
+    contextUsage: { usedTokens: 120_000, contextWindow: 200_000, percentUsed: 60 },
+    runControls: runControls({ autoCompact: WARN_THRESHOLDS }),
+  })
+  expect(html).not.toContain('until auto-compact')
+  expect(html).not.toContain('Context low')
+  // The donut it rides beside is still there — absence of the glyph is not
+  // absence of the rail.
+  expect(html).toContain('Context 60% used')
+})
+
+test('P4-33 — ABOVE the threshold the amber glyph appears with the engine percentage', () => {
+  const html = render({
+    contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
+    runControls: runControls({ autoCompact: WARN_THRESHOLDS }),
+  })
+  // (187000-175000)/187000 = 6%.
+  expect(html).toContain('6% until auto-compact')
+  // Amber comes from the shared token (theme.css `--tone-warn` IS #fbbf24), never
+  // an inlined hex or an interpolated arbitrary class (Tailwind v4 would no-op it).
+  expect(html).toContain('text-tone-warn')
+  expect(html).not.toContain('#fbbf24')
+})
+
+test('P4-33 — with auto-compact OFF the glyph says the user must act', () => {
+  const html = render({
+    contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
+    runControls: runControls({
+      autoCompact: { ...WARN_THRESHOLDS, enabled: false },
+    }),
+  })
+  // The engine words this case differently because nothing recovers on its own
+  // (`TokenWarning.tsx:169`): the title states the headroom AND names the fix.
+  expect(html).toContain('Context low · 6% remaining')
+  expect(html).not.toContain('until auto-compact')
+})
+
+test('P4-33 — the glyph joins the toolbar roving order as its own face', () => {
+  const html = render({
+    contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
+    runControls: runControls({ autoCompact: WARN_THRESHOLDS }),
+  })
+  // Roving is a DOM query over [data-composer-face]; a glyph without one would be
+  // keyboard-unreachable while every neighbouring face is reachable.
+  expect(html).toContain('data-composer-face="token-warning"')
+})
+
+test('P4-33 — no thresholds on the wire keeps the glyph hidden at any usage', () => {
+  const html = render({
+    contextUsage: { usedTokens: 900_000, contextWindow: 200_000, percentUsed: 100 },
+    runControls: runControls(),
+  })
+  expect(html).not.toContain('until auto-compact')
+  expect(html).not.toContain('data-composer-face="token-warning"')
 })
