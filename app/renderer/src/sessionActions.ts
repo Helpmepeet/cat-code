@@ -49,7 +49,10 @@ export type SessionActionKind =
   | 'branch'
   | 'rewind'
   | 'metadata'
+  /** The flyout HOST (`SessionActions.jsx:174`). Never dispatched — it only opens its submenu. */
   | 'copy'
+  | 'copy-md'
+  | 'copy-text'
   | 'export'
 
 /** Menu grouping (dividers between non-empty sections), mirroring the prototype. */
@@ -65,6 +68,13 @@ export type SessionActionItem = {
   reason?: string
   /** Destructive styling. No destructive verb survives recon today (all CUT). */
   danger?: boolean
+  /**
+   * P4-30 — this row HOSTS a side submenu instead of acting (the prototype's
+   * `hasFlyout` Copy row, `SessionActions.jsx:172-182`). A hosting row is never
+   * dispatched; only its children are. `enabled` still gates the host, so the
+   * whole group carries one honest reason when the transcript is unreadable.
+   */
+  flyout?: readonly SessionActionItem[]
 }
 
 export type SessionActionsContext = {
@@ -78,6 +88,8 @@ export type SessionActionsContext = {
 
 const DEFER = {
   rewind: 'Rewind is not available in the desktop app yet.',
+  copyMarkdown:
+    'Markdown export is not available yet. Use the plain-text copy below.',
   notLive:
     'Open or restore this session first. Rename, Export and Branch run in its live engine, which a closed session has stopped.',
   notOpen:
@@ -139,11 +151,33 @@ export function resolveSessionActions(
       ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
     },
     {
+      // P4-30 — the flyout HOST. It carries the group's honest reason and never
+      // dispatches; the two variants below are the actionable rows. The
+      // plain-text child keeps its own label because the action behind it is the
+      // debug export (`App.tsx` `copyForLlm`), not the prototype's readable
+      // transcript — calling it "Copy as text" would misdescribe what lands on
+      // the clipboard.
       kind: 'copy',
-      label: 'Copy transcript for LLM',
+      label: 'Copy',
       section: 'transfer',
       enabled: ctx.isActiveOpen,
       ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
+      flyout: [
+        {
+          kind: 'copy-md',
+          label: 'Copy as Markdown',
+          section: 'transfer',
+          enabled: false,
+          reason: DEFER.copyMarkdown,
+        },
+        {
+          kind: 'copy-text',
+          label: 'Copy transcript for LLM',
+          section: 'transfer',
+          enabled: ctx.isActiveOpen,
+          ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
+        },
+      ],
     },
     {
       kind: 'export',
@@ -161,3 +195,17 @@ export const SESSION_ACTION_SECTIONS: readonly SessionActionSection[] = [
   'history',
   'transfer',
 ]
+
+/**
+ * P4-30 — `SectionLabel` text per section (`SessionActions.jsx:169`). The
+ * prototype labels exactly ONE section, History; the others are separated by
+ * the divider alone, so those stay null rather than gaining invented headers.
+ */
+export const SESSION_ACTION_SECTION_LABELS: Record<
+  SessionActionSection,
+  string | null
+> = {
+  primary: null,
+  history: 'History',
+  transfer: null,
+}

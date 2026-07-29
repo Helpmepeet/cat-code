@@ -8,14 +8,25 @@
  * cut verbs never reach this component. Presentation only: the parent owns every
  * effect via `onAction`. No inline styles — P0-2 tokens + the shell classes, the
  * SessionsPage sort-dropdown idiom (scrim + fixed panel).
+ *
+ * P4-30 restored four prototype elements PARITY-LEDGER §17 recorded as dropped
+ * with no §0 flag: the `SA_IC` leading-icon slot (`SessionActionIcons.tsx`), the
+ * `SectionLabel` header, the `sa-pop` entrance (menu + rename popover), and the
+ * Copy row's side flyout. The remaining §17 menu gap is the anchor's
+ * bottom-flip (`placeAbove`), which stays owned by the anchor call sites.
  */
 
 import { useEffect, useRef, useState, Fragment, type ReactNode } from 'react'
 import {
   SESSION_ACTION_SECTIONS,
+  SESSION_ACTION_SECTION_LABELS,
   type SessionActionItem,
   type SessionActionKind,
 } from './sessionActions.js'
+import {
+  ActionChevronIcon,
+  SessionActionIcon,
+} from './SessionActionIcons.js'
 
 export type SessionActionsAnchor = { top: number; left: number }
 
@@ -38,9 +49,10 @@ export function SessionActionsMenu({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const sections = SESSION_ACTION_SECTIONS.map(section =>
-    items.filter(item => item.section === section),
-  ).filter(rows => rows.length > 0)
+  const sections = SESSION_ACTION_SECTIONS.map(section => ({
+    section,
+    rows: items.filter(item => item.section === section),
+  })).filter(group => group.rows.length > 0)
 
   return (
     <>
@@ -58,24 +70,39 @@ export function SessionActionsMenu({
       <div
         role="menu"
         aria-label="Session actions"
-        className="fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
         style={{ top: anchor.top, left: anchor.left }}
       >
-        {sections.map((rows, index) => (
-          <Fragment key={rows[0]?.kind ?? index}>
-            {index > 0 ? <div className="my-1 h-px bg-shell-seam" /> : null}
-            {rows.map(item => (
-              <MenuRow
-                key={item.kind}
-                item={item}
-                onAction={() => {
-                  onAction(item.kind)
-                  onClose()
-                }}
-              />
-            ))}
-          </Fragment>
-        ))}
+        {sections.map(({ section, rows }, index) => {
+          const label = SESSION_ACTION_SECTION_LABELS[section]
+          return (
+            <Fragment key={section}>
+              {index > 0 ? <div className="my-1 h-px bg-shell-seam" /> : null}
+              {label ? <SectionLabel>{label}</SectionLabel> : null}
+              {rows.map(item =>
+                item.flyout ? (
+                  <MenuFlyoutRow
+                    key={item.kind}
+                    item={item}
+                    onAction={kind => {
+                      onAction(kind)
+                      onClose()
+                    }}
+                  />
+                ) : (
+                  <MenuRow
+                    key={item.kind}
+                    item={item}
+                    onAction={() => {
+                      onAction(item.kind)
+                      onClose()
+                    }}
+                  />
+                ),
+              )}
+            </Fragment>
+          )
+        })}
       </div>
     </>
   )
@@ -116,7 +143,7 @@ export function SessionRenamePopover({
       <div
         role="dialog"
         aria-label="Rename session"
-        className="fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
         style={{ top: anchor.top, left: anchor.left }}
       >
         <input
@@ -141,6 +168,74 @@ export function SessionRenamePopover({
   )
 }
 
+/**
+ * P4-30 — `SectionLabel` (`SessionActions.jsx:144-146`). Only sections that
+ * actually carry a name in the prototype render one (see
+ * `SESSION_ACTION_SECTION_LABELS`); the rest keep the divider alone.
+ */
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-2.5 pb-[3px] pt-[7px] text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-ghost">
+      {children}
+    </div>
+  )
+}
+
+/**
+ * P4-30 — the Copy row's side submenu (`SessionActions.jsx:172-182`): the host
+ * row is inert chrome that opens on hover (and on keyboard focus, so the group
+ * is reachable without a pointer) and closes when the pointer leaves the pair.
+ * Only the children dispatch.
+ */
+function MenuFlyoutRow({
+  item,
+  onAction,
+}: {
+  item: SessionActionItem
+  onAction: (kind: SessionActionKind) => void
+}) {
+  const [open, setOpen] = useState(false)
+  if (!item.enabled) return <MenuRow item={item} onAction={() => {}} />
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+    >
+      <div
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-white/[0.05] hover:text-text-primary"
+      >
+        <span className="flex shrink-0 text-text-subtle">
+          <SessionActionIcon kind={item.kind} />
+        </span>
+        <span className="flex-1 truncate">{item.label}</span>
+        <span className="flex shrink-0 text-text-ghost">
+          <ActionChevronIcon />
+        </span>
+      </div>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={item.label}
+          className="animate-sa-pop absolute -top-[5px] left-full z-[72] ml-1 w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        >
+          {item.flyout?.map(child => (
+            <MenuRow
+              key={child.kind}
+              item={child}
+              onAction={() => onAction(child.kind)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function MenuRow({
   item,
   onAction,
@@ -156,6 +251,9 @@ function MenuRow({
         title={item.reason}
         className="flex cursor-default items-center gap-2 rounded-md px-2.5 py-1.5 text-[12.5px] text-text-subtle/70"
       >
+        <span className="flex shrink-0">
+          <SessionActionIcon kind={item.kind} />
+        </span>
         <span className="flex-1 truncate">{item.label}</span>
         <span className="shrink-0 text-[9.5px] font-semibold uppercase tracking-wide text-text-subtle/50">
           soon
@@ -175,6 +273,9 @@ function MenuRow({
           : 'text-text-muted hover:bg-white/[0.05] hover:text-text-primary')
       }
     >
+      <span className="flex shrink-0 text-text-subtle">
+        <SessionActionIcon kind={item.kind} />
+      </span>
       <span className="flex-1 truncate">{item.label}</span>
     </button>
   )

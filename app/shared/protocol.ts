@@ -1394,7 +1394,13 @@ export type RunControlsSnapshotFrame = {
  *    (`src/utils/conversationRecovery.ts:469`, the SAME loader the sidecar's
  *    resume uses) → `Message[]`, rendered with the session's REAL `tools`
  *    (`getTools`, not `[]` — the P1-3 defect). The rendered text rides BACK on the
- *    result frame (`exportText`); the renderer offers a download/clipboard.
+ *    result frame (`exportText`) and the renderer shows it in the Export dialog
+ *    (P4-30) with a Copy action. **The clipboard is the only sink**: there is no
+ *    renderer-reachable file-write path in `app/`, so "save to a file" is NOT
+ *    available and the dialog's Download button ships disabled. Wiring it is a
+ *    control-plane change (main-process `showSaveDialog` + write behind an HC3
+ *    fixed-sender channel, main validating a basename — HC1 forbids a
+ *    renderer-authored path), §0-flagged to the operator by P4-30, not assumed.
  *  - `session.branch` → the engine's OWN `createFork` (`src/commands/branch/branch.ts:61`,
  *    forks the whole conversation at HEAD — no from-message-N, so the menu label
  *    ADAPTS to "Branch from HEAD…"). It writes a real fork transcript on disk and
