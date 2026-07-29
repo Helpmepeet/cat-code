@@ -1597,19 +1597,19 @@ function projectUserContentBlock(
       }
     }
     // Ordered ahead of the command-echo heuristic exactly as the terminal
-    // orders them (UserTextMessage.tsx:76-81 sits above its `<command-message>`
+    // orders them (UserTextMessage.tsx:69-81 sits above its `<command-message>`
     // check): this one is an anchored `startsWith`, so it cannot capture a turn
     // that merely mentions the tag, while command output that happens to quote
     // `<command-message>` must not be re-read as an operator command.
-    const localCommandOutput = parseLocalCommandOutput(block.text)
-    if (localCommandOutput !== null) {
+    const commandOutput = parseCommandOutput(block.text)
+    if (commandOutput !== null) {
       return {
         id: rowId(source, 'local-command-output'),
         sessionId: source.sessionId,
         frameId: source.frameId,
         kind: 'system-notice',
         noticeType: 'local_command_output',
-        content: localCommandOutput,
+        content: commandOutput,
       }
     }
     const command = parseCommandEcho(block.text)
@@ -1709,45 +1709,60 @@ function parseCommandEcho(
 }
 
 /**
- * The engine persists a local slash command's RESULT as a plain `type:'user'`
- * message whose entire content is the raw wrapper
- * (`src/utils/processUserInput/processSlashCommand.tsx:625`). It is command
- * output, not something the operator typed, and the terminal has always
- * special-cased this exact shape at render time
- * (`src/components/messages/UserTextMessage.tsx:76-81` →
- * `UserLocalCommandOutputMessage.tsx:22-41`). Without the same branch the app
- * showed it as the operator's own right-aligned bubble, tags and ANSI bytes
- * included (bug, 2026-07-29).
+ * The engine persists a command's RESULT as a plain `type:'user'` message whose
+ * entire content is the raw wrapper: local slash commands at
+ * `src/utils/processUserInput/processSlashCommand.tsx:625`, bash-mode (`!`)
+ * commands at `src/utils/processUserInput/processBashCommand.tsx:109,125,132`.
+ * It is command output, not something the operator typed, and the terminal has
+ * always special-cased both shapes at render time
+ * (`src/components/messages/UserTextMessage.tsx:69-81` →
+ * `UserBashOutputMessage.tsx` / `UserLocalCommandOutputMessage.tsx:22-41`).
+ * Without the same branch the app showed it as the operator's own right-aligned
+ * bubble, tags and ANSI bytes included (bug, 2026-07-29; bash added 2026-07-29).
+ *
+ * NOT `<bash-input>`: that IS the operator's typed command, and the terminal
+ * deliberately routes it elsewhere via `includes` rather than `startsWith`
+ * (`UserTextMessage.tsx:102` → `UserBashInputMessage`). It needs an input-style
+ * row, which is an open design question, so it is excluded here on purpose.
  *
  * `startsWith` rather than `includes`, matching the engine predicate: only a
  * message that IS the wrapper qualifies, never one that quotes it.
  *
  * Returns the tag-free, ANSI-free payload, or null when this is not that shape.
  */
-function parseLocalCommandOutput(text: string): string | null {
-  if (
-    !text.startsWith('<local-command-stdout') &&
-    !text.startsWith('<local-command-stderr')
-  ) {
+function parseCommandOutput(text: string): string | null {
+  if (!COMMAND_OUTPUT_TAGS.some(tag => text.startsWith(`<${tag}`))) {
     return null
   }
-  const payloads = [
-    extractXmlTag(text, 'local-command-stdout'),
-    extractXmlTag(text, 'local-command-stderr'),
-  ]
+  const payloads = COMMAND_OUTPUT_TAGS.map(tag => extractXmlTag(text, tag))
     .map(payload => stripAnsiSequences(payload ?? '').trim())
     .filter(payload => payload.length > 0)
-  return payloads.length === 0
-    ? LOCAL_COMMAND_NO_CONTENT
-    : payloads.join('\n')
+  return payloads.length === 0 ? COMMAND_OUTPUT_NO_CONTENT : payloads.join('\n')
 }
+
+/**
+ * Both engine wrapper families, in the order their payloads are joined. The
+ * bash pair is listed first to mirror the terminal's own branch order
+ * (`UserTextMessage.tsx:69-81`); the two families are mutually exclusive under
+ * the anchored `startsWith` above, so the order only fixes stdout-before-stderr
+ * within a family.
+ */
+const COMMAND_OUTPUT_TAGS = [
+  'bash-stdout',
+  'bash-stderr',
+  'local-command-stdout',
+  'local-command-stderr',
+]
 
 /**
  * Both payloads empty: the terminal shows `NO_CONTENT_MESSAGE`
  * (`UserLocalCommandOutputMessage.tsx:24-34`, `src/constants/messages.ts:1`).
- * Copied rather than imported so the renderer bundle stays engine-free.
+ * Copied rather than imported so the renderer bundle stays engine-free. Applied
+ * to bash output too, where the terminal instead renders an empty
+ * `BashToolResultMessage` (`UserBashOutputMessage.tsx:14-18`): a notice row with
+ * no text at all would read as a rendering fault, so the placeholder is reused.
  */
-const LOCAL_COMMAND_NO_CONTENT = '(no content)'
+const COMMAND_OUTPUT_NO_CONTENT = '(no content)'
 
 /**
  * CSI escape sequences (`ESC [ … final`), which is what real transcripts carry:

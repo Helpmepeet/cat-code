@@ -940,6 +940,94 @@ test('local slash-command stderr, both streams, and empty output read the same w
   })
 })
 
+/* ── bash-mode (`!`) command output (2026-07-29) ────────────────────────────
+ * Same leak, other producer: processBashCommand.tsx:109,125,132 persists the
+ * result as a plain `type:'user'` message. The terminal branches on it with the
+ * identical anchored `startsWith` shape one line above the local-command branch
+ * (src/components/messages/UserTextMessage.tsx:69-74), so both ride one branch
+ * here. It reuses `local_command_output` because the notice-type union is
+ * duplicated in TranscriptView.tsx:1711,1730 (SystemNoticeBox prop +
+ * exhaustive NOTICE_STYLE record); adding a member is a two-file change, not a
+ * projector-local one. */
+
+test('projects bash-mode command output as a system notice, never a user bubble', () => {
+  const rows = rowsForUserOrigin(
+    undefined,
+    '<bash-stdout>README.md\npackage.json</bash-stdout><bash-stderr></bash-stderr>',
+  )
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'README.md\npackage.json',
+  })
+  // The assertions that fail against the pre-fix projector: the row was the
+  // operator's own bubble, wrapper tags and all.
+  expect(rows[0]).not.toMatchObject({ kind: 'user-text', role: 'user' })
+  expect(rows[0]?.kind).not.toBe('user-text')
+})
+
+test('bash stderr, both streams, and empty output read the same way', () => {
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<bash-stderr>ls: nope: No such file or directory</bash-stderr>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'ls: nope: No such file or directory',
+  })
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<bash-stdout>built</bash-stdout><bash-stderr>1 warning</bash-stderr>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'built\n1 warning',
+  })
+  // A silent `!` command: both payloads empty. A notice row with no text would
+  // read as a rendering fault, so it reuses the terminal's NO_CONTENT_MESSAGE.
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: '(no content)',
+  })
+})
+
+test('strips the ANSI bytes bash output carries, like slash-command output', () => {
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<bash-stdout>\u001B[32mok\u001B[39m</bash-stdout>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'ok',
+  })
+})
+
+test('<bash-input> stays an operator turn and is NOT folded into the notice', () => {
+  // Deliberate exclusion, pinned so nobody "fixes" it by accident: <bash-input>
+  // is the command the operator typed, not its output, and the terminal routes
+  // it to UserBashInputMessage via `includes` rather than the anchored
+  // `startsWith` used for output (UserTextMessage.tsx:102 vs :69-74). Giving it
+  // an input-style row is a separate, unmade design decision; until then it
+  // stays a user row rather than being mislabelled as command output.
+  const rows = rowsForUserOrigin(undefined, '<bash-input>ls -la</bash-input>')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ kind: 'user-text', role: 'user' })
+  expect(rows[0]).not.toMatchObject({ kind: 'system-notice' })
+})
+
 test('a turn that merely mentions the wrapper is still the operator speaking', () => {
   // Anchored `startsWith`, exactly the engine predicate: only a message that IS
   // the wrapper is command output.

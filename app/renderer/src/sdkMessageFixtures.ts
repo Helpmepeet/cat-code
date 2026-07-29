@@ -1057,6 +1057,53 @@ export const SDK_MESSAGE_FIXTURE: {
         timestamp: '2026-07-04T09:03:08.000Z',
       },
     },
+
+    /* ── bash-mode (`!`) command output ───────────────────────────────────────
+     * The same leak as the slash-command wrapper above, from the other engine
+     * producer: a `!` command's RESULT is persisted as a plain `user` message
+     * whose whole content is the raw wrapper. The terminal branches on it with
+     * the identical anchored `startsWith` shape (UserTextMessage.tsx:69-74), one
+     * line above the local-command branch, so both ride one projector branch.
+     * `<bash-input>` is deliberately NOT here: that is the operator's own typed
+     * command and the terminal routes it to UserBashInputMessage instead
+     * (UserTextMessage.tsx:102). */
+    {
+      name: 'user: bash-mode command stdout (engine wrapper, no origin)',
+      anchor: 'src/utils/processUserInput/processBashCommand.tsx:109',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            '<bash-stdout>README.md\npackage.json</bash-stdout><bash-stderr></bash-stderr>',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u019',
+        timestamp: '2026-07-04T09:03:09.000Z',
+      },
+    },
+    {
+      name: 'user: bash-mode command stderr only (shell failure path)',
+      anchor: 'src/utils/processUserInput/processBashCommand.tsx:132',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '<bash-stderr>ls: nope: No such file or directory</bash-stderr>',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u020',
+        timestamp: '2026-07-04T09:03:10.000Z',
+      },
+    },
   ],
 
   /* ── system — SDKSystemMessage + SDKCompactBoundaryMessage +
