@@ -172,8 +172,9 @@
  * no-ops, and jsdom can't see it). Colors are the EXACT prototype `CODE_THEMES.
  * dracula` palette (Messages.jsx:1761), the prototype's default code theme; the
  * block background stays page-black via `bg-app-bg` on the CodeBlock container,
- * so only the token/fg colors carry the theme. The 5-theme Settings picker is a
- * separate §5 ledger deferral (owner P4-18). Unlayered so token colors win. */
+ * so only the token/fg colors carry the theme. This UNSCOPED block IS the
+ * `dracula` option of the Settings picker below, which is why that key has no
+ * `[data-code-theme]` rules of its own. Unlayered so token colors win. */
 .hljs {
   color: #f8f8f2;
 }
@@ -240,4 +241,263 @@
 .hljs-link {
   color: #8be9fd;
   text-decoration: underline;
+}
+
+/* ── The other four code themes (app-local Settings picker) ───────────────────
+ * `CodeThemeProvider` puts `data-code-theme` on a wrapper above the whole app,
+ * so a palette swap is pure CSS — no re-render of the transcript, no dynamic
+ * Tailwind class (which silently no-ops here), no inline style. `dracula` is the
+ * unscoped block above and appears in none of these.
+ *
+ * Colors are the EXACT prototype palettes (`Messages.jsx:1762-1765`), mapped
+ * from Prism token types onto the hljs scopes the block above already uses; the
+ * full mapping, and the one Prism key with no hljs equivalent (`punctuation`),
+ * are documented in `codeTheme.ts`. No scope is invented here.
+ *
+ * BACKGROUND IS DELIBERATELY NOT THEMED. Every palette carries a `bg`, and both
+ * the prototype's own preview and this app ignore it: the prototype forces the
+ * page color so "code sits IN the page, not on a colored slab"
+ * (`Settings.jsx:295-297`), and the code block here takes `bg-app-bg` from its
+ * container. Painting #282c34 / #2e3440 / #272822 slabs would fight the shell
+ * chrome tokens for no fidelity gain. `fg` IS themed, via `.hljs`.
+ *
+ * `.hljs-addition` / `.hljs-deletion` are also unthemed: they are diff STATUS,
+ * not syntax, and no palette defines them, so inventing four more green/red
+ * pairs would be invention rather than parity.
+ *
+ * Every rule below must override its counterpart above or the default palette
+ * leaks through. `[data-code-theme] .x` is (0,2,0) against the plain `.x`
+ * (0,1,0), and the two compound selectors keep their extra class, so each
+ * override outranks exactly the rule it replaces. */
+
+[data-code-theme="oneDark"] .hljs {
+  color: #abb2bf;
+}
+[data-code-theme="oneDark"] .hljs-comment,
+[data-code-theme="oneDark"] .hljs-quote {
+  color: #5c6370;
+}
+[data-code-theme="oneDark"] .hljs-keyword,
+[data-code-theme="oneDark"] .hljs-selector-tag,
+[data-code-theme="oneDark"] .hljs-tag,
+[data-code-theme="oneDark"] .hljs-name,
+[data-code-theme="oneDark"] .hljs-meta,
+[data-code-theme="oneDark"] .hljs-meta-keyword {
+  color: #c678dd;
+}
+[data-code-theme="oneDark"] .hljs-operator {
+  color: #56b6c2;
+}
+[data-code-theme="oneDark"] .hljs-string,
+[data-code-theme="oneDark"] .hljs-regexp,
+[data-code-theme="oneDark"] .hljs-meta .hljs-string,
+[data-code-theme="oneDark"] .hljs-char.escape_ {
+  color: #98c379;
+}
+[data-code-theme="oneDark"] .hljs-number,
+[data-code-theme="oneDark"] .hljs-literal,
+[data-code-theme="oneDark"] .hljs-symbol,
+[data-code-theme="oneDark"] .hljs-bullet {
+  color: #d19a66;
+}
+[data-code-theme="oneDark"] .hljs-title,
+[data-code-theme="oneDark"] .hljs-title.function_,
+[data-code-theme="oneDark"] .hljs-section,
+[data-code-theme="oneDark"] .hljs-doctag {
+  color: #61afef;
+}
+[data-code-theme="oneDark"] .hljs-built_in {
+  color: #e5c07b;
+}
+[data-code-theme="oneDark"] .hljs-type,
+[data-code-theme="oneDark"] .hljs-title.class_,
+[data-code-theme="oneDark"] .hljs-class .hljs-title,
+[data-code-theme="oneDark"] .hljs-selector-class {
+  color: #e5c07b;
+}
+[data-code-theme="oneDark"] .hljs-attr,
+[data-code-theme="oneDark"] .hljs-attribute,
+[data-code-theme="oneDark"] .hljs-property,
+[data-code-theme="oneDark"] .hljs-variable,
+[data-code-theme="oneDark"] .hljs-template-variable,
+[data-code-theme="oneDark"] .hljs-selector-attr,
+[data-code-theme="oneDark"] .hljs-selector-id {
+  color: #e06c75;
+}
+[data-code-theme="oneDark"] .hljs-link {
+  color: #e5c07b;
+}
+
+[data-code-theme="nord"] .hljs {
+  color: #d8dee9;
+}
+[data-code-theme="nord"] .hljs-comment,
+[data-code-theme="nord"] .hljs-quote {
+  color: #616e88;
+}
+[data-code-theme="nord"] .hljs-keyword,
+[data-code-theme="nord"] .hljs-selector-tag,
+[data-code-theme="nord"] .hljs-tag,
+[data-code-theme="nord"] .hljs-name,
+[data-code-theme="nord"] .hljs-meta,
+[data-code-theme="nord"] .hljs-meta-keyword {
+  color: #81a1c1;
+}
+[data-code-theme="nord"] .hljs-operator {
+  color: #81a1c1;
+}
+[data-code-theme="nord"] .hljs-string,
+[data-code-theme="nord"] .hljs-regexp,
+[data-code-theme="nord"] .hljs-meta .hljs-string,
+[data-code-theme="nord"] .hljs-char.escape_ {
+  color: #a3be8c;
+}
+[data-code-theme="nord"] .hljs-number,
+[data-code-theme="nord"] .hljs-literal,
+[data-code-theme="nord"] .hljs-symbol,
+[data-code-theme="nord"] .hljs-bullet {
+  color: #b48ead;
+}
+[data-code-theme="nord"] .hljs-title,
+[data-code-theme="nord"] .hljs-title.function_,
+[data-code-theme="nord"] .hljs-section,
+[data-code-theme="nord"] .hljs-doctag {
+  color: #88c0d0;
+}
+[data-code-theme="nord"] .hljs-built_in {
+  color: #8fbcbb;
+}
+[data-code-theme="nord"] .hljs-type,
+[data-code-theme="nord"] .hljs-title.class_,
+[data-code-theme="nord"] .hljs-class .hljs-title,
+[data-code-theme="nord"] .hljs-selector-class {
+  color: #8fbcbb;
+}
+[data-code-theme="nord"] .hljs-attr,
+[data-code-theme="nord"] .hljs-attribute,
+[data-code-theme="nord"] .hljs-property,
+[data-code-theme="nord"] .hljs-variable,
+[data-code-theme="nord"] .hljs-template-variable,
+[data-code-theme="nord"] .hljs-selector-attr,
+[data-code-theme="nord"] .hljs-selector-id {
+  color: #d8dee9;
+}
+[data-code-theme="nord"] .hljs-link {
+  color: #8fbcbb;
+}
+
+[data-code-theme="github"] .hljs {
+  color: #c9d1d9;
+}
+[data-code-theme="github"] .hljs-comment,
+[data-code-theme="github"] .hljs-quote {
+  color: #8b949e;
+}
+[data-code-theme="github"] .hljs-keyword,
+[data-code-theme="github"] .hljs-selector-tag,
+[data-code-theme="github"] .hljs-tag,
+[data-code-theme="github"] .hljs-name,
+[data-code-theme="github"] .hljs-meta,
+[data-code-theme="github"] .hljs-meta-keyword {
+  color: #ff7b72;
+}
+[data-code-theme="github"] .hljs-operator {
+  color: #ff7b72;
+}
+[data-code-theme="github"] .hljs-string,
+[data-code-theme="github"] .hljs-regexp,
+[data-code-theme="github"] .hljs-meta .hljs-string,
+[data-code-theme="github"] .hljs-char.escape_ {
+  color: #a5d6ff;
+}
+[data-code-theme="github"] .hljs-number,
+[data-code-theme="github"] .hljs-literal,
+[data-code-theme="github"] .hljs-symbol,
+[data-code-theme="github"] .hljs-bullet {
+  color: #79c0ff;
+}
+[data-code-theme="github"] .hljs-title,
+[data-code-theme="github"] .hljs-title.function_,
+[data-code-theme="github"] .hljs-section,
+[data-code-theme="github"] .hljs-doctag {
+  color: #d2a8ff;
+}
+[data-code-theme="github"] .hljs-built_in {
+  color: #ffa657;
+}
+[data-code-theme="github"] .hljs-type,
+[data-code-theme="github"] .hljs-title.class_,
+[data-code-theme="github"] .hljs-class .hljs-title,
+[data-code-theme="github"] .hljs-selector-class {
+  color: #ffa657;
+}
+[data-code-theme="github"] .hljs-attr,
+[data-code-theme="github"] .hljs-attribute,
+[data-code-theme="github"] .hljs-property,
+[data-code-theme="github"] .hljs-variable,
+[data-code-theme="github"] .hljs-template-variable,
+[data-code-theme="github"] .hljs-selector-attr,
+[data-code-theme="github"] .hljs-selector-id {
+  color: #79c0ff;
+}
+[data-code-theme="github"] .hljs-link {
+  color: #ffa657;
+}
+
+[data-code-theme="monokai"] .hljs {
+  color: #f8f8f2;
+}
+[data-code-theme="monokai"] .hljs-comment,
+[data-code-theme="monokai"] .hljs-quote {
+  color: #88846f;
+}
+[data-code-theme="monokai"] .hljs-keyword,
+[data-code-theme="monokai"] .hljs-selector-tag,
+[data-code-theme="monokai"] .hljs-tag,
+[data-code-theme="monokai"] .hljs-name,
+[data-code-theme="monokai"] .hljs-meta,
+[data-code-theme="monokai"] .hljs-meta-keyword {
+  color: #f92672;
+}
+[data-code-theme="monokai"] .hljs-operator {
+  color: #f92672;
+}
+[data-code-theme="monokai"] .hljs-string,
+[data-code-theme="monokai"] .hljs-regexp,
+[data-code-theme="monokai"] .hljs-meta .hljs-string,
+[data-code-theme="monokai"] .hljs-char.escape_ {
+  color: #e6db74;
+}
+[data-code-theme="monokai"] .hljs-number,
+[data-code-theme="monokai"] .hljs-literal,
+[data-code-theme="monokai"] .hljs-symbol,
+[data-code-theme="monokai"] .hljs-bullet {
+  color: #ae81ff;
+}
+[data-code-theme="monokai"] .hljs-title,
+[data-code-theme="monokai"] .hljs-title.function_,
+[data-code-theme="monokai"] .hljs-section,
+[data-code-theme="monokai"] .hljs-doctag {
+  color: #a6e22e;
+}
+[data-code-theme="monokai"] .hljs-built_in {
+  color: #66d9ef;
+}
+[data-code-theme="monokai"] .hljs-type,
+[data-code-theme="monokai"] .hljs-title.class_,
+[data-code-theme="monokai"] .hljs-class .hljs-title,
+[data-code-theme="monokai"] .hljs-selector-class {
+  color: #a6e22e;
+}
+[data-code-theme="monokai"] .hljs-attr,
+[data-code-theme="monokai"] .hljs-attribute,
+[data-code-theme="monokai"] .hljs-property,
+[data-code-theme="monokai"] .hljs-variable,
+[data-code-theme="monokai"] .hljs-template-variable,
+[data-code-theme="monokai"] .hljs-selector-attr,
+[data-code-theme="monokai"] .hljs-selector-id {
+  color: #fd971f;
+}
+[data-code-theme="monokai"] .hljs-link {
+  color: #a6e22e;
 }

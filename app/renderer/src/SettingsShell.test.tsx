@@ -21,6 +21,11 @@ import type {
 } from '../../shared/protocol.js'
 import { SettingsShell } from './SettingsShell.js'
 import {
+  CODE_THEME_KEYS,
+  CODE_THEME_LABELS,
+  CodeThemeContext,
+} from './codeTheme.js'
+import {
   ReasoningLayoutContext,
   REASONING_LAYOUT_LABELS,
 } from './reasoningLayout.js'
@@ -75,6 +80,15 @@ function scopeTabs(html: string): { label: string; on: boolean }[] {
   )
 }
 
+/** One `<select>`'s opening tag, by aria-label. Needed because the shared
+ * control's className carries `disabled:` variants, so a bare /disabled/ match
+ * is true of every select on the page. */
+function selectTag(html: string, label: string): string {
+  const match = new RegExp(`<select[^>]*aria-label="${label}"[^>]*>`).exec(html)
+  expect(match).not.toBeNull()
+  return match?.[0] ?? ''
+}
+
 function controlCount(html: string): number {
   return (
     (html.match(/role="switch"/g) ?? []).length +
@@ -107,6 +121,19 @@ const SNAPSHOT: SettingsSnapshot = {
   ],
   policyOrigin: 'file',
   editableValues: [{ key: 'reasoningDisplay', value: 'raw', source: 'userSettings' }],
+}
+
+/** The engine key the app-local code-theme picker defers to, turned off. */
+const HIGHLIGHTING_OFF: SettingsSnapshot = {
+  ...SNAPSHOT,
+  editableValues: [
+    ...(SNAPSHOT.editableValues ?? []),
+    {
+      key: 'syntaxHighlightingDisabled',
+      value: true,
+      source: 'userSettings',
+    },
+  ],
 }
 
 /* ── Law 2: the subject is chosen ─────────────────────────────────────────── */
@@ -551,6 +578,55 @@ describe('This app scope', () => {
     expect(interfacePane).not.toContain('value="blocks"')
     // The Interface pane is otherwise real: its own editors render.
     expect(interfacePane).toContain('Output style')
+  })
+
+  test('the code-theme picker offers all five themes at the live one', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(
+        <CodeThemeContext.Provider value={{ theme: 'nord', setTheme: () => {} }}>
+          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+        </CodeThemeContext.Provider>,
+      ),
+    )
+    expect(pane).toContain('Code theme')
+    for (const theme of CODE_THEME_KEYS) {
+      expect(pane).toContain(`value="${theme}"`)
+      expect(decode(pane)).toContain(CODE_THEME_LABELS[theme])
+    }
+    // Selected, not merely offered — and app-local, like its neighbour.
+    expect(pane).toContain('value="nord"')
+    expect(decode(pane)).toContain('not in your settings files')
+    // Off the default, so the prototype's reset affordance is reachable.
+    expect(pane).toContain('Reset to default')
+  })
+
+  test('the code theme is not an engine setting, so Interface does not offer it', () => {
+    const interfacePane = paneMarkup(
+      renderToStaticMarkup(<SettingsShell initialCategory="interface" snapshot={SNAPSHOT} />),
+    )
+    expect(interfacePane).not.toContain('Code theme')
+    expect(interfacePane).not.toContain('value="monokai"')
+  })
+
+  test('with syntax highlighting off the picker is disabled and says where to turn it on', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(
+        <SettingsShell initialScope="app" snapshot={HIGHLIGHTING_OFF} />,
+      ),
+    )
+    expect(selectTag(pane, 'Code theme')).toContain('disabled=""')
+    expect(decode(pane)).toContain('Turn it back on under Interface')
+    // The other app-local control is unaffected by an engine key.
+    expect(selectTag(pane, 'Reasoning layout')).not.toContain('disabled=""')
+  })
+
+  test('an unread snapshot leaves the picker usable rather than guessing it is off', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={null} />),
+    )
+    expect(pane).toContain('Code theme')
+    expect(selectTag(pane, 'Code theme')).not.toContain('disabled=""')
+    expect(decode(pane)).not.toContain('Turn it back on under Interface')
   })
 
   test('an unbuilt app preference is named, not faked', () => {

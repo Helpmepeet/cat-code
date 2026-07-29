@@ -51,6 +51,14 @@ import type {
   WorkspaceTrustSnapshot,
 } from '../../shared/protocol.js'
 import { AgentsPage } from './AgentsPage.js'
+import {
+  CODE_THEME_KEYS,
+  CODE_THEME_LABELS,
+  CodeThemeContext,
+  DEFAULT_CODE_THEME,
+  isCodeThemeKey,
+  selectCodeThemeNote,
+} from './codeTheme.js'
 import { MemoryPage } from './MemoryPage.js'
 import {
   isReasoningLayoutMode,
@@ -98,7 +106,11 @@ import {
   SkillsPanel,
 } from './SettingsExtensions.js'
 import { Field, LockIcon, PaneSection, SourceBadge } from './SettingsField.js'
-import { selectLayerOrigin, selectManagedFields } from './settingsState.js'
+import {
+  selectEditableValue,
+  selectLayerOrigin,
+  selectManagedFields,
+} from './settingsState.js'
 
 export function SettingsShell({
   snapshot,
@@ -476,7 +488,7 @@ function ScopeBody({
   onRemoteVerb: (verb: RemoteVerbMessage) => void
   onSettingWrite: (input: SettingWriteInput) => void
 }) {
-  if (scope === 'app') return <AppScopeBody item={item} />
+  if (scope === 'app') return <AppScopeBody item={item} snapshot={snapshot} />
   if (scope === 'enforced')
     return <ManagedPanel sessionOpen={sessionOpen} snapshot={snapshot} />
 
@@ -711,11 +723,17 @@ function KeybindingsRow() {
 /**
  * The This-app scope: desktop preferences with no settings layer at all.
  *
- * The old page had no home for these, so its one existing control (reasoning
- * layout) sat under a heading that promised engine configuration. Only that
- * control is real today; the rest of the scope is named, not faked.
+ * The old page had no home for these, so its first control (reasoning layout)
+ * sat under a heading that promised engine configuration. Only the Appearance
+ * controls are real today; the rest of the scope is named, not faked.
  */
-function AppScopeBody({ item }: { item: SettingsRailItemId }) {
+function AppScopeBody({
+  item,
+  snapshot,
+}: {
+  item: SettingsRailItemId
+  snapshot: SettingsSnapshot | null
+}) {
   if (item === 'notifications') {
     return (
       <PaneSection title="Notifications">
@@ -726,17 +744,38 @@ function AppScopeBody({ item }: { item: SettingsRailItemId }) {
       </PaneSection>
     )
   }
-  return <TranscriptDisplaySection />
+  return <TranscriptDisplaySection snapshot={snapshot} />
 }
 
+const CODE_THEME_DESC =
+  'Color theme for fenced code blocks in the transcript. Stored in this app, not in your settings files.'
+
 /**
- * The one APP-LOCAL editor that exists today: how the transcript renders
- * reasoning summaries (`reasoningLayout.ts`). It carries no `SourceBadge`
- * because it has no settings layer — it is a renderer view preference stored
- * with the workspace layout, not a `SettingsSchema` key the sidecar writes.
+ * The APP-LOCAL editors: how the transcript renders reasoning summaries
+ * (`reasoningLayout.ts`) and which palette colors its code blocks
+ * (`codeTheme.ts`). Neither carries a `SourceBadge` because neither has a
+ * settings layer — they are renderer view preferences in the renderer's own
+ * storage, not `SettingsSchema` keys the sidecar writes.
+ *
+ * The code theme lives HERE rather than beside the syntax-highlighting toggle
+ * the prototype pairs it with (`Settings.jsx:341-347`), because that toggle is a
+ * real engine key (`settingsEditable.ts:198`) and engine keys are on the project
+ * scope's Interface pane. `snapshot` is read for that toggle only, to disable a
+ * picker that could not change anything.
  */
-function TranscriptDisplaySection() {
+function TranscriptDisplaySection({
+  snapshot,
+}: {
+  snapshot: SettingsSnapshot | null
+}) {
   const { mode, setMode } = useContext(ReasoningLayoutContext)
+  const { theme, setTheme } = useContext(CodeThemeContext)
+  // `EditableSettingValue` is `boolean | string | number`, so the identity test
+  // both narrows it and keeps an unread snapshot (null) on the enabled path —
+  // the key's built-in default is highlighting ON (`settingsEditable.ts:201`).
+  const highlightingOff =
+    selectEditableValue(snapshot, 'syntaxHighlightingDisabled') === true
+  const codeThemeNote = selectCodeThemeNote(highlightingOff)
   return (
     <PaneSection title="Transcript">
       <Field
@@ -751,6 +790,25 @@ function TranscriptDisplaySection() {
           optionLabels={REASONING_LAYOUT_LABELS}
           options={REASONING_LAYOUT_MODES}
           value={mode}
+        />
+      </Field>
+      <Field
+        desc={
+          codeThemeNote ? `${CODE_THEME_DESC} ${codeThemeNote}` : CODE_THEME_DESC
+        }
+        label="Code theme"
+        modified={theme !== DEFAULT_CODE_THEME}
+        onReset={() => setTheme(DEFAULT_CODE_THEME)}
+      >
+        <SelectControl
+          disabled={highlightingOff}
+          label="Code theme"
+          onChange={next => {
+            if (isCodeThemeKey(next)) setTheme(next)
+          }}
+          optionLabels={CODE_THEME_LABELS}
+          options={CODE_THEME_KEYS}
+          value={theme}
         />
       </Field>
     </PaneSection>
