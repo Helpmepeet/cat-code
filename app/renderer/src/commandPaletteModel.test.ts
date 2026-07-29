@@ -4,6 +4,7 @@ import type { SessionId } from '../../shared/protocol.js'
 import {
   buildPaletteItems,
   filterPaletteItems,
+  resolveCommandPage,
   type PaletteHandlers,
 } from './commandPaletteModel.js'
 
@@ -177,4 +178,35 @@ test('buildPaletteItems derives real navigation commands and session-local recen
   expect(filterPaletteItems(items, 'accounts').map(item => item.id)).toEqual([
     'command:/accounts',
   ])
+})
+
+/* --------------------------------------------------------------------------- *
+ * P4-33 — the composer's slash routing (the prototype's `onCommandRoute`).
+ * --------------------------------------------------------------------------- */
+
+test('P4-33 — a command whose subject is a whole surface routes to that surface', () => {
+  expect(resolveCommandPage('accounts')).toBe('accounts')
+  expect(resolveCommandPage('mcp')).toBe('settings')
+  expect(resolveCommandPage('resume')).toBe('sessions')
+  expect(resolveCommandPage('goals')).toBe('goals')
+})
+
+test('P4-33 — a leading slash is accepted, since pickers spell it both ways', () => {
+  expect(resolveCommandPage('/accounts')).toBe('accounts')
+})
+
+test('P4-33 — an ordinary command is left alone for the engine', () => {
+  // undefined means "complete the draft as usual"; swallowing these would trade
+  // a real engine command for nothing.
+  expect(resolveCommandPage('compact')).toBeUndefined()
+  expect(resolveCommandPage('clear')).toBeUndefined()
+  expect(resolveCommandPage('not-a-command')).toBeUndefined()
+})
+
+test('P4-33 — chat-mapped commands are NOT routed from the composer', () => {
+  // `/tasks` and `/bashes` map to `chat` for the palette, which pairs them with a
+  // dedicated action of its own. Navigating to chat from the composer would be a
+  // no-op, so those must reach the engine instead of being swallowed.
+  expect(resolveCommandPage('tasks')).toBeUndefined()
+  expect(resolveCommandPage('bashes')).toBeUndefined()
 })

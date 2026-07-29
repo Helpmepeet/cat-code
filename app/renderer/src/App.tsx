@@ -55,7 +55,12 @@ import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
 import { CommandPalette } from './CommandPalette.js'
-import { buildPaletteItems, type PaletteItem } from './commandPaletteModel.js'
+import {
+  buildPaletteItems,
+  resolveCommandPage,
+  type PaletteItem,
+  type PalettePage,
+} from './commandPaletteModel.js'
 import { applyServerFrameBatch, withBatch } from './serverFrameBatch.js'
 import {
   createRawMessageLogState,
@@ -2005,6 +2010,7 @@ export function App() {
               }
             } : undefined}
             onManageAccounts={() => setActiveView('accounts')}
+            onNavigatePage={setActiveView}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
@@ -2778,6 +2784,7 @@ export function SessionPane({
   activeAnthropicAccount,
   onSwitchAccount,
   onManageAccounts,
+  onNavigatePage,
   accountsLastResult,
   activeConnection,
   activeDescriptor,
@@ -2895,6 +2902,21 @@ export function SessionPane({
   }, [slashQuery])
 
   const pickSlashCommand = (name: string): void => {
+    // P4-33 (the prototype's `onCommandRoute`, Chat.jsx:703) — a command whose
+    // subject is a whole surface opens that surface instead of completing into a
+    // draft the user would then have to send. The picker only ever offers
+    // commands the live catalog reported, so this cannot route a command this
+    // session does not have. Everything else completes as before.
+    const page = onNavigatePage ? resolveCommandPage(name) : undefined
+    if (page && onNavigatePage) {
+      onNavigatePage(page)
+      // Clear the half-typed `/token`: the command was answered by navigating,
+      // so leaving it in the composer would invite sending it a second time.
+      setPrompt('')
+      setSlashDismissed(false)
+      setSlashActiveIndex(0)
+      return
+    }
     setPrompt(completeSlashDraft(name))
     setSlashDismissed(false)
     setSlashActiveIndex(0)
@@ -3927,6 +3949,9 @@ type SessionPaneProps = {
   onSwitchAccount?: (verb: AccountSwitchMessage) => void
   /** Open the Accounts page (the profile popover's "Manage accounts →"). */
   onManageAccounts?: () => void
+  /** P4-33 — open an app surface a slash command names (`/accounts`, `/mcp`).
+   * Absent → those commands complete into the draft like any other. */
+  onNavigatePage?: (page: PalettePage) => void
   /** Global most-recent `account.result` (ACCT-5) — SessionPane correlates it by
    * requestId + sessionId against its own in-flight composer switch and toasts
    * the real outcome; no optimistic UI, mirrors AccountsPage's `pendingRef`. */
