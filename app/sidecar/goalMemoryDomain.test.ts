@@ -268,6 +268,31 @@ test('agent-memory rows carry the engine-resolved directory and a real recursive
   }
 })
 
+test('a memory frame carrying agent rows is still secretGuard-clean', () => {
+  const snapshot = buildMemorySnapshot({
+    autoMemoryEnabled: true,
+    autoMemoryDir: '/config/memory/',
+    autoMemoryEntrypoint: '/config/memory/MEMORY.md',
+    instructionFiles: [],
+    autoMemories: [],
+    agentMemories: [
+      {
+        agentType: 'Explore',
+        scope: 'user',
+        directory: '/config/agent-memory/Explore/',
+        fileCount: 2,
+      },
+    ],
+  })
+  const frame: MemorySnapshotFrame = {
+    kind: 'memory.snapshot',
+    protocolVersion: 1,
+    sessionId: 'sess-1',
+    memory: snapshot,
+  }
+  expect(scanForSecrets(frame).ok).toBe(true)
+})
+
 test('a snapshot with no memory-carrying agents carries an empty list, never a missing field', () => {
   const snapshot = buildMemorySnapshot({
     autoMemoryEnabled: true,
