@@ -600,6 +600,30 @@ describe('This app scope', () => {
     expect(pane).toContain('Reset to default')
   })
 
+  test('the pane opens on the live code canvas, above the picker that changes it', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={SNAPSHOT} />),
+    )
+    // The real sample, really tokenized — not a static image of one.
+    expect(pane).toContain('Obeys no one, especially not the scheduler')
+    expect(pane).toContain('hljs-keyword')
+    // Hero placement: the canvas comes before the control it previews.
+    expect(pane.indexOf('hljs-keyword')).toBeLessThan(pane.indexOf('Code theme'))
+  })
+
+  test('the canvas belongs to Appearance only', () => {
+    const notifications = paneMarkup(
+      renderToStaticMarkup(
+        <SettingsShell
+          initialCategory="notifications"
+          initialScope="app"
+          snapshot={SNAPSHOT}
+        />,
+      ),
+    )
+    expect(notifications).not.toContain('hljs')
+  })
+
   test('the code theme is not an engine setting, so Interface does not offer it', () => {
     const interfacePane = paneMarkup(
       renderToStaticMarkup(<SettingsShell initialCategory="interface" snapshot={SNAPSHOT} />),

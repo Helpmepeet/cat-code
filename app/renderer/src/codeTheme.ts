@@ -149,3 +149,43 @@ export function selectCodeThemeNote(
     ? 'Syntax highlighting is off, so code blocks have no colors to theme. Turn it back on under Interface.'
     : null
 }
+
+/**
+ * The Settings preview sample, ported verbatim from the prototype's
+ * `PREVIEW_CODE` (`Settings.jsx:281`). It is chosen, not arbitrary: one sample
+ * has to exercise every themed scope at once, and this one carries comments, a
+ * docstring, keywords, builtins, a class name, function names, numbers, an
+ * f-string, and a boolean literal, so a palette swap is visible in all of them.
+ *
+ * It lives in this `.ts` module rather than beside the component because a
+ * production renderer `.tsx` module may export React components only
+ * (`lint:fast-refresh`).
+ */
+export const PREVIEW_CODE = `import random
+
+
+class Cat:
+    """A cat. Obeys no one, especially not the scheduler."""
+
+    def __init__(self, name, lives=9):
+        self.name = name
+        self.lives = lives
+        self.mood = "aloof"  # default disposition
+
+    def knock_off(self, item):
+        if item in ("mug", "pen", "your_dignity"):
+            print(f"{self.name} pushes the {item} off the desk.")
+            return True
+        return False  # deemed unworthy of gravity
+
+    def nap(self, hours=16):
+        self.mood = "recharging"
+        return ["zzz" for _ in range(hours)]
+
+
+cats = [Cat(n) for n in ("Mochi", "Pixel", "Sir Fluff")]
+chosen = random.choice(cats)
+chosen.knock_off("mug")`
+
+/** The sample's language, as both the fence and the block's own label. */
+export const PREVIEW_CODE_LANG = 'python'

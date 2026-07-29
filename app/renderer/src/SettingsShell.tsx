@@ -59,6 +59,7 @@ import {
   isCodeThemeKey,
   selectCodeThemeNote,
 } from './codeTheme.js'
+import { CodeThemePreview } from './CodeThemePreview.js'
 import { MemoryPage } from './MemoryPage.js'
 import {
   isReasoningLayoutMode,
@@ -726,6 +727,10 @@ function KeybindingsRow() {
  * The old page had no home for these, so its first control (reasoning layout)
  * sat under a heading that promised engine configuration. Only the Appearance
  * controls are real today; the rest of the scope is named, not faked.
+ *
+ * Appearance opens on the live code canvas, as the prototype's Theme pane does
+ * (`Settings.jsx:328`): the hero is the thing the controls under it change, so
+ * it goes above them and carries no heading of its own.
  */
 function AppScopeBody({
   item,
@@ -744,7 +749,14 @@ function AppScopeBody({
       </PaneSection>
     )
   }
-  return <TranscriptDisplaySection snapshot={snapshot} />
+  return (
+    <>
+      <PaneSection>
+        <CodeThemePreview />
+      </PaneSection>
+      <TranscriptDisplaySection snapshot={snapshot} />
+    </>
+  )
 }
 
 const CODE_THEME_DESC =
