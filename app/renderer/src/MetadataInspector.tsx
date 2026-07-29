@@ -33,7 +33,8 @@
  * fields).
  */
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import type { TasksSnapshot } from '../../shared/protocol.js'
 import type { SessionMetadataView } from './messageMetadata.js'
 import {
   selectMessageMetadata,
@@ -77,11 +78,13 @@ const GOAL_TONE: Record<string, Tone> = {
 export function MetadataInspector({
   session,
   log,
+  tasks,
   onClose,
   sessionState,
 }: {
   session: SessionMetadataView | null
   log: RawMessageSessionLog
+  tasks?: TasksSnapshot | null
   onClose?: () => void
   /**
    * CC-19 §4 — the session's live seams, in one bundle. OPTIONAL with no default
@@ -96,7 +99,29 @@ export function MetadataInspector({
   const refs = selectMessageRefs(log)
   const [picked, setPicked] = useState<string | null>(null)
   const activeUuid = picked ?? refs[refs.length - 1]?.uuid ?? null
-  const meta = selectMessageMetadata(log, activeUuid)
+  const meta = selectMessageMetadata(log, activeUuid, tasks?.subagents)
+
+  /**
+   * P4-31 — Escape closes the drawer (`MetadataInspector.jsx:53-57`).
+   *
+   * Bubble phase, and it yields to `defaultPrevented`: the composer's own
+   * Escape branches (slash picker, mention picker, stop-turn) run on the
+   * textarea and call `preventDefault` (`App.tsx:3213`, `:3240`, `:3250`), so a
+   * typeahead dismissal never also closes the drawer. `SessionActionsMenu` is
+   * the only other unconditional Escape consumer and cannot be co-mounted: it
+   * closes itself the moment an item is chosen (`SessionActionsMenu.tsx:71-74`),
+   * which is the only way this drawer opens (`App.tsx:2432`).
+   */
+  useEffect(() => {
+    if (!onClose) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
   return (
     <>
@@ -108,7 +133,7 @@ export function MetadataInspector({
       <div
         role="dialog"
         aria-label="Session metadata"
-        className="fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
+        className="animate-toast-in fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
       >
         <div className="flex items-center gap-2.5 border-b border-shell-seam px-5 py-4">
           <div className="min-w-0 flex-1">
@@ -216,6 +241,22 @@ export function MetadataInspector({
             ) : null}
           </Section>
 
+          {/* Subagent — joined by the engine-minted parent tool-use id. */}
+          {meta?.subagent ? (
+            <Section title="Subagent">
+              <Row label="Agent">
+                {meta.subagent.agentName ?? 'Agent'}{' '}
+                <span className="text-text-subtle">· {meta.subagent.agentType}</span>
+              </Row>
+              <Row label="Agent ID" mono>{meta.subagent.agentId}</Row>
+              <Row label="Tool use ID" mono>{meta.subagent.toolUseId}</Row>
+              <Row label="Sidechain">{meta.subagent.isSidechain ? 'yes' : 'no'}</Row>
+              <Row label="Spawned at" mono>
+                {new Date(meta.subagent.spawnedAt).toLocaleTimeString()}
+              </Row>
+            </Section>
+          ) : null}
+
           {/* Usage & cost — result frames */}
           {meta?.usage || meta?.totalCostUsd != null || meta?.durationMs != null ? (
             <Section title="Usage & cost">
@@ -235,17 +276,30 @@ export function MetadataInspector({
           {meta?.compaction ? (
             <Section title="Context collapse">
               <Row label="Trigger" mono>{meta.compaction.trigger ?? 'none'}</Row>
-              <Row label="Tokens at boundary" mono>{numOr(meta.compaction.preTokens)}</Row>
+              <Row label="Messages summarized" mono>
+                {numOr(meta.compaction.messagesSummarized)}
+              </Row>
+              <Row label="Tokens at boundary" mono>
+                {meta.compaction.preTokens == null
+                  ? 'none'
+                  : fmtK(meta.compaction.preTokens)}
+              </Row>
+              {meta.compaction.preservedSegment ? (
+                <Row label="Preserved" mono>
+                  {meta.compaction.preservedSegment.headUuid} →{' '}
+                  {meta.compaction.preservedSegment.tailUuid}
+                </Row>
+              ) : null}
             </Section>
           ) : null}
 
           {/* Attribution + deferrals — honest, source-cited notes (never mocked). */}
           <Section title="Not available">
             <div className="text-[11.5px] leading-relaxed text-text-subtle">
-              No per-message account is recorded, so attribution is model and
-              surface only. Worktree, file-history and content-replacement
-              details are not carried on any frame yet, so they are left out
-              rather than invented.
+              No per-message account or client surface is recorded, so
+              attribution is by model alone. Worktree, file-history and
+              content-replacement details are not carried on any frame yet, so
+              they are left out rather than invented.
             </div>
           </Section>
         </div>

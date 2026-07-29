@@ -2498,6 +2498,7 @@ export function App() {
               diagnostics: selectDiagnosticsSnapshot(diagnostics, activeSessionId),
             })}
             log={selectRawMessageLog(state, activeSessionId)}
+            tasks={selectTasksSnapshot(tasks, activeSessionId)}
             onClose={() => setMetadataOpen(false)}
           />
         ) : null}

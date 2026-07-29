@@ -84,6 +84,9 @@ export function toSDKCompactMetadata(
   return {
     trigger: meta.trigger,
     pre_tokens: meta.preTokens,
+    ...(meta.messagesSummarized !== undefined && {
+      messages_summarized: meta.messagesSummarized,
+    }),
     ...(seg && {
       preserved_segment: {
         head_uuid: seg.headUuid,

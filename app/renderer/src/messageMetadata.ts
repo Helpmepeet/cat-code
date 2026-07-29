@@ -22,7 +22,10 @@
  */
 
 import type { SDKMessage } from '@cat-code/engine/sdk'
-import type { ThreadGoalSnapshot } from '../../shared/protocol.js'
+import type {
+  TaskSubagentMetadata,
+  ThreadGoalSnapshot,
+} from '../../shared/protocol.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 
@@ -52,12 +55,28 @@ export type MessageMetadata = {
   timestamp: string | null
   parentToolUseId: string | null
   stopReason: string | null
+  subagent: {
+    agentName: string | null
+    agentType: string
+    agentId: string
+    toolUseId: string
+    isSidechain: boolean
+    spawnedAt: number
+  } | null
   /** result frames only. */
   totalCostUsd: number | null
   durationMs: number | null
   usage: MessageUsage | null
   /** system/compact_boundary frames only. */
-  compaction: { trigger: string | null; preTokens: number | null } | null
+  compaction: {
+    trigger: string | null
+    preTokens: number | null
+    messagesSummarized: number | null
+    preservedSegment: {
+      headUuid: string
+      tailUuid: string
+    } | null
+  } | null
 }
 
 /** Session-level metadata assembled from existing read-seams (no new frame). */
@@ -95,6 +114,7 @@ export function selectMessageRefs(log: RawMessageSessionLog): MetadataMessageRef
 export function selectMessageMetadata(
   log: RawMessageSessionLog,
   uuid: string | null,
+  subagents: readonly TaskSubagentMetadata[] = [],
 ): MessageMetadata | null {
   if (!uuid) return null
   const message = log.messages.find(m => readString(m, 'uuid') === uuid)
@@ -102,6 +122,10 @@ export function selectMessageMetadata(
 
   const type = readString(message, 'type') ?? 'unknown'
   const inner = readRecord(message, 'message')
+  const parentToolUseId = readString(message, 'parent_tool_use_id')
+  const subagent = parentToolUseId
+    ? subagents.find(item => item.toolUseId === parentToolUseId) ?? null
+    : null
   return {
     uuid,
     role: type,
@@ -110,8 +134,9 @@ export function selectMessageMetadata(
     model: readString(message, 'model') ?? (inner ? readString(inner, 'model') : null),
     requestId: readString(message, 'requestId'),
     timestamp: readString(message, 'timestamp'),
-    parentToolUseId: readString(message, 'parent_tool_use_id'),
+    parentToolUseId,
     stopReason: readString(message, 'stop_reason') ?? (inner ? readString(inner, 'stop_reason') : null),
+    subagent,
     totalCostUsd: readNumber(message, 'total_cost_usd'),
     durationMs: readNumber(message, 'duration_ms'),
     usage: readUsage(message, inner),
@@ -167,15 +192,44 @@ function readUsage(
   return { inputTokens, outputTokens, totalTokens }
 }
 
+/**
+ * P4-31 — both extra fields are REAL engine data the SDK boundary used to drop,
+ * not new inventions. Each is genuinely optional upstream, so `null` here means
+ * "the engine did not record it", never "we could not be bothered":
+ *
+ *  - `messages_summarized` is set by the partial-compact path only
+ *    (`src/services/compact/compact.ts:1065`); full compact
+ *    (`compact.ts:627-631`) and session-memory compact
+ *    (`sessionMemoryCompact.ts:457-461`) leave it undefined even though the
+ *    count is in scope at both. See the P4-31 §0 flag.
+ *  - `preserved_segment` is bolted on after the fact by
+ *    `annotateBoundaryWithPreservedSegment` (`compact.ts:352-370`) and is
+ *    correctly absent when compaction summarized everything
+ *    (`src/entrypoints/sdk/coreSchemas.ts:1600-1602`) — the prototype makes the
+ *    row conditional for the same reason (`MetadataInspector.jsx:181`).
+ */
 function readCompaction(
   message: SDKMessage,
-): { trigger: string | null; preTokens: number | null } | null {
+): MessageMetadata['compaction'] {
   const meta = readRecord(message, 'compact_metadata')
   if (!meta) return null
+  const preserved = readRecordOf(meta, 'preserved_segment')
   return {
     trigger: typeof meta.trigger === 'string' ? meta.trigger : null,
     preTokens: numberOrNull(meta.pre_tokens),
+    messagesSummarized: numberOrNull(meta.messages_summarized),
+    preservedSegment: preserved
+      ? readPreservedSegment(preserved)
+      : null,
   }
+}
+
+function readPreservedSegment(
+  preserved: Record<string, unknown>,
+): { headUuid: string; tailUuid: string } | null {
+  const headUuid = stringOrNull(preserved.head_uuid)
+  const tailUuid = stringOrNull(preserved.tail_uuid)
+  return headUuid && tailUuid ? { headUuid, tailUuid } : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -212,6 +266,10 @@ function readNumber(message: unknown, key: string): number | null {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
 }
 
 function clip(text: string): string {

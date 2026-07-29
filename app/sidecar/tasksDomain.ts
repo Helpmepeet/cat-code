@@ -8,7 +8,11 @@
  */
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 import { isBackgroundTask, type TaskState } from '../../src/tasks/types.js'
-import type { TaskSnapshotItem, TasksSnapshot } from '../shared/protocol.js'
+import type {
+  TaskSnapshotItem,
+  TasksSnapshot,
+  TaskSubagentMetadata,
+} from '../shared/protocol.js'
 
 export type SidecarTasksDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
@@ -66,10 +70,41 @@ export function tasksSnapshot(
     .filter(isVisibleBackgroundTask)
     .filter(task => !(task.type === 'local_agent' && task.id === foregroundedTaskId))
     .map(toTaskSnapshotItem)
+  const subagents = Object.values(tasks ?? {}).flatMap(toSubagentMetadata)
   return {
     items,
+    subagents,
     ...(foregroundedTaskId ? { foregroundedTaskId } : {}),
   }
+}
+
+/**
+ * P4-31 — a subagent branch's identity, keyed by the tool-use id its nested
+ * messages already carry.
+ *
+ * `toolUseId` is optional on `TaskStateBase` (`src/Task.ts:50`) and the guard is
+ * load-bearing, not defensive: `LocalMainSessionTask` also mints a `local_agent`
+ * task, but with no `toolUseId` and a synthetic `agentType: 'main-session'`
+ * (`src/tasks/LocalMainSessionTask.ts:121-138`). It is not a subagent branch and
+ * must not appear here.
+ *
+ * `isSidechain` is a literal `true` because it is true BY CONSTRUCTION, not
+ * because it was assumed: the engine records exactly these tasks' transcripts
+ * through `recordSidechainTranscript` (`src/tools/AgentTool/runAgent.ts:815`,
+ * `:898`). The flag itself lives only on the persisted transcript record
+ * (`src/types/logs.ts:243`) and reaches no SDK message, so deriving it from the
+ * task is the only honest route.
+ */
+function toSubagentMetadata(task: TaskState): TaskSubagentMetadata[] {
+  if (task.type !== 'local_agent' || !task.toolUseId) return []
+  return [{
+    toolUseId: task.toolUseId,
+    agentId: task.agentId,
+    agentName: task.agentName ?? null,
+    agentType: task.agentType,
+    isSidechain: true,
+    spawnedAt: task.startTime,
+  }]
 }
 
 // Inlines `isBackgroundTask` (types.ts) rather than calling it: `BackgroundTaskState`
