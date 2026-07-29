@@ -974,12 +974,18 @@ export type TaskSnapshotItem = {
  * the engine owns (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:149-187`); no
  * renderer-authored identity and no filesystem path crosses the boundary.
  *
- * `toolUseId` is the join key: the engine stamps the spawning tool-use id onto
- * every nested message as `parentToolUseId`
- * (`src/tools/AgentTool/runAgent.ts:824`), which reaches the renderer as
- * `parent_tool_use_id`, and onto the task itself via `createTaskStateBase`
- * (`src/Task.ts:108-119`). Both sides are engine-minted, so the join needs no
- * new seam. `spawnedAt` is that same record's `startTime` (`src/Task.ts:119`).
+ * `toolUseId` is the join key, and BOTH sides of it are engine-minted, so the
+ * join needs no new seam:
+ *
+ *  - On the message side, the spawning tool-use id is carried as
+ *    `parentToolUseID` (`src/services/tools/toolExecution.ts:556`) and emitted
+ *    onto every nested SDK message as `parent_tool_use_id`
+ *    (`src/utils/queryHelpers.ts:135` assistant, `:145` user, `:194`
+ *    tool_progress).
+ *  - On the task side, it is the `toolUseId` passed to `createTaskStateBase`
+ *    (`src/Task.ts:108-119`).
+ *
+ * `spawnedAt` is that same task record's `startTime` (`src/Task.ts:119`).
  */
 export type TaskSubagentMetadata = {
   toolUseId: string
