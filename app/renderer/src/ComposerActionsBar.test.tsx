@@ -607,6 +607,38 @@ test('ContextUsagePanel with an account whose usage is not yet fetched suppresse
   expect(html).toContain('42k / 200k')
 })
 
+/**
+ * The Context readout's formatter deviates from the prototype's k-only `fmt`
+ * (Surfaces.jsx:475), which renders a 1M window as "1000k". Claude 5 sessions
+ * carry a 1M window, so they hit that on sight. The sub-million rows here are the
+ * prototype's original behavior and must stay byte-for-byte: this table exists so a
+ * later edit cannot regress them while adjusting the millions tier.
+ *
+ * `fmtTokens` is module-private, so drive it through the rendered panel — both
+ * halves of `{used} / {window}` go through it, so one row exercises both call sites.
+ */
+test('the Context readout compacts millions ("1M") without changing sub-million formatting', () => {
+  const rows: [number, string][] = [
+    [1_000_000, '1M'],
+    [1_500_000, '1.5M'],
+    [2_000_000, '2M'],
+    [999_999, '1000k'],
+    [372_000, '372k'],
+    [42_000, '42k'],
+    [1_500, '1.5k'],
+    [999, '999'],
+  ]
+  for (const [tokens, expected] of rows) {
+    const html = renderToStaticMarkup(
+      <ContextUsagePanel
+        usage={{ usedTokens: tokens, contextWindow: tokens, percentUsed: 100 }}
+        account={null}
+      />,
+    )
+    expect(html).toContain(`${expected} / ${expected}`)
+  }
+})
+
 test('the attach button reflects the disabled gate (echo-only stub)', () => {
   const enabled = render({ attachDisabled: false })
   expect(enabled).toContain('aria-label="Add attachment"')

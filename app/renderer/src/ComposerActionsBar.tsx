@@ -603,8 +603,18 @@ function AccountChip({
   )
 }
 
-/** Compact token count like the prototype's `fmt` (Surfaces.jsx:475): 42_000 → "42k". */
+/** Compact token count: 42_000 → "42k", 1_000_000 → "1M".
+ *
+ * The millions tier DEVIATES from the prototype's `fmt` (Surfaces.jsx:475), which has a
+ * `k` tier only and so renders a 1M window as "1000k". The prototype predates
+ * million-token context windows; a Claude 5 session opens on one. Do not "restore
+ * parity" by deleting the `M` branch. Below 1_000_000 this is byte-for-byte the
+ * prototype's behavior, which is why the k branch is untouched. */
 function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+  }
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
   return String(n)
 }
