@@ -232,10 +232,12 @@ import {
 import {
   createSessionsCatalogState,
   reduceSessionsCatalogState,
+  resolveSessionOpenRoute,
   selectMergedSessionRows,
   selectRecentWorkspaces,
   selectSessionsCatalog,
   withResolvedTitle,
+  type MergedSessionRow,
 } from './sessionsCatalogState.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
@@ -432,6 +434,19 @@ export function App() {
   const [sessionActionsTarget, setSessionActionsTarget] = useState<{
     sessionId: SessionId
     anchor: SessionActionsAnchor
+    /**
+     * P4-29 — opened from a Sessions-page row, whose Rename affordance is the
+     * INLINE row editor (the prototype's), not the anchored rename popover the
+     * tab/sidebar entry points use. Absent for those two, so they are unchanged.
+     */
+    fromSessionsPage?: boolean
+  } | null>(null)
+  // P4-29 — the Sessions page's inline rename request + the confirmed-tag echo.
+  const [sessionsRenameRequest, setSessionsRenameRequest] = useState<{
+    sessionId: string
+  } | null>(null)
+  const [sessionsTagEcho, setSessionsTagEcho] = useState<{
+    entries: readonly { sessionIds: readonly string[]; tag: string | null }[]
   } | null>(null)
   const [renamingSession, setRenamingSession] = useState<{
     sessionId: SessionId
@@ -1326,6 +1341,52 @@ export function App() {
   const openExportRequestIdRef = useRef<string | null>(null)
   openExportRequestIdRef.current = exportDialog?.requestId ?? null
   const toastedActionRequestsRef = useRef<Set<string>>(new Set())
+
+  // P4-29 — tag results, which the effect below cannot handle: a Sessions-page
+  // tag targets any LIVE row, not necessarily the active tab, so its result never
+  // lands in `selectLatestSessionActionResult(…, activeSessionId)`. This scans
+  // every session's latest result for the ids THIS renderer minted, toasts the
+  // sidecar's own message, and — only on `ok` — echoes the write to the Sessions
+  // page so the row does not visibly revert until the catalog re-enumerates
+  // (up to `SESSIONS_CATALOG_REFRESH_INTERVAL_MS`). It runs BEFORE the general
+  // effect and claims the requestId, so a tag on the active tab toasts once.
+  const pendingTagWritesRef = useRef<
+    Map<string, { sessionIds: readonly string[]; tag: string | null }>
+  >(new Map())
+  useEffect(() => {
+    // A bulk tag writes one verb per row, so a single pass can settle SEVERAL
+    // results at once. Collect them and set the echo ONCE: calling the setter per
+    // result would keep only the last, while every result was already marked
+    // consumed, so the other rows would show no tag until the next refresh.
+    const entries: { sessionIds: readonly string[]; tag: string | null }[] = []
+    for (const result of Object.values(sessionActionRuntime.lastBySession)) {
+      if (!result || result.verb !== 'tag') continue
+      if (toastedActionRequestsRef.current.has(result.requestId)) continue
+      const pending = pendingTagWritesRef.current.get(result.requestId)
+      if (!pending) continue
+      toastedActionRequestsRef.current.add(result.requestId)
+      pendingTagWritesRef.current.delete(result.requestId)
+      if (result.ok) entries.push(pending)
+      toast(result.message, { tone: result.ok ? 'success' : 'danger' })
+    }
+    if (entries.length > 0) setSessionsTagEcho({ entries })
+  }, [sessionActionRuntime, toast])
+
+  // P4-29 — DISARM both Sessions-page one-shots when the page goes away.
+  //
+  // `sessionsRenameRequest` and `sessionsTagEcho` are COMMANDS, delivered once.
+  // The page de-dupes them by object identity in a ref, and that ref dies with
+  // the page, which unmounts whenever the user leaves this view. A command left
+  // set is therefore re-delivered on the next visit: dismiss a rename with
+  // Escape, open a session, come back, and the editor reopens by itself; a tag
+  // echo likewise re-applies a value the catalog may since have changed. The
+  // guard has to outlive the consumer, so it lives here.
+  useEffect(() => {
+    if (activeView === 'sessions') return
+    setSessionsRenameRequest(null)
+    setSessionsTagEcho(null)
+  }, [activeView])
+
   const latestSessionActionResult = selectLatestSessionActionResult(
     sessionActionRuntime,
     activeSessionId,
@@ -1663,6 +1724,22 @@ export function App() {
       }
     },
     [performRestore],
+  )
+
+  // P4-29 — the ONE way a catalog row is opened, shared by the Sessions-page row
+  // click and the ⋯ menu's Open/Restore verb. Those two had each re-derived the
+  // routing, and the menu's copy was wrong: it ran a bare `selectTab` for a
+  // restorable row, so a row whose own menu said "Restore" only re-focused a dead
+  // pane. `resolveSessionOpenRoute` is now the single decision
+  // (`sessionsCatalogState.ts`), so a new caller cannot reintroduce the split.
+  const openCatalogRow = useCallback(
+    (row: MergedSessionRow) => {
+      const route = resolveSessionOpenRoute(row)
+      if (route.kind === 'focus') selectTab(route.appSessionId)
+      else if (route.kind === 'restore') void performRestore(route.appSessionId)
+      else if (route.kind === 'history') void openHistorySession(route.engineSessionId)
+    },
+    [selectTab, performRestore, openHistorySession],
   )
 
   function submitSession(
@@ -2485,18 +2562,35 @@ export function App() {
                 <SessionActionsMenu
                   items={resolveSessionActions(targetRow, {
                     isActiveOpen: targetId === activeSessionId,
-                  })}
+                  }).filter(
+                    // The prototype's `hide=['metadata']` for the Sessions-page
+                    // entry point: the inspector reads the ATTACHED tab, so on a
+                    // manager page listing every session it is disabled for all
+                    // but one row. Filtered here, so the shared menu component
+                    // stays presentation-only.
+                    item =>
+                      !sessionActionsTarget.fromSessionsPage ||
+                      item.kind !== 'metadata',
+                  )}
                   anchor={sessionActionsTarget.anchor}
                   onAction={kind => {
                     if (kind === 'metadata') setMetadataOpen(true)
+                    // `copy` is the flyout HOST and is never dispatched; P4-30
+                    // split the real action out as `copy-text`.
                     else if (kind === 'copy-text') copyForLlm(targetId)
-                    else if (kind === 'open') selectTab(targetId)
+                    // P4-29 — was a bare `selectTab`, which merely re-focused a
+                    // stale pane for the very rows whose menu says "Restore".
+                    else if (kind === 'open') openCatalogRow(targetRow)
                     else if (kind === 'rename')
-                      setRenamingSession({
-                        sessionId: targetId,
-                        anchor: sessionActionsTarget.anchor,
-                        initial: targetRow.title ?? '',
-                      })
+                      sessionActionsTarget.fromSessionsPage
+                        ? setSessionsRenameRequest({
+                            sessionId: targetRow.sessionId,
+                          })
+                        : setRenamingSession({
+                            sessionId: targetId,
+                            anchor: sessionActionsTarget.anchor,
+                            initial: targetRow.title ?? '',
+                          })
                     else if (kind === 'export') {
                       // P4-30 — dispatch AND open: the dialog exists to show the
                       // transcript the sidecar renders, so it opens pending and
@@ -2724,18 +2818,44 @@ export function App() {
             }
             truncated={sessionCatalogSnapshot?.truncated ?? false}
             catalogLoaded={sessionCatalogSnapshot !== null}
-            onOpenRow={row => {
-              if (row.appSessionId != null) {
-                if (row.live) selectTab(row.appSessionId)
-                else void performRestore(row.appSessionId)
-                return
-              }
-              // History-only (terminal) row: open it by its engine id when the
-              // workspace is resolvable; empty-cwd rows stay browse-only (the
-              // SessionsPage RowItem already renders those non-openable).
-              if (row.cwd.trim().length > 0) void openHistorySession(row.sessionId)
-            }}
+            onOpenRow={openCatalogRow}
             onNewSession={() => void newSession()}
+            onOpenRowActions={(row, anchor) => {
+              if (row.appSessionId == null) return
+              setSessionActionsTarget({
+                sessionId: row.appSessionId,
+                anchor,
+                fromSessionsPage: true,
+              })
+            }}
+            onRenameRow={(row, title) => {
+              if (row.appSessionId == null) return
+              sendSessionActionVerb(row.appSessionId, {
+                type: 'session.rename',
+                requestId: newRequestId(),
+                title,
+              })
+            }}
+            onTagRows={(targets, tag) => {
+              // One verb per row: each write runs inside that session's OWN
+              // engine (N-process, LOCKED). The ids are remembered so the
+              // confirmed result can be echoed back to the page.
+              for (const row of targets) {
+                if (row.appSessionId == null) continue
+                const requestId = newRequestId()
+                pendingTagWritesRef.current.set(requestId, {
+                  sessionIds: [row.sessionId],
+                  tag,
+                })
+                sendSessionActionVerb(row.appSessionId, {
+                  type: 'session.tag',
+                  requestId,
+                  tag: tag ?? '',
+                })
+              }
+            }}
+            renameRequest={sessionsRenameRequest}
+            tagEcho={sessionsTagEcho}
           />
         ) : showTrustGate && activeSessionId ? (
           // Per-session-create trust gate (D4 §1.1): this session's cwd is

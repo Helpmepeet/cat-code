@@ -31,6 +31,9 @@ function fakeExecutor(
         forkPath: '/tmp/fork.jsonl',
       }
     },
+    async tag(tag) {
+      calls.push(`tag:${tag}`)
+    },
     ...overrides,
   }
   return { executor, calls }
@@ -127,5 +130,45 @@ describe('sessionActionsDomain — branch', () => {
     expect(result.ok).toBe(false)
     expect(result.branchEngineSessionId).toBeUndefined()
     expect(result.message).toContain('No conversation to branch')
+  })
+})
+
+describe('sessionActionsDomain — tag (P4-29)', () => {
+  test('a tag is trimmed, forwarded to the executor, and acked ok', async () => {
+    const { executor, calls } = fakeExecutor()
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    const result = await domain.tag('  infra  ')
+
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('Tagged #infra.')
+    expect(calls).toEqual(['tag:infra'])
+  })
+
+  // Unlike rename, an empty value is MEANINGFUL: it is the engine's own remove
+  // form (`src/commands/tag/tag.tsx:141`), so it must reach the executor.
+  test('an empty / whitespace tag is the REMOVE form and still reaches the engine', async () => {
+    const { executor, calls } = fakeExecutor()
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    const result = await domain.tag('   ')
+
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('Tag removed.')
+    expect(calls).toEqual(['tag:'])
+  })
+
+  test('an executor throw degrades to ok:false, never a rejected promise', async () => {
+    const { executor } = fakeExecutor({
+      tag: async () => {
+        throw new Error('transcript is read-only')
+      },
+    })
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    const result = await domain.tag('infra')
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('transcript is read-only')
   })
 })

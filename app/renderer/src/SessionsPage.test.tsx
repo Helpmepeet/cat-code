@@ -135,3 +135,141 @@ test('shows the truncation / registry-eviction note when truncated', () => {
   )
   expect(html).toContain('the oldest can drop off this list entirely')
 })
+
+/* --- P4-29 action affordances --------------------------------------------
+ * These are SSR snapshots, so they prove the affordances MOUNT with the right
+ * enablement and copy; the interaction itself is covered by the pure reducer +
+ * placement tests in `sessionsPageState.test.ts`, and the click-through remains
+ * an operator GUI step (this suite has no DOM).
+ * ------------------------------------------------------------------------- */
+
+const live = (sessionId: string, extra: Partial<MergedSessionRow> = {}) =>
+  row({
+    sessionId,
+    appSessionId: `app-${sessionId}`,
+    inRegistry: true,
+    live: true,
+    status: 'ready',
+    displayLabel: sessionId,
+    ...extra,
+  })
+
+test('P4-29 — every row offers selection, and a live row offers the actions menu', () => {
+  const html = renderToStaticMarkup(
+    <SessionsPage
+      rows={[live('a')]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(html).toContain('Select session')
+  expect(html).toContain('Session actions')
+})
+
+test('P4-29 — a terminal-history row has no actions menu (no engine to act on)', () => {
+  const html = renderToStaticMarkup(
+    <SessionsPage
+      rows={[row({ sessionId: 'h', displayLabel: 'History one' })]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(html).toContain('History one')
+  expect(html).toContain('Select session')
+  expect(html).not.toContain('Session actions')
+})
+
+test('P4-29 — the tag control reads "+ tag" when untagged and "#tag" when tagged', () => {
+  const untagged = renderToStaticMarkup(
+    <SessionsPage
+      rows={[live('a')]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(untagged).toContain('+ tag')
+  expect(untagged).toContain('Add tag')
+
+  const tagged = renderToStaticMarkup(
+    <SessionsPage
+      rows={[live('a', { tag: 'infra' })]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(tagged).toContain('#infra')
+  expect(tagged).toContain('Edit tag')
+})
+
+test('P4-29 — a CLOSED row cannot be tagged, and says what would make it possible', () => {
+  const html = renderToStaticMarkup(
+    <SessionsPage
+      rows={[
+        row({
+          sessionId: 'a',
+          appSessionId: 'app-a',
+          inRegistry: true,
+          live: false,
+          restorable: true,
+          status: 'exited',
+          displayLabel: 'Closed one',
+        }),
+      ]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(html).toContain('Open or restore this session first.')
+  expect(html).toContain('disabled')
+})
+
+test('P4-29 — the bulk bar is absent with no selection (and needs no scrim then)', () => {
+  const html = renderToStaticMarkup(
+    <SessionsPage
+      rows={[live('a'), live('b')]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated={false}
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(html).not.toContain('selected')
+  expect(html).not.toContain('Clear selection')
+})
+
+test('P4-29 — user-visible copy carries no em dash (operator rule)', () => {
+  const html = renderToStaticMarkup(
+    <SessionsPage
+      rows={[live('a', { tag: 'infra' }), row({ sessionId: 'h' })]}
+      activeCwd="/w/proj"
+      catalogLoaded
+      truncated
+      onOpenRow={noop}
+      onNewSession={noop}
+      onOpenRowActions={noop}
+    />,
+  )
+  expect(html).not.toContain('—')
+})

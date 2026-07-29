@@ -30,11 +30,18 @@
  *    (`src/screens/REPL.tsx:4034`) is in-memory REPL truncation; the only engine
  *    `rewind_files` verb is a git file-checkpoint, not conversation truncation, and
  *    is not in the sidecar vocabulary. No clean seam → deferred.
- *  - **Cut, not disabled:** Tag / Archive / Delete have NO local engine backing
+ *  - **Cut, not disabled:** Archive / Delete have NO local engine backing
  *    (`archiveSession` is remote-bridge only; there is no `deleteSession` in
  *    `src/`). They are omitted from the menu entirely (a §0 CUT), never shown as
  *    dead controls. (Fidelity note: the prototype SHOWS these; a follow-on may
  *    prefer a visible-disabled row with a reason over an omission.)
+ *  - **Tag was wrongly listed as cut here** (corrected P4-29). `saveTag`
+ *    (`src/utils/sessionStorage.ts:3257`) is a real per-session engine write —
+ *    the `/tag` command's own — so tag was a missing SIDECAR verb, not an absent
+ *    capability. It now crosses as `session.tag`. It is not a row in THIS menu:
+ *    the Sessions page tags from the row's own `#tag` / `+ tag` control, which is
+ *    also where the tag is read, so a second entry point here would duplicate it
+ *    (§0 deferred — a menu entry needs a menu→popover request path).
  *  - **Active-open gating.** Copy and Inspect-metadata read the CURRENT session's
  *    transcript, which the renderer only holds for the session open+attached in a
  *    tab. For any other row they are shown DISABLED with the reason (opening a

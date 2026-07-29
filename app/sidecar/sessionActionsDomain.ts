@@ -16,6 +16,11 @@
  *     returns the new engine session id. The forked session is NOT auto-opened
  *     (§0-deferred: a fork has no registry row and the sidecar has no host
  *     control-plane channel — see protocol.ts SESSION_ACTION_VERB_TYPES).
+ *   - Tag (P4-29) → `saveTag` (`src/utils/sessionStorage.ts:3257`), the SAME
+ *     per-session tag write `/tag` uses (`src/commands/tag/tag.tsx:118` set,
+ *     `:141` remove-with-empty-string). It appends a `{type:'tag'}` entry to this
+ *     session's transcript, which is where the sessions catalog reads `tag` back
+ *     from — one write, one reader, no renderer-side tag store.
  *
  * The executor is behind a seam (like `runControlsDomain`): the real one wires the
  * engine functions; tests inject a fake so the domain round-trip is proven without
@@ -38,6 +43,7 @@ import { renderMessagesToPlainText } from '../../src/utils/exportRenderer.js'
 import {
   getTranscriptPath,
   saveCustomTitle,
+  saveTag,
 } from '../../src/utils/sessionStorage.js'
 
 /** The redacted outcome of a session-action write (no transport, no secret). */
@@ -63,6 +69,8 @@ export type SessionActionsExecutor = {
   export(): Promise<string>
   /** Fork the whole conversation at HEAD; return the new session id + title. */
   branch(): Promise<{ engineSessionId: string; title: string; forkPath: string }>
+  /** Set (or, with an empty string, clear) THIS session's tag (`saveTag`). */
+  tag(tag: string): Promise<void>
 }
 
 export function createRealSessionActionsExecutor(deps: {
@@ -101,6 +109,12 @@ export function createRealSessionActionsExecutor(deps: {
       await saveCustomTitle(fork.sessionId, title, fork.forkPath, 'user')
       return { engineSessionId: fork.sessionId, title, forkPath: fork.forkPath }
     },
+    async tag(tag) {
+      // Mirror `/tag` (tag.tsx:118 set / :141 remove): one `saveTag` call keyed by
+      // the current engine session id + its transcript path. An empty string is the
+      // engine's own REMOVE form, so set and clear share one code path here too.
+      await saveTag(getSessionId() as UUID, tag, getTranscriptPath())
+    },
   }
 }
 
@@ -111,6 +125,8 @@ export type SidecarSessionActionsDomain = {
   export(): Promise<SessionActionResult>
   /** Fork the conversation at HEAD; report the new engine session id. */
   branch(): Promise<SessionActionResult>
+  /** Set or clear this session's tag; report the redacted outcome. */
+  tag(tag: string): Promise<SessionActionResult>
 }
 
 export function createSidecarSessionActionsDomain(
@@ -170,6 +186,25 @@ export function createSidecarSessionActionsDomain(
         return {
           ok: false,
           message: `Could not branch: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
+    async tag(tag) {
+      // Trim here so `#  spaces  ` can never become a tag the filter tabs cannot
+      // match; an all-whitespace value is the REMOVE form, not a failure.
+      const trimmed = tag.trim()
+      try {
+        await executor.tag(trimmed)
+        return {
+          ok: true,
+          message: trimmed.length === 0 ? 'Tag removed.' : `Tagged #${trimmed}.`,
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not tag: ${
             error instanceof Error ? error.message : String(error)
           }`,
         }

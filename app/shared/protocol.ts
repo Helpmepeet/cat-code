@@ -1451,10 +1451,28 @@ export type RunControlsSnapshotFrame = {
  * (`secretGuard` scans it; `MAX_OUTBOUND_FRAME_BYTES` bounds it — an over-cap
  * transcript fails closed with an honest `ok:false`, never a silent drop).
  */
+/*
+ * P4-29 adds a FOURTH verb to the same closed set:
+ *
+ *  - `session.tag` → the engine's OWN `saveTag` (`src/utils/sessionStorage.ts:3257`),
+ *    the SAME per-session tag write the `/tag` command uses
+ *    (`src/commands/tag/tag.tsx:118` to set, `:141` with an empty string to
+ *    remove). It appends a `{type:'tag'}` JSONL entry to THIS session's
+ *    transcript, which is exactly where the sessions catalog reads `tag` back
+ *    from — so the Sessions-page tag is a real engine write, not a renderer
+ *    store. Correcting the record in `sessionActions.ts:33-37`, which called tag
+ *    a §0 CUT "with NO local engine backing": archive/delete have none, tag
+ *    always did; it was a missing SIDECAR verb (PARITY-LEDGER §16 `:1209`).
+ *    The catalog is refreshed on a fixed cadence
+ *    (`SESSIONS_CATALOG_REFRESH_INTERVAL_MS`), so the row's own `tag` field
+ *    lags the write; the renderer echoes the CONFIRMED result at read time
+ *    (`sessionsPageState.ts` `selectRowTag`) rather than mutating a stored row.
+ */
 export const SESSION_ACTION_VERB_TYPES = [
   'session.rename',
   'session.export',
   'session.branch',
+  'session.tag',
 ] as const
 
 export type SessionActionVerbType = (typeof SESSION_ACTION_VERB_TYPES)[number]
@@ -1478,10 +1496,22 @@ export type SessionBranchMessage = {
   requestId: string
 }
 
+/**
+ * P4-29 — set or clear THIS session's tag (`saveTag`). `tag` is the renderer's
+ * ONLY authored field: a trimmed tag name, or the empty string to REMOVE, which
+ * is the engine's own removal call (`src/commands/tag/tag.tsx:141`).
+ */
+export type SessionTagMessage = {
+  type: 'session.tag'
+  requestId: string
+  tag: string
+}
+
 export type SessionActionVerbMessage =
   | SessionRenameMessage
   | SessionExportMessage
   | SessionBranchMessage
+  | SessionTagMessage
 
 /**
  * P4-6b outbound result echoing the verb's `requestId` (T5a-analog). ONE frame
@@ -1497,7 +1527,7 @@ export type SessionActionResultFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   requestId: string
-  verb: 'rename' | 'export' | 'branch'
+  verb: 'rename' | 'export' | 'branch' | 'tag'
   ok: boolean
   message: string
   exportText?: string

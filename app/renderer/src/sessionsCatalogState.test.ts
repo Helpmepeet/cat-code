@@ -14,6 +14,7 @@ import {
   groupByWorkspace,
   reduceSessionsCatalogState,
   resolveSessionLabel,
+  resolveSessionOpenRoute,
   selectMergedSessionRows,
   selectRecentWorkspaces,
   selectSessionsCatalog,
@@ -691,6 +692,47 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     ...partial,
   }
 }
+
+describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller copies)', () => {
+  test('a live registry row is pure UI focus', () => {
+    expect(
+      resolveSessionOpenRoute(
+        row({ sessionId: 'a', appSessionId: 'app-a', inRegistry: true, live: true }),
+      ),
+    ).toEqual({ kind: 'focus', appSessionId: 'app-a' })
+  })
+
+  // The bug this function exists to kill: the ⋯ menu labels a non-live registry
+  // row "Restore" (sessionActions.ts) but its handler ran a bare `selectTab`, so
+  // clicking Restore only re-focused a stale, dead pane. Every OTHER open path
+  // branched on `live`; this route is now the only answer any of them get.
+  test('a NON-live registry row restores — it is never a bare focus', () => {
+    const route = resolveSessionOpenRoute(
+      row({
+        sessionId: 'a',
+        appSessionId: 'app-a',
+        inRegistry: true,
+        live: false,
+        restorable: true,
+        status: 'exited',
+      }),
+    )
+    expect(route).toEqual({ kind: 'restore', appSessionId: 'app-a' })
+  })
+
+  test('a terminal-history row with a workspace opens by its ENGINE id', () => {
+    expect(resolveSessionOpenRoute(row({ sessionId: 'engine-1' }))).toEqual({
+      kind: 'history',
+      engineSessionId: 'engine-1',
+    })
+  })
+
+  test('a history row with no recorded workspace stays browse-only', () => {
+    expect(resolveSessionOpenRoute(row({ sessionId: 'a', cwd: '   ' }))).toEqual({
+      kind: 'none',
+    })
+  })
+})
 
 describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
   // A registry-openable session in /w/one, a history-only session in /w/one,

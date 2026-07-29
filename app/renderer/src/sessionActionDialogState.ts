@@ -13,6 +13,8 @@
  * recorded on the calling component.
  */
 
+import type { SessionActionResultFrame } from '../../shared/protocol'
+
 /** What a keypress means to an open dialog. */
 export type SessionActionModalKey = 'close' | null
 
@@ -68,13 +70,14 @@ export type ExportPreviewState =
  * action's outcome as its own.
  */
 export function selectExportPreview(
-  result: {
-    requestId: string
-    verb: 'rename' | 'export' | 'branch'
-    ok: boolean
-    message: string
-    exportText?: string
-  } | null,
+  // Derived from the wire contract, not a restated shape: the verb union grows
+  // (P4-29 added `tag`) and a hand-copied literal silently rots until a merge
+  // exposes it. Picked rather than taking the whole frame, so this stays a pure
+  // selector over the payload and callers need not build an envelope.
+  result: Pick<
+    SessionActionResultFrame,
+    'requestId' | 'verb' | 'ok' | 'message' | 'exportText'
+  > | null,
   requestId: string,
 ): ExportPreviewState {
   if (!result || result.requestId !== requestId || result.verb !== 'export') {
