@@ -143,6 +143,8 @@ test('ExportDialog: Download stays disabled in every preview state', () => {
       />,
     )
     expect(html).toContain('Saving to a file is not available')
+    // Visible state marker, not a hover-only tooltip.
+    expect(html).toContain('>soon<')
   }
 })
 

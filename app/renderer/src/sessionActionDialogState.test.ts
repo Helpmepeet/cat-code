@@ -3,6 +3,7 @@ import {
   branchPreviewLines,
   exportFileName,
   selectExportPreview,
+  selectLatchedExportPreview,
   sessionActionModalKeyAction,
 } from './sessionActionDialogState.js'
 
@@ -91,6 +92,44 @@ describe('selectExportPreview', () => {
         'req-1',
       ),
     ).toEqual({ status: 'failed', message: 'Nothing to export.' })
+  })
+})
+
+describe('selectLatchedExportPreview', () => {
+  const latched = {
+    requestId: 'req-1',
+    state: { status: 'ready', text: '# transcript' } as const,
+  }
+
+  test('a latched result survives a later unrelated action result', () => {
+    // The regression this closes: the runtime state keeps only the LATEST result
+    // per session, so a rename landing while the dialog is open used to blank the
+    // rendered transcript back to pending and permanently re-disable Copy.
+    expect(selectLatchedExportPreview(latched, 'req-1')).toEqual({
+      status: 'ready',
+      text: '# transcript',
+    })
+  })
+
+  test('a SECOND export opens pending, never flashing the previous transcript', () => {
+    expect(selectLatchedExportPreview(latched, 'req-2')).toEqual({
+      status: 'pending',
+    })
+  })
+
+  test('nothing latched yet reads pending', () => {
+    expect(selectLatchedExportPreview(null, 'req-1')).toEqual({ status: 'pending' })
+  })
+
+  test('a latched FAILURE is kept too, not retried into pending', () => {
+    const failed = {
+      requestId: 'req-9',
+      state: { status: 'failed', message: 'Transcript unreadable.' } as const,
+    }
+    expect(selectLatchedExportPreview(failed, 'req-9')).toEqual({
+      status: 'failed',
+      message: 'Transcript unreadable.',
+    })
   })
 })
 

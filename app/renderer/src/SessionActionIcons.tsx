@@ -7,10 +7,12 @@
  * PARITY-LEDGER §17 row "SA_IC action-icon vocabulary" asks for one set shared by
  * the menu AND the dialogs, which is why this is its own module rather than a
  * local helper in either. It carries a glyph for every verb the menu actually
- * renders plus the dialog chrome (close / warn / file / markdown / chevron).
+ * renders plus the dialog chrome (close / file / markdown / chevron).
  * The prototype's tag / archive / trash glyphs are deliberately absent: those
- * three verbs are a recorded §0 CUT (`sessionActions.ts:33-37`, no local engine
- * backing), so a glyph for them would be dead code for an unreachable row.
+ * three verbs are a recorded §0 CUT (`sessionActions.ts:34-38`, no local engine
+ * backing), so a glyph for them would be dead code for an unreachable row. Its
+ * `warn` glyph is absent for the same reason: the only consumer is the
+ * RewindDialog, which is owner-flagged and NOT built here.
  *
  * Components-only module: the renderer's Fast Refresh boundary (CLAUDE.md §3)
  * forbids a non-component export here, so the kind→glyph dispatch is the
@@ -19,7 +21,16 @@
 import type { ReactNode } from 'react'
 import type { SessionActionKind } from './sessionActions.js'
 
-/** The glyph for a resolved menu verb. Unknown kinds render nothing, never throw. */
+/**
+ * The glyph for a resolved menu verb.
+ *
+ * The `default` arm is a CLOSED-UNION TRIPWIRE (CLAUDE.md §7), not a fallback:
+ * adding a `SessionActionKind` without a glyph here stops compiling. It replaces
+ * a bare `return null`, which is exactly how `copy-text` shipped with an empty
+ * icon slot and its label sitting a glyph-width left of its sibling. Runtime
+ * still degrades to null rather than throwing, for a value that is not in the
+ * union at all.
+ */
 export function SessionActionIcon({
   kind,
 }: {
@@ -40,10 +51,15 @@ export function SessionActionIcon({
       return <ActionCopyIcon />
     case 'copy-md':
       return <ActionMarkdownIcon />
+    case 'copy-text':
+      return <ActionFileIcon />
     case 'export':
       return <ActionExportIcon />
-    default:
+    default: {
+      const exhaustive: never = kind
+      void exhaustive
       return null
+    }
   }
 }
 
@@ -132,16 +148,6 @@ export function ActionFileIcon(): ReactNode {
     <Glyph>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
-    </Glyph>
-  )
-}
-
-export function ActionWarnIcon(): ReactNode {
-  return (
-    <Glyph>
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
     </Glyph>
   )
 }

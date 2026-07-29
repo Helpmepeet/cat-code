@@ -15,8 +15,9 @@
  *    `exportText` the sidecar rendered with `renderMessagesToPlainText` and sent
  *    back on `session-action.result`, matched by the dialog's own `requestId`.
  *
- * §0 flags carried by this file, each recorded on the ledger row it belongs to
- * (they are PROPOSALS to the operator, not closures):
+ * FOUR §0 deviations are carried by this file, each recorded on the ledger row
+ * it belongs to (they are PROPOSALS to the operator, not closures, and PARITY-
+ * LEDGER Part C counts the same four):
  *
  *  1. **Download is not wired.** There is no renderer-reachable file-write path
  *     in `app/` at all, so the prototype's primary action ships disabled with an
@@ -131,6 +132,7 @@ export function ExportDialog({
             label="Download"
             variant="primary"
             disabled
+            marker="soon"
             reason="Saving to a file is not available from the desktop app yet. Copy the transcript instead."
           />
         </>

@@ -156,4 +156,30 @@ test('saBtn: disabled renders the inert variant and explains itself on hover', (
 test('saBtn: an enabled button carries no leftover disabled tooltip', () => {
   const html = renderToStaticMarkup(<SAButton label="Copy" reason="ignored when enabled" />)
   expect(html).not.toContain('title=')
+  expect(html).not.toContain('aria-label=')
+})
+
+test('saBtn: a disabled reason is reachable without a mouse, not title-only', () => {
+  // A bare `title` reaches only a hovering pointer. The visible marker carries
+  // the STATE and the accessible name carries the REASON.
+  const html = renderToStaticMarkup(
+    <SAButton
+      label="Download"
+      variant="primary"
+      disabled
+      marker="soon"
+      reason="Not available yet."
+    />,
+  )
+  expect(html).toContain('>soon<')
+  expect(html).toContain('aria-label="Download, Not available yet."')
+  expect(html).toContain('title="Not available yet."')
+})
+
+test('saBtn: a disabled button with no marker stays unmarked (a loading Copy is not "soon")', () => {
+  const html = renderToStaticMarkup(
+    <SAButton label="Copy" disabled reason="The transcript is still rendering." />,
+  )
+  expect(html).not.toContain('>soon<')
+  expect(html).toContain('aria-label="Copy, The transcript is still rendering."')
 })

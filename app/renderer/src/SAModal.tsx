@@ -149,9 +149,14 @@ const BUTTON_CLASS: Record<SAButtonVariant, string> = {
 
 /**
  * A dialog action-bar button. `disabled` renders the prototype's inert variant
- * (flat wash + ghost text) and `reason` becomes its hover title, which is how the
- * rest of this surface explains an unreachable affordance
- * (`SessionActionsMenu.tsx` `MenuRow`) rather than hiding it.
+ * (flat wash + ghost text) and `reason` explains it, which is how the rest of
+ * this surface handles an unreachable affordance (`SessionActionsMenu.tsx`
+ * `MenuRow`) rather than hiding it.
+ *
+ * `reason` reaches the user three ways, because a bare `title` reaches only a
+ * hovering mouse: the optional `marker` is a VISIBLE tag (the `soon` idiom
+ * `MenuRow` pairs with its own tooltip), `title` is the hover text, and the
+ * accessible name carries the reason for anyone not using either.
  */
 export function SAButton({
   label,
@@ -159,27 +164,36 @@ export function SAButton({
   variant = 'secondary',
   disabled = false,
   reason,
+  marker,
 }: {
   label: string
   onClick?: () => void
   variant?: SAButtonVariant
   disabled?: boolean
   reason?: string
+  /** Short visible state tag shown beside the label while disabled (e.g. `soon`). */
+  marker?: string
 }): ReactNode {
+  const explained = disabled && reason !== undefined
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      {...(disabled && reason ? { title: reason } : {})}
+      {...(explained ? { title: reason, 'aria-label': `${label}, ${reason}` } : {})}
       className={
-        'shrink-0 whitespace-nowrap rounded-lg border px-[15px] py-2 text-[12.5px] font-semibold transition-all ' +
+        'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-[15px] py-2 text-[12.5px] font-semibold transition-all ' +
         (disabled
           ? 'cursor-default border-shell-seam bg-white/[0.04] text-text-ghost opacity-60'
           : BUTTON_CLASS[variant])
       }
     >
       {label}
+      {disabled && marker ? (
+        <span className="text-[9.5px] font-semibold uppercase tracking-wide">
+          {marker}
+        </span>
+      ) : null}
     </button>
   )
 }

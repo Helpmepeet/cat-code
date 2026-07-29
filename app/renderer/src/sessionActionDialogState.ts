@@ -89,6 +89,34 @@ export function selectExportPreview(
   return { status: 'ready', text: result.exportText }
 }
 
+/** A resolved export preview, remembered against the dialog that asked for it. */
+export type LatchedExportPreview = {
+  requestId: string
+  state: ExportPreviewState
+}
+
+/**
+ * Read the latched preview for THIS dialog.
+ *
+ * Why a latch exists at all: `sessionActionRuntimeState` keeps only the LATEST
+ * result per session, by design. Without this, a rename or branch result landing
+ * while the Export dialog is open makes the export result no longer latest, so
+ * `selectExportPreview` returns pending again, the rendered transcript blanks
+ * back to "Rendering this session, one moment." and Copy re-disables forever.
+ * Once a result for this `requestId` has arrived it is kept.
+ *
+ * Keyed by `requestId` rather than by session so a SECOND export opens pending
+ * instead of flashing the previous export's transcript.
+ */
+export function selectLatchedExportPreview(
+  latched: LatchedExportPreview | null,
+  requestId: string,
+): ExportPreviewState {
+  return latched && latched.requestId === requestId
+    ? latched.state
+    : { status: 'pending' }
+}
+
 /**
  * The Branch dialog's confirmation callout (`SessionActions.jsx:292-300`).
  *

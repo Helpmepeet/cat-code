@@ -278,6 +278,8 @@ import {
 import {
   exportFileName,
   selectExportPreview,
+  selectLatchedExportPreview,
+  type LatchedExportPreview,
 } from './sessionActionDialogState.js'
 import {
   createSessionActionRuntimeState,
@@ -457,6 +459,12 @@ export function App() {
     requestId: string
     title: string | null
   } | null>(null)
+  // The export result, LATCHED against the request that asked for it. The
+  // runtime state keeps only the latest result per session, so without this an
+  // unrelated rename/branch result arriving while the dialog is open would blank
+  // the transcript back to pending (`selectLatchedExportPreview`).
+  const [latchedExport, setLatchedExport] =
+    useState<LatchedExportPreview | null>(null)
   const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
   const [workspaceLayout, setWorkspaceLayoutState] =
     useState<WorkspaceLayoutState>(
@@ -1330,6 +1338,28 @@ export function App() {
     if (result.requestId === openExportRequestIdRef.current) return
     toast(result.message, { tone: result.ok ? 'success' : 'danger' })
   }, [latestSessionActionResult, toast])
+
+  // P4-30 — latch the open Export dialog's OWN result the first time it lands.
+  // It reads the target session's latest result rather than the active session's,
+  // because the dialog can target any row the menu was opened for. A pending
+  // projection never overwrites a latched one, which is what keeps a later
+  // unrelated result from blanking the rendered transcript.
+  useEffect(() => {
+    if (!exportDialog) return
+    const projected = selectExportPreview(
+      selectLatestSessionActionResult(
+        sessionActionRuntime,
+        exportDialog.sessionId,
+      ),
+      exportDialog.requestId,
+    )
+    if (projected.status === 'pending') return
+    setLatchedExport(current =>
+      current?.requestId === exportDialog.requestId
+        ? current
+        : { requestId: exportDialog.requestId, state: projected },
+    )
+  }, [exportDialog, sessionActionRuntime])
 
   // Decision #5 (audit §I.4) — surface a FAILED verb ack that would otherwise be
   // silent (a success re-broadcasts a snapshot and the UI already updates; a
@@ -2533,11 +2563,8 @@ export function App() {
 
         {exportDialog
           ? (() => {
-              const preview = selectExportPreview(
-                selectLatestSessionActionResult(
-                  sessionActionRuntime,
-                  exportDialog.sessionId,
-                ),
+              const preview = selectLatchedExportPreview(
+                latchedExport,
                 exportDialog.requestId,
               )
               return (

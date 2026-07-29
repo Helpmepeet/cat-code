@@ -183,9 +183,17 @@ function SectionLabel({ children }: { children: ReactNode }) {
 
 /**
  * P4-30 — the Copy row's side submenu (`SessionActions.jsx:172-182`): the host
- * row is inert chrome that opens on hover (and on keyboard focus, so the group
- * is reachable without a pointer) and closes when the pointer leaves the pair.
- * Only the children dispatch.
+ * row is inert chrome that opens on hover and closes when the pointer leaves the
+ * pair. Only the children dispatch.
+ *
+ * KEYBOARD: the host carries `tabIndex={0}` deliberately. Before the flyout, the
+ * copy verb was a plain Tab-reachable `<button>`; folding it into a hover-only
+ * group would have made it mouse-only, a regression the prototype's own
+ * mouse-only flyout does not excuse. Focus opens the group (focusin bubbles, so
+ * moving onto a child keeps it open) and focus leaving the whole subtree closes
+ * it, which is what `relatedTarget` containment checks. Without the tabIndex the
+ * `onFocus` here would be dead code, because nothing inside is focusable until
+ * the group is already open.
  */
 function MenuFlyoutRow({
   item,
@@ -202,12 +210,16 @@ function MenuFlyoutRow({
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
+      }}
     >
       <div
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-white/[0.05] hover:text-text-primary"
+        tabIndex={0}
+        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-white/[0.05] hover:text-text-primary focus-visible:bg-white/[0.05] focus-visible:text-text-primary focus-visible:outline-none"
       >
         <span className="flex shrink-0 text-text-subtle">
           <SessionActionIcon kind={item.kind} />
