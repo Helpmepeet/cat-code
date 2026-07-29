@@ -1565,6 +1565,7 @@ function projectUserContentBlock(
   | UserImageRow
   | TaskNotificationRow
   | InjectedTurnRow
+  | SystemNoticeRow
   | null {
   if (!isRecord(block) || typeof block.type !== 'string') return null
   const { origin, ...rowMetadata } = metadata
@@ -1593,6 +1594,22 @@ function projectUserContentBlock(
         injectedKind: origin.kind,
         label: origin.label,
         content: block.text,
+      }
+    }
+    // Ordered ahead of the command-echo heuristic exactly as the terminal
+    // orders them (UserTextMessage.tsx:76-81 sits above its `<command-message>`
+    // check): this one is an anchored `startsWith`, so it cannot capture a turn
+    // that merely mentions the tag, while command output that happens to quote
+    // `<command-message>` must not be re-read as an operator command.
+    const localCommandOutput = parseLocalCommandOutput(block.text)
+    if (localCommandOutput !== null) {
+      return {
+        id: rowId(source, 'local-command-output'),
+        sessionId: source.sessionId,
+        frameId: source.frameId,
+        kind: 'system-notice',
+        noticeType: 'local_command_output',
+        content: localCommandOutput,
       }
     }
     const command = parseCommandEcho(block.text)
@@ -1689,6 +1706,60 @@ function parseCommandEcho(
       : `/${[commandName, args].filter(Boolean).join(' ')}`,
     skillFormat,
   }
+}
+
+/**
+ * The engine persists a local slash command's RESULT as a plain `type:'user'`
+ * message whose entire content is the raw wrapper
+ * (`src/utils/processUserInput/processSlashCommand.tsx:625`). It is command
+ * output, not something the operator typed, and the terminal has always
+ * special-cased this exact shape at render time
+ * (`src/components/messages/UserTextMessage.tsx:76-81` →
+ * `UserLocalCommandOutputMessage.tsx:22-41`). Without the same branch the app
+ * showed it as the operator's own right-aligned bubble, tags and ANSI bytes
+ * included (bug, 2026-07-29).
+ *
+ * `startsWith` rather than `includes`, matching the engine predicate: only a
+ * message that IS the wrapper qualifies, never one that quotes it.
+ *
+ * Returns the tag-free, ANSI-free payload, or null when this is not that shape.
+ */
+function parseLocalCommandOutput(text: string): string | null {
+  if (
+    !text.startsWith('<local-command-stdout') &&
+    !text.startsWith('<local-command-stderr')
+  ) {
+    return null
+  }
+  const payloads = [
+    extractXmlTag(text, 'local-command-stdout'),
+    extractXmlTag(text, 'local-command-stderr'),
+  ]
+    .map(payload => stripAnsiSequences(payload ?? '').trim())
+    .filter(payload => payload.length > 0)
+  return payloads.length === 0
+    ? LOCAL_COMMAND_NO_CONTENT
+    : payloads.join('\n')
+}
+
+/**
+ * Both payloads empty: the terminal shows `NO_CONTENT_MESSAGE`
+ * (`UserLocalCommandOutputMessage.tsx:24-34`, `src/constants/messages.ts:1`).
+ * Copied rather than imported so the renderer bundle stays engine-free.
+ */
+const LOCAL_COMMAND_NO_CONTENT = '(no content)'
+
+/**
+ * CSI escape sequences (`ESC [ … final`), which is what real transcripts carry:
+ * slash-command results are built with chalk, and the engine's own `stripAnsi`
+ * passes (`src/QueryEngine.ts:673`, `src/utils/messages/mappers.ts:266`) do NOT
+ * cover `toSDKMessages`' `case 'user'` (mappers.ts:191-213), so the raw bytes
+ * reach the app on the resume path.
+ */
+const ANSI_ESCAPE_SEQUENCE = /\u001B\[[0-9;:?]*[\u0020-\u002F]*[\u0040-\u007E]/g
+
+function stripAnsiSequences(text: string): string {
+  return text.replace(ANSI_ESCAPE_SEQUENCE, '')
 }
 
 function extractXmlTag(text: string, tag: string): string | null {

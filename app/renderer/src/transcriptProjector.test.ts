@@ -858,6 +858,99 @@ test('legacy <task-notification> transcripts (no origin field) do not regress', 
   })
 })
 
+/* ── local slash-command output (bug, 2026-07-29) ──────────────────────────
+ * A terminal slash command's RESULT is persisted as a plain `type:'user'`
+ * message whose entire content is the raw wrapper
+ * (src/utils/processUserInput/processSlashCommand.tsx:625). It carries no
+ * `origin` and no synthetic flag, so the app showed the operator as the author
+ * of output they never typed. The terminal has always branched on the tag
+ * itself (src/components/messages/UserTextMessage.tsx:76-81). */
+
+test('projects local slash-command output as a system notice, never a user bubble', () => {
+  const rows = rowsForUserOrigin(
+    undefined,
+    '<local-command-stdout>Set model to GPT 5.6 Sol</local-command-stdout>',
+  )
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'Set model to GPT 5.6 Sol',
+  })
+  // The assertions that fail against the pre-fix projector: the row was the
+  // operator's own bubble, wrapper tags and all.
+  expect(rows[0]).not.toMatchObject({ kind: 'user-text', role: 'user' })
+  expect(rows[0]?.kind).not.toBe('user-text')
+})
+
+test('strips the ANSI bytes a restored slash-command result still carries', () => {
+  // Nothing strips them on the way in: the engine's stripAnsi passes
+  // (src/QueryEngine.ts:673, src/utils/messages/mappers.ts:266) do not cover
+  // `toSDKMessages`' `case 'user'` (mappers.ts:191-213).
+  const sample = SDK_MESSAGE_FIXTURE.user.find(entry =>
+    entry.name.includes('live ANSI bytes'),
+  )
+  if (!sample) throw new Error('local-command ANSI fixture is missing')
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', sample.message))
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'Set model to GPT 5.6 Sol · Provider OpenAI',
+  })
+  expect(rows[0]?.kind).not.toBe('user-text')
+})
+
+test('local slash-command stderr, both streams, and empty output read the same way', () => {
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<local-command-stderr>/model needs an argument</local-command-stderr>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: '/model needs an argument',
+  })
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<local-command-stdout>done</local-command-stdout><local-command-stderr>one warning</local-command-stderr>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'done\none warning',
+  })
+  // Both payloads empty is the terminal's NO_CONTENT_MESSAGE case
+  // (src/components/messages/UserLocalCommandOutputMessage.tsx:24-34), not an
+  // empty operator bubble.
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<local-command-stdout></local-command-stdout><local-command-stderr></local-command-stderr>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: '(no content)',
+  })
+})
+
+test('a turn that merely mentions the wrapper is still the operator speaking', () => {
+  // Anchored `startsWith`, exactly the engine predicate: only a message that IS
+  // the wrapper is command output.
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      'why does <local-command-stdout> show up in my transcript?',
+    )[0],
+  ).toMatchObject({ kind: 'user-text', role: 'user' })
+})
+
 test('rejects malformed P2-1 content blocks without partial rows', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

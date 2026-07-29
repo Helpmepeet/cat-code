@@ -1012,6 +1012,51 @@ export const SDK_MESSAGE_FIXTURE: {
         timestamp: '2026-07-04T09:03:06.000Z',
       },
     },
+
+    /* ── local slash-command output ───────────────────────────────────────────
+     * A terminal slash command's RESULT is persisted as a plain `user` message
+     * whose whole content is the raw wrapper — no `origin`, no synthetic flag,
+     * nothing else to tell it apart from an operator turn. The terminal branches
+     * on the tag itself (UserTextMessage.tsx:76-81); the app did not, so the
+     * operator was shown as the author of `/model`'s own output. */
+    {
+      name: 'user: local slash-command stdout (engine wrapper, no origin)',
+      anchor: 'src/utils/processUserInput/processSlashCommand.tsx:625',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '<local-command-stdout>Set model to X</local-command-stdout>',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u017',
+        timestamp: '2026-07-04T09:03:07.000Z',
+      },
+    },
+    {
+      name: 'user: local slash-command stdout carrying live ANSI bytes',
+      anchor:
+        'src/utils/processUserInput/processSlashCommand.tsx:625 (chalk-formatted result); no stripAnsi on the restore path — src/utils/messages/mappers.ts:191-213 `case "user"`',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            '<local-command-stdout>Set model to \u001B[1mGPT 5.6 Sol\u001B[22m · Provider \u001B[1mOpenAI\u001B[22m</local-command-stdout>',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u018',
+        timestamp: '2026-07-04T09:03:08.000Z',
+      },
+    },
   ],
 
   /* ── system — SDKSystemMessage + SDKCompactBoundaryMessage +
