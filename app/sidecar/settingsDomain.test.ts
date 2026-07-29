@@ -530,6 +530,9 @@ test('the engine-default token is still membership-gated, like any other option'
   )
   expect(result.ok).toBe(false)
   expect(result.changed).toBe(false)
+  // The message reaches a toast, so it must not echo the reserved token back at
+  // the user as if it were a model name (CLAUDE.md §7).
+  expect(result.message).not.toContain(SETTINGS_ENGINE_DEFAULT)
 })
 
 test('availableOptions carries no secret material (secretGuard-clean)', () => {

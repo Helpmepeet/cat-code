@@ -60,8 +60,13 @@ export function AgentRoleDot({ role }: { role: string | null }) {
 
 /**
  * Type/role chip (the prototype's `AgentTypeChip`, AgentIdentity.jsx) — the
- * worker's agent type as a soft-tinted pill. Renders nothing for an unknown role
- * (no fabricated label), matching `agentTypeMeta` returning null.
+ * worker's agent type as a soft-tinted pill.
+ *
+ * Renders nothing only when there is no role at all. An UNKNOWN role still gets
+ * a chip: `agentTypeMeta` (`agentIdentity.ts:244-256`) synthesises a neutral
+ * meta labelled with the type itself, and returns null strictly for a null or
+ * empty string. (This comment previously said "unknown role", which sent P4-34
+ * looking for a plain-text fallback that can never render.)
  */
 export function AgentTypeChip({ role }: { role: string | null }) {
   const meta = agentTypeMeta(role)

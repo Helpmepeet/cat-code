@@ -132,8 +132,8 @@ async function readMemorySnapshotOnce(
  *
  * A directory that does not exist yet is a real state (the agent has run, or has
  * not, and either way its scope is declared), so it reports zero files rather
- * than dropping the row. Any other read error fails the whole snapshot to the
- * caller's catch — a partially-read count would understate memory silently.
+ * than dropping the row. One that cannot be read reports an unknown count rather
+ * than a wrong one, and never takes the page down with it (`countFiles`).
  */
 export async function readAgentMemories(
   agents: readonly AgentMemorySource[],
@@ -155,7 +155,19 @@ export async function readAgentMemories(
   )
 }
 
-async function countFiles(directory: string): Promise<number> {
+/**
+ * Zero for a directory that does not exist yet, null for one that could not be
+ * read at all.
+ *
+ * Deliberately throw-free. `readMemorySnapshotOnce` turns ANY thrown error into
+ * a null snapshot, and a null snapshot leaves the Memory page on its waiting
+ * state indefinitely — so letting one unreadable agent directory escape here
+ * would blank the instruction files and auto-memories too, which have nothing to
+ * do with agent memory. That is the display side of the error asymmetry: inbound
+ * fails closed, display degrades. The row survives with an unknown count, which
+ * says strictly more than a blank page does.
+ */
+async function countFiles(directory: string): Promise<number | null> {
   try {
     const entries = await readdir(directory, {
       recursive: true,
@@ -164,7 +176,12 @@ async function countFiles(directory: string): Promise<number> {
     return entries.filter(entry => entry.isFile()).length
   } catch (error) {
     if (isMissingDirectory(error)) return 0
-    throw error
+    process.stderr.write(
+      `[sidecar] agent memory directory unreadable (its row shows an unknown file count): ${directory}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return null
   }
 }
 

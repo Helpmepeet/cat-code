@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getAgentMemoryDir } from '../../src/tools/AgentTool/agentMemory.js'
@@ -261,6 +261,49 @@ test('agent-memory rows carry the engine-resolved directory and a real recursive
     ])
     // Counts and paths only: no memory body crosses the boundary.
     expect(JSON.stringify(rows)).not.toContain('engine-side')
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+/**
+ * The CC-13 bug class, at its source. `readAgentMemories` runs inside a
+ * `Promise.all` whose rejection makes `readMemorySnapshotOnce` return null, and a
+ * null snapshot means no `memory.snapshot` frame and a Memory page stuck on its
+ * waiting state. So an unreadable directory must resolve, not throw.
+ */
+test('an unreadable agent directory resolves to an unknown count instead of rejecting', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'p4-34-agent-memory-perm-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = home
+  try {
+    const readable = getAgentMemoryDir('Explore', 'user')
+    mkdirSync(readable, { recursive: true })
+    writeFileSync(join(readable, 'MEMORY.md'), 'x')
+
+    // A real EACCES: a directory the process may not list.
+    const denied = getAgentMemoryDir('Locked', 'user')
+    mkdirSync(denied, { recursive: true })
+    writeFileSync(join(denied, 'MEMORY.md'), 'x')
+    chmodSync(denied, 0o000)
+
+    const rows = await readAgentMemories([
+      { agentType: 'Explore', memory: 'user' },
+      { agentType: 'Locked', memory: 'user' },
+    ])
+
+    // Neither row is lost, and only the unreadable one loses its count.
+    expect(rows.map(row => row.agentType)).toEqual(['Explore', 'Locked'])
+    expect(rows[0]?.fileCount).toBe(1)
+    expect(rows[1]?.fileCount).toBeNull()
+    // Still a real row: scope and path survive, so the reader learns the
+    // directory exists and cannot be read.
+    expect(rows[1]?.directory).toBe(denied)
+    expect(rows[1]?.scope).toBe('user')
+
+    chmodSync(denied, 0o700)
   } finally {
     if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfigDir

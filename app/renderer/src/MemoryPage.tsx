@@ -1,6 +1,5 @@
 import type { MemorySnapshot } from '../../shared/protocol.js'
 import { AgentTypeChip } from './AgentChrome.js'
-import { agentTypeMeta } from './agentIdentity.js'
 import {
   selectInstructionFilesByType,
   selectMemoryInstructionCounts,
@@ -263,9 +262,14 @@ function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
  * most workspaces define no memory-carrying agent, and a permanent "none" row
  * would report a missing feature rather than an empty list.
  *
- * `AgentTypeChip` renders nothing for a role outside the known palette
- * (`AgentChrome.tsx:66`), so the name falls back to plain text exactly as the
- * prototype's own `window.AgentTypeChip` guard does.
+ * Every agent gets the chip, including a user-defined one: `agentTypeMeta`
+ * synthesises a neutral meta labelled with the type itself rather than returning
+ * null (`agentIdentity.ts:244-256`). The prototype's plain-text fallback guards
+ * `window.AgentTypeChip` being undefined at load, which has no analogue here, so
+ * writing one would be a branch nothing can reach.
+ *
+ * A null `fileCount` is a directory that could not be read. It reads `unknown`
+ * rather than 0, because 0 is a claim about the contents.
  */
 function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
   if (snapshot.agentMemories.length === 0) return null
@@ -284,18 +288,14 @@ function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
             className="flex items-center gap-3 border-b border-shell-seam py-2.5 last:border-b-0 last:pb-0"
             key={`${agent.agentType}:${agent.scope}`}
           >
-            {agentTypeMeta(agent.agentType) ? (
-              <AgentTypeChip role={agent.agentType} />
-            ) : (
-              <span className="shrink-0 text-[12px] text-text-muted">
-                {agent.agentType}
-              </span>
-            )}
+            <AgentTypeChip role={agent.agentType} />
             <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-subtle">
               {agent.directory}
             </span>
             <span className="shrink-0 text-[11px] text-text-faint">
-              {agent.fileCount} {agent.fileCount === 1 ? 'file' : 'files'}
+              {agent.fileCount === null
+                ? 'unreadable'
+                : `${agent.fileCount} ${agent.fileCount === 1 ? 'file' : 'files'}`}
             </span>
           </div>
         ))}

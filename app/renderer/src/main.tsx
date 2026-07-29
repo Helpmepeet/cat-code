@@ -14,16 +14,21 @@ if (!root) {
 
 // ToastHost wraps the app at the composition root so `useToast()` is a live
 // API for every W4 domain (P4-1). It renders nothing until a toast fires.
+//
+// `AccentThemeProvider` sits ABOVE `ToastHost` rather than beside the other view
+// preferences, because its wrapper is what carries `data-accent`: anything
+// rendered outside it keeps the default pink no matter what the user picked, and
+// a toast is exactly the kind of chrome that would silently miss the accent.
 createRoot(root).render(
   <StrictMode>
-    <ToastHost>
-      <ReasoningLayoutProvider>
-        <AccentThemeProvider>
+    <AccentThemeProvider>
+      <ToastHost>
+        <ReasoningLayoutProvider>
           <CodeThemeProvider>
             <App />
           </CodeThemeProvider>
-        </AccentThemeProvider>
-      </ReasoningLayoutProvider>
-    </ToastHost>
+        </ReasoningLayoutProvider>
+      </ToastHost>
+    </AccentThemeProvider>
   </StrictMode>,
 )

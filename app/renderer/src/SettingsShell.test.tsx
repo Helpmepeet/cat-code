@@ -25,11 +25,13 @@ import {
   ACCENT_LABELS,
   ACCENT_SWATCH_CLASS,
   AccentThemeContext,
+  DEFAULT_ACCENT,
 } from './accentTheme.js'
 import {
   CODE_THEME_KEYS,
   CODE_THEME_LABELS,
   CodeThemeContext,
+  DEFAULT_CODE_THEME,
 } from './codeTheme.js'
 import {
   ReasoningLayoutContext,
@@ -698,24 +700,31 @@ describe('This app scope', () => {
   })
 
   test('the default accent offers no reset, an off-default one does', () => {
+    // BOTH renders are the Appearance pane, so the only difference between them
+    // is the accent itself. (Standing on Notifications would have asserted pane
+    // isolation while claiming to test the reset affordance.)
     const onDefault = paneMarkup(
       renderToStaticMarkup(
-        <AccentThemeContext.Provider value={{ accent: 'pink', setAccent: () => {} }}>
-          <SettingsShell initialCategory="notifications" initialScope="app" snapshot={SNAPSHOT} />
+        <AccentThemeContext.Provider value={{ accent: DEFAULT_ACCENT, setAccent: () => {} }}>
+          <CodeThemeContext.Provider value={{ theme: DEFAULT_CODE_THEME, setTheme: () => {} }}>
+            <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          </CodeThemeContext.Provider>
         </AccentThemeContext.Provider>,
       ),
     )
-    // Notifications has no controls at all, so any reset here would be the
-    // accent's leaking across panes.
+    // Its neighbour is also at its default, so the pane offers no reset at all.
     expect(onDefault).not.toContain('Reset to default')
 
     const changed = paneMarkup(
       renderToStaticMarkup(
         <AccentThemeContext.Provider value={{ accent: 'amber', setAccent: () => {} }}>
-          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          <CodeThemeContext.Provider value={{ theme: DEFAULT_CODE_THEME, setTheme: () => {} }}>
+            <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          </CodeThemeContext.Provider>
         </AccentThemeContext.Provider>,
       ),
     )
+    // Same pane, same neighbour default: the reset can only be the accent's.
     expect(changed).toContain('Reset to default')
   })
 

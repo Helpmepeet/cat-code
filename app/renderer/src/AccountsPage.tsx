@@ -572,13 +572,13 @@ function PoolRow({
     <div
       className={`flex items-center gap-3.5 border ${
         hero
-          ? 'rounded-xl border-accent/[0.28] bg-accent/5 px-4 py-[14px] shadow-[0_0_0_1px_rgba(244,114,182,0.06),0_8px_24px_-12px_rgba(244,114,182,0.25)]'
+          ? 'rounded-xl border-accent/[0.28] bg-accent/5 px-4 py-[14px] shadow-[0_0_0_1px_rgb(var(--accent-rgb)/0.06),0_8px_24px_-12px_rgb(var(--accent-rgb)/0.25)]'
           : 'rounded-[10px] border-white/[0.06] bg-white/[0.018] px-3.5 py-[11px]'
       } ${dimmed ? 'opacity-55' : ''}`}
     >
       <span
         className={`shrink-0 rounded-full ${
-          hero ? 'h-[9px] w-[9px] shadow-[0_0_8px_rgba(244,114,182,0.6)]' : 'h-2 w-2'
+          hero ? 'h-[9px] w-[9px] shadow-[0_0_8px_rgb(var(--accent-rgb)/0.6)]' : 'h-2 w-2'
         } ${t.dot} ${account.status === 'quarantined' ? 'animate-pulse' : ''}`}
       />
       <div className="w-[150px] shrink-0">
@@ -631,7 +631,7 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
   return (
     <div className="rounded-[10px] border border-accent/[0.18] bg-accent/[0.04] px-4 py-2.5">
       <div className="mb-[9px] flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent shadow-[0_0_6px_rgba(244,114,182,0.6)]" />
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent shadow-[0_0_6px_rgb(var(--accent-rgb)/0.6)]" />
         <span className="font-mono text-[12.5px] font-semibold text-text-primary">
           {account.alias ?? account.id}
         </span>

@@ -909,12 +909,17 @@ export type AutoMemoryHeader = {
  *
  * Directory path and file COUNT only — memory bodies never cross the boundary,
  * exactly as the auto-memory rows above withhold theirs.
+ *
+ * `fileCount: null` means the directory could not be read (a permission error on
+ * a project- or local-scope dir under the session cwd, say). The row still ships
+ * with its scope and path: an unreadable directory is a fact about ONE agent, and
+ * must not cost the reader the rest of the page.
  */
 export type AgentMemorySnapshot = {
   agentType: string
   scope: 'user' | 'project' | 'local'
   directory: string
-  fileCount: number
+  fileCount: number | null
 }
 
 export type MemorySnapshot = {

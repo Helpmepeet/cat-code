@@ -103,13 +103,22 @@ export type EditableSettingSpec = {
 }
 
 /**
- * The core value-editors P4-19 wires. Each key is real (`SettingsSchema`); the
- * `default` mirrors the engine's documented default so an unset key renders at
- * its true default. `outputStyle` is a `dynamic-enum` whose live options ride
- * `SettingsSnapshot.availableOptions` (the sidecar captures the real style
- * registry at spawn). Keybindings / IDE / LSP / default-model / accent-swatch /
- * code-theme+font remain DEFERRED (separate config file, live-status read-seams,
- * provider-routing, or no engine key) — see the P4-19 report §deferred.
+ * The core value-editors. Each key is real (`SettingsSchema`); the `default`
+ * mirrors the engine's documented default so an unset key renders at its true
+ * default, except where the engine has no fixed default at all (see
+ * `SETTINGS_ENGINE_DEFAULT`).
+ *
+ * `model` and `outputStyle` are `dynamic-enum`s whose live options ride
+ * `SettingsSnapshot.availableOptions`; the sidecar captures the engine's real
+ * model and output-style registries at spawn.
+ *
+ * Still absent, and why: **keybindings / IDE / LSP** need read-seams this package
+ * does not have; **code font** has no engine key. **Accent and code theme are not
+ * missing** — they are renderer view preferences with no settings layer, and live
+ * on the This-app scope (`app/renderer/src/accentTheme.ts`,
+ * `app/renderer/src/codeTheme.ts`), so they are deliberately not in this
+ * engine-key allowlist. (This note previously listed default-model, accent and
+ * code-theme as DEFERRED; all three shipped, default-model twenty lines below.)
  */
 export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
   // ── General ──────────────────────────────────────────────────────────────

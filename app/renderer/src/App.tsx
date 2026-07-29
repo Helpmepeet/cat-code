@@ -537,7 +537,7 @@ export function App() {
   // P4-15 OAuth flow-local state. The sub-states themselves are DRIVEN by the
   // `oauth.login.progress` back-channel (`accountsState.oauthProgress`); these two
   // are the renderer-local framing: `oauthContext` distinguishes the first-run
-  // full-screen surface from the non-blocking reauth card (both begin the SAME
+  // full-screen surface from the add-account overlay (both begin the SAME
   // `account.login` flow), and `oauthStarting` is the optimistic gap between the
   // begin click and the first progress frame.
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
@@ -1130,9 +1130,9 @@ export function App() {
         setOauthProvider(verb.provider ?? 'openai')
         // AccountsPage starts login through this generic verb callback rather
         // than `beginOAuth`. Claim the attempt here so waiting/manual-code/
-        // alias/error/retry/success all keep an owning surface. A first-run or
-        // reauth caller sets its more specific context immediately beforehand,
-        // and this functional update preserves it.
+        // alias/error/retry/success all keep an owning surface. A first-run
+        // caller sets its more specific context immediately beforehand, and this
+        // functional update preserves it.
         setOauthContext(claimOAuthContextForAccountLogin)
         setOauthStarting(true)
       }
@@ -2252,9 +2252,10 @@ export function App() {
   )
 
   // P4-15 — the live OAuth progress (the back-channel) + the sub-state VIEWS
-  // derived from it. The first-run surface owns starting/waiting_for_login/
-  // waiting_for_alias/success/error; the reauth card owns waiting/error only (its
-  // success is a toast + banner clear — the blocking modal is CUT).
+  // derived from it. One view now: the first-run surface (and the add-account
+  // overlay, which reuses it) owns starting/waiting_for_login/waiting_for_alias/
+  // success/error. The reauth card that used to own waiting/error is deleted
+  // (P4-34); the blocking modal was already CUT.
   const oauthProgress = selectOAuthProgress(accounts, activeSessionId)
   const firstRunOAuthView: StartupOAuthView = oauthProgress
     ? oauthProgress.state === 'waiting_for_login'
@@ -2491,7 +2492,7 @@ export function App() {
         {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
          * owning surface: adopt it into the shared OAuth surface as a top-level
          * overlay so it can complete (incl. the alias step), regardless of the
-         * active view. First-run + reauth own their own surfaces above. */}
+         * active view. First-run owns its own surface above. */}
         {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
           <div className="absolute inset-0 z-50">
               <StartupOAuth

@@ -293,9 +293,14 @@ function applySettingsVerb(
   if (EDITABLE_SETTINGS_BY_KEY.get(verb.key)?.control.kind === 'dynamic-enum') {
     const options = availableOptions.find(entry => entry.key === verb.key)?.options
     if (!options?.some(option => option.value === value)) {
+      // The rejected value is NOT echoed. This message reaches a toast, and the
+      // one value that can plausibly be rejected here is the reserved
+      // `SETTINGS_ENGINE_DEFAULT` token, which is internal vocabulary no user
+      // should ever read (CLAUDE.md §7). The renderer offered the option, so
+      // repeating it back adds nothing anyway.
       return {
         ok: false,
-        message: `not an available option for ${verb.key}: ${String(value)}`,
+        message: `not an available option for ${verb.key}`,
         changed: false,
       }
     }

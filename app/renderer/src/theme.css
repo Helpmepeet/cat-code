@@ -42,6 +42,12 @@
 
 :root {
   --accent: #f472b6;
+  /* The same colour as bare channels, for the decorative glows and hairlines
+   * that need it at an alpha (`rgb(var(--accent-rgb) / 0.25)`). Without it those
+   * tints have to hardcode a hex, which is how the accent picker shipped with
+   * pink rings still on the account hero and the cat wordmark. Every accent
+   * below redeclares all three tokens together. */
+  --accent-rgb: 244 114 182;
   /* The prototype's lighter active-pink (pink-300): active nav destination /
    * session-row emphasis text sits one step brighter than the #f472b6 accent
    * (Sidebar.jsx active nav `#f9a8d4`). One shared token so the rail's active
@@ -83,18 +89,22 @@
 [data-accent='blue'] {
   --accent: #60a5fa;
   --accent-soft: #93c5fd;
+  --accent-rgb: 96 165 250;
 }
 [data-accent='green'] {
   --accent: #4ade80;
   --accent-soft: #86efac;
+  --accent-rgb: 74 222 128;
 }
 [data-accent='purple'] {
   --accent: #c084fc;
   --accent-soft: #d8b4fe;
+  --accent-rgb: 192 132 252;
 }
 [data-accent='amber'] {
   --accent: #fbbf24;
   --accent-soft: #fcd34d;
+  --accent-rgb: 251 191 36;
 }
 
 @theme inline {
@@ -194,8 +204,8 @@
    * moved off the prototype's inline `style` onto a class (no-inline-style
    * rule). Accent-derived so it tracks the theme, not a hardcoded pink. */
   .welcome-cat-glow {
-    filter: drop-shadow(0 0 12px rgb(244 114 182 / 0.5))
-      drop-shadow(0 0 26px rgb(244 114 182 / 0.24));
+    filter: drop-shadow(0 0 12px rgb(var(--accent-rgb) / 0.5))
+      drop-shadow(0 0 26px rgb(var(--accent-rgb) / 0.24));
   }
 }
 
