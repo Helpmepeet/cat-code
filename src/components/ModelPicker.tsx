@@ -9,7 +9,7 @@ import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { useAppState, useSetAppState } from '../state/AppState.js';
 import { convertEffortValueToLevel, type EffortLevel, getDefaultEffortForModel, getEffortLevelLabel, getSupportedEffortLevels, modelSupportsEffort, resolvePickerEffortPersistence, toPersistableEffort } from '../utils/effort.js';
 import { getDefaultMainLoopModel, type ModelSetting, modelDisplayString, parseUserSpecifiedModel } from '../utils/model/model.js';
-import { getModelOptions } from '../utils/model/modelOptions.js';
+import { getModelOptions, optionCoversModelSetting } from '../utils/model/modelOptions.js';
 import { getSettingsForSource, updateSettingsForSource } from '../utils/settings/settings.js';
 import { ConfigurableShortcutHint } from './ConfigurableShortcutHint.js';
 import { Select } from './CustomSelect/index.js';
@@ -75,7 +75,7 @@ export function ModelPicker(t0) {
   const modelOptions = t3;
   let t4;
   bb0: {
-    if (initial !== null && !modelOptions.some(opt => opt.value === initial)) {
+    if (initial !== null && !modelOptions.some(opt => optionCoversModelSetting(opt.value, initial))) {
       let t5;
       if ($[4] !== initial) {
         t5 = modelDisplayString(initial);
@@ -121,9 +121,10 @@ export function ModelPicker(t0) {
     t5 = $[13];
   }
   const selectOptions = t5;
+  const selectedValue = alignSelectionWithOptions(initialValue, selectOptions);
   let t6;
   if ($[14] !== initialValue || $[15] !== selectOptions) {
-    t6 = selectOptions.some(_ => _.value === initialValue) ? initialValue : selectOptions[0]?.value ?? undefined;
+    t6 = selectOptions.some(_ => _.value === selectedValue) ? selectedValue : selectOptions[0]?.value ?? undefined;
     $[14] = initialValue;
     $[15] = selectOptions;
     $[16] = t6;
@@ -293,7 +294,7 @@ export function ModelPicker(t0) {
   const t20 = onCancel ?? _temp4;
   let t21;
   if ($[49] !== handleFocus || $[50] !== handleSelect || $[51] !== initialFocusValue || $[52] !== initialValue || $[53] !== selectOptions || $[54] !== t20 || $[55] !== visibleCount) {
-    t21 = <Box flexDirection="column"><Select defaultValue={initialValue} defaultFocusValue={initialFocusValue} options={selectOptions} onChange={handleSelect} onFocus={handleFocus} onCancel={t20} visibleOptionCount={visibleCount} /></Box>;
+    t21 = <Box flexDirection="column"><Select defaultValue={selectedValue} defaultFocusValue={initialFocusValue} options={selectOptions} onChange={handleSelect} onFocus={handleFocus} onCancel={t20} visibleOptionCount={visibleCount} /></Box>;
     $[49] = handleFocus;
     $[50] = handleSelect;
     $[51] = initialFocusValue;
@@ -400,6 +401,20 @@ function _temp(s) {
 function resolveOptionModel(value?: string): string | undefined {
   if (!value) return undefined;
   return value === NO_PREFERENCE ? getDefaultMainLoopModel() : parseUserSpecifiedModel(value);
+}
+/**
+ * Select marks and focuses a row by plain string equality, so once the
+ * duplicate row is suppressed a setting the picker offers under a different
+ * spelling (settings hold the canonical `claude-sonnet-5`; the first-party list
+ * offers the alias `sonnet`) would leave NO row marked. Resolve the setting onto
+ * the option that stands for the same model.
+ */
+function alignSelectionWithOptions(selection: string, options: readonly { value: string }[]): string {
+  if (selection === NO_PREFERENCE || options.some(option => option.value === selection)) {
+    return selection;
+  }
+  const match = options.find(option => option.value !== NO_PREFERENCE && optionCoversModelSetting(option.value, selection));
+  return match ? match.value : selection;
 }
 function EffortLevelIndicator(t0) {
   const $ = _c(5);
