@@ -749,6 +749,9 @@ test('IDLE-PARK gate — app.park is DECLINED while a session.branch fork is sti
       await gate
       return { ok: true, message: 'Branched.', branchEngineSessionId: 'fork' }
     },
+    async tag() {
+      return { ok: true, message: 'Tagged.' }
+    },
   }
   const { server, parkCount } = makeParkServer(
     new AppSessionController(probeAdapter()),
@@ -5185,6 +5188,13 @@ function fakeSessionActionsDomain(): {
         branchEngineSessionId: 'fork-id',
       }
     },
+    async tag(tag) {
+      calls.push(`tag:${tag}`)
+      return {
+        ok: true,
+        message: tag.length === 0 ? 'Tag removed.' : `Tagged #${tag}.`,
+      }
+    },
   }
   return { domain, calls }
 }
@@ -5276,6 +5286,9 @@ test('an over-cap export is refused in words the operator can act on', async () 
     },
     async branch() {
       return { ok: true, message: 'Branched.', branchEngineSessionId: 'fork-id' }
+    },
+    async tag() {
+      return { ok: true, message: 'Tagged.' }
     },
   }
   const server = makeServer(
@@ -5428,6 +5441,107 @@ test('P4-6b — rejects session.branch carrying an unexpected key (checkStrictKe
         type: 'session.branch',
         requestId: 'sb1',
         engineSessionId: 'forged',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-29 — a valid session.tag dispatches + acks ok under the tag verb', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.tag',
+        requestId: 'st1',
+        tag: 'infra',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'session-action.result')
+  expect(result && result.kind === 'session-action.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'session-action.result' && result.verb).toBe('tag')
+  expect(result && result.kind === 'session-action.result' && result.requestId).toBe('st1')
+  expect(calls).toEqual(['tag:infra'])
+  // A tag is not a rename: it must NOT relabel the sidebar/tab.
+  expect(received.some(f => f.kind === 'session-title')).toBe(false)
+})
+
+test('P4-29 — an EMPTY session.tag is accepted (the engine remove form), not rejected', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.tag',
+        requestId: 'st2',
+        tag: '',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  const result = received.find(f => f.kind === 'session-action.result')
+  expect(result && result.kind === 'session-action.result' && result.ok).toBe(true)
+  expect(calls).toEqual(['tag:'])
+})
+
+test('P4-29 — rejects session.tag with a NON-string tag (Zod boundary), no domain call', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.tag',
+        requestId: 'st3',
+        tag: { name: 'infra' },
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
+test('P4-29 — rejects session.tag carrying an unexpected key (checkStrictKeys), no domain call', async () => {
+  // The renderer names ONLY the tag; a forged session id must never ride along.
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.tag',
+        requestId: 'st4',
+        tag: 'infra',
+        sessionId: 'forged',
       } as unknown as ClientFrame['message'],
     }),
   )

@@ -165,6 +165,41 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   )
 })
 
+test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing a dead pane', () => {
+  // The defect this pins: `sessionActions.ts` labels a non-live registry row
+  // "Restore", but the menu's handler ran `selectTab(targetId)` — pure UI focus
+  // that never touches the frame stream — so clicking Restore re-focused a stale
+  // pane. Every OTHER open path branched on `live`. The routing now lives in one
+  // pure function (`resolveSessionOpenRoute`, covered behaviourally in
+  // sessionsCatalogState.test.ts) and both call sites go through it.
+  //
+  // LAYER HONESTY: same limits as the PL-A tripwire above — the renderer suite is
+  // SSR-only, so this asserts the CALL SITE, which is exactly what regressed. The
+  // slice is anchored on code, never on a comment.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const menuStart = source.indexOf('<SessionActionsMenu')
+  const menuEnd = source.indexOf('onClose={() => setSessionActionsTarget(null)}', menuStart)
+  expect(menuStart).toBeGreaterThan(-1)
+  expect(menuEnd).toBeGreaterThan(menuStart)
+  const menuBody = source.slice(menuStart, menuEnd)
+
+  expect(menuBody).toContain("else if (kind === 'open') openCatalogRow(targetRow)")
+  // The regression itself: a bare focus must not be how Open is handled.
+  expect(menuBody).not.toContain("kind === 'open') selectTab(")
+
+  // The Sessions-page row click resolves through the same one decision, so the
+  // two entry points cannot drift apart again.
+  expect(source).toContain('onOpenRow={openCatalogRow}')
+  const routeStart = source.indexOf('const openCatalogRow = useCallback(')
+  const routeEnd = source.indexOf('\n  function submitSession(', routeStart)
+  expect(routeStart).toBeGreaterThan(-1)
+  const routeBody = source.slice(routeStart, routeEnd)
+  expect(routeBody).toContain('resolveSessionOpenRoute(row)')
+  expect(routeBody).toContain("route.kind === 'restore'")
+  expect(routeBody).toContain('void performRestore(route.appSessionId)')
+})
+
 test('P4-24: the active session pane renders the multi-line composer + transcript spine', () => {
   const html = renderToStaticMarkup(
     <SessionPane

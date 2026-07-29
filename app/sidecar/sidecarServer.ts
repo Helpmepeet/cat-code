@@ -1582,7 +1582,8 @@ export class SidecarServer {
    * P4-6b — the session-action WRITE verbs (protocol.ts: SESSION_ACTION_VERB_TYPES).
    * Same fail-closed order as the other verbs: sidecar-LOCAL structural schema →
    * domain presence → dispatch to the engine's OWN op (saveCustomTitle /
-   * renderMessagesToPlainText / createFork) → `session-action.result` frame echoing
+   * renderMessagesToPlainText / createFork / saveTag — P4-29 added the last one on
+   * this same closed set) → `session-action.result` frame echoing
    * the requestId (T5a-analog). The domain ops are async (disk reads/writes), so the
    * ack fires after the promise resolves; the domain degrades every failure to an
    * `{ok:false, message}` result rather than throwing. On a successful RENAME the
@@ -1629,14 +1630,18 @@ export class SidecarServer {
         ? 'rename'
         : verb.type === 'session.export'
           ? 'export'
-          : 'branch'
+          : verb.type === 'session.tag'
+            ? 'tag'
+            : 'branch'
 
     const run =
       verb.type === 'session.rename'
         ? domain.rename(verb.title)
         : verb.type === 'session.export'
           ? domain.export()
-          : domain.branch()
+          : verb.type === 'session.tag'
+            ? domain.tag(verb.tag)
+            : domain.branch()
 
     // IDLE-PARK gate 4: a fork writes a new transcript, so hold the park off
     // until this settles (see isParkGateOpen).
@@ -2938,6 +2943,8 @@ function checkStrictKeys(message: unknown): string | null {
     ['session.rename', new Set(['type', 'requestId', 'title'])],
     ['session.export', new Set(['type', 'requestId'])],
     ['session.branch', new Set(['type', 'requestId'])],
+    // P4-29 — the renderer authors ONLY the tag name (empty string = remove).
+    ['session.tag', new Set(['type', 'requestId', 'tag'])],
     // IDLE-PARK (decisions/IDLE-PARK.md §2/§6). Host-originated (no preload
     // channel forwards it), but on the closed allowlist as defence-in-depth. The
     // frame carries NO renderer-authored state — only `type` + `requestId`; any
@@ -3213,6 +3220,14 @@ const sessionActionVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('session.branch'),
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  // P4-29 tag: unlike `title`, an EMPTY string is meaningful here — it is the
+  // engine's own remove form (`src/commands/tag/tag.tsx:141`) — so the bound is
+  // length-only. Trimming stays a domain concern, as with rename.
+  z.object({
+    type: z.literal('session.tag'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    tag: z.string().max(MAX_TEXT_FIELD_CHARS),
   }),
 ])
 

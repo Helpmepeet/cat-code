@@ -391,6 +391,44 @@ export function sortSessionRows(
   return copy
 }
 
+/**
+ * How a catalog row must be OPENED — the one place that decision lives (P4-29).
+ *
+ * Every open path had re-derived it inline, and one of them got it wrong: the ⋯
+ * menu's `open` verb ran a bare `selectTab` for BOTH live and restorable rows,
+ * so a row whose own menu said "Restore" only re-focused a stale, dead pane
+ * (`App.tsx`; the menu is reachable for any registry row, live or not). The
+ * routes:
+ *
+ *  - `focus`   — a live registry row: pure UI focus, no frame-stream touch.
+ *  - `restore` — a registry row whose process is gone: re-spawn it first.
+ *  - `history` — a terminal-history row with a resolvable workspace, opened by
+ *    its ENGINE id (the SESSIONS-UNIFICATION ruling, 2026-07-20).
+ *  - `none`    — history with no recorded workspace: browse-only.
+ */
+export type SessionOpenRoute =
+  | { kind: 'focus'; appSessionId: SessionId }
+  | { kind: 'restore'; appSessionId: SessionId }
+  | { kind: 'history'; engineSessionId: string }
+  | { kind: 'none' }
+
+export function resolveSessionOpenRoute(
+  row: Pick<
+    MergedSessionRow,
+    'appSessionId' | 'live' | 'cwd' | 'sessionId' | 'inRegistry'
+  >,
+): SessionOpenRoute {
+  if (row.appSessionId != null) {
+    return row.live
+      ? { kind: 'focus', appSessionId: row.appSessionId }
+      : { kind: 'restore', appSessionId: row.appSessionId }
+  }
+  if (!row.inRegistry && row.cwd.trim().length > 0) {
+    return { kind: 'history', engineSessionId: row.sessionId }
+  }
+  return { kind: 'none' }
+}
+
 /** The distinct tags across rows, for the tag-filter tabs (sorted, no nulls). */
 export function collectSessionTags(rows: readonly MergedSessionRow[]): string[] {
   const tags = new Set<string>()

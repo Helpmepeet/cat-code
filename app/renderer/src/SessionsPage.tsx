@@ -1,33 +1,45 @@
 /**
- * SessionsPage (P4-6a) — the read-only cross-workspace Sessions catalog manager
+ * SessionsPage — the cross-workspace Sessions catalog MANAGER
  * (`SessionsPage.jsx`), distinct from the Sidebar switcher: browse / search /
  * sort / filter / group over the REAL catalog (`selectMergedSessionRows` —
  * registry ∪ engine transcript history), with real titles (the P4-6 rider).
  *
- * Read-only + navigation only in 6a. The per-row `SessionActionsMenu`, inline
- * rename, tag popover, multi-select bulk bar, and Branch/Rewind/Export dialogs
- * are P4-6b (each maps to a mutating engine verb needing an inbound frame —
- * `SessionActions.jsx`). They are rendered as ABSENT, never faked (honesty over
- * parity per §0). Real fields with no bounded-catalog backing (message count,
- * mode) render truth and are simply omitted when empty (C3).
+ * P4-6a built the read-only browse half. P4-29 built the ACTION half the ledger
+ * (§16) had left orphaned: multi-select + the floating bulk bar, the row overflow
+ * ⋯ and right-click context menu, inline rename, and the tag popover. Four
+ * identifiers that P4-6b imported here and never used are now genuinely consumed;
+ * the menu itself is the App-owned `SessionActionsMenu` the TabBar and Sidebar
+ * already open (one menu, three entry points), reached through `onOpenRowActions`.
  *
- * Prototype visual grammar (SessionsPage.jsx) rebuilt on the P0-2 tokens + the
- * trued-up shell classes (AgentsPage/AccountsPage idiom); no inline style.
+ * What is real, and what that costs:
+ *  - Rename and Tag are engine writes (`session.rename` → `saveCustomTitle`,
+ *    `session.tag` → `saveTag`) dispatched to the row's OWN sidecar, so they are
+ *    offered only for a LIVE row; a closed row shows the affordance disabled with
+ *    the action that would enable it. There is no renderer-side title or tag store.
+ *  - Archive and Delete stay CUT (no engine verb exists — `sessionActions.ts`).
+ *  - Bulk Export and the Branch/Export dialogs are not here yet: they are the
+ *    dialog surface P4-30 owns, and a second dialog layer is exactly the
+ *    duplication this program forbids.
+ *
+ * Real fields with no bounded-catalog backing (message count, mode) render truth
+ * and are simply omitted when empty (C3). Prototype visual grammar rebuilt on the
+ * P0-2 tokens + the trued-up shell classes; no inline style except the two
+ * measured-anchor cases, which Tailwind cannot express.
  */
 
-import { useMemo, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react'
 import { Chip } from './Chip.js'
 import { basename } from './pathUtils.js'
 import { sessionStatusVisual, statusChipTone } from './sessionStatusVisual.js'
-import type { SessionId } from '../../shared/protocol.js'
-import {
-  resolveSessionActions,
-  type SessionActionKind,
-} from './sessionActions.js'
-import {
-  SessionActionsMenu,
-  type SessionActionsAnchor,
-} from './SessionActionsMenu.js'
+import type { SessionActionsAnchor } from './SessionActionsMenu.js'
 import {
   bucketByDate,
   collectSessionTags,
@@ -39,11 +51,28 @@ import {
   type MergedSessionRow,
   type SessionSort,
 } from './sessionsCatalogState.js'
+import {
+  createSessionsPageState,
+  placeTagPopover,
+  reduceSessionsPageState,
+  resolveTagCommit,
+  selectAllVisibleSelected,
+  selectCanCreateTag,
+  selectIsSelected,
+  selectKnownTags,
+  selectMatchingTags,
+  selectRowTag,
+  type SessionsPageState,
+  type TagPopoverState,
+} from './sessionsPageState.js'
 
 const SORT_LABELS: Record<SessionSort, string> = {
   recent: 'Recent activity',
   name: 'Name (A–Z)',
 }
+
+/** The one thing a closed session's owner can DO to make a write possible. */
+const NOT_LIVE_REASON = 'Open or restore this session first.'
 
 export function SessionsPage({
   rows,
@@ -52,6 +81,11 @@ export function SessionsPage({
   truncated,
   onOpenRow,
   onNewSession,
+  onOpenRowActions,
+  onRenameRow,
+  onTagRows,
+  renameRequest,
+  tagEcho,
 }: {
   rows: readonly MergedSessionRow[]
   activeCwd: string | null
@@ -61,16 +95,65 @@ export function SessionsPage({
   truncated: boolean
   onOpenRow: (row: MergedSessionRow) => void
   onNewSession: () => void
+  /** Open the App-owned `SessionActionsMenu` for a row, anchored at a point. */
+  onOpenRowActions?: (row: MergedSessionRow, anchor: SessionActionsAnchor) => void
+  /** Commit an inline rename (→ the real `session.rename` verb, App-dispatched). */
+  onRenameRow?: (row: MergedSessionRow, title: string) => void
+  /** Set (or, with null, clear) the tag on rows (→ the real `session.tag` verb). */
+  onTagRows?: (rows: readonly MergedSessionRow[], tag: string | null) => void
+  /** The App-owned menu asking this page to start its inline rename on a row. */
+  renameRequest?: { sessionId: string } | null
+  /** A tag write the sidecar CONFIRMED, echoed until the catalog re-enumerates. */
+  tagEcho?: { sessionIds: readonly string[]; tag: string | null } | null
 }) {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SessionSort>('recent')
   const [sortOpen, setSortOpen] = useState(false)
   const [tagFilter, setTagFilter] = useState('all')
   const [allWorkspaces, setAllWorkspaces] = useState(true)
+  const [page, dispatchPage] = useReducer(
+    reduceSessionsPageState,
+    undefined,
+    createSessionsPageState,
+  )
 
   const now = Date.now()
   const allTags = useMemo(() => collectSessionTags(rows), [rows])
   const totalWorkspaces = useMemo(() => countWorkspaces(rows), [rows])
+
+  // Reconcile against the rows on every catalog delivery: drop tag echoes the
+  // catalog has caught up with, and forget selections whose row disappeared.
+  useEffect(() => {
+    dispatchPage({ type: 'catalog-settled', rows })
+  }, [rows])
+
+  // A confirmed tag write (never an optimistic guess — App only forwards an
+  // `ok` result frame). Applied by identity so one confirmation lands once.
+  const appliedEchoRef = useRef<typeof tagEcho>(null)
+  useEffect(() => {
+    if (!tagEcho || appliedEchoRef.current === tagEcho) return
+    appliedEchoRef.current = tagEcho
+    dispatchPage({
+      type: 'tag-confirmed',
+      sessionIds: tagEcho.sessionIds,
+      tag: tagEcho.tag,
+    })
+  }, [tagEcho])
+
+  // The ⋯ menu's Rename verb starts the INLINE editor on this page (the
+  // prototype's affordance), rather than the tab/sidebar rename popover.
+  const startedRenameRef = useRef<{ sessionId: string } | null>(null)
+  useEffect(() => {
+    if (!renameRequest || startedRenameRef.current === renameRequest) return
+    startedRenameRef.current = renameRequest
+    const target = rows.find(row => row.sessionId === renameRequest.sessionId)
+    if (!target) return
+    dispatchPage({
+      type: 'start-rename',
+      sessionId: target.sessionId,
+      initial: target.title ?? target.displayLabel,
+    })
+  }, [renameRequest, rows])
 
   const visible = useMemo(() => {
     const filtered = filterSessionRows(rows, {
@@ -84,6 +167,48 @@ export function SessionsPage({
 
   const grouped = allWorkspaces && countWorkspaces(visible) > 1
   const byDate = sort === 'recent'
+  const visibleIds = useMemo(() => visible.map(row => row.sessionId), [visible])
+  const knownTags = useMemo(() => selectKnownTags(page, rows), [page, rows])
+  const selectedRows = useMemo(
+    () => rows.filter(row => selectIsSelected(page, row.sessionId)),
+    [page, rows],
+  )
+
+  const rowActions: RowActions = {
+    onOpen: onOpenRow,
+    onToggleSelected: sessionId =>
+      dispatchPage({ type: 'toggle-selected', sessionId }),
+    onOpenActions: (row, anchor) => onOpenRowActions?.(row, anchor),
+    onOpenTag: (row, rect) =>
+      dispatchPage({
+        type: 'open-tag-popover',
+        target: { kind: 'row', sessionId: row.sessionId },
+        rect,
+      }),
+    onRenameChange: value => dispatchPage({ type: 'edit-rename', value }),
+    onRenameCommit: row => {
+      const title = page.renaming?.value.trim() ?? ''
+      if (title.length > 0 && title !== (row.title ?? row.displayLabel)) {
+        onRenameRow?.(row, title)
+      }
+      dispatchPage({ type: 'end-rename' })
+    },
+    onRenameCancel: () => dispatchPage({ type: 'end-rename' }),
+    canAct: onOpenRowActions != null,
+  }
+
+  function applyTag(tag: string | null): void {
+    const target = page.tagPopover?.target
+    if (!target) return
+    const targets =
+      target.kind === 'bulk'
+        ? selectedRows
+        : rows.filter(row => row.sessionId === target.sessionId)
+    const writable = targets.filter(row => row.live && row.appSessionId != null)
+    if (writable.length > 0) onTagRows?.(writable, tag)
+    if (target.kind === 'bulk') dispatchPage({ type: 'clear-selection' })
+    dispatchPage({ type: 'close-tag-popover' })
+  }
 
   return (
     <div className="relative flex-1 overflow-y-auto px-7 py-7 pb-24">
@@ -244,7 +369,8 @@ export function SessionsPage({
                 now={now}
                 activeCwd={activeCwd}
                 grouped
-                onOpenRow={onOpenRow}
+                page={page}
+                actions={rowActions}
               />
             </section>
           ))
@@ -255,7 +381,8 @@ export function SessionsPage({
             now={now}
             activeCwd={activeCwd}
             grouped={false}
-            onOpenRow={onOpenRow}
+            page={page}
+            actions={rowActions}
           />
         )}
 
@@ -266,8 +393,68 @@ export function SessionsPage({
           </div>
         ) : null}
       </div>
+
+      {page.selected.length > 0 ? (
+        <BulkBar
+          selectedCount={page.selected.length}
+          visibleCount={visibleIds.length}
+          allSelected={selectAllVisibleSelected(page, visibleIds)}
+          writableCount={
+            selectedRows.filter(row => row.live && row.appSessionId != null).length
+          }
+          onSelectAll={() =>
+            dispatchPage({ type: 'select-all', sessionIds: visibleIds })
+          }
+          onTag={rect =>
+            dispatchPage({
+              type: 'open-tag-popover',
+              target: { kind: 'bulk' },
+              rect,
+            })
+          }
+          onClear={() => dispatchPage({ type: 'clear-selection' })}
+        />
+      ) : null}
+
+      {page.tagPopover ? (
+        <TagPopover
+          state={page.tagPopover}
+          knownTags={knownTags}
+          bulkCount={page.selected.length}
+          currentTag={popoverRowTag(page, rows)}
+          onApply={applyTag}
+          onClose={() => dispatchPage({ type: 'close-tag-popover' })}
+        />
+      ) : null}
     </div>
   )
+}
+
+/**
+ * The tag currently on the row the popover targets, for the active-check and the
+ * "Remove tag" row. Null for the bulk form, which has no single current tag.
+ */
+function popoverRowTag(
+  page: SessionsPageState,
+  rows: readonly MergedSessionRow[],
+): string | null {
+  const target = page.tagPopover?.target
+  if (target?.kind !== 'row') return null
+  const row = rows.find(candidate => candidate.sessionId === target.sessionId)
+  return row ? selectRowTag(page, row) : null
+}
+
+/** Everything a row can ask the page to do, passed as one bundle. */
+type RowActions = {
+  onOpen: (row: MergedSessionRow) => void
+  onToggleSelected: (sessionId: string) => void
+  onOpenActions: (row: MergedSessionRow, anchor: SessionActionsAnchor) => void
+  onOpenTag: (row: MergedSessionRow, rect: TagPopoverState['rect']) => void
+  onRenameChange: (value: string) => void
+  onRenameCommit: (row: MergedSessionRow) => void
+  onRenameCancel: () => void
+  /** False when the host did not wire the actions menu (the read-only mount). */
+  canAct: boolean
 }
 
 function RowList({
@@ -276,14 +463,16 @@ function RowList({
   now,
   activeCwd,
   grouped,
-  onOpenRow,
+  page,
+  actions,
 }: {
   rows: MergedSessionRow[]
   byDate: boolean
   now: number
   activeCwd: string | null
   grouped: boolean
-  onOpenRow: (row: MergedSessionRow) => void
+  page: SessionsPageState
+  actions: RowActions
 }) {
   if (!byDate) {
     return (
@@ -295,7 +484,8 @@ function RowList({
             now={now}
             activeCwd={activeCwd}
             grouped={grouped}
-            onOpen={onOpenRow}
+            page={page}
+            actions={actions}
           />
         ))}
       </div>
@@ -322,7 +512,8 @@ function RowList({
                 now={now}
                 activeCwd={activeCwd}
                 grouped={grouped}
-                onOpen={onOpenRow}
+                page={page}
+                actions={actions}
               />
             ))}
           </div>
@@ -337,13 +528,15 @@ function SessionRow({
   now,
   activeCwd,
   grouped,
-  onOpen,
+  page,
+  actions,
 }: {
   row: MergedSessionRow
   now: number
   activeCwd: string | null
   grouped: boolean
-  onOpen: (row: MergedSessionRow) => void
+  page: SessionsPageState
+  actions: RowActions
 }) {
   // SESSIONS-UNIFICATION (operator ruling 2026-07-20): a terminal-created history
   // row is now openable too — by its engine id, if its workspace is resolvable.
@@ -354,30 +547,87 @@ function SessionRow({
     row.appSessionId == null && !row.inRegistry && row.cwd.trim().length > 0
   const openable = row.appSessionId != null || historyOpenable
   const crossProject = !grouped && activeCwd != null && row.cwd !== activeCwd
+  const selected = selectIsSelected(page, row.sessionId)
+  const renaming = page.renaming?.sessionId === row.sessionId
+  const tag = selectRowTag(page, row)
+  // Rename and Tag are writes into this row's OWN live engine (sessionActions.ts):
+  // a closed session has no sidecar to receive the verb.
+  const writable = row.live && row.appSessionId != null
+  // §0 adaptation: the ⋯ / right-click menu is offered for REGISTRY rows only. A
+  // terminal-history row has no `appSessionId` for the menu to act on, and its one
+  // reachable verb (Open) is the row click itself, so a menu there would be six
+  // disabled rows and nothing else.
+  const hasMenu = actions.canAct && row.appSessionId != null
+  // Four border/bg states, as the prototype (`SessionsPage.jsx:241-247`): selected
+  // wins, then cross-project, then the plain hover pair, then non-openable.
   const rowClass =
-    'flex w-full items-start gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ' +
-    (openable
-      ? 'border-white/[0.06] bg-white/[0.015] hover:border-white/15 hover:bg-white/[0.035]'
-      : 'cursor-default border-white/[0.04] bg-white/[0.01]')
+    'group relative flex w-full items-start gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ' +
+    (selected
+      ? 'border-accent/40 bg-accent/[0.06]'
+      : crossProject
+        ? 'border-tone-info/20 bg-tone-info/[0.03] hover:border-tone-info/40 hover:bg-tone-info/[0.07]'
+        : openable
+          ? 'border-white/[0.06] bg-white/[0.015] hover:border-white/15 hover:bg-white/[0.035]'
+          : 'cursor-default border-white/[0.04] bg-white/[0.01]')
 
   const inner = (
     <>
-      <span
-        aria-hidden="true"
+      {/* Leading icon that doubles as the selection checkbox — a check when
+       * selected, the mode icon otherwise (the prototype's blank-on-hover fourth
+       * state is dropped: a control that vanishes under the pointer about to
+       * click it is worse than one that stays legible). */}
+      <button
+        type="button"
+        onClick={event => {
+          event.stopPropagation()
+          actions.onToggleSelected(row.sessionId)
+        }}
+        aria-pressed={selected}
+        aria-label={selected ? 'Deselect session' : 'Select session'}
+        title={selected ? 'Deselect' : 'Select'}
         className={
-          'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md ' +
-          (row.mode === 'agent'
-            ? 'bg-accent/10 text-accent'
-            : 'bg-white/[0.04] text-text-subtle')
+          'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors ' +
+          (selected
+            ? 'border-accent bg-accent text-shell-base'
+            : row.mode === 'agent'
+              ? 'border-accent/20 bg-accent/10 text-accent hover:border-white/30'
+              : 'border-white/[0.07] bg-white/[0.04] text-text-subtle hover:border-white/30')
         }
       >
-        {row.mode === 'agent' ? <RobotIcon /> : <MessageIcon />}
-      </span>
+        {selected ? (
+          <CheckIcon />
+        ) : row.mode === 'agent' ? (
+          <RobotIcon />
+        ) : (
+          <MessageIcon />
+        )}
+      </button>
       <span className="min-w-0 flex-1">
         <span className="mb-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="truncate text-[13px] font-medium text-text-primary">
-            {row.displayLabel}
-          </span>
+          {renaming ? (
+            <input
+              autoFocus
+              value={page.renaming?.value ?? ''}
+              onChange={event => actions.onRenameChange(event.target.value)}
+              onClick={event => event.stopPropagation()}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  actions.onRenameCommit(row)
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  actions.onRenameCancel()
+                }
+              }}
+              onBlur={() => actions.onRenameCommit(row)}
+              aria-label="Session name"
+              className="min-w-0 max-w-[340px] flex-[0_1_auto] rounded-md border border-accent/45 bg-white/[0.06] px-[7px] py-0.5 text-[13px] font-medium text-text-primary outline-none"
+            />
+          ) : (
+            <span className="truncate text-[13px] font-medium text-text-primary">
+              {row.displayLabel}
+            </span>
+          )}
           <StatusBadge row={row} />
           {row.mode === 'agent' ? (
             <Chip tone="accent" label="orchestrating" />
@@ -401,28 +651,114 @@ function SessionRow({
               {row.prNumber}
             </MetaItem>
           ) : null}
-          {row.tag ? (
-            <span className="font-mono text-[11px] text-accent">#{row.tag}</span>
-          ) : null}
+          <TagControl
+            tag={tag}
+            writable={writable}
+            onOpen={rect => actions.onOpenTag(row, rect)}
+          />
         </span>
       </span>
+      {/* Row overflow ⋯ — hover-revealed, opens the shared actions menu anchored
+       * below-right of the button, exactly as the tab and sidebar entry points do. */}
+      {hasMenu ? (
+        <button
+          type="button"
+          onClick={event => {
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            actions.onOpenActions(row, { top: rect.bottom, left: rect.right - 220 })
+          }}
+          aria-label="Session actions"
+          title="Session actions"
+          className="flex h-8 w-8 shrink-0 items-center justify-center self-center rounded-lg text-text-subtle opacity-0 transition-opacity hover:bg-accent/15 hover:text-accent focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <MoreIcon />
+        </button>
+      ) : null}
     </>
   )
 
-  if (openable) {
+  const openRow = () => {
+    if (renaming || !openable) return
+    actions.onOpen(row)
+  }
+  const onContextMenu = hasMenu
+    ? (event: ReactMouseEvent) => {
+        event.preventDefault()
+        actions.onOpenActions(row, { top: event.clientY, left: event.clientX })
+      }
+    : undefined
+
+  // A div, not a button: the row now nests its own controls (checkbox, tag, ⋯),
+  // and a button may not contain buttons. Keyboard activation is restored
+  // explicitly so the row stays reachable without a pointer.
+  return (
+    <div
+      role={openable ? 'button' : undefined}
+      tabIndex={openable ? 0 : undefined}
+      className={rowClass}
+      onClick={openRow}
+      onKeyDown={event => {
+        if (!openable || renaming) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          actions.onOpen(row)
+        }
+      }}
+      onContextMenu={onContextMenu}
+      title={
+        openable
+          ? undefined
+          : 'This session has no recorded workspace, so it can only be opened from the terminal.'
+      }
+    >
+      {inner}
+    </div>
+  )
+}
+
+/**
+ * The row's tag affordance: the `#tag` pill when tagged, a dashed hover-revealed
+ * `+ tag` when not. Both open the popover. Disabled (with the action that would
+ * enable it) for a closed session, whose engine cannot receive the write.
+ */
+function TagControl({
+  tag,
+  writable,
+  onOpen,
+}: {
+  tag: string | null
+  writable: boolean
+  onOpen: (rect: TagPopoverState['rect']) => void
+}) {
+  const open = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    onOpen({ top: rect.bottom, bottom: rect.top, left: rect.left })
+  }
+  if (tag) {
     return (
-      <button type="button" className={rowClass} onClick={() => onOpen(row)}>
-        {inner}
+      <button
+        type="button"
+        onClick={open}
+        disabled={!writable}
+        title={writable ? 'Edit tag' : NOT_LIVE_REASON}
+        className="inline-flex items-center rounded-[5px] border border-accent/20 bg-accent/[0.08] px-1.5 py-px font-mono text-[10.5px] leading-normal text-accent transition-colors enabled:hover:border-accent/45 disabled:cursor-default"
+      >
+        #{tag}
       </button>
     )
   }
   return (
-    <div
-      className={rowClass}
-      title="This session has no recorded workspace, so it can only be opened from the terminal."
+    <button
+      type="button"
+      onClick={open}
+      disabled={!writable}
+      title={writable ? 'Add tag' : NOT_LIVE_REASON}
+      className="inline-flex items-center gap-1 rounded-[5px] border border-dashed border-white/[0.18] px-1.5 py-px font-mono text-[10.5px] leading-normal text-text-subtle opacity-0 transition-colors focus-visible:opacity-100 group-hover:opacity-100 enabled:hover:border-accent/40 enabled:hover:text-accent disabled:cursor-default"
     >
-      {inner}
-    </div>
+      + tag
+    </button>
   )
 }
 
@@ -508,7 +844,241 @@ function EmptyState({
   )
 }
 
+/**
+ * The floating bulk-action bar. Offset `left-12` (48px) so it centres over the
+ * content column and clears the sidebar rail, as the prototype does
+ * (`SessionsPage.jsx:618`).
+ *
+ * Archive and Delete are absent because no engine verb exists for them
+ * (`sessionActions.ts` records that CUT). Export is absent because the format
+ * dialog is P4-30's surface and a second one here would be a duplicate.
+ */
+function BulkBar({
+  selectedCount,
+  visibleCount,
+  allSelected,
+  writableCount,
+  onSelectAll,
+  onTag,
+  onClear,
+}: {
+  selectedCount: number
+  visibleCount: number
+  allSelected: boolean
+  /** How many of the selected rows are live, i.e. can receive a write verb. */
+  writableCount: number
+  onSelectAll: () => void
+  onTag: (rect: TagPopoverState['rect']) => void
+  onClear: () => void
+}) {
+  return (
+    <div className="pointer-events-none fixed bottom-6 left-12 right-0 z-[60] flex justify-center px-4">
+      <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-shell-chrome py-2 pl-3.5 pr-2 shadow-[0_16px_40px_rgba(0,0,0,0.55)]">
+        <span className="whitespace-nowrap text-[12.5px] font-semibold text-text-primary">
+          {selectedCount} selected
+        </span>
+        <button
+          type="button"
+          onClick={onSelectAll}
+          className="whitespace-nowrap px-1 text-[12px] text-tone-info transition-colors hover:text-text-primary"
+        >
+          {allSelected ? 'Deselect all' : `Select all ${visibleCount}`}
+        </button>
+        <div className="h-5 w-px bg-white/10" />
+        <button
+          type="button"
+          disabled={writableCount === 0}
+          onClick={event => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            onTag({ top: rect.bottom, bottom: rect.top, left: rect.left })
+          }}
+          title={
+            writableCount === 0
+              ? 'Open or restore at least one of these sessions first.'
+              : writableCount < selectedCount
+                ? `Tags ${writableCount} of ${selectedCount}: the rest are closed.`
+                : undefined
+          }
+          className="flex items-center gap-1.5 whitespace-nowrap rounded-[7px] border border-white/[0.09] px-2.5 py-1.5 text-[12.5px] font-medium text-text-muted transition-colors enabled:hover:border-white/20 enabled:hover:bg-white/[0.06] enabled:hover:text-text-primary disabled:cursor-default disabled:text-text-subtle/60"
+        >
+          <TagIcon /> Tag
+        </button>
+        <button
+          type="button"
+          onClick={onClear}
+          aria-label="Clear selection"
+          title="Clear selection"
+          className="flex h-7 w-7 items-center justify-center rounded-[7px] text-text-subtle transition-colors hover:bg-white/[0.06] hover:text-text-muted"
+        >
+          <CloseIcon />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The tag popover: filter-or-create input, the matching-tag list with a check on
+ * the active one, "Create #tag" when the query is novel, and "Remove tag" for a
+ * tagged single row. Placement (above vs below, left-clamped) is the pure
+ * `placeTagPopover` — the one piece of this surface with real geometry in it.
+ */
+function TagPopover({
+  state,
+  knownTags,
+  bulkCount,
+  currentTag,
+  onApply,
+  onClose,
+}: {
+  state: TagPopoverState
+  knownTags: readonly string[]
+  bulkCount: number
+  currentTag: string | null
+  onApply: (tag: string | null) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const bulk = state.target.kind === 'bulk'
+  const matches = selectMatchingTags(query, knownTags)
+  const canCreate = selectCanCreateTag(query, knownTags)
+  const viewport =
+    typeof window === 'undefined'
+      ? { width: 1280, height: 800 }
+      : { width: window.innerWidth, height: window.innerHeight }
+  const placement = placeTagPopover(state.rect, viewport)
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[70]" aria-hidden="true" onClick={onClose} />
+      {/* §0 EXCEPTION: data-driven geometry Tailwind cannot express — the measured
+          anchor of the trigger that opened this popover. */}
+      <div
+        role="dialog"
+        aria-label={bulk ? 'Tag selected sessions' : 'Set session tag'}
+        className="fixed z-[71] w-[216px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+        style={
+          placement.placeAbove
+            ? { bottom: placement.bottom, left: placement.left }
+            : { top: placement.top, left: placement.left }
+        }
+      >
+        <div className="px-1.5 pb-1.5 pt-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-text-subtle">
+          {bulk
+            ? `Tag ${bulkCount} session${bulkCount === 1 ? '' : 's'}`
+            : 'Set tag'}
+        </div>
+        <input
+          autoFocus
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              const resolved = resolveTagCommit(query, knownTags)
+              if (resolved) onApply(resolved)
+              else if (matches[0]) onApply(matches[0])
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              onClose()
+            }
+          }}
+          placeholder="Filter or create…"
+          aria-label="Filter or create a tag"
+          className="mb-1 w-full rounded-[7px] border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-text-muted outline-none placeholder:text-text-subtle focus:border-accent/35"
+        />
+        <div className="no-scrollbar max-h-[180px] overflow-y-auto">
+          {matches.map(candidate => {
+            const active = candidate === currentTag
+            return (
+              <button
+                key={candidate}
+                type="button"
+                onClick={() => onApply(candidate)}
+                className={
+                  'flex w-full items-center justify-between rounded-md px-2 py-1.5 font-mono text-[12.5px] transition-colors ' +
+                  (active
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-text-muted hover:bg-white/[0.05]')
+                }
+              >
+                <span>#{candidate}</span>
+                {active ? <CheckIcon /> : null}
+              </button>
+            )
+          })}
+          {canCreate ? (
+            <button
+              type="button"
+              onClick={() => onApply(query.trim().toLowerCase())}
+              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] text-accent transition-colors hover:bg-accent/[0.08]"
+            >
+              <PlusIcon />
+              Create <span className="font-mono">#{query.trim().toLowerCase()}</span>
+            </button>
+          ) : null}
+          {matches.length === 0 && !canCreate ? (
+            <div className="px-2 py-2.5 text-center text-[11.5px] text-text-subtle">
+              Type to create a tag
+            </div>
+          ) : null}
+        </div>
+        {!bulk && currentTag ? (
+          <>
+            <div className="my-1 h-px bg-shell-seam" />
+            <button
+              type="button"
+              onClick={() => onApply(null)}
+              className="flex w-full items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-[12px] text-text-muted transition-colors hover:bg-white/[0.05]"
+            >
+              <CloseIcon />
+              Remove tag
+            </button>
+          </>
+        ) : null}
+      </div>
+    </>
+  )
+}
+
 /* --- icons (stroke, currentColor — matching the shell idiom) --- */
+
+function MoreIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="12" cy="19" r="1.7" />
+    </svg>
+  )
+}
+
+function TagIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="M7 7h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M18 6 6 18M6 6l12 12"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
 
 function PlusIcon() {
   return (
