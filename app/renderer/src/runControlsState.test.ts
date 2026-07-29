@@ -9,6 +9,8 @@ import type { RunControlsSnapshot, ServerFrame } from '../../shared/protocol.js'
 const SNAPSHOT: RunControlsSnapshot = {
   model: {
     current: 'gpt-5.6-terra',
+    currentLabel: 'GPT-5.6 Terra',
+    contextWindow: 372_000,
     selected: 'gpt-5.6-terra',
     provider: 'openai',
     providerSwitchLocked: false,

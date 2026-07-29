@@ -26,6 +26,7 @@
 
 import {
   getMainLoopModelOverride,
+  getSdkBetas,
   getTotalInputTokens,
   isProviderSwitchLocked,
   setMainLoopModelOverride,
@@ -48,7 +49,11 @@ import {
   isFastModeAvailable,
   isFastModeSupportedByModel,
 } from '../../src/utils/fastMode.js'
-import { getMainLoopModel } from '../../src/utils/model/model.js'
+import { getContextWindowForModel } from '../../src/utils/context.js'
+import {
+  getMainLoopModel,
+  getMarketingNameForModel,
+} from '../../src/utils/model/model.js'
 import {
   getModelOptions,
   optionCoversModelSetting,
@@ -424,6 +429,17 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
     savedSelection,
   )
 
+  // The two display facts about `current` that only the engine can answer. Both
+  // are resolved from the SAME functions the rest of cat-code uses — the picker
+  // labels come from `getMarketingNameForModel` via `getModelOptions`, and the
+  // live gauge's denominator comes from `getContextWindowForModel` via the cost
+  // tracker (`src/cost-tracker.ts:107`) — so the composer never grows a second
+  // name table or window table of its own (§10).
+  const currentLabel = current
+    ? safe(() => getMarketingNameForModel(current) ?? null, null)
+    : null
+  const contextWindow = current ? readContextWindow(current) : null
+
   const effortSupported = current
     ? safe(() => modelSupportsEffort(current), false)
     : false
@@ -459,6 +475,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
   return {
     model: {
       current,
+      currentLabel,
+      contextWindow,
       selected,
       provider: toRunControlProvider(safe(() => getAPIProvider(), 'firstParty')),
       providerSwitchLocked: safe(
@@ -480,6 +498,18 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
       unavailableReason: fastUnavailableReason,
     },
   }
+}
+
+/**
+ * The window `model` runs with, or null. Guarded like the backfill worker's
+ * resolver (`transcriptRunFacts.ts`): a nonsense answer costs the gauge its
+ * exact denominator (the renderer keeps its default), never the whole snapshot.
+ */
+function readContextWindow(model: string): number | null {
+  const window = safe(() => getContextWindowForModel(model, getSdkBetas()), null)
+  return typeof window === 'number' && Number.isFinite(window) && window > 0
+    ? window
+    : null
 }
 
 /**

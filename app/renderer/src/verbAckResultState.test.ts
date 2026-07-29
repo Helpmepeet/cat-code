@@ -133,6 +133,8 @@ test('an unrelated frame kind is ignored (no consumer, no crash)', () => {
     runControls: {
       model: {
         current: null,
+        currentLabel: null,
+        contextWindow: null,
         selected: null,
         provider: 'anthropic',
         providerSwitchLocked: false,

@@ -25,6 +25,7 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type {
   AccountsSnapshot,
   AccountStatus,
+  RunControlsSnapshot,
 } from '../../shared/protocol.js'
 
 function emptyAccountsSnapshotForTest(): AccountsSnapshot {
@@ -1285,6 +1286,76 @@ test('a parked prompt is visible, and the send arrow says so', () => {
   const liveButton =
     sendable.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
   expect(liveButton).not.toContain('disabled=""')
+})
+
+/**
+ * The composer rail, end to end through the real pane, on a session with NO
+ * turns yet.
+ *
+ * Both 2026-07-29 defects were invisible to the unit suites: the face printed
+ * `model.current` (a resolved model id) and the donut divided by the renderer's
+ * 200k constant because only a `result` frame ever carried a window, and there
+ * is no result frame before the first turn. Each fix could be inert here and
+ * `contextUsage.test.ts` + `ComposerActionsBar.test.tsx` would still be green,
+ * so this asserts on what the pane actually renders.
+ */
+function liveRunControls(
+  model: string,
+  currentLabel: string,
+  contextWindow: number,
+): RunControlsSnapshot {
+  return {
+    model: {
+      current: model,
+      currentLabel,
+      contextWindow,
+      selected: model,
+      provider: model.startsWith('gpt-') ? 'openai' : 'anthropic',
+      providerSwitchLocked: false,
+      options: [
+        {
+          value: model,
+          label: currentLabel,
+          provider: model.startsWith('gpt-') ? 'openai' : 'anthropic',
+        },
+      ],
+    },
+    effort: { current: null, selected: null, supported: false, options: [] },
+    fast: {
+      active: false,
+      supportedByModel: false,
+      available: false,
+      unavailableReason: null,
+    },
+  }
+}
+
+test('a live pane with no turns yet names the selected model and sizes the donut to it', () => {
+  const paneFor = (controls: RunControlsSnapshot) =>
+    renderToStaticMarkup(
+      <SessionPane
+        {...idleSessionPaneProps()}
+        model={controls.model.current}
+        runControls={controls}
+        onSetModel={() => {}}
+      />,
+    )
+
+  const opus = paneFor(liveRunControls('claude-opus-5', 'Opus 5', 1_000_000))
+  expect(opus).toContain('Model: Opus 5')
+  expect(opus).not.toContain('claude-opus-5')
+  expect(opus).toContain(
+    `Context: 0 / ${(1_000_000).toLocaleString()} tokens (0% used)`,
+  )
+
+  // Switching model re-broadcasts the snapshot, and the donut has to follow it:
+  // the reported symptom was 200k for every model, unchanged by any selection.
+  const terra = paneFor(liveRunControls('gpt-5.6-terra', 'GPT-5.6 Terra', 372_000))
+  expect(terra).toContain('Model: GPT-5.6 Terra')
+  expect(terra).toContain(
+    `Context: 0 / ${(372_000).toLocaleString()} tokens (0% used)`,
+  )
+  expect(terra).not.toContain((200_000).toLocaleString())
 })
 
 test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused control and to a dedicated flow', () => {

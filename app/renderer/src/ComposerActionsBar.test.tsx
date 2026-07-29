@@ -25,6 +25,8 @@ function runControls(
   return {
     model: {
       current: 'gpt-5.6-terra',
+      currentLabel: 'GPT-5.6 Terra',
+      contextWindow: 372_000,
       selected: 'gpt-5.6-terra',
       provider: 'openai',
       providerSwitchLocked: false,
@@ -252,9 +254,58 @@ test('P4-24c — with runControls + handlers, the MODEL face becomes an interact
     }),
     onSetModel: () => {},
   })
-  expect(html).toContain('gpt-5.6-terra')
-  expect(html).toContain('Model: gpt-5.6-terra')
+  expect(html).toContain('GPT-5.6 Terra')
+  expect(html).toContain('Model: GPT-5.6 Terra')
   expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(2)
+})
+
+/**
+ * The bug: picking "Haiku 4.5" left the face reading `claude-haiku-4-5-20251001`.
+ * `model.current` is what the engine RESOLVES the selection to, and the picker
+ * offers Haiku under the family alias `haiku`, so neither the raw current nor a
+ * row lookup by `selected` would print the name the user just clicked. The face
+ * reads the engine's own display name for the resolved model instead.
+ */
+test('the MODEL face shows the engine display name, never the resolved model id', () => {
+  const html = render({
+    runControls: runControls({
+      model: {
+        current: 'claude-haiku-4-5-20251001',
+        currentLabel: 'Haiku 4.5',
+        contextWindow: 200_000,
+        selected: 'haiku',
+        provider: 'anthropic',
+        options: [{ value: 'haiku', label: 'Haiku 4.5', provider: 'anthropic' }],
+      },
+    }),
+    onSetModel: () => {},
+  })
+  expect(html).toContain('Haiku 4.5')
+  expect(html).toContain('Model: Haiku 4.5')
+  expect(html).not.toContain('claude-haiku-4-5-20251001')
+})
+
+/**
+ * A model the engine has no marketing name for (a custom model, a Foundry
+ * deployment id) still has to say WHAT is running, so the id is the fallback.
+ * Blanking the face would be a worse answer than the id the operator objected to.
+ */
+test('a model with no engine display name falls back to its id, not to nothing', () => {
+  const html = render({
+    runControls: runControls({
+      model: {
+        current: 'my-foundry-deployment',
+        currentLabel: null,
+        contextWindow: null,
+        selected: 'my-foundry-deployment',
+        options: [
+          { value: 'my-foundry-deployment', label: 'Custom', provider: 'foundry' },
+        ],
+      },
+    }),
+    onSetModel: () => {},
+  })
+  expect(html).toContain('Model: my-foundry-deployment')
 })
 
 test('P4-24c — the REASONING picker offers Auto even when no explicit tier is set', () => {

@@ -3094,11 +3094,18 @@ export function SessionPane({
   const contentSignature = `${activeLog.messages.length}:${partialCount}`
   // P4-24: context-window fullness for the composer donut. The prototype's
   // ContextChip is always on (`Surfaces.jsx:471-473`), so `selectContextUsage`
-  // always returns — real result-frame usage once a turn provides it, a 0%
-  // default-window gauge before then (never hidden).
+  // always returns — real result-frame usage once a turn provides it, a 0% gauge
+  // before then (never hidden).
+  //
+  // The DENOMINATOR before that first turn is the run-controls snapshot's
+  // engine-resolved window for the current model, so a fresh session already
+  // reads this model's real window instead of a flat 200k. Depending on the
+  // number rather than the snapshot object keeps the memo from re-running on
+  // every unrelated re-broadcast.
+  const runControlsContextWindow = runControls?.model.contextWindow ?? null
   const liveContextUsage = useMemo(
-    () => selectContextUsage(activeLog.messages, model),
-    [activeLog.messages, model],
+    () => selectContextUsage(activeLog.messages, model, runControlsContextWindow),
+    [activeLog.messages, model, runControlsContextWindow],
   )
   /*
    * The rail under a PREVIEWED session reads the cache, not the engine.

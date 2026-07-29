@@ -37,8 +37,10 @@ import type {
  * REAL DATA ONLY (the prototype's chip values are mock fixtures — source wins):
  *  - MODEL renders the RESOLVED session model (`DiagnosticsSnapshot`
  *    `mainLoopModelForSession`, the sidecar's `getMainLoopModel()` — the same
- *    resolver the QueryEngine uses at request time). Absent only before the
- *    snapshot arrives; never a fabricated label.
+ *    resolver the QueryEngine uses at request time), under the engine's own
+ *    display name for it (`RunControlsSnapshot.model.currentLabel`, from
+ *    `getMarketingNameForModel`) so the face reads as the picker row does.
+ *    Absent only before the snapshot arrives; never a fabricated label.
  *  - REASONING renders the session's real effort tier (`reasoningEffort` ←
  *    `AppState.effortValue`, seeded from `getInitialEffortSetting()` in the
  *    sidecar). Absent when no explicit effort is set (running at the provider
@@ -157,9 +159,18 @@ const ANTHROPIC_STATUS_LABEL: Record<AnthropicAccountStatus['status'], string> =
   dead: 'Needs re-login',
 }
 
-/** Interactive MODEL face → a popover of the REAL selectable models (`model.set`). */
+/**
+ * Interactive MODEL face → a popover of the REAL selectable models (`model.set`).
+ *
+ * The face reads the engine's display NAME for the resolved model (`label`), not
+ * the model id (`current`): picking "Haiku 4.5" used to leave the face reading
+ * `claude-haiku-4-5-20251001`, because `current` is what the engine resolves the
+ * selection to. `current` is still the fallback, so a model the engine has no
+ * name for shows its id rather than nothing.
+ */
 function ModelChip({
   current,
+  label,
   selected,
   provider,
   providerSwitchLocked,
@@ -168,6 +179,7 @@ function ModelChip({
   faceProps,
 }: {
   current: string | null
+  label: string | null
   selected: string | null
   provider: RunControlProvider
   providerSwitchLocked: boolean
@@ -176,6 +188,7 @@ function ModelChip({
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const face = label ?? current
   return (
     <div ref={ref} className="relative shrink-0">
       <button
@@ -184,11 +197,11 @@ function ModelChip({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={current ? `Model: ${current}` : 'Select model'}
+        title={face ? `Model: ${face}` : 'Select model'}
         onClick={() => setOpen(value => !value)}
         className={`${RAIL_FACE} text-[#22d3ee] hover:text-text-primary`}
       >
-        {current ?? 'Model'}
+        {face ?? 'Model'}
       </button>
       {open ? (
         <div
@@ -939,6 +952,7 @@ export function ComposerActionsBar({
           <>
             <ModelChip
               current={runControls.model.current ?? model}
+              label={runControls.model.currentLabel}
               selected={runControls.model.selected}
               provider={runControls.model.provider}
               providerSwitchLocked={runControls.model.providerSwitchLocked}

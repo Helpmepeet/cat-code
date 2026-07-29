@@ -1717,6 +1717,11 @@ function fakeRunControlsDomain(): {
   const snapshot = (): RunControlsSnapshot => ({
     model: {
       current: model,
+      // The real builder resolves both from the engine (marketing name +
+      // context window); this fake only has to keep them tied to `model` so a
+      // frame-level test can see them move with it.
+      currentLabel: model === null ? null : `Name for ${model}`,
+      contextWindow: model === null ? null : 200_000,
       selected: model,
       provider: 'anthropic',
       providerSwitchLocked,
@@ -1850,7 +1855,13 @@ test('P4-24c — a valid model.set switches the model + re-broadcasts run-contro
       f.kind === 'run-controls.snapshot',
   )
   expect(snaps.length).toBeGreaterThan(before)
-  expect(snaps[snaps.length - 1]?.runControls.model.current).toBe('gpt-5.6-terra')
+  const latest = snaps[snaps.length - 1]?.runControls.model
+  expect(latest?.current).toBe('gpt-5.6-terra')
+  // The composer face and the context gauge read these two, and they are what
+  // makes a model switch visible before any turn runs. The clone + secretGuard
+  // + size cap on the outbound path must carry them, not drop them.
+  expect(latest?.currentLabel).toBe('Name for gpt-5.6-terra')
+  expect(latest?.contextWindow).toBe(200_000)
 })
 
 test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast', () => {

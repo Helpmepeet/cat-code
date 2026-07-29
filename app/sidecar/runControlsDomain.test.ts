@@ -4,12 +4,14 @@ import {
 } from '../../src/utils/model/model.js'
 import {
   getMainLoopModelOverride,
+  getSdkBetas,
   getSessionProvider,
   isProviderSwitchLocked,
   setMainLoopModelOverride,
   setProviderSwitchLocked,
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
+import { getContextWindowForModel } from '../../src/utils/context.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import { createStore, type Store } from '../../src/state/store.js'
@@ -351,6 +353,70 @@ test('selected always names one of the offered options, so a row is always highl
     expect(
       buildRunControlsSnapshot(getDefaultAppState()).model.selected,
     ).toBeNull()
+  } finally {
+    setMainLoopModelOverride(prevOverride)
+    setSessionProvider(prevProvider)
+    if (prevApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = prevApiKey
+  }
+})
+
+/**
+ * LIVE: the two composer-face facts about the CURRENT model.
+ *
+ * Both defects fixed on 2026-07-29 were the absence of these. The face printed
+ * `current`, which is the model ID the engine resolves a selection to, so
+ * picking "Haiku 4.5" read `claude-haiku-4-5-20251001`. And nothing on the wire
+ * stated a context window before the first turn, so the gauge divided every
+ * model by the renderer's 200k default.
+ *
+ * Neither is derivable in the renderer: a name needs the engine's marketing
+ * table, and a window depends on betas, the model-capability cache, and env
+ * overrides. So this asserts they come from the engine's OWN functions, on real
+ * process state, not from a second table in app/ (§10). Comparing the window
+ * against `getContextWindowForModel` is what pins the SOURCE; the literal 1M is
+ * what pins the VALUE, since a Claude 5 model gets a 1M window with no `[1m]`
+ * suffix (`src/utils/context.ts:56`) and 200k for it is simply wrong.
+ */
+test('LIVE: the snapshot carries the engine display name and context window for the current model', () => {
+  const prevOverride = getMainLoopModelOverride()
+  const prevProvider = getSessionProvider()
+  const prevApiKey = process.env.ANTHROPIC_API_KEY
+  try {
+    setSessionProvider('firstParty')
+    process.env.ANTHROPIC_API_KEY = 'test-anthropic-api-key'
+
+    setMainLoopModelOverride('claude-opus-5')
+    const opus = buildRunControlsSnapshot(getDefaultAppState()).model
+    expect(opus.current).toBe('claude-opus-5')
+    expect(opus.currentLabel).toBe('Opus 5')
+    expect(opus.contextWindow).toBe(1_000_000)
+    expect(opus.contextWindow).toBe(
+      getContextWindowForModel('claude-opus-5', getSdkBetas()),
+    )
+
+    // A family ALIAS is the case the operator hit: the picker offers `haiku`,
+    // the engine resolves it to a dated id, and the face must still read the
+    // name. The window comes from the same engine call, whatever it answers.
+    setMainLoopModelOverride('haiku')
+    const haiku = buildRunControlsSnapshot(getDefaultAppState()).model
+    expect(haiku.current).toContain('claude-haiku-4-5')
+    expect(haiku.currentLabel).toBe('Haiku 4.5')
+    expect(haiku.contextWindow).toBe(
+      getContextWindowForModel(haiku.current ?? '', getSdkBetas()),
+    )
+    // …and the window genuinely MOVED with the selection. A snapshot that
+    // reported one constant for every model is the reported bug.
+    expect(haiku.contextWindow).not.toBe(opus.contextWindow)
+
+    // No override: the face describes what the provider default RESOLVES to,
+    // not the "Default (recommended)" row, which names no model at all.
+    setMainLoopModelOverride(null)
+    const fallback = buildRunControlsSnapshot(getDefaultAppState()).model
+    expect(fallback.selected).toBeNull()
+    expect(fallback.current).not.toBeNull()
+    expect(fallback.currentLabel).not.toBe('Default (recommended)')
+    expect(fallback.contextWindow).toBeGreaterThan(0)
   } finally {
     setMainLoopModelOverride(prevOverride)
     setSessionProvider(prevProvider)

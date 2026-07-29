@@ -24,12 +24,17 @@ import type { SDKMessage } from '@cat-code/engine/sdk'
  *    run-controls snapshot supplies the current main-loop model, so historical
  *    model entries cannot leave the gauge on a stale larger window after a switch.
  *
- * Before a turn completes (or a frame that omits `contextWindow`), the window falls
- * back to `DEFAULT_CONTEXT_WINDOW`, exactly like the prototype's
- * `status.contextMax || 200000`: the displayed value is 0% (nothing used yet) and
- * self-corrects to the real window on the first result frame. (Follow-up option:
- * plumb the resolved model's exact window from the engine so the fresh-session
- * TOOLTIP total is exact for non-200k models too — the % is already correct.)
+ * Before a turn completes there IS no result frame, and after a model switch the
+ * newest one only knows the model that already ran, so in both states the window
+ * comes from `modelContextWindow` instead: the live run-controls snapshot's
+ * `model.contextWindow`, which the sidecar resolves with the engine's own
+ * `getContextWindowForModel` — the same function that produced the number on the
+ * result frame. That is what makes a fresh session read 1M on Claude 5 and 372k on
+ * GPT-5.6 rather than 200k for everything.
+ *
+ * `DEFAULT_CONTEXT_WINDOW` remains the last resort, for a pane with no live
+ * snapshot at all (a preview, or the moment before attach), exactly like the
+ * prototype's `status.contextMax || 200000`.
  */
 export type ContextUsage = {
   usedTokens: number
@@ -49,9 +54,19 @@ function readNum(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+function isPositive(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
 export function selectContextUsage(
   messages: readonly SDKMessage[],
   currentModel?: string | null,
+  /**
+   * The window the CURRENT model runs with (`RunControlsSnapshot.model.contextWindow`).
+   * Used whenever no result frame states one for that model, which is every
+   * pre-turn render and every render between a model switch and the next result.
+   */
+  modelContextWindow?: number | null,
 ): ContextUsage {
   let usedTokens = 0
   let contextWindow = 0
@@ -83,9 +98,13 @@ export function selectContextUsage(
     break // the latest result frame with usage wins
   }
 
-  // Always show the donut (the prototype's ContextChip never hides): default the
-  // window until a turn reports the real one — the displayed % is 0 on a fresh
-  // session and self-corrects on the first result frame.
+  // Always show the donut (the prototype's ContextChip never hides). Where no
+  // result frame stated a window for the current model, the engine-resolved one
+  // for that model answers instead, and only a pane with neither falls back to
+  // the constant.
+  if (contextWindow <= 0 && isPositive(modelContextWindow)) {
+    contextWindow = modelContextWindow
+  }
   if (contextWindow <= 0) contextWindow = DEFAULT_CONTEXT_WINDOW
   const percentUsed = Math.min(
     100,

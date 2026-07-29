@@ -78,6 +78,64 @@ test('shows a 0% default gauge when no result frame yet (the prototype donut is 
   expect(selectContextUsage([filler])).toEqual(empty)
 })
 
+/**
+ * The bug: with no `result` frame there is no window anywhere in the transcript,
+ * so every model divided by the 200k constant and the gauge read the same before
+ * every first turn. The run-controls snapshot carries the engine-resolved window
+ * for the model that is about to run, which is the only source that exists yet.
+ */
+test('before any turn the gauge sizes to the current model, not the 200k default', () => {
+  expect(selectContextUsage([], 'claude-opus-5', 1_000_000)).toEqual({
+    usedTokens: 0,
+    contextWindow: 1_000_000,
+    percentUsed: 0,
+  })
+  expect(selectContextUsage([], 'gpt-5.6-terra', 372_000).contextWindow).toBe(372_000)
+  // No snapshot yet (a preview, or the moment before attach) keeps the default.
+  expect(selectContextUsage([], 'claude-opus-5', null).contextWindow).toBe(200_000)
+})
+
+/**
+ * After a switch, the newest result frame only knows the model that already ran,
+ * so its modelUsage has no entry for the new one. That is the second state where
+ * the resolved window is the only truth, and the used tokens still count.
+ */
+test('after a model switch the window follows the new model while usage stays real', () => {
+  const usage = selectContextUsage(
+    [
+      result(
+        { input_tokens: 100_000 },
+        { 'claude-haiku-4-5-20251001': { contextWindow: 200_000 } },
+      ),
+    ],
+    'claude-opus-5',
+    1_000_000,
+  )
+  expect(usage).toEqual({
+    usedTokens: 100_000,
+    contextWindow: 1_000_000,
+    percentUsed: 10,
+  })
+})
+
+test('a result frame that states the window for the current model still wins', () => {
+  // Same function resolved both, so they agree; the frame is the more specific
+  // statement (it is what that turn actually ran under) and stays authoritative.
+  const usage = selectContextUsage(
+    [result({ input_tokens: 50_000 }, { 'gpt-5.6-terra': { contextWindow: 372_000 } })],
+    'gpt-5.6-terra',
+    1_000_000,
+  )
+  expect(usage.contextWindow).toBe(372_000)
+})
+
+test.each([0, -1, Number.NaN, null, undefined])(
+  'a resolved window of %p is ignored in favour of the default',
+  window => {
+    expect(selectContextUsage([], 'claude-opus-5', window).contextWindow).toBe(200_000)
+  },
+)
+
 test('defaults the window when the result omits contextWindow (still shows the donut)', () => {
   // A frame with usage but no contextWindow (e.g. stale fixtures) falls back to the
   // 200k default rather than hiding — matches the prototype's `contextMax || 200000`.

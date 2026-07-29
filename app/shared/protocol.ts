@@ -19,6 +19,18 @@
  *    SDKMessage`) — NOT the flattened `appSessionEventMapper` shape. The mapper
  *    drops `tool_use`; we route around it.
  *
+ *  - **New outbound facts grow an existing snapshot; they never repurpose a
+ *    field.** `PROTOCOL_VERSION` stays put for an addition because no reader's
+ *    existing field changes shape. `RunControlsSnapshot.model.currentLabel` and
+ *    `.contextWindow` (2026-07-29) are that kind of addition: display facts
+ *    about the CURRENT model that ONLY the engine can compute (a marketing
+ *    name; a context window that depends on betas, model capabilities, and env
+ *    overrides). They exist because the composer face printed a canonical model
+ *    id and the donut divided every model by 200k. `current` deliberately keeps
+ *    its meaning — the resolved model id — because `selectContextUsage` matches
+ *    it against `result.modelUsage` keys, so re-spelling it would break the
+ *    live gauge.
+ *
  *  - **Inbound = the allowlisted client message types (SECURITY-MINIMUM §2).**
  *    `app.submit` / `app.abort` / `permission.response` / `app.ping` reuse the
  *    existing, transport-agnostic `appClientMessageSchema` vocabulary
@@ -1267,8 +1279,48 @@ export type RunControlModelOption = {
 
 export type RunControlsSnapshot = {
   model: {
-    /** The RESOLVED model this session runs (`getMainLoopModel()`), for the face; null if resolution failed. */
+    /**
+     * The RESOLVED model this session runs (`getMainLoopModel()`); null if
+     * resolution failed. This is a model ID, not a display string: the live
+     * context gauge looks it up in a `result` frame's `modelUsage` map
+     * (`contextUsage.ts`), so it must stay spelled the way the engine spells
+     * it. {@link currentLabel} is what the composer face shows.
+     */
     current: string | null
+    /**
+     * The display NAME for `current`, from the engine's OWN
+     * `getMarketingNameForModel` (`src/utils/model/model.ts:726`) — the same
+     * source the picker's `options[].label` derives from, so the face and the
+     * row a user just clicked read alike.
+     *
+     * Resolved HERE rather than looked up in `options` by the renderer, because
+     * a face built from `selected` cannot answer the two cases that matter
+     * most: the provider-default row (whose label is "Default (recommended)",
+     * not the model that actually runs) and a model set from settings or the
+     * environment (which never reaches `selected` at all — that reads only
+     * `getMainLoopModelOverride()`). Both would print something other than what
+     * the session runs.
+     *
+     * null when the engine has no marketing name for it (a custom model, a
+     * Foundry deployment id); the face then falls back to `current`.
+     */
+    currentLabel: string | null
+    /**
+     * The context window `current` runs with, resolved at the sidecar by the
+     * engine's own `getContextWindowForModel` (`src/utils/context.ts:68`) —
+     * the very function whose output the live gauge otherwise reads off a
+     * `result` frame's `modelUsage[…].contextWindow` (`src/cost-tracker.ts:107`).
+     *
+     * It is the gauge's denominator in the two states no `result` frame can
+     * cover: BEFORE the first turn, and right after a model switch, when the
+     * newest `result` frame only knows the model that already ran. Without it
+     * every model divided by the renderer's 200k default, which is wrong for
+     * Claude 5 (1M), GPT-5.6 (372k), and every other gpt model (272k).
+     *
+     * Re-resolved on each snapshot, so it follows a model change live. null
+     * when resolution failed; the renderer keeps its default window then.
+     */
+    contextWindow: number | null
     /**
      * The user-specified setting (`getMainLoopModelOverride()`) for option
      * highlighting; null = provider default. Already aligned to the matching
