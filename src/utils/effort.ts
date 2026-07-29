@@ -55,8 +55,8 @@ export function modelSupportsEffort(model: string): boolean {
   if (getAPIProvider() === 'openai' && m.startsWith('gpt-')) {
     return true
   }
-  // Supported by a subset of Claude 4 models
-  if (m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
+  // Supported by a subset of Claude 4 models and Claude 5 models
+  if (m.includes('fable-5') || m.includes('opus-5') || m.includes('sonnet-5') || m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
     return true
   }
   // Exclude any other known legacy models (haiku, older opus/sonnet variants)
@@ -81,6 +81,9 @@ export function modelSupportsMaxEffort(model: string): boolean {
     return supported3P
   }
   const m = model.toLowerCase()
+  if (m.includes('fable-5') || m.includes('opus-5')) {
+    return true
+  }
   if (m.includes('opus-4-6')) {
     return true
   }
@@ -374,6 +377,21 @@ export function getDefaultEffortForModel(
     return 'medium'
   }
   if (model.toLowerCase() === 'gpt-5.6-luna') return 'low'
+
+  // Opus 5 and Fable 5 default to medium effort
+  if (model.toLowerCase().includes('opus-5') || model.toLowerCase().includes('fable-5')) {
+    if (isProSubscriber()) {
+      return 'medium'
+    }
+    if (
+      getOpusDefaultEffortConfig().enabled &&
+      (isMaxSubscriber() || isTeamSubscriber())
+    ) {
+      return 'medium'
+    }
+  }
+
+  // Sonnet 5 follows the ultrathink default below
 
   // Default effort on Opus 4.6 to medium for Pro.
   // Max/Team also get medium when the tengu_grey_step2 config is enabled.

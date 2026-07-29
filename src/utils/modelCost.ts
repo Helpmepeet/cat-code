@@ -9,14 +9,17 @@ import {
   CLAUDE_3_5_HAIKU_CONFIG,
   CLAUDE_3_5_V2_SONNET_CONFIG,
   CLAUDE_3_7_SONNET_CONFIG,
+  CLAUDE_FABLE_5_CONFIG,
   CLAUDE_HAIKU_4_5_CONFIG,
   CLAUDE_OPUS_4_1_CONFIG,
   CLAUDE_OPUS_4_5_CONFIG,
   CLAUDE_OPUS_4_6_CONFIG,
   CLAUDE_OPUS_4_CONFIG,
+  CLAUDE_OPUS_5_CONFIG,
   CLAUDE_SONNET_4_5_CONFIG,
   CLAUDE_SONNET_4_6_CONFIG,
   CLAUDE_SONNET_4_CONFIG,
+  CLAUDE_SONNET_5_CONFIG,
 } from './model/configs.js'
 import {
   firstPartyNameToCanonical,
@@ -88,6 +91,15 @@ export const COST_HAIKU_45 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// Pricing for Fable 5: $10 input / $50 output per Mtok
+export const COST_FABLE_10_50 = {
+  inputTokens: 10,
+  outputTokens: 50,
+  promptCacheWriteTokens: 12.5,
+  promptCacheReadTokens: 1,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /**
@@ -125,6 +137,12 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_5_25,
   [firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)]:
     COST_TIER_5_25,
+  [firstPartyNameToCanonical(CLAUDE_SONNET_5_CONFIG.firstParty)]:
+    COST_TIER_3_15,
+  [firstPartyNameToCanonical(CLAUDE_OPUS_5_CONFIG.firstParty)]:
+    COST_TIER_5_25,
+  [firstPartyNameToCanonical(CLAUDE_FABLE_5_CONFIG.firstParty)]:
+    COST_FABLE_10_50,
 }
 
 /**

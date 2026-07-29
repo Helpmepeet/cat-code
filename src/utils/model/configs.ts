@@ -94,6 +94,30 @@ export const CLAUDE_SONNET_4_6_CONFIG = {
   openai: 'claude-sonnet-4-6',
 } as const satisfies ModelConfig
 
+export const CLAUDE_SONNET_5_CONFIG = {
+  firstParty: 'claude-sonnet-5',
+  bedrock: 'us.anthropic.claude-sonnet-5-v1',
+  vertex: 'claude-sonnet-5',
+  foundry: 'claude-sonnet-5',
+  openai: 'claude-sonnet-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_OPUS_5_CONFIG = {
+  firstParty: 'claude-opus-5',
+  bedrock: 'us.anthropic.claude-opus-5-v1',
+  vertex: 'claude-opus-5',
+  foundry: 'claude-opus-5',
+  openai: 'claude-opus-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_FABLE_5_CONFIG = {
+  firstParty: 'claude-fable-5',
+  bedrock: 'us.anthropic.claude-fable-5-v1',
+  vertex: 'claude-fable-5',
+  foundry: 'claude-fable-5',
+  openai: 'claude-fable-5',
+} as const satisfies ModelConfig
+
 // OpenAI Codex models
 export const GPT_5_6_SOL_CONFIG = {
   firstParty: 'gpt-5.6-sol',
@@ -132,6 +156,9 @@ export const ALL_MODEL_CONFIGS = {
   opus41: CLAUDE_OPUS_4_1_CONFIG,
   opus45: CLAUDE_OPUS_4_5_CONFIG,
   opus46: CLAUDE_OPUS_4_6_CONFIG,
+  sonnet5: CLAUDE_SONNET_5_CONFIG,
+  opus5: CLAUDE_OPUS_5_CONFIG,
+  fable5: CLAUDE_FABLE_5_CONFIG,
   // OpenAI Codex models
   gpt56sol: GPT_5_6_SOL_CONFIG,
   gpt56terra: GPT_5_6_TERRA_CONFIG,

@@ -143,7 +143,7 @@ export function getFastModeUnavailableReason(): string | null {
 }
 
 // @[MODEL LAUNCH]: Update supported Fast Mode models.
-export const FAST_MODE_MODEL_DISPLAY = 'Opus 4.6'
+export const FAST_MODE_MODEL_DISPLAY = 'Opus 5'
 
 export function getFastModeModelDisplay(): string {
   if (getAPIProvider() === 'openai') {
@@ -182,7 +182,9 @@ export function isFastModeSupportedByModel(
   const parsedModel = parseUserSpecifiedModel(model)
   const normalizedModel = parsedModel.toLowerCase()
   return (
+    normalizedModel.includes('opus-5') ||
     normalizedModel.includes('opus-4-6') ||
+    normalizedModel.includes('fable-5') ||
     normalizedModel === 'gpt-5.6-sol' ||
     normalizedModel === 'gpt-5.6-terra' ||
     normalizedModel === 'gpt-5.6-luna'

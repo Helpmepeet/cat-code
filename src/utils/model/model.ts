@@ -65,7 +65,8 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus40 ||
     model === getModelStrings().opus41 ||
     model === getModelStrings().opus45 ||
-    model === getModelStrings().opus46
+    model === getModelStrings().opus46 ||
+    model === getModelStrings().opus5
   )
 }
 
@@ -84,6 +85,29 @@ const RETIRED_GPT_MODEL_REPLACEMENTS: Record<string, ModelName> = {
 export function remapRetiredGptModel(model: ModelName): ModelName {
   const base = model.trim().replace(/\[1m\]$/i, '').toLowerCase()
   return RETIRED_GPT_MODEL_REPLACEMENTS[base] ?? model
+}
+
+const RETIRED_CLAUDE_46_MODEL_REPLACEMENTS: Record<string, ModelName> = {
+  'claude-sonnet-4-6': 'claude-sonnet-5',
+  'claude-opus-4-6': 'claude-opus-5',
+}
+
+/**
+ * Retire first-party Claude 4.6 model pins in favor of Claude 5.
+ *
+ * Third-party providers keep their 4.6 identifiers because their availability
+ * does not necessarily track the first-party retirement. The Claude 5 models
+ * have 1M context by default, so an old `[1m]` suffix is intentionally dropped.
+ */
+export function remapRetiredClaude46Model(model: ModelName): ModelName {
+  if (getAPIProvider() !== 'firstParty') {
+    return model
+  }
+  const base = model.trim().replace(/\[1m\]$/i, '')
+  // Do not resolve settings-based model overrides here: an override keyed by
+  // the retired ID must itself be migrated rather than hiding that ID.
+  const replacement = RETIRED_CLAUDE_46_MODEL_REPLACEMENTS[firstPartyNameToCanonical(base)]
+  return replacement ?? model
 }
 
 /**
@@ -152,13 +176,13 @@ export function getMainLoopModel(): ModelName {
 }
 
 export function getBestModel(): ModelName {
-  return getDefaultOpusModel()
+  return getModelStrings().fable5
 }
 
 // @[MODEL LAUNCH]: Update the default Opus model (3P providers may lag so keep defaults unchanged).
 export function getDefaultOpusModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_OPUS_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+    return remapRetiredClaude46Model(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL)
   }
   // 3P providers (Bedrock, Vertex, Foundry) — kept as a separate branch
   // even when values match, since 3P availability lags firstParty and
@@ -166,19 +190,19 @@ export function getDefaultOpusModel(): ModelName {
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().opus46
   }
-  return getModelStrings().opus46
+  return getModelStrings().opus5
 }
 
 // @[MODEL LAUNCH]: Update the default Sonnet model (3P providers may lag so keep defaults unchanged).
 export function getDefaultSonnetModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_SONNET_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+    return remapRetiredClaude46Model(process.env.ANTHROPIC_DEFAULT_SONNET_MODEL)
   }
   // Default to Sonnet 4.5 for 3P since they may not have 4.6 yet
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().sonnet45
   }
-  return getModelStrings().sonnet46
+  return getModelStrings().sonnet5
 }
 
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
@@ -189,6 +213,14 @@ export function getDefaultHaikuModel(): ModelName {
 
   // Haiku 4.5 is available on all platforms (first-party, Foundry, Bedrock, Vertex)
   return getModelStrings().haiku45
+}
+
+// @[MODEL LAUNCH]: Update the default Fable model (3P providers may lag so keep defaults unchanged).
+export function getDefaultFableModel(): ModelName {
+  if (process.env.ANTHROPIC_DEFAULT_FABLE_MODEL) {
+    return process.env.ANTHROPIC_DEFAULT_FABLE_MODEL
+  }
+  return getModelStrings().fable5
 }
 
 /**
@@ -274,6 +306,16 @@ export function getDefaultMainLoopModel(): ModelName {
  */
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
+  // Special cases for Claude 5+ models — check before 4.x to avoid false matches
+  if (name.includes('claude-fable-5')) {
+    return 'claude-fable-5'
+  }
+  if (name.includes('claude-opus-5')) {
+    return 'claude-opus-5'
+  }
+  if (name.includes('claude-sonnet-5')) {
+    return 'claude-sonnet-5'
+  }
   // Special cases for Claude 4+ models to differentiate versions
   // Order matters: check more specific versions first (4-5 before 4)
   if (name.includes('claude-opus-4-6')) {
@@ -359,11 +401,11 @@ export function getClaudeAiUserDefaultModelDescription(
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {
-      return `Opus 4.6 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+      return `Opus 5 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
     }
-    return `Opus 4.6 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    return `Opus 5 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
-  return 'Sonnet 4.6 · Best for everyday tasks'
+  return 'Sonnet 5 · Best for everyday tasks'
 }
 
 export function renderDefaultModelSetting(
@@ -431,6 +473,18 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
   }
 
   switch (model) {
+    case getModelStrings().fable5:
+      return 'Fable 5'
+    case getModelStrings().fable5 + '[1m]':
+      return 'Fable 5 (1M context)'
+    case getModelStrings().opus5:
+      return 'Opus 5'
+    case getModelStrings().opus5 + '[1m]':
+      return 'Opus 5 (1M context)'
+    case getModelStrings().sonnet5:
+      return 'Sonnet 5'
+    case getModelStrings().sonnet5 + '[1m]':
+      return 'Sonnet 5 (1M context)'
     case getModelStrings().opus46:
       return 'Opus 4.6'
     case getModelStrings().opus46 + '[1m]':
@@ -538,6 +592,10 @@ export function parseUserSpecifiedModel(
   modelInput: ModelName | ModelAlias,
 ): ModelName {
   const modelInputTrimmed = modelInput.trim()
+  const remappedClaudeModel = remapRetiredClaude46Model(modelInputTrimmed)
+  if (remappedClaudeModel !== modelInputTrimmed) {
+    return remappedClaudeModel
+  }
   const remappedModel = remapRetiredGptModel(modelInputTrimmed)
   if (remappedModel !== modelInputTrimmed) {
     return remappedModel
@@ -559,6 +617,8 @@ export function parseUserSpecifiedModel(
         return getDefaultHaikuModel() + (has1mTag ? '[1m]' : '')
       case 'opus':
         return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
+      case 'fable':
+        return getDefaultFableModel() + (has1mTag ? '[1m]' : '')
       case 'best':
         return getBestModel()
       default:
@@ -672,6 +732,15 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
 
+  if (canonical.includes('claude-fable-5')) {
+    return has1m ? 'Fable 5 (with 1M context)' : 'Fable 5'
+  }
+  if (canonical.includes('claude-opus-5')) {
+    return has1m ? 'Opus 5 (with 1M context)' : 'Opus 5'
+  }
+  if (canonical.includes('claude-sonnet-5')) {
+    return has1m ? 'Sonnet 5 (with 1M context)' : 'Sonnet 5'
+  }
   if (canonical.includes('claude-opus-4-6')) {
     return has1m ? 'Opus 4.6 (with 1M context)' : 'Opus 4.6'
   }

@@ -370,9 +370,6 @@ export type GlobalConfig = {
   voiceLangHintLastLanguage?: string // Resolved STT language code when the hint was last shown — reset count when it changes
   voiceFooterHintSeenCount?: number // Number of sessions the "hold X to speak" footer hint has been shown
 
-  // Opus 1M merge notice tracking
-  opus1mMergeNoticeSeenCount?: number // Number of times the opus-1m-merge notice has been shown
-
   // Experiment enrollment notice tracking (keyed by experiment id)
   experimentNoticesSeenCount?: Record<string, number>
 

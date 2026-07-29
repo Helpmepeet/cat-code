@@ -138,12 +138,12 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY =
   '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 
 // @[MODEL LAUNCH]: Update the latest frontier model.
-const FRONTIER_MODEL_NAME = 'Claude Opus 4.6'
+const FRONTIER_MODEL_NAME = 'Claude Fable 5'
 
 // @[MODEL LAUNCH]: Update the model family IDs below to the latest in each tier.
 const CLAUDE_4_5_OR_4_6_MODEL_IDS = {
-  opus: 'claude-opus-4-6',
-  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-5',
+  sonnet: 'claude-sonnet-5',
   haiku: 'claude-haiku-4-5-20251001',
 }
 
@@ -975,7 +975,7 @@ export async function computeSimpleEnvInfo(
     apiProvider === 'openai' ||
     (process.env.USER_TYPE === 'ant' && isUndercover())
       ? null
-      : `The most recent Claude model family is Claude 4.5/4.6. Model IDs — Opus 4.6: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.opus}', Sonnet 4.6: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.sonnet}', Haiku 4.5: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
+      : `The most recent Claude model family is Claude 5. Model IDs — Fable 5: 'claude-fable-5', Opus 5: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.opus}', Sonnet 5: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.sonnet}', Haiku 4.5: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
     `This session is running through the ${apiProvider === 'openai' ? 'OpenAI Codex' : 'Anthropic'} provider.`,
     process.env.USER_TYPE === 'ant' && isUndercover()
       ? null
@@ -992,7 +992,13 @@ export async function computeSimpleEnvInfo(
 // @[MODEL LAUNCH]: Add a knowledge cutoff date for the new model.
 function getKnowledgeCutoff(modelId: string): string | null {
   const canonical = getCanonicalName(modelId)
-  if (canonical.includes('claude-sonnet-4-6')) {
+  if (canonical.includes('claude-fable-5')) {
+    return 'May 2026'
+  } else if (canonical.includes('claude-opus-5')) {
+    return 'May 2026'
+  } else if (canonical.includes('claude-sonnet-5')) {
+    return 'March 2026'
+  } else if (canonical.includes('claude-sonnet-4-6')) {
     return 'August 2025'
   } else if (canonical.includes('claude-opus-4-6')) {
     return 'May 2025'

@@ -15,6 +15,8 @@ import {
 import { getModelStrings } from './modelStrings.js'
 import {
   COST_TIER_3_15,
+  COST_TIER_5_25,
+  COST_FABLE_10_50,
   COST_HAIKU_35,
   COST_HAIKU_45,
   formatModelPricing,
@@ -28,6 +30,7 @@ import {
   getClaudeAiUserDefaultModelDescription,
   getDefaultSonnetModel,
   getDefaultOpusModel,
+  getDefaultFableModel,
   getDefaultHaikuModel,
   getDefaultMainLoopModelSetting,
   getMarketingNameForModel,
@@ -169,6 +172,70 @@ export function getOpus46_1MOption(fastMode = false): ModelOption {
   }
 }
 
+function getSonnet5Option(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: is3P ? getModelStrings().sonnet5 : 'sonnet',
+    label: 'Sonnet 5',
+    description: `Sonnet 5 · Best for everyday tasks${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    descriptionForModel:
+      'Sonnet 5 - best for everyday tasks. Generally recommended for most coding tasks',
+  }
+}
+
+function getOpus5Option(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: is3P ? getModelStrings().opus5 : 'opus',
+    label: 'Opus 5',
+    description: `Opus 5 · Most capable for complex work${is3P ? '' : ` · ${formatModelPricing(COST_TIER_5_25)}`}`,
+    descriptionForModel: 'Opus 5 - most capable for complex work',
+  }
+}
+
+function getFable5Option(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: is3P ? getModelStrings().fable5 : 'fable',
+    label: 'Fable 5',
+    description: `Fable 5 · Maximum capability frontier model${is3P ? '' : ` · ${formatModelPricing(COST_FABLE_10_50)}`}`,
+    descriptionForModel: 'Fable 5 - maximum capability frontier model',
+  }
+}
+
+export function getSonnet5_1MOption(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: is3P ? getModelStrings().sonnet5 + '[1m]' : 'sonnet[1m]',
+    label: 'Sonnet 5 (1M context)',
+    description: `Sonnet 5 for long sessions${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    descriptionForModel:
+      'Sonnet 5 with 1M context window - for long sessions with large codebases',
+  }
+}
+
+export function getOpus5_1MOption(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: is3P ? getModelStrings().opus5 + '[1m]' : 'opus[1m]',
+    label: 'Opus 5 (1M context)',
+    description: `Opus 5 for long sessions${is3P ? '' : ` · ${formatModelPricing(COST_TIER_5_25)}`}`,
+    descriptionForModel:
+      'Opus 5 with 1M context window - for long sessions with large codebases',
+  }
+}
+
+export function getFable5_1MOption(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: is3P ? getModelStrings().fable5 + '[1m]' : 'fable[1m]',
+    label: 'Fable 5 (1M context)',
+    description: `Fable 5 for long sessions${is3P ? '' : ` · ${formatModelPricing(COST_FABLE_10_50)}`}`,
+    descriptionForModel:
+      'Fable 5 with 1M context window - for long sessions with large codebases',
+  }
+}
+
 function getCustomHaikuOption(): ModelOption | undefined {
   const is3P = getAPIProvider() !== 'firstParty'
   const customHaikuModel = process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
@@ -189,7 +256,7 @@ function getHaiku45Option(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   return {
     value: 'haiku',
-    label: 'Haiku',
+    label: 'Haiku 4.5',
     description: `Haiku 4.5 · Fastest for quick answers${is3P ? '' : ` · ${formatModelPricing(COST_HAIKU_45)}`}`,
     descriptionForModel:
       'Haiku 4.5 - fastest for quick answers. Lower cost but less capable than Sonnet 4.6.',
@@ -249,58 +316,62 @@ function getGpt56LunaOption(): ModelOption {
 function getMaxOpusOption(fastMode = false): ModelOption {
   return {
     value: 'opus',
-    label: 'Opus',
-    description: `Opus 4.6 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`,
+    label: 'Opus 5',
+    description: `Opus 5 · Most capable for complex work`,
   }
 }
 
 export function getMaxSonnet46_1MOption(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const billingInfo = isClaudeAISubscriber() ? ' · Billed as extra usage' : ''
+  const modelName = is3P ? 'Sonnet 4.6' : 'Sonnet 5'
   return {
     value: 'sonnet[1m]',
-    label: 'Sonnet (1M context)',
-    description: `Sonnet 4.6 with 1M context${billingInfo}${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    label: `${modelName} (1M context)`,
+    description: `${modelName} with 1M context${billingInfo}${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
   }
 }
 
 export function getMaxOpus46_1MOption(fastMode = false): ModelOption {
   const billingInfo = isClaudeAISubscriber() ? ' · Billed as extra usage' : ''
+  const is3P = getAPIProvider() !== 'firstParty'
+  const modelName = is3P ? 'Opus 4.6' : 'Opus 5'
   return {
     value: 'opus[1m]',
-    label: 'Opus (1M context)',
-    description: `Opus 4.6 with 1M context${billingInfo}${getOpus46PricingSuffix(fastMode)}`,
+    label: `${modelName} (1M context)`,
+    description: `${modelName} with 1M context${billingInfo}${getOpus46PricingSuffix(fastMode)}`,
   }
 }
 
 function getMergedOpus1MOption(fastMode = false): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
+  const modelName = is3P ? 'Opus 4.6' : 'Opus 5'
   return {
     value: is3P ? getModelStrings().opus46 + '[1m]' : 'opus[1m]',
-    label: 'Opus (1M context)',
-    description: `Opus 4.6 with 1M context · Most capable for complex work${!is3P && fastMode ? getOpus46PricingSuffix(fastMode) : ''}`,
+    label: `${modelName} (1M context)`,
+    description: `${modelName} with 1M context · Most capable for complex work${!is3P && fastMode ? getOpus46PricingSuffix(fastMode) : ''}`,
     descriptionForModel:
-      'Opus 4.6 with 1M context - most capable for complex work',
+      `${modelName} with 1M context - most capable for complex work`,
   }
 }
 
-const MaxSonnet46Option: ModelOption = {
+const MaxSonnet5Option: ModelOption = {
   value: 'sonnet',
-  label: 'Sonnet',
-  description: 'Sonnet 4.6 · Best for everyday tasks',
+  label: 'Sonnet 5',
+  description: 'Sonnet 5 · Best for everyday tasks',
 }
 
 const MaxHaiku45Option: ModelOption = {
   value: 'haiku',
-  label: 'Haiku',
+  label: 'Haiku 4.5',
   description: 'Haiku 4.5 · Fastest for quick answers',
 }
 
 function getOpusPlanOption(): ModelOption {
   return {
     value: 'opusplan',
-    label: 'Opus Plan Mode',
-    description: 'Use Opus 4.6 in plan mode, Sonnet 4.6 otherwise',
+    label: 'Opus 5 Plan Mode',
+    description: 'Use Opus 5 in plan mode, Sonnet 5 otherwise',
   }
 }
 
@@ -339,24 +410,26 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       getTotalInputTokens() === 0 &&
       hasAnthropicCredentials()
     ) {
-      codexOptions.push(getSonnet46Option(), getOpus46Option(fastMode), getHaiku45Option())
+      codexOptions.push(getSonnet5Option(), getOpus5Option(), getFable5Option(), getHaiku45Option())
     }
     return codexOptions
   }
 
   if (isClaudeAISubscriber()) {
     if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
-      // Max and Team Premium users: Opus is default, show Sonnet as alternative
+      // Keep the default model selectable alongside the Default row.
       const premiumOptions = [getDefaultOptionForUser(fastMode)]
       if (!isOpus1mMergeEnabled() && checkOpus1mAccess()) {
         premiumOptions.push(getMaxOpus46_1MOption(fastMode))
       }
 
-      premiumOptions.push(MaxSonnet46Option)
+      premiumOptions.push(getOpus5Option())
+      premiumOptions.push(MaxSonnet5Option)
       if (checkSonnet1mAccess()) {
         premiumOptions.push(getMaxSonnet46_1MOption())
       }
 
+      premiumOptions.push(getFable5Option())
       premiumOptions.push(MaxHaiku45Option)
       return premiumOptions
     }
@@ -376,11 +449,12 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       }
     }
 
+    standardOptions.push(getFable5Option())
     standardOptions.push(MaxHaiku45Option)
     return standardOptions
   }
 
-  // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus 4.6 + Opus 1M + Haiku
+  // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus 5 + Opus 1M + Fable + Haiku
   if (getAPIProvider() === 'firstParty') {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
     if (checkSonnet1mAccess()) {
@@ -389,11 +463,12 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     if (isOpus1mMergeEnabled()) {
       payg1POptions.push(getMergedOpus1MOption(fastMode))
     } else {
-      payg1POptions.push(getOpus46Option(fastMode))
+      payg1POptions.push(getOpus5Option())
       if (checkOpus1mAccess()) {
         payg1POptions.push(getOpus46_1MOption(fastMode))
       }
     }
+    payg1POptions.push(getFable5Option())
     payg1POptions.push(getHaiku45Option())
     return payg1POptions
   }
@@ -444,8 +519,17 @@ function getModelFamilyInfo(
 ): { alias: string; currentVersionName: string } | null {
   const canonical = getCanonicalName(model)
 
+  // Fable family
+  if (canonical.includes('claude-fable-5')) {
+    const currentName = getMarketingNameForModel(getDefaultFableModel())
+    if (currentName) {
+      return { alias: 'Fable', currentVersionName: currentName }
+    }
+  }
+
   // Sonnet family
   if (
+    canonical.includes('claude-sonnet-5') ||
     canonical.includes('claude-sonnet-4-6') ||
     canonical.includes('claude-sonnet-4-5') ||
     canonical.includes('claude-sonnet-4-') ||
@@ -459,7 +543,7 @@ function getModelFamilyInfo(
   }
 
   // Opus family
-  if (canonical.includes('claude-opus-4')) {
+  if (canonical.includes('claude-opus-4') || canonical.includes('claude-opus-5')) {
     const currentName = getMarketingNameForModel(getDefaultOpusModel())
     if (currentName) {
       return { alias: 'Opus', currentVersionName: currentName }

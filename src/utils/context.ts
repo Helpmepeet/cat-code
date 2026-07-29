@@ -45,7 +45,24 @@ export function modelSupports1M(model: string): boolean {
     return false
   }
   const canonical = getCanonicalName(model)
-  return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6')
+  return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6') || canonical.includes('claude-sonnet-5') || canonical.includes('claude-opus-5') || canonical.includes('claude-fable-5')
+}
+
+/**
+ * Claude 5 frontier models use the 1M context window without requiring the
+ * legacy `[1m]` model-selection suffix. Keep the suffix support above for
+ * older models and explicit user configuration.
+ */
+export function modelUses1MContextByDefault(model: string): boolean {
+  if (is1mContextDisabled()) {
+    return false
+  }
+  const canonical = getCanonicalName(model)
+  return (
+    canonical.includes('claude-sonnet-5') ||
+    canonical.includes('claude-opus-5') ||
+    canonical.includes('claude-fable-5')
+  )
 }
 
 export function getContextWindowForModel(
@@ -68,6 +85,13 @@ export function getContextWindowForModel(
 
   // [1m] suffix — explicit client-side opt-in, respected over all detection
   if (has1mContext(model)) {
+    return 1_000_000
+  }
+
+  // Claude 5 frontier models have a 1M context window by default. This must
+  // precede capability-cache lookup so a cold or stale cache cannot make the
+  // statusline and compaction logic fall back to the legacy 200k default.
+  if (modelUses1MContextByDefault(model)) {
     return 1_000_000
   }
 
@@ -173,7 +197,10 @@ export function getModelMaxOutputTokens(model: string): {
     return { default: 32_000, upperLimit }
   }
 
-  if (m.includes('opus-4-6')) {
+  if (m.includes('fable-5') || m.includes('opus-5') || m.includes('sonnet-5')) {
+    defaultTokens = 64_000
+    upperLimit = 128_000
+  } else if (m.includes('opus-4-6')) {
     defaultTokens = 64_000
     upperLimit = 128_000
   } else if (m.includes('sonnet-4-6')) {

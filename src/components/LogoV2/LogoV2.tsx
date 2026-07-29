@@ -20,7 +20,6 @@ import { getDumpPromptsPath } from 'src/services/api/dumpPrompts.js'
 import { getStartupPerfLogPath, isDetailedProfilingEnabled } from 'src/utils/startupProfiler.js'
 import { EmergencyTip } from './EmergencyTip.js'
 import { VoiceModeNotice } from './VoiceModeNotice.js'
-import { Opus1mMergeNotice } from './Opus1mMergeNotice.js'
 import { feature } from 'bun:bundle'
 import { SandboxManager } from 'src/utils/sandbox/sandbox-adapter.js'
 import { useAppState } from '../../state/AppState.js'
@@ -107,7 +106,6 @@ export function LogoV2() {
   const PostBorderNotices = (
     <>
       <VoiceModeNotice />
-      <Opus1mMergeNotice />
       {ChannelsNoticeModule && <ChannelsNoticeModule.ChannelsNotice />}
       {isDebugMode() && (
         <Box paddingLeft={2} flexDirection="column">

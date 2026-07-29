@@ -89,15 +89,15 @@ describe('GPT-5.6 Sol, Terra, and Luna', () => {
   })
 
   test('/effort accepts Codex levels and reports their labels', () => {
-    expect(executeEffort('XHIGH')).toMatchObject({
+    expect(executeEffort('XHIGH', 'gpt-5.6-sol')).toMatchObject({
       effortUpdate: { value: 'xhigh' },
       message: expect.stringContaining('Extra high'),
     })
-    expect(executeEffort('ULTRA')).toMatchObject({
+    expect(executeEffort('ULTRA', 'gpt-5.6-sol')).toMatchObject({
       effortUpdate: { value: 'ultra' },
       message: expect.stringContaining('Ultra'),
     })
-    expect(executeEffort('impossible')).toEqual({
+    expect(executeEffort('impossible', 'gpt-5.6-sol')).toEqual({
       message:
         'Invalid argument: impossible. Valid options are: low, medium, high, xhigh, max, ultra, auto',
     })
