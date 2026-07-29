@@ -684,7 +684,7 @@ const MARKDOWN_COMPONENTS = {
  * uses text-glyph chrome throughout. The 5-theme Settings picker is a separate
  * §5 ledger deferral (owner P4-18; needs the Settings code-theme sync seam).
  */
-function CodeBlock({
+export function CodeBlock({
   lang,
   code,
   highlighted,
