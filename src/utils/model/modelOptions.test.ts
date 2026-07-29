@@ -31,20 +31,33 @@ const previous = {
   apiKey: process.env.ANTHROPIC_API_KEY,
 }
 
+// `mock.module` MUTATES the namespace object a prior `import` returned, so a
+// pass-through written as `actual.isCodexSubscriber()` calls the mock itself and
+// recurses forever the moment `tier` is null. Capture the implementations before
+// registering anything; bun never unregisters the module, so every later file in
+// the process would otherwise hang on the first auth read.
+const actual = await import('../auth.js')
+const real = {
+  isClaudeAISubscriber: actual.isClaudeAISubscriber,
+  isMaxSubscriber: actual.isMaxSubscriber,
+  isTeamPremiumSubscriber: actual.isTeamPremiumSubscriber,
+  isCodexSubscriber: actual.isCodexSubscriber,
+  hasCodexTokens: actual.hasCodexTokens,
+  hasAnthropicCredentials: actual.hasAnthropicCredentials,
+}
+
 beforeEach(async () => {
-  const actual = await import('../auth.js')
   await mock.module('src/utils/auth.js', () => ({
     ...actual,
     isClaudeAISubscriber: () =>
-      tier === null ? actual.isClaudeAISubscriber() : true,
-    isMaxSubscriber: () => (tier === null ? actual.isMaxSubscriber() : true),
+      tier === null ? real.isClaudeAISubscriber() : true,
+    isMaxSubscriber: () => (tier === null ? real.isMaxSubscriber() : true),
     isTeamPremiumSubscriber: () =>
-      tier === null ? actual.isTeamPremiumSubscriber() : false,
-    isCodexSubscriber: () =>
-      tier === null ? actual.isCodexSubscriber() : false,
-    hasCodexTokens: () => (tier === null ? actual.hasCodexTokens() : false),
+      tier === null ? real.isTeamPremiumSubscriber() : false,
+    isCodexSubscriber: () => (tier === null ? real.isCodexSubscriber() : false),
+    hasCodexTokens: () => (tier === null ? real.hasCodexTokens() : false),
     hasAnthropicCredentials: () =>
-      tier === null ? actual.hasAnthropicCredentials() : true,
+      tier === null ? real.hasAnthropicCredentials() : true,
   }))
   tier = 'max'
   delete process.env.USER_TYPE
