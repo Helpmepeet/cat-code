@@ -12,13 +12,31 @@ import type { ContextUsage } from './contextUsage.js'
  * clears itself once a turn compacts and `usedTokens` drops back under the
  * warning threshold — it is a live readout, not a notification.
  *
- * SOURCE — this mirrors the engine's `calculateTokenWarningState`
+ * SOURCE — the ARITHMETIC mirrors the engine's `calculateTokenWarningState`
  * (`src/services/compact/autoCompact.ts:246-286`) rather than reimplementing it:
  *
- *  - visible exactly when `tokenUsage >= warningThreshold` (`autoCompact.ts:269`),
+ *  - visible when `tokenUsage >= warningThreshold` (`autoCompact.ts:269`),
  *  - `percentLeft = max(0, round(((threshold - tokenUsage) / threshold) * 100))`
  *    (`autoCompact.ts:261-264`), measured against the COMPACT threshold, so it
  *    reaches 0% where compaction fires rather than where the window ends.
+ *
+ * APPROXIMATION — the QUANTITY compared is not the engine's. This feeds
+ * `contextUsage.usedTokens`, the API-reported usage off the newest `result`
+ * frame, whereas `shouldAutoCompact` compares
+ * `tokenCountWithEstimation(messages, model) - snipTokensFreed`
+ * (`autoCompact.ts:371-372`). Two consequences, both accepted:
+ *
+ *  - MID-TURN the newest result frame predates the current turn, so its usage
+ *    omits this turn's tool results and the glyph can lag: the engine may
+ *    compact before the readout ever appears.
+ *  - `snipTokensFreed` has no renderer analog, so after a snip the readout can
+ *    be pessimistic (showing less headroom than the engine will act on).
+ *
+ * It is a live READOUT, not the trigger — the engine compacts on its own
+ * numbers regardless of what this shows, so drift costs accuracy, never
+ * correctness. Closing it would mean the sidecar shipping the engine's own
+ * `isAboveWarningThreshold`/`percentLeft`, which needs a per-turn recompute the
+ * run-controls snapshot does not currently do.
  *
  * Both thresholds arrive from the sidecar because neither is derivable here: the
  * denominator is `getEffectiveContextWindowSize` (`autoCompact.ts:40`), which

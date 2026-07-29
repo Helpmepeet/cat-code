@@ -13,9 +13,10 @@ import type { ContextUsage } from './contextUsage.js'
  * `>=`, and `percentLeft` runs against the threshold rather than the window.
  *
  * Deliberately NOT derived here from a window: the real buffer is model-dependent
- * (`getAutoCompactBufferTokens`, `autoCompact.ts:204` — 19k for a 200k model, not
- * the flat 13k the prototype hard-codes), which is the whole reason the numbers
- * ship from the engine instead of being recomputed in the renderer.
+ * (`getAutoCompactBufferTokens`, `autoCompact.ts:204` — 17,400 for a 200k model
+ * with the output-token cap off, 18,360 with it on, never the flat 13k the
+ * prototype hard-codes), which is the whole reason the numbers ship from the
+ * engine instead of being recomputed in the renderer.
  */
 const THRESHOLD = 187_000
 const WARNING_THRESHOLD = 167_000

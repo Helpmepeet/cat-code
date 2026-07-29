@@ -510,9 +510,14 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
 /**
  * The composer warning glyph's two thresholds, mirrored off the ENGINE rather
  * than recomputed (§10). Both come from the same functions
- * `calculateTokenWarningState` uses (`src/services/compact/autoCompact.ts:256-269`),
- * so the glyph appears exactly when the engine would report
- * `isAboveWarningThreshold` and its percentage matches the engine's `percentLeft`.
+ * `calculateTokenWarningState` uses (`src/services/compact/autoCompact.ts:256-269`).
+ *
+ * These are the engine's THRESHOLDS, not its verdict. The renderer compares them
+ * against API-reported usage off the newest `result` frame, while the engine
+ * compares `tokenCountWithEstimation(...) - snipTokensFreed` (`autoCompact.ts:371`),
+ * so the glyph approximates `isAboveWarningThreshold` and can lag it mid-turn.
+ * The drift and why it is accepted are documented at the point of comparison,
+ * `app/renderer/src/tokenWarning.ts`.
  *
  * Guarded like {@link readContextWindow}: a failed resolve costs the glyph (it
  * stays hidden, the honest state when we cannot say how close compaction is),

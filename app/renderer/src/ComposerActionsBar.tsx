@@ -937,9 +937,15 @@ export function ComposerActionsBar({
   // the first face ('attach', always rendered), so Tab from the textarea has a
   // deterministic landing spot. Faces read their tabIndex from `faceProps(id)`.
   const [activeFace, setActiveFace] = useState<string | null>(null)
+  // The warning glyph is the one face that can vanish mid-session (it unmounts
+  // the moment a turn compacts). If it held the tab stop when it went, no face
+  // would match and the whole toolbar would have NO tabIndex=0 until a blur
+  // happened to reset it. Resolve the stop at read time instead of storing it.
+  const resolvedActiveFace =
+    activeFace === 'token-warning' && !tokenWarning ? null : activeFace
   const faceProps = (id: string): ComposerFaceProps => ({
     'data-composer-face': id,
-    tabIndex: id === (activeFace ?? 'attach') ? 0 : -1,
+    tabIndex: id === (resolvedActiveFace ?? 'attach') ? 0 : -1,
     onFocus: () => setActiveFace(id),
   })
   const exitToComposer = () => onFocusComposer?.()

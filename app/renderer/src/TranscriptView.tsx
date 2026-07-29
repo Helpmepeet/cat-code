@@ -39,6 +39,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
+import { useToast } from './toastContext.js'
 import {
   groupAgentDelegates,
   selectNestedTranscriptRows,
@@ -1350,6 +1351,7 @@ function ToolOverflowNote({
  */
 function BubbleCopyChip({ content }: { content: string }) {
   const [copied, setCopied] = useState(false)
+  const toast = useToast()
   const copy = (): void => {
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
@@ -1359,6 +1361,9 @@ function BubbleCopyChip({ content }: { content: string }) {
       .then(() => {
         setCopied(true)
         setTimeout(() => setCopied(false), 1300)
+        // The prototype toasts as well as ticking (Messages.jsx:2096): the tick
+        // is in the corner the pointer just left, so it is easy to miss.
+        toast('Copied message', { tone: 'success' })
       })
       .catch(() => {})
   }
