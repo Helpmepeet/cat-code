@@ -200,6 +200,38 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   expect(routeBody).toContain('void performRestore(route.appSessionId)')
 })
 
+test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the page unmounts', () => {
+  // The defect this pins: `sessionsRenameRequest` and `sessionsTagEcho` are
+  // one-shot COMMANDS whose de-dupe guard is a ref inside SessionsPage — and
+  // that ref dies when the page unmounts, which happens whenever the user
+  // leaves the Sessions view. A command left set is re-delivered on the next
+  // visit: Escape out of a rename, open a session, come back, and the editor
+  // reopens by itself. The guard therefore has to live in App, above the mount.
+  //
+  // LAYER HONESTY: SSR-only suite, so this asserts the disarm EXISTS and is
+  // keyed on leaving the view. The reopen itself is an operator GUI step.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const disarmStart = source.indexOf("if (activeView === 'sessions') return")
+  expect(disarmStart).toBeGreaterThan(-1)
+  const disarmEnd = source.indexOf('}, [activeView])', disarmStart)
+  expect(disarmEnd).toBeGreaterThan(disarmStart)
+  const disarmBody = source.slice(disarmStart, disarmEnd)
+  expect(disarmBody).toContain('setSessionsRenameRequest(null)')
+  expect(disarmBody).toContain('setSessionsTagEcho(null)')
+
+  // A bulk tag settles several results in one effect pass; they must be batched
+  // into ONE echo. A per-result setter keeps only the last while marking them
+  // all consumed, so the other rows silently lose their tag.
+  const echoStart = source.indexOf('const pendingTagWritesRef = useRef<')
+  const echoEnd = source.indexOf('}, [sessionActionRuntime, toast])', echoStart)
+  expect(echoStart).toBeGreaterThan(-1)
+  const echoBody = source.slice(echoStart, echoEnd)
+  expect(echoBody).toContain('entries.push(pending)')
+  expect(echoBody).toContain('if (entries.length > 0) setSessionsTagEcho({ entries })')
+  expect(echoBody).not.toContain('setSessionsTagEcho({ sessionIds:')
+})
+
 test('P4-24: the active session pane renders the multi-line composer + transcript spine', () => {
   const html = renderToStaticMarkup(
     <SessionPane

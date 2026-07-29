@@ -103,8 +103,14 @@ export function SessionsPage({
   onTagRows?: (rows: readonly MergedSessionRow[], tag: string | null) => void
   /** The App-owned menu asking this page to start its inline rename on a row. */
   renameRequest?: { sessionId: string } | null
-  /** A tag write the sidecar CONFIRMED, echoed until the catalog re-enumerates. */
-  tagEcho?: { sessionIds: readonly string[]; tag: string | null } | null
+  /**
+   * Tag writes the sidecar CONFIRMED, echoed until the catalog re-enumerates.
+   * A list, because one bulk tag settles several results in a single pass and
+   * each carries its own rows.
+   */
+  tagEcho?: {
+    entries: readonly { sessionIds: readonly string[]; tag: string | null }[]
+  } | null
 }) {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SessionSort>('recent')
@@ -133,11 +139,13 @@ export function SessionsPage({
   useEffect(() => {
     if (!tagEcho || appliedEchoRef.current === tagEcho) return
     appliedEchoRef.current = tagEcho
-    dispatchPage({
-      type: 'tag-confirmed',
-      sessionIds: tagEcho.sessionIds,
-      tag: tagEcho.tag,
-    })
+    for (const entry of tagEcho.entries) {
+      dispatchPage({
+        type: 'tag-confirmed',
+        sessionIds: entry.sessionIds,
+        tag: entry.tag,
+      })
+    }
   }, [tagEcho])
 
   // The ⋯ menu's Rename verb starts the INLINE editor on this page (the

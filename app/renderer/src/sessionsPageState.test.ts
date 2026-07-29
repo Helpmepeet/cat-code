@@ -169,6 +169,20 @@ describe('tags', () => {
     expect(settled.selected).toEqual(['a'])
   })
 
+  // A bulk tag settles one result per row, so several confirmations arrive in a
+  // single pass. Each must land: the earlier shape kept only the last, leaving
+  // the other rows blank until the next catalog refresh.
+  test('several confirmations in one pass ALL apply, including different tags', () => {
+    const state = apply([
+      { type: 'tag-confirmed', sessionIds: ['a'], tag: 'ui' },
+      { type: 'tag-confirmed', sessionIds: ['b'], tag: 'ui' },
+      { type: 'tag-confirmed', sessionIds: ['c'], tag: 'infra' },
+    ])
+    expect(selectRowTag(state, row({ sessionId: 'a' }))).toBe('ui')
+    expect(selectRowTag(state, row({ sessionId: 'b' }))).toBe('ui')
+    expect(selectRowTag(state, row({ sessionId: 'c' }))).toBe('infra')
+  })
+
   test('known tags include confirmed writes the catalog has not published yet', () => {
     const rows = [row({ sessionId: 'a', tag: 'infra' }), row({ sessionId: 'b' })]
     const confirmed = apply([{ type: 'tag-confirmed', sessionIds: ['b'], tag: 'ui' }])

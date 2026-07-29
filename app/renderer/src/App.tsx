@@ -436,8 +436,7 @@ export function App() {
     sessionId: string
   } | null>(null)
   const [sessionsTagEcho, setSessionsTagEcho] = useState<{
-    sessionIds: readonly string[]
-    tag: string | null
+    entries: readonly { sessionIds: readonly string[]; tag: string | null }[]
   } | null>(null)
   const [renamingSession, setRenamingSession] = useState<{
     sessionId: SessionId
@@ -1312,6 +1311,11 @@ export function App() {
     Map<string, { sessionIds: readonly string[]; tag: string | null }>
   >(new Map())
   useEffect(() => {
+    // A bulk tag writes one verb per row, so a single pass can settle SEVERAL
+    // results at once. Collect them and set the echo ONCE: calling the setter per
+    // result would keep only the last, while every result was already marked
+    // consumed, so the other rows would show no tag until the next refresh.
+    const entries: { sessionIds: readonly string[]; tag: string | null }[] = []
     for (const result of Object.values(sessionActionRuntime.lastBySession)) {
       if (!result || result.verb !== 'tag') continue
       if (toastedActionRequestsRef.current.has(result.requestId)) continue
@@ -1319,12 +1323,26 @@ export function App() {
       if (!pending) continue
       toastedActionRequestsRef.current.add(result.requestId)
       pendingTagWritesRef.current.delete(result.requestId)
-      if (result.ok) {
-        setSessionsTagEcho({ sessionIds: pending.sessionIds, tag: pending.tag })
-      }
+      if (result.ok) entries.push(pending)
       toast(result.message, { tone: result.ok ? 'success' : 'danger' })
     }
+    if (entries.length > 0) setSessionsTagEcho({ entries })
   }, [sessionActionRuntime, toast])
+
+  // P4-29 — DISARM both Sessions-page one-shots when the page goes away.
+  //
+  // `sessionsRenameRequest` and `sessionsTagEcho` are COMMANDS, delivered once.
+  // The page de-dupes them by object identity in a ref, and that ref dies with
+  // the page, which unmounts whenever the user leaves this view. A command left
+  // set is therefore re-delivered on the next visit: dismiss a rename with
+  // Escape, open a session, come back, and the editor reopens by itself; a tag
+  // echo likewise re-applies a value the catalog may since have changed. The
+  // guard has to outlive the consumer, so it lives here.
+  useEffect(() => {
+    if (activeView === 'sessions') return
+    setSessionsRenameRequest(null)
+    setSessionsTagEcho(null)
+  }, [activeView])
 
   const latestSessionActionResult = selectLatestSessionActionResult(
     sessionActionRuntime,
