@@ -37,6 +37,7 @@ import {
   getUserSpecifiedModelSetting,
   isOpus1mMergeEnabled,
   getOpus46PricingSuffix,
+  parseUserSpecifiedModel,
   renderDefaultModelSetting,
   type ModelSetting,
 } from './model.js'
@@ -599,6 +600,54 @@ function getKnownModelOption(model: string): ModelOption | null {
   }
 }
 
+/**
+ * Aliases whose resolved model is deliberately NOT the model their row stands
+ * for: `opusplan` resolves to the Sonnet default (Opus applies in plan mode
+ * only) and `best` resolves to Fable. Comparing them by resolved model would
+ * fold their rows into another family's row, so they match by exact string only.
+ */
+function isResolutionOpaqueSetting(setting: string): boolean {
+  const base = setting.trim().toLowerCase().replace(/\[1m]$/i, '').trim()
+  return base === 'opusplan' || base === 'best'
+}
+
+function resolveSettingOrNull(setting: string): string | null {
+  try {
+    return parseUserSpecifiedModel(setting)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether an option already offers `setting`. The raw string is the fast path;
+ * the resolved comparison catches the alias-vs-canonical split that otherwise
+ * appends a second, byte-identical row — the picker offers Sonnet as the alias
+ * `sonnet`, while a Codex session persists the canonical `claude-sonnet-5`
+ * (`getSonnet5Option` is provider-dependent). The `[1m]` suffix survives
+ * resolution, so a 1M variant stays distinct from its base model.
+ */
+export function optionCoversModelSetting(
+  optionValue: ModelSetting,
+  setting: ModelSetting,
+): boolean {
+  if (optionValue === null || setting === null) return false
+  if (optionValue === setting) return true
+  if (
+    isResolutionOpaqueSetting(optionValue) ||
+    isResolutionOpaqueSetting(setting)
+  ) {
+    return false
+  }
+  const resolvedOption = resolveSettingOrNull(optionValue)
+  const resolvedSetting = resolveSettingOrNull(setting)
+  return (
+    resolvedOption !== null &&
+    resolvedSetting !== null &&
+    resolvedOption === resolvedSetting
+  )
+}
+
 export function getModelOptions(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
 
@@ -655,7 +704,10 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   } else if (initialMainLoopModel !== null) {
     customModel = initialMainLoopModel
   }
-  if (customModel === null || options.some(opt => opt.value === customModel)) {
+  if (
+    customModel === null ||
+    options.some(opt => optionCoversModelSetting(opt.value, customModel))
+  ) {
     return filterModelOptionsByAllowlist(options)
   } else if (customModel === 'opusplan') {
     return filterModelOptionsByAllowlist([...options, getOpusPlanOption()])

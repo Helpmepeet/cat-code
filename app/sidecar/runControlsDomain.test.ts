@@ -315,6 +315,50 @@ test('buildRunControlsSnapshot degrades gracefully and reports effective plus se
   ).toBe(true)
 })
 
+test('selected always names one of the offered options, so a row is always highlighted', () => {
+  // The renderer highlights by plain string equality (`ComposerActionsBar.tsx`
+  // `selected === option.value`). The engine offers each model under whichever
+  // spelling its tier list uses — the family alias `sonnet` on first party, the
+  // canonical `claude-sonnet-5` inside a Codex session — while the saved setting
+  // keeps whatever spelling was persisted. If the two disagree, the picker opens
+  // with NO row highlighted, so the sidecar must align them.
+  const prevOverride = getMainLoopModelOverride()
+  const prevProvider = getSessionProvider()
+  const prevApiKey = process.env.ANTHROPIC_API_KEY
+  try {
+    setSessionProvider('firstParty')
+    // Unmocked engine auth reads throw under NODE_ENV=test with no credential
+    // env var, which would degrade the option list to [] and prove nothing.
+    process.env.ANTHROPIC_API_KEY = 'test-anthropic-api-key'
+
+    for (const setting of [
+      'claude-fable-5',
+      'claude-sonnet-5',
+      'claude-opus-5',
+      'sonnet',
+      'opusplan',
+    ]) {
+      setMainLoopModelOverride(setting)
+      const snapshot = buildRunControlsSnapshot(getDefaultAppState())
+      expect(snapshot.model.options.length).toBeGreaterThan(0)
+      expect(snapshot.model.options.map(option => option.value)).toContain(
+        snapshot.model.selected,
+      )
+    }
+
+    // No override keeps the provider-default row (value null) highlighted.
+    setMainLoopModelOverride(null)
+    expect(
+      buildRunControlsSnapshot(getDefaultAppState()).model.selected,
+    ).toBeNull()
+  } finally {
+    setMainLoopModelOverride(prevOverride)
+    setSessionProvider(prevProvider)
+    if (prevApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = prevApiKey
+  }
+})
+
 test('LIVE: the real executor wires the engine setters — model override flips, effort + fast take effect', () => {
   const prevOverride = getMainLoopModelOverride()
   const prevProvider = getSessionProvider()

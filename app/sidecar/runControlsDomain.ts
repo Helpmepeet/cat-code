@@ -49,7 +49,10 @@ import {
   isFastModeSupportedByModel,
 } from '../../src/utils/fastMode.js'
 import { getMainLoopModel } from '../../src/utils/model/model.js'
-import { getModelOptions } from '../../src/utils/model/modelOptions.js'
+import {
+  getModelOptions,
+  optionCoversModelSetting,
+} from '../../src/utils/model/modelOptions.js'
 import {
   getAPIProvider,
   getConfiguredAnthropicProvider,
@@ -399,10 +402,10 @@ function safe<T>(fn: () => T, fallback: T): T {
  */
 export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
   // Resolved model (the SAME resolver QueryEngine uses); after a `model.set` the
-  // override is live so this reflects the change. Raw setting drives option
-  // highlighting.
+  // override is live so this reflects the change. The saved setting drives option
+  // highlighting, once aligned to the option that offers the same model.
   const current = safe(() => getMainLoopModel(), null)
-  const selected = safe(() => getMainLoopModelOverride() ?? null, null)
+  const savedSelection = safe(() => getMainLoopModelOverride() ?? null, null)
 
   const options: RunControlModelOption[] = safe(
     () => getModelOptions(state.fastMode ?? false),
@@ -415,6 +418,11 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
         resolveModelSelectionProvider(option.value),
       ),
     }))
+
+  const selected = safe(
+    () => alignSelectionWithOptions(savedSelection, options),
+    savedSelection,
+  )
 
   const effortSupported = current
     ? safe(() => modelSupportsEffort(current), false)
@@ -472,6 +480,26 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
       unavailableReason: fastUnavailableReason,
     },
   }
+}
+
+/**
+ * The renderer highlights the picker row by plain string equality, so a saved
+ * setting the engine offers under a different string (settings hold the
+ * canonical `claude-sonnet-5`; the first-party picker offers the alias
+ * `sonnet`) would highlight NO row at all. Resolve the saved setting onto the
+ * option that means the same model HERE: model resolution is engine knowledge
+ * and never belongs in the renderer.
+ */
+function alignSelectionWithOptions(
+  selection: string | null,
+  options: RunControlModelOption[],
+): string | null {
+  if (selection === null) return null
+  if (options.some(option => option.value === selection)) return selection
+  const match = options.find(option =>
+    optionCoversModelSetting(option.value, selection),
+  )
+  return match ? match.value : selection
 }
 
 function toRunControlProvider(provider: APIProvider): RunControlsSnapshot['model']['provider'] {

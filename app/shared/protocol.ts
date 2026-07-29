@@ -1269,7 +1269,13 @@ export type RunControlsSnapshot = {
   model: {
     /** The RESOLVED model this session runs (`getMainLoopModel()`), for the face; null if resolution failed. */
     current: string | null
-    /** The raw user-specified setting (`getMainLoopModelOverride()`) for option highlighting; null = provider default. */
+    /**
+     * The user-specified setting (`getMainLoopModelOverride()`) for option
+     * highlighting; null = provider default. Already aligned to the matching
+     * `options[].value` by the sidecar when the setting and the offered option
+     * are two spellings of the same model (canonical id vs family alias), so
+     * the renderer can highlight by plain string equality.
+     */
     selected: string | null
     /** The authoritative provider route for the current session. */
     provider: RunControlProvider
