@@ -370,6 +370,11 @@ const reduceSessionActionRuntimeStateBatched = withBatch(
 )
 const reduceVerbAckResultStateBatched = withBatch(reduceVerbAckResultState)
 
+/** Which surface raised the session-actions overlay. The TabBar ⋯ and a sidebar
+ * row ⋮ share one piece of state, and only the sidebar-anchored case may hold the
+ * sidebar open (P4-33). */
+type SessionActionsOrigin = 'sidebar' | 'tab'
+
 export function App() {
   const [state, dispatch] = useReducer(
     reduceServerFrameBatched,
@@ -419,14 +424,21 @@ export function App() {
   // drawer + the inline rename editor. The menu is bound to the session it was
   // OPENED for (the clicked tab's `sessionId`, NOT `activeSessionId`), so it never
   // retargets if the active tab changes while the overlay is open.
+  //
+  // P4-33 — `origin` records which surface RAISED the overlay. Both the TabBar ⋯
+  // and a sidebar row ⋮ set this same state, but only a sidebar-anchored overlay
+  // should hold the sidebar open (see `sidebarOverlayOpen`): pinning it for a tab
+  // menu would slide the rail out over the transcript for no reason.
   const [sessionActionsTarget, setSessionActionsTarget] = useState<{
     sessionId: SessionId
     anchor: SessionActionsAnchor
+    origin: SessionActionsOrigin
   } | null>(null)
   const [renamingSession, setRenamingSession] = useState<{
     sessionId: SessionId
     anchor: SessionActionsAnchor
     initial: string
+    origin: SessionActionsOrigin
   } | null>(null)
   const [metadataOpen, setMetadataOpen] = useState(false)
   const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
@@ -2384,7 +2396,16 @@ export function App() {
         onRestore={sessionId => void performRestore(sessionId)}
         onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
         onOpenRowActions={(sessionId, anchor) =>
-          setSessionActionsTarget({ sessionId, anchor })
+          setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' })
+        }
+        /* P4-33 (Sidebar.jsx:80) — the row's ⋮ menu and rename editor are
+         * App-level `fixed` overlays, so they float OUTSIDE the rail's hover box:
+         * moving the pointer toward one fires onMouseLeave and collapses the
+         * sidebar out from under a menu still anchored to a now-hidden row. Hold
+         * it open while a SIDEBAR-anchored overlay is up. */
+        menuActive={
+          sessionActionsTarget?.origin === 'sidebar' ||
+          renamingSession?.origin === 'sidebar'
         }
         onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
         modelForSession={id =>
@@ -2402,7 +2423,7 @@ export function App() {
           onRestart={restartTab}
           onNewTab={newSession}
           onOpenActions={(sessionId, anchor) =>
-            setSessionActionsTarget({ sessionId, anchor })
+            setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
           }
           panelCount={workspaceLayout.panels.length}
           canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
@@ -2437,6 +2458,9 @@ export function App() {
                         sessionId: targetId,
                         anchor: sessionActionsTarget.anchor,
                         initial: targetRow.title ?? '',
+                        // The rename editor replaces the menu in place, so it
+                        // inherits whichever surface anchored it.
+                        origin: sessionActionsTarget.origin,
                       })
                     else if (kind === 'export')
                       sendSessionActionVerb(targetId, {

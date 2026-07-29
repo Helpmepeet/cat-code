@@ -164,6 +164,7 @@ export function Sidebar({
   onOpenRowActions,
   onNewSessionInWorkspace,
   modelForSession,
+  menuActive = false,
   storage,
 }: {
   rows: MergedSessionRow[]
@@ -201,6 +202,18 @@ export function Sidebar({
   /** Resolved model for a session (the subtitle's "· model", prototype grammar);
    * null when unknown — e.g. a restorable row that never attached this run. */
   modelForSession?: (id: SessionId) => string | null
+  /**
+   * P4-33 (the prototype's `menuActive`, Sidebar.jsx:80) — true while an overlay
+   * ANCHORED TO A ROW HERE is open (the ⋮ actions menu or the rename editor).
+   * Those render as App-level `fixed` overlays outside this rail's hover box, so
+   * without this the pointer moving toward one fires `onMouseLeave` and collapses
+   * the sidebar out from under a menu still anchored to a now-hidden row.
+   *
+   * App passes false for a TabBar-raised menu even though it shares the same
+   * state: pinning the rail open for a tab's ⋯ would slide it over the transcript
+   * with nothing here to anchor.
+   */
+  menuActive?: boolean
   /** Where the operator's workspace order is persisted. Injectable for tests
    * (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
    * renderer's own `localStorage`, and `null` disables persistence entirely. */
@@ -224,12 +237,15 @@ export function Sidebar({
   } | null>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** The rail element, so the backdrop-close re-collapse can ask whether the
+   * pointer is genuinely still over it (Sidebar.jsx:106 `sbRef`). */
+  const asideRef = useRef<HTMLElement | null>(null)
   /** Live workspace-header buttons by cwd, and the one a keyboard step just
    * moved — see the re-focus effect below `reorderHandlers`. */
   const headerRefs = useRef(new Map<string, HTMLButtonElement>())
   const refocusCwd = useRef<string | null>(null)
 
-  const open = pinned || hovering
+  const open = pinned || hovering || menuActive
 
   const onEnter = () => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -237,6 +253,9 @@ export function Sidebar({
   }
   const onLeave = () => {
     if (showTimer.current) clearTimeout(showTimer.current)
+    // Don't start the hide timer while a row's menu/rename is open
+    // (Sidebar.jsx:99). Reaching for that menu means leaving the rail.
+    if (menuActive) return
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }
   useEffect(
@@ -246,6 +265,20 @@ export function Sidebar({
     },
     [],
   )
+
+  // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
+  // the pointer is wherever the menu was with no `onMouseLeave` to follow and
+  // `hovering` still true — the rail would stay expanded indefinitely. Re-collapse
+  // unless the pointer really is back over the rail, or it is pinned
+  // (Sidebar.jsx:103-111). `:hover` is the only honest answer here; React has no
+  // synthetic event for "pointer is still inside after an unrelated unmount".
+  useEffect(() => {
+    if (menuActive || pinned) return
+    const el = asideRef.current
+    if (el && typeof el.matches === 'function' && el.matches(':hover')) return
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
+  }, [menuActive, pinned])
 
   const query = search.trim().toLowerCase()
   // Sort (CC-2 warp-free activity order) → filter → group. Recomputes only when
@@ -370,6 +403,7 @@ export function Sidebar({
       <div className="w-12 shrink-0" aria-hidden="true" />
 
       <aside
+        ref={asideRef}
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
         aria-label="Primary"
