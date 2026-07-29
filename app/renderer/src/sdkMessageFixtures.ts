@@ -1104,6 +1104,31 @@ export const SDK_MESSAGE_FIXTURE: {
         timestamp: '2026-07-04T09:03:10.000Z',
       },
     },
+    {
+      // Large `!` output: the stdout payload carries a SECOND, inner wrapper.
+      // processBashCommand.tsx:106 deliberately leaves
+      // buildLargeToolResultMessage's `<persisted-output>` unescaped
+      // (toolResultStorage.ts:189-199 builds it), so the terminal unwraps it
+      // again at render time (UserBashOutputMessage.tsx:14-18).
+      name: 'user: bash-mode command stdout wrapping large persisted output',
+      anchor:
+        'src/utils/processUserInput/processBashCommand.tsx:106 (inner wrapper kept unescaped) → src/utils/toolResultStorage.ts:189',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            '<bash-stdout><persisted-output>\nOutput too large (1.4MB). Full output saved to: /tmp/cat-code/bash-9f2c.txt\n\nPreview (first 10.0KB):\nsrc/QueryEngine.ts\nsrc/main.tsx\n...\n</persisted-output></bash-stdout><bash-stderr></bash-stderr>',
+        },
+        parent_tool_use_id: null,
+        isReplay: true,
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u021',
+        timestamp: '2026-07-04T09:03:11.000Z',
+      },
+    },
   ],
 
   /* ── system — SDKSystemMessage + SDKCompactBoundaryMessage +

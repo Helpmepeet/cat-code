@@ -1015,6 +1015,65 @@ test('strips the ANSI bytes bash output carries, like slash-command output', () 
   })
 })
 
+test('unwraps the <persisted-output> a large `!` command nests inside bash-stdout', () => {
+  // processBashCommand.tsx:106 keeps buildLargeToolResultMessage's inner
+  // wrapper unescaped on purpose, so the tag survives into the stdout payload
+  // and the notice printed it verbatim. The terminal unwraps it again
+  // (UserBashOutputMessage.tsx:14-18).
+  const sample = SDK_MESSAGE_FIXTURE.user.find(entry =>
+    entry.name.includes('large persisted output'),
+  )
+  if (!sample) throw new Error('bash persisted-output fixture is missing')
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', sample.message))
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content:
+      'Output too large (1.4MB). Full output saved to: /tmp/cat-code/bash-9f2c.txt\n\nPreview (first 10.0KB):\nsrc/QueryEngine.ts\nsrc/main.tsx\n...',
+  })
+  // The assertion that fails against the pre-fix projector.
+  const row = rows[0]
+  expect(row && 'content' in row ? row.content : '').not.toContain(
+    'persisted-output',
+  )
+})
+
+test('bash output without the inner wrapper is left exactly as it was', () => {
+  // The terminal's `?? rawStdout` fallback (UserBashOutputMessage.tsx:14-18):
+  // no inner tag means the payload is untouched.
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<bash-stdout>README.md\npackage.json</bash-stdout>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: 'README.md\npackage.json',
+  })
+})
+
+test('local-command output keeps a persisted-output wrapper it happens to carry', () => {
+  // Pinned scope limit, matching the terminal: only UserBashOutputMessage
+  // unwraps the inner tag. UserLocalCommandOutputMessage.tsx:22-23 extracts the
+  // two local-command tags and nothing else, so a slash command that prints
+  // that literal text keeps it.
+  expect(
+    rowsForUserOrigin(
+      undefined,
+      '<local-command-stdout><persisted-output>saved</persisted-output></local-command-stdout>',
+    )[0],
+  ).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'local_command_output',
+    content: '<persisted-output>saved</persisted-output>',
+  })
+})
+
 test('<bash-input> stays an operator turn and is NOT folded into the notice', () => {
   // Deliberate exclusion, pinned so nobody "fixes" it by accident: <bash-input>
   // is the command the operator typed, not its output, and the terminal routes

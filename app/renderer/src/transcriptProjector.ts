@@ -1734,7 +1734,20 @@ function parseCommandOutput(text: string): string | null {
   if (!COMMAND_OUTPUT_TAGS.some(tag => text.startsWith(`<${tag}`))) {
     return null
   }
-  const payloads = COMMAND_OUTPUT_TAGS.map(tag => extractXmlTag(text, tag))
+  const payloads = COMMAND_OUTPUT_TAGS.map(tag => {
+    const payload = extractXmlTag(text, tag)
+    if (payload === null || tag !== 'bash-stdout') return payload
+    // Large `!` output nests a SECOND wrapper inside the stdout payload
+    // (`src/utils/processUserInput/processBashCommand.tsx:106` keeps
+    // `buildLargeToolResultMessage`'s `<persisted-output>` unescaped on
+    // purpose). Same fallback semantics as the terminal's
+    // `extractTag(rawStdout, 'persisted-output') ?? rawStdout`
+    // (`src/components/messages/UserBashOutputMessage.tsx:14-18`): absent inner
+    // tag leaves the payload untouched. Scoped to bash exactly as the terminal
+    // scopes it, since `UserLocalCommandOutputMessage.tsx:22-23` does no such
+    // unwrapping.
+    return extractXmlTag(payload, 'persisted-output') ?? payload
+  })
     .map(payload => stripAnsiSequences(payload ?? '').trim())
     .filter(payload => payload.length > 0)
   return payloads.length === 0 ? COMMAND_OUTPUT_NO_CONTENT : payloads.join('\n')
