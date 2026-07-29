@@ -1,4 +1,6 @@
 import type { MemorySnapshot } from '../../shared/protocol.js'
+import { AgentTypeChip } from './AgentChrome.js'
+import { agentTypeMeta } from './agentIdentity.js'
 import {
   selectInstructionFilesByType,
   selectMemoryInstructionCounts,
@@ -39,6 +41,7 @@ export function MemoryPage({
           <MemorySummary snapshot={snapshot} />
           <InstructionFiles snapshot={snapshot} />
           <AutoMemories snapshot={snapshot} />
+          <AgentMemories snapshot={snapshot} />
         </>
       )}
     </>
@@ -248,6 +251,55 @@ function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
           ))}
         </div>
       )}
+    </section>
+  )
+}
+
+/**
+ * Per-agent memory directories (prototype `MemoryPage.jsx:199-210`).
+ *
+ * Absent rather than empty when no agent declares a memory scope, which is what
+ * the prototype does (`agentMem.length > 0 &&`) and is also the honest reading:
+ * most workspaces define no memory-carrying agent, and a permanent "none" row
+ * would report a missing feature rather than an empty list.
+ *
+ * `AgentTypeChip` renders nothing for a role outside the known palette
+ * (`AgentChrome.tsx:66`), so the name falls back to plain text exactly as the
+ * prototype's own `window.AgentTypeChip` guard does.
+ */
+function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
+  if (snapshot.agentMemories.length === 0) return null
+  const count = snapshot.agentMemories.length
+  return (
+    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-text-primary">Agent memory</h3>
+        <span className="font-mono text-[11px] text-text-subtle">
+          {count} {count === 1 ? 'agent' : 'agents'}
+        </span>
+      </div>
+      <div>
+        {snapshot.agentMemories.map(agent => (
+          <div
+            className="flex items-center gap-3 border-b border-shell-seam py-2.5 last:border-b-0 last:pb-0"
+            key={`${agent.agentType}:${agent.scope}`}
+          >
+            {agentTypeMeta(agent.agentType) ? (
+              <AgentTypeChip role={agent.agentType} />
+            ) : (
+              <span className="shrink-0 text-[12px] text-text-muted">
+                {agent.agentType}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-subtle">
+              {agent.directory}
+            </span>
+            <span className="shrink-0 text-[11px] text-text-faint">
+              {agent.fileCount} {agent.fileCount === 1 ? 'file' : 'files'}
+            </span>
+          </div>
+        ))}
+      </div>
     </section>
   )
 }

@@ -50,6 +50,13 @@ import type {
   SettingsSnapshot,
   WorkspaceTrustSnapshot,
 } from '../../shared/protocol.js'
+import {
+  ACCENT_KEYS,
+  ACCENT_LABELS,
+  ACCENT_SWATCH_CLASS,
+  AccentThemeContext,
+  DEFAULT_ACCENT,
+} from './accentTheme.js'
 import { AgentsPage } from './AgentsPage.js'
 import {
   CODE_THEME_KEYS,
@@ -754,8 +761,53 @@ function AppScopeBody({
       <PaneSection>
         <CodeThemePreview />
       </PaneSection>
+      <AppearanceSection />
       <TranscriptDisplaySection snapshot={snapshot} />
     </>
+  )
+}
+
+/**
+ * Accent colour — the prototype's first Appearance control
+ * (`Settings.jsx:332-343`), and the only one of that section's four that belongs
+ * to this scope: syntax highlighting is an engine key on the project's Interface
+ * pane, code theme sits with the transcript preferences below, and code font is
+ * unbuilt.
+ *
+ * A radiogroup rather than five buttons, because the swatches are one choice.
+ * Each swatch names its colour for anything that cannot see it, and the current
+ * one is marked by a ring instead of by colour alone.
+ */
+function AppearanceSection() {
+  const { accent, setAccent } = useContext(AccentThemeContext)
+  return (
+    <PaneSection title="Appearance">
+      <Field
+        desc="Used for active states, the live indicator, and toggles. Stored in this app, not in your settings files."
+        label="Accent color"
+        modified={accent !== DEFAULT_ACCENT}
+        onReset={() => setAccent(DEFAULT_ACCENT)}
+      >
+        <div aria-label="Accent color" className="flex gap-[7px]" role="radiogroup">
+          {ACCENT_KEYS.map(key => (
+            <button
+              aria-checked={accent === key}
+              aria-label={ACCENT_LABELS[key]}
+              className={`h-[22px] w-[22px] rounded-full ${ACCENT_SWATCH_CLASS[key]} ${
+                accent === key
+                  ? 'ring-2 ring-text-primary'
+                  : 'ring-1 ring-white/15'
+              }`}
+              key={key}
+              onClick={() => setAccent(key)}
+              role="radio"
+              title={ACCENT_LABELS[key]}
+              type="button"
+            />
+          ))}
+        </div>
+      </Field>
+    </PaneSection>
   )
 }
 

@@ -45,6 +45,7 @@ const MEMORY: MemorySnapshot = {
       type: 'feedback',
     },
   ],
+  agentMemories: [],
   notes: [],
 }
 

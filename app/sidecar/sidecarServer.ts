@@ -1351,7 +1351,7 @@ export class SidecarServer {
 
   /**
    * P4-15 — the workspace-trust accept verb (protocol.ts: WORKSPACE_TRUST_VERB_TYPES;
-   * `decisions/STARTUP-GATES.md §1.1`). Same fail-closed order as `handleAccountVerb`:
+   * `docs/migration/decisions/STARTUP-GATES.md §1.1`). Same fail-closed order as `handleAccountVerb`:
    * sidecar-LOCAL structural schema → domain presence → dispatch to the domain
    * (which persists via the engine's OWN `saveCurrentProjectConfig` for THIS
    * session's cwd — HC1, no renderer path) → `workspace.trust.result` frame →

@@ -50,6 +50,14 @@ const MEMORY: MemorySnapshot = {
       type: 'feedback',
     },
   ],
+  agentMemories: [
+    {
+      agentType: 'Explore',
+      scope: 'user',
+      directory: '/config/agent-memory/Explore/',
+      fileCount: 3,
+    },
+  ],
   notes: ['Memory bodies stay engine-side.'],
 }
 
@@ -141,6 +149,68 @@ test('renders every memory instruction and auto-memory type', () => {
   for (const label of autoMemoryTypes) {
     expect(html).toContain(`${label}.md`)
   }
+})
+
+/* ── agent memory (P4-34) ─────────────────────────────────────────────────── */
+
+test('agent-memory rows show a known role as its chip and an unknown one as its name', () => {
+  const memory: MemorySnapshot = {
+    ...MEMORY,
+    agentMemories: [
+      {
+        agentType: 'Explore',
+        scope: 'user',
+        directory: '/config/agent-memory/Explore/',
+        fileCount: 4,
+      },
+      {
+        // A user-defined agent outside the known palette: `AgentTypeChip`
+        // renders nothing for it, so the row must still name it.
+        agentType: 'my-plugin-reviewer',
+        scope: 'project',
+        directory: '/repo/.cat-code/agent-memory/my-plugin-reviewer/',
+        fileCount: 1,
+      },
+    ],
+  }
+  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={memory} />)
+
+  expect(html).toContain('Agent memory')
+  expect(html).toContain('2 agents')
+  expect(html).toContain('/config/agent-memory/Explore/')
+  expect(html).toContain('/repo/.cat-code/agent-memory/my-plugin-reviewer/')
+  expect(html).toContain('my-plugin-reviewer')
+  // Counts are pluralised per row, not once for the section.
+  expect(html).toContain('4 files')
+  expect(html).toContain('1 file')
+})
+
+test('one agent reads as one agent, and none renders no section at all', () => {
+  const one = renderToStaticMarkup(
+    <MemoryPage
+      embedded
+      snapshot={{
+        ...MEMORY,
+        agentMemories: [
+          {
+            agentType: 'Explore',
+            scope: 'local',
+            directory: '/repo/.cat-code/agent-memory-local/Explore/',
+            fileCount: 0,
+          },
+        ],
+      }}
+    />,
+  )
+  expect(one).toContain('1 agent')
+  expect(one).not.toContain('1 agents')
+  // A declared scope that has never been written to is a real row reading zero.
+  expect(one).toContain('0 files')
+
+  const none = renderToStaticMarkup(
+    <MemoryPage embedded snapshot={{ ...MEMORY, agentMemories: [] }} />,
+  )
+  expect(none).not.toContain('Agent memory')
 })
 
 test('renders memory waiting state without fixtures', () => {

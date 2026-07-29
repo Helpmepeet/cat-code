@@ -10,9 +10,12 @@
  *  - `WorkspaceSwitchPrompt` — G4: one-cwd-per-session dissolves it.
  *  - the blocking `ReauthGate` modal — Q2: token death never walls the window.
  *    The interim non-blocking reauth banner/wall was itself REMOVED entirely
- *    (#12, 2026-07-20 — `decisions/STARTUP-GATES.md`); the pool error now
- *    surfaces inline at request time. The reauth OAuth-progress card below is a
- *    different surface (it drives an in-flight re-link), and stays.
+ *    (#12, 2026-07-20 — `docs/migration/decisions/STARTUP-GATES.md`); the pool
+ *    error now surfaces inline at request time. P4-34 then removed the floating
+ *    `ReauthOAuthProgress` card that had survived it: with no banner left to
+ *    launch the flow, its `'reauth'` context could only be set by the card's own
+ *    Retry button, so the card could never appear. Re-linking an account runs
+ *    through `StartupOAuth` and the add-account dialog like any other sign-in.
  *
  * Real backing:
  *  - Trust: `isPathTrusted(cwd)` / `hasTrustDialogAccepted`
@@ -493,65 +496,5 @@ export function StartupOAuth({
         </div>
       </div>
     </StartupShell>
-  )
-}
-
-/* ── reauth OAuth progress (non-blocking; the blocking modal is CUT) ─────────── */
-
-/**
- * The reauth flow's live progress, surfaced NON-BLOCKING (the prototype's
- * blocking `ReauthGate` modal is CUT — `STARTUP-GATES.md §5-Q2`). Reuses the
- * shared OAuth waiting UX (`Startup.jsx:423-430`); `success` is NOT rendered here
- * — it surfaces as a toast + the banner clearing on the account re-link
- * (`STARTUP-GATES.md` ledger §27 rows 1882-1883). A compact card (not a full
- * shell) so it floats below the banner rather than covering the window.
- */
-export type ReauthOAuthView =
-  | { phase: 'waiting'; url: string | null }
-  | { phase: 'error'; message: string }
-
-export function ReauthOAuthProgress({
-  view,
-  onPasteCode,
-  onCancel,
-  onRetry,
-}: {
-  view: ReauthOAuthView
-  onPasteCode: (code: string) => void
-  onCancel: () => void
-  onRetry: () => void
-}): ReactNode {
-  return (
-    <div className="mx-auto mt-2 w-full max-w-[520px] rounded-xl border border-shell-seam bg-surface-panel px-5 py-4 shadow-[0_16px_48px_rgba(0,0,0,0.5)]">
-      {view.phase === 'error' ? (
-        <>
-          <div className="mb-3">
-            <Pill tone="danger" label="OAuth error" />
-          </div>
-          <div className="mb-3 rounded-lg border border-tone-danger/20 bg-tone-danger/[0.06] px-3 py-2.5">
-            <code className="break-all font-mono text-[12px] text-tone-danger">
-              OAuth error: {view.message}
-            </code>
-          </div>
-          <div className="flex gap-2">
-            <PrimaryButton autoFocus onClick={onRetry}>
-              Retry <span className="ml-1.5 text-[11px] opacity-60">↵</span>
-            </PrimaryButton>
-            <SecondaryButton onClick={onCancel}>Dismiss</SecondaryButton>
-          </div>
-        </>
-      ) : (
-        <>
-          <h2 className="mb-2 text-[15px] font-semibold tracking-tight text-text-primary">
-            Continue in your browser
-          </h2>
-          <p className="mb-3.5 text-[12.5px] leading-relaxed text-text-muted">
-            Authorize the request to re-link your account, then return here.
-          </p>
-          <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
-          <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
-        </>
-      )}
-    </div>
   )
 }

@@ -73,6 +73,26 @@ export type EditableSettingControl =
       default: string
     }
 
+/**
+ * The reserved `dynamic-enum` option meaning "no override in this file" — the
+ * engine decides.
+ *
+ * Some engine keys are OPTIONAL and resolve at runtime rather than to a fixed
+ * documented default (`model` is the first: `src/utils/settings/types.ts:388`
+ * `z.string().optional()`, resolved per account/provider by
+ * `getDefaultOptionForUser`, `src/utils/model/modelOptions.ts:56`, which is
+ * itself a real option carrying `value: null`). A select over such a key needs a
+ * row for that state, or picking a model becomes a one-way door with no way back
+ * to the engine's choice.
+ *
+ * It is a TOKEN, never a value: the sidecar offers it as an available option and
+ * REMOVES the key when it is chosen (`app/sidecar/settingsDomain.ts`), so this
+ * string is never written to a settings file. Deliberately not the empty string
+ * — `validateEditableSettingValue` rejects zero-length input (a T7 bound) and
+ * that bound stays as it is.
+ */
+export const SETTINGS_ENGINE_DEFAULT = '__catcode.engineDefault__'
+
 export type EditableSettingSpec = {
   /** The exact `SettingsSchema` key this editor writes. */
   key: string
@@ -138,6 +158,23 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     },
   },
   // ── Model & Inference ──────────────────────────────────────────────────────
+  {
+    key: 'model',
+    pane: 'model',
+    label: 'Default model',
+    description:
+      'Model for sessions started afterwards. Leave it on the default to let Cat Code choose per account.',
+    control: {
+      kind: 'dynamic-enum',
+      maxLength: 200,
+      // The engine's own "no override" row, not a model name — see
+      // SETTINGS_ENGINE_DEFAULT. `model` is optional in the schema
+      // (`src/utils/settings/types.ts:388`) and the engine resolves an unset
+      // value per account and provider, so there is no default string to mirror
+      // here and naming one would make the row claim a choice nobody made.
+      default: SETTINGS_ENGINE_DEFAULT,
+    },
+  },
   {
     key: 'alwaysThinkingEnabled',
     pane: 'model',

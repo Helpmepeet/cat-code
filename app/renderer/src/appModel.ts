@@ -25,7 +25,16 @@ export function shouldShowFirstRunOAuth(
   )
 }
 
-export type OAuthContext = 'first-run' | 'reauth' | 'add-account' | null
+/**
+ * Which surface owns the shared `account.login` flow.
+ *
+ * `'reauth'` was removed with the floating reauth card (P4-34): the banner that
+ * used to launch it went with ruling #12
+ * (`docs/migration/decisions/STARTUP-GATES.md`), leaving a context only the
+ * card's own Retry button could set. Re-authentication is the same act as any
+ * other sign-in and runs through these two surfaces.
+ */
+export type OAuthContext = 'first-run' | 'add-account' | null
 
 export function claimOAuthContextForAccountLogin(
   current: OAuthContext,

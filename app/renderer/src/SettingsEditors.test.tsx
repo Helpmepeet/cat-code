@@ -12,8 +12,29 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SettingsSnapshot } from '../../shared/protocol.js'
+import { SETTINGS_ENGINE_DEFAULT } from '../../shared/settingsEditable.js'
 import { SettingsPane } from './SettingsEditors.js'
 import { settingsPaneSpecs } from './settingsEditorModel.js'
+
+/** One `<select>`'s opening tag, by aria-label — the shared control's className
+ * carries `disabled:` variants, so a bare /disabled/ match hits every select. */
+function selectTag(html: string, label: string): string {
+  const match = new RegExp(`<select[^>]*aria-label="${label}"[^>]*>`).exec(html)
+  expect(match).not.toBeNull()
+  return match?.[0] ?? ''
+}
+
+/** The `value` of a select's SELECTED option. Server rendering puts the choice
+ * on the option (`selected=""`), never back on the `<select>` tag. */
+function selectedOption(html: string, label: string): string {
+  const open = new RegExp(`<select[^>]*aria-label="${label}"[^>]*>`).exec(html)
+  expect(open).not.toBeNull()
+  const start = (open?.index ?? 0) + (open?.[0].length ?? 0)
+  const body = html.slice(start, html.indexOf('</select>', start))
+  const chosen = /<option value="([^"]*)" selected=""/.exec(body)
+  expect(chosen).not.toBeNull()
+  return chosen?.[1] ?? ''
+}
 
 function snapshot(partial: Partial<SettingsSnapshot>): SettingsSnapshot {
   return {
@@ -281,6 +302,76 @@ test('a dynamic-enum shows an on-disk value that is not in the live option set',
     />,
   )
   expect(html).toContain('my-removed-style')
+})
+
+/* ── default model (P4-34) ────────────────────────────────────────────────── */
+
+const MODEL_OPTIONS = [
+  {
+    key: 'model',
+    options: [
+      { value: SETTINGS_ENGINE_DEFAULT, label: 'Default (recommended)' },
+      { value: 'opus', label: 'Opus' },
+      { value: 'sonnet', label: 'Sonnet' },
+    ],
+  },
+]
+
+test('an unset default model reads as the engine’s own Default row, not as a model', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [{ source: 'userSettings', origin: '/u.json', keys: [] }],
+        availableOptions: MODEL_OPTIONS,
+      })}
+    />,
+  )
+  const row = html.slice(html.indexOf('>Default model<'))
+  // The engine's wording for "you have not chosen", carried on the wire from
+  // `getDefaultOptionForUser` — never a model name invented to fill the box.
+  expect(row).toContain('Default (recommended)')
+  expect(selectedOption(html, 'Default model')).toBe(SETTINGS_ENGINE_DEFAULT)
+})
+
+test('a chosen default model is selected, with the Default row still offered to undo it', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [{ source: 'userSettings', origin: '/u.json', keys: ['model'] }],
+        resolved: [
+          { key: 'model', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [{ key: 'model', value: 'opus', source: 'userSettings' }],
+        availableOptions: MODEL_OPTIONS,
+      })}
+    />,
+  )
+  expect(selectedOption(html, 'Default model')).toBe('opus')
+  // Without this row the select is a one-way door: no way back to the engine's
+  // own choice once any model is picked.
+  expect(html).toContain(`value="${SETTINGS_ENGINE_DEFAULT}"`)
+  expect(html).toContain('Default (recommended)')
+})
+
+test('the default-model select degrades disabled when the model registry was unreadable', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [{ source: 'userSettings', origin: '/u.json', keys: [] }],
+        // availableOptions omitted → the spawn-time read failed.
+      })}
+    />,
+  )
+  expect(selectTag(html, 'Default model')).toContain('disabled=""')
 })
 
 test('every pane renders at its defaults without throwing, snapshot or not', () => {
