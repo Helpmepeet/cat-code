@@ -1739,6 +1739,13 @@ function fakeRunControlsDomain(): {
       options: ['low', 'medium', 'high'],
     },
     fast: { active: fast, supportedByModel: true, available: true, unavailableReason: null },
+    // Tied to `model` like the two display facts above: the real builder resolves
+    // these from the engine's own auto-compact functions.
+    autoCompact: {
+      enabled: true,
+      threshold: model === null ? null : 181_000,
+      warningThreshold: model === null ? null : 161_000,
+    },
   })
   const domain: SidecarRunControlsDomain = {
     getSnapshot: snapshot,
