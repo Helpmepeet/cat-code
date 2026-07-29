@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test'
-import type { MessageOrigin, UserMessage } from '../../types/message.js'
-import { toSDKMessageOrigin, toSDKMessages } from './mappers.js'
+import type {
+  CompactMetadata,
+  MessageOrigin,
+  UserMessage,
+} from '../../types/message.js'
+import {
+  toSDKCompactMetadata,
+  toSDKMessageOrigin,
+  toSDKMessages,
+} from './mappers.js'
 
 /**
  * `MessageOrigin` (src/types/message.ts:10) has six kinds; five are engine
@@ -96,5 +104,30 @@ describe('toSDKMessages carries provenance', () => {
   test('an operator turn carries no origin key at all (byte-identical to pre-field)', () => {
     const [sdk] = toSDKMessages([userMessage()])
     expect(sdk).not.toHaveProperty('origin')
+  })
+})
+
+describe('toSDKCompactMetadata', () => {
+  test('keeps the real summarized count and preserved segment on the SDK boundary', () => {
+    const compact: CompactMetadata = {
+      trigger: 'auto',
+      preTokens: 178400,
+      messagesSummarized: 34,
+      preservedSegment: {
+        headUuid: 'head-1',
+        anchorUuid: 'anchor-1',
+        tailUuid: 'tail-1',
+      },
+    }
+    expect(toSDKCompactMetadata(compact)).toEqual({
+      trigger: 'auto',
+      pre_tokens: 178400,
+      messages_summarized: 34,
+      preserved_segment: {
+        head_uuid: 'head-1',
+        anchor_uuid: 'anchor-1',
+        tail_uuid: 'tail-1',
+      },
+    })
   })
 })

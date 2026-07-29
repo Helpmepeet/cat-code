@@ -54,6 +54,17 @@ const session: SessionMetadataView = {
 }
 
 const noop = () => {}
+const tasks = {
+  items: [],
+  subagents: [{
+    toolUseId: 'toolu-parent',
+    agentId: 'agent-7',
+    agentName: 'Ritchie',
+    agentType: 'verification',
+    isSidechain: true as const,
+    spawnedAt: Date.UTC(2026, 6, 26, 12, 4, 18),
+  }],
+}
 
 test('renders the read-only drawer with the session + goal sections', () => {
   const html = renderToStaticMarkup(
@@ -83,8 +94,12 @@ test('shows the honest "Not available" deferral note, never mocked worktree/file
     <MetadataInspector session={session} log={log([assistant])} onClose={noop} />,
   )
   expect(html).toContain('Not available')
-  expect(html).toContain('No per-message account is recorded')
   expect(html).toContain('left out rather than invented')
+  // P4-31: the note used to claim attribution was "model and surface", while no
+  // Surface row was ever rendered and no per-message surface field exists on any
+  // frame. It now states that absence instead of contradicting itself.
+  expect(html).toContain('No per-message account or client surface is recorded')
+  expect(html).not.toContain('>Surface<')
 })
 
 test('degrades cleanly with an empty log and no session', () => {
@@ -375,4 +390,53 @@ test('IDE / LSP status is simply absent, with no note about why', () => {
   // was there explained our own gap rather than anything the user can act on.
   expect(html).not.toContain('language-server')
   expect(html).not.toContain('Editor and language')
+})
+
+/* ------------------------------------------------------------------------- *
+ * P4-31 — drawer chrome + the subagent / compaction conditional sections
+ * ------------------------------------------------------------------------- */
+
+test('matches the prototype chrome and source-backed conditional sections', () => {
+  const child: SDKMessage = {
+    ...assistant,
+    uuid: 'child-1',
+    parent_tool_use_id: 'toolu-parent',
+  }
+  const compact: SDKMessage = {
+    type: 'system',
+    subtype: 'compact_boundary',
+    uuid: 'compact-1',
+    session_id: 'engine-xyz',
+    models: [],
+    account: {},
+    compact_metadata: {
+      trigger: 'auto',
+      pre_tokens: 178400,
+      messages_summarized: 34,
+      preserved_segment: {
+        head_uuid: 'u_01',
+        anchor_uuid: 'u_19',
+        tail_uuid: 'u_33',
+      },
+    },
+  }
+
+  const childHtml = renderToStaticMarkup(
+    <MetadataInspector session={session} log={log([child])} tasks={tasks} onClose={noop} />,
+  )
+  expect(childHtml).toContain('animate-toast-in')
+  expect(childHtml).toContain('Subagent')
+  expect(childHtml).toContain('Ritchie')
+  expect(childHtml).toContain('verification')
+  expect(childHtml).toContain('agent-7')
+  expect(childHtml).toContain('yes')
+
+  const compactHtml = renderToStaticMarkup(
+    <MetadataInspector session={session} log={log([compact])} onClose={noop} />,
+  )
+  expect(compactHtml).toContain('Messages summarized')
+  expect(compactHtml).toContain('34')
+  expect(compactHtml).toContain('178k')
+  expect(compactHtml).toContain('u_01')
+  expect(compactHtml).toContain('u_33')
 })

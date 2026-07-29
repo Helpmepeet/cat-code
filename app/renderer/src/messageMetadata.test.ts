@@ -24,7 +24,20 @@ const assistant: SDKMessage = {
   parent_tool_use_id: 'toolu_parent',
 }
 const result: SDKMessage = { ...SDK_MESSAGE_FIXTURE.result[0]!.message, uuid: 'r1' }
-const compact: SDKMessage = { ...findSystem('compact_boundary'), uuid: '0-0-0-0-c1' }
+const compact: SDKMessage = {
+  ...findSystem('compact_boundary'),
+  uuid: '0-0-0-0-c1',
+  compact_metadata: {
+    trigger: 'auto',
+    pre_tokens: 167034,
+    messages_summarized: 34,
+    preserved_segment: {
+      head_uuid: 'head-1',
+      anchor_uuid: 'anchor-1',
+      tail_uuid: 'tail-1',
+    },
+  },
+}
 const streamEvent: SDKMessage = SDK_MESSAGE_FIXTURE.stream_event[0]!.message
 
 function log(messages: SDKMessage[]): RawMessageSessionLog {
@@ -77,11 +90,35 @@ describe('selectMessageMetadata', () => {
     expect(meta!.stopReason).toBe('end_turn')
   })
 
-  test('system compact_boundary: compaction trigger + preTokens', () => {
+  test('system compact_boundary: all real compaction metadata', () => {
     const meta = selectMessageMetadata(log([compact]), '0-0-0-0-c1')
     expect(meta!.compaction).not.toBeNull()
     expect(meta!.compaction!.trigger).toBe('auto')
     expect(meta!.compaction!.preTokens).toBe(167034)
+    expect(meta!.compaction!.messagesSummarized).toBe(34)
+    expect(meta!.compaction!.preservedSegment).toEqual({
+      headUuid: 'head-1',
+      tailUuid: 'tail-1',
+    })
+  })
+
+  test('joins a nested message to source-backed subagent identity by parent tool use id', () => {
+    const meta = selectMessageMetadata(log([assistant]), 'a1', [{
+      toolUseId: 'toolu_parent',
+      agentId: 'agent-7',
+      agentName: 'Ritchie',
+      agentType: 'verification',
+      isSidechain: true,
+      spawnedAt: 100,
+    }])
+    expect(meta!.subagent).toEqual({
+      toolUseId: 'toolu_parent',
+      agentId: 'agent-7',
+      agentName: 'Ritchie',
+      agentType: 'verification',
+      isSidechain: true,
+      spawnedAt: 100,
+    })
   })
 
   test('unknown uuid → null; null uuid → null', () => {

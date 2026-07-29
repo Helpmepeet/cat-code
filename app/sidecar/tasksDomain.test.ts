@@ -155,7 +155,15 @@ test('keeps a terminal backgrounded local_agent visible (blocked/completed hando
 test('excludes the foregrounded local_agent — its messages already render in the main pane', () => {
   const snapshot = tasksSnapshot(
     {
-      a1: agentTask({ id: 'a1', status: 'running', isBackgrounded: false }),
+      a1: agentTask({
+        id: 'a1',
+        status: 'running',
+        isBackgrounded: false,
+        toolUseId: 'toolu-a1',
+        agentName: 'lead-worker',
+        agentType: 'verification',
+        startTime: 100,
+      }),
       a2: agentTask({ id: 'a2', status: 'running', isBackgrounded: true }),
     },
     'a1',
@@ -163,6 +171,16 @@ test('excludes the foregrounded local_agent — its messages already render in t
   const ids = snapshot.items.map(item => item.id)
   expect(ids).not.toContain('a1')
   expect(ids).toContain('a2')
+  expect(snapshot.subagents).toEqual([
+    {
+      toolUseId: 'toolu-a1',
+      agentId: 'agent-1',
+      agentName: 'lead-worker',
+      agentType: 'verification',
+      isSidechain: true,
+      spawnedAt: 100,
+    },
+  ])
   expect(snapshot.foregroundedTaskId).toBe('a1')
 })
 
@@ -208,9 +226,53 @@ test('the outbound tasks.snapshot frame is secretGuard-clean even with token-sha
   expect(scanForSecrets(frame).ok).toBe(true)
 })
 
+// P4-31 — the bash-only fixture above leaves `subagents` EMPTY, so it never
+// exercised the new outbound field. Agent names and types are user-authored
+// (`.claude/agents/<name>.md`), so they are the arm of this frame most likely to
+// carry pasted credential-shaped text.
+test('the outbound subagents field is covered by secretGuard, and a real secret in an agent name is caught', () => {
+  const clean = tasksSnapshot(
+    {
+      a1: agentTask({
+        id: 'a1',
+        status: 'running',
+        isBackgrounded: true,
+        toolUseId: 'toolu-a1',
+        agentName: 'curl -H "Authorization: Bearer sk-fake-not-a-real-secret"',
+        agentType: 'verification',
+        startTime: 100,
+      }),
+    },
+    undefined,
+  )
+  // The field is actually populated — otherwise this test proves nothing.
+  expect(clean.subagents).toHaveLength(1)
+  const frame: TasksSnapshotFrame = {
+    kind: 'tasks.snapshot',
+    protocolVersion: 1,
+    sessionId: 'sess-1',
+    tasks: clean,
+  }
+  expect(scanForSecrets(frame).ok).toBe(true)
+
+  // Failing-direction proof that the guard actually DESCENDS into `subagents`
+  // rather than stopping at `items`. It must be a secret KEY, not a
+  // secret-shaped value: `scanForSecrets` matches on key names only
+  // (`app/shared/secretGuard.ts:28-41`), so a credential pasted into a name
+  // string is deliberately out of its scope — the assertion above is about the
+  // guard running, not about redacting user text.
+  const planted = {
+    ...clean,
+    subagents: [{ ...clean.subagents![0]!, accessToken: 'planted' }],
+  }
+  const result = scanForSecrets({ ...frame, tasks: planted })
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.path).toContain('subagents')
+})
+
 test('an empty task map produces an empty, well-formed snapshot', () => {
-  expect(tasksSnapshot(undefined, undefined)).toEqual({ items: [] })
-  expect(tasksSnapshot({}, undefined)).toEqual({ items: [] })
+  expect(tasksSnapshot(undefined, undefined)).toEqual({ items: [], subagents: [] })
+  expect(tasksSnapshot({}, undefined)).toEqual({ items: [], subagents: [] })
 })
 
 /* --------------------------------------------------------------------------- *
