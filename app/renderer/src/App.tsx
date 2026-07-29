@@ -272,6 +272,16 @@ import {
 } from './SessionActionsMenu.js'
 import { resolveSessionActions } from './sessionActions.js'
 import {
+  BranchDialog,
+  ExportDialog,
+} from './SessionActionDialogs.js'
+import {
+  exportFileName,
+  selectExportPreview,
+  selectLatchedExportPreview,
+  type LatchedExportPreview,
+} from './sessionActionDialogState.js'
+import {
   createSessionActionRuntimeState,
   reduceSessionActionRuntimeState,
   selectLatestSessionActionResult,
@@ -429,6 +439,32 @@ export function App() {
     initial: string
   } | null>(null)
   const [metadataOpen, setMetadataOpen] = useState(false)
+  // P4-30 — the two SAModal dialogs the ⋯ menu opens (PARITY-LEDGER §17). Both
+  // are bound to the row the menu was opened for, like the menu itself.
+  //
+  // Branch is a CONFIRMATION gate: `session.branch` writes a real fork on disk
+  // (`createFork`), and before this it fired straight off the menu click. Nothing
+  // is dispatched until the dialog's primary button.
+  //
+  // Export is the reverse shape: the verb is dispatched WHEN the dialog opens,
+  // because the dialog's whole job is to show the transcript the sidecar renders.
+  // The dialog holds the `requestId` it minted so it displays its OWN result and
+  // never another action's (T5a-analog).
+  const [branchConfirm, setBranchConfirm] = useState<{
+    sessionId: SessionId
+    title: string | null
+  } | null>(null)
+  const [exportDialog, setExportDialog] = useState<{
+    sessionId: SessionId
+    requestId: string
+    title: string | null
+  } | null>(null)
+  // The export result, LATCHED against the request that asked for it. The
+  // runtime state keeps only the latest result per session, so without this an
+  // unrelated rename/branch result arriving while the dialog is open would blank
+  // the transcript back to pending (`selectLatchedExportPreview`).
+  const [latchedExport, setLatchedExport] =
+    useState<LatchedExportPreview | null>(null)
   const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
   const [workspaceLayout, setWorkspaceLayoutState] =
     useState<WorkspaceLayoutState>(
@@ -1275,13 +1311,20 @@ export function App() {
   )
 
   // P4-6b — surface the sidecar's real outcome (never an optimistic guess): toast
-  // the redacted `message`, and on a successful export copy the engine-rendered
-  // transcript to the clipboard. Deduped by `requestId` so a re-render never
+  // the redacted `message`. Deduped by `requestId` so a re-render never
   // re-toasts. (rename's live relabel rides the existing `session-title` outbound
   // frame — no extra renderer work.)
   // Deduped by requestId across ALL sessions (a globally-unique id toasts once,
   // ever) so switching back to a tab that already ran an action never re-surfaces
   // its stale outcome.
+  //
+  // P4-30 — an export result belonging to an OPEN ExportDialog is that dialog's
+  // to render, so this effect stays silent for it (and marks it seen, so closing
+  // the dialog can never make a stale outcome pop as a toast later). Read through
+  // a ref, not a dep: the effect must fire on the RESULT, not on the dialog
+  // opening or closing.
+  const openExportRequestIdRef = useRef<string | null>(null)
+  openExportRequestIdRef.current = exportDialog?.requestId ?? null
   const toastedActionRequestsRef = useRef<Set<string>>(new Set())
   const latestSessionActionResult = selectLatestSessionActionResult(
     sessionActionRuntime,
@@ -1292,15 +1335,31 @@ export function App() {
     if (!result) return
     if (toastedActionRequestsRef.current.has(result.requestId)) return
     toastedActionRequestsRef.current.add(result.requestId)
-    if (result.verb === 'export' && result.ok && result.exportText) {
-      void navigator.clipboard
-        .writeText(result.exportText)
-        .then(() => toast('Transcript copied to clipboard', { tone: 'success' }))
-        .catch(() => toast(result.message, { tone: 'warn' }))
-      return
-    }
+    if (result.requestId === openExportRequestIdRef.current) return
     toast(result.message, { tone: result.ok ? 'success' : 'danger' })
   }, [latestSessionActionResult, toast])
+
+  // P4-30 — latch the open Export dialog's OWN result the first time it lands.
+  // It reads the target session's latest result rather than the active session's,
+  // because the dialog can target any row the menu was opened for. A pending
+  // projection never overwrites a latched one, which is what keeps a later
+  // unrelated result from blanking the rendered transcript.
+  useEffect(() => {
+    if (!exportDialog) return
+    const projected = selectExportPreview(
+      selectLatestSessionActionResult(
+        sessionActionRuntime,
+        exportDialog.sessionId,
+      ),
+      exportDialog.requestId,
+    )
+    if (projected.status === 'pending') return
+    setLatchedExport(current =>
+      current?.requestId === exportDialog.requestId
+        ? current
+        : { requestId: exportDialog.requestId, state: projected },
+    )
+  }, [exportDialog, sessionActionRuntime])
 
   // Decision #5 (audit §I.4) — surface a FAILED verb ack that would otherwise be
   // silent (a success re-broadcasts a snapshot and the UI already updates; a
@@ -2430,7 +2489,7 @@ export function App() {
                   anchor={sessionActionsTarget.anchor}
                   onAction={kind => {
                     if (kind === 'metadata') setMetadataOpen(true)
-                    else if (kind === 'copy') copyForLlm(targetId)
+                    else if (kind === 'copy-text') copyForLlm(targetId)
                     else if (kind === 'open') selectTab(targetId)
                     else if (kind === 'rename')
                       setRenamingSession({
@@ -2438,15 +2497,26 @@ export function App() {
                         anchor: sessionActionsTarget.anchor,
                         initial: targetRow.title ?? '',
                       })
-                    else if (kind === 'export')
+                    else if (kind === 'export') {
+                      // P4-30 — dispatch AND open: the dialog exists to show the
+                      // transcript the sidecar renders, so it opens pending and
+                      // fills in when its own result arrives.
+                      const requestId = newRequestId()
+                      setExportDialog({
+                        sessionId: targetId,
+                        requestId,
+                        title: targetRow.title ?? null,
+                      })
                       sendSessionActionVerb(targetId, {
                         type: 'session.export',
-                        requestId: newRequestId(),
+                        requestId,
                       })
-                    else if (kind === 'branch')
-                      sendSessionActionVerb(targetId, {
-                        type: 'session.branch',
-                        requestId: newRequestId(),
+                    } else if (kind === 'branch')
+                      // P4-30 — CONFIRM FIRST. The verb writes a real fork on
+                      // disk; it is dispatched by the dialog, not by this click.
+                      setBranchConfirm({
+                        sessionId: targetId,
+                        title: targetRow.title ?? null,
                       })
                   }}
                   onClose={() => setSessionActionsTarget(null)}
@@ -2473,6 +2543,58 @@ export function App() {
             }}
           />
         ) : null}
+
+        {/* P4-30 — the SAModal dialog layer (PARITY-LEDGER §17). Branch gates the
+         * fork behind a confirmation; Export shows the engine-rendered transcript
+         * with its file name before anything is copied. */}
+        {branchConfirm ? (
+          <BranchDialog
+            title={branchConfirm.title}
+            onClose={() => setBranchConfirm(null)}
+            onConfirm={() => {
+              sendSessionActionVerb(branchConfirm.sessionId, {
+                type: 'session.branch',
+                requestId: newRequestId(),
+              })
+              setBranchConfirm(null)
+            }}
+          />
+        ) : null}
+
+        {exportDialog
+          ? (() => {
+              const preview = selectLatchedExportPreview(
+                latchedExport,
+                exportDialog.requestId,
+              )
+              return (
+                <ExportDialog
+                  title={exportDialog.title}
+                  fileName={exportFileName(exportDialog.title)}
+                  preview={preview}
+                  {...(preview.status === 'ready'
+                    ? {
+                        onCopy: () => {
+                          void navigator.clipboard
+                            .writeText(preview.text)
+                            .then(() =>
+                              toast('Transcript copied to clipboard', {
+                                tone: 'success',
+                              }),
+                            )
+                            .catch(() =>
+                              toast('Could not write to the clipboard', {
+                                tone: 'warn',
+                              }),
+                            )
+                        },
+                      }
+                    : {})}
+                  onClose={() => setExportDialog(null)}
+                />
+              )
+            })()
+          : null}
 
         {metadataOpen && activeSessionId ? (
           <MetadataInspector

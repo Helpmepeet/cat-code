@@ -53,12 +53,54 @@ test('renders the menu with a scrim and the Session actions label', () => {
   expect(html).toContain('role="menu"')
 })
 
-test('active-open row: Copy + Inspect render as live menuitem buttons', () => {
+test('active-open row: Copy hosts a flyout and Inspect renders as a live menuitem button', () => {
   const html = render(true)
-  expect(html).toContain('Copy transcript for LLM')
+  // P4-30 — Copy became the flyout HOST (`SessionActions.jsx:174`): it renders
+  // with a chevron and `aria-haspopup`, and it is NOT a dispatching button. Its
+  // variants live in the submenu, which only opens on hover/focus.
+  expect(html).toContain('aria-haspopup="menu"')
+  expect(html).toContain('aria-expanded="false"')
+  expect(html).not.toContain('Copy transcript for LLM')
   expect(html).toContain('Inspect metadata…')
-  // Two live verbs (Open, Copy, Inspect) → real <button> menuitems present.
   expect(html).toContain('<button')
+})
+
+test('P4-30: EVERY rendered row carries a glyph, including inside the flyout', () => {
+  // Regression: `SessionActionIcon` fell through to `return null` for
+  // `copy-text`, so that row drew an empty span in a `gap-2` flex and its label
+  // sat a glyph-width left of its sibling. The union is now exhaustive at
+  // compile time; this pins the rendered result.
+  for (const item of resolveSessionActions(row(), { isActiveOpen: true })) {
+    for (const each of [item, ...(item.flyout ?? [])]) {
+      const html = renderToStaticMarkup(
+        <SessionActionsMenu
+          items={[each.flyout ? { ...each, flyout: undefined } : each]}
+          anchor={{ top: 0, left: 0 }}
+          onAction={noop}
+          onClose={noop}
+        />,
+      )
+      expect(html).toContain('<svg')
+    }
+  }
+})
+
+test('P4-30: the flyout host is Tab-reachable, so folding Copy into it kept it keyboard-usable', () => {
+  // Before the flyout, the copy verb was a plain <button> in the Tab order.
+  // Without tabIndex the host is an unfocusable <div role="menuitem"> and the
+  // onFocus open handler is dead code.
+  const html = render(true)
+  expect(html).toContain('tabindex="0"')
+  expect(html).toContain('aria-haspopup="menu"')
+})
+
+test('P4-30: the menu renders leading icons, the History section label and the sa-pop entrance', () => {
+  const html = render(true)
+  // SA_IC icon slot — every row now carries a glyph, and the panel animates in.
+  expect(html).toContain('animate-sa-pop')
+  expect(html).toContain('<svg')
+  // SectionLabel: History is the ONE labelled section in the prototype.
+  expect(html).toContain('>History<')
 })
 
 test('a still-deferred verb (Rewind) renders disabled with a "soon" tag and the reason as a tooltip', () => {

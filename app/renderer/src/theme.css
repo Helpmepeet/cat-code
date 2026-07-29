@@ -152,9 +152,29 @@
   }
 }
 
+/* P4-30 `sa-pop` — the session-action menu + dialog entrance (the prototype's
+ * `sa-pop`, "CatCode Web App.html":68). Same class-not-inline-style reason as
+ * `catcode-toast-in` above: SSR emits the class and skips the animation. The
+ * prototype runs it at 0.12s on the menu and 0.14s on a modal; one duration
+ * here, because the two never appear together. */
+@keyframes catcode-sa-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 @layer components {
   .animate-toast-in {
     animation: catcode-toast-in 0.18s ease-out both;
+  }
+
+  .animate-sa-pop {
+    animation: catcode-sa-pop 0.13s ease both;
   }
 
   /* P4-17 Welcome hero — the neon-cat pink glow (Welcome.jsx:9 drop-shadow),

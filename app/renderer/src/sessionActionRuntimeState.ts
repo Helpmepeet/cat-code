@@ -6,9 +6,14 @@
  * `transcriptProjector.ts`). There is no snapshot — a session-action verb has no
  * live read-seam; the reducer only records the most recent RESULT per session so a
  * consumer can correlate the outcome by `requestId` (T5a-analog) and act on it:
- * toast the `message`, offer the `exportText` as a download/clipboard, or surface
+ * toast the `message`, show the `exportText` in the Export dialog (P4-30 — the
+ * clipboard is its only sink; there is no file-write path in `app/`), or surface
  * the `branchEngineSessionId` of a freshly-forked session — never an optimistic
  * guess, always the sidecar's real outcome.
+ *
+ * LATEST-ONLY, deliberately: a consumer that must survive a later unrelated
+ * result holds its own latch keyed by `requestId` (`selectLatchedExportPreview`),
+ * rather than this reducer growing per-request history.
  */
 
 import type {

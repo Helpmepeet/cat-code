@@ -48,11 +48,39 @@ describe('resolveSessionActions', () => {
 
   test('every disabled item carries a source-cited reason; every enabled one does not', () => {
     for (const ctx of [{ isActiveOpen: true }, { isActiveOpen: false }]) {
-      for (const item of resolveSessionActions(row(), ctx)) {
+      // P4-30 — walks flyout CHILDREN too, so a submenu row can never smuggle in
+      // a dead affordance with no reason.
+      for (const item of resolveSessionActions(row(), ctx).flatMap(i => [
+        i,
+        ...(i.flyout ?? []),
+      ])) {
         if (item.enabled) expect(item.reason).toBeUndefined()
         else expect(typeof item.reason).toBe('string')
       }
     }
+  })
+
+  test('P4-30: Copy is a non-dispatching flyout host over the two copy variants', () => {
+    const copy = byKind(resolveSessionActions(row(), { isActiveOpen: true })).get('copy')!
+    expect(copy.label).toBe('Copy')
+    const children = copy.flyout ?? []
+    expect(children.map(c => c.kind)).toEqual(['copy-md', 'copy-text'])
+
+    // Markdown stays the owner-flagged §0 defer (no engine markdown renderer):
+    // rendered, disabled, with an honest reason — never a Potemkin button.
+    const markdown = children.find(c => c.kind === 'copy-md')!
+    expect(markdown.enabled).toBe(false)
+    expect(markdown.reason).toContain('not available yet')
+
+    // The plain-text child is the real, already-wired copy action.
+    expect(children.find(c => c.kind === 'copy-text')!.enabled).toBe(true)
+  })
+
+  test('P4-30: a flyout host that is itself disabled carries the group reason', () => {
+    const copy = byKind(resolveSessionActions(row(), { isActiveOpen: false })).get('copy')!
+    expect(copy.enabled).toBe(false)
+    expect(copy.reason).toContain('Open this session first')
+    expect(copy.flyout?.every(child => !child.enabled)).toBe(true)
   })
 
   test('Open is enabled for a registry-backed row, disabled+reason for history-only', () => {
