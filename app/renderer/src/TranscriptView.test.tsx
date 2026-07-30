@@ -1187,6 +1187,58 @@ test('P4-1: the inspector overlay renders nothing when closed (null row)', () =>
   ).toBe('')
 })
 
+test('P4-36: a revealed hidden row renders DIMMED, and only when revealed', () => {
+  // Built from the REAL projection of a synthetic frame (the engine's hidden
+  // tier), not a hand-made row: the dim depends on the read-time `isHidden`
+  // mark, so a hand-made row would prove nothing about the wiring.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 's',
+    engineSessionId: 'engine-s',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  const hiddenFrame: SDKMessage = {
+    type: 'user',
+    message: { role: 'user', content: 'engine bookkeeping turn' },
+    parent_tool_use_id: null,
+    session_id: 's',
+    uuid: '00000000-0000-4000-8000-0000000036b2',
+    isSynthetic: true,
+  }
+  state = projectServerFrame(state, {
+    kind: 'event',
+    protocolVersion: 1,
+    sessionId: 's',
+    event: { type: 'message', message: hiddenFrame },
+  })
+
+  // Default view: the row is absent entirely (the transcript the app has always
+  // shown), so there is nothing to dim.
+  const plain = renderToStaticMarkup(
+    <TranscriptRowsView rows={selectNestedTranscriptRows(state, 's')} />,
+  )
+  expect(plain).not.toContain('engine bookkeeping turn')
+  expect(plain).not.toContain('opacity-55')
+
+  // Revealed view: the row renders, wrapped in the prototype's 0.55 dim
+  // (Chat.jsx:1285), so it never passes as ordinary conversation.
+  const revealed = renderToStaticMarkup(
+    <TranscriptRowsView rows={selectNestedTranscriptRows(state, 's', true)} />,
+  )
+  expect(revealed).toContain('engine bookkeeping turn')
+  expect(revealed).toContain('opacity-55')
+})
+
 test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone', () => {
   const row = projectedBashRow()
   // Found at the top level.

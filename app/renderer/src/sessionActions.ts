@@ -61,6 +61,15 @@ export type SessionActionKind =
   | 'copy-md'
   | 'copy-text'
   | 'export'
+  /**
+   * P4-36 — the transcript-mode hidden-row reveal (`Chat.jsx:1199-1203`). TWO
+   * kinds, not one stateful row, because the glyph vocabulary is keyed by kind
+   * alone (`SessionActionIcons.tsx`) and the prototype's control swaps eye ↔
+   * eye-off with its state. Exactly one of them is ever present, and only when
+   * the session HAS a hidden tier.
+   */
+  | 'reveal-hidden'
+  | 'hide-hidden'
 
 /** Menu grouping (dividers between non-empty sections), mirroring the prototype. */
 export type SessionActionSection = 'primary' | 'history' | 'transfer'
@@ -91,6 +100,15 @@ export type SessionActionsContext = {
    * Inspect-metadata require it; every other verb ignores it.
    */
   isActiveOpen: boolean
+  /**
+   * P4-36 — does this session's transcript hold hidden-tier rows
+   * (`selectHasHiddenRows`)? The reveal row only exists when it does, matching
+   * the prototype's `messages.some(m => m.meta)` guard: no toggle for an empty
+   * tier, and no disabled row promising a view that has nothing in it.
+   */
+  hasHiddenRows?: boolean
+  /** P4-36 — is the hidden tier currently revealed for this session? */
+  hiddenRevealed?: boolean
 }
 
 const DEFER = {
@@ -116,6 +134,31 @@ export function resolveSessionActions(
   // Rename / Export / Branch run inside the session's OWN live engine (the verb is
   // dispatched to its sidecar), so they are reachable ONLY for a LIVE row.
   const live = row.live === true
+  // P4-36 — the reveal changes what the TRANSCRIPT PANE draws, so it is offered
+  // only for the row that IS the attached tab (the same reason Copy and
+  // Inspect-metadata are active-open gated), and only when that transcript
+  // actually holds a hidden tier. Absent rather than disabled: an empty tier has
+  // nothing to promise. The prototype hosts this in a chat header; that header
+  // was deleted by the 2026-07-12 fidelity correction (`App.tsx:2969-2973`), and
+  // the operator placed it here on 2026-07-30.
+  const hiddenTier: SessionActionItem[] =
+    ctx.isActiveOpen && ctx.hasHiddenRows === true
+      ? [
+          ctx.hiddenRevealed === true
+            ? {
+                kind: 'hide-hidden',
+                label: 'Hide hidden messages',
+                section: 'history',
+                enabled: true,
+              }
+            : {
+                kind: 'reveal-hidden',
+                label: 'Show hidden messages',
+                section: 'history',
+                enabled: true,
+              },
+        ]
+      : []
   return [
     {
       kind: 'open',
@@ -150,6 +193,7 @@ export function resolveSessionActions(
       enabled: false,
       reason: DEFER.rewind,
     },
+    ...hiddenTier,
     {
       kind: 'metadata',
       label: 'Inspect metadata…',

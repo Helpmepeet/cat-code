@@ -124,6 +124,7 @@ export const TranscriptView = memo(function TranscriptView({
   cwd,
   branch,
   restorePhase,
+  revealHidden,
 }: {
   state: TranscriptState
   activeSessionId: SessionId | null
@@ -138,10 +139,16 @@ export const TranscriptView = memo(function TranscriptView({
   branch?: string | null
   /** IS-C (M5) — restore affordance phase; null for an ordinary live pane. */
   restorePhase?: RestorePhase | null
+  /**
+   * P4-36 — transcript mode: keep the engine's hidden tier (`isSynthetic`) in
+   * the pane, dimmed. Owned by App per session and toggled from the session
+   * actions menu; false is the ordinary transcript.
+   */
+  revealHidden?: boolean
 }) {
   return (
     <TranscriptRowsView
-      rows={selectNestedTranscriptRows(state, activeSessionId)}
+      rows={selectNestedTranscriptRows(state, activeSessionId, revealHidden)}
       accounts={accounts ?? null}
       orchestratorActive={orchestratorActive ?? false}
       onToggleOrchestrator={onToggleOrchestrator}
@@ -231,9 +238,20 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         {restored ? (
           <RestoredSessionDivider resuming={restorePhase === 'resuming'} />
         ) : null}
-        {items.map(item => (
-          <DisplayItemView item={item} key={displayItemKey(item)} />
-        ))}
+        {items.map(item =>
+          // P4-36 — a revealed hidden row reads dimmed (`Chat.jsx:1285`
+          // `opacity: 0.55`), so transcript mode never passes engine bookkeeping
+          // off as ordinary conversation. `isHidden` is only ever present when
+          // the caller asked for the revealed view, so the default transcript
+          // takes the untouched branch and keeps its DOM exactly as before.
+          isRevealedHiddenItem(item) ? (
+            <div className="opacity-55" key={displayItemKey(item)}>
+              <DisplayItemView item={item} />
+            </div>
+          ) : (
+            <DisplayItemView item={item} key={displayItemKey(item)} />
+          ),
+        )}
       </div>
     )
   }
@@ -351,6 +369,15 @@ function groupDisplayItems(
 
 function displayItemKey(item: ReasoningLayoutItem): string {
   return item.kind === 'single' ? item.row.id : item.id
+}
+
+/**
+ * P4-36 — is this item a revealed hidden-tier row? Only single rows can be:
+ * the hidden tier is user frames, and every grouped item (agent DelegateGroup,
+ * reasoning run) is built from assistant rows, which the engine never hides.
+ */
+function isRevealedHiddenItem(item: ReasoningLayoutItem): boolean {
+  return item.kind === 'single' && item.row.isHidden === true
 }
 
 /**

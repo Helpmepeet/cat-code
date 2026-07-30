@@ -55,6 +55,10 @@ export function SessionActionIcon({
       return <ActionFileIcon />
     case 'export':
       return <ActionExportIcon />
+    case 'reveal-hidden':
+      return <ActionEyeIcon />
+    case 'hide-hidden':
+      return <ActionEyeOffIcon />
     default: {
       const exhaustive: never = kind
       void exhaustive
@@ -148,6 +152,31 @@ export function ActionFileIcon(): ReactNode {
     <Glyph>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
+    </Glyph>
+  )
+}
+
+/**
+ * P4-36 — the transcript-mode reveal pair (`Chat.jsx:1208-1211`): the open eye
+ * for "show the hidden tier", the struck-through eye for "hide it again". The
+ * geometry is the prototype's, redrawn on the house `Glyph` grammar so it
+ * inherits the row's hover tint like every other action icon.
+ */
+export function ActionEyeIcon(): ReactNode {
+  return (
+    <Glyph>
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </Glyph>
+  )
+}
+
+export function ActionEyeOffIcon(): ReactNode {
+  return (
+    <Glyph>
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <path d="M1 1l22 22" />
+      <path d="M4.06 8A18.5 18.5 0 0 0 2 12s3 8 10 8a9.12 9.12 0 0 0 5.94-2.06" />
     </Glyph>
   )
 }

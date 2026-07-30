@@ -85,6 +85,31 @@ test('P4-30: EVERY rendered row carries a glyph, including inside the flyout', (
   }
 })
 
+test('P4-36: the hidden-row reveal renders as a live menuitem with its own glyph', () => {
+  for (const hiddenRevealed of [false, true]) {
+    const html = renderToStaticMarkup(
+      <SessionActionsMenu
+        items={resolveSessionActions(row(), {
+          isActiveOpen: true,
+          hasHiddenRows: true,
+          hiddenRevealed,
+        })}
+        anchor={{ top: 0, left: 0 }}
+        onAction={noop}
+        onClose={noop}
+      />,
+    )
+    expect(html).toContain(
+      hiddenRevealed ? 'Hide hidden messages' : 'Show hidden messages',
+    )
+    // The eye/eye-off pair: the struck-through variant carries the slash path,
+    // which is how the two glyphs are told apart in static markup.
+    expect(html.includes('M1 1l22 22')).toBe(hiddenRevealed)
+  }
+  // No hidden tier ⇒ the row is absent, not a disabled "soon" row.
+  expect(render(true)).not.toContain('hidden messages')
+})
+
 test('P4-30: the flyout host is Tab-reachable, so folding Copy into it kept it keyboard-usable', () => {
   // Before the flyout, the copy verb was a plain <button> in the Tab order.
   // Without tabIndex the host is an unfocusable <div role="menuitem"> and the

@@ -29,6 +29,12 @@
  * (`decisions/AGENT-CHROME.md`) is a separate read-time transform,
  * `selectNestedTranscriptRows` — rows with a non-null `parentToolUseId`
  * never interleave at top level.
+ *
+ * P4-36 hidden tier: rows the engine keeps out of the default transcript
+ * (`isSynthetic`) are STORED like any other row and filtered per read, so the
+ * reveal control has real rows to show and revealing one restores it to its
+ * arrival position. Same discipline as tool status: the tier lives in
+ * `hiddenFrameIds`, never as a second copy of the transcript.
  */
 
 import type { SDKMessage } from '@cat-code/engine/session-events'
@@ -44,6 +50,14 @@ type FrameRowSource = {
   sessionId: SessionId
   /** SDK frame UUID supplied by the producer. */
   frameId: string
+  /**
+   * P4-36 hidden tier. READ-TIME ONLY: `selectTranscriptRows` attaches this
+   * when the caller asked for the revealed view, exactly the way tool-card
+   * status is joined in (never stored, never mutated onto a row in `rows`).
+   * Absent on every stored row AND on every row of the default view, so a
+   * consumer that ignores it renders the transcript it always rendered.
+   */
+  isHidden?: true
 }
 
 type RowSource = FrameRowSource & {
@@ -317,6 +331,20 @@ type TranscriptSessionState = {
    * first init frame arrives (or if the sidecar's catalog degraded to empty).
    */
   slashCommands: string[]
+  /**
+   * P4-36 hidden tier: frame ids whose rows the engine hides from the default
+   * transcript (`isSynthetic` = `isMeta || isVisibleInTranscriptOnly`,
+   * `src/utils/messages/mappers.ts:203`). Their rows are stored in `rows` in
+   * arrival order like any other row, so revealing them puts each one back in
+   * its real place instead of appending a second, re-ordered copy. Membership
+   * is the only thing recorded here; whether it is SHOWN is decided per read
+   * (`selectTranscriptRows(state, id, revealHidden)`), mirroring the engine's
+   * own `shouldShowUserMessage(message, isTranscriptMode)`
+   * (`src/utils/messages.ts:4823`). A frame lands here only when it actually
+   * appended rows, so a non-empty map means the reveal control has something
+   * to show.
+   */
+  hiddenFrameIds: Record<string, true>
 }
 
 export type TranscriptState = {
@@ -333,6 +361,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     seenFrameIds: {},
     toolResultsByUseId: {},
     slashCommands: [],
+    hiddenFrameIds: {},
   }
 }
 
@@ -344,14 +373,29 @@ export function createTranscriptState(): TranscriptState {
  * Rows are stored as pure producer facts; tool status/result are joined in
  * HERE from the correlation map on every read, never mutated onto a stored
  * row. A `tool-use` row with no matching entry yet reads as `pending`.
+ *
+ * P4-36: the hidden tier is the SECOND read-time join. `revealHidden` is the
+ * projector's `isTranscriptMode` (`shouldShowUserMessage`,
+ * `src/utils/messages.ts:4823`): false drops the hidden rows, true keeps them
+ * in place carrying `isHidden` so the view can dim them. A session with no
+ * hidden frames skips both branches, so the overwhelmingly common transcript
+ * pays nothing for the feature.
  */
 export function selectTranscriptRows(
   state: TranscriptState,
   sessionId: SessionId | null,
+  revealHidden = false,
 ): TranscriptRow[] {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return []
-  return session.rows.map(row => {
+  const hidden = session.hiddenFrameIds
+  const visible =
+    Object.keys(hidden).length === 0
+      ? session.rows
+      : revealHidden
+        ? session.rows.map(row => (hidden[row.frameId] ? markHidden(row) : row))
+        : session.rows.filter(row => !hidden[row.frameId])
+  return visible.map(row => {
     if (row.kind !== 'tool-use') return row
     const result = session.toolResultsByUseId[row.toolUseId] ?? null
     const status: ToolCardStatus = result
@@ -362,6 +406,27 @@ export function selectTranscriptRows(
     if (row.status === status && row.result === result) return row
     return { ...row, status, result }
   })
+}
+
+/** The read-time hidden-tier mark. Returns a COPY; the stored row is untouched. */
+function markHidden(row: TranscriptRow): TranscriptRow {
+  return { ...row, isHidden: true }
+}
+
+/**
+ * P4-36 — does this session hold any hidden-tier rows? The reveal control only
+ * exists when the answer is yes (`Chat.jsx:1200`
+ * `messages.some(m => m.meta)`), so an ordinary session never grows a toggle
+ * for an empty tier. Reads the membership map, not the rows, so it stays O(1)
+ * in transcript length.
+ */
+export function selectHasHiddenRows(
+  state: TranscriptState,
+  sessionId: SessionId | null,
+): boolean {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  if (!session) return false
+  return Object.keys(session.hiddenFrameIds).length > 0
 }
 
 /**
@@ -400,18 +465,29 @@ export type NestedTranscriptRow = TranscriptRow & {
 // `React.memo`'d TranscriptView/rows skip re-rendering. A new slice (real change)
 // misses the cache and recomputes. WeakMap ⇒ evicts with the slice, no leak.
 const nestedRowsCache = new WeakMap<TranscriptSessionState, NestedTranscriptRow[]>()
+// P4-36: the revealed view is a DIFFERENT pure function of the same slice, so it
+// needs its own cache line rather than a composite key — otherwise flipping the
+// reveal control would serve the other view's array (and a shared key object
+// would allocate on every read). Only ever populated for a session that has a
+// hidden tier and a viewer who asked to see it.
+const revealedNestedRowsCache = new WeakMap<
+  TranscriptSessionState,
+  NestedTranscriptRow[]
+>()
 const EMPTY_NESTED_ROWS: NestedTranscriptRow[] = []
 
 export function selectNestedTranscriptRows(
   state: TranscriptState,
   sessionId: SessionId | null,
+  revealHidden = false,
 ): NestedTranscriptRow[] {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return EMPTY_NESTED_ROWS
-  const cached = nestedRowsCache.get(session)
+  const cache = revealHidden ? revealedNestedRowsCache : nestedRowsCache
+  const cached = cache.get(session)
   if (cached) return cached
 
-  const rows = selectTranscriptRows(state, sessionId)
+  const rows = selectTranscriptRows(state, sessionId, revealHidden)
   const byToolUseId = new Map<string, TranscriptRow>()
   for (const row of rows) {
     if (row.kind === 'tool-use') byToolUseId.set(row.toolUseId, row)
@@ -438,7 +514,7 @@ export function selectNestedTranscriptRows(
     ).map(attachChildren),
   })
   const result = topLevel.map(attachChildren)
-  nestedRowsCache.set(session, result)
+  cache.set(session, result)
   return result
 }
 
@@ -548,8 +624,11 @@ export function groupAgentDelegates(
 export function selectTranscriptDisplayItems(
   state: TranscriptState,
   sessionId: SessionId | null,
+  revealHidden = false,
 ): TranscriptDisplayItem[] {
-  return groupAgentDelegates(selectNestedTranscriptRows(state, sessionId))
+  return groupAgentDelegates(
+    selectNestedTranscriptRows(state, sessionId, revealHidden),
+  )
 }
 
 /** Reducer over addressed server frames; unknown sessions are rejected. */
@@ -797,7 +876,17 @@ function projectUserFrame(
   // may lose its result.
   state = correlateToolResults(state, message)
 
-  if (message.isSynthetic === true) return state
+  // P4-36 — the hidden tier is RETAINED, not discarded. This used to be
+  // `if (message.isSynthetic === true) return state`, which threw the row away
+  // and left the reveal control with nothing to reveal. The frame now walks the
+  // SAME projection path as any other user frame and its rows land in `rows` in
+  // arrival order; only `hiddenFrameIds` records the tier, and every read
+  // decides whether to show it. Nothing moved above `correlateToolResults`, so
+  // the ordering that comment protects is unchanged: dedupe still gates the
+  // fold, the fold still runs before any early return, and a hidden frame that
+  // appends rows now ALSO marks `seenFrameIds` (via `appendFrameRows`), so its
+  // replay is a total no-op instead of re-folding a correlation it already did.
+  const isHidden = message.isSynthetic === true
 
   const body: unknown = message.message
   if (!frameId || !isRecord(body)) return state
@@ -838,7 +927,12 @@ function projectUserFrame(
     return row === null ? [] : [row]
   })
   if (rows.length === 0) return state
-  return appendFrameRows(state, frameId, rows)
+  const appended = appendFrameRows(state, frameId, rows)
+  if (!isHidden || appended === state) return appended
+  return {
+    ...appended,
+    hiddenFrameIds: { ...appended.hiddenFrameIds, [frameId]: true },
+  }
 }
 
 function projectResultFrame(
