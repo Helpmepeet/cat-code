@@ -456,6 +456,7 @@ export function splitSysPromptPrefix(
 
   for (const block of systemPrompt) {
     if (!block) continue
+    if (block === SYSTEM_PROMPT_DYNAMIC_BOUNDARY) continue // Skip boundary
 
     if (block.startsWith('x-anthropic-billing-header')) {
       attributionHeader = block

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { getEmptyToolPermissionContext } from '../Tool.js'
 import { getSessionProvider, setSessionProvider } from '../bootstrap/state.js'
 import { getTools } from '../tools.js'
-import { getDefaultAgentPrompt } from '../constants/prompts.js'
+import {
+  getDefaultAgentPrompt,
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+} from '../constants/prompts.js'
 import { getGPTDoingTasksSection } from '../constants/promptStyles/gpt.js'
 import { buildProviderInstructionAssembly } from '../services/api/instructionAssembly.js'
 import { getEditToolDescription } from '../tools/FileEditTool/prompt.js'
@@ -10,7 +13,7 @@ import { FilePatchTool } from '../tools/FilePatchTool/FilePatchTool.js'
 import { getFilePatchToolDescription } from '../tools/FilePatchTool/prompt.js'
 import { getWriteToolDescription } from '../tools/FileWriteTool/prompt.js'
 import { GrepTool } from '../tools/GrepTool/GrepTool.js'
-import { normalizeToolInput, toolToAPISchema } from './api.js'
+import { normalizeToolInput, splitSysPromptPrefix, toolToAPISchema } from './api.js'
 import { createUserMessage, normalizeMessagesForAPI } from './messages.js'
 import {
   renameOpenAIInputKeysToOriginal,
@@ -244,6 +247,26 @@ describe('provider and prompt regressions', () => {
       userMessage,
     ])
     expect(assembly.messages).toEqual([userMessage])
+  })
+
+  test('provider instruction paths omit the dynamic boundary marker', () => {
+    const systemPrompt = ['base instructions', SYSTEM_PROMPT_DYNAMIC_BOUNDARY, 'dynamic']
+    const assembly = buildProviderInstructionAssembly({
+      provider: 'openai',
+      messages: [],
+      systemPrompt,
+      userContext: {},
+      systemContext: {},
+    })
+
+    expect(assembly.openAIInstructionAssembly?.instructions).toBe(
+      'base instructions\n\ndynamic',
+    )
+
+    setSessionProvider('openai')
+    expect(splitSysPromptPrefix(systemPrompt).map(block => block.text)).toEqual([
+      'base instructions\n\ndynamic',
+    ])
   })
 
   test('normalizeMessagesForAPI preserves trailing thinking blocks for OpenAI replay', () => {

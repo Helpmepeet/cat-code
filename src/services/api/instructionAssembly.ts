@@ -3,6 +3,7 @@ import { asSystemPrompt, type SystemPrompt } from '../../utils/systemPromptType.
 import { appendSystemContext, prependUserContext } from '../../utils/api.js'
 import { logForDebugging } from '../../utils/debug.js'
 import type { Message } from '../../types/message.js'
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../../constants/prompts.js'
 
 export type OpenAIInstructionAssembly = {
   instructions: string
@@ -77,7 +78,12 @@ function buildOpenAIInstructions(
   systemContext: { [k: string]: string },
   userContext: { [k: string]: string },
 ): string {
-  const base = appendSystemContext(systemPrompt, systemContext).join('\n\n')
+  const instructionBlocks: string[] = []
+  for (const block of appendSystemContext(systemPrompt, systemContext)) {
+    if (block === SYSTEM_PROMPT_DYNAMIC_BOUNDARY) continue
+    instructionBlocks.push(block)
+  }
+  const base = instructionBlocks.join('\n\n')
   const userEntries = Object.entries(userContext)
   if (userEntries.length === 0) return base
   const contextBlock = userEntries.map(([key, value]) => `# ${key}\n${value}`).join('\n\n')
