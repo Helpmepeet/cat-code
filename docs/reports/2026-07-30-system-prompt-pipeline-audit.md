@@ -787,18 +787,36 @@ migration-orchestrator convention: **ANY** = any competent model,
 **CLAUDE** = needs long-horizon coherence or judgment under a constraint,
 so do not hand it to a GPT one-shot.
 
-| Item | What it is | Diff | Model | Notes |
+**Two axes, not one.** Difficulty is how hard the change is to get right.
+Blast radius is what breaks if it is wrong. They diverge here: H6 and H10
+are trivial edits that alter what every session sends, while H7 is a
+refactor whose output must be byte-identical. Delegate on the higher of the
+two, not on difficulty alone.
+
+| Item | What it is | Diff | Blast radius | Model |
 |---|---|---|---|---|
-| H6 | Two cutoff strings | **1** | ANY | Exact values given in §A9. Nothing to decide. |
-| H8 | Two `continue` statements | **1** | ANY | Precedent lines cited. No behavior change. |
-| H2 | Document the language contract | **2** | ANY | Must be done **with** H1, not separately. |
-| H4 | Unify truthiness on `isEnvTruthy` | **2** | ANY | Mechanical; 3 sites, 2 in `REPL.tsx`. |
-| H7 | Extract the duplicated literal | **2** | ANY | Diff the two copies before extracting. |
-| H9 | Restore the swallowed log | **2** | ANY | Match upstream's message; find the right logger. |
-| H10 | Delete `length_guidance` | **2** | ANY | Removing a section shifts prompt output; expect snapshot-style test churn. |
-| H5 | Prefix at the source | **4** | CLAUDE | One-line change guarded by an OPEN sub-decision and two explicitly rejected neighbours. Needs restraint, not cleverness. The optional payload test is the harder half. |
-| H3 | Build from the remapped model | **5** | CLAUDE | Conceptually one line, but `REPL.tsx` is huge and multi-writer, and the `exceeds200kTokens` question must be raised rather than guessed. |
-| H1 | Key the section cache | **8** | CLAUDE | The only genuinely hard item. Per-section key design, a process-global touched by every prompt build, a deliberate behavior (flag damping) that must survive, and a constraint inherited from H2. |
+| H6 | Two cutoff strings | **1** | **Medium** — changes the cutoff line for every Fable 5 and Sonnet 5 session. Intended, but user-visible. | ANY |
+| H8 | Two `continue` statements | **1** | None — only affects payloads that would have leaked the marker. | ANY |
+| H2 | Document the language contract | **2** | None — documentation only. | ANY |
+| H4 | Unify truthiness on `isEnvTruthy` | **2** | Low-medium — narrow trigger, but anyone on `=yes` flips into real agent mode. | ANY |
+| H7 | Extract the duplicated literal | **2** | None **if** output stays byte-identical; verify that, do not assume it. | ANY |
+| H9 | Restore the swallowed log | **2** | None — adds a log line. | ANY |
+| H10 | Delete `length_guidance` | **2** | **Medium** — removes a sentence from every default-path prompt. Expect prompt-shape test churn, and judge whether the static copy alone reads the same. | ANY |
+| H5 | Prefix at the source | **4** | Low — agent-mode headless identity line only. | CLAUDE |
+| H3 | Build from the remapped model | **5** | **Medium-high** — changes the prompt on every Plan-mode turn. It is a correction toward what `/context` already does, which bounds the risk. | CLAUDE |
+| H1 | Key the section cache | **8** | **High** — a process-global consumed by every prompt build in the process, including subagents and swarm teammates. | CLAUDE |
+
+Why the two CLAUDE-tagged mid items are not ANY despite low difficulty:
+H5 is a one-line change fenced by an OPEN sub-decision and two explicitly
+rejected neighbours, so it needs a model that stops and reports rather than
+improvises; H3's `exceeds200kTokens` question has the same shape. Both fail
+by a capable model quietly picking the "obvious" answer.
+
+Why H1 is 8: per-section key design across ten registration sites, a
+process-global with consumers this audit did not trace end-to-end
+(`env_info_simple`, `frc` — see §G1), a deliberate behavior that must
+survive (flag damping), and a constraint inherited from H2 (`language` must
+stay out of the key). Nothing about it is mechanical.
 
 **Deferred findings, for later planning:**
 
