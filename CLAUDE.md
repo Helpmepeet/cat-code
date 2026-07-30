@@ -121,7 +121,15 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
 - `lsof -ti:5173` and `pgrep -lf "Cat Code Dev"` tell you whether it is up. If
   something you spawned hangs, report the PID you recorded — never sweep for it
   with a `ps` pattern match; other sessions and the operator's own app share
-  this machine.
+  this machine. **This is now ENFORCED, not just documented:** a `PreToolUse`
+  hook (`.claude/hooks/block-sweep-kill.sh`, registered in
+  `.claude/settings.local.json`) denies `pkill`/`killall`, `… | xargs kill`, and
+  `kill $(pgrep …)`-style discovery-paired kills. `kill <pid>` and
+  `kill $(cat x.pid)` still work, so nothing you legitimately own is out of
+  reach. Searching is untouched — `ps aux | grep …`, `lsof`, `pgrep` all still
+  run. The hook is machine-local (`.claude/` is git-excluded), so a fresh clone
+  has the rule but not the enforcement. Added 2026-07-30 after three agents
+  broke this rule in one day, one of them immediately after being corrected.
 
 - Known-red baseline: raw `tsc -p app/sidecar/tsconfig.json` fails with ~5.5k
   pre-existing upstream-engine diagnostics (the include-override drops root
