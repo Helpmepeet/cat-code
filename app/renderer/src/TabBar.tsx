@@ -11,6 +11,7 @@
 import { useRef, type KeyboardEvent } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
+import { OrchestratorBadge } from './AgentChrome.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
@@ -18,6 +19,12 @@ import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 export type TabModel = {
   descriptor: SessionDescriptor
   visual: TabVisualState
+  /**
+   * P4-32a (B1) — this session's live agent-mode flag from
+   * `agent-mode.snapshot`. Optional + additive so existing TabModel builders and
+   * headless tests are untouched; absent reads as "not in the mode".
+   */
+  orchestratorActive?: boolean
 }
 
 export function TabBar({
@@ -32,6 +39,7 @@ export function TabBar({
   canAddPanel = false,
   onAddPanel,
   onRemovePanel,
+  onToggleOrchestrator,
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
@@ -64,6 +72,14 @@ export function TabBar({
   canAddPanel?: boolean
   onAddPanel?: () => void
   onRemovePanel?: () => void
+  /**
+   * P4-32a (B1 + M1) — flip the ACTIVE tab's session in or out of Orchestrator
+   * mode. The tab is the app's real session-title host (the chat pane has no
+   * header by design), so putting the switch here is what keeps it reachable
+   * after the transcript has messages; the empty-state reflect could not.
+   * Optional + additive: without it the badge stays a passive marker.
+   */
+  onToggleOrchestrator?: (sessionId: SessionId, next: boolean) => void
 }) {
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
@@ -131,6 +147,7 @@ export function TabBar({
             onClose={onClose}
             onRestart={onRestart}
             onOpenActions={onOpenActions}
+            onToggleOrchestrator={onToggleOrchestrator}
             onKeyDown={event => onTabKeyDown(event, index)}
           />
         ))}
@@ -220,6 +237,7 @@ function Tab({
   onClose,
   onRestart,
   onOpenActions,
+  onToggleOrchestrator,
   onKeyDown,
 }: {
   ref: (element: HTMLDivElement | null) => void
@@ -234,6 +252,7 @@ function Tab({
     sessionId: SessionId,
     anchor: { top: number; left: number },
   ) => void
+  onToggleOrchestrator?: (sessionId: SessionId, next: boolean) => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }) {
   const { descriptor, visual } = tab
@@ -288,6 +307,17 @@ function Tab({
       >
         {title}
       </span>
+
+      {/* P4-32a — the mode marker sits with the title it belongs to. Interactive
+       * on the tab you are in (so the mode stays changeable mid-conversation),
+       * a passive marker on a background session that is in the mode. */}
+      <OrchestratorBadge
+        active={tab.orchestratorActive ?? false}
+        sessionLabel={title}
+        {...(isActive && onToggleOrchestrator
+          ? { onToggle: (next: boolean) => onToggleOrchestrator(id, next) }
+          : {})}
+      />
 
       <StatusChip visual={visual} />
 

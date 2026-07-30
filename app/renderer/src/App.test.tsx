@@ -6,6 +6,7 @@ import {
   App,
   ConnectionRecovery,
   SessionPane,
+  TasksStrip,
 } from './App.js'
 import {
   buildDebugExport,
@@ -25,7 +26,10 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type {
   AccountsSnapshot,
   AccountStatus,
+  AgentModeWorkerItem,
   RunControlsSnapshot,
+  TaskSnapshotItem,
+  TasksSnapshot,
 } from '../../shared/protocol.js'
 
 function emptyAccountsSnapshotForTest(): AccountsSnapshot {
@@ -1293,6 +1297,158 @@ function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
     transportError: null,
   } satisfies ComponentProps<typeof SessionPane>
 }
+
+/* ── P4-32a: the footer strip carries worker attention (ruling P1) ──────────── */
+
+function tasksSnapshotForTest(
+  items: Array<
+    Partial<TaskSnapshotItem> & { id: string; type: TaskSnapshotItem['type'] }
+  >,
+): TasksSnapshot {
+  return {
+    items: items.map(item => ({
+      status: 'running' as const,
+      label: item.id,
+      startTime: 0,
+      ...item,
+    })),
+  }
+}
+
+function agentWorkerForTest(
+  over: Partial<AgentModeWorkerItem> = {},
+): AgentModeWorkerItem {
+  return {
+    agentId: 'w-1',
+    handle: 'Turing',
+    role: 'agent-mode-coding-worker',
+    status: 'running',
+    description: 'Port the roster',
+    ...over,
+  }
+}
+
+function renderStrip(
+  props: Partial<ComponentProps<typeof TasksStrip>> = {},
+): string {
+  return renderToStaticMarkup(
+    <TasksStrip
+      snapshot={null}
+      workers={[]}
+      orchestratorActive={false}
+      onOpen={() => {}}
+      {...props}
+    />,
+  )
+}
+
+test('P4-32a — an idle session with no workers still renders no strip', () => {
+  expect(renderStrip()).toBe('')
+})
+
+test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', () => {
+  // D2 C2: workers waiting on an ACTIVE orchestrator are that orchestrator's
+  // problem. Only a solo escalation is allowed to go amber.
+  const html = renderStrip({
+    orchestratorActive: true,
+    workers: [
+      agentWorkerForTest(),
+      agentWorkerForTest({
+        agentId: 'w-2',
+        status: 'completed',
+        handoffStatus: 'blocked',
+      }),
+    ],
+  })
+  expect(html).toContain('2 subagents active')
+  expect(html).not.toContain('tone-warn')
+})
+
+test('P4-32a — a solo escalation turns the strip amber and says who owns it', () => {
+  const html = renderStrip({
+    orchestratorActive: false,
+    workers: [agentWorkerForTest({ status: 'completed', handoffStatus: 'blocked' })],
+  })
+  expect(html).toContain('1 needs you')
+  expect(html).toContain('text-tone-warn')
+})
+
+test('P4-32a — the same delegated worker is never counted twice across the two feeds', () => {
+  // A backgrounded `local_agent` appears in BOTH tasks.snapshot and the worker
+  // list; the task half must therefore count only non-worker task types.
+  const html = renderStrip({
+    orchestratorActive: true,
+    snapshot: tasksSnapshotForTest([
+      { id: 'w-1', type: 'local_agent' },
+      { id: 'sh-1', type: 'local_bash' },
+    ]),
+    workers: [agentWorkerForTest()],
+  })
+  expect(html).toContain('1 subagent active')
+  expect(html).toContain('1 background task')
+  expect(html).not.toContain('2 background')
+})
+
+test('P4-32a — a plain background task keeps the original strip wording', () => {
+  const html = renderStrip({
+    snapshot: tasksSnapshotForTest([
+      { id: 'sh-1', type: 'local_bash' },
+      { id: 'sh-2', type: 'local_bash' },
+    ]),
+  })
+  expect(html).toContain('2 background tasks')
+  expect(html).not.toContain('subagent')
+})
+
+test('P4-32a — real workers reach the composer dock, above the permission stack', () => {
+  // The live path, not the component in isolation: SessionPane must actually mount
+  // the roster inside the 740px composer column, or the wiring is invisible.
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      orchestratorActive
+      orchestratorWorkers={[
+        agentWorkerForTest({ handle: 'Turing', description: 'Wire the dock' }),
+      ]}
+    />,
+  )
+  expect(html).toContain('Turing')
+  expect(html).toContain('Wire the dock')
+  const dockIndex = html.indexOf('max-w-[740px] shrink-0')
+  expect(dockIndex).toBeGreaterThan(-1)
+  expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
+})
+
+test('P4-32a — a session with no delegated workers leaves the dock untouched', () => {
+  const html = renderToStaticMarkup(<SessionPane {...idleSessionPaneProps()} />)
+  expect(html).not.toContain('subagents')
+})
+
+test('P4-32a — the per-tab mode flag and switch are wired to the real seams', () => {
+  // The App-level joins the SSR harness cannot reach: each tab reads ITS OWN
+  // agent-mode snapshot (so a background orchestrator session is visible), the
+  // memo depends on `orchestrator` (or the badge would freeze on first paint),
+  // and the switch dispatches the existing P4-8b verb rather than a new one.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const tabsStart = source.indexOf('const tabs: TabModel[] = useMemo(')
+  const tabsEnd = source.indexOf('const activeAgentModeSnapshot', tabsStart)
+  const tabsBody = source.slice(tabsStart, tabsEnd)
+  expect(tabsBody).toContain('orchestratorActive:')
+  expect(tabsBody).toContain('selectAgentModeSnapshot(orchestrator, sessionId)')
+  expect(/orchestrator,\s*\],/.test(tabsBody)).toBe(true)
+
+  const barStart = source.indexOf('<TabBar')
+  const barBody = source.slice(barStart, source.indexOf('/>', barStart))
+  expect(barBody).toContain('onToggleOrchestrator={(sessionId, next)')
+  expect(barBody).toContain('getBridge().setAgentMode(sessionId, next)')
+
+  // Each pane docks ITS panel's workers, not the globally-active session's.
+  expect(source).toContain('orchestratorWorkers={panelOrchestratorWorkers}')
+  expect(source).toContain(
+    'const panelOrchestratorWorkers = panelAgentMode?.workers ?? EMPTY_WORKERS',
+  )
+})
 
 test('a truncated transcript is styled as a warning, with a tone the theme actually defines', () => {
   // `tone-warning` is not a token: theme.css declares --color-tone-warn (and

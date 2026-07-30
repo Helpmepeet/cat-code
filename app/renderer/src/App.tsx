@@ -243,9 +243,11 @@ import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
 import {
   createOrchestratorState,
+  orchestratorPill,
   reduceOrchestratorState,
   selectAgentModeSnapshot,
 } from './orchestratorState.js'
+import { OrchestratorRoster } from './OrchestratorRoster.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import {
@@ -302,6 +304,7 @@ import type {
   AnthropicAccountStatus,
   AccountSwitchMessage,
   AccountVerbMessage,
+  AgentModeWorkerItem,
   AskUserQuestionAnswer,
   CatCodeBridge,
   PermissionResponseInput,
@@ -353,6 +356,8 @@ const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
 const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
 /** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
+/** Stable identity so a session with no orchestrator snapshot never re-renders. */
+const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
 
 /**
  * Elements that already act on Enter/Escape themselves. The plain-key permission
@@ -923,6 +928,10 @@ export function App() {
           shell.previews[sessionId] === true && shell.tabs[sessionId] !== true
         return {
           descriptor,
+          // P4-32a (B1) — per-tab agent-mode flag, so the mode marker is visible
+          // on a BACKGROUND orchestrator session too, not only the active pane.
+          orchestratorActive:
+            selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false,
           visual: previewOnly
             ? {
                 label: 'preview',
@@ -941,7 +950,21 @@ export function App() {
               }),
         }
       }),
-    [shell, connection, permissions, activeSessionId, sessionCatalogSnapshot],
+    [
+      shell,
+      connection,
+      permissions,
+      activeSessionId,
+      sessionCatalogSnapshot,
+      orchestrator,
+    ],
+  )
+  // P4-32a — the active session's orchestrator snapshot, read once for the docked
+  // roster and the footer strip so both read one truth (never two derivations of
+  // the same workers).
+  const activeAgentModeSnapshot = selectAgentModeSnapshot(
+    orchestrator,
+    activeSessionId,
   )
   const paneSessionIds = useMemo(
     () => tabs.map(tab => tab.descriptor.appSessionId),
@@ -2076,8 +2099,11 @@ export function App() {
 	      const panelAccounts =
 	        selectAccountsSnapshot(accounts, sessionId) ??
 	        selectFirstAccountsSnapshot(accounts)
-	      const panelOrchestratorActive =
-	        selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false
+	      const panelAgentMode = selectAgentModeSnapshot(orchestrator, sessionId)
+	      const panelOrchestratorActive = panelAgentMode?.active ?? false
+	      // P4-32a — this panel's OWN workers (never the globally-active session's),
+	      // mirroring how the mode toggle dispatches per panel.
+	      const panelOrchestratorWorkers = panelAgentMode?.workers ?? EMPTY_WORKERS
 	      // Read-only git branch for the empty-state meta strip — from the session
 	      // log's `gitBranch` (shared catalog seam), keyed by this panel's session.
 	      // Matched on `appSessionId` for the same reason `activeSessionRow` is
@@ -2185,6 +2211,8 @@ export function App() {
 	              }
 	            }}
 	            orchestratorActive={panelOrchestratorActive}
+	            orchestratorWorkers={panelOrchestratorWorkers}
+	            onOpenTasks={() => setTasksOpen(true)}
 		            onToggleOrchestrator={next => {
 		              // P4-8b — toggle THIS panel's session (its own sessionId, not
 		              // the globally-active one), mirroring setPermissionMode's
@@ -2514,6 +2542,17 @@ export function App() {
           canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
           onAddPanel={addWorkspacePanel}
           onRemovePanel={removeWorkspacePanel}
+          onToggleOrchestrator={(sessionId, next) => {
+            // Same P4-8b verb the empty-state reflect dispatches: the sidecar
+            // calls the engine's own `matchSessionMode` and re-broadcasts
+            // agent-mode.snapshot, which flips the badge. No respawn.
+            try {
+              getBridge().setAgentMode(sessionId, next)
+              setTransportError(null)
+            } catch (error) {
+              setTransportError(errorMessage(error))
+            }
+          }}
         />
 
         {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
@@ -2886,6 +2925,8 @@ export function App() {
         {activeView === 'chat' && activeSessionId ? (
           <TasksStrip
             snapshot={selectTasksSnapshot(tasks, activeSessionId)}
+            workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
+            orchestratorActive={activeAgentModeSnapshot?.active ?? false}
             onOpen={() => setTasksOpen(true)}
           />
         ) : null}
@@ -2919,26 +2960,66 @@ export function App() {
 /**
  * The real `BackgroundTaskStatus.tsx` footer pill, adapted: a compact count of
  * active background tasks for the current session, opening `TasksDialog` on
- * click. Renders nothing when there are no active tasks (same as the source
+ * click. Renders nothing when there is nothing active (same as the source
  * component returning `null`, `BackgroundTaskStatus.tsx:195-197`).
+ *
+ * P4-32a (ruling P1) — this ONE strip also carries the prototype's `bgTaskPill`
+ * attention semantics; the slot has an owner, so there is no second pill (CC-5
+ * rule #10). Amber ONLY when the human owns the next action: a worker waiting on
+ * an active orchestrator is that orchestrator's problem and stays neutral (D2 C2).
+ *
+ * The two feeds overlap, so they are reconciled rather than summed: a delegated
+ * `local_agent` shows up in the tasks snapshot AND in the agent-mode worker list,
+ * so the task half counts only NON-worker task types and the worker half comes
+ * from the worker feed alone. Nothing is counted twice.
  */
-function TasksStrip({
+export function TasksStrip({
   snapshot,
+  workers,
+  orchestratorActive,
   onOpen,
 }: {
   snapshot: ReturnType<typeof selectTasksSnapshot>
+  workers: readonly AgentModeWorkerItem[]
+  orchestratorActive: boolean
   onOpen: () => void
 }) {
-  const active = groupTaskItems(snapshot).active
-  if (active.length === 0) return null
+  const pill = orchestratorPill(workers, orchestratorActive)
+  const backgroundTasks = groupTaskItems(snapshot).active.filter(
+    item => item.type !== 'local_agent',
+  )
+  if (!pill && backgroundTasks.length === 0) return null
+  const attention = pill?.attention === true
   return (
     <button
-      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[0_10px_30px_rgba(0,0,0,0.5)] hover:text-text-primary"
+      className={
+        'absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.5)] ' +
+        (attention
+          ? 'border-tone-warn/30 bg-tone-warn/10 font-semibold text-tone-warn'
+          : 'border-shell-seam bg-shell-chrome text-text-muted hover:text-text-primary')
+      }
       onClick={onOpen}
       type="button"
     >
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden="true" />
-      {active.length} background {active.length === 1 ? 'task' : 'tasks'}
+      <span
+        className={
+          'h-1.5 w-1.5 animate-pulse rounded-full ' +
+          (attention ? 'bg-tone-warn' : 'bg-accent')
+        }
+        aria-hidden="true"
+      />
+      {pill ? <span className={attention ? '' : 'text-accent'}>{pill.label}</span> : null}
+      {pill && backgroundTasks.length > 0 ? (
+        <span aria-hidden="true" className="text-text-ghost">
+          ·
+        </span>
+      ) : null}
+      {backgroundTasks.length > 0 ? (
+        <span>
+          {backgroundTasks.length} background{' '}
+          {backgroundTasks.length === 1 ? 'task' : 'tasks'}
+        </span>
+      ) : null}
     </button>
   )
 }
@@ -2987,6 +3068,8 @@ export function SessionPane({
   onCancelQuestions,
   orchestratorActive,
   onToggleOrchestrator,
+  orchestratorWorkers = EMPTY_WORKERS,
+  onOpenTasks,
   partialCount,
   pastes,
   pendingSubmit = null,
@@ -3608,6 +3691,17 @@ export function SessionPane({
        * separates it from the scrolling transcript above. Inner blocks keep
        * their existing indent (wrapped without re-indentation). */}
       <div className="mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-4">
+      {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
+       * host for this block: above the composer, in the transcript's own measure,
+       * ahead of the permission/question stack. It dims while the orchestrator is
+       * itself generating, and renders nothing when there are no workers. */}
+      <OrchestratorRoster
+        active={orchestratorActive}
+        compact={generating}
+        onOpen={onOpenTasks}
+        workers={orchestratorWorkers}
+      />
+
       {/* Docked above the composer, in Chat.jsx order — live permission-request
        * cards and any error/notice sit directly above the input, then the
        * in-turn activity row hugs the composer. */}
@@ -4150,6 +4244,10 @@ type SessionPaneProps = {
    * switch (renderer authors the boolean intent → the `agent-mode.set` verb).
    * Optional: when absent the empty-state toggle degrades to a read-only reflect. */
   onToggleOrchestrator?: (next: boolean) => void
+  /** P4-32a (R1) — this session's real worker roster, docked above the composer. */
+  orchestratorWorkers?: readonly AgentModeWorkerItem[]
+  /** P4-32a — open the workers/tasks list (the roster's click-through). */
+  onOpenTasks?: (agentId?: string) => void
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   permissionQueue: ReturnType<typeof selectPermissionQueue>

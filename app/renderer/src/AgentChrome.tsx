@@ -109,6 +109,95 @@ export function AgentStateLabel({
 }
 
 /**
+ * Orchestrator-mode marker (the prototype's `OrchestratorBadge`,
+ * OrchestratorMode.jsx:410-417). It rides the session TAB next to the title
+ * (B1) because the chat pane deliberately has no header, and with `onToggle` it
+ * IS the mode switch (M1) — the switch must stay reachable once the transcript
+ * has messages, which the empty-state reflect could not do.
+ *
+ * Off + interactive collapses to the icon alone: a lit "Orchestrator" pill on a
+ * session that is not in the mode would name a state the user did not choose.
+ * Off + passive renders nothing at all.
+ *
+ * `stopPropagation` is deliberate: the host row (a tab) is itself clickable, so
+ * without it toggling the mode would also re-select the tab.
+ */
+export function OrchestratorBadge({
+  active,
+  onToggle,
+  sessionLabel,
+}: {
+  active: boolean
+  onToggle?: (next: boolean) => void
+  sessionLabel?: string
+}) {
+  if (!active && !onToggle) return null
+  const icon = <OrchestratorGlyph />
+  const forSession = sessionLabel ? ` for session ${sessionLabel}` : ''
+
+  if (!onToggle) {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/25 bg-purple-400/10 px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] text-purple-300"
+        title="Orchestrator mode is on"
+      >
+        {icon}
+        Orchestrator
+      </span>
+    )
+  }
+
+  const action = active ? 'Turn off Orchestrator mode' : 'Turn on Orchestrator mode'
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      aria-label={`${action}${forSession}`}
+      title={action}
+      onClick={event => {
+        event.stopPropagation()
+        onToggle(!active)
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+      }}
+      className={
+        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] transition-colors ' +
+        (active
+          ? 'border-purple-400/25 bg-purple-400/10 text-purple-300'
+          : 'border-transparent bg-transparent text-text-ghost hover:border-purple-400/25 hover:text-purple-300')
+      }
+    >
+      {icon}
+      {active ? 'Orchestrator' : null}
+    </button>
+  )
+}
+
+/** The prototype's orchestrator glyph: one branch handing off to another. */
+function OrchestratorGlyph() {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <line x1="6" y1="3" x2="6" y2="15" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
+    </svg>
+  )
+}
+
+/**
  * Attention baton — the owner chip. Neutral (→orchestrator) unless the human owns
  * the next action (→you), the only amber case (D2 C2).
  */
