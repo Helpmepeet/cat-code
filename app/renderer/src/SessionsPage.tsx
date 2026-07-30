@@ -17,9 +17,11 @@
  *    offered only for a LIVE row; a closed row shows the affordance disabled with
  *    the action that would enable it. There is no renderer-side title or tag store.
  *  - Archive and Delete stay CUT (no engine verb exists — `sessionActions.ts`).
- *  - Bulk Export and the Branch/Export dialogs are not here yet: they are the
- *    dialog surface P4-30 owns, and a second dialog layer is exactly the
- *    duplication this program forbids.
+ *  - P4-35 closed the three rows P4-29 owed. The row ⋯ reaches P4-30's Branch and
+ *    Export dialogs through the same App-owned menu (no second dialog layer here),
+ *    and bulk Export is real: one `session.export` per live row, folded into ONE
+ *    file through main's save dialog. It waited for a file sink to exist, because
+ *    ten transcripts cannot go to the clipboard.
  *
  * Real fields with no bounded-catalog backing (message count, mode) render truth
  * and are simply omitted when empty (C3). Prototype visual grammar rebuilt on the
@@ -84,6 +86,7 @@ export function SessionsPage({
   onOpenRowActions,
   onRenameRow,
   onTagRows,
+  onExportRows,
   renameRequest,
   tagEcho,
 }: {
@@ -101,6 +104,12 @@ export function SessionsPage({
   onRenameRow?: (row: MergedSessionRow, title: string) => void
   /** Set (or, with null, clear) the tag on rows (→ the real `session.tag` verb). */
   onTagRows?: (rows: readonly MergedSessionRow[], tag: string | null) => void
+  /**
+   * P4-35 — export rows into ONE file (→ a real `session.export` verb per row,
+   * then main's save dialog). Given every selected row; the App exports the live
+   * ones, which is what the bar's own disabled reason already says.
+   */
+  onExportRows?: (rows: readonly MergedSessionRow[]) => void
   /** The App-owned menu asking this page to start its inline rename on a row. */
   renameRequest?: { sessionId: string } | null
   /**
@@ -420,6 +429,15 @@ export function SessionsPage({
               rect,
             })
           }
+          {...(onExportRows
+            ? {
+                onExport: () => {
+                  onExportRows(selectedRows)
+                  // The selection is spent, exactly as a bulk tag spends it.
+                  dispatchPage({ type: 'clear-selection' })
+                },
+              }
+            : {})}
           onClear={() => dispatchPage({ type: 'clear-selection' })}
         />
       ) : null}
@@ -858,16 +876,23 @@ function EmptyState({
  * (`SessionsPage.jsx:618`).
  *
  * Archive and Delete are absent because no engine verb exists for them
- * (`sessionActions.ts` records that CUT). Export is absent because the format
- * dialog is P4-30's surface and a second one here would be a duplicate.
+ * (`sessionActions.ts` records that CUT). Export is here as of P4-35: the
+ * prototype's version is a mock toast, and it only became worth building for real
+ * once a file sink existed, since ten transcripts cannot go to the clipboard.
+ *
+ * Exported for its own test: the bar only mounts once rows are SELECTED, and this
+ * package's harness cannot click a checkbox, so rendering it through `SessionsPage`
+ * can never reach it. Hook-free, so invoking it directly is exact (the
+ * `SAModalFrame` precedent). Consumers use `SessionsPage`.
  */
-function BulkBar({
+export function BulkBar({
   selectedCount,
   visibleCount,
   allSelected,
   writableCount,
   onSelectAll,
   onTag,
+  onExport,
   onClear,
 }: {
   selectedCount: number
@@ -877,8 +902,19 @@ function BulkBar({
   writableCount: number
   onSelectAll: () => void
   onTag: (rect: TagPopoverState['rect']) => void
+  /** Absent when the page was given no export handler at all. */
+  onExport?: () => void
   onClear: () => void
 }) {
+  // Export reads each session's transcript through its OWN engine, so it is
+  // offered for exactly the rows Tag is: the live ones. Same wording shape, so a
+  // partly-closed selection explains itself the same way twice.
+  const exportReason =
+    writableCount === 0
+      ? 'Open or restore at least one of these sessions first.'
+      : writableCount < selectedCount
+        ? `Exports ${writableCount} of ${selectedCount}: the rest are closed.`
+        : undefined
   return (
     <div className="pointer-events-none fixed bottom-6 left-12 right-0 z-[60] flex justify-center px-4">
       <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-shell-chrome py-2 pl-3.5 pr-2 shadow-[0_16px_40px_rgba(0,0,0,0.55)]">
@@ -910,6 +946,15 @@ function BulkBar({
           className="flex items-center gap-1.5 whitespace-nowrap rounded-[7px] border border-white/[0.09] px-2.5 py-1.5 text-[12.5px] font-medium text-text-muted transition-colors enabled:hover:border-white/20 enabled:hover:bg-white/[0.06] enabled:hover:text-text-primary disabled:cursor-default disabled:text-text-subtle/60"
         >
           <TagIcon /> Tag
+        </button>
+        <button
+          type="button"
+          disabled={writableCount === 0 || !onExport}
+          onClick={onExport}
+          {...(exportReason ? { title: exportReason } : {})}
+          className="flex items-center gap-1.5 whitespace-nowrap rounded-[7px] border border-white/[0.09] px-2.5 py-1.5 text-[12.5px] font-medium text-text-muted transition-colors enabled:hover:border-white/20 enabled:hover:bg-white/[0.06] enabled:hover:text-text-primary disabled:cursor-default disabled:text-text-subtle/60"
+        >
+          <ExportIcon /> Export
         </button>
         <button
           type="button"
@@ -1071,6 +1116,28 @@ function TagIcon() {
         strokeLinejoin="round"
       />
       <path d="M7 7h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** The bulk bar's export glyph (`SessionsPage.jsx:626` — tray with a down arrow). */
+function ExportIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m7 10 5 5 5-5M12 15V3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

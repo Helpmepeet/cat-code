@@ -1,7 +1,9 @@
 /**
  * P4-30 — `BranchDialog` + `ExportDialog` (`SessionActions.jsx:280-303` and
  * `:351-387`), the confirmation/preview layer PARITY-LEDGER §17 recorded as
- * dropped with no §0 flag.
+ * dropped with no §0 flag. P4-35 (operator ruling 2026-07-30) then wired
+ * **Download**, which P4-30 had to ship disabled: `saveTextToFile` now exists, so
+ * Export finally reaches a file instead of only the clipboard.
  *
  * What each one is FOR, in this app rather than in the prototype:
  *
@@ -15,17 +17,11 @@
  *    `exportText` the sidecar rendered with `renderMessagesToPlainText` and sent
  *    back on `session-action.result`, matched by the dialog's own `requestId`.
  *
- * FOUR §0 deviations are carried by this file, each recorded on the ledger row
+ * THREE §0 deviations are carried by this file, each recorded on the ledger row
  * it belongs to (they are PROPOSALS to the operator, not closures, and PARITY-
- * LEDGER Part C counts the same four):
+ * LEDGER Part C counts the same three):
  *
- *  1. **Download is not wired.** There is no renderer-reachable file-write path
- *     in `app/` at all, so the prototype's primary action ships disabled with an
- *     honest reason. Adding it is a control-plane change (a main-process
- *     `showSaveDialog` + write behind an HC3 fixed-sender preload channel, main
- *     validating a basename and never accepting a renderer path — HC1), which
- *     needs an operator ruling before the boundary widens. See the report.
- *  2. **No message count in the Export subtitle.** The prototype shows
+ *  1. **No message count in the Export subtitle.** The prototype shows
  *     "N messages · title". `MergedSessionRow.messageCount` cannot supply it: the
  *     bounded catalog loader never populates it (`sessionsCatalogState.ts:374`),
  *     so every session would read "0 messages".
@@ -94,12 +90,18 @@ export function BranchDialog({
  * Show the engine-rendered transcript with its file name before it goes
  * anywhere. `preview` is the projection of THIS dialog's own export result
  * (`selectExportPreview`); `fileName` is derived from the session title.
+ *
+ * Copy and Download are the same shape: both stay disabled with the same honest
+ * reason until a transcript has actually arrived, so neither is ever a button
+ * that appears live and does nothing. `fileName` is a SUGGESTION main sanitizes
+ * and the user overrides in the save dialog, never a destination (HC1).
  */
 export function ExportDialog({
   title,
   fileName,
   preview,
   onCopy,
+  onDownload,
   onClose,
 }: {
   title: string | null
@@ -107,8 +109,11 @@ export function ExportDialog({
   preview: ExportPreviewState
   /** Undefined until the transcript has arrived, which disables Copy. */
   onCopy?: () => void
+  /** Undefined until the transcript has arrived, which disables Download. */
+  onDownload?: () => void
   onClose: () => void
 }): ReactNode {
+  const waiting = { disabled: true, reason: 'The transcript is still rendering.' }
   return (
     <SAModal
       icon={<ActionExportIcon />}
@@ -126,14 +131,14 @@ export function ExportDialog({
             label="Copy"
             {...(preview.status === 'ready' && onCopy
               ? { onClick: onCopy }
-              : { disabled: true, reason: 'The transcript is still rendering.' })}
+              : waiting)}
           />
           <SAButton
             label="Download"
             variant="primary"
-            disabled
-            marker="soon"
-            reason="Saving to a file is not available from the desktop app yet. Copy the transcript instead."
+            {...(preview.status === 'ready' && onDownload
+              ? { onClick: onDownload }
+              : waiting)}
           />
         </>
       }

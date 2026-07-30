@@ -270,15 +270,23 @@ import {
   SessionRenamePopover,
   type SessionActionsAnchor,
 } from './SessionActionsMenu.js'
-import { resolveSessionActions } from './sessionActions.js'
+import {
+  resolveSessionActions,
+  selectSessionsPageActions,
+} from './sessionActions.js'
 import {
   BranchDialog,
   ExportDialog,
 } from './SessionActionDialogs.js'
 import {
+  buildBulkExportDocument,
+  bulkExportSavedMessage,
+  describeSaveOutcome,
   exportFileName,
+  selectBulkExportOutcome,
   selectExportPreview,
   selectLatchedExportPreview,
+  type BulkExportRequest,
   type LatchedExportPreview,
 } from './sessionActionDialogState.js'
 import {
@@ -1323,6 +1331,28 @@ export function App() {
     [],
   )
 
+  // P4-35 (operator ruling 2026-07-30) — the app's only file write, reached the
+  // one legal way: hand main the engine-rendered text plus a name SUGGESTION and
+  // let it ask the user where the file goes (HC1 — the renderer names no path, and
+  // learns none back). A dismissed dialog says nothing; a real failure carries
+  // main's own message, never a guess.
+  const saveTranscript = useCallback(
+    async (text: string, suggestedName: string, savedMessage: string) => {
+      try {
+        const outcome = describeSaveOutcome(
+          await getBridge().saveTextToFile({ text, suggestedName }),
+          savedMessage,
+        )
+        if (outcome) toast(outcome.message, { tone: outcome.tone })
+      } catch {
+        // The preload's local bound, or a dead IPC channel. Either way the user
+        // pressed a button and nothing happened, so say so.
+        toast('The transcript could not be saved.', { tone: 'warn' })
+      }
+    },
+    [toast],
+  )
+
   // P4-6b — surface the sidecar's real outcome (never an optimistic guess): toast
   // the redacted `message`. Deduped by `requestId` so a re-render never
   // re-toasts. (rename's live relabel rides the existing `session-title` outbound
@@ -1370,6 +1400,34 @@ export function App() {
     if (entries.length > 0) setSessionsTagEcho({ entries })
   }, [sessionActionRuntime, toast])
 
+  // P4-35 — bulk export: one real `session.export` verb per live row (each runs
+  // inside its OWN engine, N-process), folded into ONE file once every leg has
+  // settled. The legs are claimed as toasted AT DISPATCH, so the general effect
+  // below never pops a per-session outcome for a batch that reports itself once.
+  //
+  // Declared BEFORE that effect for the same reason the tag effect is: effects run
+  // in declaration order, so this must have the ids first.
+  const pendingBulkExportRef = useRef<BulkExportRequest[] | null>(null)
+  useEffect(() => {
+    const requests = pendingBulkExportRef.current
+    if (!requests) return
+    const outcome = selectBulkExportOutcome(
+      requests,
+      sessionActionRuntime.lastBySession,
+    )
+    if (outcome.status === 'waiting') return
+    pendingBulkExportRef.current = null
+    if (outcome.sections.length === 0) {
+      toast('None of those sessions could be read.', { tone: 'warn' })
+      return
+    }
+    void saveTranscript(
+      buildBulkExportDocument(outcome.sections),
+      exportFileName(`${outcome.sections.length} sessions`),
+      bulkExportSavedMessage(outcome.sections.length, outcome.failed),
+    )
+  }, [sessionActionRuntime, saveTranscript, toast])
+
   // P4-29 — DISARM both Sessions-page one-shots when the page goes away.
   //
   // `sessionsRenameRequest` and `sessionsTagEcho` are COMMANDS, delivered once.
@@ -1383,6 +1441,11 @@ export function App() {
     if (activeView === 'sessions') return
     setSessionsRenameRequest(null)
     setSessionsTagEcho(null)
+    // P4-35 — and drop an unfinished bulk export with them. A leg whose session
+    // dies before its very first result leaves no reset to observe, so the batch
+    // can wait indefinitely; leaving the page is the point past which a save
+    // dialog appearing would be a surprise rather than an answer.
+    pendingBulkExportRef.current = null
   }, [activeView])
 
   const latestSessionActionResult = selectLatestSessionActionResult(
@@ -2530,18 +2593,17 @@ export function App() {
               const targetId = sessionActionsTarget.sessionId
               return (
                 <SessionActionsMenu
-                  items={resolveSessionActions(targetRow, {
-                    isActiveOpen: targetId === activeSessionId,
-                  }).filter(
-                    // The prototype's `hide=['metadata']` for the Sessions-page
-                    // entry point: the inspector reads the ATTACHED tab, so on a
-                    // manager page listing every session it is disabled for all
-                    // but one row. Filtered here, so the shared menu component
-                    // stays presentation-only.
-                    item =>
-                      !sessionActionsTarget.fromSessionsPage ||
-                      item.kind !== 'metadata',
-                  )}
+                  items={(() => {
+                    // The shared menu component stays presentation-only; the
+                    // per-entry-point hide list is a resolver decision
+                    // (`selectSessionsPageActions`, which is where it is tested).
+                    const items = resolveSessionActions(targetRow, {
+                      isActiveOpen: targetId === activeSessionId,
+                    })
+                    return sessionActionsTarget.fromSessionsPage
+                      ? selectSessionsPageActions(items)
+                      : items
+                  })()}
                   anchor={sessionActionsTarget.anchor}
                   onAction={kind => {
                     if (kind === 'metadata') setMetadataOpen(true)
@@ -2651,6 +2713,16 @@ export function App() {
                                 tone: 'warn',
                               }),
                             )
+                        },
+                        // P4-35 — the file sink. The renderer hands over the
+                        // engine-rendered text plus the derived name as a
+                        // SUGGESTION; main asks the user where it goes (HC1).
+                        onDownload: () => {
+                          void saveTranscript(
+                            preview.text,
+                            exportFileName(exportDialog.title),
+                            'Transcript saved',
+                          )
                         },
                       }
                     : {})}
@@ -2809,6 +2881,35 @@ export function App() {
                   requestId,
                   tag: tag ?? '',
                 })
+              }
+            }}
+            onExportRows={targets => {
+              // P4-35 — one verb per LIVE row, which is what the bar's own
+              // disabled reason already tells the user. Each export is rendered by
+              // that session's OWN engine (N-process, LOCKED); the results are
+              // folded into one file by the effect above.
+              const requests: BulkExportRequest[] = []
+              for (const row of targets) {
+                if (!row.live || row.appSessionId == null) continue
+                const requestId = newRequestId()
+                requests.push({
+                  sessionId: row.appSessionId,
+                  requestId,
+                  title: row.title ?? null,
+                })
+                // Claimed here so the general result effect stays silent: this
+                // batch reports itself ONCE, when the file is written.
+                toastedActionRequestsRef.current.add(requestId)
+                sendSessionActionVerb(row.appSessionId, {
+                  type: 'session.export',
+                  requestId,
+                })
+              }
+              // Bounded by MAX_LIVE_SESSIONS (32) live engines, comfortably under
+              // the inbound rate cap, so a select-all cannot trip T7.
+              pendingBulkExportRef.current = requests.length > 0 ? requests : null
+              if (requests.length === 0) {
+                toast('Open or restore a session to export it.', { tone: 'warn' })
               }
             }}
             renameRequest={sessionsRenameRequest}

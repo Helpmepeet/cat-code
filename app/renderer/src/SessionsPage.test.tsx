@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { SessionsPage } from './SessionsPage.js'
+import { BulkBar, SessionsPage } from './SessionsPage.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 
 function row(partial: Partial<MergedSessionRow> & { sessionId: string }): MergedSessionRow {
@@ -257,6 +257,101 @@ test('P4-29 — the bulk bar is absent with no selection (and needs no scrim the
   )
   expect(html).not.toContain('selected')
   expect(html).not.toContain('Clear selection')
+})
+
+/* --------------------------------------------------------------------------- *
+ * P4-35 — the bulk bar's Export control. Rendered directly because the bar only
+ * mounts once rows are selected, which this harness cannot do.
+ * --------------------------------------------------------------------------- */
+
+function bulkBar(overrides: Partial<Parameters<typeof BulkBar>[0]> = {}) {
+  return (
+    <BulkBar
+      selectedCount={3}
+      visibleCount={10}
+      allSelected={false}
+      writableCount={3}
+      onSelectAll={noop}
+      onTag={noop}
+      onExport={noop}
+      onClear={noop}
+      {...overrides}
+    />
+  )
+}
+
+test('P4-35 — the bulk bar offers Export beside Tag, in the prototype order', () => {
+  const html = renderToStaticMarkup(bulkBar())
+  expect(html).toContain('Export')
+  expect(html).toContain('3 selected')
+  // Tag then Export then the clear affordance (`SessionsPage.jsx:625-629`), with
+  // Archive and Delete absent (no engine verb exists for either).
+  expect(html.indexOf('Tag')).toBeLessThan(html.indexOf('Export'))
+  expect(html.indexOf('Export')).toBeLessThan(html.indexOf('Clear selection'))
+  expect(html).not.toContain('Archive')
+  expect(html).not.toContain('Delete')
+})
+
+test('P4-35 — Export fires with the rows, once', () => {
+  let fired = 0
+  const el = BulkBar({
+    selectedCount: 2,
+    visibleCount: 5,
+    allSelected: false,
+    writableCount: 2,
+    onSelectAll: noop,
+    onTag: noop,
+    onExport: () => (fired += 1),
+    onClear: noop,
+  }) as never as { props: { children: { props: { children: unknown[] } } } }
+  const buttons = (el.props.children.props.children as { props: Record<string, unknown> }[])
+    .filter(child => child?.props && 'onClick' in child.props)
+  const exportButton = buttons.find(
+    button => JSON.stringify(button.props.children).includes('Export'),
+  )
+  expect(exportButton).toBeDefined()
+  expect(exportButton!.props.disabled).toBe(false)
+  ;(exportButton!.props.onClick as () => void)()
+  expect(fired).toBe(1)
+})
+
+test('P4-35 — a selection with no live row cannot export, and says what to do', () => {
+  // Export reads each transcript through that session's OWN engine, so a closed
+  // row has nothing to read it with. Same posture and wording shape as Tag.
+  const html = renderToStaticMarkup(bulkBar({ writableCount: 0 }))
+  expect(html).toContain('Open or restore at least one of these sessions first.')
+  expect(html).toContain('disabled')
+})
+
+test('P4-35 — a partly-closed selection says how many it will actually export', () => {
+  const html = renderToStaticMarkup(bulkBar({ selectedCount: 5, writableCount: 2 }))
+  expect(html).toContain('Exports 2 of 5: the rest are closed.')
+})
+
+test('P4-35 — Export is inert when the page was given no export handler', () => {
+  // Never a Potemkin control: without the wiring it is visibly disabled, not a
+  // live button over a missing callback.
+  const el = BulkBar({
+    selectedCount: 2,
+    visibleCount: 5,
+    allSelected: false,
+    writableCount: 2,
+    onSelectAll: noop,
+    onTag: noop,
+    onClear: noop,
+  }) as never as { props: { children: { props: { children: unknown[] } } } }
+  const buttons = (el.props.children.props.children as { props: Record<string, unknown> }[])
+    .filter(child => child?.props && 'onClick' in child.props)
+  const exportButton = buttons.find(
+    button => JSON.stringify(button.props.children).includes('Export'),
+  )
+  expect(exportButton!.props.disabled).toBe(true)
+})
+
+test('P4-35 — the bulk bar carries no em dash (operator rule)', () => {
+  for (const writableCount of [0, 2, 3]) {
+    expect(renderToStaticMarkup(bulkBar({ writableCount }))).not.toContain('—')
+  }
 })
 
 test('P4-29 — user-visible copy carries no em dash (operator rule)', () => {
