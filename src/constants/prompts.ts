@@ -765,11 +765,6 @@ ${CYBER_RISK_INSTRUCTION}`,
       'summarize_tool_results',
       () => SUMMARIZE_TOOL_RESULTS_SECTION,
     ),
-    systemPromptSection(
-      'length_guidance',
-      () =>
-        'Keep updates brief. Keep final answers concise unless more detail is needed for clarity.',
-    ),
     ...(feature('TOKEN_BUDGET')
       ? [
           // Cached unconditionally — the "When the user specifies..." phrasing
