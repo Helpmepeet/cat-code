@@ -643,7 +643,10 @@ export async function getAgentModeSystemPromptSections(
 
   return [
     // --- Static content (cacheable) ---
-    getCLISyspromptPrefix(),
+    getCLISyspromptPrefix({
+      isNonInteractive: getIsNonInteractiveSession(),
+      hasAppendSystemPrompt: false,
+    }),
     getAgentModeSystemPrompt(),
     getSimpleSystemSection(),
     gpt
