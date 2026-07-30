@@ -49,7 +49,7 @@ import type {
   UserMessage,
 } from '../../types/message.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
-import { AbortError } from '../../utils/errors.js'
+import { AbortError, errorMessage } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import {
   cloneFileStateCache,
@@ -1020,7 +1020,10 @@ async function getAgentSystemPrompt(
   let agentPrompt: string
   try {
     agentPrompt = agentDefinition.getSystemPrompt({ toolUseContext })
-  } catch (_error) {
+  } catch (error) {
+    logForDebugging(
+      `Failed to get system prompt for agent ${agentDefinition.agentType}: ${errorMessage(error)}`,
+    )
     agentPrompt = getDefaultAgentPrompt(
       resolveRequestProvider(
         resolvedAgentModel,
