@@ -680,10 +680,29 @@ map files).
 
 ## G. Provenance: fork-introduced vs upstream-inherited (added in r5)
 
-**Why this section exists.** Several findings are inherited Claude Code
-behavior and several are ours. That changes who should fix what, and it
-changes how much latitude an implementer has: reverting to upstream
-behavior is safe, diverging from it is a decision.
+**Read this first: this fork no longer syncs from upstream.** There is no
+future merge, and nobody upstream will fix anything for us. So provenance
+here does **not** mean "someone else's problem" and never justifies waiting
+or deferring. Every finding in this report is ours to fix, whatever its
+origin.
+
+**What provenance is still good for, then:**
+
+1. **Freedom.** None of this code is on loan. There is no merge-conflict
+   cost to redesigning an inherited module, so an implementer should build
+   the right thing rather than the upstream-shaped thing.
+2. **A known-good reference.** Where upstream did something better, its
+   version is a proven design rather than a speculative one. A6 is the
+   clean case: upstream logged the error we now swallow, so restoring it is
+   a revert to something that demonstrably worked, not a new invention.
+3. **Process signal.** Fork-authored defects say something about our own
+   review gaps. A9 was written one day before this audit and got the wrong
+   column of a published table; A3 and A7 sit in fork-only subsystems that
+   never had upstream's review passes.
+
+What it is explicitly **not** good for: assigning blame, or deciding that
+an upstream-origin bug is lower priority. A8 is upstream-origin and is the
+highest-impact finding in the report.
 
 **Method.** The fork's history begins at a squashed snapshot (`86051a8`,
 2026-04-30, **v2.1.87**) that already contained fork work — its second
@@ -727,28 +746,27 @@ upstream. That upstream *also* builds its prompt from the unmapped model was
 not independently verified in the minified bundle — it is a strong
 inference from the matching call-site shape, not a byte match.
 
-### G1. Consequence for H1: keying the cache is a deliberate divergence
+### G1. Consequence for H1: design it properly, the file is ours outright
 
 A2's root design flaw is **not a fork defect**. The section module at
-2.1.87 is byte-equivalent to ours, name-only keying included. H1 therefore
-changes inherited upstream behavior rather than repairing something we
-broke. Three things follow, and the implementer should know them before
-starting:
+2.1.87 is byte-equivalent to ours, name-only keying included. Since there
+is no upstream sync, that fact carries no cost and no constraint:
 
-1. **It creates a permanent merge-conflict surface.** Any future upstream
-   change to `systemPromptSections.ts` will now conflict. Keep the diff as
-   small and as structurally close to upstream as possible so the conflict
-   stays mechanical.
-2. **Upstream may solve it differently later**, and their solution will not
-   be ours. That is an accepted cost of the operator's decision, not a
-   reason to reopen it.
-3. **A2-iii and A2-iv are upstream behavior too**, which means H2's "the
-   language contract is intended" ruling is now better supported: it is
-   inherited behavior, not an accident this fork introduced.
+1. **Do not shape the fix to stay close to upstream.** There is no merge to
+   protect. `systemPromptSections.ts` is ours to redesign, and the right
+   key design beats an upstream-shaped one.
+2. **Nobody else is going to fix this.** Inherited origin is not a reason to
+   narrow H1's scope or defer it.
+3. **A2-iii and A2-iv are upstream behavior too**, which is still useful for
+   H2: the "language applies next session" contract is long-standing
+   behavior rather than an accident this fork introduced, so documenting it
+   rather than changing it is the lower-risk call.
 
-The genuinely fork-owned parts of A2 remain worth fixing regardless: the
-`session_guidance` section, the cross-provider staleness path, and the
-`/context` partial-args warmer.
+The one thing origin genuinely tells the H1 implementer: `env_info_simple`
+and `frc` predate the fork and are consumed by paths this audit did not
+trace end-to-end, whereas `session_guidance` is ours and fully understood.
+Expect fewer surprises keying the fork-owned section than the inherited
+ones, and verify the inherited ones' consumers before assuming a key set.
 
 ---
 
@@ -788,7 +806,7 @@ so do not hand it to a GPT one-shot.
 |---|---|---|---|
 | Remaining §C cosmetics | **1** | ANY | Operator declined (H7 note). |
 | B1 trigger verification | **5** | ANY | Investigation, not a fix; H8 makes it moot in practice. |
-| A4 fallback prompt refresh | **6** | CLAUDE | Upstream-inherited; needs a rebuild inside the retry loop. |
+| A4 fallback prompt refresh | **6** | CLAUDE | Bounded impact (one turn, only on failover); needs a rebuild inside the retry loop, so it depends on H1. |
 | §E fingerprint / server cache | **7** | CLAUDE | Needs a live emitted-payload experiment, not a code change. |
 | B3 structural fix (A5 option c) | **8** | CLAUDE | Unfreezing the OpenAI assembly touches Codex instruction caching. |
 
@@ -811,9 +829,10 @@ the `/context` warmer. The operator wants the class closed, not the
 instances patched.
 
 **Read §G1 before starting.** The name-only cache is byte-equivalent to
-upstream 2.1.87, so this item deliberately diverges from upstream rather
-than repairing a fork defect. Keep the diff minimal and structurally close
-to upstream so future merge conflicts stay mechanical.
+upstream 2.1.87, but this fork does not sync from upstream, so that is
+context rather than a constraint: design the key properly instead of
+preserving the upstream shape. §G1 does flag which sections are inherited
+and therefore have consumers this audit did not trace.
 
 Current shape: `systemPromptSection(name, compute)` produces a zero-argument
 closure that captures everything (`systemPromptSections.ts:20-25`), and
@@ -893,8 +912,10 @@ available or meaningful at REPL prompt-build time. Determine what
 `/context` passes, and report the choice rather than guessing — passing a
 wrong value reintroduces the same mismatch through a different door.
 
-**A4 (fallback) is explicitly NOT in scope.** It is upstream-inherited
-(§G) and misbehaves only for the remainder of one turn. Leave it open.
+**A4 (fallback) is explicitly NOT in scope**, on impact grounds only: it
+fires solely when a request fails over and the prompt heals on the next
+turn. Its upstream origin is **not** a reason to defer it — no upstream fix
+is coming (§G). Queue it behind H1, whose cache work it depends on.
 
 **Concurrency note:** `REPL.tsx` was mid-edit by another session during the
 r1–r4 audit. It was clean at `a424574` when r5 was written. Re-check
