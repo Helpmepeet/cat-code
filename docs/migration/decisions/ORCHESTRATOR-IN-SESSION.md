@@ -425,5 +425,39 @@ recommendation: the options and their costs above remain the decision.
 
 ---
 
-**STOP — Phase 1 ends here.** Do not implement P4-32a or P4-32b, change the parity ledger,
-or resolve any option until the operator rules.
+## 10. OPERATOR RULING — 2026-07-30
+
+**Status: RULED. Phase 1 is closed and P4-32a / P4-32b are authorized.**
+
+The operator accepted the §9 recommendation set **as written, all nine groups**:
+
+| Group | Ruling |
+|---|---|
+| 1. Roster | **R1** — docked roster above the composer |
+| 2. Badge/header | **B1** — TabBar switch-badge (no new chat header) |
+| 3. Footer | **P1** — extend the existing `TasksStrip` (no second pill) |
+| 4. Inspection | **D1** — read-only `TasksDialog` detail |
+| 5. Two-axis/Baton | **T1+A1** — wire them, do not delete |
+| 6. Always-reachable toggle | **M1** — TabBar switch |
+| 7. Leases | **L1** — new read seam |
+| 8. Result policy | **Q2** — real result only inside read-only `/tasks` detail, never the main transcript or focus column |
+| 9. Waivers 7–14 | **Approved as activated by the choices above** |
+
+Consequences that follow, and are therefore also ruled:
+
+- The §9 "proposed cuts under all options" (1–6) are **approved cuts**: `OrchestratorDemoSwitch`
+  and `ODEMO_STATES`; all mock worker fields (`progress`/`files`/`up`/`down`/`cost`, mock account,
+  `MOCK_CODEX_LEASES`); the Activity-timeline rows as specified; the WorkerFocus worker-composer
+  and its "messages go to the worker" promise; the lease failover/rotation event strip; and any
+  standalone Orchestrator page, nav destination or second footer pill.
+- **D1 means waiver 10 activates:** all `WorkerFocusView` rows and FLOW-5 focus are waived.
+  P4-32b must RECORD those waivers explicitly rather than omit them silently.
+- **L1 means a new read-only lease seam is authorized** — outbound only, sidecar-validated,
+  with the security verification §8 requires.
+- **T1+A1 means the 8 test-only `orchestratorState.ts` exports get wired, not deleted**, and the
+  unreachable `Baton` (`AgentChrome.tsx:142`, sole caller hard-codes `owner="none"`) gets a real
+  owner.
+- **M1 supersedes the empty-transcript-only toggle defect** (`TranscriptView.tsx:206`): the mode
+  toggle moves to the TabBar and must be reachable on a non-empty transcript.
+
+Phase-2 dispatch: **P4-32a** and **P4-32b** per the §8 split, which stands unchanged.
