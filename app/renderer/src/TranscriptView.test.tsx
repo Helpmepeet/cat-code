@@ -284,8 +284,8 @@ test('the empty state degrades honestly with no pool snapshot and no cwd (no fab
   expect(html).toContain('This workspace')
 })
 
-// IS-C (M5) — restore affordance. A cached preview keeps a non-text divider, an
-// engaged restore pulses, and a no-cache restore shows the skeleton instead of
+// IS-C (M5) — restore affordance. Cached transcript rows retain their content
+// without startup decoration; a no-cache restore shows the skeleton instead of
 // an empty WelcomeScreen (report F4's "reads as a hang").
 const cachedRow: NestedTranscriptRow = {
   ...blockSource,
@@ -295,24 +295,25 @@ const cachedRow: NestedTranscriptRow = {
   content: 'cached line',
 }
 
-test('IS-C: preview rows render under a non-text restore divider', () => {
+test('IS-C: preview rows render without a restore divider', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView rows={[cachedRow]} restorePhase="preview" />,
   )
   expect(html).toContain('cached line')
-  expect(html).toContain('bg-accent')
-  // No visible restore labels.
+  expect(html).not.toContain('h-px flex-1 bg-accent/20')
+  // No visible restore chrome or labels.
   expect(html).not.toContain('Restored session')
   expect(html).not.toContain('Resuming session')
   expect(html).not.toContain('Opening session')
 })
 
-test('IS-C: an engaged preview shows a pulsing non-text divider', () => {
+test('IS-C: an engaged preview does not add a pulsing restore divider', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView rows={[cachedRow]} restorePhase="resuming" />,
   )
-  expect(html).toContain('animate-pulse') // live pulse dot
   expect(html).toContain('cached line')
+  expect(html).not.toContain('h-px flex-1 bg-accent/20')
+  expect(html).not.toContain('animate-pulse')
   expect(html).not.toContain('Restored session')
   expect(html).not.toContain('Resuming session')
   expect(html).not.toContain('Opening session')
@@ -714,12 +715,28 @@ test('trail mode: a lone reasoning summary is ONE labelled line, not a card', ()
   expect(html).not.toContain('border-accent/15')
 })
 
-test('trail mode: a summary heading is plain text, never markdown prose', () => {
+test('trail mode: a summary heading renders its Markdown emphasis', () => {
   const html = render(thinkingRow('s:m:0:thinking', 'weighing the **socket** options'))
 
-  // A heading is a label, not prose — it is not run through the markdown path.
-  expect(html).toContain('**socket**')
-  expect(html).not.toContain('<strong>socket</strong>')
+  // Summary headings are compact, but must not expose model-authored Markdown
+  // delimiters to the user.
+  expect(html).toContain('<strong>socket</strong>')
+  expect(html).not.toContain('**socket**')
+})
+
+test('trail mode: every heading in a reasoning run renders inline Markdown', () => {
+  const html = renderRows(
+    [
+      thinkingRow('s:m:0:thinking', '**Checking** the transport'),
+      thinkingRow('s:m:1:thinking', '_Ordering_ the close frame'),
+    ],
+    'trail',
+  )
+
+  expect(html).toContain('<strong>Checking</strong>')
+  expect(html).toContain('<em>Ordering</em>')
+  expect(html).not.toContain('**Checking**')
+  expect(html).not.toContain('_Ordering_')
 })
 
 test('trail mode: adjacent reasoning rows coalesce into ONE run with a step count', () => {

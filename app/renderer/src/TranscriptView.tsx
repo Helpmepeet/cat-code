@@ -216,11 +216,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       groupAgentDelegates(rows),
       reasoningMode,
     )
-    // IS-C (M5) — cached preview rows (engaged or not) keep a non-text restore
-    // marker so the pane never masquerades as a live session; the `connecting`
-    // phase only fires on an empty pane (handled above), so it draws no divider
-    // over live rows.
-    const restored = restorePhase === 'preview' || restorePhase === 'resuming'
+    // Intentional: cached/restoring transcripts render without a divider or pulse.
+    // The operator rejected the startup pink hairline + dot (2026-07-29).
     content = (
       // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
       // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
@@ -228,9 +225,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
       // code / mono text stays at a crisp, readable weight.
       <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
-        {restored ? (
-          <RestoredSessionDivider resuming={restorePhase === 'resuming'} />
-        ) : null}
         {items.map(item => (
           <DisplayItemView item={item} key={displayItemKey(item)} />
         ))}
@@ -284,23 +278,6 @@ export function ToolInspectorOverlay({
       <div className="relative flex h-full shadow-2xl">
         <ToolInspector row={row} onClose={onClose} />
       </div>
-    </div>
-  )
-}
-
-/**
- * IS-C (M5) — non-text marker above cached preview rows. Shares the
- * centered-hairline seam grammar (see `Seam`) and carries a live pulse dot for
- * in-flight resume. Pure presentation.
- */
-function RestoredSessionDivider({ resuming }: { resuming: boolean }) {
-  return (
-    <div className="flex items-center gap-3 py-1" aria-hidden>
-      <div className="h-px flex-1 bg-accent/20" />
-      <span
-        className={`h-1.5 w-1.5 rounded-full bg-accent ${resuming ? 'animate-pulse' : ''}`}
-      />
-      <div className="h-px flex-1 bg-accent/20" />
     </div>
   )
 }
@@ -1333,7 +1310,7 @@ function ToolOverflowNote({
   if (total <= shown) return null
   return (
     <div className="mt-1 border-t border-shell-seam pt-1 font-mono text-[10px] text-text-subtle/70">
-      {total - shown} more {unit} — open the full-output inspector to view all
+      {total - shown} more {unit}. Open the full-output inspector to view all
     </div>
   )
 }
@@ -1446,8 +1423,9 @@ function ThinkingBlock({ content }: { content: string }) {
  *  - One step is ONE row (`ReasoningLine`): a head, a rail and a single node
  *    spend two rows on four words with nothing to group or collapse. The trail
  *    form appears only when a second step exists.
- *  - Headings render as plain sans, one line, no markdown and no italics —
- *    italic prose makes a six-word phrase read as a truncated quotation.
+ *  - Headings stay compact, but render their provider-supplied Markdown —
+ *    models commonly emphasize the current action with `**bold**`, and the
+ *    transcript must show that emphasis rather than exposing the delimiters.
  *  - Grey only. Accent stays with user turns, running work and the streaming
  *    caret; reasoning is background activity.
  *  - The encrypted signature is a SHAPE, never a payload: a hollow node and a
@@ -1458,7 +1436,7 @@ function ThinkingBlock({ content }: { content: string }) {
  * summary of its reasoning, not the reasoning itself. Stated once per row/run,
  * never as a per-row badge (the `summary` sub-label was removed, #7). */
 const REASONING_TITLE =
-  'Short summary headings the model exposes about its reasoning — not the reasoning itself.'
+  'Short summary headings the model exposes about its reasoning, not the reasoning itself.'
 
 /** Steps kept visible before the older ones fold away, mirroring the
  * "Show N more lines" idiom `AssistantProse` uses for long bodies. */
@@ -1572,7 +1550,7 @@ const ReasoningStep = memo(function ReasoningStep({
     >
       <ReasoningNode placement="rail" />
       {step.kind === 'heading' ? (
-        <span className="break-words">{step.text}</span>
+        <ReasoningHeading content={step.text} />
       ) : (
         <ReasoningProse content={step.text} />
       )}
@@ -1632,6 +1610,27 @@ function ReasoningProse({ content }: { content: string }) {
   )
 }
 
+/**
+ * Compact Markdown for a reasoning-summary heading. `react-markdown` normally
+ * wraps a line in a paragraph; replacing that wrapper keeps the trail's
+ * one-line layout while still interpreting inline Markdown such as emphasis,
+ * strong text, code, and links. Raw HTML remains disabled by react-markdown.
+ */
+function ReasoningHeading({ content }: { content: string }) {
+  return (
+    <span className="break-words">
+      <MarkdownErrorBoundary fallback={content}>
+        <Markdown
+          remarkPlugins={REMARK_PLUGINS}
+          components={{ p: ({ children }) => <>{children}</> }}
+        >
+          {content}
+        </Markdown>
+      </MarkdownErrorBoundary>
+    </span>
+  )
+}
+
 /** A lone readable summary: node · label · phrase, on one row. */
 function ReasoningLine({ content }: { content: string }) {
   return (
@@ -1643,7 +1642,7 @@ function ReasoningLine({ content }: { content: string }) {
       <span className="mr-2 text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">
         Reasoning
       </span>
-      <span className="break-words">{content}</span>
+      <ReasoningHeading content={content} />
     </div>
   )
 }
