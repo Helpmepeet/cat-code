@@ -282,7 +282,7 @@ export function getGPTAgentModeUsingToolsSection(enabledTools: Set<string>): str
       ? `TASK TRACKING: Use ${taskToolName} to track the run. Mark each task complete as soon as it is done. Do not batch completions.`
       : null,
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `DELEGATION: Use ${AGENT_TOOL_NAME} as your default execution path for bounded investigation, implementation, verification, and parallel workstreams. If the work is more than a tiny single-file pass, push execution to a worker and keep planning, synthesis, approval routing, and final outcome judgment on the main thread. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.`
+      ? `DELEGATION: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
       : null,
     `CONTEXT SHAPE: Keep context small and decision-focused. Prefer compact evidence and short handoffs over carrying raw tool output forward.`,
     `PARALLELISM: Use parallel tool calls only when ownership is clear and the results will join cleanly.`,
@@ -346,7 +346,7 @@ export function getGPTAgentModeSessionGuidanceSection(
       ? null
       : `SHELL COMMANDS: If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands in the conversation.`,
     hasAgentTool
-      ? `AGENT MODE: You are the orchestrator. Plan inline on the main thread. Keep the main thread focused on planning, synthesis, approval decisions, and completion truth. Agent Mode should feel more aggressive than normal chat by moving execution outward sooner. Use ${AGENT_TOOL_NAME} as the default execution path for bounded investigation, implementation, and verification slices that would otherwise take more than a tiny single-file pass. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default. After spawning Explore workers, avoid overlapping repo reads and searches unless you need one narrow blocking fact to steer the run.`
+      ? `AGENT MODE: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
       : null,
     getGPTAgentModeWorkerControlGuidance(enabledTools),
     hasSkills
@@ -366,23 +366,15 @@ function getGPTAgentModeWorkerControlGuidance(
   enabledTools: Set<string>,
 ): string | null {
   const available = [
-    enabledTools.has('ListWorkers')
-      ? 'ListWorkers: inspect the worker roster before redundant spawning.'
-      : null,
-    enabledTools.has('WaitWorkers')
-      ? 'WaitWorkers: wait after parallel launches so convergence is explicit.'
-      : null,
-    enabledTools.has('GetWorkerResult')
-      ? 'GetWorkerResult: read worker output before synthesis or final completion; mark synthesized only after use.'
-      : null,
-    enabledTools.has('CancelWorker')
-      ? 'CancelWorker: cancel stale, wrong, conflicting, unsafe, or no-longer-needed workers.'
-      : null,
+    enabledTools.has('ListWorkers') ? 'ListWorkers' : null,
+    enabledTools.has('WaitWorkers') ? 'WaitWorkers' : null,
+    enabledTools.has('GetWorkerResult') ? 'GetWorkerResult' : null,
+    enabledTools.has('CancelWorker') ? 'CancelWorker' : null,
   ].filter(item => item !== null)
 
   if (available.length === 0) return null
 
-  return `WORKER CONTROL: ${available.join(' ')} If Explore already owns a question, do not keep doing the same search on the main thread. Do not both spawn Explore and then keep investigating the same area yourself. Use worker handles instead of raw task IDs or internal agent IDs.`
+  return `WORKER-CONTROL TOOLS AVAILABLE: ${available.join(', ')}. Follow the Worker control tools doctrine above.`
 }
 
 export function getGPTSessionGuidanceSection(
@@ -393,9 +385,13 @@ export function getGPTSessionGuidanceSection(
   const hasSkills =
     skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
-  const searchTools = hasEmbeddedSearchTools()
+  const embeddedSearch = hasEmbeddedSearchTools()
+  const searchTools = embeddedSearch
     ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
     : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
+  const readDiscipline = embeddedSearch
+    ? `READ DISCIPLINE: Use targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read.`
+    : `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read.`
 
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()
@@ -428,7 +424,7 @@ export function getGPTSessionGuidanceSection(
       : `SHELL COMMANDS: If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands in the conversation.`,
     `PROACTIVE EXECUTION: When the user's intent is clear and the next step is reversible and low-risk, proceed without asking. Do not stop after completing a step and wait for the user to push you forward — determine what the natural next action is and take it. Use tools to discover missing details rather than asking about them. Only stop and check with the user when: the task is genuinely complete, the next step is ambiguous with no clear best path, or the next step is risky or irreversible.`,
     `INVESTIGATION DISCIPLINE: When diagnosing a problem, track whether your conclusion is stable. Once you can identify the specific files and changes needed, STOP investigating and act — either edit the files or report your findings. Do not continue searching for confirming evidence after your conclusion has stabilized. The test: can you write a precise implementation spec with file paths and what to change? If yes, stop investigating and proceed.`,
-    `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read.`,
+    readDiscipline,
     agentToolRule,
     ...(hasAgentTool &&
     areExplorePlanAgentsEnabled() &&

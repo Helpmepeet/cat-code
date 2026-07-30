@@ -335,6 +335,8 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
         ]),
   ]
   const backgroundNote = getBackgroundUsageNote()
+  const workingDirectoryNote =
+    "The main session's working directory persists between commands, but shell state does not. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
 
   const instructionItems: Array<string | string[]> = [
     'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.',
@@ -364,7 +366,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
     return [
       'Executes a given bash command and returns its output.',
       '',
-      "The working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).",
+      workingDirectoryNote,
       '',
       `TOOL SELECTION CONSTRAINT: Before using ${BASH_TOOL_NAME}, check whether a dedicated tool can perform the task. Avoid using this tool to run ${avoidCommands} commands unless you have verified that no dedicated tool can accomplish the task or the user explicitly asked for Bash.`,
       '',
@@ -380,7 +382,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   return [
     'Executes a given bash command and returns its output.',
     '',
-    "The working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).",
+    workingDirectoryNote,
     '',
     `IMPORTANT: Avoid using this tool to run ${avoidCommands} commands, unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool as this will provide a much better experience for the user:`,
     '',

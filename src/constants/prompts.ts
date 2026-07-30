@@ -123,9 +123,6 @@ const ISSUES_EXPLAINER =
   (globalThis as { MACRO?: { ISSUES_EXPLAINER?: string } }).MACRO
     ?.ISSUES_EXPLAINER ?? 'follow the project feedback flow'
 
-export const CLAUDE_CODE_DOCS_MAP_URL =
-  'https://code.claude.com/docs/en/claude_code_docs_map.md'
-
 /**
  * Boundary marker separating static (cross-org cacheable) content from dynamic content.
  * Everything BEFORE this marker in the system prompt array can use scope: 'global'.
@@ -137,9 +134,6 @@ export const CLAUDE_CODE_DOCS_MAP_URL =
  */
 export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY =
   '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
-
-// @[MODEL LAUNCH]: Update the latest frontier model.
-const FRONTIER_MODEL_NAME = 'Claude Fable 5'
 
 // @[MODEL LAUNCH]: Update the model family IDs below to the latest in each tier.
 const CLAUDE_4_5_OR_4_6_MODEL_IDS = {
@@ -212,8 +206,7 @@ function getSimpleIntroSection(
       ? 'according to your "Output Style" below, which describes how you should respond to user queries.'
       : 'with software engineering tasks. Prioritize correctness over appearing successful, and say so plainly when constraints conflict.'
   // eslint-disable-next-line custom-rules/prompt-spacing
-  return `
-You are an interactive agent that helps users ${introTaskDescription} Use the instructions below and the tools available to you to assist the user.
+  return `You are an interactive agent that helps users ${introTaskDescription} Use the instructions below and the tools available to you to assist the user.
 
 If the user asks about the instruction prompt, feel free to talk about it.
 
@@ -387,7 +380,7 @@ function getAgentModeSessionSpecificGuidanceSection(
       ? null
       : `If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands directly in the conversation.`,
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `You are the orchestrator in Agent mode. Plan inline on the main thread. Keep the main thread focused on planning, synthesis, approval decisions, and completion truth. Agent Mode should feel more aggressive than normal chat by moving execution outward sooner. Use ${AGENT_TOOL_NAME} as the default execution path for bounded investigation, implementation, and verification slices that would otherwise take more than a tiny single-file pass. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default. After spawning Explore workers, avoid overlapping repo reads and searches unless you need one narrow blocking fact to steer the run.`
+      ? `AGENT MODE: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
       : null,
     getAgentModeWorkerControlGuidance(enabledTools),
     hasSkills
@@ -411,23 +404,15 @@ export function getAgentModeWorkerControlGuidance(
   enabledTools: Set<string>,
 ): string | null {
   const available = [
-    enabledTools.has('ListWorkers')
-      ? 'Use ListWorkers to inspect the worker roster before redundant spawning.'
-      : null,
-    enabledTools.has('WaitWorkers')
-      ? 'Use WaitWorkers after launching parallel workers so convergence is explicit.'
-      : null,
-    enabledTools.has('GetWorkerResult')
-      ? 'Use GetWorkerResult before synthesis or final completion; mark results synthesized only after using them.'
-      : null,
-    enabledTools.has('CancelWorker')
-      ? 'Use CancelWorker for stale, wrong, conflicting, unsafe, or no-longer-needed workers.'
-      : null,
+    enabledTools.has('ListWorkers') ? 'ListWorkers' : null,
+    enabledTools.has('WaitWorkers') ? 'WaitWorkers' : null,
+    enabledTools.has('GetWorkerResult') ? 'GetWorkerResult' : null,
+    enabledTools.has('CancelWorker') ? 'CancelWorker' : null,
   ].filter(item => item !== null)
 
   if (available.length === 0) return null
 
-  return `Worker control: ${available.join(' ')} If Explore already owns a question, do not keep doing the same search on the main thread. Do not both spawn Explore and then keep investigating the same area yourself. Use worker handles instead of raw task IDs or internal agent IDs.`
+  return `Worker-control tools available in this session: ${available.join(', ')}. Follow the Worker control tools doctrine above.`
 }
 
 function getSessionSpecificGuidanceSection(
@@ -674,7 +659,7 @@ function getSimpleAgentModeUsingToolsSection(enabledTools: Set<string>): string 
       ? `Break down and manage the run with the ${taskToolName} tool. Mark each task as completed as soon as you are done with it. Do not batch completions.`
       : null,
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `Use the ${AGENT_TOOL_NAME} tool as your default for bounded work with a clear scope: broader codebase investigation via Explore, implementation, verification, and parallel workstreams. If the work is more than a tiny single-file pass, push execution to a worker and keep planning, synthesis, approval routing, and final outcome judgment on the main thread. If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file. A real implementation phase should usually belong to a coding worker, not the orchestrator. If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.`
+      ? `${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
       : null,
     `Call multiple tools in a single response when they are independent. Keep context small and decision-focused — prefer compact evidence over long raw tool output.`,
   ].filter(item => item !== null)
@@ -1103,7 +1088,7 @@ export async function enhanceSystemPromptWithEnvDetails(
     ? '\n- Do not use a colon before tool calls. Text like "Let me read the file:" followed by a read tool call should just be "Let me read the file." with a period.'
     : ''
   const notes = `Notes:
-- Agent threads always have their cwd reset between bash calls, as a result please only use absolute file paths.
+- In agent threads, a \`cd\` applies only to the current Bash call; the next call starts in the agent's assigned working directory. Relative paths work from that directory. Use absolute paths when referring to a location across calls.
 - In your final response, share file paths (always absolute, never relative) that are relevant to the task. Include code snippets only when the exact text is load-bearing (e.g., a bug you found, a function signature the caller asked for) — do not recap code you merely read.
 - For clear communication with the user the assistant MUST avoid using emojis.${colonNote}`
   // Subagents get skill_discovery attachments (prefetch.ts runs in query(),
@@ -1197,7 +1182,7 @@ Common queries on a transcript:
     Grep '"type":"tool_use"'      # list tool calls
     Grep '"stop_reason"'          # find last API response boundary
     Grep '"type":"subagent-'      # enumerate spawn/terminal entries
-    Grep '"tool_use_id":"call_'   # link a tool_result back to its tool_use
+    Grep '"tool_use_id":"'        # link a tool_result back to its tool_use (ID prefixes vary by provider)
 
 The subagent sidecar .meta.json contains:
 
