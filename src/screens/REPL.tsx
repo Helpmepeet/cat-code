@@ -178,9 +178,9 @@ import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
 import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
-import { renderModelName } from '../utils/model/model.js';
+import { getRuntimeMainLoopModel, renderModelName } from '../utils/model/model.js';
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
-import { tokenCountWithEstimation } from '../utils/tokens.js';
+import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } from '../utils/tokens.js';
 import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
@@ -3113,6 +3113,14 @@ export function REPL({
     }
     queryCheckpoint('query_context_loading_start');
     const isAgentModeActive = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
+    const runtimePermissionMode = toolUseContext.getAppState().toolPermissionContext.mode;
+    const runtimeMainLoopModel = getRuntimeMainLoopModel({
+      permissionMode: runtimePermissionMode,
+      mainLoopModel: toolUseContext.options.mainLoopModel,
+      exceeds200kTokens:
+        runtimePermissionMode === 'plan' &&
+        doesMostRecentAssistantMessageExceed200k(messagesIncludingNewMessages),
+    });
     const additionalWorkingDirectories = Array.from(toolPermissionContext.additionalWorkingDirectories.keys());
     logForDebugging(`[REPL:query-setup] context loading start toolCount=${freshTools.length} mcpClientCount=${freshMcpClients.length} additionalWorkingDirectoryCount=${additionalWorkingDirectories.length} hasCustomSystemPrompt=${Boolean(customSystemPrompt)} isAgentModeActive=${isAgentModeActive}`);
     const [,, defaultSystemPrompt, agentModePromptSections, baseUserContext, systemContext] = await Promise.all([
@@ -3126,7 +3134,7 @@ export function REPL({
       logForDebugging(`[REPL:query-setup] auto mode check complete`);
       return result;
     }) : Promise.resolve(undefined),
-    getSystemPrompt(freshTools, mainLoopModelParam, additionalWorkingDirectories, freshMcpClients).then(result => {
+    getSystemPrompt(freshTools, runtimeMainLoopModel, additionalWorkingDirectories, freshMcpClients).then(result => {
       logForDebugging(`[REPL:query-setup] getSystemPrompt complete sectionCount=${result.length}`);
       return result;
     }),
