@@ -131,6 +131,15 @@ describe('key encoding', () => {
     expect(new Set(encodings).size).toBe(encodings.length)
   })
 
+  test('the module source carries no NUL byte', async () => {
+    // A literal NUL makes git classify this file binary and makes `rg` skip it
+    // during directory traversal, so it vanishes from searches with no warning.
+    const source = await Bun.file(
+      new URL('./systemPromptSections.ts', import.meta.url).pathname,
+    ).bytes()
+    expect(source.includes(0)).toBe(false)
+  })
+
   test('field order does not change the encoding', () => {
     expect(encodeKeyInput({ gpt: true, model: 'x' })).toBe(
       encodeKeyInput({ model: 'x', gpt: true }),
