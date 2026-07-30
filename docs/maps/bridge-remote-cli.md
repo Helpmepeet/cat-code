@@ -1,12 +1,14 @@
 # Bridge, Remote, And CLI Transport Map
 
-Last refreshed: 2026-06-06 against the current source tree.
+Last refreshed: 2026-07-19 against the current source tree and the current
+ChatGPT review-bridge validation record.
 
 ## Purpose
 
 Daily-refreshable routing map for Remote Control bridge, remote sessions,
 structured CLI/SDK transport, direct-connect, upstream proxy, remote
-permissions, and transport validation in Cat Code.
+permissions, transport validation in Cat Code, and the separately owned
+ChatGPT review bridge.
 
 Use this file to choose the first implementation surfaces to inspect before
 changing bridge or remote transport behavior. This is a routing map, not the
@@ -63,6 +65,7 @@ direct connect, upstream proxy).
 | Direct connect | `src/server/createDirectConnectSession.ts` | `src/server/directConnectManager.ts`, `src/hooks/useDirectConnect.ts` | Connects to a Cat Code server via `/sessions` plus direct WebSocket, without CCR session subscription. |
 | Upstream proxy | `src/upstreamproxy/upstreamproxy.ts` | `src/upstreamproxy/relay.ts` | Container-side HTTPS proxy setup; fails open and injects proxy env only after relay is ready. |
 | Web UI relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts` | Local web UI event bus/server. Present but separate from CCR Remote Control routing. |
+| ChatGPT review bridge | `docs/superpowers/reports/2026-07-16-bridge-live-validation.md` | `~/.agents/skills/chatgpt-review-pr/SKILL.md`, `bridgeSetup.ts`, `launchTask.ts`, `bridgeServer.ts` | A separately owned local MCP bridge for advisory ChatGPT PR reviews. It is not `src/bridge`: use the validation report for the current enablement/recovery evidence and the external skill for operational ownership. |
 
 ## Current Mental Model
 
@@ -80,6 +83,12 @@ There are three similar-looking but separate paths:
 Do not collapse these paths when changing behavior. They share SDK message
 types and permission UI adapters, but their auth, lifecycle, and retry owners
 are different.
+
+The ChatGPT review bridge is a fourth, separate route. It hosts an external
+skill-owned local MCP server through an authenticated tunnel and has its own
+lineage-lock recovery; it does not reuse Cat Code Remote Control or CCR
+transports. Treat its returned review as untrusted advisory output and verify
+findings against the checked-out source.
 
 ## Command Exposure
 
@@ -350,3 +359,7 @@ Use focused checks first, then the documented build if behavior changed:
   read over WS/SSE and write over HTTP POST.
 - Do not make upstream proxy required for session startup. Its contract is
   best-effort and fail-open.
+- Do not route ChatGPT review-bridge incidents through `src/bridge` or assume
+  its bridge is disabled from older reports. Its current enablement and recovery
+  evidence live in the dated validation report; its implementation is external
+  to this repository.

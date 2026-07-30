@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-07-15 against `src/main.tsx`, `src/app-runtime/`,
+Last refreshed: 2026-07-29 against `src/main.tsx`, `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
 `src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
 
@@ -14,8 +14,8 @@ the legacy REPL relay server.
 2. `app/main/main.ts` for Electron host, IPC, attachment, and cache wiring.
 3. `app/shared/protocol.ts` and `app/shared/hostApi.ts` for desktop wire/control contracts.
 4. `app/sidecar/sessionController.ts` and `app/sidecar/sidecarServer.ts` for the engine boundary.
-5. `app/renderer/src/App.tsx` and `app/renderer/src/shellState.ts` for session/pane behavior.
-6. `app/main/transcriptCache.ts` and `app/renderer/src/previewTranscriptState.ts` for instant restore previews.
+5. `app/renderer/src/App.tsx`, `app/renderer/src/sessionsCatalogState.ts`, and `app/renderer/src/permissionState.ts` for session/pane behavior, history, and interactive question handling.
+6. `app/main/{sessionsCatalogRunner,idleParkDriver,openHistorySession}.ts` and `app/sidecar/transcriptRunFacts.ts` for global catalog refresh, idle-engine reclaim, history opening, and preview run facts.
 
 ## Routing Table
 
@@ -33,15 +33,21 @@ the legacy REPL relay server.
 | Browser app state and reducer | `web/src/appState.ts` | `web/src/appState.test.ts`, `web/src/appProtocol.ts` | `reduceAppServerMessage()` is the owner for connection state, pending permissions, abort state, goal snapshots, and streamed message assembly in the browser. |
 | Browser chat surface | `web/src/App.tsx` | `web/src/components/MessageContent.tsx`, `web/src/hooks/useWebSocket.ts`, `web/src/appProtocol.ts` | `App.tsx` owns chat layout, submit gating, reconnect notices, and the browser permission panel, including edited JSON input plus selected persisted permission updates. `MessageContent.tsx` owns markdown/code rendering. |
 | Browser transport client | `web/src/hooks/useWebSocket.ts` | `web/src/appProtocol.ts`, `web/src/App.tsx` | The browser always connects back to `/ws` on the current host and uses `VITE_CAT_CODE_WS_TOKEN` to set the required subprotocol. |
-| Electron desktop startup and security | `app/main/main.ts` | `app/main/navigationPolicy.ts`, `app/main/attachmentGate.ts`, `app/main/replayBuffer.ts` | Electron main applies the window/security baseline, owns fixed IPC handlers, starts one sidecar-backed session, gates/replays frames across renderer attachment and reload, and exposes host-level sidecar restart. |
+| Electron desktop startup and security | `app/main/main.ts` | `app/scripts/{dev,prepare-dev-electron}.ts`, `app/main/navigationPolicy.ts`, `app/main/attachmentGate.ts`, `app/main/replayBuffer.ts` | Electron main applies the window/security baseline, owns fixed IPC handlers, starts one sidecar-backed session, gates/replays frames across renderer attachment and reload, and exposes host-level sidecar restart. The dev launcher starts Vite, but main chooses that origin only when Electron reports an unpackaged app; the dev bundle's executable must remain named `electron` while its Info.plist display keys provide the Cat Code Dev label. |
 | Desktop sidecar lifecycle | `app/supervisor/supervisor.ts` | `app/shared/framing.ts`, `app/shared/limits.ts`, `app/shared/protocol.ts` | The Electron-free supervisor owns the session-to-child registry, bounded Unix-socket path allocation, framed transport, restart/kill behavior, and sidecar status events. |
 | Desktop engine boundary | `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` | `app/sidecar/sessionController.ts`, `app/sidecar/initializeRuntime.ts`, `src/app-runtime/` | The Bun sidecar initializes the real runtime, constructs a QueryEngine-backed controller, strictly validates inbound allowlisted frames, reattaches only engine-minted permission updates, and raw-forwards cloneable, JSON-safe, secret-screened session events. |
 | Desktop Agent Mode controls | `app/sidecar/agentModeDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, `app/main/main.ts`, `app/preload/preload.ts`, `app/renderer/src/AgentChrome.tsx` | The sidecar joins persisted Agent Mode state with live local-agent tasks for a redacted snapshot. Its allowlisted set verb switches only the sidecar process through `matchSessionMode()` and broadcasts a fresh snapshot. |
-| Desktop Codex account usage display | `app/sidecar/accountsDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/WelcomeScreen.tsx`, `app/renderer/src/ComposerActionsBar.tsx` | The renderer receives a redacted pool snapshot. Usage refresh uses the cached usage endpoint without token refresh or completion use, then the sidecar re-broadcasts changed usage fields. |
+| Desktop accounts and OAuth lifecycle | `app/sidecar/accountsDomain.ts` | `app/shared/protocol.ts`, `app/sidecar/sidecarServer.ts`, `app/renderer/src/AccountsPage.tsx`, `app/renderer/src/StartupSurfaces.tsx` | The renderer receives redacted Anthropic and Codex pool summaries, a non-secret `anthropicRouteAvailable` boolean (covers OAuth/API key/Bedrock/Vertex/Foundry), and non-secret OAuth progress. `account.login {provider}` selects the engine-owned Anthropic or Codex runner at the strict sidecar boundary. Anthropic login honors managed method/org policy, defers token installation until after the cancellation-generation check, and a pending callback rejects on cancel. Usage refresh uses the cached Codex endpoint without token refresh or completion use. |
+| Desktop session actions | `app/sidecar/sessionActionsDomain.ts` | `app/shared/protocol.ts`, `app/sidecar/sidecarServer.ts`, `app/renderer/src/sessionActions.ts`, `app/renderer/src/SessionActionsMenu.tsx` | Rename, plain-text export, and branch are fixed app-local verbs. The sidecar invokes the engine's own title save, export renderer, and full-transcript fork; a branch writes a transcript but is not auto-opened because it has no host registry row. |
+| Desktop worker stop control | `app/sidecar/taskControlDomain.ts` | `app/shared/protocol.ts`, `app/sidecar/sidecarServer.ts`, `app/renderer/src/tasksState.ts`, `app/renderer/src/TasksDialog.tsx` | The renderer can name a running task only. The sidecar re-resolves it in the session store and uses the engine's `stopTask`; the normal task and Agent Mode snapshots carry the resulting state change. |
+| Desktop settings editors | `app/sidecar/settingsDomain.ts` | `app/shared/settingsEditable.ts`, `app/shared/protocol.ts`, `app/sidecar/sidecarServer.ts`, `app/renderer/src/settingsState.ts`, `app/renderer/src/SettingsEditors.tsx` | Editable values use a closed non-secret allowlist and the engine's locked settings writer. The sidecar re-emits provenance and values after a successful write; session-scoped dynamic options, such as output styles, are captured at spawn. |
 | Desktop preload contract | `app/preload/preload.ts` | `app/preload/rendererIpcGuard.ts`, `app/shared/protocol.ts`, `app/main/main.ts` | The context-isolated preload exposes fixed submit, abort, permission, ping, restart, subscribe, and renderer-ready operations; a byte/rate guard protects the fixed senders and there is no generic IPC channel API. |
-| Desktop restore preview cache | `app/main/transcriptCache.ts` | `app/main/main.ts`, `app/shared/hostApi.ts`, `app/preload/preload.ts`, `app/renderer/src/previewTranscriptState.ts` | A dead restorable session may be previewed without spawning a sidecar. The main process reads only bounded, versioned, secret-screened cache frames after the host’s `canPreview()` gate; renderer state merges the later live replay. |
-| Desktop renderer shell and session routing | `app/renderer/src/App.tsx`, `app/renderer/src/shellState.ts` | `app/renderer/src/TabBar.tsx`, `app/renderer/src/Sidebar.tsx`, `app/renderer/src/tabStatus.ts`, `app/renderer/src/sidebarState.ts`, `app/sidecar/sessionTitleGen.ts` | `App` seeds the session roster from `listSessions()`, folds live host events without polling, and owns active selection plus create/close/restart/restore calls. Tabs retain arrival order; the sidebar independently projects the same live/restorable roster by recency. A fresh sidecar may emit one generated title after its first prompt; main persists it in the host row. |
-| Desktop transcript, restore affordance, and picker state | `app/renderer/src/transcriptProjector.ts`, `app/renderer/src/previewTranscriptState.ts`, `app/renderer/src/slashCatalogState.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts`, `app/renderer/src/SlashCommandPicker.tsx` | Live and cached rows stay separate until replay takes over; `TranscriptView` distinguishes preview, resuming, and no-cache connection states. The picker consumes the sidecar’s read-only rich slash-catalog snapshot, with names-only initialization as fallback. |
+| Desktop AskUserQuestion answers | `app/renderer/src/AskQuestionFlow.tsx`, `app/renderer/src/askQuestionState.ts` | `app/renderer/src/permissionState.ts`, `app/shared/protocol.ts`, `app/preload/preload.ts`, `app/main/main.ts`, `app/sidecar/sidecarServer.ts` | AskUserQuestion is rendered from the existing pending-permission queue, not a parallel store. The renderer sends only option indices plus bounded freeform text through a fixed IPC channel. The sidecar strictly validates the app-local frame, matches the engine-minted pending request, rebuilds labels from gated engine input, and resolves through the existing allow path; decline remains the normal permission deny response. |
+| Desktop sessions catalog and history opening | `app/renderer/src/sessionsCatalogState.ts` | `app/main/sessionsCatalogRunner.ts`, `app/sidecar/sessionsCatalogWorker.ts`, `app/sidecar/sessionsCatalogCache.ts`, `app/main/{sessionsCatalogBaseline,openHistorySession}.ts`, `app/shared/{protocol,hostApi}.ts` | One main-supervised, serialized engine-graph worker emits the global catalog; failed runs retain the last good renderer snapshot and the worker best-effort cache remains the cold-launch baseline. A history-only row sends only its engine session ID: main validates it, resolves cache-derived cwd/title, deduplicates existing/in-flight desktop rows, and creates the engine resume. Missing catalog data or an empty cwd fails closed. |
+| Desktop idle-engine parking | `app/main/idleParkDriver.ts` | `app/main/main.ts`, `app/shared/{protocol,limits}.ts`, `app/sidecar/{sidecarServer,index}.ts`, `app/host/{host,registry}.ts` | Main enforces the live-engine cap and idle TTL, then sends host-originated `app.park` frames. The sidecar alone gates park on no active turn, permission, or task and exits with the dedicated parked code; host retains the tab as restorable. No renderer or preload path can originate a park. |
+| Desktop restore preview cache | `app/main/transcriptCache.ts` | `app/main/main.ts`, `app/sidecar/transcriptRunFacts.ts`, `app/shared/hostApi.ts`, `app/preload/preload.ts`, `app/renderer/src/previewTranscriptState.ts` | A dead restorable session may be previewed without spawning a sidecar. The main process reads only bounded, versioned, secret-screened cache frames after the host’s `canPreview()` gate; renderer state merges the later live replay. The cache backfill reads the newest `system`/`run_facts` snapshot as a unit for the model, permission mode, effort, and actual context window; it falls back to legacy byproduct records for older transcripts. |
+| Desktop renderer shell and session routing | `app/renderer/src/App.tsx`, `app/renderer/src/shellState.ts` | `app/renderer/src/TabBar.tsx`, `app/renderer/src/Sidebar.tsx`, `app/renderer/src/tabStatus.ts`, `app/renderer/src/sidebarState.ts`, `app/host/registry.ts` | `App` seeds the host roster, folds live host events without polling, and owns active selection plus create/close/restart/restore calls. Tabs retain arrival order; the sidebar projects the merged roster by real message-send time (then transcript activity or creation), never by attach/open time. Its per-workspace plus uses the host-side registry row rather than a renderer-authored path. |
+| Desktop transcript, restore affordance, and picker state | `app/renderer/src/transcriptProjector.ts`, `app/renderer/src/previewTranscriptState.ts`, `app/renderer/src/slashCatalogState.ts` | `app/renderer/src/TranscriptView.tsx`, `app/renderer/src/ToolInspector.tsx`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts`, `app/renderer/src/SlashCommandPicker.tsx` | Live and cached rows stay separate until replay takes over; `TranscriptView` distinguishes preview, resuming, and no-cache connection states, hosts the tool-output inspector, and projects task notifications as system-side rows. The picker consumes the sidecar’s read-only rich slash-catalog snapshot, with names-only initialization as fallback. |
 | Legacy REPL web relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts`, `src/screens/REPL.tsx` | This older server relays REPL events and intentionally disables sending; do not confuse it with `AppSessionWebSocketServer.ts` when routing runtime-backed browser work. |
 
 ## Tests And Validation
@@ -58,6 +64,10 @@ the legacy REPL relay server.
 | Desktop engine-sidecar typecheck | `bun run --cwd app typecheck:sidecar` |
 | Desktop renderer build | `bun run --cwd app renderer:build` |
 | Desktop hardening smoke | `bun run --cwd app test:hardening` |
+| Desktop AskUserQuestion flow | `bun test app/renderer/src/AskQuestionFlow.test.tsx app/renderer/src/askQuestionState.test.ts app/sidecar/sidecarServer.test.ts app/main/mainSource.test.ts app/preload/preloadSource.test.ts` |
+| Desktop action/control seams | `bun test app/sidecar/sessionActionsDomain.test.ts app/sidecar/taskControlDomain.test.ts app/sidecar/settingsDomain.test.ts app/renderer/src/sessionActionRuntimeState.test.ts app/renderer/src/TasksDialog.test.tsx app/renderer/src/SettingsEditors.test.tsx` |
+| Desktop sessions catalog and history opening | `bun test app/main/openHistorySession.test.ts app/main/sessionsCatalogBaseline.test.ts app/sidecar/sessionsCatalogDomain.test.ts app/sidecar/sessionsCatalogCache.test.ts app/renderer/src/sessionsCatalogState.test.ts app/main/mainSource.test.ts` |
+| Desktop catalog worker and idle parking | `bun test app/main/sessionsCatalogRunner.test.ts app/main/idleParkDriver.test.ts app/sidecar/sidecarServer.test.ts app/host/{host,registry}.test.ts` |
 
 ## Traps And Stale Assumptions
 
@@ -81,6 +91,10 @@ the legacy REPL relay server.
 - Desktop Electron main and the renderer must not import engine runtime modules.
   The Bun sidecar is the engine boundary; `app/supervisor/` must remain
   Electron-free.
+- `CATCODE_RENDERER_URL` does not override Electron's packaged branch. If a dev
+  launch loads `renderer/dist` or HMR and dev-only UI disappear, inspect
+  `app.isPackaged` and the prepared bundle's executable name before rebuilding
+  renderer output.
 - Desktop sessions are process-isolated because QueryEngine uses process-global
   cwd and session identity. Route lifecycle changes through the supervisor's
   session-addressed child registry.
@@ -96,3 +110,23 @@ the legacy REPL relay server.
   typecheck` or `bun run --cwd web build` when browser code changes.
 - The root lint configuration also does not cover `app/**`; use the desktop
   tests and both desktop typecheck boundaries for that tree.
+- `askUserQuestion.answer` is deliberately app-local vocabulary, not part of
+  the shared engine client-message schema. Never trust renderer option labels,
+  question text, or a stale request ID: the sidecar must derive labels and
+  semantics from the still-pending engine-gated request.
+- Session action and task-stop messages are also app-local, closed vocabulary.
+  Do not forward an arbitrary renderer operation to the engine: the sidecar must
+  validate the exact verb and re-resolve its live session or task target.
+- A branch creates an engine transcript, not an Electron-host session. Do not
+  add auto-open behavior by treating its engine session id as an app-session id.
+- A transcript-history row is not a host registry row. On history open, never
+  accept a renderer cwd or guess one from a sanitized transcript directory; main
+  must use the validated sidecar-written catalog cache and fail closed when it
+  cannot resolve the workspace. The engine’s ordinary resume path has no
+  cross-process liveness lock, so this route intentionally matches that behavior.
+- The sessions catalog is no longer refreshed independently by each sidecar.
+  Keep its one main-supervised worker serialized and fail closed on malformed or
+  secret-bearing output; a failed run must retain the last good catalog.
+- `app.park` is host-originated policy input, not a renderer feature. Do not add
+  a preload channel or treat a parked process exit as a crash: only the sidecar
+  can approve the park, and the host must preserve its tab for restore.
