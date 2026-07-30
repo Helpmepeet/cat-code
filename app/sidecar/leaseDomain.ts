@@ -29,6 +29,17 @@
  * lease plus the live `local_agent` workers of THIS session, so the snapshot is
  * session-scoped the way §7 requires.
  *
+ * KNOWN AND CORRECT: the FIRST frame after attach is often empty. Leases only
+ * exist once something has made a Codex request (`registerCodexLease` runs inside
+ * a turn — `src/query.ts:325` main, `src/tools/AgentTool/AgentTool.tsx:1226`
+ * worker), and the account pool loads through `init()`'s FIRE-AND-FORGET
+ * `initAccountPool()` (`app/sidecar/initializeRuntime.ts:40` → `src/entrypoints/
+ * init.ts`), so `getPoolStatus().initialized` can still be false at attach. An
+ * empty roster is therefore the truth at that moment, and the renderer's empty
+ * state says so; the store-driven re-broadcast fills it in as soon as a turn or a
+ * worker moves. Do not "fix" this by polling the pool or by seeding a placeholder
+ * lease.
+ *
  * ZERO transport knowledge: frames, wire validation and limits stay in
  * `sidecarServer.ts`.
  */
