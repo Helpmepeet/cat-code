@@ -31,9 +31,15 @@ Revision 5 changes (no cold review; operator-directed follow-up session):
   (`Failed to get system prompt for agent ${agentType}: …`). The fork
   replaced it with a bare `catch (_error)`. This is a fork regression, not
   inherited behavior.
-- **§G added:** per-finding provenance (fork-introduced vs upstream-
-  inherited), with the method and its limits stated.
-- **§H added:** the approved remediation plan.
+- **§G added and then fully resolved:** per-finding provenance
+  (fork-introduced vs upstream-inherited). The exact fork base,
+  `@anthropic-ai/claude-code@2.1.87`, was pulled from npm, so this is a
+  same-version comparison with **no unresolved rows**. Headline result:
+  **A2's name-only cache keying is upstream verbatim**, which makes H1 a
+  deliberate divergence rather than a bug fix (§G1). A3, A7, and the H7
+  duplication are ours; A2-iii, A2-iv, and B1 are upstream.
+- **§H added:** the approved remediation plan, with difficulty scores and
+  delegation tags (§H0).
 
 Revision 4 changes, in response to the third RED review:
 
@@ -679,43 +685,70 @@ behavior and several are ours. That changes who should fix what, and it
 changes how much latitude an implementer has: reverting to upstream
 behavior is safe, diverging from it is a decision.
 
-**Method, and its limit.** The fork's history begins at a squashed snapshot
-(`86051a8`, 2026-04-30, v2.1.87) that **already contained fork work** — the
-second commit already fixes Codex profile persistence — so `git blame`
-cannot separate origins for anything inside it. The only readable upstream
-available on this machine is `@anthropic-ai/claude-code` **2.1.27** at
-`/opt/homebrew/lib/node_modules/@anthropic-ai/.claude-code-2DTsDk1V/cli.js`,
-which is 60 minors behind the fork base. The newer builds in
-`~/.local/bin/` (2.1.214–2.1.218) are compiled and **not string-searchable**
-(`rg -a instructions` returns 0), so they are useless for this.
+**Method.** The fork's history begins at a squashed snapshot (`86051a8`,
+2026-04-30, **v2.1.87**) that already contained fork work — its second
+commit fixes Codex profile persistence — so `git blame` cannot separate
+origins for anything inside it.
 
-The 2.1.27 baseline was validated before use: `Doing tasks`, `Tone and
-style`, `Additional working directories`, `You are powered by the model`,
-`Output Style`, `getSystemPrompt`, `FallbackTriggered` are all present.
+**The exact fork base is available from npm and was used.**
+`npm pack @anthropic-ai/claude-code@2.1.87` yields a readable 13 MB
+`package/cli.js`. This is a same-version comparison, so *absence* is
+evidence here, not merely suggestive. (Two weaker sources were tried first
+and are recorded only to save the next person the trip: 2.1.27 from
+homebrew is 60 minors stale, and the compiled 2.1.214–2.1.218 builds in
+`~/.local/bin/` are **not string-searchable** at all — `rg -a instructions`
+returns 0.)
 
-**Inference rule.** *Presence* in 2.1.27 proves upstream. *Absence* is only
-suggestive, because 60 minors of upstream change are invisible — unless the
-subsystem is fork-only by construction.
-
-| Finding | Origin | Evidence |
+| Finding | Origin | Evidence at 2.1.87 |
 |---|---|---|
-| A9 wrong cutoffs | **Ours** | `git blame` → `8b5ce81`, 2026-07-29, fork commit. |
+| A9 wrong cutoffs | **Ours** | `git blame` → `8b5ce81`, 2026-07-29. |
 | A6 silent catch | **Ours (regression)** | Upstream logs it: `catch(o){ I(\`Failed to get system prompt for agent ${V.agentType}: …\`)`. The fork replaced it with `catch (_error)`. |
-| A1 marker filter gap | **Ours** | Fork-only by construction: `codex` and `buildOpenAIInstructions` both 0 hits upstream; upstream has no OpenAI provider. |
+| A3 truthiness split | **Ours** | `CLAUDE_CODE_AGENT_MODE`: 0 hits. Agent mode is a fork subsystem, so both parsers and their disagreement are ours. |
+| A7 duplicated length line | **Ours** | `length_guidance`: 0 hits. `Keep updates brief`: 0 hits. The section and its sentence are both fork additions. |
+| §C `session_transcripts` duplication (H7) | **Ours** | `Reading session transcripts`: 0 hits; `session_transcripts` is not an upstream section. |
+| A1 marker filter gap | **Ours** | Fork-only by construction: `codex`, `buildOpenAIInstructions` 0 hits; upstream has no OpenAI provider. |
 | A5 OpenAI bypass, B3 | **Ours** | Same construction argument. |
-| A2-i cross-provider path | **Ours** | Requires session-provider switching, which does not exist upstream. |
-| A8 Plan-mode remap | **Upstream** | `function Hi(A){…"opusplan"…"haiku"…}` is `getRuntimeMainLoopModel` verbatim; its query call site (`getAppState` → `toolPermissionContext.mode` → `Hi({`) mirrors `query.ts:477-485`. |
-| A4 fallback | **Upstream** | `FallbackTriggered` present; `fallbackModel` 8 hits. |
-| A2 core keying, A2-iii, A2-iv, A3, A7, B1 | **Unresolved** | All trace to the squashed snapshot and are absent from 2.1.27, which proves nothing at 60 versions of distance. |
+| A2-i cross-provider path | **Ours (partly)** | Session-provider switching does not exist upstream. But two of the three stale sections it names (`env_info_simple`, `frc`) are upstream; only `session_guidance` is ours. |
+| **A2 core: name-only cache keying** | **Upstream, verbatim** | The whole module is byte-equivalent: `function DQ(q,K){return{name:q,compute:K,cacheBreak:!1}}` … `if(!_.cacheBreak&&K.has(_.name))return K.get(_.name)??null`. That is `systemPromptSection` / `DANGEROUS_uncachedSystemPromptSection` / `resolveSystemPromptSections` / `clearSystemPromptSections`. **See the H1 consequence note below.** |
+| A2-iii output-style split | **Upstream** | `output_style` is an upstream cached section (`DQ("output_style")`) under the upstream cache. |
+| A2-iv frozen language | **Upstream** | `DQ("language")` is an upstream cached section. The "applies next session" behavior is inherited, which supports the H2 ruling. |
+| A8 Plan-mode remap | **Upstream** | `function Hi(A){…"opusplan"…"haiku"…}` is `getRuntimeMainLoopModel` verbatim; its query call site mirrors `query.ts:477-485`. |
+| A4 fallback | **Upstream** | `FallbackTriggered` present. |
+| B1 mode-3 marker gap | **Upstream** | All five marker occurrences enumerated at 2.1.87: declaration, insertion, the `/context` filter, and the mode-1 and mode-2 filters. **There is no mode-3 filter upstream either.** |
+
+Upstream 2.1.87 section registry, for reference: `ant_model_override`,
+`brief`, `env_info_simple`, `frc`, `language`, `memory`, `output_style`,
+`scratchpad`, `summarize_tool_results`, and the uncached `mcp_instructions`.
+Fork additions: `session_guidance`, `session_transcripts`,
+`length_guidance`.
 
 **Caveat on A8.** The remap function and its call site are byte-confirmed
 upstream. That upstream *also* builds its prompt from the unmapped model was
 not independently verified in the minified bundle — it is a strong
 inference from the matching call-site shape, not a byte match.
 
-**What would close the unresolved row:** a readable upstream at or near
-2.1.87 (an npm tarball or an uncompiled build of that era). One `rg` pass
-over it settles all six.
+### G1. Consequence for H1: keying the cache is a deliberate divergence
+
+A2's root design flaw is **not a fork defect**. The section module at
+2.1.87 is byte-equivalent to ours, name-only keying included. H1 therefore
+changes inherited upstream behavior rather than repairing something we
+broke. Three things follow, and the implementer should know them before
+starting:
+
+1. **It creates a permanent merge-conflict surface.** Any future upstream
+   change to `systemPromptSections.ts` will now conflict. Keep the diff as
+   small and as structurally close to upstream as possible so the conflict
+   stays mechanical.
+2. **Upstream may solve it differently later**, and their solution will not
+   be ours. That is an accepted cost of the operator's decision, not a
+   reason to reopen it.
+3. **A2-iii and A2-iv are upstream behavior too**, which means H2's "the
+   language contract is intended" ruling is now better supported: it is
+   inherited behavior, not an accident this fork introduced.
+
+The genuinely fork-owned parts of A2 remain worth fixing regardless: the
+`session_guidance` section, the cross-provider staleness path, and the
+`/context` partial-args warmer.
 
 ---
 
@@ -776,6 +809,11 @@ so do not hand it to a GPT one-shot.
 Rejected alternatives: targeted invalidation on each event, and fixing only
 the `/context` warmer. The operator wants the class closed, not the
 instances patched.
+
+**Read §G1 before starting.** The name-only cache is byte-equivalent to
+upstream 2.1.87, so this item deliberately diverges from upstream rather
+than repairing a fork defect. Keep the diff minimal and structurally close
+to upstream so future merge conflicts stay mechanical.
 
 Current shape: `systemPromptSection(name, compute)` produces a zero-argument
 closure that captures everything (`systemPromptSections.ts:20-25`), and
