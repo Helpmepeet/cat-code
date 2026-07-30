@@ -1216,3 +1216,38 @@ test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone'
   expect(findNestedToolUseRow([updated], row.id)).toBe(updated)
   expect(findNestedToolUseRow([updated], row.id)).not.toBe(row)
 })
+
+/* --------------------------------------------------------------------------- *
+ * P4-33 — the user bubble's hover-reveal copy chip (Messages.jsx:2094).
+ * --------------------------------------------------------------------------- */
+
+function userRow(content: string): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: 's:m:0:user-text',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  }
+}
+
+test('P4-33 — a user turn carries a copy control, revealed on hover', () => {
+  const html = render(userRow('restart the sidecar please'))
+  expect(html).toContain('aria-label="Copy message"')
+  // Quiet by default; the bubble is the hover group that reveals it.
+  expect(html).toContain('opacity-0')
+  expect(html).toContain('group-hover:opacity-100')
+})
+
+test('P4-33 — the chip is keyboard-reachable, not hover-only', () => {
+  // The prototype reveals on hover ALONE, which hides the control from keyboard
+  // users entirely. Focus reveals it here too.
+  const html = render(userRow('restart the sidecar please'))
+  expect(html).toContain('group-focus-within:opacity-100')
+})
+
+test('P4-33 — an empty user turn gets no copy chip', () => {
+  // Nothing to put on the clipboard (the prototype's showCopy gate).
+  expect(render(userRow('   '))).not.toContain('aria-label="Copy message"')
+})

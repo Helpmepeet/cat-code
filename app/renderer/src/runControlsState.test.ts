@@ -23,6 +23,7 @@ const SNAPSHOT: RunControlsSnapshot = {
     options: ['low', 'medium', 'high'],
   },
   fast: { active: false, supportedByModel: true, available: true, unavailableReason: null },
+  autoCompact: { enabled: true, threshold: null, warningThreshold: null },
 }
 
 function snapshotFrame(sessionId: string, runControls: RunControlsSnapshot): ServerFrame {

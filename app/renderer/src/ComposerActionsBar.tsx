@@ -14,6 +14,7 @@ import { ContextGauge } from './ContextGauge.js'
 import type { ContextUsage } from './contextUsage.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
 import { toneClasses } from './tone.js'
+import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
 import type {
   AccountStatus,
   AnthropicAccountStatus,
@@ -711,6 +712,105 @@ export function ContextUsagePanel({
   )
 }
 
+/** The warning triangle, at the two sizes the prototype draws it (Surfaces.jsx:436
+ * face 14px, `:452` popover header 13px). */
+function WarningTriangle({ size }: { size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  )
+}
+
+/**
+ * The amber "approaching auto-compact" glyph + popover (the prototype's
+ * `TokenWarning`, Surfaces.jsx:415, rendered in the rail at `:779` between the
+ * separator and the context donut).
+ *
+ * Renders NOTHING below the warning threshold — {@link selectTokenWarning}
+ * returns null and this never mounts, matching the engine's own
+ * `isAboveWarningThreshold` gate rather than a number we chose. The amber is the
+ * shared `--tone-warn` token, which is already exactly the prototype's `#fbbf24`
+ * (theme.css:62), so no hex is inlined and no dynamic class is interpolated.
+ *
+ * The two sentences are the engine's two cases (`TokenWarning.tsx:166` / `:169`):
+ * with auto-compact ON the session recovers by itself, with it OFF the user has
+ * to run `/compact`, so the copy tells them to do that rather than explaining
+ * why it stopped.
+ */
+function TokenWarningChip({
+  warning,
+  faceProps,
+}: {
+  warning: TokenWarning
+  faceProps?: ComposerFaceProps
+}) {
+  const { open, setOpen, ref, triggerRef } = usePopover()
+  const { percentLeft, autoCompactEnabled } = warning
+  const summary = autoCompactEnabled
+    ? `${percentLeft}% until auto-compact`
+    : 'Context low'
+  const title = autoCompactEnabled
+    ? `${percentLeft}% until auto-compact`
+    : `Context low · ${percentLeft}% remaining`
+  return (
+    <div ref={ref} className="relative flex shrink-0">
+      <button
+        ref={triggerRef}
+        {...faceProps}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={title}
+        title={title}
+        onClick={() => setOpen(value => !value)}
+        className="animate-token-warn-in flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
+      >
+        <WarningTriangle size={14} />
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-label="Context"
+          className="absolute bottom-full right-0 z-40 mb-2.5 w-[252px] rounded-xl border border-tone-warn/25 bg-surface-raised px-3.5 py-3 shadow-lg"
+        >
+          <div className="mb-1.5 flex items-center gap-[7px]">
+            <span className="inline-flex text-tone-warn">
+              <WarningTriangle size={13} />
+            </span>
+            <span className="text-[12.5px] font-semibold text-text-primary">
+              {summary}
+            </span>
+          </div>
+          <div className="text-[11.5px] leading-relaxed text-text-muted">
+            {autoCompactEnabled ? (
+              'This conversation is getting long. Soon it auto-compacts into a summary so it can continue without resending everything.'
+            ) : (
+              <>
+                This conversation is nearly full. Run{' '}
+                <span className="font-mono text-tone-warn">/compact</span> to
+                summarize it and keep going.
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** The context-window donut face → its usage popover (the prototype's `ContextChip`,
  * Surfaces.jsx:467). The donut ({@link ContextGauge}) becomes a menu button opening
  * {@link ContextUsagePanel}. Read-only info → no handler, always interactive when a
@@ -825,14 +925,27 @@ export function ComposerActionsBar({
   // present; otherwise the P4-24 read-only alias face (mirrors the ModelChip gate).
   const accountInteractive = account != null && onSwitchAccount != null
 
+  // Derived at read time, never stored: the glyph appears when the live context
+  // crosses the engine's warning threshold and clears itself once a turn compacts.
+  const tokenWarning = selectTokenWarning(
+    contextUsage ?? null,
+    runControls?.autoCompact,
+  )
+
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
   // follows the last-focused face; when nothing in the bar is focused it rests on
   // the first face ('attach', always rendered), so Tab from the textarea has a
   // deterministic landing spot. Faces read their tabIndex from `faceProps(id)`.
   const [activeFace, setActiveFace] = useState<string | null>(null)
+  // The warning glyph is the one face that can vanish mid-session (it unmounts
+  // the moment a turn compacts). If it held the tab stop when it went, no face
+  // would match and the whole toolbar would have NO tabIndex=0 until a blur
+  // happened to reset it. Resolve the stop at read time instead of storing it.
+  const resolvedActiveFace =
+    activeFace === 'token-warning' && !tokenWarning ? null : activeFace
   const faceProps = (id: string): ComposerFaceProps => ({
     'data-composer-face': id,
-    tabIndex: id === (activeFace ?? 'attach') ? 0 : -1,
+    tabIndex: id === (resolvedActiveFace ?? 'attach') ? 0 : -1,
     onFocus: () => setActiveFace(id),
   })
   const exitToComposer = () => onFocusComposer?.()
@@ -1050,6 +1163,16 @@ export function ComposerActionsBar({
           ) : null}
           {(accountInteractive || showAccount || anthropicAccountLabel) && contextUsage ? (
             <RailSep />
+          ) : null}
+          {/* The prototype orders the right cluster account · Sep · TokenWarning ·
+            * ContextChip (Surfaces.jsx:771-780): the glyph sits INSIDE the separator,
+            * next to the donut it is about, and is absent entirely below the
+            * threshold. */}
+          {tokenWarning ? (
+            <TokenWarningChip
+              warning={tokenWarning}
+              faceProps={faceProps('token-warning')}
+            />
           ) : null}
           {contextUsage ? (
             <ContextChip

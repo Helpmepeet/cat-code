@@ -51,6 +51,12 @@ import {
 } from '../../src/utils/fastMode.js'
 import { getContextWindowForModel } from '../../src/utils/context.js'
 import {
+  WARNING_THRESHOLD_BUFFER_TOKENS,
+  getAutoCompactThreshold,
+  getEffectiveContextWindowSize,
+  isAutoCompactEnabled,
+} from '../../src/services/compact/autoCompact.js'
+import {
   getMainLoopModel,
   getMarketingNameForModel,
 } from '../../src/utils/model/model.js'
@@ -497,7 +503,54 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
       available: fastAvailable,
       unavailableReason: fastUnavailableReason,
     },
+    autoCompact: readAutoCompact(current),
   }
+}
+
+/**
+ * The composer warning glyph's two thresholds, mirrored off the ENGINE rather
+ * than recomputed (§10). Both come from the same functions
+ * `calculateTokenWarningState` uses (`src/services/compact/autoCompact.ts:256-269`).
+ *
+ * These are the engine's THRESHOLDS, not its verdict. The renderer compares them
+ * against API-reported usage off the newest `result` frame, while the engine
+ * compares `tokenCountWithEstimation(...) - snipTokensFreed` (`autoCompact.ts:371`),
+ * so the glyph approximates `isAboveWarningThreshold` and can lag it mid-turn.
+ * The drift and why it is accepted are documented at the point of comparison,
+ * `app/renderer/src/tokenWarning.ts`.
+ *
+ * Guarded like {@link readContextWindow}: a failed resolve costs the glyph (it
+ * stays hidden, the honest state when we cannot say how close compaction is),
+ * never the whole snapshot.
+ */
+function readAutoCompact(model: string | null): RunControlsSnapshot['autoCompact'] {
+  const enabled = safe(() => isAutoCompactEnabled(), false)
+  if (!model) return { enabled, threshold: null, warningThreshold: null }
+
+  // The engine picks the auto-compact threshold only while auto-compact is on;
+  // with it off the percentage runs against the effective window instead
+  // (`autoCompact.ts:257-259`). Mirror that choice here, not in the renderer.
+  const threshold = positive(
+    safe(
+      () =>
+        enabled
+          ? getAutoCompactThreshold(model)
+          : getEffectiveContextWindowSize(model),
+      null,
+    ),
+  )
+  return {
+    enabled,
+    threshold,
+    warningThreshold:
+      threshold == null ? null : threshold - WARNING_THRESHOLD_BUFFER_TOKENS,
+  }
+}
+
+function positive(value: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
 }
 
 /**

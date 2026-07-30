@@ -211,6 +211,20 @@
   }
 }
 
+/* P4-33 composer auto-compact glyph entrance (Surfaces.jsx:434 `tokenWarnIn`,
+ * keyframe at `CatCode Web App.html:66`). The glyph appears mid-session when the
+ * context crosses the warning threshold, so it pops in rather than blinking on. */
+@keyframes catcode-token-warn-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @layer components {
   .animate-toast-in {
     animation: catcode-toast-in 0.18s ease-out both;
@@ -218,6 +232,10 @@
 
   .animate-sa-pop {
     animation: catcode-sa-pop 0.13s ease both;
+  }
+
+  .animate-token-warn-in {
+    animation: catcode-token-warn-in 0.18s ease both;
   }
 
   /* P4-17 Welcome hero — the neon-cat pink glow (Welcome.jsx:9 drop-shadow),

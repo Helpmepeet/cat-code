@@ -1393,6 +1393,7 @@ function liveRunControls(
       available: false,
       unavailableReason: null,
     },
+    autoCompact: { enabled: true, threshold: null, warningThreshold: null },
   }
 }
 

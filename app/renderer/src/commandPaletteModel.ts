@@ -69,6 +69,13 @@ export type PaletteInput = {
   handlers: PaletteHandlers
 }
 
+/**
+ * Palette-only. P4-33 tried to reuse this for the COMPOSER's slash picker (the
+ * prototype's `onCommandRoute`) and reverted: in the palette, picking a row means
+ * "take me there", but in the composer it means "run this command", and every
+ * command reachable there has a real engine implementation to run. See the
+ * ledger row for §06 `onCommandRoute`.
+ */
 const PAGE_NAV_BY_COMMAND: Readonly<Record<string, PalettePage>> = {
   accounts: 'accounts',
   'switch-account': 'accounts',

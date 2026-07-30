@@ -39,6 +39,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
+import { useToast } from './toastContext.js'
 import {
   groupAgentDelegates,
   selectNestedTranscriptRows,
@@ -1316,15 +1317,93 @@ function ToolOverflowNote({
 }
 
 /**
+ * P4-33 — the hover-reveal copy chip inside a user bubble (Messages.jsx:2094).
+ * Quiet until the bubble is hovered or something inside it takes focus, then a
+ * small clipboard glyph in the notched corner; the tick pins itself visible for
+ * a beat so the confirmation survives the pointer leaving.
+ *
+ * `group-focus-within` is a real-added a11y fix: the prototype reveals on hover
+ * ONLY, which leaves the control unreachable by keyboard. Icons are drawn inline
+ * per component, the house pattern (there is no shared icon set).
+ */
+function BubbleCopyChip({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false)
+  const toast = useToast()
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) return
+    void clipboard
+      .writeText(content)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1300)
+        // The prototype toasts as well as ticking (Messages.jsx:2096): the tick
+        // is in the corner the pointer just left, so it is easy to miss.
+        toast('Copied message', { tone: 'success' })
+      })
+      .catch(() => {})
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? 'Message copied' : 'Copy message'}
+      title="Copy message"
+      className={`absolute bottom-1.5 right-2 inline-flex items-center justify-center rounded-md p-1 opacity-0 transition-[color,opacity] duration-150 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+        copied
+          ? 'text-[#86efac] opacity-100'
+          : 'text-text-subtle hover:text-[#d4d4d8]'
+      }`}
+    >
+      {copied ? (
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <rect x="9" y="9" width="13" height="13" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
+/**
  * "User side" grammar (Messages.jsx UserBubble): right-aligned, accent-tinted,
  * bottom-right-notched bubble. Shared shape with the command echo + image rows
  * so a user's own turns read as one column against the assistant's left body.
  */
 function UserBubble({ content }: { content: string }) {
+  // No chip on an empty turn — there would be nothing to put on the clipboard
+  // (the prototype's `showCopy` gate, Messages.jsx:2098).
+  const copyable = content.trim().length > 0
   return (
     <div className="flex justify-end">
-      <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
+      <div className="group relative max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 pr-8 text-sm leading-relaxed text-text-primary">
         {content}
+        {copyable ? <BubbleCopyChip content={content} /> : null}
       </div>
     </div>
   )
