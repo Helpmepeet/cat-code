@@ -1424,11 +1424,17 @@ test('P4-32a — a session with no delegated workers leaves the dock untouched',
   expect(html).not.toContain('subagents')
 })
 
-test('P4-32a — the per-tab mode flag and switch are wired to the real seams', () => {
-  // The App-level joins the SSR harness cannot reach: each tab reads ITS OWN
-  // agent-mode snapshot (so a background orchestrator session is visible), the
-  // memo depends on `orchestrator` (or the badge would freeze on first paint),
-  // and the switch dispatches the existing P4-8b verb rather than a new one.
+test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the per-tab mode joins', () => {
+  // Read this for what it is: a source-TEXT assertion. It fires if someone deletes
+  // or renames these joins, and it proves NOTHING about whether the handler can be
+  // reached at runtime — it would still pass if the TabBar were never rendered.
+  // Reachability of the mode switch is GUI-gated (operator step 2); the roster's
+  // reachability, by contrast, is covered by the real render test above.
+  //
+  // The joins pinned here are the App-level ones the SSR harness cannot reach: each
+  // tab reads ITS OWN agent-mode snapshot (so a background orchestrator session is
+  // visible), the memo depends on `orchestrator` (or the badge would freeze on
+  // first paint), and the switch dispatches the existing P4-8b verb, not a new one.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   const tabsStart = source.indexOf('const tabs: TabModel[] = useMemo(')

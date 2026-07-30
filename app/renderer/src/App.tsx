@@ -2972,6 +2972,13 @@ export function App() {
  * `local_agent` shows up in the tasks snapshot AND in the agent-mode worker list,
  * so the task half counts only NON-worker task types and the worker half comes
  * from the worker feed alone. Nothing is counted twice.
+ *
+ * Two prototype gaps are inherited from the P4-9 shell that P1 said to KEEP, and
+ * are recorded on the ledger row rather than fixed here: the prototype's pill
+ * inverts on hover (fills with its own colour, text going dark,
+ * `OrchestratorMode.jsx:396-397`) where this one only lifts its text; and its
+ * neutral tone is the agent purple `#c084fc` where this one uses the theme
+ * `accent`. Changing either would restyle P4-9's button, not extend its semantics.
  */
 export function TasksStrip({
   snapshot,
@@ -2995,7 +3002,7 @@ export function TasksStrip({
       className={
         'absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.5)] ' +
         (attention
-          ? 'border-tone-warn/30 bg-tone-warn/10 font-semibold text-tone-warn'
+          ? 'border-tone-warn/30 bg-tone-warn/10 font-semibold text-tone-warn hover:bg-tone-warn/20'
           : 'border-shell-seam bg-shell-chrome text-text-muted hover:text-text-primary')
       }
       onClick={onOpen}

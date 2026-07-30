@@ -118,11 +118,29 @@ test('the compact state dims the resting header only (the counts stay legible)',
   expect(compact).toContain('2 working')
 })
 
-test('a handle-less worker degrades to a generic name rather than an empty row', () => {
+test('an unnamed worker shows its ROLE, never an invented handle', () => {
+  // `handle` is null whenever the Agent tool ran unnamed (the common case). The row
+  // must not print a word the engine never supplied, and must not dress a role up
+  // in the `@handle` styling.
   const html = renderToStaticMarkup(
     <OrchestratorRoster active workers={[worker({ handle: null, description: null })]} />,
   )
-  expect(html).toContain('subagent')
+  expect(html).toContain('Coding worker')
+  expect(html).not.toContain('subagent')
+  expect(html).not.toContain('text-purple-200')
+})
+
+test('a worker with neither handle nor role still renders an honest row', () => {
+  const html = renderToStaticMarkup(
+    <OrchestratorRoster
+      active
+      workers={[worker({ handle: null, role: null, description: 'Do the thing' })]}
+    />,
+  )
+  // No name at all is correct: the task text and lifecycle carry the row.
+  expect(html).toContain('Do the thing')
+  expect(html).toContain('Running')
+  expect(html).not.toContain('subagent')
 })
 
 test('the mention sigil is stripped from a handle for display', () => {

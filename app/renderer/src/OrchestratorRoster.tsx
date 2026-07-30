@@ -109,6 +109,9 @@ export function OrchestratorRoster({
       <button
         type="button"
         className={ROW_CLASS}
+        // A promoted lead raises ITS id (the prototype's "promoted handle opens
+        // its thread"); the consumer is P4-32b's `TasksDialog` drilldown, so today
+        // App opens the workers list and drops the id.
         onClick={() => onOpen?.(lead?.worker.agentId)}
       >
         {lead ? (
@@ -165,7 +168,7 @@ function PromotedLead({
   return (
     <>
       <AgentPip state={state} />
-      <AgentHandle name={displayHandle(worker.handle) ?? 'subagent'} />
+      <WorkerName worker={worker} />
       {/* The tone already carries the escalation (a solo handoff derives the amber
        * `needs-you` state); priority 3 only adds the heavier weight. */}
       <span
@@ -204,11 +207,14 @@ function WorkerRow({
     <button
       type="button"
       className={ROW_CLASS}
+      // The id is raised for P4-32b's read-only `TasksDialog` worker drilldown
+      // (ruling D1); App currently opens the dialog and drops it, so a click
+      // lands on the workers list rather than this worker. Not broken, deferred.
       onClick={() => onOpen?.(worker.agentId)}
       title={role?.label ?? undefined}
     >
       <AgentRoleDot role={worker.role} />
-      <AgentHandle name={displayHandle(worker.handle) ?? 'subagent'} />
+      <WorkerName worker={worker} />
       {worker.description ? (
         <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
           {worker.description}
@@ -219,6 +225,28 @@ function WorkerRow({
       <AgentStateLabel state={orchestratorWorkerState(worker, active)} />
       <Baton owner={deriveWorkerOwner(worker, active)} />
     </button>
+  )
+}
+
+/**
+ * How a worker is named on the line. `handle` is null whenever the Agent tool ran
+ * unnamed, which is the COMMON case, so there are three honest faces and no
+ * invented one:
+ *   - a real handle → the mono `@handle` vocabulary;
+ *   - no handle but a role → the role label, deliberately NOT in handle styling,
+ *     so a type is never mistaken for a name the engine supplied;
+ *   - neither → nothing. The role dot, task text and lifecycle still identify the
+ *     row, which is better than printing a word no engine field contains.
+ */
+function WorkerName({ worker }: { worker: AgentModeWorkerItem }) {
+  const handle = displayHandle(worker.handle)
+  if (handle) return <AgentHandle name={handle} />
+  const role = agentTypeMeta(worker.role)
+  if (!role) return null
+  return (
+    <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-text-muted">
+      {role.label}
+    </span>
   )
 }
 
