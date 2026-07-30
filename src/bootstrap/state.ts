@@ -1682,10 +1682,10 @@ export function getSystemPromptSectionCache(): Map<string, string | null> {
 }
 
 export function setSystemPromptSectionCacheEntry(
-  name: string,
+  key: string,
   value: string | null,
 ): void {
-  STATE.systemPromptSectionCache.set(name, value)
+  STATE.systemPromptSectionCache.set(key, value)
 }
 
 export function clearSystemPromptSectionState(): void {

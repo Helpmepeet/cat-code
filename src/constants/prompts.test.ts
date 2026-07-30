@@ -1,8 +1,10 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
   getAgentModeSystemPromptSections,
   getAgentModeWorkerControlGuidance,
+  getSystemPrompt,
 } from './prompts.js'
+import { clearSystemPromptSections } from './systemPromptSections.js'
 
 describe('Agent Mode dynamic prompt guidance', () => {
   test('includes stronger worker-first guidance for GPT Agent Mode too', async () => {
@@ -126,5 +128,67 @@ describe('GPT read discipline guidance', () => {
 
   test('Claude style does not carry the GPT read discipline rule', () => {
     expect(promptsSource).not.toContain('READ DISCIPLINE:')
+  })
+})
+
+describe('system prompt section cache keying', () => {
+  const withCleanPromptEnv = async (run: () => Promise<void>) => {
+    const saved = {
+      simple: process.env.CLAUDE_CODE_SIMPLE,
+      agentMode: process.env.CLAUDE_CODE_AGENT_MODE,
+    }
+    delete process.env.CLAUDE_CODE_SIMPLE
+    delete process.env.CLAUDE_CODE_AGENT_MODE
+    try {
+      await run()
+    } finally {
+      if (saved.simple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
+      else process.env.CLAUDE_CODE_SIMPLE = saved.simple
+      if (saved.agentMode === undefined)
+        delete process.env.CLAUDE_CODE_AGENT_MODE
+      else process.env.CLAUDE_CODE_AGENT_MODE = saved.agentMode
+    }
+  }
+
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  test('a provider switch after the cache is warm rebuilds the environment section', async () => {
+    // The confirmed A2-i sequence: /context warms the registry on the session
+    // model, then `/model gpt-*` switches provider before the first turn. Under
+    // name-only keying the GPT turn served the cached Anthropic text.
+    await withCleanPromptEnv(async () => {
+      const anthropic = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const openai = (await getSystemPrompt([], 'gpt-5.6-terra')).join('\n')
+
+      expect(anthropic).toContain('running through the Anthropic provider')
+      expect(openai).toContain('running through the OpenAI Codex provider')
+    })
+  })
+
+  test('a build with additional working directories is not served the cache-warming build without them', async () => {
+    // A2-i-b: /context used to warm env_info_simple with partial arguments.
+    await withCleanPromptEnv(async () => {
+      const withoutDirs = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const withDirs = (
+        await getSystemPrompt([], 'claude-opus-5', ['/tmp/cat-code-extra-dir'])
+      ).join('\n')
+
+      expect(withoutDirs).not.toContain('/tmp/cat-code-extra-dir')
+      expect(withDirs).toContain('Additional working directories')
+      expect(withDirs).toContain('/tmp/cat-code-extra-dir')
+    })
+  })
+})
+
+describe('language section caching contract', () => {
+  test('language stays out of the section key so it applies to new sessions only', () => {
+    // H2 ruling: keying language would silently turn "applies next session"
+    // into a live mid-session switch. Both prompt builds must opt out.
+    const optOuts = promptsSource.match(
+      /systemPromptSection\('language', NO_SECTION_INPUTS,/g,
+    )
+    expect(optOuts?.length).toBe(2)
   })
 })

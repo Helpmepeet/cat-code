@@ -53,6 +53,7 @@ import {
   systemPromptSection,
   DANGEROUS_uncachedSystemPromptSection,
   resolveSystemPromptSections,
+  NO_SECTION_INPUTS,
 } from './systemPromptSections.js'
 import {
   getAgentPromptIdentityPrefix,
@@ -525,6 +526,35 @@ function getAgentModeToneSection(): string {
   return [`# Tone and style`, ...prependBullets(items)].join('\n')
 }
 
+/**
+ * Key inputs for sections that branch on the enabled tool set. Sorted so two
+ * builds with the same tools key alike regardless of tool ordering.
+ */
+function toolNamesKeyInput(enabledTools: Set<string>): string[] {
+  return [...enabledTools].sort()
+}
+
+/**
+ * Key inputs for sections that branch on available skills. The guidance
+ * builders only read `skillToolCommands.length > 0`, but the names are keyed
+ * so a future site that renders them cannot inherit another build's text.
+ */
+function skillNamesKeyInput(skillToolCommands: Command[]): string[] {
+  return skillToolCommands.map(command => command.name).sort()
+}
+
+/**
+ * Key inputs for the output-style section. `getOutputStyleSection` reads only
+ * the name and the prompt body; the rest of the config drives static sections
+ * that are outside the registry.
+ */
+function outputStyleKeyInput(
+  outputStyleConfig: OutputStyleConfig | null,
+): { name: string; prompt: string } | null {
+  if (outputStyleConfig === null) return null
+  return { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt }
+}
+
 export async function getAgentModeSystemPromptSections(
   tools: Tools,
   model: string,
@@ -547,18 +577,38 @@ export async function getAgentModeSystemPromptSections(
   const enabledTools = new Set(tools.map(_ => _.name))
 
   const dynamicSections = [
-    systemPromptSection('session_guidance', () =>
-      gpt
-        ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-        : getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
+    systemPromptSection(
+      'session_guidance',
+      {
+        gpt,
+        agentMode: true,
+        tools: toolNamesKeyInput(enabledTools),
+        skills: skillNamesKeyInput(skillToolCommands),
+      },
+      () =>
+        gpt
+          ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
+          : getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
-    systemPromptSection('memory', () => loadMemoryPrompt()),
-    systemPromptSection('ant_model_override', () => getAntModelOverrideSection()),
-    systemPromptSection('env_info_simple', () =>
-      computeSimpleEnvInfo(model, additionalWorkingDirectories),
+    systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
+    systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
+      getAntModelOverrideSection(),
     ),
-    systemPromptSection('language', () => getLanguageSection(settings.language)),
-    systemPromptSection('output_style', () => getOutputStyleSection(outputStyleConfig)),
+    systemPromptSection(
+      'env_info_simple',
+      { model, additionalWorkingDirectories },
+      () => computeSimpleEnvInfo(model, additionalWorkingDirectories),
+    ),
+    // Not keyed on settings.language: language is read once per session by
+    // contract. See the matching comment in getSystemPrompt.
+    systemPromptSection('language', NO_SECTION_INPUTS, () =>
+      getLanguageSection(settings.language),
+    ),
+    systemPromptSection(
+      'output_style',
+      outputStyleKeyInput(outputStyleConfig),
+      () => getOutputStyleSection(outputStyleConfig),
+    ),
     DANGEROUS_uncachedSystemPromptSection(
       'mcp_instructions',
       () =>
@@ -567,13 +617,22 @@ export async function getAgentModeSystemPromptSections(
           : getMcpInstructionsSection(mcpClients),
       'MCP servers connect/disconnect between turns',
     ),
-    systemPromptSection('scratchpad', () => getScratchpadInstructions()),
-    systemPromptSection('frc', () => getFunctionResultClearingSection(model)),
+    systemPromptSection('scratchpad', NO_SECTION_INPUTS, () =>
+      getScratchpadInstructions(),
+    ),
+    systemPromptSection('frc', { model }, () =>
+      getFunctionResultClearingSection(model),
+    ),
     systemPromptSection(
       'summarize_tool_results',
+      NO_SECTION_INPUTS,
       () => SUMMARIZE_TOOL_RESULTS_SECTION,
     ),
-    systemPromptSection('session_transcripts', () => SESSION_TRANSCRIPTS_SECTION),
+    systemPromptSection(
+      'session_transcripts',
+      NO_SECTION_INPUTS,
+      () => SESSION_TRANSCRIPTS_SECTION,
+    ),
   ]
 
   const resolvedDynamicSections = await resolveSystemPromptSections(dynamicSections)
@@ -692,27 +751,44 @@ ${CYBER_RISK_INSTRUCTION}`,
   const isAgentMode = isAgentModePromptActive()
 
   const dynamicSections = [
-    systemPromptSection('session_guidance', () =>
-      gpt
-        ? isAgentMode
-          ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-          : getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
-        : isAgentMode
-          ? getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands)
-          : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
+    systemPromptSection(
+      'session_guidance',
+      {
+        gpt,
+        agentMode: isAgentMode,
+        tools: toolNamesKeyInput(enabledTools),
+        skills: skillNamesKeyInput(skillToolCommands),
+      },
+      () =>
+        gpt
+          ? isAgentMode
+            ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
+            : getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
+          : isAgentMode
+            ? getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands)
+            : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
-    systemPromptSection('memory', () => loadMemoryPrompt()),
-    systemPromptSection('ant_model_override', () =>
+    systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
+    systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
       getAntModelOverrideSection(),
     ),
-    systemPromptSection('env_info_simple', () =>
-      computeSimpleEnvInfo(model, additionalWorkingDirectories),
+    systemPromptSection(
+      'env_info_simple',
+      { model, additionalWorkingDirectories },
+      () => computeSimpleEnvInfo(model, additionalWorkingDirectories),
     ),
-    systemPromptSection('language', () =>
+    // Deliberately NOT keyed on settings.language. A language change applies to
+    // the next session, not this one: the picker writes the setting immediately
+    // (components/Settings/Config.tsx), but the prompt keeps the value read at
+    // the first build until /clear, /compact, or restart. Keying on it here
+    // would silently turn that contract into a live mid-session switch.
+    systemPromptSection('language', NO_SECTION_INPUTS, () =>
       getLanguageSection(settings.language),
     ),
-    systemPromptSection('output_style', () =>
-      getOutputStyleSection(outputStyleConfig),
+    systemPromptSection(
+      'output_style',
+      outputStyleKeyInput(outputStyleConfig),
+      () => getOutputStyleSection(outputStyleConfig),
     ),
     // When delta enabled, instructions are announced via persisted
     // mcp_instructions_delta attachments (attachments.ts) instead of this
@@ -727,10 +803,15 @@ ${CYBER_RISK_INSTRUCTION}`,
           : getMcpInstructionsSection(mcpClients),
       'MCP servers connect/disconnect between turns',
     ),
-    systemPromptSection('scratchpad', () => getScratchpadInstructions()),
-    systemPromptSection('frc', () => getFunctionResultClearingSection(model)),
+    systemPromptSection('scratchpad', NO_SECTION_INPUTS, () =>
+      getScratchpadInstructions(),
+    ),
+    systemPromptSection('frc', { model }, () =>
+      getFunctionResultClearingSection(model),
+    ),
     systemPromptSection(
       'summarize_tool_results',
+      NO_SECTION_INPUTS,
       () => SUMMARIZE_TOOL_RESULTS_SECTION,
     ),
     ...(feature('TOKEN_BUDGET')
@@ -742,15 +823,20 @@ ${CYBER_RISK_INSTRUCTION}`,
           // budget-continuation paths don't see attachments (#21577).
           systemPromptSection(
             'token_budget',
+            NO_SECTION_INPUTS,
             () =>
               'When the user specifies a token target (e.g., "+500k", "spend 2M tokens", "use 1B tokens"), your output token count will be shown each turn. Keep working until you approach the target, but do not trade correctness for output volume. If the task is impossible, contradictory, or blocked, say so plainly and use the remaining budget on honest diagnosis, decomposition, or next steps rather than forced progress. The target is a hard minimum, not a suggestion. If you stop early, the system will automatically continue you.',
           ),
         ]
       : []),
     ...(feature('KAIROS') || feature('KAIROS_BRIEF')
-      ? [systemPromptSection('brief', () => getBriefSection())]
+      ? [systemPromptSection('brief', NO_SECTION_INPUTS, () => getBriefSection())]
       : []),
-    systemPromptSection('session_transcripts', () => SESSION_TRANSCRIPTS_SECTION),
+    systemPromptSection(
+      'session_transcripts',
+      NO_SECTION_INPUTS,
+      () => SESSION_TRANSCRIPTS_SECTION,
+    ),
   ]
 
   const resolvedDynamicSections =

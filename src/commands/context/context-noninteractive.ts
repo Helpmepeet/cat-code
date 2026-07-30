@@ -1,5 +1,6 @@
 import { feature } from 'bun:bundle'
 import { microcompactMessages } from '../../services/compact/microCompact.js'
+import type { MCPServerConnection } from '../../services/mcp/types.js'
 import type { AppState } from '../../state/AppStateStore.js'
 import type { Tools, ToolUseContext } from '../../Tool.js'
 import type { AgentDefinitionsResult } from '../../tools/AgentTool/loadAgentsDir.js'
@@ -28,6 +29,7 @@ type CollectContextDataInput = {
     agentDefinitions: AgentDefinitionsResult
     customSystemPrompt?: string
     appendSystemPrompt?: string
+    mcpClients?: MCPServerConnection[]
   }
 }
 
@@ -43,6 +45,7 @@ export async function collectContextData(
       agentDefinitions,
       customSystemPrompt,
       appendSystemPrompt,
+      mcpClients,
     },
   } = context
 
@@ -65,9 +68,10 @@ export async function collectContextData(
     tools,
     agentDefinitions,
     undefined, // terminalWidth
-    // analyzeContextUsage only reads options.{customSystemPrompt,appendSystemPrompt}
-    // but its signature declares the full Pick<ToolUseContext, 'options'>.
-    { options: { customSystemPrompt, appendSystemPrompt } } as Pick<
+    // analyzeContextUsage only reads
+    // options.{customSystemPrompt,appendSystemPrompt,mcpClients} but its
+    // signature declares the full Pick<ToolUseContext, 'options'>.
+    { options: { customSystemPrompt, appendSystemPrompt, mcpClients } } as Pick<
       ToolUseContext,
       'options'
     >,

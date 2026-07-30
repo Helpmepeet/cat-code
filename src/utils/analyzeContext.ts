@@ -927,15 +927,23 @@ export async function analyzeContextUsage(
   /** Original messages before microcompact, used to extract API usage */
   originalMessages?: Message[],
 ): Promise<ContextData> {
+  const toolPermissionContext = await getToolPermissionContext()
   const runtimeModel = getRuntimeMainLoopModel({
-    permissionMode: (await getToolPermissionContext()).mode,
+    permissionMode: toolPermissionContext.mode,
     mainLoopModel: model,
   })
   // Get context window size
   const contextWindow = getContextWindowForModel(runtimeModel, getSdkBetas())
 
-  // Build the effective system prompt using the shared utility
-  const defaultSystemPrompt = await getSystemPrompt(tools, runtimeModel)
+  // Build the effective system prompt using the shared utility. Pass the same
+  // additional directories and MCP clients a turn would, or /context measures a
+  // prompt the session will never send.
+  const defaultSystemPrompt = await getSystemPrompt(
+    tools,
+    runtimeModel,
+    Array.from(toolPermissionContext.additionalWorkingDirectories.keys()),
+    toolUseContext?.options.mcpClients,
+  )
   const effectiveSystemPrompt = buildEffectiveSystemPrompt({
     mainThreadAgentDefinition,
     toolUseContext: toolUseContext ?? {
