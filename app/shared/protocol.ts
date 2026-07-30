@@ -1119,6 +1119,109 @@ export type AgentModeSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Codex lease read-seam (P4-32b, L1 — `decisions/ORCHESTRATOR-IN-SESSION.md` §7
+ * + §10 ruling 2026-07-30)
+ * ------------------------------------------------------------------------- *
+ *
+ * "Which Codex account is each agent in this swarm leasing right now?" is real
+ * engine state, owned by the lease manager
+ * (`src/services/api/codexAccountLeaseManager.ts`). It is SESSION-scoped, which
+ * is why it belongs beside the worker roster and not on the global Accounts page
+ * (§7 L2 rejected).
+ *
+ * OUTBOUND ONLY. There is no lease write verb, no new inbound frame kind and no
+ * new preload channel: assignment, failover and release stay engine-side
+ * (`registerCodexLease`/`failoverCodexLease`/`releaseCodexLease`), and the
+ * renderer only ever reads this projection.
+ *
+ * Redaction: the projection carries account IDENTIFIERS and the pool's redacted
+ * alias, never credential material — the same policy `AccountStatus.id` /
+ * `AccountStatus.alias` already established (`accountId` is an OpenAI account
+ * UUID that `secretGuard` does not block; `accessToken`/`refreshToken`/
+ * `vaultFilePath` never appear in this shape by construction). Engine-authored
+ * reason text is length-capped at the sidecar.
+ *
+ * JOIN KEY (verified in source, not inferred): `LeaseOwnerRow.ownerId` is the
+ * subagent's `agentId` for worker leases (`src/tools/AgentTool/AgentTool.tsx:1226`
+ * async, `:1354` sync) and the literal `'main-thread'` for the main lease
+ * (`src/query.ts:325`). A `local_agent` task's id IS that same agentId
+ * (`createTaskStateBase(agentId, 'local_agent', …)`,
+ * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:618`), and the roster carries it as
+ * `AgentModeWorkerItem.agentId` (`app/sidecar/agentModeDomain.ts:212`). So
+ * `ownerId === AgentModeWorkerItem.agentId` needs no new field on either side.
+ *
+ * CUT (§10): the prototype's failover/rotation EVENT strip. The engine exposes
+ * current lease/failover state (`failoverCount` + `lastFailureReason`), not an
+ * event history, and no mock stands in for one.
+ */
+
+/** Lease lifecycle, mirrored from the engine's `CodexLeaseState` (`codexAccountLeaseManager.ts:22`). */
+export type LeaseState = 'active' | 'released' | 'failed'
+
+/** Subagent account strategy, mirrored from `CodexLeaseStrategy` (`codexAccountLeaseManager.ts:20`). */
+export type LeaseStrategy = 'spread' | 'follow-main'
+
+/** One owner→account lease row, projected from the engine's `CodexLease` (`codexAccountLeaseManager.ts:24-37`). */
+export type LeaseOwnerRow = {
+  leaseId: string
+  /** `'main-thread'` for the main lease, else the subagent `agentId` (joins `AgentModeWorkerItem.agentId`). */
+  ownerId: string
+  ownerType: 'main' | 'subagent'
+  /** Engine-authored label: `'Main thread'` or the delegated task description. */
+  ownerLabel: string
+  /** Account UUID — an identifier, NOT a secret (same policy as `AccountStatus.id`). */
+  accountId: string
+  /** The pool's redacted alias for that account, or null. Never an email, never a token. */
+  accountAlias: string | null
+  strategy: LeaseStrategy
+  state: LeaseState
+  /** Epoch ms; held-duration is derived at READ time in the renderer, never stored. */
+  createdAt: number
+  updatedAt: number
+  failoverCount: number
+  /** Engine `selectionReason`, length-capped at the sidecar. */
+  selectionReason: string
+  /** Engine `lastFailureReason` when a failover happened, length-capped at the sidecar. */
+  lastFailureReason?: string
+}
+
+/**
+ * Per-account rollup — the non-exclusivity proof (many agents may share one
+ * account). Projected from `getCodexLeaseSnapshot().accounts`
+ * (`codexAccountLeaseManager.ts:175-184`), which the ENGINE derives over its own
+ * live lease map; the renderer never re-derives it.
+ */
+export type LeaseAccountRow = {
+  accountId: string
+  accountAlias: string | null
+  leaseCount: number
+  /** `ownerLabel`s holding a lease on this account. */
+  holders: string[]
+}
+
+export type LeaseSnapshot = {
+  /** This session's subagent strategy (`getCodexLeaseSnapshot().strategy`). */
+  strategy: LeaseStrategy
+  /** Main lease first, then the live worker leases. Empty when nothing holds one. */
+  owners: LeaseOwnerRow[]
+  /** Accounts currently carrying at least one lease. */
+  accounts: LeaseAccountRow[]
+}
+
+/**
+ * P4-32b outbound frame. Emitted on attach beside the other read-seam snapshots
+ * and re-broadcast on the same app-state store change that re-broadcasts
+ * `agent-mode.snapshot` (a worker spawn/finish is exactly when leases move).
+ * Read-only: there is no lease verb.
+ */
+export type LeaseSnapshotFrame = {
+  kind: 'lease.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  leases: LeaseSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
  * P4-8b — agent-mode WRITE verb (the in-session Orchestrator toggle's set)
  * ------------------------------------------------------------------------- *
  *
@@ -2370,6 +2473,7 @@ export type ServerFrame =
   | MemorySnapshotFrame
   | TasksSnapshotFrame
   | AgentModeSnapshotFrame
+  | LeaseSnapshotFrame
   | AgentModeSetResultFrame
   | TaskControlResultFrame
   | RunControlsSnapshotFrame

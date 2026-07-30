@@ -259,6 +259,51 @@ export function agentStateMeta(state: AgentStateKey): AgentStateMeta {
   return AGENT_STATE_META[state]
 }
 
+/**
+ * Compressed lifecycle word for tight list/card contexts (P4-32b — the
+ * prototype's `agentTranscriptStateWord`, `AgentIdentity.jsx:146`, and the same
+ * compression `WStatusText`'s list mode applies, `OrchestratorMode.jsx:46`).
+ *
+ * A row in a list has no room for "Result ready" or "In background", and the
+ * distinctions those labels draw are not the ones a scanning reader needs: every
+ * settled outcome reads "done", every in-flight one "running", and both handoff
+ * states "needs input". The full `agentStateMeta().label` stays the vocabulary
+ * for a standalone state chip; this is only the crowded case. Tone still comes
+ * from `agentStateMeta`, so nothing about the colour vocabulary forks here.
+ */
+export function agentTranscriptStateWord(state: AgentStateKey): string {
+  switch (state) {
+    case 'running':
+    case 'background':
+    case 'resumed':
+      return 'running'
+    case 'waiting':
+      return 'needs input'
+    case 'needs-you':
+      return 'needs you'
+    case 'completed':
+    case 'reviewed':
+    case 'result-ready':
+      return 'done'
+    case 'failed':
+    case 'attention':
+      return 'failed'
+    case 'stopped':
+      return 'stopped'
+    case 'paused':
+      return 'paused'
+    case 'resumable':
+      return 'resumable'
+    case 'stale':
+      return 'stale'
+    default: {
+      // Closed-union tripwire: a new AgentStateKey must be given a word here.
+      const exhaustive: never = state
+      return exhaustive
+    }
+  }
+}
+
 export function resolveAgentIdentity(data: AgentIdentitySource = {}): AgentIdentity {
   const nestedIdentity = record(data.identity)
   const rawName = firstString(

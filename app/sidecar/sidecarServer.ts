@@ -96,6 +96,7 @@ import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
+import type { SidecarLeaseDomain } from './leaseDomain.js'
 import type { SidecarTaskControlDomain } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
@@ -165,6 +166,12 @@ export type SidecarServerOptions = {
    * change; when absent, no orchestrator frame is emitted.
    */
   agentMode?: SidecarAgentModeDomain
+  /**
+   * Codex lease read-seam (P4-32b, L1). When present, a `lease.snapshot` frame is
+   * emitted on attach and re-broadcast on the same store change as agent-mode;
+   * when absent, no lease frame is emitted. Outbound only, no lease verb.
+   */
+  leases?: SidecarLeaseDomain
   /**
    * Task-control write-seam (P4-8b) — the deferred worker Stop/kill verb. When
    * present, a `task.stop` verb dispatches the engine's own `stopTask`; when
@@ -299,6 +306,7 @@ export class SidecarServer {
   private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
   private readonly agentMode: SidecarAgentModeDomain | null
+  private readonly leases: SidecarLeaseDomain | null
   private readonly taskControl: SidecarTaskControlDomain | null
   private readonly runControls: SidecarRunControlsDomain | null
   private readonly sessionActions: SidecarSessionActionsDomain | null
@@ -323,6 +331,7 @@ export class SidecarServer {
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
   private unsubscribeAgentModeSnapshot: (() => void) | null = null
+  private unsubscribeLeaseSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private activeTurn = false
   /**
@@ -358,6 +367,7 @@ export class SidecarServer {
     this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
     this.agentMode = options.agentMode ?? null
+    this.leases = options.leases ?? null
     this.taskControl = options.taskControl ?? null
     this.runControls = options.runControls ?? null
     this.sessionActions = options.sessionActions ?? null
@@ -422,6 +432,14 @@ export class SidecarServer {
     if (this.agentMode) {
       this.unsubscribeAgentModeSnapshot = this.agentMode.subscribe(() => {
         void this.broadcastAgentModeSnapshot()
+      })
+    }
+    // P4-32b — leases move on the SAME events that move the worker roster (a
+    // spawn registers a lease, a finish releases one), so the lease seam rides
+    // the same store subscription rather than polling the lease manager.
+    if (this.leases) {
+      this.unsubscribeLeaseSnapshot = this.leases.subscribe(() => {
+        this.broadcastLeaseSnapshot()
       })
     }
     // P4-24c — re-broadcast the run-controls snapshot whenever the session's
@@ -539,6 +557,10 @@ export class SidecarServer {
     // effort (a non-agent-mode session degrades to an empty roster); fire-and-forget
     // since a read-only snapshot has no ordering dependency on history replay.
     void this.sendAgentModeSnapshot(connection)
+    // P4-32b — read-only Codex lease snapshot (which account each agent in this
+    // session's swarm is leasing), right after the worker roster it joins to.
+    // Outbound only: there is no lease verb and no new inbound vocabulary.
+    this.sendLeaseSnapshot(connection)
     // P4-24c — composer run-controls snapshot (current model/effort/fast + the real
     // selectable options + availability). Read-at-call + re-broadcast on change; no
     // renderer-authored state (the value/selection rides the app-owned write verbs).
@@ -717,6 +739,8 @@ export class SidecarServer {
     this.unsubscribeTasksSnapshot = null
     this.unsubscribeAgentModeSnapshot?.()
     this.unsubscribeAgentModeSnapshot = null
+    this.unsubscribeLeaseSnapshot?.()
+    this.unsubscribeLeaseSnapshot = null
     this.unsubscribeRunControlsSnapshot?.()
     this.unsubscribeRunControlsSnapshot = null
     for (const connection of this.connections) {
@@ -2456,6 +2480,50 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       await this.sendAgentModeSnapshot(connection)
+    }
+  }
+
+  /**
+   * P4-32b — read-only Codex lease snapshot (L1,
+   * `decisions/ORCHESTRATOR-IN-SESSION.md` §7). Sync: the lease map and the pool
+   * are in-memory engine singletons. The shared `send` path applies clone/JSON
+   * checks, the outbound secret guard and the size cap; the whole read is wrapped
+   * so a failure can never strand the attaching connection.
+   */
+  private sendLeaseSnapshot(connection: Connection): void {
+    if (!this.leases) {
+      return
+    }
+    try {
+      const raw = this.leases.getSnapshot()
+      if (!raw) {
+        return
+      }
+      const snapshot = this.prepareOutboundPayload(raw, 'lease.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'lease.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        leases: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] lease.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
+  private broadcastLeaseSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendLeaseSnapshot(connection)
     }
   }
 

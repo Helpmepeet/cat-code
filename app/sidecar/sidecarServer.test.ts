@@ -57,6 +57,11 @@ import {
   createSidecarAgentModeDomain,
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
+import {
+  createSidecarLeaseDomain,
+  type LeaseReader,
+  type SidecarLeaseDomain,
+} from './leaseDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
@@ -192,6 +197,7 @@ function makeServer(
   runControls?: SidecarRunControlsDomain,
   sessionActions?: SidecarSessionActionsDomain,
   taskControl?: SidecarTaskControlDomain,
+  leases?: SidecarLeaseDomain,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -210,6 +216,7 @@ function makeServer(
     ...(runControls ? { runControls } : {}),
     ...(sessionActions ? { sessionActions } : {}),
     ...(taskControl ? { taskControl } : {}),
+    ...(leases ? { leases } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -5574,4 +5581,157 @@ test('P4-6b — a session-action verb with NO domain (probe) fails closed with i
   expect(
     received.some(f => f.kind === 'error' && f.requestId === 'sb2'),
   ).toBe(true)
+})
+
+/* ── P4-32b — the Codex lease read seam at the transport boundary ──────────────
+ * The seam is OUTBOUND ONLY (`decisions/ORCHESTRATOR-IN-SESSION.md` §7 L1, ruled
+ * §10), so the boundary property to prove is the absence of an inbound surface:
+ * the closed inbound allowlist did NOT grow, and a plausible lease verb is
+ * rejected fail-closed. The outbound half proves emission + redaction + the
+ * degrade-to-nothing path.
+ */
+
+function fakeLeaseReader(over: Partial<LeaseReader> = {}): LeaseReader {
+  return {
+    snapshot: () => ({
+      mainLease: {
+        leaseId: 'lease:main:acct-1111',
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+        accountId: 'acct-1111',
+        strategy: 'follow-main',
+        state: 'active',
+        createdAt: 0,
+        updatedAt: 0,
+        failoverCount: 0,
+        selectionReason: 'main lease pinned to pool activeIndex',
+      },
+      strategy: 'spread',
+      accounts: [{ accountId: 'acct-1111', leaseCount: 1, holders: ['Main thread'] }],
+    }),
+    leaseForOwner: () => undefined,
+    accountAliases: () => new Map([['acct-1111', 'work-laptop']]),
+    ...over,
+  }
+}
+
+function leaseServerFixture(leases?: SidecarLeaseDomain) {
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    leases,
+  )
+  return server
+}
+
+test('P4-32b — attach emits a lease.snapshot right after agent-mode.snapshot', () => {
+  const store = createStore({ ...getDefaultAppState(), tasks: {} })
+  const server = leaseServerFixture(
+    createSidecarLeaseDomain(store, { reader: fakeLeaseReader() }),
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  const kinds = received.map(f => f.kind)
+  const snap = received.find(f => f.kind === 'lease.snapshot')
+  expect(snap?.kind).toBe('lease.snapshot')
+  expect(snap && 'leases' in snap ? snap.leases.owners[0]?.accountAlias : null).toBe(
+    'work-laptop',
+  )
+  // Ordering matters: the renderer joins the lease rows to the worker roster, so
+  // the roster frame must not arrive after them on a replayed attach.
+  expect(kinds.indexOf('lease.snapshot')).toBeGreaterThan(
+    kinds.indexOf('tasks.snapshot'),
+  )
+  // Redaction: the projection carries identifiers and aliases only.
+  expect(JSON.stringify(snap)).not.toContain('accessToken')
+})
+
+test('P4-32b — no lease domain means no lease frame at all (never an empty one)', () => {
+  const server = leaseServerFixture(undefined)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  expect(received.some(f => f.kind === 'lease.snapshot')).toBe(false)
+})
+
+test('P4-32b — a lease read that fails degrades to silence, never a stranded attach', () => {
+  const store = createStore({ ...getDefaultAppState(), tasks: {} })
+  const server = leaseServerFixture(
+    createSidecarLeaseDomain(store, {
+      reader: fakeLeaseReader({
+        snapshot: () => {
+          throw new Error('pool exploded')
+        },
+      }),
+    }),
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  expect(received.some(f => f.kind === 'lease.snapshot')).toBe(false)
+  // The rest of the attach burst still lands: one seam's failure is not fatal.
+  expect(received.some(f => f.kind === 'ready')).toBe(true)
+})
+
+test('P4-32b — a store change re-broadcasts the lease snapshot (a spawn moves leases)', () => {
+  const store = createStore({ ...getDefaultAppState(), tasks: {} })
+  const server = leaseServerFixture(
+    createSidecarLeaseDomain(store, { reader: fakeLeaseReader() }),
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'lease.snapshot').length
+  expect(before).toBe(1)
+
+  store.setState(state => ({ ...state, tasks: {} }))
+
+  expect(received.filter(f => f.kind === 'lease.snapshot').length).toBeGreaterThan(
+    before,
+  )
+})
+
+test('P4-32b — the inbound allowlist did NOT grow: a lease verb is rejected bad_request', () => {
+  const store = createStore({ ...getDefaultAppState(), tasks: {} })
+  const server = leaseServerFixture(
+    createSidecarLeaseDomain(store, { reader: fakeLeaseReader() }),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const verbs = ['lease.set', 'lease.get', 'lease.failover', 'lease.release']
+  for (const type of verbs) {
+    const before = received.filter(
+      f => f.kind === 'error' && f.code === 'bad_request',
+    ).length
+    server.handleData(
+      conn,
+      encodeFrame({
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: SESSION,
+        message: {
+          type,
+          requestId: `lease-${type}`,
+        } as unknown as ClientFrame['message'],
+      }),
+    )
+    // Fail closed: an unallowlisted type is refused before any dispatch, so it
+    // never reaches a domain and never mutates lease state.
+    expect(
+      received.filter(f => f.kind === 'error' && f.code === 'bad_request').length,
+    ).toBe(before + 1)
+  }
+  // And nothing was emitted in response beyond the refusals.
+  expect(received.filter(f => f.kind === 'lease.snapshot').length).toBe(1)
 })

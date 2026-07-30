@@ -16,6 +16,25 @@ export const AGENT_STATE_TONE_CLASS: Record<
   purple: { text: 'text-purple-400', dot: 'bg-purple-400', border: 'border-purple-400', soft: 'bg-purple-400/10', line: 'border-purple-400/30' },
 }
 
+/** P4-32b — `AgentSectionLabel` caption tones (the prototype's `WLabel` colour arg). */
+export type SectionLabelTone = 'muted' | 'accent' | 'lease' | 'warn'
+
+export const SECTION_LABEL_TONE_CLASS: Record<SectionLabelTone, string> = {
+  muted: 'text-zinc-600',
+  accent: 'text-purple-400',
+  lease: 'text-teal-300',
+  warn: 'text-tone-warn',
+}
+
+/** P4-32b — `AgentActionButton` tones (the prototype's `WBtn` neutral/accent/danger). */
+export type ActionButtonTone = 'neutral' | 'accent' | 'danger'
+
+export const ACTION_BUTTON_TONE_CLASS: Record<ActionButtonTone, string> = {
+  neutral: 'border-white/10 text-text-muted',
+  accent: 'border-purple-400/30 text-purple-400',
+  danger: 'border-tone-danger/30 text-tone-danger',
+}
+
 export const AGENT_TYPE_TONE_CLASS: Record<
   AgentTypeTone,
   { text: string; soft: string; line: string; dot: string }
