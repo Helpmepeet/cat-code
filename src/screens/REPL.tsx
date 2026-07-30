@@ -2809,7 +2809,7 @@ export function REPL({
     void (async () => {
       const toolUseContext = getToolUseContext(messagesRef.current, [], new AbortController(), mainLoopModel);
       const bgAdditionalDirs = Array.from(toolPermissionContext.additionalWorkingDirectories.keys());
-      const bgIsAgentMode = process.env.CLAUDE_CODE_AGENT_MODE === '1' || process.env.CLAUDE_CODE_AGENT_MODE === 'true';
+      const bgIsAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
       const [defaultSystemPrompt, agentModePromptSectionsBg, userContext, systemContext] = await Promise.all([getSystemPrompt(toolUseContext.options.tools, mainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients), bgIsAgentMode && !customSystemPrompt ? getAgentModeSystemPromptSections(toolUseContext.options.tools, mainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients) : Promise.resolve(undefined), getUserContext(), getSystemContext()]);
       const systemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition,
@@ -3112,7 +3112,7 @@ export function REPL({
       });
     }
     queryCheckpoint('query_context_loading_start');
-    const isAgentModeActive = process.env.CLAUDE_CODE_AGENT_MODE === '1' || process.env.CLAUDE_CODE_AGENT_MODE === 'true';
+    const isAgentModeActive = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
     const additionalWorkingDirectories = Array.from(toolPermissionContext.additionalWorkingDirectories.keys());
     logForDebugging(`[REPL:query-setup] context loading start toolCount=${freshTools.length} mcpClientCount=${freshMcpClients.length} additionalWorkingDirectoryCount=${additionalWorkingDirectories.length} hasCustomSystemPrompt=${Boolean(customSystemPrompt)} isAgentModeActive=${isAgentModeActive}`);
     const [,, defaultSystemPrompt, agentModePromptSections, baseUserContext, systemContext] = await Promise.all([

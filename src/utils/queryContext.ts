@@ -18,6 +18,7 @@ import type { Tools, ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { Message } from '../types/message.js'
 import { createAbortController } from './abortController.js'
+import { isEnvTruthy } from './envUtils.js'
 import type { FileStateCache } from './fileStateCache.js'
 import type { CacheSafeParams } from './forkedAgent.js'
 import { getMainLoopModel } from './model/model.js'
@@ -63,7 +64,7 @@ export async function fetchSystemPromptParts({
   userContext: { [k: string]: string }
   systemContext: { [k: string]: string }
 }> {
-  const isAgentMode = process.env.CLAUDE_CODE_AGENT_MODE === '1' || process.env.CLAUDE_CODE_AGENT_MODE === 'true'
+  const isAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
   const [defaultSystemPrompt, agentModePromptSections, userContext, systemContext] = await Promise.all([
     customSystemPrompt !== undefined
       ? Promise.resolve([])
