@@ -766,9 +766,9 @@ function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, u
  * top (messages.ts), then translateMessages emits `JSON.stringify(block.input)`.
  * To match, the record side composes the same two passes over the raw server
  * arguments — exactly once, with side effects suppressed (the decode-time pass
- * already fired them). Unknown tools (no registry entry) and unparseable
- * arguments fall back to a deterministic re-stringify (JSON.parse→stringify),
- * which still kills whitespace/key-order drift.
+ * already fired them). Unknown tools (no registry entry) use a deterministic
+ * re-stringify, while malformed/null arguments mirror decode's conservative
+ * empty-object fallback.
  */
 function canonicalizeToolArgumentsForRecord(
   toolName: string,
@@ -777,9 +777,16 @@ function canonicalizeToolArgumentsForRecord(
   const rawString =
     typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments ?? {})
   const parsed = safeParseJSON(rawString)
-  if (parsed === null || typeof parsed !== 'object') {
-    // Not JSON-object arguments (or empty): re-stringify deterministically.
-    return typeof parsed === 'undefined' ? rawString : JSON.stringify(parsed)
+  if (parsed === null) {
+    // Decode maps both malformed JSON and JSON null to {}, and replay emits
+    // JSON.stringify(block.input || {}). Mirror that conservative fallback so
+    // malformed provider output forces neither canonical drift nor raw replay.
+    return '{}'
+  }
+  if (typeof parsed !== 'object') {
+    // Replay also replaces falsy primitive inputs with {}. Truthy primitives
+    // are re-stringified as-is (they are unusual but deterministic).
+    return JSON.stringify(parsed || {})
   }
 
   const tool = findToolByName(getAllBaseTools(), toolName)
@@ -804,6 +811,28 @@ function canonicalizeToolArgumentsForRecord(
     // for the common (no-mutation) case.
     return JSON.stringify(parsed)
   }
+}
+
+/**
+ * Canonicalizes the structured JSON arm of Apply_patch custom-tool input.
+ * Decode stores valid JSON objects structurally and replay compacts them with
+ * JSON.stringify; doing the same at record time removes whitespace drift. Raw
+ * non-JSON patch envelopes must remain byte-identical for executable handoff.
+ */
+function canonicalizeCustomToolInputForRecord(
+  toolName: unknown,
+  rawInput: unknown,
+): unknown {
+  if (toolName !== APPLY_PATCH_TOOL_NAME || typeof rawInput !== 'string') {
+    return rawInput
+  }
+
+  // Raw patch envelopes are the expected/common case, so do not report their
+  // intentional non-JSON syntax as a parse failure.
+  const parsed = safeParseJSON(rawInput, false)
+  return parsed && typeof parsed === 'object'
+    ? JSON.stringify(parsed)
+    : rawInput
 }
 
 /**
@@ -851,7 +880,7 @@ export function canonicalizeCodexItem(
       type: 'custom_tool_call',
       call_id: item.call_id,
       name: item.name,
-      input: item.input,
+      input: canonicalizeCustomToolInputForRecord(item.name, item.input),
     }
   }
 
@@ -2516,6 +2545,7 @@ function buildAnthropicStreamResponse(
   requestCacheMetadata?: CodexRequestCacheMetadata,
   httpFallback?: HttpFallbackEventsFactory,
   transportContext?: CodexStreamTransportContext,
+  cancelSource?: (reason?: unknown) => void,
 ): Response {
   const messageId = `msg_codex_${Date.now()}`
   const encoder = new TextEncoder()
@@ -2530,6 +2560,9 @@ function buildAnthropicStreamResponse(
         httpFallback,
         transportContext,
       )
+    },
+    cancel(reason) {
+      cancelSource?.(reason)
     },
   })
   return new Response(readable, {
@@ -2799,6 +2832,7 @@ export function translateCodexWsStreamToAnthropic(
   requestCacheMetadata?: CodexRequestCacheMetadata,
   httpFallback?: HttpFallbackEventsFactory,
   transportContext?: CodexStreamTransportContext,
+  cancelSource?: (reason?: unknown) => void,
 ): Response {
   return buildAnthropicStreamResponse(
     wsEvents,
@@ -2806,6 +2840,7 @@ export function translateCodexWsStreamToAnthropic(
     requestCacheMetadata,
     httpFallback,
     transportContext,
+    cancelSource,
   )
 }
 
@@ -3411,13 +3446,36 @@ export function createCodexFetch(
           // request awaited it), so it just double-billed the prefix. The first
           // real WS call seeds the same prefix.
           const wsRequestStartedAtMs = Date.now()
+          const wsAbortController = new AbortController()
+          const requestSignal = init?.signal
+          const forwardRequestAbort = () => {
+            wsAbortController.abort(requestSignal?.reason)
+          }
+          if (requestSignal?.aborted) {
+            forwardRequestAbort()
+          } else {
+            requestSignal?.addEventListener('abort', forwardRequestAbort, {
+              once: true,
+            })
+          }
+          const wsSource = streamTurnViaWebSocketLocked(
+            conversationId,
+            codexBody,
+            authHeaders,
+            fullInput.length,
+            wsAbortController.signal,
+          )
+          const wsSourceWithAbortCleanup: AsyncIterable<Record<string, unknown>> = {
+            async *[Symbol.asyncIterator]() {
+              try {
+                yield* wsSource
+              } finally {
+                requestSignal?.removeEventListener('abort', forwardRequestAbort)
+              }
+            },
+          }
           const wsEvents = await primeCodexEvents(
-            streamTurnViaWebSocketLocked(
-              conversationId,
-              codexBody,
-              authHeaders,
-              fullInput.length,
-            ),
+            wsSourceWithAbortCleanup,
             requestCacheMetadata,
             'websocket',
           )
@@ -3435,8 +3493,22 @@ export function createCodexFetch(
               transport: 'websocket',
               requestStartedAtMs: wsRequestStartedAtMs,
             },
+            reason => {
+              const abortReason =
+                reason instanceof Error
+                  ? reason
+                  : new DOMException('The operation was aborted.', 'AbortError')
+              wsAbortController.abort(abortReason)
+            },
           )
         } catch (wsError) {
+          if (
+            init?.signal?.aborted ||
+            (wsError instanceof Error && wsError.name === 'AbortError')
+          ) {
+            closeSocketPreservingState(conversationId)
+            throw wsError
+          }
           const normalized = normalizeInitialWebSocketError(
             wsError,
             currentAccountId,

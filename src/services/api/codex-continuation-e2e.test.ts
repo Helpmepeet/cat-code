@@ -221,10 +221,67 @@ describe('codex continuation e2e: normalization → translation → reconciliati
     expect(delta![0]).toMatchObject({ role: 'user', content: 'now edit it' })
   })
 
+  test('tool-result replacement forces a full send so server context is actually reduced', () => {
+    const callId = 'call_large_web_fetch'
+    const turn1Messages = [
+      userMsg('fetch the page'),
+      toolUseMsg('WebFetch', callId, { url: 'https://example.com' }),
+      toolResultMsg(callId, 'original large result'),
+    ]
+    const turn1Input = transcriptToCodexInput(turn1Messages)
+    const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'Fetched.')
+
+    const turn2Messages = [
+      userMsg('fetch the page'),
+      toolUseMsg('WebFetch', callId, { url: 'https://example.com' }),
+      // Both aggregate tool-result budgeting and time-based microcompact replace
+      // a prior tool_result in place while retaining its tool_use_id.
+      toolResultMsg(callId, '[Old tool result content cleared]'),
+      assistantMsg('Fetched.'),
+      userMsg('continue'),
+    ]
+    const turn2Input = transcriptToCodexInput(turn2Messages)
+
+    const result = reconcileCanonicalDelta(turn2Input, sentInput, outputItems)
+    expect(result.delta).toBeNull()
+    expect(result.mismatchReason).toContain('tool_result_replaced')
+  })
+
+  test('structured Apply_patch output stays incremental after transcript replay', () => {
+    const callId = 'call_patch_structured'
+    const ops = [{ type: 'delete', path: 'src/gone.ts' }]
+    const turn1Input = transcriptToCodexInput([userMsg('delete the file')])
+    const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'unused', [
+      {
+        type: 'custom_tool_call',
+        call_id: callId,
+        name: 'Apply_patch',
+        input: JSON.stringify({ ops }, null, 2),
+      },
+    ])
+
+    const turn2Input = transcriptToCodexInput([
+      userMsg('delete the file'),
+      toolUseMsg('Apply_patch', callId, { ops }),
+      toolResultMsg(callId, 'Done!'),
+      userMsg('what changed?'),
+    ])
+    const delta = canonicalDelta(turn2Input, sentInput, outputItems)
+
+    expect(delta).not.toBeNull()
+    expect(delta).toHaveLength(2)
+    expect(delta![0]).toMatchObject({
+      type: 'function_call_output',
+      call_id: callId,
+      output: 'Done!',
+    })
+    expect(delta![1]).toMatchObject({ role: 'user', content: 'what changed?' })
+  })
+
   test('normalization drift in sent-input portion does not block canonical reconciliation', () => {
     // Core regression from the bug report: normalizeMessagesForAPI rewrites the
-    // user message prefix (id-tags, block merges, etc.), but since sent-input is
-    // trusted by length only, the canonical delta still succeeds.
+    // user message prefix (id-tags, block merges, etc.). Non-tool-result prefix
+    // normalization remains trusted by length, so the canonical delta succeeds.
     const turn1Input = transcriptToCodexInput([userMsg('hello')])
     const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'world')
 

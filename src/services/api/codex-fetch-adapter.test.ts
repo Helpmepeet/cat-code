@@ -1951,6 +1951,115 @@ describe('codex-fetch-adapter', () => {
     )
   })
 
+  test('createCodexFetch request abort closes an active websocket turn', async () => {
+    resetCodexCacheContext()
+    const conversationId = 'conv_request_abort'
+    const fakeWs = installFakeWs()
+    const abortController = new AbortController()
+    fakeWs.responseBatches = [[
+      { type: 'response.output_text.delta', delta: 'started' },
+    ]]
+
+    try {
+      const response = await createCodexFetch(
+        createAccessToken('acct_request_abort'),
+        conversationId,
+      )('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        signal: abortController.signal,
+        body: JSON.stringify({
+          stream: true,
+          model: 'claude-sonnet-4-6',
+          _openaiInstructionAssembly: {
+            instructions: 'Be precise.',
+            inputMessages: [{ role: 'user', content: 'start' }],
+          },
+        }),
+      })
+
+      const body = response.text()
+      abortController.abort()
+      await expect(body).rejects.toBeInstanceOf(Error)
+      expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+    } finally {
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conversationId)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('pre-visible request abort does not activate sticky HTTP fallback', async () => {
+    resetCodexCacheContext()
+    const conversationId = 'conv_previsible_abort'
+    const accountId = 'acct_previsible_abort'
+    const fakeWs = installFakeWs()
+    const abortController = new AbortController()
+    fakeWs.responseBatches = [[{ type: 'response.created' }]]
+
+    try {
+      const pending = createCodexFetch(
+        createAccessToken(accountId),
+        conversationId,
+      )('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        signal: abortController.signal,
+        body: JSON.stringify({
+          stream: true,
+          model: 'claude-sonnet-4-6',
+          _openaiInstructionAssembly: {
+            instructions: 'Be precise.',
+            inputMessages: [{ role: 'user', content: 'start' }],
+          },
+        }),
+      })
+
+      await new Promise(resolve => setTimeout(resolve, 0))
+      abortController.abort()
+
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      expect(_hasStickyHttpFallbackForTest(conversationId, accountId)).toBe(false)
+      expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+    } finally {
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conversationId)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('canceling the translated response body closes an active websocket turn', async () => {
+    resetCodexCacheContext()
+    const conversationId = 'conv_body_cancel'
+    const fakeWs = installFakeWs()
+    fakeWs.responseBatches = [[
+      { type: 'response.output_text.delta', delta: 'started' },
+    ]]
+
+    try {
+      const response = await createCodexFetch(
+        createAccessToken('acct_body_cancel'),
+        conversationId,
+      )('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          stream: true,
+          model: 'claude-sonnet-4-6',
+          _openaiInstructionAssembly: {
+            instructions: 'Be precise.',
+            inputMessages: [{ role: 'user', content: 'start' }],
+          },
+        }),
+      })
+
+      await response.body?.cancel()
+      await Promise.resolve()
+      expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+    } finally {
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conversationId)
+      resetCodexCacheContext()
+    }
+  })
+
   test('createCodexFetch uses HTTP fallback for immediate zero-event websocket closes', async () => {
     resetCodexCacheContext()
     const accessToken = createAccessToken('acct_test_streaming')

@@ -148,7 +148,11 @@ const conversationTurnQueues = new Map<string, ConversationTurnQueue>()
 
 async function acquireConversationTurn(
   conversationId: string,
+  signal?: AbortSignal,
 ): Promise<() => void> {
+  if (signal?.aborted) {
+    throw createWebSocketAbortError(signal)
+  }
   const queue = conversationTurnQueues.get(conversationId) ?? {
     tail: Promise.resolve(),
     pending: 0,
@@ -169,7 +173,32 @@ async function acquireConversationTurn(
     )
   }
 
-  await priorTail
+  let onAbort: (() => void) | undefined
+  const aborted = signal
+    ? new Promise<never>((_, reject) => {
+        onAbort = () => reject(createWebSocketAbortError(signal))
+        signal.addEventListener('abort', onAbort, { once: true })
+      })
+    : null
+
+  try {
+    await (aborted ? Promise.race([priorTail, aborted]) : priorTail)
+  } catch (error) {
+    // Resolve this queued turn's gate without bypassing priorTail: queue.tail
+    // still waits for the active turn before it observes the already-resolved
+    // gate, so later turns remain correctly serialized.
+    queue.pending -= 1
+    releaseGate()
+    if (
+      queue.pending === 0 &&
+      conversationTurnQueues.get(conversationId) === queue
+    ) {
+      conversationTurnQueues.delete(conversationId)
+    }
+    throw error
+  } finally {
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
+  }
 
   let released = false
   return () => {
@@ -243,6 +272,7 @@ export function closeSocketPreservingState(conversationId: string): void {
 async function openSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<WsSession> {
   return new Promise((resolve, reject) => {
     const openVersion = sessionOpenVersions.get(conversationId) ?? 0
@@ -272,18 +302,44 @@ async function openSession(
       })
     }
 
-    const timeout = setTimeout(() => {
-      ws.close()
-      reject(new Error('WebSocket connect timeout'))
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout>
+    const cleanup = () => {
+      clearTimeout(timeout)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const rejectOpen = (error: Error, closeSocket = false) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (closeSocket) {
+        try { ws.close() } catch { /* ignore */ }
+      }
+      reject(error)
+    }
+    const onAbort = () => {
+      rejectOpen(createWebSocketAbortError(signal!), true)
+    }
+
+    timeout = setTimeout(() => {
+      rejectOpen(new Error('WebSocket connect timeout'), true)
     }, 15_000)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+    }
 
     ws.on('open', () => {
-      clearTimeout(timeout)
-      if ((sessionOpenVersions.get(conversationId) ?? 0) !== openVersion) {
+      if (settled) {
         try { ws.close() } catch { /* ignore */ }
-        reject(new Error('WebSocket session cleared before open'))
         return
       }
+      if ((sessionOpenVersions.get(conversationId) ?? 0) !== openVersion) {
+        rejectOpen(new Error('WebSocket session cleared before open'), true)
+        return
+      }
+      settled = true
+      cleanup()
       const session: WsSession = {
         ws,
         accountId: authHeaders['chatgpt-account-id'] ?? null,
@@ -304,9 +360,35 @@ async function openSession(
     })
 
     ws.on('error', () => {
-      clearTimeout(timeout)
-      reject(new Error('WebSocket connect error'))
+      rejectOpen(new Error('WebSocket connect error'))
     })
+  })
+}
+
+function waitForSessionWithSignal(
+  promise: Promise<WsSession>,
+  signal?: AbortSignal,
+): Promise<WsSession> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(createWebSocketAbortError(signal))
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      cleanup()
+      reject(createWebSocketAbortError(signal))
+    }
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      session => {
+        cleanup()
+        resolve(session)
+      },
+      error => {
+        cleanup()
+        reject(error)
+      },
+    )
   })
 }
 
@@ -316,6 +398,7 @@ async function openSession(
 async function getOrOpenSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<WsSession> {
   const requestedAccountId = authHeaders['chatgpt-account-id'] ?? null
   const existing = sessions.get(conversationId)
@@ -328,7 +411,7 @@ async function getOrOpenSession(
   }
   const opening = openingSessions.get(conversationId)
   if (opening && opening.accountId === requestedAccountId) {
-    return opening.promise
+    return waitForSessionWithSignal(opening.promise, signal)
   }
   // Stale/closed session — remove and reconnect
   if (existing) {
@@ -365,7 +448,7 @@ async function getOrOpenSession(
         }
     try { existing.ws.close() } catch { /* ignore */ }
     sessions.delete(conversationId)
-    const fresh = await openTrackedSession(conversationId, authHeaders)
+    const fresh = await openTrackedSession(conversationId, authHeaders, signal)
     if (preserved) {
       fresh.lastResponseId = preserved.lastResponseId
       fresh.lastRequestSignature = preserved.lastRequestSignature
@@ -385,20 +468,21 @@ async function getOrOpenSession(
     }
     return fresh
   }
-  return openTrackedSession(conversationId, authHeaders)
+  return openTrackedSession(conversationId, authHeaders, signal)
 }
 
 function openTrackedSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<WsSession> {
   const requestedAccountId = authHeaders['chatgpt-account-id'] ?? null
   const opening = openingSessions.get(conversationId)
   if (opening && opening.accountId === requestedAccountId) {
-    return opening.promise
+    return waitForSessionWithSignal(opening.promise, signal)
   }
 
-  const promise = openSession(conversationId, authHeaders).finally(() => {
+  const promise = openSession(conversationId, authHeaders, signal).finally(() => {
     if (openingSessions.get(conversationId)?.promise === promise) {
       openingSessions.delete(conversationId)
     }
@@ -418,8 +502,9 @@ function openTrackedSession(
 export async function ensureWebSocketSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await getOrOpenSession(conversationId, authHeaders)
+  await getOrOpenSession(conversationId, authHeaders, signal)
 }
 
 /**
@@ -441,15 +526,24 @@ export async function* streamTurnViaWebSocketLocked(
   codexBody: Record<string, unknown>,
   authHeaders: Record<string, string>,
   fullInputLength: number,
+  signal?: AbortSignal,
 ): AsyncGenerator<Record<string, unknown>> {
-  const releaseTurn = await acquireConversationTurn(conversationId)
+  const releaseTurn = await acquireConversationTurn(conversationId, signal)
   try {
-    await ensureWebSocketSession(conversationId, authHeaders)
+    if (signal?.aborted) {
+      throw createWebSocketAbortError(signal)
+    }
+    await ensureWebSocketSession(conversationId, authHeaders, signal)
+    if (signal?.aborted) {
+      closeSocketPreservingState(conversationId)
+      throw createWebSocketAbortError(signal)
+    }
     yield* streamTurnViaWebSocket(
       conversationId,
       codexBody,
       authHeaders,
       fullInputLength,
+      signal,
     )
   } finally {
     releaseTurn()
@@ -476,6 +570,28 @@ function responseItemsEqual(
   right: Record<string, unknown>,
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function findReplacedToolResult(
+  currentInput: Array<Record<string, unknown>>,
+  previousInput: Array<Record<string, unknown>>,
+): string | null {
+  for (let i = 0; i < previousInput.length; i++) {
+    const previous = previousInput[i]!
+    const current = currentInput[i]
+    if (
+      previous.type === 'function_call_output' &&
+      current?.type === 'function_call_output' &&
+      previous.call_id === current.call_id &&
+      !responseItemsEqual(
+        { output: previous.output },
+        { output: current.output },
+      )
+    ) {
+      return `tool_result_replaced index=${i} call_id=${String(previous.call_id ?? 'unknown')}`
+    }
+  }
+  return null
 }
 
 /**
@@ -554,11 +670,15 @@ function getIncrementalInputDelta(
  * Reconcile the freshly translated input[] against the canonical continuation
  * baseline using a hybrid strategy:
  *
- *   - previousInput portion  → trust by length only (these are the items we
+ *   - previousInput portion  → trust by length except for same-call tool-result
+ *     content replacement (these are otherwise the items we
  *     originally sent, which normalizeMessagesForAPI can structurally rewrite
  *     across turns via tool_reference injection, [id:...] tags, assistant-block
  *     merging, etc. — the drift is harmless to KV-cache continuity because the
- *     server already processed these items last turn)
+ *     server already processed these items last turn). Aggregate tool-result
+ *     budgeting and time-based microcompaction intentionally replace output
+ *     content in place; those semantic changes require a full send so the server
+ *     does not retain the unreduced context behind previous_response_id.
  *
    *   - previousOutputItems portion → verify by strict JSON equality, except
    *     that omitted reasoning items are tolerated. Reasoning is provider-managed
@@ -585,6 +705,11 @@ export function reconcileCanonicalDelta(
       delta: null,
       mismatchReason: `input shorter than canonical baseline: current=${currentInput.length} baseline=${minBaselineLength}`,
     }
+  }
+
+  const replacedToolResult = findReplacedToolResult(currentInput, previousInput)
+  if (replacedToolResult) {
+    return { delta: null, mismatchReason: replacedToolResult }
   }
 
   // Verify the output-items portion strictly, with one Codex-specific escape
@@ -736,6 +861,16 @@ export class CodexWebSocketClosedBeforeCompletedError extends Error {
   }
 }
 
+function createWebSocketAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason
+  if (reason instanceof Error) {
+    return reason
+  }
+  const error = new Error('The operation was aborted.')
+  error.name = 'AbortError'
+  return error
+}
+
 function isUsageLimitRejection(code: string, message: string): boolean {
   return (
     code.toLowerCase().includes('usage_limit') ||
@@ -763,6 +898,7 @@ export async function* streamTurnViaWebSocket(
   codexBody: Record<string, unknown>,
   authHeaders: Record<string, string>,
   fullInputLength: number,
+  signal?: AbortSignal,
 ): AsyncGenerator<Record<string, unknown>> {
   let retryingAfterStaleResponseId = false
   // Allow up to 2 retries:
@@ -771,12 +907,16 @@ export async function* streamTurnViaWebSocket(
   //   attempt 2 → after ConnectionLimitError: reconnect + full send
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      if (signal?.aborted) {
+        throw createWebSocketAbortError(signal)
+      }
       yield* _streamTurnAttempt(
         conversationId,
         codexBody,
         authHeaders,
         fullInputLength,
         retryingAfterStaleResponseId,
+        signal,
       )
       return
     } catch (err) {
@@ -807,8 +947,13 @@ async function* _streamTurnAttempt(
   authHeaders: Record<string, string>,
   fullInputLength: number,
   retryingAfterStaleResponseId?: boolean,
+  signal?: AbortSignal,
 ): AsyncGenerator<Record<string, unknown>> {
-  const session = await getOrOpenSession(conversationId, authHeaders)
+  const session = await getOrOpenSession(conversationId, authHeaders, signal)
+  if (signal?.aborted) {
+    closeSocketPreservingState(conversationId)
+    throw createWebSocketAbortError(signal)
+  }
 
   // Build request: wrap in response.create envelope, apply incremental fields.
   const requestBody: Record<string, unknown> = {
@@ -1008,7 +1153,11 @@ async function* _streamTurnAttempt(
         session.lastRequestInput = []
         session.lastResponseOutputItems = []
       }
-      enqueue({ error: new Error(`Codex WS error: ${msg}`) })
+      // A terminal server error ends this physical stream. onMessage has no
+      // response-id correlation, so late events from the rejected turn must not
+      // be allowed onto a socket reused by the next turn. The reset baseline
+      // above remains reset across the reconnect, making that next turn full-send.
+      failStream(new Error(`Codex WS error: ${msg}`), { closeSocket: true })
       return
     }
 
@@ -1084,6 +1233,10 @@ async function* _streamTurnAttempt(
     })
   }
 
+  const onAbort = () => {
+    failStream(createWebSocketAbortError(signal!), { closeSocket: true })
+  }
+
   const onClose = (code?: number, reason?: Buffer) => {
     const closeCode = typeof code === 'number' ? code : undefined
     const rawReason = reason?.toString('utf8') ?? ''
@@ -1145,8 +1298,19 @@ async function* _streamTurnAttempt(
   // Send the request.
   const sendTs = Date.now()
   let firstEventTs: number | null = null
+  if (signal?.aborted) {
+    session.ws.off('message', onMessage)
+    session.ws.off('error', onError)
+    session.ws.off('close', onClose)
+    closeSocketPreservingState(conversationId)
+    throw createWebSocketAbortError(signal)
+  }
   try {
     session.ws.send(JSON.stringify(requestBody))
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+    }
     resetIdle()
   } catch (err) {
     session.ws.off('message', onMessage)
@@ -1272,6 +1436,7 @@ async function* _streamTurnAttempt(
       await waitForItem()
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort)
     session.ws.off('message', onMessage)
     session.ws.off('error', onError)
     session.ws.off('close', onClose)

@@ -8,6 +8,7 @@ import {
   clearWebSocketSession,
   closeSocketPreservingState,
   ensureWebSocketSession,
+  reconcileCanonicalDelta,
   registerSendPathLogger,
   streamTurnViaWebSocket,
   streamTurnViaWebSocketLocked,
@@ -646,6 +647,81 @@ describe('streamTurnViaWebSocket', () => {
     expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
   })
 
+  test('canonical reconciliation: full-sends when tool-result content was replaced in place', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const callId = 'call_large_result'
+    const turn1Input = [
+      { role: 'user', content: 'fetch it' },
+      { type: 'function_call', call_id: callId, name: 'WebFetch', arguments: '{}' },
+      { type: 'function_call_output', call_id: callId, output: 'original large result' },
+    ]
+    fakeWs.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn1Input },
+        AUTH,
+        turn1Input.length,
+      ),
+    )
+
+    const turn2Input = [
+      { role: 'user', content: 'fetch it' },
+      { type: 'function_call', call_id: callId, name: 'WebFetch', arguments: '{}' },
+      {
+        type: 'function_call_output',
+        call_id: callId,
+        output: '[Old tool result content cleared]',
+      },
+      { role: 'user', content: 'continue' },
+    ]
+    fakeWs.responses = [completedEvent('resp_002')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: turn2Input },
+        AUTH,
+        turn2Input.length,
+      ),
+    )
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBeUndefined()
+    expect(sent[1]!.input).toEqual(turn2Input)
+  })
+
+  test('canonical reconciliation: compares multimodal tool outputs structurally', () => {
+    const previousInput = [{
+      type: 'function_call_output',
+      call_id: 'call_image',
+      output: [
+        { type: 'input_text', text: 'same' },
+        { type: 'input_image', image_url: 'data:image/png;base64,abc' },
+      ],
+    }]
+    const unchangedInput = [
+      JSON.parse(JSON.stringify(previousInput[0]!)) as Record<string, unknown>,
+      { role: 'user', content: 'continue' },
+    ]
+
+    expect(
+      reconcileCanonicalDelta(unchangedInput, previousInput, []),
+    ).toEqual({
+      delta: [{ role: 'user', content: 'continue' }],
+      mismatchReason: null,
+    })
+
+    const changedInput = JSON.parse(JSON.stringify(unchangedInput)) as Array<Record<string, unknown>>
+    const changedOutput = changedInput[0]!.output as Array<Record<string, unknown>>
+    changedOutput[0]!.text = 'changed'
+    expect(
+      reconcileCanonicalDelta(changedInput, previousInput, []),
+    ).toMatchObject({ delta: null })
+  })
+
   test('canonical reconciliation: falls back to full send when input is shorter than canonical baseline', async () => {
     // Canonical baseline = 1 sent input + 1 output item = 2 items.
     // If next turn's input only has 1 item total (shorter than baseline), must full-send.
@@ -1148,13 +1224,12 @@ describe('streamTurnViaWebSocket', () => {
   // Rule 2b: a chained-request server error that is NOT 'not found' must still
   // reset the baseline, so the next send is a clean full send rather than a
   // poisoned incremental that would loop through sticky HTTP fallback forever.
-  test('non-"not found" server error resets the baseline (rule 2b)', async () => {
-    installFakeWs()
+  test('non-"not found" server error closes the socket and resets the baseline (rule 2b)', async () => {
+    const sessionsList = installMultiFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
-    const defaultSend = fakeWs.send.bind(fakeWs)
 
     // Turn 1 records a baseline.
-    fakeWs.responses = [completedEvent('resp_001')]
+    sessionsList[0]!.responses = [completedEvent('resp_001')]
     await collectEvents(
       streamTurnViaWebSocket(
         CONV_ID,
@@ -1165,10 +1240,10 @@ describe('streamTurnViaWebSocket', () => {
     )
 
     // Turn 2: server rejects the chained request with a generic (non-TTL) error.
-    fakeWs.send = (data: string) => {
-      fakeWs['sent'].push(data)
+    sessionsList[0]!.send = (data: string) => {
+      sessionsList[0]!['sent'].push(data)
       Promise.resolve().then(() =>
-        fakeWs.deliverError({ code: 'server_error', message: 'internal error' }),
+        sessionsList[0]!.deliverError({ code: 'server_error', message: 'internal error' }),
       )
     }
     const err = await collectEvents(
@@ -1186,11 +1261,14 @@ describe('streamTurnViaWebSocket', () => {
       ),
     ).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toBe('Codex WS error: internal error')
+    expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.CLOSED)
 
-    // Baseline reset: the socket is still open (a bare server error doesn't close
-    // it), so the next turn sends a FULL request with no previous_response_id.
-    fakeWs.send = defaultSend
-    fakeWs.responses = [completedEvent('resp_003')]
+    // The next turn reconnects on a fresh physical socket. The baseline reset
+    // survives that reconnect, so this is a FULL request with no response anchor.
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    expect(sessionsList).toHaveLength(2)
+    sessionsList[1]!.responses = [completedEvent('resp_003')]
     await collectEvents(
       streamTurnViaWebSocket(
         CONV_ID,
@@ -1205,13 +1283,105 @@ describe('streamTurnViaWebSocket', () => {
         2,
       ),
     )
-    const sent = fakeWs.getSent()
-    const lastSend = sent[sent.length - 1]!
+    const lastSend = sessionsList[1]!.getSent()[0]!
     expect(lastSend.previous_response_id).toBeUndefined()
     expect(lastSend.input).toEqual([
       { role: 'user', content: 'first' },
       { role: 'user', content: 'second' },
     ])
+  })
+
+  test('request abort closes the socket and releases the conversation turn lock', async () => {
+    const sessionsList = installMultiFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    sessionsList[0]!.send = (data: string) => {
+      sessionsList[0]!['sent'].push(data)
+      Promise.resolve().then(() =>
+        sessionsList[0]!.deliver({ type: 'response.created' }),
+      )
+    }
+
+    const abortController = new AbortController()
+    const turn = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+      AUTH,
+      1,
+      abortController.signal,
+    )
+    await turn.next()
+    const pending = turn.next()
+    abortController.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.CLOSED)
+
+    // A fresh turn can acquire the same conversation lock immediately.
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    sessionsList[1]!.responses = [completedEvent('resp_after_abort')]
+    await collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'second' }] },
+        AUTH,
+        1,
+      ),
+    )
+    expect(sessionsList[1]!.getSent()).toHaveLength(1)
+  })
+
+  test('queued request aborts without waiting for the active conversation turn', async () => {
+    const sessionsList = installMultiFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    sessionsList[0]!.send = (data: string) => {
+      sessionsList[0]!['sent'].push(data)
+      Promise.resolve().then(() =>
+        sessionsList[0]!.deliver({ type: 'response.created' }),
+      )
+    }
+
+    const active = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'active' }] },
+      AUTH,
+      1,
+    )
+    await active.next()
+
+    const abortController = new AbortController()
+    const queued = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'queued' }] },
+      AUTH,
+      1,
+      abortController.signal,
+    )
+    const pending = queued.next()
+    abortController.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.OPEN)
+    await active.return(undefined)
+  })
+
+  test('request abort interrupts websocket connection setup', async () => {
+    const socket = installFakeWs(false)
+    const abortController = new AbortController()
+    const pending = collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'cold start' }] },
+        AUTH,
+        1,
+        abortController.signal,
+      ),
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    abortController.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(socket.readyState).toBe(FakeWebSocket.CLOSED)
   })
 
   // Rule 5: an aborted turn (consumer abandons iteration) leaves the socket open

@@ -241,6 +241,26 @@ describe('canonicalizeCodexItem: function_call tool-input normalization', () => 
     const canonical = canonicalizeCodexItem(rawServerItem)
     expect(canonical.arguments).toBe('{"city":"Paris"}')
   })
+
+  test('malformed and null arguments use the same conservative empty-object replay', () => {
+    for (const rawArguments of ['not-json', 'null', '', '0', 'false', '""']) {
+      const callId = `call_bad_${rawArguments.length}`
+      const canonical = canonicalizeCodexItem({
+        type: 'function_call',
+        call_id: callId,
+        name: 'mcp__example__tool',
+        arguments: rawArguments,
+      })
+      const replayed = replayToolCallItem(
+        callId,
+        'mcp__example__tool',
+        {},
+      )
+
+      expect(canonical.arguments).toBe('{}')
+      expect(JSON.stringify(canonical)).toBe(JSON.stringify(replayed))
+    }
+  })
 })
 
 describe('canonicalizeCodexItem: Apply_patch custom_tool_call round-trip', () => {
@@ -276,12 +296,13 @@ describe('canonicalizeCodexItem: Apply_patch custom_tool_call round-trip', () =>
       type: 'custom_tool_call',
       call_id: callId,
       name: 'Apply_patch',
-      input: JSON.stringify({ ops }),
+      input: JSON.stringify({ ops }, null, 2),
     }
     const canonical = canonicalizeCodexItem(rawServerItem)
 
     const replayed = replayToolCallItem(callId, 'Apply_patch', { ops })
     expect(replayed.type).toBe('custom_tool_call')
+    expect(canonical.input).toBe(JSON.stringify({ ops }))
     expect(JSON.stringify(canonical)).toBe(JSON.stringify(replayed))
   })
 })

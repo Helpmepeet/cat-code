@@ -67,6 +67,7 @@ import {
 import { getOrCreateUserID } from '../../utils/config.js'
 import {
   CAPPED_DEFAULT_MAX_TOKENS,
+  getContextWindowForModel,
   getModelMaxOutputTokens,
   getSonnet1mExpTreatmentEnabled,
 } from '../../utils/context.js'
@@ -92,6 +93,7 @@ import {
   getSmallFastModelForProvider,
   isNonCustomOpusModel,
 } from '../../utils/model/model.js'
+import { recordRunFacts } from '../../utils/sessionStorage.js'
 import {
   asSystemPrompt,
   type SystemPrompt,
@@ -114,6 +116,21 @@ import {
 // The SDK's 21333-token cap is derived from 10min × 128k tokens/hour, but we
 // bypass it by setting a client-level timeout, so we can cap higher.
 export const MAX_NON_STREAMING_TOKENS = 64_000
+
+function isCodexPartialStreamReplaySkippedError(error: unknown): boolean {
+  let current = error
+  const seen = new Set<unknown>()
+
+  while (current instanceof Error && !seen.has(current)) {
+    if (current.name === 'CodexPartialStreamReplaySkippedError') {
+      return true
+    }
+    seen.add(current)
+    current = current.cause
+  }
+
+  return false
+}
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER')
@@ -1911,6 +1928,30 @@ async function* queryModel(
         fastMode: isFastMode,
         previousRequestId,
       })
+      // Same resolved request as the log line above, which is the point: these
+      // four facts are only coherent when captured together (`recordRunFacts`).
+      // Main-conversation turns only. A subagent or compaction request runs its
+      // own model and effort against the SAME transcript, so recording it would
+      // stamp the session's snapshot with a run the user never chose — the very
+      // cross-turn mixing this record exists to prevent.
+      //
+      // BOTH sources are the main conversation: the TUI supplies
+      // `repl_main_thread…` (`getQuerySourceForREPL`), while QueryEngine — which
+      // is what the desktop app and the SDK run on — supplies `sdk`
+      // (`QueryEngine.ts:468`). Matching only the former silently excluded the
+      // desktop app, the surface this record exists for.
+      if (
+        !options.agentId &&
+        (options.querySource === 'sdk' ||
+          options.querySource?.startsWith('repl_main_thread'))
+      ) {
+        recordRunFacts({
+          model: options.model,
+          permissionMode: permissionContext.mode,
+          effort: logEffortValue === undefined ? null : String(logEffortValue),
+          contextWindow: getContextWindowForModel(options.model, logBetas),
+        })
+      }
     })
   }
 
@@ -2674,6 +2715,14 @@ async function* queryModel(
           // Throw a more specific error for timeout
           throw new APIConnectionTimeoutError({ message: 'Request timed out' })
         }
+      }
+
+      // The Codex adapter uses this error to signal that visible output has
+      // already escaped and replaying the turn could duplicate text or execute
+      // a surfaced tool call twice. This safety decision must survive the outer
+      // provider-agnostic streaming fallback.
+      if (isCodexPartialStreamReplaySkippedError(streamingError)) {
+        throw streamingError
       }
 
       // When the flag is enabled, skip the non-streaming fallback and let the
