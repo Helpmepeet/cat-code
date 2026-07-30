@@ -60,7 +60,11 @@ import type { SettingSource } from './settings/constants.js'
 import { jsonStringify } from './slowOperations.js'
 import { buildEffectiveSystemPrompt } from './systemPrompt.js'
 import type { Theme } from './theme.js'
-import { getCurrentUsage, getFreshInputTokens } from './tokens.js'
+import {
+  doesMostRecentAssistantMessageExceed200k,
+  getCurrentUsage,
+  getFreshInputTokens,
+} from './tokens.js'
 
 const RESERVED_CATEGORY_NAME = 'Autocompact buffer'
 const MANUAL_COMPACT_BUFFER_NAME = 'Compact buffer'
@@ -931,6 +935,9 @@ export async function analyzeContextUsage(
   const runtimeModel = getRuntimeMainLoopModel({
     permissionMode: toolPermissionContext.mode,
     mainLoopModel: model,
+    exceeds200kTokens:
+      toolPermissionContext.mode === 'plan' &&
+      doesMostRecentAssistantMessageExceed200k(messages),
   })
   // Get context window size
   const contextWindow = getContextWindowForModel(runtimeModel, getSdkBetas())
