@@ -984,15 +984,15 @@ export async function computeSimpleEnvInfo(
   ].join(`\n`)
 }
 
-// @[MODEL LAUNCH]: Add a knowledge cutoff date for the new model.
+// @[MODEL LAUNCH]: Add the official reliable knowledge cutoff date for the new model.
 function getKnowledgeCutoff(modelId: string): string | null {
   const canonical = getCanonicalName(modelId)
   if (canonical.includes('claude-fable-5')) {
-    return 'May 2026'
+    return 'January 2026'
   } else if (canonical.includes('claude-opus-5')) {
     return 'May 2026'
   } else if (canonical.includes('claude-sonnet-5')) {
-    return 'March 2026'
+    return 'January 2026'
   } else if (canonical.includes('claude-sonnet-4-6')) {
     return 'August 2025'
   } else if (canonical.includes('claude-opus-4-6')) {
