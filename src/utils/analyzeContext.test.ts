@@ -12,3 +12,14 @@ test('/context measures the Agent Mode prompt assembled for that runtime model',
   expect(source).toContain('getAgentModeSystemPromptSections(\n          tools,\n          runtimeModel,')
   expect(source).toContain('agentModePromptSections,')
 })
+
+test('/context builds the prompt with the same working directories and MCP clients a turn passes', () => {
+  // A partial-args build measures a prompt the session will never send, and
+  // before the section cache was keyed it also poisoned the first real turn.
+  expect(source).toMatch(
+    /const additionalWorkingDirectories = Array\.from\(\s*toolPermissionContext\.additionalWorkingDirectories\.keys\(\),?\s*\)/,
+  )
+  expect(source).toMatch(
+    /getSystemPrompt\(\s*tools,\s*runtimeModel,\s*additionalWorkingDirectories,\s*toolUseContext\?\.options\.mcpClients,?\s*\)/,
+  )
+})
