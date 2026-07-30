@@ -599,8 +599,9 @@ export async function getAgentModeSystemPromptSections(
       { model, additionalWorkingDirectories },
       () => computeSimpleEnvInfo(model, additionalWorkingDirectories),
     ),
-    // Not keyed on settings.language: language is read once per session by
-    // contract. See the matching comment in getSystemPrompt.
+    // Not keyed on settings.language: language is read once per session and a
+    // change takes effect on the next /clear, /compact, or restart. The full
+    // contract is stated at the matching registration in getSystemPrompt.
     systemPromptSection('language', NO_SECTION_INPUTS, () =>
       getLanguageSection(settings.language),
     ),
@@ -777,11 +778,18 @@ ${CYBER_RISK_INSTRUCTION}`,
       { model, additionalWorkingDirectories },
       () => computeSimpleEnvInfo(model, additionalWorkingDirectories),
     ),
-    // Deliberately NOT keyed on settings.language. A language change applies to
-    // the next session, not this one: the picker writes the setting immediately
-    // (components/Settings/Config.tsx), but the prompt keeps the value read at
-    // the first build until /clear, /compact, or restart. Keying on it here
-    // would silently turn that contract into a live mid-session switch.
+    // CONTRACT: language is read once per session. The picker writes the
+    // setting immediately (components/LanguagePicker.tsx, applied at
+    // components/Settings/Config.tsx), but this section keeps the value read at
+    // the first prompt build, so a change takes effect on the next /clear,
+    // /compact, or restart. Those are exactly the paths that call
+    // clearSystemPromptSections() (/clear reaches it through
+    // clearSessionCaches -> runPostCompactCleanup).
+    //
+    // That is why NO_SECTION_INPUTS is deliberate here rather than an omission:
+    // keying on settings.language would make the change apply mid-session and
+    // silently replace the contract. Change the contract on purpose, or not at
+    // all.
     systemPromptSection('language', NO_SECTION_INPUTS, () =>
       getLanguageSection(settings.language),
     ),
