@@ -288,7 +288,19 @@ export function resolveAgentTools(
       // fall through to normal resolution below.
     }
 
-    const tool = availableToolMap.get(toolName)
+    // The two file-edit aliases are one capability under two provider names, so
+    // a definition that asks for either gets whichever one this pool carries.
+    // Without this, an agent whose `tools` list says Edit resolves to nothing on
+    // the OpenAI path and silently loses the ability to edit at all — the same
+    // defect the async allowlist had, one layer down.
+    const aliasSibling = PROVIDER_FILE_EDIT_TOOL_ALIASES.includes(
+      toolName as (typeof PROVIDER_FILE_EDIT_TOOL_ALIASES)[number],
+    )
+      ? PROVIDER_FILE_EDIT_TOOL_ALIASES.find(name => name !== toolName)
+      : undefined
+    const tool =
+      availableToolMap.get(toolName) ??
+      (aliasSibling ? availableToolMap.get(aliasSibling) : undefined)
     if (tool) {
       validTools.push(toolSpec)
       if (!resolvedToolsSet.has(tool)) {

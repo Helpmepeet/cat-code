@@ -6,6 +6,7 @@ import {
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import {
   getCyberPolicyInstruction,
+  HOOK_AUTHORITY_RULE,
   INSTRUCTION_AUTHORITY_LIMIT,
   OUTCOME_REPORTING_RULE,
   PROMPT_INJECTION_RULE,
@@ -101,17 +102,25 @@ describe('policy core coverage across provider and mode variants', () => {
   )
 
   test.each(VARIANTS.map(v => [v.label, v.build] as const))(
-    '%s states each core rule once, so no two owners can drift',
+    '%s states each core rule at most once, so no two owners can drift',
     async (_label, build) => {
       const prompt = await withPromptEnv(async () => (await build()).join('\n'))
 
+      // Every rule the module owns, not a sample of them. RETRY_RULE is the
+      // one rule that is legitimately absent from a variant (Agent Mode runs
+      // the orchestrator's tighter budget), so the assertion is "never twice"
+      // and the presence matrix is the test above.
       for (const rule of [
+        getCyberPolicyInstruction(),
         TOOL_OUTPUT_IS_DATA_RULE,
         RUNTIME_METADATA_RULE,
+        PROMPT_INJECTION_RULE,
+        HOOK_AUTHORITY_RULE,
         INSTRUCTION_AUTHORITY_LIMIT,
         OUTCOME_REPORTING_RULE,
+        RETRY_RULE,
       ]) {
-        expect(prompt.split(rule).length - 1).toBe(1)
+        expect(prompt.split(rule).length - 1).toBeLessThanOrEqual(1)
       }
     },
   )
@@ -161,6 +170,31 @@ describe('policy core coverage across provider and mode variants', () => {
     expect(prompt).toContain(
       'does not by itself authorize a destructive or shared-state action',
     )
+  })
+
+  test('the default assembly keeps the policy core when Agent Mode is on', async () => {
+    // getSystemPrompt has its own in-session Agent Mode branch, separate from
+    // getAgentModeSystemPromptSections. systemPrompt.ts prefers the dedicated
+    // assembly, so this array is usually discarded, but it is built every turn
+    // and is what /context accounts for. It used to null both doing-tasks and
+    // actions without adding the core, leaving it with no consent rule, no
+    // instruction-authority rule, and no outcome reporting.
+    const saved = process.env.CLAUDE_CODE_AGENT_MODE
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+
+    try {
+      const prompt = await withPromptEnv(async () =>
+        (await getSystemPrompt(TOOLS, CLAUDE_MODEL)).join('\n'),
+      )
+
+      expect(prompt).toContain(getCyberPolicyInstruction())
+      expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
+      expect(prompt).toContain(OUTCOME_REPORTING_RULE)
+      expect(prompt).toContain('# Executing actions with care')
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CODE_AGENT_MODE
+      else process.env.CLAUDE_CODE_AGENT_MODE = saved
+    }
   })
 
   test('the proactive assembly selects the policy core and an actions section', () => {

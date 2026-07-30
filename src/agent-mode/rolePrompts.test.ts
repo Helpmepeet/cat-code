@@ -32,10 +32,13 @@ describe('Agent Mode role prompts', () => {
     expect(promptSource).toContain('especially when prompt, session-state, worker-control, or orchestration behavior changed')
   })
 
-  test('coding worker prompt names the edit tool its provider actually has', async () => {
+  test('coding worker prompt names the edit tool the worker pool actually carries', async () => {
     // Dynamic import after the tool graph is warm — see the note above.
     await import('../tools.js')
     const { AGENT_MODE_CODING_WORKER } = await import('./rolePrompts.js')
+    const { setSessionProvider, resetStateForTests } = await import(
+      '../bootstrap/state.js'
+    )
     const promptFor = (model: string, provider: string) =>
       AGENT_MODE_CODING_WORKER.getSystemPrompt({
         toolUseContext: {
@@ -43,13 +46,27 @@ describe('Agent Mode role prompts', () => {
         },
       } as never)
 
-    const openai = promptFor('gpt-5.6-terra', 'openai')
-    expect(openai).toContain('Use Apply_patch and Write for code changes.')
-    expect(openai).not.toContain('Use Edit and Write')
+    try {
+      // The worker's pool comes from getProviderFileEditTool(), which reads the
+      // SESSION provider — so that is what decides the tool name, even when the
+      // request provider (which selects the prose variant) differs.
+      setSessionProvider('openai')
+      expect(promptFor('gpt-5.6-terra', 'openai')).toContain(
+        'Use Apply_patch and Write for code changes.',
+      )
+      // Request routed to OpenAI by model string, session still Anthropic: the
+      // pool holds Edit, so the prompt must say Edit even in the GPT variant.
+      setSessionProvider('firstParty')
+      const mixed = promptFor('gpt-5.6-terra', 'openai')
+      expect(mixed).toContain('Use Edit and Write for code changes.')
+      expect(mixed).not.toContain('Apply_patch')
 
-    const anthropic = promptFor('claude-opus-4-1', 'firstParty')
-    expect(anthropic).toContain('Use Edit and Write for code changes.')
-    expect(anthropic).not.toContain('Apply_patch')
+      expect(promptFor('claude-opus-4-1', 'firstParty')).toContain(
+        'Use Edit and Write for code changes.',
+      )
+    } finally {
+      resetStateForTests()
+    }
   })
 
   test('coding worker prompt only offers nested delegation where the build allows it', async () => {

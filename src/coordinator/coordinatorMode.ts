@@ -118,7 +118,7 @@ export function getCoordinatorUserContext(
 export function getCoordinatorSystemPrompt(): string {
   const workerCapabilities = isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
     ? `Workers have access to ${BASH_TOOL_NAME}, ${FILE_READ_TOOL_NAME}, and ${getAsyncAgentFileEditTool()} tools, plus MCP tools from configured MCP servers.`
-    : `Workers have access to standard tools and MCP tools from configured MCP servers. They do not have the ${SKILL_TOOL_NAME} tool, so do not ask a worker to run a skill: put the steps in the prompt instead.`
+    : `Workers have access to standard tools and MCP tools from configured MCP servers. They do not have the ${SKILL_TOOL_NAME} tool unless their own agent definition grants it, so do not ask a worker to run a skill: put the steps in the prompt instead.`
 
   return `You are Cat Code, an AI assistant that orchestrates software engineering tasks across multiple workers.
 

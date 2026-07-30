@@ -20,7 +20,10 @@ import { FILE_PATCH_TOOL_NAME } from 'src/tools/FilePatchTool/constants.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from 'src/tools/ExitPlanModeTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from 'src/tools/NotebookEditTool/constants.js'
 import { CLAUDE_CLI_TOOL_NAME } from 'src/tools/ClaudeCliTool/constants.js'
-import { ALL_AGENT_DISALLOWED_TOOLS } from 'src/constants/tools.js'
+import {
+  ALL_AGENT_DISALLOWED_TOOLS,
+  getAsyncAgentFileEditTool,
+} from 'src/constants/tools.js'
 
 // ---------------------------------------------------------------------------
 // Coding Worker (V2)
@@ -30,11 +33,12 @@ const SYNTHETIC_OUTPUT_TOOL_NAME = 'StructuredOutput'
 
 function getCodingWorkerSystemPrompt(provider: APIProvider): string {
   const embedded = hasEmbeddedSearchTools()
-  // The pool carries exactly one file-edit tool per provider
-  // (getProviderFileEditTool, src/tools.ts). Name the one this worker will
-  // actually have, or the prompt sends it to a tool that does not exist.
-  const editToolName =
-    provider === 'openai' ? FILE_PATCH_TOOL_NAME : FILE_EDIT_TOOL_NAME
+  // The pool carries exactly one file-edit tool per provider, and it is built
+  // from the SESSION provider (getProviderFileEditTool, src/tools.ts). Ask the
+  // same resolver the pool uses rather than re-deriving from `provider`, which
+  // comes from the request model and can disagree — naming the wrong alias
+  // sends the worker to a tool it does not have.
+  const editToolName = getAsyncAgentFileEditTool()
   // Workers only receive Agent where nested delegation is permitted;
   // ALL_AGENT_DISALLOWED_TOOLS strips it in every other build, so the prompt
   // must not promise a capability the worker does not have.

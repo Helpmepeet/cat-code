@@ -415,3 +415,59 @@ describe('formatForkWorkerResultForNotification provider branches', () => {
     expect(formatted).toContain('add a regression test')
   })
 })
+
+describe('resolveAgentTools edit-alias resolution for explicit tool lists', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  afterEach(() => {
+    resetStateForTests()
+  })
+
+  // A definition names one alias; the pool carries the other. Asking for Edit on
+  // an OpenAI pool used to resolve to nothing, leaving the worker unable to edit
+  // while its own definition said it could.
+  test.each([
+    ['openai', FILE_PATCH_TOOL_NAME],
+    ['firstParty', FILE_EDIT_TOOL_NAME],
+  ] as const)(
+    'resolves either alias to the one the %s pool carries',
+    (provider, expected) => {
+      setSessionProvider(provider)
+
+      for (const requested of [FILE_EDIT_TOOL_NAME, FILE_PATCH_TOOL_NAME]) {
+        const resolved = resolveAgentTools(
+          {
+            tools: ['Read', requested],
+            disallowedTools: [],
+            source: 'built-in',
+            permissionMode: 'default',
+          },
+          getTools(getEmptyToolPermissionContext()),
+          true,
+        )
+
+        expect(fileEditToolsIn(resolved.resolvedTools.map(t => t.name))).toEqual([
+          expected,
+        ])
+        expect(resolved.invalidTools).toEqual([])
+      }
+    },
+  )
+
+  test('still reports a genuinely unknown tool as invalid', () => {
+    const resolved = resolveAgentTools(
+      {
+        tools: ['Read', 'NoSuchTool'],
+        disallowedTools: [],
+        source: 'built-in',
+        permissionMode: 'default',
+      },
+      getTools(getEmptyToolPermissionContext()),
+      true,
+    )
+
+    expect(resolved.invalidTools).toEqual(['NoSuchTool'])
+  })
+})

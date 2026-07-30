@@ -882,13 +882,22 @@ export async function getSystemPrompt(
     // --- Static content (cacheable) ---
     gpt ? getGPTIntroSection(outputStyleConfig) : getSimpleIntroSection(outputStyleConfig),
     gpt ? getGPTSystemSection() : getSimpleSystemSection(),
+    // Agent Mode drops doing-tasks here, which is where outcome reporting
+    // lives, so this branch needs the same core section the dedicated Agent
+    // Mode assembly gets. Both arrays are built when Agent Mode is on and
+    // only one is emitted (systemPrompt.ts prefers the dedicated one), but
+    // this one is what /context accounts for and what any caller that omits
+    // agentModePromptSections would send.
+    isAgentMode ? getCorePolicySection() : null,
     isAgentMode
       ? null
       : outputStyleConfig === null ||
           outputStyleConfig.keepCodingInstructions === true
         ? gpt ? getGPTDoingTasksSection(enabledTools) : getSimpleDoingTasksSection()
         : null,
-    isAgentMode ? null : gpt ? getGPTActionsSection() : getActionsSection(),
+    // Risky-action consent is invariant across modes, so Agent Mode keeps the
+    // actions section rather than nulling it.
+    gpt ? getGPTActionsSection() : getActionsSection(),
     isAgentMode
       ? gpt
         ? getGPTAgentModeUsingToolsSection(enabledTools)

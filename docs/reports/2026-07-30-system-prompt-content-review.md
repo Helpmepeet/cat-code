@@ -549,7 +549,9 @@ that both prompt styles interpolate: `getCyberPolicyInstruction()`,
 and `getCorePolicySection()`. `src/constants/cyberRiskInstruction.ts` was not
 edited: it stays the empty Safeguards-owned constant, and the resolver prefers
 it whenever it is populated. Each rule has exactly one container per assembled
-prompt, asserted by test rather than by convention:
+prompt. A test asserts no rule appears twice in any assembled variant, and the
+presence matrix is asserted per variant; the proactive column is closed by source
+reading, because its feature gate is off under `bun test`:
 
 | Rule | Default Claude / GPT | Agent Mode | Proactive |
 |---|---|---|---|
@@ -646,12 +648,13 @@ Run against the final source, on the combined change:
 bun test src/constants/ src/agent-mode/ src/coordinator/ src/tools/AgentTool/ \
   src/utils/claudemd.test.ts src/utils/queryContext.test.ts \
   src/utils/providerPromptRegressions.test.ts src/utils/swarm/ \
-  src/screens/REPL.systemPrompt.test.ts src/utils/analyzeContext.test.ts
-  → 234 pass, 0 fail, 24 files
+  src/screens/REPL.systemPrompt.test.ts src/utils/analyzeContext.test.ts \
+  src/contracts/
+  → 240 pass, 0 fail, 24 files
 
 bun run build:dev:full
   → 0 errors (287 pre-existing lint warnings), bundle 5820 modules,
-    Built ./cli-dev, 2.1.87-dev.20260730.t111607.sha54445772
+    Built ./cli-dev, 2.1.87-dev.20260730.t163129.shabf7beca9
 
 git diff --check   → clean
 bun run maps:lint  → passed: 18 map(s), 8 pre-existing warning(s)
@@ -698,9 +701,20 @@ needs the tool or a worker role must grant it. That is a product decision, not
 a defect introduced here, and `feature('COORDINATOR_MODE')` is absent from the
 dev-full list, so the mode is not compiled in repo builds.
 
-Found in passing and deliberately left alone: `agentToolUtils.ts` calls
-`serializeForkWorkerResultForOpenAI`, which is defined and imported nowhere.
-Pre-existing at `5444577` and unrelated to this work.
+Fixed in passing: `agentToolUtils.ts` called `serializeForkWorkerResultForOpenAI`
+without importing it, so the OpenAI branch of `formatForkWorkerResultForNotification`
+threw `ReferenceError`. The function exists (`src/contracts/orchestration.ts:218`)
+and `src/utils/teammateMessage.ts` already imported it correctly, so the fix was
+the missing import plus tests for both provider branches. Not reachable in repo
+builds: every caller sits behind `isForkSubagentEnabled()`, and `FORK_SUBAGENT`
+appears in no build config.
+
+Known limits of the least-privilege work, found in review and left as they are:
+`EXPLORE_AGENT` still carries `Bash`, so "Explore is read-only" is true of file
+edits but not of command execution. That is pre-existing and changing it would
+alter how Explore searches in embedded-search builds, so it needs an owner
+decision rather than a drive-by change. The proactive assembly still states no
+retry budget.
 
 Two branches could not be exercised by test because `feature()` resolves false
 under `bun test`: the proactive assembly (`PROACTIVE`/`KAIROS`, also absent from
