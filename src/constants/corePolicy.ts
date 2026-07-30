@@ -25,7 +25,10 @@ import { CYBER_RISK_INSTRUCTION } from './cyberRiskInstruction.js'
 const CAT_CODE_CYBER_POLICY_BASELINE = `Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools require clear authorization context.`
 
 export function getCyberPolicyInstruction(): string {
-  return CYBER_RISK_INSTRUCTION || CAT_CODE_CYBER_POLICY_BASELINE
+  // Trim before testing: a constant populated with only whitespace would pass a
+  // bare truthiness check and silently serve nothing, which is the exact
+  // failure this resolver exists to prevent.
+  return CYBER_RISK_INSTRUCTION.trim() || CAT_CODE_CYBER_POLICY_BASELINE
 }
 
 /**
@@ -66,16 +69,30 @@ export const OUTCOME_REPORTING_RULE = `Report outcomes faithfully. If tests or c
 export const RETRY_RULE = `If an approach fails, diagnose why before switching tactics: read the error, check your assumptions, try a focused fix. Each retry must use a materially different strategy, not a minor variation of the attempt that just failed. After three failed attempts on the same problem, stop and either report the blocker or re-plan — do not keep looping. If requirements or tests appear contradictory or impossible, say so directly instead of forcing a pass. Do not modify tests, hardcode expected outputs, or violate task intent to get a passing result unless the user explicitly asks for that tradeoff.`
 
 /**
- * The invariants that the lean assemblies would otherwise lose. Agent Mode and
- * proactive replace the default prompt wholesale, so they get neither intro
- * (cyber policy) nor doing-tasks (outcome reporting). They DO include the
- * provider system and actions sections, which own provenance and
- * authority/consent, so this section deliberately does not restate those.
+ * The invariants an assembly would otherwise lose, for the assemblies that drop
+ * the section normally carrying them. Both flags exist because "which container
+ * is missing" differs per caller, and stating a rule twice in one prompt is the
+ * drift this module exists to prevent:
+ *
+ * - `cyberPolicy`: off when the intro section is present, since it carries the
+ *   policy already. On for assemblies that have no intro at all.
+ * - `retryRule`: on only when doing-tasks was dropped for a reason unrelated to
+ *   the retry budget (an output style). Agent Mode omits it deliberately, since
+ *   the orchestrator runs a tighter two-repair budget.
+ *
+ * Provenance and authority/consent are never restated here: every caller also
+ * includes the provider system and actions sections, which own them.
  */
-export function getCorePolicySection(): string {
-  return `# Core policy
-
-${getCyberPolicyInstruction()}
-
-${OUTCOME_REPORTING_RULE}`
+export function getCorePolicySection({
+  cyberPolicy = true,
+  retryRule = false,
+}: { cyberPolicy?: boolean; retryRule?: boolean } = {}): string {
+  return [
+    '# Core policy',
+    cyberPolicy ? getCyberPolicyInstruction() : null,
+    OUTCOME_REPORTING_RULE,
+    retryRule ? RETRY_RULE : null,
+  ]
+    .filter(part => part !== null)
+    .join('\n\n')
 }

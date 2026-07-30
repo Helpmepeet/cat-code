@@ -878,23 +878,34 @@ export async function getSystemPrompt(
     durationMs: Date.now() - startTime
   })
 
+  // Doing-tasks is the only container for truthful outcome reporting and the
+  // retry budget, and TWO independent things drop it: Agent Mode, and an output
+  // style that turns coding instructions off. Outcome reporting is an invariant
+  // (owner decision 2026-07-30), so whenever this section is absent the core
+  // section stands in. The intro is always present here and already carries the
+  // cyber policy, so the fallback must not restate it.
+  const hasDoingTasksSection =
+    !isAgentMode &&
+    (outputStyleConfig === null ||
+      outputStyleConfig.keepCodingInstructions === true)
+
   return [
     // --- Static content (cacheable) ---
     gpt ? getGPTIntroSection(outputStyleConfig) : getSimpleIntroSection(outputStyleConfig),
     gpt ? getGPTSystemSection() : getSimpleSystemSection(),
-    // Agent Mode drops doing-tasks here, which is where outcome reporting
-    // lives, so this branch needs the same core section the dedicated Agent
-    // Mode assembly gets. Both arrays are built when Agent Mode is on and
-    // only one is emitted (systemPrompt.ts prefers the dedicated one), but
-    // this one is what /context accounts for and what any caller that omits
-    // agentModePromptSections would send.
-    isAgentMode ? getCorePolicySection() : null,
-    isAgentMode
+    hasDoingTasksSection
       ? null
-      : outputStyleConfig === null ||
-          outputStyleConfig.keepCodingInstructions === true
-        ? gpt ? getGPTDoingTasksSection(enabledTools) : getSimpleDoingTasksSection()
-        : null,
+      : getCorePolicySection({
+          cyberPolicy: false,
+          // Agent Mode has the orchestrator's tighter budget; an output-style
+          // session has no other anti-loop rule at all.
+          retryRule: !isAgentMode,
+        }),
+    hasDoingTasksSection
+      ? gpt
+        ? getGPTDoingTasksSection(enabledTools)
+        : getSimpleDoingTasksSection()
+      : null,
     // Risky-action consent is invariant across modes, so Agent Mode keeps the
     // actions section rather than nulling it.
     gpt ? getGPTActionsSection() : getActionsSection(),

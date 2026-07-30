@@ -709,6 +709,27 @@ the missing import plus tests for both provider branches. Not reachable in repo
 builds: every caller sits behind `isForkSubagentEnabled()`, and `FORK_SUBAGENT`
 appears in no build config.
 
+**User-visible behavior change worth calling out:** `Skill` is now withheld from
+every delegated subagent by default, foreground and background alike, not only
+from Agent Mode workers. That follows the decision record ("Skill access and
+nested delegation are orchestrator-only unless explicitly granted", plus
+"foreground/background execution must not silently alter a role's logical
+capabilities"), but its reach is wider than Agent Mode: the built-in
+general-purpose agent, Explore, Plan, Verification, in-process teammates, and any
+user `.claude/agents/*.md` that omits a `tools:` list all lose it. The grant path
+is to name `Skill` in that agent's own `tools:` frontmatter; a `['*']` wildcard
+deliberately does not count. Skill *preloading* via an agent's `skills:`
+frontmatter is unaffected, since that injects messages rather than using the
+tool.
+
+**Two prompt branches still carry none of the policy core**, both of which
+replace the system prompt wholesale in `buildEffectiveSystemPrompt`: coordinator
+mode (not compiled in repo builds) and the main-thread `--agent <name>` path,
+which is not feature-gated and is reachable today. A user running a custom
+main-thread agent gets that agent's prompt and nothing else. Whether a
+user-authored agent should keep the safety core is a product decision, not a
+mechanical fix, so it is recorded here rather than changed.
+
 Known limits of the least-privilege work, found in review and left as they are:
 `EXPLORE_AGENT` still carries `Bash`, so "Explore is read-only" is true of file
 edits but not of command execution. That is pre-existing and changing it would

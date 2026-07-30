@@ -5,6 +5,7 @@ import {
 } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import {
+  getCorePolicySection,
   getCyberPolicyInstruction,
   HOOK_AUTHORITY_RULE,
   INSTRUCTION_AUTHORITY_LIMIT,
@@ -37,7 +38,15 @@ const promptsSource = await Bun.file(
   new URL('./prompts.ts', import.meta.url),
 ).text()
 
-async function withPromptEnv<T>(run: () => Promise<T>): Promise<T> {
+/**
+ * `agentMode` is an explicit parameter because this helper clears the env var
+ * by default: a test that set it itself and then called this would have been
+ * silently downgraded to a normal-mode build and asserted nothing.
+ */
+async function withPromptEnv<T>(
+  run: () => Promise<T>,
+  { agentMode = false }: { agentMode?: boolean } = {},
+): Promise<T> {
   const saved = {
     simple: process.env.CLAUDE_CODE_SIMPLE,
     agentMode: process.env.CLAUDE_CODE_AGENT_MODE,
@@ -45,7 +54,8 @@ async function withPromptEnv<T>(run: () => Promise<T>): Promise<T> {
     openaiKey: process.env.OPENAI_API_KEY,
   }
   delete process.env.CLAUDE_CODE_SIMPLE
-  delete process.env.CLAUDE_CODE_AGENT_MODE
+  if (agentMode) process.env.CLAUDE_CODE_AGENT_MODE = '1'
+  else delete process.env.CLAUDE_CODE_AGENT_MODE
   process.env.ANTHROPIC_API_KEY = saved.anthropicKey ?? 'test-key'
   process.env.OPENAI_API_KEY = saved.openaiKey ?? 'test-key'
   try {
@@ -179,22 +189,45 @@ describe('policy core coverage across provider and mode variants', () => {
     // and is what /context accounts for. It used to null both doing-tasks and
     // actions without adding the core, leaving it with no consent rule, no
     // instruction-authority rule, and no outcome reporting.
-    const saved = process.env.CLAUDE_CODE_AGENT_MODE
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    const prompt = await withPromptEnv(
+      async () => (await getSystemPrompt(TOOLS, CLAUDE_MODEL)).join('\n'),
+      { agentMode: true },
+    )
 
-    try {
-      const prompt = await withPromptEnv(async () =>
-        (await getSystemPrompt(TOOLS, CLAUDE_MODEL)).join('\n'),
-      )
+    // Proves the branch was actually taken: doing-tasks is Agent Mode's tell.
+    expect(prompt).not.toContain('# Doing tasks')
+    expect(prompt).toContain(getCyberPolicyInstruction())
+    expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
+    expect(prompt).toContain(OUTCOME_REPORTING_RULE)
+    expect(prompt).toContain('# Executing actions with care')
+    // The intro already carries the cyber policy on this branch, so the
+    // stand-in section must not restate it.
+    expect(prompt.split(getCyberPolicyInstruction()).length - 1).toBe(1)
+    // Agent Mode keeps the orchestrator's tighter budget instead.
+    expect(prompt).not.toContain(RETRY_RULE)
+  })
 
-      expect(prompt).toContain(getCyberPolicyInstruction())
-      expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
-      expect(prompt).toContain(OUTCOME_REPORTING_RULE)
-      expect(prompt).toContain('# Executing actions with care')
-    } finally {
-      if (saved === undefined) delete process.env.CLAUDE_CODE_AGENT_MODE
-      else process.env.CLAUDE_CODE_AGENT_MODE = saved
-    }
+  test('an output style that drops coding instructions still gets reporting and retry', () => {
+    // The default assembly drops doing-tasks for TWO reasons: Agent Mode, and an
+    // output style with keepCodingInstructions falsy. Doing-tasks is the only
+    // container for outcome reporting and the retry budget, so an unguarded
+    // output style silently removed both. getOutputStyleConfig() reads real
+    // settings, so the axis is covered at the seam plus the wiring below.
+    const fallback = getCorePolicySection({
+      cyberPolicy: false,
+      retryRule: true,
+    })
+
+    expect(fallback).toContain(OUTCOME_REPORTING_RULE)
+    expect(fallback).toContain(RETRY_RULE)
+    expect(fallback).not.toContain(getCyberPolicyInstruction())
+
+    // One condition covers both drop reasons, and the fallback is tied to it.
+    expect(promptsSource).toContain('const hasDoingTasksSection =')
+    expect(promptsSource).toContain(
+      'outputStyleConfig.keepCodingInstructions === true',
+    )
+    expect(promptsSource).toContain('retryRule: !isAgentMode,')
   })
 
   test('the proactive assembly selects the policy core and an actions section', () => {

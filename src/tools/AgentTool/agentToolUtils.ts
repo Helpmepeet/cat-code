@@ -201,12 +201,20 @@ export function resolveAgentTools(
   const hasWildcard =
     agentTools === undefined ||
     (agentTools.length === 1 && agentTools[0] === '*')
+  // Parsed once and reused by the resolution loop below: resolveAgentTools runs
+  // on every spawn and inside REPL render memos, so parsing each spec twice is
+  // work this path does not need.
+  const parsedSpecs =
+    hasWildcard || agentTools === undefined
+      ? []
+      : agentTools.map(spec => ({
+          spec,
+          ...permissionRuleValueFromString(spec),
+        }))
   // A wildcard is not an explicit grant — it means "whatever policy allows".
   // Only a definition that names a default-off tool (Skill) keeps it.
   const explicitlyRequestedTools = new Set(
-    hasWildcard
-      ? []
-      : agentTools!.map(spec => permissionRuleValueFromString(spec).toolName),
+    parsedSpecs.map(parsed => parsed.toolName),
   )
   // When isMainThread is true, skip filterToolsForAgent entirely — the main
   // thread's tool pool is already properly assembled by useMergedTools(), so
@@ -268,10 +276,7 @@ export function resolveAgentTools(
   const resolvedToolsSet = new Set<Tool>()
   let allowedAgentTypes: string[] | undefined
 
-  for (const toolSpec of agentTools) {
-    // Parse the tool spec to extract the base tool name and any permission pattern
-    const { toolName, ruleContent } = permissionRuleValueFromString(toolSpec)
-
+  for (const { spec: toolSpec, toolName, ruleContent } of parsedSpecs) {
     // Special case: Agent tool carries allowedAgentTypes metadata in its spec
     if (toolName === AGENT_TOOL_NAME) {
       if (ruleContent) {

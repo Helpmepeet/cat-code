@@ -83,15 +83,14 @@ describe('Agent Mode role prompts', () => {
       },
     } as never)
 
-    if (ALL_AGENT_DISALLOWED_TOOLS.has(AGENT_TOOL_NAME)) {
-      // Subagents cannot spawn agents in this build, so the prompt must not
-      // send the worker to a tool it will never receive.
-      expect(prompt).toContain('You do not have Agent')
-      expect(prompt).not.toContain('spawn the Explore agent')
-    } else {
-      expect(prompt).toContain('spawn the Explore agent')
-      expect(prompt).not.toContain('You do not have Agent')
-    }
+    // Asserted unconditionally rather than by re-evaluating the implementation's
+    // own condition, which could never fail. USER_TYPE is not 'ant' here (nor in
+    // repo builds, where scripts/build.ts defines it as 'external'), so
+    // ALL_AGENT_DISALLOWED_TOOLS strips Agent from every subagent and the prompt
+    // must not send the worker to a tool it will never receive.
+    expect(ALL_AGENT_DISALLOWED_TOOLS.has(AGENT_TOOL_NAME)).toBe(true)
+    expect(prompt).toContain('You do not have Agent')
+    expect(prompt).not.toContain('spawn the Explore agent')
   })
 
   test('verifier judges isolated worktree result safety', () => {
