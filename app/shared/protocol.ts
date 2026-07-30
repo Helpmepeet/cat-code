@@ -1454,12 +1454,13 @@ export type RunControlsSnapshotFrame = {
  *    resume uses) → `Message[]`, rendered with the session's REAL `tools`
  *    (`getTools`, not `[]` — the P1-3 defect). The rendered text rides BACK on the
  *    result frame (`exportText`) and the renderer shows it in the Export dialog
- *    (P4-30) with a Copy action. **The clipboard is the only sink**: there is no
- *    renderer-reachable file-write path in `app/`, so "save to a file" is NOT
- *    available and the dialog's Download button ships disabled. Wiring it is a
- *    control-plane change (main-process `showSaveDialog` + write behind an HC3
- *    fixed-sender channel, main validating a basename — HC1 forbids a
- *    renderer-authored path), §0-flagged to the operator by P4-30, not assumed.
+ *    (P4-30) with Copy and Download actions. **Two sinks as of P4-35** (operator
+ *    ruling 2026-07-30, `decisions/FILE-SINK.md`): the clipboard, and a file via
+ *    the `saveTextToFile` control-plane channel — main's own `showSaveDialog` plus
+ *    the write, behind an HC3 fixed sender, with main sanitizing the renderer's
+ *    name SUGGESTION to a basename because HC1 forbids a renderer-authored path.
+ *    Nothing about that changes THIS frame: the export result is unchanged, and the
+ *    file sink is a main-owned capability that adds no wire vocabulary.
  *  - `session.branch` → the engine's OWN `createFork` (`src/commands/branch/branch.ts:61`,
  *    forks the whole conversation at HEAD — no from-message-N, so the menu label
  *    ADAPTS to "Branch from HEAD…"). It writes a real fork transcript on disk and

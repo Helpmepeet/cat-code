@@ -25,10 +25,10 @@
  *     "N messages · title". `MergedSessionRow.messageCount` cannot supply it: the
  *     bounded catalog loader never populates it (`sessionsCatalogState.ts:374`),
  *     so every session would read "0 messages".
- *  3. **No format segmented control.** md/json remain the owner-flagged §0 defer
+ *  2. **No format segmented control.** md/json remain the owner-flagged §0 defer
  *     (`sessionActions.ts:20-21`); the engine renders text only, so there is one
  *     format and nothing to segment.
- *  4. **Branch preview describes the naming rule, not a guessed name** — see
+ *  3. **Branch preview describes the naming rule, not a guessed name** — see
  *     `branchPreviewLines`.
  */
 import type { ReactNode } from 'react'
