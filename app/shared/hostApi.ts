@@ -141,6 +141,53 @@ export type HostError = {
 export type HostResult<T> = { ok: true; value: T } | { ok: false; error: HostError }
 
 /* ------------------------------------------------------------------------- *
+ * P4-35 — the file sink (operator ruling 2026-07-30)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Why `saveTextToFile` fails, as a THIRD union — deliberately neither
+ * `HostErrorCode` nor `ErrorFrame['code']`, for the same reason those two are
+ * separate (F3 §3, above). This is not a session control-plane call: it names no
+ * session, touches no registry row, mints no process, and reaches no host method.
+ * Adding `invalid_name`/`write_failed` to `HostErrorCode` would put a
+ * file-sink outcome into the vocabulary a `createSession`/`restoreSession` caller
+ * pattern-matches, which erases which plane failed exactly as merging the other
+ * two would.
+ */
+export type SaveTextErrorCode =
+  /** The suggested name sanitized to nothing usable (HC1 — see the sanitizer). */
+  | 'invalid_name'
+  /** Text absent, not a string, or past `MAX_SAVE_TEXT_BYTES`. */
+  | 'invalid_text'
+  /** The user chose a destination and the write itself failed. */
+  | 'write_failed'
+
+/**
+ * The outcome of a save. `ok: true, saved: false` is the user DISMISSING the
+ * native dialog — a normal outcome, not a failure, so the caller can stay silent
+ * instead of reporting an error the user caused on purpose.
+ *
+ * HC1: there is no path anywhere in this type. The renderer learns whether a file
+ * was written, never where. It already knows the directory it cannot name, because
+ * the user picked it in main's own dialog.
+ */
+export type SaveTextResult =
+  | { ok: true; saved: boolean }
+  | { ok: false; error: { code: SaveTextErrorCode; message: string } }
+
+/**
+ * A save REQUEST as the renderer may express it (HC1). There is deliberately no
+ * `path` and no `directory`: the renderer offers the text plus a name SUGGESTION,
+ * and main decides the destination by asking the user. `suggestedName` is treated
+ * as hostile — main reduces it to a basename and never joins it to a directory
+ * itself (`sanitizeSaveFileName`).
+ */
+export type SaveTextInput = {
+  text: string
+  suggestedName: string
+}
+
+/* ------------------------------------------------------------------------- *
  * HostEvent — the row-change stream (REGISTRY.md §6.1)
  * ------------------------------------------------------------------------- */
 

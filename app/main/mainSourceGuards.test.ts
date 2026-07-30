@@ -75,6 +75,35 @@ test('HC1: the picker hands back a token, never the path the user chose', () => 
   expect(pick).not.toContain('return chosen.realpath')
 })
 
+test('HC1: the save-text handler never hands the chosen path back to the renderer', () => {
+  // P4-35. The renderer learns whether a file was written, never where: the user
+  // chose the destination in main's own dialog, so main has no reason to echo it
+  // across the boundary — and echoing it would make the picker's whole
+  // token-instead-of-path posture pointless one channel over.
+  const save = region(
+    'ipcMain.handle(\n    CH_HOST_SAVE_TEXT',
+    'function registerDebugStateHandler',
+  ).replace(/\/\/.*$/gm, '')
+
+  // The dialog's answer is used in EXACTLY two places, both pinned below: the
+  // cancellation check and the write itself. A third occurrence would be the path
+  // escaping into a returned value or a message, so the count is the guard.
+  expect(save.match(/filePath/g)).toHaveLength(2)
+  expect(save).toContain(
+    'if (result.canceled || !result.filePath) return { ok: true, saved: false }',
+  )
+  expect(save).toContain('await writeFile(result.filePath, validated.text')
+
+  // The write target is the dialog's answer, never a renderer-supplied string:
+  // the payload is read only through the pure validator.
+  expect(save).toContain('validateSaveTextRequest(input)')
+  expect(save).not.toContain('readString(input')
+  // Validation is not optional: a rejected payload returns before any dialog.
+  expect(save.indexOf('validateSaveTextRequest')).toBeLessThan(
+    save.indexOf('showSaveDialog'),
+  )
+})
+
 test('HC1: the create handler reads no renderer cwd and no renderer resume id', () => {
   const create = region(
     'ipcMain.handle(\n    CH_HOST_CREATE',

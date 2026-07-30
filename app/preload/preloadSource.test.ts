@@ -70,12 +70,13 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // 16 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
-  // answerQuestions) + 9 payload-bearing control-plane senders + the DEV-only
+  // answerQuestions) + 10 payload-bearing control-plane senders + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
   // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
-  // previewSession/readSessionsCatalog/openHistorySession). subscribe / subscribeHost
-  // register a listener and send no payload, so they do NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(26)
+  // previewSession/readSessionsCatalog/openHistorySession/P4-35 saveTextToFile).
+  // subscribe / subscribeHost register a listener and send no payload, so they do
+  // NOT (and must not) call the guard.
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(27)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
@@ -94,6 +95,9 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   expect(source).toContain("const CH_HOST_LIST = 'catcode:host:list'")
   expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
   expect(source).toContain("const CH_HOST_PREVIEW = 'catcode:host:preview'")
+  // P4-35 — the file sink rides its own fixed channel (HC3). The renderer carries
+  // text plus a name suggestion; main owns the destination (HC1).
+  expect(source).toContain("const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'")
   // F2 — read-only cold-launch sessions-catalog baseline rides its own fixed channel.
   expect(source).toContain(
     "const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'",
@@ -109,7 +113,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(9)
+  expect(invokeChannels.length).toBe(10)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -120,6 +124,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_PREVIEW',
     'CH_HOST_SESSIONS_CATALOG',
     'CH_HOST_OPEN_HISTORY',
+    'CH_HOST_SAVE_TEXT',
   ])
   for (const channel of invokeChannels) {
     expect(allowed.has(channel)).toBe(true)
@@ -138,4 +143,32 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   // single realpath string, never a directory listing or file bytes.
   expect(code).not.toContain('readdir')
   expect(code).not.toContain('readFile')
+  // P4-35 — and none of them touches the filesystem in the other direction
+  // either. The preload runs in the renderer's process, so a write here would be
+  // a renderer-reachable file write with no user dialog in front of it; the sink
+  // is main's `CH_HOST_SAVE_TEXT` handler and only main's.
+  expect(code).not.toContain('writeFile')
+  expect(code).not.toContain("'node:fs'")
+})
+
+test('P4-35: the file sink carries no destination the renderer could author (HC1)', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('saveTextToFile(input: SaveTextInput)')
+  if (start < 0) throw new Error('preload.ts no longer exposes saveTextToFile')
+  const end = source.indexOf('subscribeHost(', start)
+  if (end <= start) throw new Error('preload.ts save-text region no longer ends at subscribeHost')
+  // Comments stripped first, for the same reason the default-deny check above
+  // strips them: the prose DESCRIBING the absent field is not the field.
+  const save = source.slice(start, end).replace(/\/\/.*$/gm, '')
+
+  // The renderer supplies text + a name SUGGESTION. Any of these words appearing
+  // here would mean a destination became expressible on this channel.
+  expect(save).not.toContain('filePath')
+  expect(save).not.toContain('directory')
+  expect(save).not.toContain('defaultPath')
+  expect(save).not.toMatch(/\bpath\b/)
+  // The guard still runs (rate cap, T7), and the body carries its own bound
+  // rather than silently riding the inbound frame cap.
+  expect(save).toContain('sendGuard.assertAllowed')
+  expect(save).toContain('MAX_SAVE_TEXT_BYTES')
 })

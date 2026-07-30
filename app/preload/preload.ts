@@ -37,9 +37,12 @@ import type {
   CreateSessionInput,
   HostEvent,
   HostResult,
+  SaveTextInput,
+  SaveTextResult,
   SessionDescriptor,
 } from '../shared/hostApi.js'
 import type { DebugRendererSnapshot } from '../shared/debugState.js'
+import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
 import { createRendererIpcGuard } from './rendererIpcGuard.js'
 
 declare const __CATCODE_DEV_HARNESS__: boolean
@@ -73,6 +76,7 @@ const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
+const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const sendGuard = createRendererIpcGuard()
@@ -297,6 +301,24 @@ const bridge: CatCodeBridge = {
     return ipcRenderer.invoke(CH_HOST_OPEN_HISTORY, engineSessionId) as Promise<
       HostResult<SessionDescriptor>
     >
+  },
+  saveTextToFile(input: SaveTextInput): Promise<SaveTextResult> {
+    // P4-35 — the mirror of pickDirectory (HC1): the renderer REQUESTS a native
+    // save dialog and cannot answer it. `SaveTextInput` carries text plus a name
+    // SUGGESTION and has no path field, so no destination is expressible here;
+    // main sanitizes the name to a basename, asks the user, and writes.
+    //
+    // The guard runs on the request WITHOUT the body, for two reasons. It is the
+    // rate cap that matters on this channel (T7's flood posture, unchanged), and
+    // the body is a transcript the engine rendered, which routinely exceeds
+    // `MAX_FRAME_BYTES` — the cap that still governs every other inbound payload
+    // and does not move. The body has its own bound, checked here for a fast local
+    // failure and enforced again at MAIN, which is the actual trust boundary.
+    sendGuard.assertAllowed({ saveTextToFile: true, suggestedName: input.suggestedName })
+    if (new TextEncoder().encode(input.text).byteLength > MAX_SAVE_TEXT_BYTES) {
+      throw new Error(`save text exceeds ${MAX_SAVE_TEXT_BYTES} bytes`)
+    }
+    return ipcRenderer.invoke(CH_HOST_SAVE_TEXT, input) as Promise<SaveTextResult>
   },
   subscribeHost(listener: (event: HostEvent) => void): () => void {
     const handler = (_event: unknown, event: HostEvent) => listener(event)

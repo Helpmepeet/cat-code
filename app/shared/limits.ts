@@ -42,6 +42,37 @@ export const MAX_PROMPT_BYTES = 96 * 1024
 export const MAX_TEXT_FIELD_CHARS = 4_096
 
 /**
+ * P4-35 — the `saveTextToFile` control-plane channel's own two bounds.
+ *
+ * This channel is the one place where renderer→main traffic legitimately carries
+ * a large body: the payload is a transcript the ENGINE rendered, handed straight
+ * back so main can write it to a file the user names in a native dialog. It
+ * therefore gets its OWN cap rather than riding either existing one, and neither
+ * existing cap moves:
+ *
+ *  - `MAX_FRAME_BYTES` (128 KiB) stays exactly what it is and still bounds every
+ *    other inbound payload. A long session's transcript exceeds it routinely, so
+ *    reusing it here would mean the feature silently fails on the sessions most
+ *    worth saving.
+ *  - `MAX_OUTBOUND_FRAME_BYTES` (32 MiB) is the TRUSTED direction's sanity bound
+ *    and must never be applied to renderer input.
+ *
+ * So this sits deliberately between them: far above a frame, far below the
+ * outbound bound. It is still a hostile-input bound — the renderer is untrusted
+ * and enforcement is at MAIN (`validateSaveTextRequest`), the preload check being
+ * only a fast local failure. What keeps the flood posture intact is that a write
+ * cannot happen without the user answering a native save dialog, and the
+ * inbound RATE cap (`MAX_FRAMES_PER_WINDOW`) applies to this channel unchanged.
+ */
+export const MAX_SAVE_TEXT_BYTES = 8 * 1024 * 1024
+
+/**
+ * Max length of the renderer's SUGGESTED file name, in chars. A suggestion only:
+ * main sanitizes it to a basename and the user renames freely in the dialog.
+ */
+export const MAX_SAVE_NAME_CHARS = 120
+
+/**
  * Max entries in a permission-response `applySuggestions` selection (C1,
  * decisions/PERMISSION-BOUNDARY.md). Engine suggestion lists are tiny (1–3
  * entries in practice); this is a structural bound on hostile input, not a

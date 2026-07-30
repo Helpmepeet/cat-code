@@ -266,6 +266,9 @@ async function runProductionHardeningSmoke(
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',
       'restoreSession',
+      // P4-35 — the file sink (operator ruling 2026-07-30). The renderer requests
+      // main's native save dialog and cannot name a destination (HC1/HC3).
+      'saveTextToFile',
       'subscribeHost',
     ].sort()
     const links = probe.links as Array<{

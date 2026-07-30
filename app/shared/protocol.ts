@@ -59,6 +59,8 @@ import type {
   CreateSessionInput,
   HostEvent,
   HostResult,
+  SaveTextInput,
+  SaveTextResult,
   SessionDescriptor,
 } from './hostApi.js'
 import type { DebugRendererSnapshot } from './debugState.js'
@@ -2689,6 +2691,19 @@ export type CatCodeBridge = {
   openHistorySession(
     engineSessionId: string,
   ): Promise<HostResult<SessionDescriptor>>
+  /**
+   * P4-35 (operator ruling 2026-07-30) — write text to a file the USER chooses.
+   * The app's only file sink, and the mirror of `pickDirectory`: the renderer may
+   * REQUEST main's native save dialog, never answer it. It supplies the text plus
+   * a name SUGGESTION and cannot express a destination (HC1 — `SaveTextInput` has
+   * no path field); main sanitizes the suggestion to a basename, asks the user,
+   * writes, and returns whether a file was written. The chosen path never crosses
+   * back. `ok: true, saved: false` is a dismissed dialog, not a failure.
+   *
+   * Bounded by `MAX_SAVE_TEXT_BYTES`, its own cap — see `limits.ts` for why this
+   * channel does not ride `MAX_FRAME_BYTES` and why that cap is unchanged.
+   */
+  saveTextToFile(input: SaveTextInput): Promise<SaveTextResult>
   /**
    * Subscribe to the host's row-change stream (the session list is a projection
    * of this, never a poll loop). Returns an unsubscribe function.
