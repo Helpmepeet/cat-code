@@ -4,6 +4,13 @@ import { dirname } from 'path'
 import { randomUUID } from 'crypto'
 import { getAgentModeUserContext } from './agentMode.js'
 import { getTranscriptPathForSession } from '../utils/sessionStorage.js'
+import {
+  resetStateForTests,
+  setSessionProvider,
+} from '../bootstrap/state.js'
+import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
+import { SKILL_TOOL_NAME } from '../tools/SkillTool/constants.js'
 
 const createdFiles: string[] = []
 
@@ -25,7 +32,15 @@ afterEach(() => {
     rmSync(file, { force: true })
   }
   delete process.env.CLAUDE_CODE_AGENT_MODE
+  resetStateForTests()
 })
+
+/** The advertised tool list, parsed out of the capability sentence. */
+function listedWorkerTools(content: string | undefined): string[] {
+  const list = content?.match(/can receive these tools: (.+?)\. That is/)?.[1]
+  if (!list) throw new Error(`no worker tool list in: ${content}`)
+  return list.split(', ')
+}
 
 describe('getAgentModeUserContext', () => {
   test('includes formatted live session state in Agent Mode', async () => {
@@ -54,6 +69,45 @@ describe('getAgentModeUserContext', () => {
     expect(context.workerToolsContext).toContain('Delegated workers')
     expect(context.agentModeSessionState).toContain('Agent Mode session state:')
     expect(context.agentModeSessionState).toContain('Known workers:')
+  })
+
+  test('advertises the provider tool set as a candidate set, without Skill', async () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+
+    setSessionProvider('openai')
+    const openai = await getAgentModeUserContext(
+      [],
+      undefined,
+      `agent-mode-context-${randomUUID()}`,
+    )
+    expect(listedWorkerTools(openai.workerToolsContext)).toContain(
+      FILE_PATCH_TOOL_NAME,
+    )
+    expect(listedWorkerTools(openai.workerToolsContext)).not.toContain(
+      FILE_EDIT_TOOL_NAME,
+    )
+    expect(openai.workerToolsContext).toContain('not a per-worker guarantee')
+
+    setSessionProvider('firstParty')
+    const anthropic = await getAgentModeUserContext(
+      [],
+      undefined,
+      `agent-mode-context-${randomUUID()}`,
+    )
+    expect(listedWorkerTools(anthropic.workerToolsContext)).toContain(
+      FILE_EDIT_TOOL_NAME,
+    )
+    expect(listedWorkerTools(anthropic.workerToolsContext)).not.toContain(
+      FILE_PATCH_TOOL_NAME,
+    )
+
+    // Skill is orchestrator-only by default, so it must not be advertised as a
+    // worker capability (it contradicted the orchestrator doctrine).
+    for (const context of [openai, anthropic]) {
+      expect(listedWorkerTools(context.workerToolsContext)).not.toContain(
+        SKILL_TOOL_NAME,
+      )
+    }
   })
 
   test('returns an empty context when Agent Mode is off', async () => {

@@ -1,5 +1,8 @@
 import { feature } from 'bun:bundle'
-import { getAsyncAgentDisplayTools } from '../constants/tools.js'
+import {
+  getAsyncAgentDisplayTools,
+  getAsyncAgentFileEditTool,
+} from '../constants/tools.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -7,8 +10,8 @@ import {
 } from '../services/analytics/index.js'
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
-import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
+import { SKILL_TOOL_NAME } from '../tools/SkillTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../tools/ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
@@ -88,7 +91,7 @@ export function getCoordinatorUserContext(
   }
 
   const workerTools = isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
-    ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_EDIT_TOOL_NAME]
+    ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, getAsyncAgentFileEditTool()]
         .sort()
         .join(', ')
     : getAsyncAgentDisplayTools()
@@ -96,11 +99,13 @@ export function getCoordinatorUserContext(
         .sort()
         .join(', ')
 
-  let content = `Workers spawned via the ${AGENT_TOOL_NAME} tool have access to these tools: ${workerTools}`
+  // Candidate set, not a guarantee: the worker's own role definition narrows
+  // it at spawn time (resolveAgentTools), so do not promise per-worker access.
+  let content = `Workers spawned via the ${AGENT_TOOL_NAME} tool can receive these tools: ${workerTools}. That is the candidate set for this provider, not a per-worker guarantee: the role you select may allow fewer, and a read-only role gets no file-edit or write tools.`
 
   if (mcpClients.length > 0) {
     const serverNames = mcpClients.map(c => c.name).join(', ')
-    content += `\n\nWorkers also have access to MCP tools from connected MCP servers: ${serverNames}`
+    content += `\n\nWorkers can also receive MCP tools from connected MCP servers: ${serverNames}`
   }
 
   if (scratchpadDir && isScratchpadGateEnabled()) {
@@ -112,8 +117,8 @@ export function getCoordinatorUserContext(
 
 export function getCoordinatorSystemPrompt(): string {
   const workerCapabilities = isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
-    ? 'Workers have access to Bash, Read, and Edit tools, plus MCP tools from configured MCP servers.'
-    : 'Workers have access to standard tools, MCP tools from configured MCP servers, and project skills via the Skill tool. Delegate skill invocations (e.g. /commit, /verify) to workers.'
+    ? `Workers have access to ${BASH_TOOL_NAME}, ${FILE_READ_TOOL_NAME}, and ${getAsyncAgentFileEditTool()} tools, plus MCP tools from configured MCP servers.`
+    : `Workers have access to standard tools and MCP tools from configured MCP servers. They do not have the ${SKILL_TOOL_NAME} tool, so do not ask a worker to run a skill: put the steps in the prompt instead.`
 
   return `You are Cat Code, an AI assistant that orchestrates software engineering tasks across multiple workers.
 

@@ -32,6 +32,51 @@ describe('Agent Mode role prompts', () => {
     expect(promptSource).toContain('especially when prompt, session-state, worker-control, or orchestration behavior changed')
   })
 
+  test('coding worker prompt names the edit tool its provider actually has', async () => {
+    // Dynamic import after the tool graph is warm — see the note above.
+    await import('../tools.js')
+    const { AGENT_MODE_CODING_WORKER } = await import('./rolePrompts.js')
+    const promptFor = (model: string, provider: string) =>
+      AGENT_MODE_CODING_WORKER.getSystemPrompt({
+        toolUseContext: {
+          options: { mainLoopModel: model, mainLoopProvider: provider },
+        },
+      } as never)
+
+    const openai = promptFor('gpt-5.6-terra', 'openai')
+    expect(openai).toContain('Use Apply_patch and Write for code changes.')
+    expect(openai).not.toContain('Use Edit and Write')
+
+    const anthropic = promptFor('claude-opus-4-1', 'firstParty')
+    expect(anthropic).toContain('Use Edit and Write for code changes.')
+    expect(anthropic).not.toContain('Apply_patch')
+  })
+
+  test('coding worker prompt only offers nested delegation where the build allows it', async () => {
+    await import('../tools.js')
+    const { AGENT_MODE_CODING_WORKER } = await import('./rolePrompts.js')
+    const { ALL_AGENT_DISALLOWED_TOOLS } = await import('../constants/tools.js')
+    const { AGENT_TOOL_NAME } = await import('../tools/AgentTool/constants.js')
+    const prompt = AGENT_MODE_CODING_WORKER.getSystemPrompt({
+      toolUseContext: {
+        options: {
+          mainLoopModel: 'claude-opus-4-1',
+          mainLoopProvider: 'firstParty',
+        },
+      },
+    } as never)
+
+    if (ALL_AGENT_DISALLOWED_TOOLS.has(AGENT_TOOL_NAME)) {
+      // Subagents cannot spawn agents in this build, so the prompt must not
+      // send the worker to a tool it will never receive.
+      expect(prompt).toContain('You do not have Agent')
+      expect(prompt).not.toContain('spawn the Explore agent')
+    } else {
+      expect(prompt).toContain('spawn the Explore agent')
+      expect(prompt).not.toContain('You do not have Agent')
+    }
+  })
+
   test('verifier judges isolated worktree result safety', () => {
     expect(promptSource).toContain('If verifying an isolated worktree result')
     expect(promptSource).toContain('safe to apply')

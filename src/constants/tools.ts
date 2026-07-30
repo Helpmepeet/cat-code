@@ -16,6 +16,7 @@ import { WEB_FETCH_TOOL_NAME } from '../tools/WebFetchTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../tools/GlobTool/prompt.js'
 import { SHELL_TOOL_NAMES } from '../utils/shell/shellToolUtils.js'
 import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../tools/FileWriteTool/prompt.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../tools/NotebookEditTool/constants.js'
 import { GET_WORKER_RESULT_TOOL_NAME } from '../tools/GetWorkerResultTool/constants.js'
@@ -35,6 +36,7 @@ import { WORKFLOW_TOOL_NAME } from '../tools/WorkflowTool/constants.js'
 import { ASK_ORCHESTRATOR_TOOL_NAME } from '../tools/AskOrchestratorTool/prompt.js'
 import { CLAUDE_CLI_TOOL_NAME } from '../tools/ClaudeCliTool/constants.js'
 import { isTodoV2Enabled } from '../utils/tasks.js'
+import { getAPIProvider } from '../utils/model/providers.js'
 import {
   CRON_CREATE_TOOL_NAME,
   CRON_DELETE_TOOL_NAME,
@@ -66,6 +68,20 @@ export const CUSTOM_AGENT_DISALLOWED_TOOLS = new Set([
   ...ALL_AGENT_DISALLOWED_TOOLS,
 ])
 
+/**
+ * Provider aliases for the ONE file-edit capability. The pool carries exactly
+ * one of these — `getProviderFileEditTool()` in tools.ts returns FilePatchTool
+ * on the OpenAI/Codex path and FileEditTool everywhere else. Both names are
+ * allowlisted for async agents (so the filter never strips a worker's only edit
+ * tool) and both are denied together when a role disallows either one (see
+ * resolveAgentTools): a provider alias must not change a role's logical
+ * capability (owner decision 2026-07-30, C10/C11).
+ */
+export const PROVIDER_FILE_EDIT_TOOL_ALIASES = [
+  FILE_EDIT_TOOL_NAME,
+  FILE_PATCH_TOOL_NAME,
+] as const
+
 const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   FILE_READ_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
@@ -73,10 +89,8 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   WEB_FETCH_TOOL_NAME,
   GLOB_TOOL_NAME,
   ...SHELL_TOOL_NAMES,
-  FILE_EDIT_TOOL_NAME,
   FILE_WRITE_TOOL_NAME,
   NOTEBOOK_EDIT_TOOL_NAME,
-  SKILL_TOOL_NAME,
   ASK_ORCHESTRATOR_TOOL_NAME,
   CLAUDE_CLI_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
@@ -84,6 +98,16 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   ENTER_WORKTREE_TOOL_NAME,
   EXIT_WORKTREE_TOOL_NAME,
 ] as const
+
+/**
+ * Tools an async agent does NOT get by default but MAY receive when its own
+ * agent definition names them in its `tools` list. Skill is orchestrator-only
+ * by default so the orchestrator doctrine ("workers do not have Skill access")
+ * is true unless a role explicitly grants it (owner decision 2026-07-30, C10).
+ * ALL_AGENT_DISALLOWED_TOOLS stays absolute: this escape hatch never reopens a
+ * recursion or authorization boundary.
+ */
+export const ASYNC_AGENT_EXPLICIT_GRANT_TOOLS = new Set([SKILL_TOOL_NAME])
 
 const ASYNC_AGENT_V1_TASK_TOOLS = [TODO_WRITE_TOOL_NAME] as const
 
@@ -99,13 +123,27 @@ const ASYNC_AGENT_V2_TASK_TOOLS = [
  */
 export const ASYNC_AGENT_ALLOWED_TOOLS = new Set([
   ...ASYNC_AGENT_BASE_ALLOWED_TOOLS,
+  ...PROVIDER_FILE_EDIT_TOOL_ALIASES,
   ...ASYNC_AGENT_V1_TASK_TOOLS,
   ...ASYNC_AGENT_V2_TASK_TOOLS,
 ])
 
+/** The file-edit tool name a worker actually receives on this provider. */
+export function getAsyncAgentFileEditTool(): string {
+  return getAPIProvider() === 'openai'
+    ? FILE_PATCH_TOOL_NAME
+    : FILE_EDIT_TOOL_NAME
+}
+
+/**
+ * The tools a delegated worker can receive, resolved for the current provider.
+ * This is a candidate set: a worker's role definition may narrow it further
+ * (see resolveAgentTools), so callers must not advertise it as a guarantee.
+ */
 export function getAsyncAgentDisplayTools(): string[] {
   return [
     ...ASYNC_AGENT_BASE_ALLOWED_TOOLS,
+    getAsyncAgentFileEditTool(),
     ...(isTodoV2Enabled()
       ? ASYNC_AGENT_V2_TASK_TOOLS
       : ASYNC_AGENT_V1_TASK_TOOLS),
@@ -136,6 +174,8 @@ export const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS = new Set([
  * - ExitPlanModeTool: Plan mode is a main thread abstraction.
  * - TaskStopTool: Requires access to main thread task state.
  * - TungstenTool: Uses singleton virtual terminal abstraction that conflicts between agents.
+ * - SkillTool: Orchestrator-only by default; an agent definition that names it
+ *   in `tools` still gets it (ASYNC_AGENT_EXPLICIT_GRANT_TOOLS).
  *
  * ENABLE LATER (NEED WORK):
  * - MCPTool: TBD

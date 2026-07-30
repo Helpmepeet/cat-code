@@ -51,4 +51,13 @@ describe('fetchSystemPromptParts Agent Mode truthiness', () => {
     expect(prompt).toContain('# Doing tasks')
     expect(prompt).toContain('# Executing actions with care')
   })
+
+  test('Doing-tasks stays the discriminator now that Agent Mode also carries Actions', async () => {
+    // Agent Mode gained the actions section on 2026-07-30 (risky-action consent
+    // is a cross-mode invariant), so Actions no longer separates the two builds.
+    const agentModePrompt = await buildPrompt('1')
+
+    expect(agentModePrompt).toContain('# Executing actions with care')
+    expect(agentModePrompt).not.toContain('# Doing tasks')
+  })
 })

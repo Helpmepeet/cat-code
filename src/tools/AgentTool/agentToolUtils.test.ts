@@ -3,8 +3,14 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   resetStateForTests,
   setIsInteractive,
+  setSessionProvider,
 } from '../../bootstrap/state.js'
+import { FORK_WORKER_RESULT_TAG } from '../../constants/xml.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
+import { SKILL_TOOL_NAME } from '../SkillTool/constants.js'
+import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../../tools/ResumeAgentTool/constants.js'
 import { TASK_CREATE_TOOL_NAME } from '../../tools/TaskCreateTool/constants.js'
 import { TASK_GET_TOOL_NAME } from '../../tools/TaskGetTool/constants.js'
@@ -16,15 +22,17 @@ import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
 import {
+  filterToolsForAgent,
+  formatForkWorkerResultForNotification,
   getAgentContinuationCapabilities,
   resolveAgentTools,
 } from './agentToolUtils.js'
 
-function getAsyncWorkerToolNames(): string[] {
+function getAsyncWorkerToolNames(tools: string[] = ['*']): string[] {
   const availableTools = getTools(getEmptyToolPermissionContext())
   return resolveAgentTools(
     {
-      tools: ['*'],
+      tools,
       disallowedTools: [],
       source: 'built-in',
       permissionMode: 'default',
@@ -32,6 +40,12 @@ function getAsyncWorkerToolNames(): string[] {
     availableTools,
     true,
   ).resolvedTools.map(tool => tool.name)
+}
+
+function fileEditToolsIn(toolNames: string[]): string[] {
+  return toolNames.filter(
+    name => name === FILE_EDIT_TOOL_NAME || name === FILE_PATCH_TOOL_NAME,
+  )
 }
 
 describe('resolveAgentTools task-management availability for async workers', () => {
@@ -133,6 +147,187 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
   })
 })
 
+describe('resolveAgentTools provider-aliased edit capability for async workers', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  afterEach(() => {
+    resetStateForTests()
+  })
+
+  // The pool carries exactly one file-edit tool per provider
+  // (getProviderFileEditTool, tools.ts). The async allowlist used to name only
+  // Edit, so an async worker on the OpenAI path got NO edit tool at all.
+  test('gets Apply_patch and only Apply_patch on the OpenAI path', () => {
+    setSessionProvider('openai')
+
+    expect(fileEditToolsIn(getAsyncWorkerToolNames())).toEqual([
+      FILE_PATCH_TOOL_NAME,
+    ])
+  })
+
+  test('gets Edit and only Edit on the Anthropic path', () => {
+    setSessionProvider('firstParty')
+
+    expect(fileEditToolsIn(getAsyncWorkerToolNames())).toEqual([
+      FILE_EDIT_TOOL_NAME,
+    ])
+  })
+
+  test('keeps Agent Mode roles read-only or editing regardless of the alias', async () => {
+    // Dynamic import: the role definitions live behind the same tool-constant
+    // graph getTools() primes above, so import them after it has loaded.
+    const { AGENT_MODE_CODING_WORKER, AGENT_MODE_VERIFIER } = await import(
+      '../../agent-mode/rolePrompts.js'
+    )
+    const availableTools = getTools(getEmptyToolPermissionContext())
+
+    for (const provider of ['firstParty', 'openai'] as const) {
+      resetStateForTests()
+      setSessionProvider(provider)
+      const expectedEditTool =
+        provider === 'openai' ? FILE_PATCH_TOOL_NAME : FILE_EDIT_TOOL_NAME
+
+      const verifierNames = resolveAgentTools(
+        AGENT_MODE_VERIFIER,
+        availableTools,
+        true,
+      ).resolvedTools.map(tool => tool.name)
+      expect(verifierNames).toContain('Read')
+      expect(fileEditToolsIn(verifierNames)).toEqual([])
+      expect(verifierNames).not.toContain('Write')
+
+      const workerNames = resolveAgentTools(
+        AGENT_MODE_CODING_WORKER,
+        getTools(getEmptyToolPermissionContext()),
+        true,
+      ).resolvedTools.map(tool => tool.name)
+      expect(fileEditToolsIn(workerNames)).toEqual([expectedEditTool])
+    }
+  })
+
+  // A role that disallows one alias must not receive the other when the pool
+  // swaps for the OpenAI path — these three name only Edit in disallowedTools.
+  test('keeps read-only built-ins edit-free on the OpenAI path', async () => {
+    const { EXPLORE_AGENT } = await import('./built-in/exploreAgent.js')
+    const { PLAN_AGENT } = await import('./built-in/planAgent.js')
+
+    for (const definition of [EXPLORE_AGENT, PLAN_AGENT, VERIFICATION_AGENT]) {
+      for (const isAsync of [true, false]) {
+        resetStateForTests()
+        setSessionProvider('openai')
+        const toolNames = resolveAgentTools(
+          definition,
+          getTools(getEmptyToolPermissionContext()),
+          isAsync,
+        ).resolvedTools.map(tool => tool.name)
+
+        expect(fileEditToolsIn(toolNames)).toEqual([])
+        expect(toolNames).not.toContain('Write')
+      }
+    }
+  })
+
+  test('names both edit aliases in the verifier disallow list', async () => {
+    const { AGENT_MODE_VERIFIER } = await import(
+      '../../agent-mode/rolePrompts.js'
+    )
+
+    expect(AGENT_MODE_VERIFIER.disallowedTools).toContain(FILE_EDIT_TOOL_NAME)
+    expect(AGENT_MODE_VERIFIER.disallowedTools).toContain(FILE_PATCH_TOOL_NAME)
+  })
+})
+
+describe('resolveAgentTools Skill policy is symmetric across spawn shapes', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  afterEach(() => {
+    resetStateForTests()
+  })
+
+  function resolveNames(tools: string[], isAsync: boolean): string[] {
+    return resolveAgentTools(
+      {
+        tools,
+        disallowedTools: [],
+        source: 'built-in',
+        permissionMode: 'default',
+      },
+      getTools(getEmptyToolPermissionContext()),
+      isAsync,
+    ).resolvedTools.map(tool => tool.name)
+  }
+
+  // Foreground vs background must not change a role's logical capabilities
+  // (owner decision 2026-07-30). The async allowlist alone left Skill on every
+  // sync subagent, which made the orchestrator doctrine false for foreground
+  // spawns.
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)('withholds Skill from a wildcard %s worker', (_shape, isAsync) => {
+    expect(resolveNames(['*'], isAsync)).not.toContain(SKILL_TOOL_NAME)
+  })
+
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'grants Skill to a %s worker whose definition names it',
+    (_shape, isAsync) => {
+      expect(resolveNames(['Read', SKILL_TOOL_NAME], isAsync)).toContain(
+        SKILL_TOOL_NAME,
+      )
+    },
+  )
+
+  test('leaves Skill selectable when asking which tools a definition could pick', () => {
+    // The agent-creation picker passes no explicit list; hiding Skill there
+    // would remove the only interactive way to grant it.
+    const pickable = filterToolsForAgent({
+      tools: getTools(getEmptyToolPermissionContext()),
+      isBuiltIn: false,
+      isAsync: false,
+    }).map(tool => tool.name)
+
+    expect(pickable).toContain(SKILL_TOOL_NAME)
+  })
+})
+
+describe('resolveAgentTools Skill policy for async workers', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  test('withholds Skill from a wildcard async worker', () => {
+    expect(getTools(getEmptyToolPermissionContext()).map(t => t.name)).toContain(
+      SKILL_TOOL_NAME,
+    )
+
+    expect(getAsyncWorkerToolNames()).not.toContain(SKILL_TOOL_NAME)
+  })
+
+  test('grants Skill when the agent definition names it', () => {
+    const toolNames = getAsyncWorkerToolNames(['Read', SKILL_TOOL_NAME])
+
+    expect(toolNames).toContain(SKILL_TOOL_NAME)
+    expect(toolNames).toContain('Read')
+  })
+
+  test('does not let an explicit request reopen the recursion boundary', () => {
+    const toolNames = getAsyncWorkerToolNames([
+      'Read',
+      AGENT_TOOL_NAME,
+      TASK_OUTPUT_TOOL_NAME,
+    ])
+
+    expect(toolNames).toEqual(['Read'])
+  })
+})
+
 describe('resolveAgentTools explicit in-process-teammate environment', () => {
   beforeEach(() => {
     resetStateForTests()
@@ -181,5 +376,42 @@ describe('resolveAgentTools explicit in-process-teammate environment', () => {
     expect(toolNames).toEqual(availableTools.map(tool => tool.name))
     expect(toolNames).toContain(AGENT_TOOL_NAME)
     expect(toolNames).toContain(RESUME_AGENT_TOOL_NAME)
+  })
+})
+
+describe('formatForkWorkerResultForNotification provider branches', () => {
+  const RESULT = {
+    version: 1 as const,
+    kind: 'fork_worker_result' as const,
+    scope: 'add a regression test',
+    result: 'done',
+    key_files: ['src/tools/AgentTool/agentToolUtils.ts'],
+    files_changed: ['src/tools/AgentTool/agentToolUtils.ts'],
+    issues: [],
+    commit_hash: null,
+  }
+
+  // The OpenAI branch referenced serializeForkWorkerResultForOpenAI without
+  // importing it, so reaching it threw ReferenceError while the Claude branch
+  // worked. Both branches are exercised here so an import regression cannot
+  // hide on one provider.
+  test('serializes raw JSON for OpenAI', () => {
+    const formatted = formatForkWorkerResultForNotification(
+      JSON.stringify(RESULT),
+      'openai',
+    )
+
+    expect(JSON.parse(formatted)).toEqual(RESULT)
+    expect(formatted).not.toContain(`<${FORK_WORKER_RESULT_TAG}>`)
+  })
+
+  test('wraps the payload in contract tags for the Claude path', () => {
+    const formatted = formatForkWorkerResultForNotification(
+      JSON.stringify(RESULT),
+      'firstParty',
+    )
+
+    expect(formatted).toContain(`<${FORK_WORKER_RESULT_TAG}>`)
+    expect(formatted).toContain('add a regression test')
   })
 })

@@ -23,6 +23,34 @@ describe('Agent Mode orchestrator prompt', () => {
     expect(prompt).toContain('Prefer worker handles over raw task IDs or internal agent IDs')
   })
 
+  test('gives each worker-control tool exactly one owning rule', () => {
+    // C3: the four rules were stated twice, once under a "Worker convergence"
+    // heading and once under "Worker control tools", with drifted wording.
+    const prompt = getOrchestratorSystemPrompt()
+
+    for (const tool of [
+      'ListWorkers',
+      'WaitWorkers',
+      'GetWorkerResult',
+      'CancelWorker',
+    ]) {
+      expect(prompt.split(tool).length - 1).toBe(1)
+    }
+    expect(prompt).not.toContain('## Worker convergence')
+  })
+
+  test('states the Skill boundary as role-dependent rather than a blanket denial', () => {
+    // C10: the doctrine claimed no worker has Skill access while the worker
+    // capability context claimed every worker does.
+    const prompt = getOrchestratorSystemPrompt()
+
+    expect(prompt).toContain('Only the orchestrator invokes skills')
+    expect(prompt).toContain(
+      'no Skill access unless its own agent definition explicitly grants it',
+    )
+    expect(prompt).not.toContain('workers do not have Skill tool access')
+  })
+
   test('pushes post-spawn orchestration and concrete worker thresholds', () => {
     const prompt = getOrchestratorSystemPrompt()
 

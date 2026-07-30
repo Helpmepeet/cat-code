@@ -5,8 +5,10 @@ import { clearInvokedSkillsForAgent } from '../../bootstrap/state.js'
 import {
   ALL_AGENT_DISALLOWED_TOOLS,
   ASYNC_AGENT_ALLOWED_TOOLS,
+  ASYNC_AGENT_EXPLICIT_GRANT_TOOLS,
   CUSTOM_AGENT_DISALLOWED_TOOLS,
   IN_PROCESS_TEAMMATE_ALLOWED_TOOLS,
+  PROVIDER_FILE_EDIT_TOOL_ALIASES,
 } from '../../constants/tools.js'
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js'
 import {
@@ -66,6 +68,7 @@ import {
   getForkWorkerResultJsonSchema,
   parseForkWorkerResult,
   serializeForkWorkerResultForClaude,
+  serializeForkWorkerResultForOpenAI,
 } from '../../contracts/orchestration.js'
 import { safeParseJSON } from '../../utils/json.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
@@ -101,12 +104,20 @@ export function filterToolsForAgent({
   isAsync = false,
   permissionMode,
   environment = 'default',
+  explicitlyRequestedTools,
 }: {
   tools: Tools
   isBuiltIn: boolean
   isAsync?: boolean
   permissionMode?: PermissionMode
   environment?: AgentToolEnvironment
+  /** Tool names the agent definition names in its own `tools` list (never
+   * `['*']`). Passing this set opts into grant-only enforcement: a member of
+   * ASYNC_AGENT_EXPLICIT_GRANT_TOOLS survives only if the definition named it.
+   * ALL_AGENT_DISALLOWED_TOOLS stays absolute either way. Callers that ask
+   * "which tools COULD a definition select" (the agent-creation tool picker)
+   * omit it, so grantable tools stay pickable there. */
+  explicitlyRequestedTools?: ReadonlySet<string>
 }): Tools {
   return tools.filter(tool => {
     // Allow MCP tools for all agents
@@ -127,7 +138,28 @@ export function filterToolsForAgent({
     if (!isBuiltIn && CUSTOM_AGENT_DISALLOWED_TOOLS.has(tool.name)) {
       return false
     }
+    // Grant-only tools (Skill) are withheld from EVERY worker unless its own
+    // definition named the tool — foreground and background must not differ,
+    // or the orchestrator doctrine is true for one spawn shape and false for
+    // the other (owner decision 2026-07-30, C10). Enforced only when the
+    // caller supplies the definition's own list; see the field doc above.
+    if (
+      explicitlyRequestedTools !== undefined &&
+      ASYNC_AGENT_EXPLICIT_GRANT_TOOLS.has(tool.name) &&
+      !explicitlyRequestedTools.has(tool.name)
+    ) {
+      return false
+    }
     if (isAsync && !ASYNC_AGENT_ALLOWED_TOOLS.has(tool.name)) {
+      // Default-off but explicitly grantable (Skill): the role's own
+      // definition asked for it by name, so honor that. Reached only after
+      // the absolute disallow lists above.
+      if (
+        ASYNC_AGENT_EXPLICIT_GRANT_TOOLS.has(tool.name) &&
+        explicitlyRequestedTools?.has(tool.name)
+      ) {
+        return true
+      }
       if (isAgentSwarmsEnabled() && environment === 'in-process-teammate') {
         // Allow AgentTool for in-process teammates to spawn sync subagents.
         // Validation in AgentTool.call() prevents background agents and teammate spawning.
@@ -165,6 +197,17 @@ export function resolveAgentTools(
     permissionMode,
   } = agentDefinition
   const isMainThread = environment === 'main-thread'
+  // If tools is undefined or ['*'], allow all tools (after filtering disallowed)
+  const hasWildcard =
+    agentTools === undefined ||
+    (agentTools.length === 1 && agentTools[0] === '*')
+  // A wildcard is not an explicit grant — it means "whatever policy allows".
+  // Only a definition that names a default-off tool (Skill) keeps it.
+  const explicitlyRequestedTools = new Set(
+    hasWildcard
+      ? []
+      : agentTools!.map(spec => permissionRuleValueFromString(spec).toolName),
+  )
   // When isMainThread is true, skip filterToolsForAgent entirely — the main
   // thread's tool pool is already properly assembled by useMergedTools(), so
   // the sub-agent disallow lists shouldn't apply.
@@ -176,6 +219,7 @@ export function resolveAgentTools(
         isAsync,
         permissionMode,
         environment,
+        explicitlyRequestedTools,
       })
 
   // Create a set of disallowed tool names for quick lookup
@@ -186,15 +230,24 @@ export function resolveAgentTools(
     }) ?? [],
   )
 
+  // The two file-edit aliases are one capability, so denying either denies
+  // both. Without this, a role that disallows Edit (Explore, Plan, the
+  // verifiers) receives Apply_patch on the OpenAI path, where the pool swaps
+  // the alias — a provider swap must not grant a read-only role write access
+  // (owner decision 2026-07-30, C11).
+  if (
+    PROVIDER_FILE_EDIT_TOOL_ALIASES.some(name => disallowedToolSet.has(name))
+  ) {
+    for (const name of PROVIDER_FILE_EDIT_TOOL_ALIASES) {
+      disallowedToolSet.add(name)
+    }
+  }
+
   // Filter available tools based on disallowed list
   const allowedAvailableTools = filteredAvailableTools.filter(
     tool => !disallowedToolSet.has(tool.name),
   )
 
-  // If tools is undefined or ['*'], allow all tools (after filtering disallowed)
-  const hasWildcard =
-    agentTools === undefined ||
-    (agentTools.length === 1 && agentTools[0] === '*')
   if (hasWildcard) {
     return {
       hasWildcard: true,

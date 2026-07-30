@@ -164,14 +164,49 @@ describe('GPT read discipline guidance', () => {
 })
 
 describe('mechanical prompt cleanup', () => {
-  test('uses a provider-neutral transcript tool-result query and has no unused prompt constants', () => {
-    expect(promptsSource).toContain(`Grep '"tool_use_id":"'`)
-    expect(promptsSource).not.toContain(`Grep '"tool_use_id":"call_'`)
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  test('uses a provider-neutral transcript tool-result query and has no unused or stale prompt constants', async () => {
+    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+
+    expect(prompt).toContain(`Grep '"tool_use_id":"'`)
+    expect(prompt).not.toContain(`Grep '"tool_use_id":"call_'`)
     expect(promptsSource).not.toContain('CLAUDE_CODE_DOCS_MAP_URL')
     expect(promptsSource).not.toContain('FRONTIER_MODEL_NAME')
+    expect(promptsSource).not.toContain('CLAUDE_4_5_OR_4_6_MODEL_IDS')
+    expect(prompt).toContain(
+      'The most recent Claude models are the Claude 5 family and Haiku 4.5',
+    )
     expect(promptsSource).toContain(
       'In agent threads, a \\`cd\\` applies only to the current Bash call',
     )
+  })
+
+  test('transcript guidance names the search surface an embedded-search build actually has', async () => {
+    const saved = {
+      embedded: process.env.EMBEDDED_SEARCH_TOOLS,
+      entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT,
+    }
+    process.env.EMBEDDED_SEARCH_TOOLS = '1'
+    delete process.env.CLAUDE_CODE_ENTRYPOINT
+
+    try {
+      const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const section = prompt.slice(prompt.indexOf('## Reading session transcripts'))
+
+      expect(section).toContain('## Reading session transcripts')
+      expect(section).toContain(`grep '"tool_use_id":"'`)
+      expect(section).not.toContain('Grep')
+      expect(section).not.toContain('Glob')
+    } finally {
+      if (saved.embedded === undefined) delete process.env.EMBEDDED_SEARCH_TOOLS
+      else process.env.EMBEDDED_SEARCH_TOOLS = saved.embedded
+      if (saved.entrypoint === undefined)
+        delete process.env.CLAUDE_CODE_ENTRYPOINT
+      else process.env.CLAUDE_CODE_ENTRYPOINT = saved.entrypoint
+    }
   })
 })
 

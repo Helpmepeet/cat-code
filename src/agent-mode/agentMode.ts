@@ -7,14 +7,16 @@ import {
 } from '../services/analytics/index.js'
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
-import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
 import { RESUME_AGENT_TOOL_NAME } from '../tools/ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import { TEAM_CREATE_TOOL_NAME } from '../tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '../tools/TeamDeleteTool/constants.js'
-import { getAsyncAgentDisplayTools } from '../constants/tools.js'
+import {
+  getAsyncAgentDisplayTools,
+  getAsyncAgentFileEditTool,
+} from '../constants/tools.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { getOrchestratorSystemPrompt } from './orchestratorPrompt.js'
 import {
@@ -48,7 +50,7 @@ export async function getAgentModeUserContext(
   }
 
   const workerTools = isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
-    ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_EDIT_TOOL_NAME]
+    ? [BASH_TOOL_NAME, FILE_READ_TOOL_NAME, getAsyncAgentFileEditTool()]
         .sort()
         .join(', ')
     : getAsyncAgentDisplayTools()
@@ -56,11 +58,13 @@ export async function getAgentModeUserContext(
         .sort()
         .join(', ')
 
-  let content = `Delegated workers launched via the ${AGENT_TOOL_NAME} tool have access to these tools: ${workerTools}`
+  // Candidate set, not a guarantee: the worker's own role definition narrows
+  // it at spawn time (resolveAgentTools), so do not promise per-worker access.
+  let content = `Delegated workers launched via the ${AGENT_TOOL_NAME} tool can receive these tools: ${workerTools}. That is the candidate set for this provider, not a per-worker guarantee: the role you select may allow fewer, and a read-only role gets no file-edit or write tools.`
 
   if (mcpClients.length > 0) {
     const serverNames = mcpClients.map(c => c.name).join(', ')
-    content += `\n\nDelegated workers also have access to MCP tools from connected MCP servers: ${serverNames}`
+    content += `\n\nDelegated workers can also receive MCP tools from connected MCP servers: ${serverNames}`
   }
 
   if (scratchpadDir && isScratchpadGateEnabled()) {

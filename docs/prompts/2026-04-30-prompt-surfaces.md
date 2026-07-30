@@ -100,6 +100,7 @@ Usually safe for content changes:
 
 Core plumbing: edit carefully:
 
+- `src/constants/corePolicy.ts` (one rule text, several containers: a change lands in the Claude, GPT, Agent Mode, and proactive assemblies at once)
 - `src/utils/systemPrompt.ts`
 - `src/QueryEngine.ts`
 - `src/utils/queryContext.ts`
@@ -112,6 +113,7 @@ Core plumbing: edit carefully:
 
 | File | Role |
 |---|---|
+| `src/constants/corePolicy.ts` | Cross-provider, cross-mode policy core: cyber policy resolver, provenance/authority/reporting/retry rules interpolated by both prompt styles |
 | `src/constants/prompts.ts` | Main default system prompt text and section builders |
 | `src/constants/prompts.ts` | Main default system prompt text and deployment-aware behavior |
 | `src/tools/AgentTool/runAgent.ts` | Agent runtime system prompt builder (`getAgentSystemPrompt()`) |
