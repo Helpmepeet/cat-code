@@ -187,8 +187,32 @@ describe('language section caching contract', () => {
     // H2 ruling: keying language would silently turn "applies next session"
     // into a live mid-session switch. Both prompt builds must opt out.
     const optOuts = promptsSource.match(
-      /systemPromptSection\('language', NO_SECTION_INPUTS,/g,
+      /systemPromptSection\(\s*'language',\s*NO_SECTION_INPUTS\s*,/g,
     )
     expect(optOuts?.length).toBe(2)
+  })
+})
+
+describe('session guidance keying across the two prompt builds', () => {
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  test('a GPT build is not served the Claude-style guidance cached before it', async () => {
+    // session_guidance is the most heavily branched section: it selects among
+    // four compute functions on (gpt x agentMode). Warm on Claude, then build
+    // GPT. Under name-only keying the GPT build served the Claude text.
+    const tools = [
+      { name: 'Agent' },
+      { name: 'AskUserQuestion' },
+      { name: 'Bash' },
+    ] as unknown as Parameters<typeof getSystemPrompt>[0]
+
+    const claude = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
+    const gpt = (await getSystemPrompt(tools, 'gpt-5.6-terra')).join('\n')
+
+    expect(claude).toContain('# Session-specific guidance')
+    expect(gpt).toContain('# Session-Specific Guidance')
+    expect(gpt).not.toContain('# Session-specific guidance')
   })
 })

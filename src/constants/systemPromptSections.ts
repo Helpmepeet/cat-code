@@ -18,7 +18,9 @@ type ComputeFn = () => string | null | Promise<string | null>
  *   intentional (`prompts.ts` verification-agent gate; cf. `Tool.ts:304`,
  *   `tools/AgentTool/forkSubagent.ts:64`). Keying on them would make a cold→warm
  *   flag transition rewrite the prompt mid-session, which is the behavior those
- *   comments exist to prevent.
+ *   comments exist to prevent. Note this damps more than gates: `frc` renders
+ *   `keepRecent` from its remote config straight into the prompt text, so that
+ *   value is frozen for the session too.
  * - **`language`.** Language is read once per session by contract; see the
  *   comment at its registration site in `prompts.ts`.
  * - **Anything that changes every turn.** A per-turn-varying input would grow
@@ -74,9 +76,13 @@ function encodeKeyInput(value: SectionKeyInput): string {
 function sectionCacheKey(name: string, keyInputs: SectionKeyInput): string {
   // '#' separates, not '\0': a literal NUL in this file makes git classify it
   // binary and makes `rg` skip it during directory traversal, so the module
-  // silently disappears from searches. Section names are plain identifiers, and
-  // the encoding below is self-delimiting, so any separator is unambiguous.
-  return `${name}#${encodeKeyInput(keyInputs)}`
+  // silently disappears from searches.
+  //
+  // The name is length-prefixed so the split stays unambiguous even if a
+  // section name ever contains the separator. Without it, ('a', 'ab#z') and
+  // ('a#s4:ab', null) both encode to "a#s4:ab#z" and share one entry, which
+  // means one section served under another's inputs.
+  return `${name.length}:${name}#${encodeKeyInput(keyInputs)}`
 }
 
 /**
@@ -135,7 +141,13 @@ export async function resolveSystemPromptSections(
         return cache.get(s.cacheKey) ?? null
       }
       const value = await s.compute()
-      setSystemPromptSectionCacheEntry(s.cacheKey, value)
+      // A cache-breaking section must not write either. Its entry is never read
+      // back by itself, but a cached section registered later under the same
+      // name and no key inputs would land on the identical key and serve this
+      // volatile section's last value.
+      if (!s.cacheBreak) {
+        setSystemPromptSectionCacheEntry(s.cacheKey, value)
+      }
       return value
     }),
   )

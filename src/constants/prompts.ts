@@ -527,8 +527,10 @@ function getAgentModeToneSection(): string {
 }
 
 /**
- * Key inputs for sections that branch on the enabled tool set. Sorted so two
- * builds with the same tools key alike regardless of tool ordering.
+ * Key inputs for sections that branch on the enabled tool set. Sorted because
+ * the guidance builders test membership, so ordering cannot change the output.
+ * Contrast `additionalWorkingDirectories`, which is keyed unsorted: the
+ * environment section renders those in order, so their order IS an input.
  */
 function toolNamesKeyInput(enabledTools: Set<string>): string[] {
   return [...enabledTools].sort()
@@ -536,8 +538,10 @@ function toolNamesKeyInput(enabledTools: Set<string>): string[] {
 
 /**
  * Key inputs for sections that branch on available skills. The guidance
- * builders only read `skillToolCommands.length > 0`, but the names are keyed
- * so a future site that renders them cannot inherit another build's text.
+ * builders only read `skillToolCommands.length > 0` today, so keying the names
+ * is finer than strictly required. That is the intended direction: over-keying
+ * costs one extra cache entry, while under-keying serves a prompt built for a
+ * different skill set, and nothing would surface that.
  */
 function skillNamesKeyInput(skillToolCommands: Command[]): string[] {
   return skillToolCommands.map(command => command.name).sort()
@@ -776,6 +780,13 @@ ${CYBER_RISK_INSTRUCTION}`,
     systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
       getAntModelOverrideSection(),
     ),
+    // env_info_simple and frc predate this fork, so their key sets were derived
+    // by tracing consumers rather than by assumption: computeSimpleEnvInfo and
+    // getFunctionResultClearingSection have no caller outside this file, and
+    // nothing reads the section cache by name (resolveSystemPromptSections is
+    // the only reader). Everything else those computes touch is either
+    // model-derived, a memoized process fact, or cwd/worktree state that the
+    // clearSystemPromptSections() sites already cover.
     systemPromptSection(
       'env_info_simple',
       { model, additionalWorkingDirectories },
@@ -785,9 +796,10 @@ ${CYBER_RISK_INSTRUCTION}`,
     // setting immediately (components/LanguagePicker.tsx, applied at
     // components/Settings/Config.tsx), but this section keeps the value read at
     // the first prompt build, so a change takes effect on the next /clear,
-    // /compact, or restart. Those are exactly the paths that call
-    // clearSystemPromptSections() (/clear reaches it through
-    // clearSessionCaches -> runPostCompactCleanup).
+    // /compact, or restart. Those are the paths a user reaches for; the full
+    // set that calls clearSystemPromptSections() also includes worktree
+    // enter/exit and session restore. (/clear reaches it indirectly, through
+    // clearSessionCaches -> runPostCompactCleanup.)
     //
     // That is why NO_SECTION_INPUTS is deliberate here rather than an omission:
     // keying on settings.language would make the change apply mid-session and

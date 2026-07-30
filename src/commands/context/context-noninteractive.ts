@@ -29,7 +29,7 @@ type CollectContextDataInput = {
     agentDefinitions: AgentDefinitionsResult
     customSystemPrompt?: string
     appendSystemPrompt?: string
-    mcpClients?: MCPServerConnection[]
+    mcpClients: MCPServerConnection[]
   }
 }
 
