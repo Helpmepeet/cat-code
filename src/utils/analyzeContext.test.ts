@@ -7,3 +7,8 @@ test('/context resolves the Plan-mode runtime model with the request path\'s 200
     /exceeds200kTokens:\s*toolPermissionContext\.mode === 'plan' &&\s*doesMostRecentAssistantMessageExceed200k\(messages\),/,
   )
 })
+
+test('/context measures the Agent Mode prompt assembled for that runtime model', () => {
+  expect(source).toContain('getAgentModeSystemPromptSections(\n          tools,\n          runtimeModel,')
+  expect(source).toContain('agentModePromptSections,')
+})

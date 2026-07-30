@@ -2810,7 +2810,15 @@ export function REPL({
       const toolUseContext = getToolUseContext(messagesRef.current, [], new AbortController(), mainLoopModel);
       const bgAdditionalDirs = Array.from(toolPermissionContext.additionalWorkingDirectories.keys());
       const bgIsAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
-      const [defaultSystemPrompt, agentModePromptSectionsBg, userContext, systemContext] = await Promise.all([getSystemPrompt(toolUseContext.options.tools, mainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients), bgIsAgentMode && !customSystemPrompt ? getAgentModeSystemPromptSections(toolUseContext.options.tools, mainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients) : Promise.resolve(undefined), getUserContext(), getSystemContext()]);
+      const bgRuntimePermissionMode = toolUseContext.getAppState().toolPermissionContext.mode;
+      const bgRuntimeMainLoopModel = getRuntimeMainLoopModel({
+        permissionMode: bgRuntimePermissionMode,
+        mainLoopModel: toolUseContext.options.mainLoopModel,
+        exceeds200kTokens:
+          bgRuntimePermissionMode === 'plan' &&
+          doesMostRecentAssistantMessageExceed200k(messagesRef.current),
+      });
+      const [defaultSystemPrompt, agentModePromptSectionsBg, userContext, systemContext] = await Promise.all([getSystemPrompt(toolUseContext.options.tools, bgRuntimeMainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients), bgIsAgentMode && !customSystemPrompt ? getAgentModeSystemPromptSections(toolUseContext.options.tools, bgRuntimeMainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients) : Promise.resolve(undefined), getUserContext(), getSystemContext()]);
       const systemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition,
         toolUseContext,
@@ -3138,7 +3146,7 @@ export function REPL({
       logForDebugging(`[REPL:query-setup] getSystemPrompt complete sectionCount=${result.length}`);
       return result;
     }),
-    isAgentModeActive && !customSystemPrompt ? getAgentModeSystemPromptSections(freshTools, mainLoopModelParam, additionalWorkingDirectories, freshMcpClients).then(result => {
+    isAgentModeActive && !customSystemPrompt ? getAgentModeSystemPromptSections(freshTools, runtimeMainLoopModel, additionalWorkingDirectories, freshMcpClients).then(result => {
       logForDebugging(`[REPL:query-setup] getAgentModeSystemPromptSections complete sectionCount=${result?.length ?? 0}`);
       return result;
     }) : Promise.resolve(undefined),
