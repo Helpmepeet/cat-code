@@ -8,6 +8,7 @@ import {
   isSerializedLocalJsxPending,
   markSerializedLocalJsxPending,
   resolveToolJsxUpdate,
+  shouldRepinForLocalJsxTransition,
 } from './immediateCommand.js'
 
 afterEach(() => {
@@ -114,5 +115,14 @@ describe('immediate display command flags', () => {
     for (const command of [context, stats, help, usage]) {
       expect(command.immediate).toBe(true)
     }
+  })
+})
+
+describe('immediate panel scroll restoration', () => {
+  test('repins when a local JSX panel opens or closes', () => {
+    expect(shouldRepinForLocalJsxTransition(false, true)).toBe(true)
+    expect(shouldRepinForLocalJsxTransition(true, false)).toBe(true)
+    expect(shouldRepinForLocalJsxTransition(false, false)).toBe(false)
+    expect(shouldRepinForLocalJsxTransition(true, true)).toBe(false)
   })
 })

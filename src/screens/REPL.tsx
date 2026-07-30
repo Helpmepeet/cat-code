@@ -52,7 +52,7 @@ import { useLogMessages } from '../hooks/useLogMessages.js';
 import { useReplBridge } from '../hooks/useReplBridge.js';
 import { usePtcloveBridge } from '../hooks/usePtcloveBridge.js';
 import { type Command, type CommandResultDisplay, type ResumeEntrypoint, clearCommandsCache, getCommandName, getCommands, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js';
-import { claimImmediateOwner, getImmediateCommandQueryState, isCurrentImmediateOwner, isSerializedLocalJsxPending, resolveToolJsxUpdate } from '../utils/immediateCommand.js';
+import { claimImmediateOwner, getImmediateCommandQueryState, isCurrentImmediateOwner, isSerializedLocalJsxPending, resolveToolJsxUpdate, shouldRepinForLocalJsxTransition } from '../utils/immediateCommand.js';
 import type { PromptInputMode, QueuedCommand, VimMode } from '../types/textInputTypes.js';
 import { MessageSelector, selectableUserMessagesFilter, messagesAfterAreOnlySynthetic } from '../components/MessageSelector.js';
 import { useIdeLogging } from '../hooks/useIdeLogging.js';
@@ -2323,6 +2323,15 @@ export function REPL({
     if (was !== now) repinScroll();
     prevDialogRef.current = focusedInputDialog;
   }, [focusedInputDialog, repinScroll]);
+  // Immediate panels can cover messages that complete while they are open.
+  // Restore the live viewport before painting either side of the transition.
+  const prevLocalJsxVisibleRef = useRef(isShowingLocalJSXCommand);
+  useLayoutEffect(() => {
+    if (shouldRepinForLocalJsxTransition(prevLocalJsxVisibleRef.current, isShowingLocalJSXCommand)) {
+      repinScroll();
+    }
+    prevLocalJsxVisibleRef.current = isShowingLocalJSXCommand;
+  }, [isShowingLocalJSXCommand, repinScroll]);
   function onCancel() {
     if (focusedInputDialog === 'elicitation') {
       // Elicitation dialog handles its own Escape, and closing it shouldn't affect any loading state.

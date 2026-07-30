@@ -7,6 +7,13 @@ export function getImmediateCommandQueryState(
   return localQueryActive || externalQueryActive
 }
 
+export function shouldRepinForLocalJsxTransition(
+  wasVisible: boolean,
+  isVisible: boolean,
+): boolean {
+  return wasVisible !== isVisible
+}
+
 /**
  * Whether inference-config commands (/model, /fast, /effort) should execute
  * immediately (during a running query) rather than waiting for the current
