@@ -573,39 +573,7 @@ export async function getAgentModeSystemPromptSections(
       'summarize_tool_results',
       () => SUMMARIZE_TOOL_RESULTS_SECTION,
     ),
-    systemPromptSection('session_transcripts', () => `## Reading session transcripts
-
-Cat-code session files are line-oriented JSONL. Use Grep with patterns on the "type" or other fields — do NOT write a custom parser. The shape is stable.
-
-Paths:
-
-    ~/.cat-code/projects/<sanitized-cwd>/<session-id>.jsonl
-    ~/.cat-code/projects/<sanitized-cwd>/<session-id>/subagents/agent-<hash>.jsonl
-    ~/.cat-code/projects/<sanitized-cwd>/<session-id>/subagents/agent-<hash>.meta.json
-
-Given a session id prefix, resolve the file with Glob — pass the projects dir as the \`path\` argument, not the default cwd:
-
-    Glob pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"
-
-Common queries on a transcript:
-
-    Grep '"type":"tool_use"'      # list tool calls
-    Grep '"stop_reason"'          # find last API response boundary
-    Grep '"type":"subagent-'      # enumerate spawn/terminal entries
-    Grep '"tool_use_id":"call_'   # link a tool_result back to its tool_use
-
-The subagent sidecar .meta.json contains:
-
-    {
-      "agentType": "general-purpose",
-      "description": "audit your code",
-      "worktreePath": "...",
-      "parentSessionId": "...",
-      "parentToolUseId": "...",
-      "spawnedAt": "2026-04-16T15:45:25Z"
-    }
-
-Read .meta.json first when you want to know what a subagent was for or who spawned it.`),
+    systemPromptSection('session_transcripts', () => SESSION_TRANSCRIPTS_SECTION),
   ]
 
   const resolvedDynamicSections = await resolveSystemPromptSections(dynamicSections)
@@ -782,39 +750,7 @@ ${CYBER_RISK_INSTRUCTION}`,
     ...(feature('KAIROS') || feature('KAIROS_BRIEF')
       ? [systemPromptSection('brief', () => getBriefSection())]
       : []),
-    systemPromptSection('session_transcripts', () => `## Reading session transcripts
-
-Cat-code session files are line-oriented JSONL. Use Grep with patterns on the "type" or other fields — do NOT write a custom parser. The shape is stable.
-
-Paths:
-
-    ~/.cat-code/projects/<sanitized-cwd>/<session-id>.jsonl
-    ~/.cat-code/projects/<sanitized-cwd>/<session-id>/subagents/agent-<hash>.jsonl
-    ~/.cat-code/projects/<sanitized-cwd>/<session-id>/subagents/agent-<hash>.meta.json
-
-Given a session id prefix, resolve the file with Glob — pass the projects dir as the \`path\` argument, not the default cwd:
-
-    Glob pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"
-
-Common queries on a transcript:
-
-    Grep '"type":"tool_use"'      # list tool calls
-    Grep '"stop_reason"'          # find last API response boundary
-    Grep '"type":"subagent-'      # enumerate spawn/terminal entries
-    Grep '"tool_use_id":"call_'   # link a tool_result back to its tool_use
-
-The subagent sidecar .meta.json contains:
-
-    {
-      "agentType": "general-purpose",
-      "description": "audit your code",
-      "worktreePath": "...",
-      "parentSessionId": "...",
-      "parentToolUseId": "...",
-      "spawnedAt": "2026-04-16T15:45:25Z"
-    }
-
-Read .meta.json first when you want to know what a subagent was for or who spawned it.`),
+    systemPromptSection('session_transcripts', () => SESSION_TRANSCRIPTS_SECTION),
   ]
 
   const resolvedDynamicSections =
@@ -1132,6 +1068,40 @@ Old tool results will be automatically cleared from context to free up space. Th
 }
 
 const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.`
+
+const SESSION_TRANSCRIPTS_SECTION = `## Reading session transcripts
+
+Cat-code session files are line-oriented JSONL. Use Grep with patterns on the "type" or other fields — do NOT write a custom parser. The shape is stable.
+
+Paths:
+
+    ~/.cat-code/projects/<sanitized-cwd>/<session-id>.jsonl
+    ~/.cat-code/projects/<sanitized-cwd>/<session-id>/subagents/agent-<hash>.jsonl
+    ~/.cat-code/projects/<sanitized-cwd>/<session-id>/subagents/agent-<hash>.meta.json
+
+Given a session id prefix, resolve the file with Glob — pass the projects dir as the \`path\` argument, not the default cwd:
+
+    Glob pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"
+
+Common queries on a transcript:
+
+    Grep '"type":"tool_use"'      # list tool calls
+    Grep '"stop_reason"'          # find last API response boundary
+    Grep '"type":"subagent-'      # enumerate spawn/terminal entries
+    Grep '"tool_use_id":"call_'   # link a tool_result back to its tool_use
+
+The subagent sidecar .meta.json contains:
+
+    {
+      "agentType": "general-purpose",
+      "description": "audit your code",
+      "worktreePath": "...",
+      "parentSessionId": "...",
+      "parentToolUseId": "...",
+      "spawnedAt": "2026-04-16T15:45:25Z"
+    }
+
+Read .meta.json first when you want to know what a subagent was for or who spawned it.`
 
 function getBriefSection(): string | null {
   if (!(feature('KAIROS') || feature('KAIROS_BRIEF'))) return null
