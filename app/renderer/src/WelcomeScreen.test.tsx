@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { OrchestratorReflect, WelcomeScreen } from './WelcomeScreen.js'
+import { OrchestratorReflect, RecentItem, WelcomeScreen } from './WelcomeScreen.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
@@ -9,6 +9,7 @@ function recent(over: Partial<RecentWorkspace> & { cwd: string }): RecentWorkspa
     name: over.cwd.split('/').pop() ?? over.cwd,
     appSessionId: null,
     live: false,
+    historySessionId: null,
     modifiedAtMs: Date.now(),
     trusted: null,
     sessionCount: 1,
@@ -175,6 +176,32 @@ test("the 'session' variant reflects orchestrator read-only and degrades a null 
   // No wire cwd → an honest placeholder, never a fabricated path.
   expect(html).toContain('This workspace')
   expect(html).toContain('No Codex account data')
+})
+
+test('P4-40 — a project whose sessions all came from the terminal is a live row', () => {
+  // It has no app id (nothing in it was ever a desktop session) but it does have
+  // an engine id, which is the identity the history route opens by. Before P4-40
+  // this rendered as a greyed, unclickable div.
+  const html = renderToStaticMarkup(
+    <RecentItem recent={recent({ cwd: '/w/two', historySessionId: 'ec' })} onOpen={noop} />,
+  )
+  expect(html).toContain('<button')
+  expect(html).toContain('hover:bg-white/[0.045]')
+  expect(html).not.toContain('opacity-60')
+})
+
+test('P4-40 — a project whose folder is gone stays unopenable, and says what to do', () => {
+  const html = renderToStaticMarkup(
+    <RecentItem recent={recent({ cwd: '/w/gone' })} onOpen={noop} />,
+  )
+  expect(html).not.toContain('<button')
+  expect(html).toContain('opacity-60')
+  expect(html).toContain('This folder is missing from disk.')
+  // The stale claim this session removed: open-from-history shipped, so the
+  // desktop CAN restore a terminal-created project.
+  expect(html).not.toContain('The desktop cannot restore it yet')
+  // User-visible text rule (CLAUDE.md §7): no em dash on any read surface.
+  expect(html).not.toContain('—')
 })
 
 test('the orchestrator toggle is a read-only reflection of agent-mode', () => {

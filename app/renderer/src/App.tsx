@@ -233,12 +233,15 @@ import {
 import {
   createSessionsCatalogState,
   reduceSessionsCatalogState,
+  resolveRecentOpenRoute,
   resolveSessionOpenRoute,
   selectMergedSessionRows,
   selectRecentWorkspaces,
   selectSessionsCatalog,
   withResolvedTitle,
   type MergedSessionRow,
+  type RecentWorkspace,
+  type SessionOpenRoute,
 } from './sessionsCatalogState.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
@@ -1749,14 +1752,33 @@ export function App() {
   // restorable row, so a row whose own menu said "Restore" only re-focused a dead
   // pane. `resolveSessionOpenRoute` is now the single decision
   // (`sessionsCatalogState.ts`), so a new caller cannot reintroduce the split.
-  const openCatalogRow = useCallback(
-    (row: MergedSessionRow) => {
-      const route = resolveSessionOpenRoute(row)
+  const applyOpenRoute = useCallback(
+    (route: SessionOpenRoute) => {
       if (route.kind === 'focus') selectTab(route.appSessionId)
       else if (route.kind === 'restore') void performRestore(route.appSessionId)
       else if (route.kind === 'history') void openHistorySession(route.engineSessionId)
     },
     [selectTab, performRestore, openHistorySession],
+  )
+
+  const openCatalogRow = useCallback(
+    (row: MergedSessionRow) => {
+      applyOpenRoute(resolveSessionOpenRoute(row))
+    },
+    [applyOpenRoute],
+  )
+
+  // P4-40 — the Welcome launcher opens a project through that same one decision.
+  // It used to open by app id only, so a project whose sessions were all created
+  // in the terminal had nothing to open with and its click was dropped here.
+  // `resolveRecentOpenRoute` gives it the history route, which passes ONLY the
+  // engine session id: main resolves the workspace from the engine-written
+  // baseline cache (`app/main/openHistorySession.ts`), so HC1 still holds.
+  const openRecentWorkspace = useCallback(
+    (recent: RecentWorkspace) => {
+      applyOpenRoute(resolveRecentOpenRoute(recent))
+    },
+    [applyOpenRoute],
   )
 
   function submitSession(
@@ -2880,19 +2902,16 @@ export function App() {
           </div>
         ) : workspacePanels.length === 0 || !activeSessionId ? (
           // P4-17 — the rich launcher replaces the minimal empty shell. Reads
-          // derived recents (D5) + the P4-5 pool + agent-mode, wires open/restore
-          // (HC1 id-only) and the HC1 folder picker (post-spawn trust gate).
+          // derived recents (D5) + the P4-5 pool + agent-mode, wires open/restore/
+          // open-from-history (HC1 id-only, P4-40) and the HC1 folder picker
+          // (post-spawn trust gate).
           <WelcomeScreen
             recents={welcomeRecents}
             accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}
             orchestratorActive={
               selectAgentModeSnapshot(orchestrator, activeSessionId)?.active ?? false
             }
-            onOpenRecent={recent => {
-              if (recent.appSessionId == null) return
-              if (recent.live) selectTab(recent.appSessionId)
-              else void performRestore(recent.appSessionId)
-            }}
+            onOpenRecent={openRecentWorkspace}
             onOpenFolder={() => void newSession()}
           />
         ) : (

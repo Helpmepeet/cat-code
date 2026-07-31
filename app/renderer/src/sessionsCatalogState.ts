@@ -585,16 +585,25 @@ export type RecentWorkspace = {
   name: string
   /**
    * The most-recent registry-backed session in this workspace (a row carrying an
-   * app id), or null when every row here is history-only. The Welcome launcher
-   * opens recents by `appSessionId` (select/restore); a purely-history project
-   * has none, so the launcher shows it browse-only. NOTE: the sidebar/Sessions
-   * page now open a history row by its ENGINE id via `openHistorySession`
-   * (SESSIONS-UNIFICATION 2026-07-20) — the launcher could adopt that same path,
-   * a follow-on not wired here (out of the sessions-unification scope).
+   * app id), or null when every session in it was created in the terminal. It
+   * WINS when both identities exist: an already-known desktop session is focused
+   * or restored rather than resumed a second time from its transcript.
    */
   appSessionId: string | null
   /** True when the openable row is live (select), false ⇒ restore. */
   live: boolean
+  /**
+   * The engine session id this project opens by when it has no registry row —
+   * every session in it was created in the terminal (P4-40). Routed through
+   * `openHistorySession`, the SAME path the sidebar and the Sessions page take
+   * (SESSIONS-UNIFICATION 2026-07-20): main resolves the workspace from the
+   * engine-written baseline cache, so HC1 holds and no filesystem path ever
+   * crosses from the renderer.
+   *
+   * Null when no session here is openable that way — see `openableHistoryId`
+   * for the one case that leaves a project with neither identity.
+   */
+  historySessionId: string | null
   modifiedAtMs: number
   /**
    * Per-path trust from the join of live sessions' `workspace-trust.snapshot`
@@ -607,10 +616,26 @@ export type RecentWorkspace = {
 }
 
 /**
+ * The engine session id a terminal-created session opens by, or null when it
+ * opens by nothing. Openable requires a recorded workspace that is non-empty AND
+ * still on disk — the SAME gate the sidebar row applies (`deriveMergedRowVisual`,
+ * `sidebarState.ts:205`, bug-sweep #1). Without the `cwdExists` half the launcher
+ * would offer the ~40 stale transcripts whose temp workspaces are long gone, and
+ * the click would come back as the host's typed `invalid_cwd` rejection.
+ */
+function openableHistoryId(row: MergedSessionRow): string | null {
+  if (row.inRegistry || row.appSessionId != null) return null
+  if (row.cwd.trim().length === 0 || !row.cwdExists) return null
+  return row.sessionId
+}
+
+/**
  * Collapse merged session rows into distinct-workspace recents, newest-first,
- * capped to `limit`. Prefers an openable (registry) row's app id + live flag so
- * a project with any openable session can be reopened; a purely-history project
- * yields `appSessionId: null`.
+ * capped to `limit`. Carries BOTH openable identities, newest of each kind: a
+ * registry row's app id + live flag (focus/restore), and the engine id of a
+ * terminal-created session (open-by-engine-id). A project keeps `appSessionId:
+ * null` when every session in it was created in the terminal — which no longer
+ * means it cannot be opened, only that it opens by the other identity (P4-40).
  *
  * Labels go through `disambiguateWorkspaceLabels`, the SAME helper the sidebar's
  * group headers use (CC-14): keying on cwd is right, but labelling each recent
@@ -649,6 +674,7 @@ export function selectRecentWorkspaces(
         name: basename(row.cwd) || row.cwd,
         appSessionId: row.appSessionId,
         live: row.live,
+        historySessionId: openableHistoryId(row),
         modifiedAtMs: row.modifiedAtMs,
         trusted: trustByCwd.has(row.cwd) ? trustByCwd.get(row.cwd)! : null,
         sessionCount: 1,
@@ -665,6 +691,11 @@ export function selectRecentWorkspaces(
       existing.appSessionId = row.appSessionId
       existing.live = row.live
     }
+    // The same adoption for the other identity, so a project made entirely of
+    // terminal-created sessions still names one openable session.
+    if (existing.historySessionId == null) {
+      existing.historySessionId = openableHistoryId(row)
+    }
   }
   const visible = [...byCwd.values()]
     .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs)
@@ -676,6 +707,33 @@ export function selectRecentWorkspaces(
     // to the seed above and the `??` fallback is a no-op belt.
     name: labels.get(recent.cwd) ?? recent.name,
   }))
+}
+
+/**
+ * How a Welcome recent opens (P4-40). Delegates to `resolveSessionOpenRoute` —
+ * the ONE open decision (P4-29) — rather than re-deriving it, so the launcher
+ * cannot drift from the sidebar and the Sessions page the way it had: it opened
+ * by app id only, which left a project whose sessions all came from the terminal
+ * rendered as a dead row.
+ *
+ * `selectRecentWorkspaces` has already reduced the project to at most one
+ * identity of each kind, so this only has to hand them over in the shape the row
+ * decision reads. Neither identity ⇒ nothing here can be opened.
+ */
+export function resolveRecentOpenRoute(recent: RecentWorkspace): SessionOpenRoute {
+  if (recent.appSessionId == null && recent.historySessionId == null) {
+    return { kind: 'none' }
+  }
+  return resolveSessionOpenRoute({
+    appSessionId: recent.appSessionId,
+    live: recent.live,
+    cwd: recent.cwd,
+    sessionId: recent.historySessionId ?? '',
+    // A recent carrying an app id was adopted from a registry row, and one
+    // carrying only an engine id from a history row (the merge gives registry
+    // rows an app id and history rows none, `selectMergedSessionRows`).
+    inRegistry: recent.appSessionId != null,
+  })
 }
 
 export type DateBucket = { label: string; rows: MergedSessionRow[] }

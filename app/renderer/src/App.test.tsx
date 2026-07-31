@@ -196,8 +196,44 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   expect(routeStart).toBeGreaterThan(-1)
   const routeBody = source.slice(routeStart, routeEnd)
   expect(routeBody).toContain('resolveSessionOpenRoute(row)')
-  expect(routeBody).toContain("route.kind === 'restore'")
-  expect(routeBody).toContain('void performRestore(route.appSessionId)')
+  // The dispatch itself moved into `applyOpenRoute` when the Welcome launcher
+  // became a third caller (P4-40); the regression it pins is unchanged, so the
+  // assertion follows the code rather than being dropped.
+  const applyStart = source.indexOf('const applyOpenRoute = useCallback(')
+  expect(applyStart).toBeGreaterThan(-1)
+  const applyBody = source.slice(applyStart, routeStart)
+  expect(applyBody).toContain("route.kind === 'restore'")
+  expect(applyBody).toContain('void performRestore(route.appSessionId)')
+})
+
+test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history route', () => {
+  // The defect this pins: the launcher opened a recent by `appSessionId` alone,
+  // and a project whose sessions were ALL created in the terminal carries none —
+  // so its click hit an early return in this file and vanished. Deleting the
+  // disabled rendering without this wiring produces a row that looks live and
+  // does nothing, which is why the guard and the route land together.
+  //
+  // LAYER HONESTY: SSR-only suite, so this asserts the CALL SITE (the P4-29
+  // tripwire's precedent above). The route decision itself is covered
+  // behaviourally in sessionsCatalogState.test.ts.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // The prop is the shared handler, not an inline id-only branch.
+  expect(source).toContain('onOpenRecent={openRecentWorkspace}')
+  expect(source).not.toContain('if (recent.appSessionId == null) return')
+
+  const recentStart = source.indexOf('const openRecentWorkspace = useCallback(')
+  expect(recentStart).toBeGreaterThan(-1)
+  const recentEnd = source.indexOf('\n  function submitSession(', recentStart)
+  const recentBody = source.slice(recentStart, recentEnd)
+  expect(recentBody).toContain('applyOpenRoute(resolveRecentOpenRoute(recent))')
+
+  // HC1: the history hop passes the engine id only. A recent that handed a cwd
+  // across the boundary would be a baseline violation, not a shortcut.
+  const applyStart = source.indexOf('const applyOpenRoute = useCallback(')
+  const applyEnd = source.indexOf('const openCatalogRow = useCallback(', applyStart)
+  const applyBody = source.slice(applyStart, applyEnd)
+  expect(applyBody).toContain('void openHistorySession(route.engineSessionId)')
 })
 
 test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the page unmounts', () => {

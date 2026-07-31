@@ -13,6 +13,7 @@ import {
   formatRelativeTime,
   groupByWorkspace,
   reduceSessionsCatalogState,
+  resolveRecentOpenRoute,
   resolveSessionLabel,
   resolveSessionOpenRoute,
   selectMergedSessionRows,
@@ -21,6 +22,7 @@ import {
   sortSessionRows,
   withResolvedTitle,
   type MergedSessionRow,
+  type RecentWorkspace,
 } from './sessionsCatalogState.js'
 import { tabLabel } from './tabBarModel.js'
 
@@ -764,13 +766,46 @@ describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
     expect(one.name).toBe('one')
   })
 
-  test('adopts an openable registry id; history-only stays non-openable', () => {
+  test('adopts an openable registry id; a terminal-only project opens by engine id', () => {
     const recents = selectRecentWorkspaces(rows, new Map())
     const one = recents.find(r => r.cwd === '/w/one')!
     expect(one.appSessionId).toBe('a')
     expect(one.live).toBe(true)
+    // P4-40 — /w/two has no registry row at all (every session in it was created
+    // in the terminal). That is an openable identity now, not a dead row: it
+    // carries the engine id the `openHistorySession` path takes.
     const two = recents.find(r => r.cwd === '/w/two')!
-    expect(two.appSessionId).toBeNull() // history-only → browse-only (HC1/P4-6b)
+    expect(two.appSessionId).toBeNull()
+    expect(two.historySessionId).toBe('ec')
+  })
+
+  test('a project whose folder is gone from disk has NO openable identity', () => {
+    // The one case the launcher must still refuse (bug-sweep #1): the recorded
+    // workspace no longer exists, so opening it would come back as the host's
+    // typed `invalid_cwd` rejection. Same gate the sidebar row applies.
+    const gone = selectMergedSessionRows(
+      [],
+      snapshot([entry({ sessionId: 'eg', cwd: '/w/gone', cwdExists: false })]),
+    )
+    const recents = selectRecentWorkspaces(gone, new Map())
+    expect(recents).toHaveLength(1)
+    expect(recents[0]!.appSessionId).toBeNull()
+    expect(recents[0]!.historySessionId).toBeNull()
+    expect(resolveRecentOpenRoute(recents[0]!)).toEqual({ kind: 'none' })
+  })
+
+  test('the newest openable terminal session wins when the newest one is unopenable', () => {
+    const mixed = selectMergedSessionRows(
+      [],
+      snapshot([
+        entry({ sessionId: 'new', cwd: '/w/two', cwdExists: false, modifiedAtMs: 9000 }),
+        entry({ sessionId: 'old', cwd: '/w/two', modifiedAtMs: 8000 }),
+      ]),
+    )
+    // Both rows share a cwd, so `cwdExists` disagreeing between them is a
+    // stale-snapshot artefact; adopting the openable one keeps the project
+    // reachable instead of letting row order decide.
+    expect(selectRecentWorkspaces(mixed, new Map())[0]!.historySessionId).toBe('old')
   })
 
   test('trust flag joins from the cwd map; unknown ⇒ null', () => {
@@ -787,6 +822,53 @@ describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
 
   test('empty input ⇒ empty list', () => {
     expect(selectRecentWorkspaces([], new Map())).toEqual([])
+  })
+})
+
+describe('resolveRecentOpenRoute (P4-40 — the launcher opens by the SAME decision)', () => {
+  function recent(over: Partial<RecentWorkspace> & { cwd: string }): RecentWorkspace {
+    return {
+      name: 'proj',
+      appSessionId: null,
+      live: false,
+      historySessionId: null,
+      modifiedAtMs: 0,
+      trusted: null,
+      sessionCount: 1,
+      ...over,
+    }
+  }
+
+  test('a live registry project is focused', () => {
+    expect(
+      resolveRecentOpenRoute(recent({ cwd: '/w/one', appSessionId: 'a', live: true })),
+    ).toEqual({ kind: 'focus', appSessionId: 'a' })
+  })
+
+  test('a registry project whose process is gone is restored', () => {
+    expect(
+      resolveRecentOpenRoute(recent({ cwd: '/w/one', appSessionId: 'a', live: false })),
+    ).toEqual({ kind: 'restore', appSessionId: 'a' })
+  })
+
+  // The defect P4-40 fixes: this project used to resolve to nothing at all, so
+  // the launcher greyed it out and told the operator to go to the terminal.
+  test('a project whose sessions were all created in the terminal opens by engine id', () => {
+    expect(
+      resolveRecentOpenRoute(recent({ cwd: '/w/two', historySessionId: 'ec' })),
+    ).toEqual({ kind: 'history', engineSessionId: 'ec' })
+  })
+
+  test('a registry id wins over an engine id — an open session is never resumed twice', () => {
+    expect(
+      resolveRecentOpenRoute(
+        recent({ cwd: '/w/one', appSessionId: 'a', live: true, historySessionId: 'ec' }),
+      ),
+    ).toEqual({ kind: 'focus', appSessionId: 'a' })
+  })
+
+  test('neither identity ⇒ nothing to open', () => {
+    expect(resolveRecentOpenRoute(recent({ cwd: '/w/gone' }))).toEqual({ kind: 'none' })
   })
 })
 

@@ -35,6 +35,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
@@ -243,7 +244,6 @@ function ProjectPicker({
                   key={recent.cwd}
                   recent={recent}
                   onOpen={() => {
-                    if (recent.appSessionId == null) return
                     onOpenRecent(recent)
                     setOpen(false)
                   }}
@@ -278,14 +278,23 @@ function ProjectPicker({
   )
 }
 
-function RecentItem({
+/**
+ * One recent-project row. Exported so its openable/unopenable rendering can be
+ * asserted directly: the dropdown is closed on first paint, so the rows never
+ * appear in this package's SSR markup (the `OrchestratorReflect` convention).
+ */
+export function RecentItem({
   recent,
   onOpen,
 }: {
   recent: RecentWorkspace
   onOpen: () => void
 }) {
-  const openable = recent.appSessionId != null
+  // P4-40 — openability is the shared open decision, not a second rule here. A
+  // project made only of terminal-created sessions used to fail this test and
+  // render dead; it now opens by engine id like every other surface does. What
+  // still cannot open is a project whose folder is gone from disk.
+  const openable = resolveRecentOpenRoute(recent).kind !== 'none'
   const untrusted = recent.trusted === false
   const body = (
     <>
@@ -328,7 +337,7 @@ function RecentItem({
   return (
     <div
       className="flex w-full cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left opacity-60"
-      title="Open this project from the terminal. The desktop cannot restore it yet."
+      title="This folder is missing from disk. Put it back to open the project again."
     >
       {body}
     </div>
