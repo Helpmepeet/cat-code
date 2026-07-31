@@ -1599,3 +1599,36 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(source).toContain('el.setSelectionRange(caret, caret)')
   expect(source).toContain('pendingCaretRef.current = {')
 })
+
+test('P4-50: the account-health bar sits above the workspace and cannot gate a send', () => {
+  // The ruling's two hard constraints are structural, so they are pinned
+  // structurally. (1) ONE bar, mounted as a sibling ABOVE the workspace, not
+  // inside a pane: a split view must not stack one copy per transcript. (2)
+  // SessionPane owns the composer and every disabled state on it, and is never
+  // handed the derivation, so no send can be gated on account health.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneStart = source.indexOf('export function SessionPane({')
+  expect(paneStart).toBeGreaterThan(-1)
+  expect(source.slice(paneStart)).not.toContain('accountHealth')
+
+  const mount = source.indexOf('<BannerStack')
+  expect(mount).toBeGreaterThan(-1)
+  expect(mount).toBeLessThan(paneStart)
+  expect(source.indexOf('<BannerStack', mount + 1)).toBe(-1)
+  expect(source.indexOf('<WorkspaceLayout', mount)).toBeGreaterThan(mount)
+
+  // The dismissal is in-memory for the run: #12 deleted the persisted keys.
+  expect(source).toContain('setDismissedAccountHealthId(banner.id)')
+  expect(source).not.toContain('dismissedReauth')
+  expect(source).not.toContain('acknowledgedReauthWall')
+})
+
+test('P4-50: a cold start renders no account-health bar', () => {
+  // The pool has not reported, so there is nothing surprising to say. This is
+  // the healthy-pool half of the GUI check, closed headlessly.
+  const html = renderToStaticMarkup(<App />)
+
+  expect(html).not.toContain('aria-label="Notices"')
+  expect(html).not.toContain('Codex usage limit reached')
+  expect(html).not.toContain('No Codex account is ready to use')
+})

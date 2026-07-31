@@ -151,9 +151,9 @@ export function renameError(
   return null
 }
 
-export function formatResetLabel(sec: number | null): string {
+export function formatResetLabel(sec: number | null, now = Date.now()): string {
   if (!sec) return 'soon'
-  const ms = sec * 1000 - Date.now()
+  const ms = sec * 1000 - now
   if (ms <= 0) return 'now'
   const mins = Math.round(ms / 60000)
   if (mins < 60) return `in ${mins}m`

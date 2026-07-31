@@ -199,6 +199,8 @@ import {
   selectGlobalAccountsSnapshot,
   selectOAuthProgress,
 } from './accountsState.js'
+import { selectAccountHealthBanner } from './accountHealthBanner.js'
+import { BannerStack, type BannerNotice } from './BannerStack.js'
 import {
   createWorkspaceTrustState,
   reduceWorkspaceTrustState,
@@ -358,6 +360,8 @@ const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
 const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
 /** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
+/** Stable empty notice list so a healthy pool re-renders nothing (P4-50). */
+const EMPTY_BANNERS: readonly BannerNotice[] = []
 
 /**
  * Elements that already act on Enter/Escape themselves. The plain-key permission
@@ -1233,6 +1237,32 @@ export function App() {
       dispatchAccounts({ type: 'pool', pool: snapshot })
     }
   }, [accounts])
+
+  // P4-50 (O2a) — account health, pinned above the transcript instead of left to
+  // scroll away inside it. Session-free by construction: it reads the global pool
+  // view, so it is the same fact whichever tab is in front.
+  const accountHealthBanner = selectAccountHealthBanner(
+    selectGlobalAccountsSnapshot(accounts),
+  )
+  const accountHealthBannerId = accountHealthBanner?.id ?? null
+  const [dismissedAccountHealthId, setDismissedAccountHealthId] = useState<
+    string | null
+  >(null)
+  // Dismissal lasts exactly as long as the state that raised the bar. Nothing is
+  // persisted (#12 deleted those keys and they stay deleted), so it cannot
+  // outlive the run; and it is cleared the moment the pool recovers or escalates
+  // to the other variant, so a dismissal can never hide a NEW problem. The two
+  // failures to choose between were nagware and a silent failure; this drops the
+  // first and refuses the second.
+  useEffect(() => {
+    if (accountHealthBannerId !== dismissedAccountHealthId) {
+      setDismissedAccountHealthId(null)
+    }
+  }, [accountHealthBannerId, dismissedAccountHealthId])
+  const accountHealthBanners =
+    accountHealthBanner && accountHealthBanner.id !== dismissedAccountHealthId
+      ? [accountHealthBanner]
+      : EMPTY_BANNERS
 
   // P4-15 — the first-run surface and the add-account dialog both begin the SAME
   // engine OAuth flow (the `account.login` verb; browser handoff, the engine owns
@@ -2916,6 +2946,20 @@ export function App() {
             onOpenFolder={() => void newSession()}
           />
         ) : (
+          /* P4-50 (O2a) — the account-health bar is pinned HERE, above the
+           * transcript, rather than left to scroll away inside it. It sits in
+           * the chat branch alone, so it never doubles the Accounts page's own
+           * cap row, and OUTSIDE `WorkspaceLayout`, so a split view shows one
+           * bar rather than one per pane. It is a sibling of the transcript and
+           * never of the composer: nothing here can gate a send. Shell lifecycle
+           * errors keep their own surface (`shellError` above) and are not
+           * routed into this plane. */
+          <div className="flex min-h-0 flex-1 flex-col">
+            <BannerStack
+              banners={accountHealthBanners}
+              onAction={() => setActiveView('accounts')}
+              onDismiss={banner => setDismissedAccountHealthId(banner.id)}
+            />
 	          <WorkspaceLayout
 	            layout={workspaceLayout}
 	            panels={workspacePanels}
@@ -2926,7 +2970,8 @@ export function App() {
 	            onSelectSession={selectWorkspacePanelSession}
 	            onSplitPanel={splitWorkspacePanelWithSession}
 	            onWidthsChange={updateWorkspaceWidths}
-          />
+            />
+          </div>
         )}
 
         {/* In-session background-task strip (P4-9). The prototype's `TasksPanel`
