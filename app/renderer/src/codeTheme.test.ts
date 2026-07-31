@@ -159,6 +159,30 @@ function paletteOf(theme: CodeThemeKey): Record<string, string> {
 }
 
 describe('theme.css', () => {
+  test('reduced motion neutralizes every current renderer animation class', () => {
+    const mediaRule =
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*([^{}]+)\s*\{\s*([^{}]+)\s*\}\s*\}/.exec(
+        CSS,
+      )
+    expect(mediaRule).not.toBeNull()
+
+    const selectors = mediaRule?.[1]
+      .split(',')
+      .map(selector => selector.trim())
+      .sort()
+    expect(selectors).toEqual(
+      [
+        '.animate-ping',
+        '.animate-pulse',
+        '.animate-sa-pop',
+        '.animate-spin',
+        '.animate-toast-in',
+        '.animate-token-warn-in',
+      ].sort(),
+    )
+    expect(mediaRule?.[2].trim()).toBe('animation: none !important;')
+  })
+
   test('the default theme is the unscoped block, so it needs no rules of its own', () => {
     expect(CSS).not.toContain(`[data-code-theme="${DEFAULT_CODE_THEME}"]`)
     expect(Object.keys(paletteOf(DEFAULT_CODE_THEME)).sort()).toEqual(

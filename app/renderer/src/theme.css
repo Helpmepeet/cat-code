@@ -247,6 +247,20 @@
   }
 }
 
+/* The desktop renderer follows the operating-system motion preference. Keep the
+ * ordinary animation classes in markup, but make both indefinite Tailwind
+ * indicators and renderer-owned entrances static when reduced motion is active. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-ping,
+  .animate-spin,
+  .animate-toast-in,
+  .animate-sa-pop,
+  .animate-token-warn-in {
+    animation: none !important;
+  }
+}
+
 /* ── P4-18c fenced-code syntax theme (highlight.js / rehype-highlight) ─────────
  * A FIXED stylesheet for the `hljs-*` token classes rehype-highlight emits — NOT
  * dynamic Tailwind (CLAUDE.md app rule: an interpolated `text-[${hex}]` silently
