@@ -684,6 +684,28 @@ function createWindow(): void {
   const window = new BrowserWindow({
     width: 1100,
     height: 720,
+    // P4-46 — a floor DERIVED from the layout, not chosen. The renderer has no
+    // responsive layer (six `sm:grid-cols-*` uses, nothing else), so the window
+    // must not shrink past the widest composition that cannot reflow.
+    //
+    // Width 852 = 48 sidebar rail (`Sidebar.tsx:407` `w-12 shrink-0`, the only
+    // non-shrinking flow chrome) + 64 chat-pane padding (`App.tsx:3567` `p-8`)
+    // + 740 transcript/composer column (`App.tsx:3661` and
+    // `TranscriptView.tsx:233` `max-w-[740px]`, P4-24). The two pages with wider
+    // columns are `max-w` + `mx-auto` and reflow: Settings' 660 column beside its
+    // `w-[240px] shrink-0` rail (`SettingsShell.tsx:294,356`), and Accounts' 1000
+    // (`AccountsPage.tsx:768`), which already reflows at the 1100 default above.
+    //
+    // Height 495 = 28 macOS title bar (Electron's min* are OUTER-window measures;
+    // every other term here is CSS px) + 40 tab bar (`TabBar.tsx:119` `h-10`)
+    // + 64 chat-pane padding + 16 dock gap (`App.tsx:3567` `gap-4`) + 83 composer
+    // dock at rest (36 textarea + 11 pad + 2 focus rule + 12 + 22 actions bar)
+    // + 264 for the transcript, which must never be shorter than the tallest
+    // panel the shell opens over it: the 7-item session actions menu
+    // (`sessionActions.ts:320` `estimateSessionActionsMenuHeight`), which neither
+    // scrolls nor clamps its own height.
+    minWidth: 852,
+    minHeight: 495,
     backgroundColor: '#09090b',
     show: false,
     icon: APP_ICON_PATH,
