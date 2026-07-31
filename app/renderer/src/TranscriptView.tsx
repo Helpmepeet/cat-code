@@ -2139,6 +2139,16 @@ const INJECTED_TURN_FALLBACK: InjectedTurnStyle = {
  * ResultRow: the turn/session-end seam. Tone + label encode completed vs
  * errored; duration and cost ride as middot-separated detail.
  */
+const RESULT_ERROR_LABELS = new Map([
+  ['error_during_execution', 'Errored during execution'],
+  ['error_max_turns', 'Stopped · max turns reached'],
+  ['error_max_budget_usd', 'Stopped · budget limit reached'],
+  [
+    'error_max_structured_output_retries',
+    'Stopped · max output retries',
+  ],
+])
+
 function ResultSeam({
   isError,
   subtype,
@@ -2154,11 +2164,7 @@ function ResultSeam({
   // turn shows no seam. Only error/abort turns (isError) still surface a seam so
   // a broken turn stays visible. `isError` is the same signal that drives tone.
   if (!isError) return null
-  const label = isError
-    ? subtype === 'error_max_turns'
-      ? 'Stopped · max turns reached'
-      : 'Errored'
-    : 'Completed'
+  const label = RESULT_ERROR_LABELS.get(subtype) ?? 'Turn failed'
   const detail = [
     durationMs === undefined ? null : `${(durationMs / 1000).toFixed(1)}s`,
     totalCostUsd === undefined ? null : `$${totalCostUsd.toFixed(4)}`,

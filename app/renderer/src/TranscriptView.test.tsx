@@ -896,7 +896,7 @@ test('blocks mode: adjacent reasoning rows stay separate blocks, never grouped',
 // transcriptProjector.test.ts) but emits no transcript row, so there is no
 // SessionInitBanner render case to test here anymore.
 
-test('#6: a successful result row renders no turn-footer', () => {
+test('P4-60/#6: a successful result row renders no turn-footer', () => {
   const html = render({
     ...frameSource,
     id: 's:f:result',
@@ -915,30 +915,44 @@ test('#6: a successful result row renders no turn-footer', () => {
   expect(html).not.toContain('$0.0123')
 })
 
-test('P4-18a/#6: an errored result row still renders an Errored seam', () => {
+test.each([
+  ['error_during_execution', 'Errored during execution'],
+  ['error_max_turns', 'Stopped · max turns reached'],
+  ['error_max_budget_usd', 'Stopped · budget limit reached'],
+  [
+    'error_max_structured_output_retries',
+    'Stopped · max output retries',
+  ],
+] as const)('P4-60: %s renders its truthful result label', (subtype, label) => {
   const html = render({
     ...frameSource,
-    id: 's:f:result',
+    id: `s:f:result:${subtype}`,
     kind: 'result',
-    subtype: 'error_during_execution',
+    subtype,
     isError: true,
-    errors: ['boom'],
+    errors: ['Detailed failure text stays outside the label-only seam'],
+    durationMs: 4200,
+    totalCostUsd: 0.0123,
   })
 
-  expect(html).toContain('Errored')
+  expect(html).toContain(label)
+  expect(html).toContain('4.2s')
+  expect(html).toContain('$0.0123')
+  expect(html).not.toContain('Detailed failure text')
 })
 
-test('#6: an aborted/max-turns result row still renders its seam', () => {
+test('P4-60: an unknown error subtype renders a generic failure label', () => {
   const html = render({
     ...frameSource,
-    id: 's:f:result',
+    id: 's:f:result:future-error',
     kind: 'result',
-    subtype: 'error_max_turns',
+    subtype: 'error_future_subtype',
     isError: true,
     errors: [],
   })
 
-  expect(html).toContain('Stopped · max turns reached')
+  expect(html).toContain('Turn failed')
+  expect(html).not.toContain('Completed')
 })
 
 test('P4-18a: a compact-boundary row renders the compaction seam', () => {
