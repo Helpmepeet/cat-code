@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
+  connectionRecoveryMessage,
+  connectionTone,
   createConnectionState,
   isAppReadyFrame,
   isTerminalConnectionStatus,
@@ -169,5 +171,43 @@ test('the terminal partition agrees with the parked-prompt classifier', () => {
     const releases =
       resolvePendingSubmit({ status, inputEnabled: false }) === 'release'
     expect(isTerminalConnectionStatus(status)).toBe(releases)
+  }
+})
+
+test('the tone grammar has exactly two tones and reads danger only for terminal states', () => {
+  const tones = new Set(ALL_STATUSES.map(status => connectionTone(status)))
+  expect([...tones].sort()).toEqual(['danger', 'neutral'])
+
+  for (const status of ALL_STATUSES) {
+    // Pinned to the partition, not to a parallel list: a transient can never
+    // acquire the failure tone, which is the whole 24b guarantee.
+    expect(connectionTone(status)).toBe(
+      isTerminalConnectionStatus(status) ? 'danger' : 'neutral',
+    )
+  }
+})
+
+test('every danger status has a sentence and no transient one does', () => {
+  for (const status of ALL_STATUSES) {
+    const message = connectionRecoveryMessage(status)
+    if (connectionTone(status) === 'danger') {
+      expect(typeof message).toBe('string')
+      expect((message as string).length).toBeGreaterThan(0)
+    } else {
+      expect(message).toBeNull()
+    }
+  }
+})
+
+test('no recovery sentence prints the engine discriminant or an em dash', () => {
+  for (const status of ALL_STATUSES) {
+    const message = connectionRecoveryMessage(status)
+    if (message === null) continue
+    // The defect this replaces was literally `Session {status}.`, so every
+    // status word is barred from every sentence, not just its own.
+    for (const word of ALL_STATUSES) {
+      expect(message.toLowerCase()).not.toContain(word)
+    }
+    expect(message).not.toContain('—')
   }
 })

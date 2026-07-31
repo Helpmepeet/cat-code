@@ -1110,9 +1110,14 @@ test('renders a restart control only for a terminal session state', () => {
     expect(render(status)).not.toContain('Restart')
   }
 
-  // Terminal — the session will not come back on its own.
+  // Terminal — the session will not come back on its own, and the bar states
+  // what happened in a sentence instead of printing the engine's discriminant
+  // at the user ("Session dead.", the copy this replaced).
   for (const status of ['dead', 'disconnected', 'failed', 'exited'] as const) {
-    expect(render(status)).toContain('Restart')
+    const markup = render(status)
+    expect(markup).toContain('Restart')
+    expect(markup).not.toContain(`Session ${status}.`)
+    expect(markup).toContain('This session')
   }
 
   // No session at all: nothing to restart.

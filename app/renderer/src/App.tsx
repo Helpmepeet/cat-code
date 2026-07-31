@@ -161,8 +161,9 @@ import {
   type WorkspaceSplitEdge,
 } from './workspaceLayout.js'
 import {
+  connectionRecoveryMessage,
+  connectionTone,
   createConnectionState,
-  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
   type ConnectionSnapshot,
@@ -4043,14 +4044,18 @@ export function ConnectionRecovery({
   const [restartError, setRestartError] = useState<string | null>(null)
   // Only a TERMINAL connection earns a failure bar and a Restart invitation. A
   // still-spawning session (`connecting`/`starting`) has not failed, so the
-  // shared partition decides this rather than a local status list.
-  if (!sessionId || !isTerminalConnectionStatus(connection.status)) {
+  // shared two-tone grammar decides this rather than a local status list: the
+  // danger tone is the gate, and a transient reads neutral, which mounts
+  // nothing. A status added to the union inherits that by construction.
+  const tone = connectionTone(connection.status)
+  const message = connectionRecoveryMessage(connection.status)
+  if (!sessionId || tone !== 'danger' || message === null) {
     return null
   }
 
   return (
     <div className="flex items-center gap-3 text-sm text-tone-danger">
-      <span>Session {connection.status}.</span>
+      <span>{message}</span>
       <button
         className="rounded border border-tone-danger px-3 py-1 text-xs"
         onClick={() => {

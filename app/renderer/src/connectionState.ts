@@ -72,6 +72,55 @@ export function isTerminalConnectionStatus(
   }
 }
 
+/**
+ * The connection tone grammar (24b ruling): exactly two tones, and the transient
+ * one is the ABSENCE of a failure presentation, not a second style.
+ *
+ * Derived from `isTerminalConnectionStatus` rather than from a second switch, so
+ * a status can never be transient for the recovery guard and danger for its
+ * paint. A member added to the union has to be classified once, above, and
+ * inherits its tone here — which is the whole point: the next transient state
+ * cannot present as a failure because its author picked a colour.
+ */
+export type ConnectionTone = 'neutral' | 'danger'
+
+export function connectionTone(
+  status: ConnectionSnapshot['status'],
+): ConnectionTone {
+  return isTerminalConnectionStatus(status) ? 'danger' : 'neutral'
+}
+
+/**
+ * What a `danger` connection says to the user, in place of the engine's own
+ * discriminant (`Session dead.` was the literal prior copy).
+ *
+ * Transient statuses have no sentence because they mount no bar;
+ * `connectionState.test.ts` pins the null-vs-sentence split to the tone so the
+ * two lists cannot drift, and pins that no sentence contains its own status word.
+ */
+export function connectionRecoveryMessage(
+  status: ConnectionSnapshot['status'],
+): string | null {
+  switch (status) {
+    case 'connecting':
+    case 'starting':
+    case 'ready':
+      return null
+    case 'dead':
+      return 'This session is no longer available. Restart it to keep working.'
+    case 'disconnected':
+      return 'This session lost its connection. Restart it to reconnect.'
+    case 'failed':
+      return 'This session could not start. Restart it to try again.'
+    case 'exited':
+      return 'This session stopped unexpectedly. Restart it to keep working.'
+    default: {
+      const exhaustive: never = status
+      return exhaustive
+    }
+  }
+}
+
 export function reduceConnectionState(
   state: ConnectionState,
   frame: ServerFrame,
