@@ -64,6 +64,18 @@ export function selectSidebarOpen({
 }
 
 /**
+ * Preserve the identity of a focused collapsed-rail nav button across the
+ * collapsed -> expanded branch replacement. Entry through the stable pin has
+ * no nav id, while focus already inside an expanded rail needs no handoff.
+ */
+export function selectSidebarNavFocusHandoff<Id extends string>(
+  sidebarOpen: boolean,
+  focusedNavId: Id | null,
+): Id | null {
+  return sidebarOpen ? null : focusedNavId
+}
+
+/**
  * Resolve a nav-rail click into the view to switch to, or `null` when the
  * item is disabled. Pure so `Sidebar.tsx`'s `NavItemExpanded` and
  * `NavItemRail` can BOTH route every click through the same tested logic

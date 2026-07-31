@@ -461,6 +461,24 @@ test('P4-53 — the collapsed rail keeps the pin as its stable keyboard entry ta
   // reaches search/roster controls; those remain operator-only checks.
 })
 
+test('P4-53 — collapsed and expanded nav buttons share generic focus-handoff ids', () => {
+  const collapsed = renderSidebar()
+  const expanded = renderSidebar({ menuActive: true })
+  for (const id of [
+    'chat',
+    'sessions',
+    'goals',
+    'accounts',
+    'settings',
+  ]) {
+    const marker = `data-sidebar-nav-id="${id}"`
+    expect(collapsed.match(new RegExp(marker, 'g'))).toHaveLength(1)
+    expect(expanded.match(new RegExp(marker, 'g'))).toHaveLength(1)
+  }
+  // The shared id pins the generic ref handoff for reverse entry, including
+  // Settings. SSR cannot press Shift+Tab or observe the layout-effect focus.
+})
+
 test('P4-33 — a sidebar-anchored row menu holds the rail expanded', () => {
   // Without this the pointer moving toward the (App-level, `fixed`) menu leaves
   // the rail, the hide timer fires, and the sidebar collapses out from under a

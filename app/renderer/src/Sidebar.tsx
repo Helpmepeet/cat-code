@@ -84,6 +84,7 @@ import {
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
+  selectSidebarNavFocusHandoff,
   selectSidebarOpen,
   selectVisibleSidebarRows,
   shouldShowSidebarGroupExpansionToggle,
@@ -263,6 +264,10 @@ export function Sidebar({
    * moved — see the re-focus effect below `reorderHandlers`. */
   const headerRefs = useRef(new Map<string, HTMLButtonElement>())
   const refocusCwd = useRef<string | null>(null)
+  /** Expanded nav buttons by destination, plus a collapsed rail destination
+   * whose focus must survive the branch replacement. */
+  const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
+  const refocusNavId = useRef<NavItem['id'] | null>(null)
 
   const open = selectSidebarOpen({
     pinned,
@@ -420,6 +425,13 @@ export function Sidebar({
     headerRefs.current.get(cwd)?.focus()
   }, [workspaceOrder])
 
+  useLayoutEffect(() => {
+    const navId = refocusNavId.current
+    if (navId == null || !open) return
+    refocusNavId.current = null
+    navRefs.current.get(navId)?.focus()
+  }, [open])
+
   return (
     <>
       {/* Spacer reserves the collapsed rail's 48px footprint in the flex flow;
@@ -430,7 +442,20 @@ export function Sidebar({
         ref={asideRef}
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
-        onFocusCapture={() => setFocusWithin(true)}
+        onFocusCapture={event => {
+          const target = event.target
+          const focusedNavId =
+            target instanceof HTMLElement
+              ? (NAV.find(
+                  item => item.id === target.dataset.sidebarNavId,
+                )?.id ?? null)
+              : null
+          refocusNavId.current = selectSidebarNavFocusHandoff(
+            open,
+            focusedNavId,
+          )
+          setFocusWithin(true)
+        }}
         onBlurCapture={event => {
           const nextTarget = event.relatedTarget
           if (
@@ -559,6 +584,10 @@ export function Sidebar({
               {NAV.map(item => (
                 <NavItemExpanded
                   activeView={activeView}
+                  buttonRef={element => {
+                    if (element) navRefs.current.set(item.id, element)
+                    else navRefs.current.delete(item.id)
+                  }}
                   item={item}
                   key={item.id}
                   onSelectView={onSelectView}
@@ -1038,19 +1067,23 @@ export function SidebarRowItem({
 function NavItemExpanded({
   item,
   activeView,
+  buttonRef,
   onSelectView,
 }: {
   item: NavItem
   activeView: SidebarView
+  buttonRef: (element: HTMLButtonElement | null) => void
   onSelectView: (view: SidebarView) => void
 }) {
   const active = item.enabled && item.id === activeView
   if (!item.enabled) {
     return (
       <button
+        ref={buttonRef}
         type="button"
         disabled
         aria-disabled="true"
+        data-sidebar-nav-id={item.id}
         title={`${item.label} is not available yet`}
         className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
       >
@@ -1063,8 +1096,10 @@ function NavItemExpanded({
   }
   return (
     <button
+      ref={buttonRef}
       type="button"
       aria-current={active ? 'page' : undefined}
+      data-sidebar-nav-id={item.id}
       onClick={() => {
         const view = resolveNavSelection(item)
         if (view) onSelectView(view)
@@ -1103,6 +1138,7 @@ function NavItemRail({
         disabled
         aria-disabled="true"
         aria-label={item.label}
+        data-sidebar-nav-id={item.id}
         title={`${item.label} is not available yet`}
         className="flex h-8 w-8 items-center justify-center rounded-md text-text-subtle/55"
       >
@@ -1115,6 +1151,7 @@ function NavItemRail({
       type="button"
       aria-current={active ? 'page' : undefined}
       aria-label={item.label}
+      data-sidebar-nav-id={item.id}
       title={item.label}
       onClick={() => {
         const view = resolveNavSelection(item)

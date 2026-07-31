@@ -7,6 +7,7 @@ import {
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
+  selectSidebarNavFocusHandoff,
   selectSidebarOpen,
   selectShellDescriptors,
   selectVisibleSidebarRows,
@@ -75,6 +76,25 @@ describe('selectSidebarOpen', () => {
         focusWithin: false,
       }),
     ).toBe(false)
+  })
+})
+
+describe('selectSidebarNavFocusHandoff', () => {
+  test('transfers any collapsed nav identity to its expanded counterpart', () => {
+    for (const id of [
+      'chat',
+      'sessions',
+      'goals',
+      'accounts',
+      'settings',
+    ] as const) {
+      expect(selectSidebarNavFocusHandoff(false, id)).toBe(id)
+    }
+  })
+
+  test('does not request a handoff for the stable pin or an already-open rail', () => {
+    expect(selectSidebarNavFocusHandoff(false, null)).toBeNull()
+    expect(selectSidebarNavFocusHandoff(true, 'settings')).toBeNull()
   })
 })
 
