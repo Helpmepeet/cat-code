@@ -590,9 +590,8 @@ test('CC-16 REGRESSION GUARD: a mid-turn composer is still blocked — the engin
     html.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
 
   expect(textarea).toContain('readOnly=""')
-  // A ready session's placeholder is the normal one — unchanged by CC-16.
   expect(textarea).toContain(
-    'placeholder="Ask Cat Code anything or describe a task…"',
+    'placeholder="Input is unavailable until the current response finishes."',
   )
   // Non-empty draft, yet the arrow stays disabled: the engine, not the draft,
   // is what refuses this submit.
@@ -655,6 +654,100 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
   expect(sendButton).toContain('disabled=""')
 })
 
+test('P4-58: composer read-only and placeholder decisions cover every session state', () => {
+  const base = idleSessionPaneProps()
+  const ordinaryPlaceholder = 'Ask Cat Code anything or describe a task…'
+  const unavailablePlaceholder =
+    'Input is unavailable until the current response finishes.'
+  const cases: Array<{
+    name: string
+    props: ComponentProps<typeof SessionPane>
+    readOnly: boolean
+    disabled: boolean
+    placeholder: string
+  }> = [
+    {
+      name: 'ordinary ready',
+      props: base,
+      readOnly: false,
+      disabled: false,
+      placeholder: ordinaryPlaceholder,
+    },
+    {
+      name: 'ready mid-turn',
+      props: {
+        ...base,
+        activeConnection: { status: 'ready', inputEnabled: false },
+      },
+      readOnly: true,
+      disabled: false,
+      placeholder: unavailablePlaceholder,
+    },
+    {
+      name: 'connecting',
+      props: {
+        ...base,
+        activeConnection: { status: 'connecting', inputEnabled: false },
+        activeLog: { ...base.activeLog, inputEnabled: false },
+      },
+      readOnly: false,
+      disabled: false,
+      placeholder: ordinaryPlaceholder,
+    },
+    {
+      name: 'terminal',
+      props: {
+        ...base,
+        activeConnection: { status: 'failed', inputEnabled: false },
+        activeLog: { ...base.activeLog, inputEnabled: false },
+      },
+      readOnly: true,
+      disabled: false,
+      placeholder: 'Connecting…',
+    },
+    {
+      name: 'preview',
+      props: {
+        ...base,
+        preview: true,
+      },
+      readOnly: false,
+      disabled: false,
+      placeholder: ordinaryPlaceholder,
+    },
+    {
+      name: 'no session',
+      props: {
+        ...base,
+        activeSessionId: null,
+        activeConnection: { status: 'connecting', inputEnabled: false },
+        activeLog: { ...base.activeLog, inputEnabled: false },
+      },
+      readOnly: true,
+      disabled: true,
+      placeholder: 'Connecting…',
+    },
+  ]
+
+  for (const state of cases) {
+    const html = renderToStaticMarkup(<SessionPane {...state.props} />)
+    const textarea =
+      html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+
+    expect({
+      name: state.name,
+      readOnly: textarea.includes('readOnly=""'),
+      disabled: textarea.includes('disabled=""'),
+      placeholder: textarea.match(/placeholder="([^"]*)"/)?.[1] ?? '',
+    }).toEqual({
+      name: state.name,
+      readOnly: state.readOnly,
+      disabled: state.disabled,
+      placeholder: state.placeholder,
+    })
+  }
+})
+
 test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through App', () => {
   // LAYER HONESTY: the app/ renderer suite is SSR-only (no DOM — see
   // AccountsPage.test.tsx), so React effects never run here and the drain
@@ -696,7 +789,8 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
 
   // The composer's three consumers all read the SAME gate object, so
   // "typeable" can never drift apart from "sendable" again.
-  expect(source).toContain('readOnly={!composerGate.editable}')
+  expect(source).toContain('const composerReadOnly = !composerGate.editable')
+  expect(source).toContain('readOnly={composerReadOnly}')
   expect(source).toContain(
     'disabled={\n              !composerGate.editable ||\n              prompt.trim().length === 0 ||\n              pendingSubmit !== null\n            }',
   )

@@ -3329,14 +3329,17 @@ export function SessionPane({
     connectionInputEnabled: activeConnection.inputEnabled,
     logInputEnabled: activeLog.inputEnabled,
   })
-  // The placeholder never instructs the user any more: a previewed/connecting
-  // pane reads exactly like a live one (prototype `Chat.jsx:1145` has no
-  // connection-state placeholder at all). 'Connecting…' survives only for the
-  // terminal statuses — dead/failed/exited/disconnected — which stay read-only.
+  // One decision drives both the textarea attribute and its copy. A ready
+  // session that is mid-turn stays read-only and says why; previewed/connecting
+  // panes remain editable with the ordinary prompt, while terminal/no-session
+  // states keep their separate connection copy.
+  const composerReadOnly = !composerGate.editable
   const composerPlaceholder =
-    composerGate.editable || activeConnection.status === 'ready'
-      ? 'Ask Cat Code anything or describe a task…'
-      : 'Connecting…'
+    composerReadOnly && generating
+      ? 'Input is unavailable until the current response finishes.'
+      : composerGate.editable || activeConnection.status === 'ready'
+        ? 'Ask Cat Code anything or describe a task…'
+        : 'Connecting…'
   const paused = permissionQueue.length > 0 || askQuestion !== null
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
@@ -3877,7 +3880,7 @@ export function SessionPane({
               rows={1}
               className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
               disabled={!activeSessionId}
-              readOnly={!composerGate.editable}
+              readOnly={composerReadOnly}
               onFocus={engagePreviewPane}
               onPointerDown={engagePreviewPane}
               onChange={event => {
