@@ -63,6 +63,10 @@ import {
 } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
 import {
+  SESSION_ACTIONS_MENU_WIDTH,
+  type SessionActionsAnchor,
+} from './sessionActions.js'
+import {
   deriveMergedRowVisual,
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
@@ -188,7 +192,7 @@ export function Sidebar({
    */
   onOpenRowActions?: (
     sessionId: SessionId,
-    anchor: { top: number; left: number },
+    anchor: SessionActionsAnchor,
   ) => void
   /**
    * #10/#15 — the per-workspace "+" (new session DIRECTLY in this workspace, no
@@ -585,7 +589,7 @@ export function SessionGroup({
   onOpenHistory: (engineSessionId: string) => void
   onOpenRowActions?: (
     sessionId: SessionId,
-    anchor: { top: number; left: number },
+    anchor: SessionActionsAnchor,
   ) => void
   onNewSessionInWorkspace?: (repId: SessionId) => void
   modelForSession?: (id: SessionId) => string | null
@@ -832,7 +836,7 @@ export function SidebarRowItem({
   onOpenHistory: (engineSessionId: string) => void
   onOpenRowActions?: (
     sessionId: SessionId,
-    anchor: { top: number; left: number },
+    anchor: SessionActionsAnchor,
   ) => void
   modelForSession?: (id: SessionId) => string | null
 }) {
@@ -900,8 +904,12 @@ export function SidebarRowItem({
               event.preventDefault()
               event.stopPropagation()
               if (onOpenRowActions && appSessionId != null) {
+                // P4-39 — a pointer is a zero-height trigger. The menu clamps it
+                // into the viewport and flips it above the pointer near the
+                // bottom edge; before, these coordinates were applied raw.
                 onOpenRowActions(appSessionId, {
                   top: event.clientY,
+                  bottom: event.clientY,
                   left: event.clientX,
                 })
               }
@@ -956,9 +964,12 @@ export function SidebarRowItem({
             event.stopPropagation()
             const rect = event.currentTarget.getBoundingClientRect()
             if (onOpenRowActions && appSessionId != null) {
+              // P4-39 — the trigger's rect, right-aligned to the kebab; the menu
+              // owns the gap, the clamp and the bottom-flip.
               onOpenRowActions(appSessionId, {
-                top: rect.bottom + 4,
-                left: Math.max(8, rect.right - 232),
+                top: rect.top,
+                bottom: rect.bottom,
+                left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
               })
             }
           }}

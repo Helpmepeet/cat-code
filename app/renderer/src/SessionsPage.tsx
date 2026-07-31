@@ -40,6 +40,7 @@ import { Chip } from './Chip.js'
 import { basename } from './pathUtils.js'
 import { sessionStatusVisual, statusChipTone } from './sessionStatusVisual.js'
 import type { SessionActionsAnchor } from './SessionActionsMenu.js'
+import { SESSION_ACTIONS_MENU_WIDTH } from './sessionActions.js'
 import {
   bucketByDate,
   collectSessionTags,
@@ -674,7 +675,14 @@ function SessionRow({
           onClick={event => {
             event.stopPropagation()
             const rect = event.currentTarget.getBoundingClientRect()
-            actions.onOpenActions(row, { top: rect.bottom, left: rect.right - 220 })
+            // P4-39 — the trigger's rect, right-aligned to the button at the
+            // menu's REAL width (this said 220, the prototype's, for a 232px
+            // panel); the menu owns the gap, the clamp and the bottom-flip.
+            actions.onOpenActions(row, {
+              top: rect.top,
+              bottom: rect.bottom,
+              left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
+            })
           }}
           aria-label="Session actions"
           title="Session actions"
@@ -693,7 +701,12 @@ function SessionRow({
   const onContextMenu = hasMenu
     ? (event: ReactMouseEvent) => {
         event.preventDefault()
-        actions.onOpenActions(row, { top: event.clientY, left: event.clientX })
+        // P4-39 — a pointer is a zero-height trigger; the menu clamps and flips it.
+        actions.onOpenActions(row, {
+          top: event.clientY,
+          bottom: event.clientY,
+          left: event.clientX,
+        })
       }
     : undefined
 

@@ -12,23 +12,44 @@
  * P4-30 restored four prototype elements PARITY-LEDGER §17 recorded as dropped
  * with no §0 flag: the `SA_IC` leading-icon slot (`SessionActionIcons.tsx`), the
  * `SectionLabel` header, the `sa-pop` entrance (menu + rename popover), and the
- * Copy row's side flyout. The remaining §17 menu gap is the anchor's
- * bottom-flip (`placeAbove`), which stays owned by the anchor call sites.
+ * Copy row's side flyout.
+ *
+ * P4-39 moved placement here, the §17 gap this comment used to cede to the call
+ * sites. The anchor is now the TRIGGER's rect (or pointer) and this component
+ * resolves it against the viewport with the pure `placeSessionActionsMenu`,
+ * which is what gives every entry point the bottom-flip at once, including the
+ * sidebar and Sessions-page right-click paths that clamped nothing at all.
+ * Whether a real menu clipped before this is still unconfirmed in a running app.
  */
 
 import { useEffect, useRef, useState, Fragment, type ReactNode } from 'react'
 import {
   SESSION_ACTION_SECTIONS,
   SESSION_ACTION_SECTION_LABELS,
+  SESSION_RENAME_POPOVER_HEIGHT,
+  estimateSessionActionsMenuHeight,
+  placeSessionActionsMenu,
   type SessionActionItem,
   type SessionActionKind,
+  type SessionActionsAnchor,
 } from './sessionActions.js'
 import {
   ActionChevronIcon,
   SessionActionIcon,
 } from './SessionActionIcons.js'
 
-export type SessionActionsAnchor = { top: number; left: number }
+export type { SessionActionsAnchor }
+
+/**
+ * The viewport the placement is clamped into. SSR has no window, so it falls
+ * back to the same nominal box `SessionsPage`'s `TagPopover` uses, which keeps
+ * the rendered markup deterministic in tests.
+ */
+function readViewport(): { width: number; height: number } {
+  return typeof window === 'undefined'
+    ? { width: 1280, height: 800 }
+    : { width: window.innerWidth, height: window.innerHeight }
+}
 
 export function SessionActionsMenu({
   items,
@@ -53,6 +74,11 @@ export function SessionActionsMenu({
     section,
     rows: items.filter(item => item.section === section),
   })).filter(group => group.rows.length > 0)
+  const placement = placeSessionActionsMenu(
+    anchor,
+    readViewport(),
+    estimateSessionActionsMenuHeight(items),
+  )
 
   return (
     <>
@@ -66,12 +92,18 @@ export function SessionActionsMenu({
         }}
       />
       {/* §0 EXCEPTION: data-driven geometry Tailwind can't express — the
-          measured anchor of the row that opened this menu. */}
+          measured anchor of the row that opened this menu, resolved against the
+          viewport by `placeSessionActionsMenu`. The flipped case anchors
+          `bottom`, so the panel grows upward from the trigger. */}
       <div
         role="menu"
         aria-label="Session actions"
         className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
-        style={{ top: anchor.top, left: anchor.left }}
+        style={
+          placement.placeAbove
+            ? { bottom: placement.bottom, left: placement.left }
+            : { top: placement.top, left: placement.left }
+        }
       >
         {sections.map(({ section, rows }, index) => {
           const label = SESSION_ACTION_SECTION_LABELS[section]
@@ -131,6 +163,14 @@ export function SessionRenamePopover({
     inputRef.current?.focus()
     inputRef.current?.select()
   }, [])
+  // P4-39 — same placement path as the menu, with its own height: it shares the
+  // menu's anchor (App reuses the target's anchor when Rename opens it), so it
+  // would otherwise be laid out against the trigger's TOP edge.
+  const placement = placeSessionActionsMenu(
+    anchor,
+    readViewport(),
+    SESSION_RENAME_POPOVER_HEIGHT,
+  )
   return (
     <>
       <div
@@ -139,12 +179,17 @@ export function SessionRenamePopover({
         onClick={onCancel}
       />
       {/* §0 EXCEPTION: data-driven geometry Tailwind can't express — the
-          measured anchor of the row being renamed. */}
+          measured anchor of the row being renamed, resolved against the viewport
+          by `placeSessionActionsMenu`. */}
       <div
         role="dialog"
         aria-label="Rename session"
         className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
-        style={{ top: anchor.top, left: anchor.left }}
+        style={
+          placement.placeAbove
+            ? { bottom: placement.bottom, left: placement.left }
+            : { top: placement.top, left: placement.left }
+        }
       >
         <input
           ref={inputRef}

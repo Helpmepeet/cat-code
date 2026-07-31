@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 import {
+  estimateSessionActionsMenuHeight,
+  placeSessionActionsMenu,
   resolveSessionActions,
   SESSION_ACTION_SECTIONS,
   type SessionActionItem,
@@ -151,5 +153,98 @@ describe('resolveSessionActions', () => {
     for (const item of resolveSessionActions(row(), { isActiveOpen: true })) {
       expect(SESSION_ACTION_SECTIONS).toContain(item.section)
     }
+  })
+})
+
+describe('P4-39 — placeSessionActionsMenu', () => {
+  const viewport = { width: 1280, height: 800 }
+  const HEIGHT = 264
+
+  test('a trigger near the top opens BELOW it, one gap down', () => {
+    const placed = placeSessionActionsMenu(
+      { top: 40, bottom: 58, left: 800 },
+      viewport,
+      HEIGHT,
+    )
+    expect(placed).toEqual({ placeAbove: false, top: 62, left: 800 })
+  })
+
+  test('a trigger near the bottom FLIPS above it, anchored by `bottom`', () => {
+    // The defect this session exists for: 718 + 264 overflows an 800px window,
+    // and the raw anchor put the lower rows out of reach with no scroll.
+    const placed = placeSessionActionsMenu(
+      { top: 700, bottom: 718, left: 800 },
+      viewport,
+      HEIGHT,
+    )
+    expect(placed).toEqual({ placeAbove: true, bottom: 104, left: 800 })
+  })
+
+  test('exactly-fits stays below; one pixel less flips', () => {
+    // spaceBelow = 800 - 532 - 4 = 264 = the panel: it fits, so no flip.
+    expect(
+      placeSessionActionsMenu({ top: 514, bottom: 532, left: 0 }, viewport, HEIGHT)
+        .placeAbove,
+    ).toBe(false)
+    expect(
+      placeSessionActionsMenu({ top: 515, bottom: 533, left: 0 }, viewport, HEIGHT)
+        .placeAbove,
+    ).toBe(true)
+  })
+
+  test('a viewport narrower than the panel clamps to the left margin', () => {
+    const placed = placeSessionActionsMenu(
+      { top: 40, bottom: 58, left: 150 },
+      { width: 200, height: 800 },
+      HEIGHT,
+    )
+    expect(placed.left).toBe(8)
+  })
+
+  test('the right-click path (a zero-height pointer) is clamped and flipped too', () => {
+    // Before P4-39 these coordinates were applied raw at the sidebar and the
+    // Sessions page: no clamp of any kind, in either axis.
+    const nearBottomRight = placeSessionActionsMenu(
+      { top: 790, bottom: 790, left: 1270 },
+      viewport,
+      HEIGHT,
+    )
+    expect(nearBottomRight).toEqual({ placeAbove: true, bottom: 14, left: 1040 })
+    const nearTop = placeSessionActionsMenu(
+      { top: 120, bottom: 120, left: 60 },
+      viewport,
+      HEIGHT,
+    )
+    expect(nearTop).toEqual({ placeAbove: false, top: 124, left: 60 })
+  })
+
+  test('a panel taller than the whole viewport picks the roomier side, not always above', () => {
+    const placed = placeSessionActionsMenu(
+      { top: 10, bottom: 28, left: 0 },
+      viewport,
+      900,
+    )
+    expect(placed.placeAbove).toBe(false)
+  })
+})
+
+describe('P4-39 — estimateSessionActionsMenuHeight', () => {
+  test('the real menu lands in the range the audit measured by eye (~300px)', () => {
+    const height = estimateSessionActionsMenuHeight(
+      resolveSessionActions(row(), { isActiveOpen: true }),
+    )
+    expect(height).toBeGreaterThan(240)
+    expect(height).toBeLessThan(320)
+  })
+
+  test('it tracks the rows actually rendered, so a short menu does not flip early', () => {
+    const [first] = resolveSessionActions(row(), { isActiveOpen: true })
+    // One unlabelled section, one row: panel chrome + one row, no divider.
+    expect(estimateSessionActionsMenuHeight([first!])).toBe(44)
+    expect(
+      estimateSessionActionsMenuHeight(
+        resolveSessionActions(row(), { isActiveOpen: true }),
+      ),
+    ).toBeGreaterThan(estimateSessionActionsMenuHeight([first!]))
   })
 })

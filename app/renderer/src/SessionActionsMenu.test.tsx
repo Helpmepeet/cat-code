@@ -40,7 +40,7 @@ function render(isActiveOpen: boolean, r: MergedSessionRow = row()): string {
   return renderToStaticMarkup(
     <SessionActionsMenu
       items={resolveSessionActions(r, { isActiveOpen })}
-      anchor={{ top: 40, left: 80 }}
+      anchor={{ top: 40, bottom: 58, left: 80 }}
       onAction={noop}
       onClose={noop}
     />,
@@ -75,7 +75,7 @@ test('P4-30: EVERY rendered row carries a glyph, including inside the flyout', (
       const html = renderToStaticMarkup(
         <SessionActionsMenu
           items={[each.flyout ? { ...each, flyout: undefined } : each]}
-          anchor={{ top: 0, left: 0 }}
+          anchor={{ top: 0, bottom: 0, left: 0 }}
           onAction={noop}
           onClose={noop}
         />,
@@ -148,7 +148,7 @@ test('history-only row: Open is disabled, not a clickable button label', () => {
 test('SessionRenamePopover prefills the input with the current title', () => {
   const html = renderToStaticMarkup(
     <SessionRenamePopover
-      anchor={{ top: 40, left: 80 }}
+      anchor={{ top: 40, bottom: 58, left: 80 }}
       initial="Refactor auth"
       onCommit={noop}
       onCancel={noop}
@@ -157,4 +157,38 @@ test('SessionRenamePopover prefills the input with the current title', () => {
   expect(html).toContain('role="dialog"')
   expect(html).toContain('aria-label="Rename session"')
   expect(html).toContain('value="Refactor auth"')
+})
+
+/**
+ * P4-39 — the placement helper is unit-tested next door; these two pin that this
+ * component actually CONSUMES it. A helper nothing calls was the failure mode
+ * that produced this finding: the anchor's flip lived in a doc comment that
+ * ceded it to call sites, and no call site implemented it.
+ *
+ * SSR has no window, so the panel is placed against the 1280x800 fallback.
+ */
+test('P4-39: a trigger near the bottom renders the menu anchored by `bottom`', () => {
+  const html = renderToStaticMarkup(
+    <SessionActionsMenu
+      items={resolveSessionActions(row(), { isActiveOpen: true })}
+      anchor={{ top: 700, bottom: 718, left: 800 }}
+      onAction={noop}
+      onClose={noop}
+    />,
+  )
+  expect(html).toContain('bottom:104px')
+  expect(html).not.toContain('top:718px')
+})
+
+test('P4-39: a raw right-click point past the right edge is clamped into the viewport', () => {
+  const html = renderToStaticMarkup(
+    <SessionActionsMenu
+      items={resolveSessionActions(row(), { isActiveOpen: true })}
+      anchor={{ top: 120, bottom: 120, left: 1270 }}
+      onAction={noop}
+      onClose={noop}
+    />,
+  )
+  expect(html).toContain('left:1040px')
+  expect(html).not.toContain('left:1270px')
 })

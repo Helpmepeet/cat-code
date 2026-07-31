@@ -11,6 +11,10 @@
 import { useRef, type KeyboardEvent } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
+import {
+  SESSION_ACTIONS_MENU_WIDTH,
+  type SessionActionsAnchor,
+} from './sessionActions.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
@@ -48,7 +52,7 @@ export function TabBar({
    */
   onOpenActions?: (
     sessionId: SessionId,
-    anchor: { top: number; left: number },
+    anchor: SessionActionsAnchor,
   ) => void
   /**
    * Split-view controls (P4-4 fidelity — the prototype's TabBar.jsx owns the
@@ -232,7 +236,7 @@ function Tab({
   onRestart: (sessionId: SessionId) => void
   onOpenActions?: (
     sessionId: SessionId,
-    anchor: { top: number; left: number },
+    anchor: SessionActionsAnchor,
   ) => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }) {
@@ -312,12 +316,13 @@ function Tab({
           onClick={event => {
             event.stopPropagation()
             const rect = event.currentTarget.getBoundingClientRect()
-            // Anchor the menu below the button, right-aligned to its width
-            // (SessionActionsMenu is w-[232px]); clamp so it never leaves the
-            // viewport when the active tab sits near the left edge.
+            // P4-39 — hand the menu the TRIGGER's rect, right-aligned to the
+            // button; the menu owns the gap, the viewport clamp and the
+            // bottom-flip (`placeSessionActionsMenu`).
             onOpenActions(id, {
-              top: rect.bottom + 4,
-              left: Math.max(8, rect.right - 232),
+              top: rect.top,
+              bottom: rect.bottom,
+              left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
             })
           }}
           title="Session actions"

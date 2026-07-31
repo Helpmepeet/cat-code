@@ -216,3 +216,127 @@ export const SESSION_ACTION_SECTION_LABELS: Record<
   history: 'History',
   transfer: null,
 }
+
+/* ------------------------------------------------------------------------- *
+ * Pure geometry — where the anchored panel goes (P4-39)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The trigger the menu hangs off: the ⋯/⋮ button's rect, or a right-click point
+ * (which collapses to a zero-height rect, `top === bottom === clientY`).
+ *
+ * `left` is the DESIRED left edge, decided by the call site — a button
+ * right-aligns the panel to itself (`rect.right - SESSION_ACTIONS_MENU_WIDTH`),
+ * a context menu opens rightward from the pointer (`clientX`). The clamp into
+ * the viewport is not the call site's job; `placeSessionActionsMenu` owns it.
+ */
+export type SessionActionsAnchor = {
+  /** Viewport y of the trigger's top edge. */
+  top: number
+  /** Viewport y of the trigger's bottom edge (a pointer repeats `top`). */
+  bottom: number
+  /** Desired viewport x of the panel's left edge, before clamping. */
+  left: number
+}
+
+/** Panel width, matching `w-[232px]` on the menu AND the rename popover. */
+export const SESSION_ACTIONS_MENU_WIDTH = 232
+/** Gap between the trigger edge and the panel, either direction. */
+export const SESSION_ACTIONS_MENU_GAP = 4
+/** Minimum distance from the viewport's left/right edge (the pre-P4-39 clamp). */
+export const SESSION_ACTIONS_VIEWPORT_MARGIN = 8
+
+export type SessionActionsPlacement =
+  | { placeAbove: true; bottom: number; left: number }
+  | { placeAbove: false; top: number; left: number }
+
+/**
+ * Place an anchored panel the way `placeTagPopover`
+ * (`sessionsPageState.ts:237-253`) does: a discriminated placement, so the
+ * flipped case anchors CSS `bottom` and the panel grows upward, plus a left
+ * clamp. Pure, so placement is testable without a DOM.
+ *
+ * Two differences from that precedent, both because this panel is ~6x taller
+ * than the tag popover:
+ *
+ *  - The flip is decided by whether the panel FITS below, not by a viewport
+ *    midpoint. `placeTagPopover`'s midpoint rule would flip a 260px menu opened
+ *    at y=410 in an 800px window that has 390px of room below it.
+ *  - It prefers below on a tie and only flips when above is genuinely roomier,
+ *    so a panel taller than the whole viewport picks the larger side instead of
+ *    always flipping off the top.
+ *
+ * `panelHeight` is an ESTIMATE (`estimateSessionActionsMenuHeight`), never a
+ * measurement. Its error budget is soft: it moves the y at which the flip
+ * happens and nothing else, because the CSS anchoring does the actual layout.
+ */
+export function placeSessionActionsMenu(
+  anchor: SessionActionsAnchor,
+  viewport: { width: number; height: number },
+  panelHeight: number,
+): SessionActionsPlacement {
+  const left = Math.max(
+    SESSION_ACTIONS_VIEWPORT_MARGIN,
+    Math.min(
+      anchor.left,
+      viewport.width - SESSION_ACTIONS_MENU_WIDTH - SESSION_ACTIONS_VIEWPORT_MARGIN,
+    ),
+  )
+  const spaceBelow = viewport.height - anchor.bottom - SESSION_ACTIONS_MENU_GAP
+  const spaceAbove = anchor.top - SESSION_ACTIONS_MENU_GAP
+  if (spaceBelow < panelHeight && spaceAbove > spaceBelow) {
+    return {
+      placeAbove: true,
+      bottom: viewport.height - anchor.top + SESSION_ACTIONS_MENU_GAP,
+      left,
+    }
+  }
+  return { placeAbove: false, top: anchor.bottom + SESSION_ACTIONS_MENU_GAP, left }
+}
+
+/**
+ * Model the menu's height from the rows it is about to render, rather than from
+ * the prototype's constant 320 (`SessionActions.jsx:112`) — that constant suits
+ * the prototype's row set, fonts and zoom, not this menu's.
+ *
+ * The numbers below re-state the panel's own Tailwind classes, which is the
+ * cost of not measuring: a class change here drifts the model silently. It is
+ * paid because the alternative (a ref + `getBoundingClientRect` in a layout
+ * effect) makes placement a second render pass and is invisible to this
+ * package's SSR-only renderer tests. A few px of error only nudges the flip
+ * threshold; it cannot mis-lay-out the panel.
+ *
+ *  - row: `px-2.5 py-1.5` (12px) + a 15px glyph/label line ≈ 30
+ *  - section label: `pt-[7px] pb-[3px]` (10px) + a 9.5px line ≈ 22
+ *  - divider: `my-1` (8px) + 1px rule = 9
+ *  - panel chrome: `p-1.5` (12px) + 1px border top and bottom = 14
+ */
+export const SESSION_ACTIONS_ROW_HEIGHT = 30
+export const SESSION_ACTIONS_SECTION_LABEL_HEIGHT = 22
+export const SESSION_ACTIONS_DIVIDER_HEIGHT = 9
+export const SESSION_ACTIONS_PANEL_CHROME_HEIGHT = 14
+
+export function estimateSessionActionsMenuHeight(
+  items: readonly SessionActionItem[],
+): number {
+  const sections = SESSION_ACTION_SECTIONS.filter(section =>
+    items.some(item => item.section === section),
+  )
+  const labelled = sections.filter(
+    section => SESSION_ACTION_SECTION_LABELS[section] != null,
+  )
+  return (
+    SESSION_ACTIONS_PANEL_CHROME_HEIGHT +
+    items.length * SESSION_ACTIONS_ROW_HEIGHT +
+    labelled.length * SESSION_ACTIONS_SECTION_LABEL_HEIGHT +
+    Math.max(0, sections.length - 1) * SESSION_ACTIONS_DIVIDER_HEIGHT
+  )
+}
+
+/**
+ * The rename popover is ONE input in the same panel chrome, so it gets its own
+ * height instead of the menu's: sharing the menu's would flip it hundreds of px
+ * early, off an edge it clears easily. `p-1.5` (12) + border (2) + the input's
+ * `py-1.5` + border + 12.5px line ≈ 44.
+ */
+export const SESSION_RENAME_POPOVER_HEIGHT = 44
