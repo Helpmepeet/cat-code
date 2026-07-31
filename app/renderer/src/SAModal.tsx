@@ -14,9 +14,9 @@
  * `bg-[${hex}]/10` silently no-ops under Tailwind v4 and the SSR harness cannot
  * see it (CLAUDE.md, the dynamic-class trap).
  */
-import { useEffect, type ReactNode } from 'react'
+import { useRef, type ReactNode, type Ref } from 'react'
 import { ActionCloseIcon } from './SessionActionIcons.js'
-import { sessionActionModalKeyAction } from './sessionActionDialogState.js'
+import { useModalFocus } from './overlayFocus.js'
 
 /** The header chip hue per dialog (`iconTint` blue | amber | pink). */
 export type SAModalTint = 'info' | 'warn' | 'accent'
@@ -55,15 +55,14 @@ export type SAModalProps = {
  */
 export function SAModal(props: SAModalProps): ReactNode {
   const { onClose } = props
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (sessionActionModalKeyAction(event) === 'close') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalFocus({
+    open: true,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
 
-  return <SAModalFrame {...props} />
+  return <SAModalFrame {...props} dialogRef={dialogRef} />
 }
 
 /** The presentation half of {@link SAModal}. Consumers use `SAModal`, not this. */
@@ -76,7 +75,8 @@ export function SAModalFrame({
   onClose,
   children,
   footer,
-}: SAModalProps): ReactNode {
+  dialogRef,
+}: SAModalProps & { dialogRef?: Ref<HTMLDivElement> }): ReactNode {
   return (
     <div
       className="fixed inset-0 z-[90] flex items-center justify-center bg-black/[0.62] p-6 backdrop-blur-[4px]"
@@ -84,9 +84,11 @@ export function SAModalFrame({
       onMouseDown={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         className={
           'animate-sa-pop flex max-h-[86vh] max-w-full flex-col overflow-hidden rounded-2xl border border-shell-seam bg-surface-raised shadow-[0_28px_70px_rgba(0,0,0,0.65)] ' +
           WIDTH_CLASS[width]

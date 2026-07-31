@@ -35,7 +35,8 @@
  *    coordinated operator step — see the P4-15 report §0.
  */
 
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
+import { useModalFocus } from './overlayFocus.js'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── shared chrome ─────────────────────────────────────────────────────────── */
@@ -114,12 +115,28 @@ function SecondaryButton({
 export function StartupShell({
   step,
   children,
+  onEscape,
 }: {
   step: 'trust' | 'auth'
   children: ReactNode
+  onEscape?: () => void
 }): ReactNode {
+  const shellRef = useRef<HTMLDivElement>(null)
+  useModalFocus({
+    open: true,
+    containerRef: shellRef,
+    onEscape: onEscape ?? (() => {}),
+    escapeEnabled: onEscape !== undefined,
+  })
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center overflow-auto bg-app-bg/95 p-6">
+    <div
+      ref={shellRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={step === 'trust' ? 'Workspace trust' : 'Sign in'}
+      tabIndex={-1}
+      className="absolute inset-0 z-40 flex items-center justify-center overflow-auto bg-app-bg/95 p-6"
+    >
       <div className="absolute left-6 top-5 flex items-center gap-2.5">
         <PawLogo />
         <span className="text-[13px] font-semibold text-text-primary">cat code</span>
@@ -168,7 +185,7 @@ export function WorkspaceTrustGate({
   // widening must be stated, never implied by showing only the session folder.
   const widerThanCwd = trustRoot !== null && trustRoot !== cwd
   return (
-    <StartupShell step="trust">
+    <StartupShell step="trust" onEscape={onDecline}>
       <div className="mb-5">
         <Pill tone="warn" label="Trust required" />
       </div>
@@ -327,10 +344,16 @@ function OAuthWaitingBody({
 }
 
 /** The Codex `waiting_for_alias` naming step (`Startup.jsx:129`, `ConsoleOAuthFlow.tsx:48`). */
-function AliasForm({ onSubmitAlias }: { onSubmitAlias: (alias: string) => void }): ReactNode {
+function AliasForm({
+  onSubmitAlias,
+  onCancel,
+}: {
+  onSubmitAlias: (alias: string) => void
+  onCancel: () => void
+}): ReactNode {
   const [alias, setAlias] = useState('')
   return (
-    <StartupShell step="auth">
+    <StartupShell step="auth" onEscape={onCancel}>
       <div className="mb-5">
         <Pill tone="good" label="Authorized" />
       </div>
@@ -385,7 +408,7 @@ export function StartupOAuth({
 }): ReactNode {
   if (view.phase === 'waiting') {
     return (
-      <StartupShell step="auth">
+      <StartupShell step="auth" onEscape={onCancel}>
         <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
           Continue in your browser
         </h1>
@@ -402,7 +425,7 @@ export function StartupOAuth({
 
   if (view.phase === 'success') {
     return (
-      <StartupShell step="auth">
+      <StartupShell step="auth" onEscape={onCancel}>
         <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
           Signed in
         </h1>
@@ -418,12 +441,12 @@ export function StartupOAuth({
   }
 
   if (view.phase === 'alias') {
-    return <AliasForm onSubmitAlias={onSubmitAlias} />
+    return <AliasForm onSubmitAlias={onSubmitAlias} onCancel={onCancel} />
   }
 
   if (view.phase === 'error') {
     return (
-      <StartupShell step="auth">
+      <StartupShell step="auth" onEscape={onCancel}>
         <div className="mb-5">
           <Pill tone="danger" label="OAuth error" />
         </div>
@@ -450,7 +473,7 @@ export function StartupOAuth({
   }
 
   return (
-    <StartupShell step="auth">
+    <StartupShell step="auth" onEscape={onCancel}>
       <div className="mb-5">
         <Pill tone="info" label="Sign in" />
       </div>

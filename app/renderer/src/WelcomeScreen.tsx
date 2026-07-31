@@ -41,8 +41,12 @@
  * it.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { shouldShowFirstRunOAuth } from './appModel.js'
+import {
+  handleMenuRovingKeyDown,
+  usePopover,
+} from './composerPopover.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
@@ -229,26 +233,17 @@ function ProjectPicker({
   onOpenRecent: (recent: RecentWorkspace) => void
   onOpenFolder: () => void
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const close = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
-  }, [open])
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
 
   const triggerLabel = recents.length > 0 ? recents[0]!.name : 'Open a project'
 
   return (
     <div ref={ref} className="relative inline-block">
       <button
+        ref={triggerRef}
         type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
         onClick={() => setOpen(value => !value)}
         className="inline-flex max-w-full items-center gap-1.5"
       >
@@ -259,7 +254,12 @@ function ProjectPicker({
       </button>
 
       {open ? (
-        <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-[288px] rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.6)]">
+        <div
+          role="menu"
+          aria-label="Recent projects"
+          onKeyDown={handleMenuRovingKeyDown}
+          className="absolute left-0 top-[calc(100%+4px)] z-30 w-[288px] rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.6)]"
+        >
           {recents.length > 0 ? (
             <>
               <div className="px-2.5 pb-1 pt-1.5 text-[9.5px] font-bold uppercase tracking-[0.09em] text-text-faint">
@@ -270,8 +270,8 @@ function ProjectPicker({
                   key={recent.cwd}
                   recent={recent}
                   onOpen={() => {
+                    close()
                     onOpenRecent(recent)
-                    setOpen(false)
                   }}
                 />
               ))}
@@ -284,8 +284,9 @@ function ProjectPicker({
           )}
           <button
             type="button"
+            role="menuitem"
             onClick={() => {
-              setOpen(false)
+              close()
               onOpenFolder()
             }}
             className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.045]"
@@ -353,6 +354,7 @@ export function RecentItem({
     return (
       <button
         type="button"
+        role="menuitem"
         onClick={onOpen}
         className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.045]"
       >
@@ -362,6 +364,8 @@ export function RecentItem({
   }
   return (
     <div
+      role="menuitem"
+      aria-disabled="true"
       className="flex w-full cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left opacity-60"
       title="This folder is missing from disk. Put it back to open the project again."
     >

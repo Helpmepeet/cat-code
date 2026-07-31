@@ -72,6 +72,8 @@ test('renders the read-only drawer with the session + goal sections', () => {
   )
   expect(html).toContain('read-only')
   expect(html).toContain('role="dialog"')
+  expect(html).toContain('aria-modal="true"')
+  expect(html).toContain('tabindex="-1"')
   expect(html).toContain('engine-xyz')
   expect(html).toContain('acceptEdits')
   expect(html).toContain('#p4-6b')

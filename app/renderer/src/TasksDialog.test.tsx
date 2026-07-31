@@ -42,6 +42,15 @@ test('renders the empty state, branched on active-session scope', () => {
   expect(withoutSession).toContain('No background tasks')
 })
 
+test('emits the modal focus container attributes', () => {
+  const html = renderToStaticMarkup(
+    <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={null} />,
+  )
+  expect(html).toContain('role="dialog"')
+  expect(html).toContain('aria-modal="true"')
+  expect(html).toContain('tabindex="-1"')
+})
+
 test('renders active and completed task rows with their labels and kind badge', () => {
   const snapshot: TasksSnapshot = {
     items: [

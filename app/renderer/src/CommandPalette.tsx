@@ -21,6 +21,7 @@ import {
   filterPaletteItems,
   type PaletteItem,
 } from './commandPaletteModel.js'
+import { useModalFocus } from './overlayFocus.js'
 
 export function CommandPalette({
   open,
@@ -37,6 +38,7 @@ export function CommandPalette({
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   const filtered = useMemo(
     () => filterPaletteItems(items, query),
@@ -45,14 +47,17 @@ export function CommandPalette({
   const activeIndex =
     filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
 
-  // Reset query + selection each time the palette opens, and focus the input.
+  // Reset query + selection each time the palette opens.
   useEffect(() => {
     if (!open) return
     setQuery('')
     setCursor(0)
-    const raf = requestAnimationFrame(() => inputRef.current?.focus())
-    return () => cancelAnimationFrame(raf)
   }, [open])
+  useModalFocus({
+    open,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
 
   // A new query always re-homes the cursor to the top match.
   useEffect(() => {
@@ -107,10 +112,12 @@ export function CommandPalette({
       onMouseDown={onClose}
     >
       <div
+        ref={dialogRef}
         className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-surface-raised shadow-[0_28px_70px_rgba(0,0,0,0.7)]"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        tabIndex={-1}
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-shell-seam px-4 py-3">

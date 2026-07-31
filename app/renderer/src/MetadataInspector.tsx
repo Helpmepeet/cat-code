@@ -33,7 +33,7 @@
  * fields).
  */
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import type { SessionMetadataView } from './messageMetadata.js'
 import {
@@ -57,6 +57,7 @@ import {
   type SessionInspectorState,
 } from './sessionInspectorState.js'
 import { SourceBadge } from './SettingsField.js'
+import { useModalFocus } from './overlayFocus.js'
 import { settingsWereRead } from './settingsReadState.js'
 import { selectPermissionDefaultMode } from './settingsState.js'
 import { toneClasses, type Tone } from './tone.js'
@@ -98,30 +99,16 @@ export function MetadataInspector({
 }): ReactNode {
   const refs = selectMessageRefs(log)
   const [picked, setPicked] = useState<string | null>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const activeUuid = picked ?? refs[refs.length - 1]?.uuid ?? null
   const meta = selectMessageMetadata(log, activeUuid, tasks?.subagents)
 
-  /**
-   * P4-31 — Escape closes the drawer (`MetadataInspector.jsx:53-57`).
-   *
-   * Bubble phase, and it yields to `defaultPrevented`: the composer's own
-   * Escape branches (slash picker, mention picker, stop-turn) run on the
-   * textarea and call `preventDefault` (`App.tsx:3213`, `:3240`, `:3250`), so a
-   * typeahead dismissal never also closes the drawer. `SessionActionsMenu` is
-   * the only other unconditional Escape consumer and cannot be co-mounted: it
-   * closes itself the moment an item is chosen (`SessionActionsMenu.tsx:71-74`),
-   * which is the only way this drawer opens (`App.tsx:2432`).
-   */
-  useEffect(() => {
-    if (!onClose) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return
-      event.preventDefault()
-      onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  useModalFocus({
+    open: true,
+    containerRef: dialogRef,
+    onEscape: onClose ?? (() => {}),
+    escapeEnabled: onClose !== undefined,
+  })
 
   return (
     <>
@@ -131,8 +118,11 @@ export function MetadataInspector({
         onClick={onClose}
       />
       <div
+        ref={dialogRef}
         role="dialog"
+        aria-modal="true"
         aria-label="Session metadata"
+        tabIndex={-1}
         className="animate-toast-in fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
       >
         <div className="flex items-center gap-2.5 border-b border-shell-seam px-5 py-4">

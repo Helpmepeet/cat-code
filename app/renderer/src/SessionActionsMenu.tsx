@@ -24,6 +24,11 @@
 
 import { useEffect, useRef, useState, Fragment, type ReactNode } from 'react'
 import {
+  FOCUSABLE_ELEMENT_SELECTOR,
+  handleMenuRovingKeyDown,
+  usePopoverFocus,
+} from './overlayFocus.js'
+import {
   SESSION_ACTION_SECTIONS,
   SESSION_ACTION_SECTION_LABELS,
   SESSION_RENAME_POPOVER_HEIGHT,
@@ -62,13 +67,12 @@ export function SessionActionsMenu({
   onAction: (kind: SessionActionKind) => void
   onClose: () => void
 }): ReactNode {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const menuRef = useRef<HTMLDivElement>(null)
+  const { restoreTriggerFocus } = usePopoverFocus({
+    open: true,
+    containerRef: menuRef,
+    onEscape: onClose,
+  })
 
   const sections = SESSION_ACTION_SECTIONS.map(section => ({
     section,
@@ -96,8 +100,10 @@ export function SessionActionsMenu({
           viewport by `placeSessionActionsMenu`. The flipped case anchors
           `bottom`, so the panel grows upward from the trigger. */}
       <div
+        ref={menuRef}
         role="menu"
         aria-label="Session actions"
+        onKeyDown={handleMenuRovingKeyDown}
         className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
         style={
           placement.placeAbove
@@ -117,6 +123,7 @@ export function SessionActionsMenu({
                     key={item.kind}
                     item={item}
                     onAction={kind => {
+                      restoreTriggerFocus()
                       onAction(kind)
                       onClose()
                     }}
@@ -126,6 +133,7 @@ export function SessionActionsMenu({
                     key={item.kind}
                     item={item}
                     onAction={() => {
+                      restoreTriggerFocus()
                       onAction(item.kind)
                       onClose()
                     }}
@@ -159,6 +167,13 @@ export function SessionRenamePopover({
 }): ReactNode {
   const [value, setValue] = useState(initial)
   const inputRef = useRef<HTMLInputElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const { restoreTriggerFocus } = usePopoverFocus({
+    open: true,
+    containerRef: popoverRef,
+    onEscape: onCancel,
+    initialFocusSelector: FOCUSABLE_ELEMENT_SELECTOR,
+  })
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
@@ -182,6 +197,7 @@ export function SessionRenamePopover({
           measured anchor of the row being renamed, resolved against the viewport
           by `placeSessionActionsMenu`. */}
       <div
+        ref={popoverRef}
         role="dialog"
         aria-label="Rename session"
         className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
@@ -198,9 +214,11 @@ export function SessionRenamePopover({
           onKeyDown={event => {
             if (event.key === 'Enter') {
               event.preventDefault()
+              restoreTriggerFocus()
               onCommit(value)
             } else if (event.key === 'Escape') {
               event.preventDefault()
+              restoreTriggerFocus()
               onCancel()
             }
           }}
@@ -278,6 +296,7 @@ function MenuFlyoutRow({
         <div
           role="menu"
           aria-label={item.label}
+          onKeyDown={handleMenuRovingKeyDown}
           className="animate-sa-pop absolute -top-[5px] left-full z-[72] ml-1 w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
         >
           {item.flyout?.map(child => (

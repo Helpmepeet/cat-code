@@ -29,6 +29,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
@@ -39,6 +40,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
+import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import {
   groupAgentDelegates,
@@ -262,17 +264,12 @@ export function ToolInspectorOverlay({
   row: ToolUseNestedRow | null
   onClose: () => void
 }) {
-  useEffect(() => {
-    if (!row) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [row, onClose])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalFocus({
+    open: row !== null,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
   if (!row) return null
   return (
     <div className="fixed inset-0 z-[200] flex justify-end">
@@ -281,7 +278,14 @@ export function ToolInspectorOverlay({
         onClick={onClose}
         aria-hidden
       />
-      <div className="relative flex h-full shadow-2xl">
+      <div
+        ref={dialogRef}
+        className="relative flex h-full shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Tool inspector"
+        tabIndex={-1}
+      >
         <ToolInspector row={row} onClose={onClose} />
       </div>
     </div>

@@ -15,9 +15,10 @@
  * Visual grammar adapted from `~/catcode_prototype/cat-app/TasksPage.jsx`
  * (`BgTasksDialog`), rebuilt on the P0-2 tokens, zero ported code.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TaskSnapshotItem, TasksSnapshot } from '../../shared/protocol.js'
 import { agentStateMeta } from './agentIdentity.js'
+import { useModalFocus } from './overlayFocus.js'
 import {
   groupTaskItems,
   isTerminalTaskStatus,
@@ -50,6 +51,7 @@ export function TasksDialog({
   onStopTask?: (taskId: string) => void
 }) {
   const [selected, setSelected] = useState(0)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   const { active, completed } = useMemo(
     () => groupTaskItems(snapshot),
@@ -65,6 +67,7 @@ export function TasksDialog({
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
       // A modifier chord belongs to the app, not to this dialog — `tasksDialogKeyAction`
       // owns that bail so ⌘K can reach the command palette without stopping a task.
       const action = tasksDialogKeyAction(event)
@@ -99,6 +102,12 @@ export function TasksDialog({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open, flat, selected, onClose, onStopTask])
 
+  useModalFocus({
+    open,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
+
   if (!open) return null
 
   return (
@@ -108,10 +117,12 @@ export function TasksDialog({
       role="presentation"
     >
       <div
+        ref={dialogRef}
         className="animate-toast-in flex max-h-[74vh] w-[640px] max-w-[calc(100%-48px)] flex-col overflow-hidden rounded-[14px] border border-shell-seam bg-surface-panel shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
         role="dialog"
         aria-modal="true"
         aria-label="Background tasks"
+        tabIndex={-1}
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 border-b border-shell-seam px-[18px] py-3.5">

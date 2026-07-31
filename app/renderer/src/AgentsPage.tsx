@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   AgentConfigDefinition,
   AgentConfigSnapshot,
@@ -10,6 +10,7 @@ import {
   selectAgentConfigCounts,
   selectAgentConfigGroups,
 } from './agentConfigState.js'
+import { useModalFocus } from './overlayFocus.js'
 
 type SourceMeta = {
   label: string
@@ -258,13 +259,12 @@ function AgentInspectDrawer({
   definition: AgentConfigDefinition
   onClose: () => void
 }) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  const drawerRef = useRef<HTMLElement>(null)
+  useModalFocus({
+    open: true,
+    containerRef: drawerRef,
+    onEscape: onClose,
+  })
 
   return (
     <>
@@ -274,7 +274,14 @@ function AgentInspectDrawer({
         onClick={onClose}
         type="button"
       />
-      <aside className="animate-toast-in fixed bottom-0 right-0 top-0 z-[81] flex w-[min(560px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]">
+      <aside
+        ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Agent details"
+        tabIndex={-1}
+        className="animate-toast-in fixed bottom-0 right-0 top-0 z-[81] flex w-[min(560px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
+      >
         <header className="flex shrink-0 items-center gap-2.5 border-b border-shell-seam px-5 py-4">
           <span
             aria-hidden="true"

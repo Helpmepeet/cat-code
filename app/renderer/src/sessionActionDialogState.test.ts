@@ -4,26 +4,7 @@ import {
   exportFileName,
   selectExportPreview,
   selectLatchedExportPreview,
-  sessionActionModalKeyAction,
 } from './sessionActionDialogState.js'
-
-describe('sessionActionModalKeyAction', () => {
-  test('bare Escape closes the dialog', () => {
-    expect(sessionActionModalKeyAction({ key: 'Escape' })).toBe('close')
-  })
-
-  test('any other key is not a dismissal', () => {
-    for (const key of ['Enter', 'Tab', 'a', 'ArrowDown', 'escape']) {
-      expect(sessionActionModalKeyAction({ key })).toBeNull()
-    }
-  })
-
-  test('a modifier chord belongs to the app, not the dialog (⌘K still reaches the palette)', () => {
-    expect(sessionActionModalKeyAction({ key: 'Escape', metaKey: true })).toBeNull()
-    expect(sessionActionModalKeyAction({ key: 'Escape', ctrlKey: true })).toBeNull()
-    expect(sessionActionModalKeyAction({ key: 'Escape', altKey: true })).toBeNull()
-  })
-})
 
 describe('exportFileName', () => {
   test('slugifies the session title (the prototype rule)', () => {

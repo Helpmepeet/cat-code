@@ -71,6 +71,11 @@ import {
   type AccountMenuItem,
   type AccountMenuKey,
 } from './accountsPageModel.js'
+import {
+  handleMenuRovingKeyDown,
+  usePopover,
+} from './composerPopover.js'
+import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import type { ToastTone } from './toastModel.js'
 import { toneClasses, type Tone } from './tone.js'
@@ -188,13 +193,12 @@ function ALDialog({
   footer?: ReactNode
   onClose: () => void
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalFocus({
+    open: true,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
   return (
     <div
       role="presentation"
@@ -202,9 +206,11 @@ function ALDialog({
       className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         onClick={e => e.stopPropagation()}
         className="animate-toast-in w-[460px] max-w-[calc(100%-48px)] overflow-hidden rounded-[14px] border border-white/10 bg-[#0c0c0e] shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
       >
@@ -484,25 +490,7 @@ function AccountRowMenu({
   account: AccountStatus
   onAction: (key: AccountMenuKey, account: AccountStatus) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && e.target instanceof Node && !ref.current.contains(e.target)) {
-        setOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
 
   const items = selectAccountMenuItems(account)
   if (items.length === 0) return null
@@ -510,6 +498,7 @@ function AccountRowMenu({
   return (
     <div ref={ref} className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Account actions"
         aria-haspopup="menu"
@@ -524,6 +513,8 @@ function AccountRowMenu({
       {open ? (
         <div
           role="menu"
+          aria-label="Account actions"
+          onKeyDown={handleMenuRovingKeyDown}
           className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[#141417] p-[5px] shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
         >
           {items.map(it => (
@@ -532,7 +523,7 @@ function AccountRowMenu({
               type="button"
               role="menuitem"
               onClick={() => {
-                setOpen(false)
+                close()
                 onAction(it.key, account)
               }}
               className={`block w-full rounded-[7px] px-2.5 py-[7px] text-left text-[12.5px] transition-colors ${

@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import {
+  handleMenuRovingKeyDown,
+  useModalFocus,
+  usePopoverFocus,
+} from './overlayFocus.js'
 import { toneClasses } from './tone.js'
 import {
   PLAN_APPROVE_OPTIONS,
@@ -94,32 +99,21 @@ export function PlanPanel({
   const [revising, setRevising] = useState(false)
   const [revisionText, setRevisionText] = useState('')
   const cardRef = useRef<HTMLDivElement>(null)
-  const prevFocus = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     if (!open) return
     setShowApprove(false)
     setRevising(false)
     setRevisionText('')
-    prevFocus.current = document.activeElement as HTMLElement | null
-    const timer = setTimeout(() => cardRef.current?.focus(), 0)
-    return () => {
-      clearTimeout(timer)
-      prevFocus.current?.focus?.()
-    }
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape' && !showApprove && !revising) {
-        event.preventDefault()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, showApprove, revising, onClose])
+  useModalFocus({
+    open,
+    containerRef: cardRef,
+    onEscape: onClose,
+    escapeEnabled: !showApprove && !revising,
+    initialFocus: 'container',
+  })
 
   if (!open || !review) return null
 
@@ -150,6 +144,7 @@ export function PlanPanel({
         onClick={event => event.stopPropagation()}
         ref={cardRef}
         role="dialog"
+        aria-modal="true"
         tabIndex={-1}
       >
         <div className="shrink-0 border-b border-shell-seam px-4 py-3">
@@ -324,6 +319,11 @@ function ApproveMenu({
 }) {
   const [cursor, setCursor] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
+  const { restoreTriggerFocus } = usePopoverFocus({
+    open: true,
+    containerRef: ref,
+    onEscape: onClose,
+  })
 
   useEffect(() => {
     function onDocMouseDown(event: MouseEvent) {
@@ -331,33 +331,11 @@ function ApproveMenu({
         onClose()
       }
     }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        setCursor(current => (current + 1) % PLAN_APPROVE_OPTIONS.length)
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault()
-        setCursor(
-          current => (current - 1 + PLAN_APPROVE_OPTIONS.length) % PLAN_APPROVE_OPTIONS.length,
-        )
-      } else if (event.key === 'Enter') {
-        event.preventDefault()
-        onPick(PLAN_APPROVE_OPTIONS[cursor])
-      } else if (/^[1-2]$/.test(event.key)) {
-        event.preventDefault()
-        onPick(PLAN_APPROVE_OPTIONS[Number(event.key) - 1])
-      }
-    }
     document.addEventListener('mousedown', onDocMouseDown)
-    window.addEventListener('keydown', onKeyDown)
     return () => {
       document.removeEventListener('mousedown', onDocMouseDown)
-      window.removeEventListener('keydown', onKeyDown)
     }
-  }, [cursor, onClose, onPick])
+  }, [onClose])
 
   return (
     <div
@@ -365,6 +343,15 @@ function ApproveMenu({
       className="absolute bottom-full left-0 z-10 mb-1.5 w-[270px] rounded-lg border border-shell-seam bg-surface-raised p-1 shadow-2xl"
       ref={ref}
       role="menu"
+      onKeyDown={event => {
+        if (/^[1-2]$/.test(event.key)) {
+          event.preventDefault()
+          restoreTriggerFocus()
+          onPick(PLAN_APPROVE_OPTIONS[Number(event.key) - 1])
+          return
+        }
+        handleMenuRovingKeyDown(event)
+      }}
     >
       {PLAN_APPROVE_OPTIONS.map((option, index) => (
         <button
@@ -374,7 +361,11 @@ function ApproveMenu({
               : 'border-transparent hover:bg-white/[0.04]'
           }`}
           key={option.mode}
-          onClick={() => onPick(option)}
+          onClick={() => {
+            restoreTriggerFocus()
+            onPick(option)
+          }}
+          onFocus={() => setCursor(index)}
           onMouseEnter={() => setCursor(index)}
           role="menuitem"
           type="button"

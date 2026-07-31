@@ -37,6 +37,11 @@ import {
   type ReactNode,
 } from 'react'
 import { Chip } from './Chip.js'
+import {
+  FOCUSABLE_ELEMENT_SELECTOR,
+  handleMenuRovingKeyDown,
+  usePopoverFocus,
+} from './overlayFocus.js'
 import { basename } from './pathUtils.js'
 import { sessionStatusVisual, statusChipTone } from './sessionStatusVisual.js'
 import type { SessionActionsAnchor } from './SessionActionsMenu.js'
@@ -116,6 +121,12 @@ export function SessionsPage({
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SessionSort>('recent')
   const [sortOpen, setSortOpen] = useState(false)
+  const sortMenuRef = useRef<HTMLDivElement>(null)
+  const { restoreTriggerFocus: restoreSortTriggerFocus } = usePopoverFocus({
+    open: sortOpen,
+    containerRef: sortMenuRef,
+    onEscape: () => setSortOpen(false),
+  })
   const [tagFilter, setTagFilter] = useState('all')
   const [allWorkspaces, setAllWorkspaces] = useState(true)
   const [page, dispatchPage] = useReducer(
@@ -258,6 +269,8 @@ export function SessionsPage({
           <div className="relative">
             <button
               type="button"
+              aria-haspopup="menu"
+              aria-expanded={sortOpen}
               onClick={() => setSortOpen(open => !open)}
               className={
                 'flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12.5px] transition-colors ' +
@@ -276,12 +289,21 @@ export function SessionsPage({
                   onClick={() => setSortOpen(false)}
                   aria-hidden="true"
                 />
-                <div className="absolute right-0 top-9 z-50 w-[176px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.5)]">
+                <div
+                  ref={sortMenuRef}
+                  role="menu"
+                  aria-label="Sort sessions"
+                  onKeyDown={handleMenuRovingKeyDown}
+                  className="absolute right-0 top-9 z-50 w-[176px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+                >
                   {(Object.keys(SORT_LABELS) as SessionSort[]).map(option => (
                     <button
                       key={option}
                       type="button"
+                      role="menuitemradio"
+                      aria-checked={option === sort}
                       onClick={() => {
+                        restoreSortTriggerFocus()
                         setSort(option)
                         setSortOpen(false)
                       }}
@@ -960,6 +982,17 @@ function TagPopover({
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const { restoreTriggerFocus } = usePopoverFocus({
+    open: true,
+    containerRef: popoverRef,
+    onEscape: onClose,
+    initialFocusSelector: FOCUSABLE_ELEMENT_SELECTOR,
+  })
+  const apply = (tag: string | null) => {
+    restoreTriggerFocus()
+    onApply(tag)
+  }
   const bulk = state.target.kind === 'bulk'
   const matches = selectMatchingTags(query, knownTags)
   const canCreate = selectCanCreateTag(query, knownTags)
@@ -975,6 +1008,7 @@ function TagPopover({
       {/* §0 EXCEPTION: data-driven geometry Tailwind cannot express — the measured
           anchor of the trigger that opened this popover. */}
       <div
+        ref={popoverRef}
         role="dialog"
         aria-label={bulk ? 'Tag selected sessions' : 'Set session tag'}
         className="fixed z-[71] w-[216px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
@@ -997,10 +1031,11 @@ function TagPopover({
             if (event.key === 'Enter') {
               event.preventDefault()
               const resolved = resolveTagCommit(query, knownTags)
-              if (resolved) onApply(resolved)
-              else if (matches[0]) onApply(matches[0])
+              if (resolved) apply(resolved)
+              else if (matches[0]) apply(matches[0])
             } else if (event.key === 'Escape') {
               event.preventDefault()
+              restoreTriggerFocus()
               onClose()
             }
           }}
@@ -1015,7 +1050,7 @@ function TagPopover({
               <button
                 key={candidate}
                 type="button"
-                onClick={() => onApply(candidate)}
+                  onClick={() => apply(candidate)}
                 className={
                   'flex w-full items-center justify-between rounded-md px-2 py-1.5 font-mono text-[12.5px] transition-colors ' +
                   (active
@@ -1031,7 +1066,7 @@ function TagPopover({
           {canCreate ? (
             <button
               type="button"
-              onClick={() => onApply(query.trim().toLowerCase())}
+              onClick={() => apply(query.trim().toLowerCase())}
               className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] text-accent transition-colors hover:bg-accent/[0.08]"
             >
               <PlusIcon />
@@ -1049,7 +1084,7 @@ function TagPopover({
             <div className="my-1 h-px bg-shell-seam" />
             <button
               type="button"
-              onClick={() => onApply(null)}
+              onClick={() => apply(null)}
               className="flex w-full items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-[12px] text-text-muted transition-colors hover:bg-white/[0.05]"
             >
               <CloseIcon />

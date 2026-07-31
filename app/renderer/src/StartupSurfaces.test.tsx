@@ -44,6 +44,9 @@ function trustHtml(
 
 test('trust gate shows the title, the session cwd, and the two ruled actions', () => {
   const html = trustHtml()
+  expect(html).toContain('role="dialog"')
+  expect(html).toContain('aria-modal="true"')
+  expect(html).toContain('tabindex="-1"')
   expect(html).toContain('Trust this workspace?')
   expect(html).toContain('/Users/me/proj')
   expect(html).toContain('Trust required')

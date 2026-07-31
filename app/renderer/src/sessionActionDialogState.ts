@@ -15,24 +15,6 @@
 
 import type { SessionActionResultFrame } from '../../shared/protocol'
 
-/** What a keypress means to an open dialog. */
-export type SessionActionModalKey = 'close' | null
-
-/**
- * Escape closes; a modifier chord belongs to the app, not to the dialog (so ⌘K
- * still reaches the command palette while a dialog is open — the same bail
- * `tasksDialogKeyAction` makes).
- */
-export function sessionActionModalKeyAction(event: {
-  key: string
-  metaKey?: boolean
-  ctrlKey?: boolean
-  altKey?: boolean
-}): SessionActionModalKey {
-  if (event.metaKey || event.ctrlKey || event.altKey) return null
-  return event.key === 'Escape' ? 'close' : null
-}
-
 /**
  * The export's suggested file name (`SessionActions.jsx:356` — slugified title +
  * extension), shown in the dialog footer.
