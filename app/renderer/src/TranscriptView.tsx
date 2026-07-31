@@ -979,11 +979,17 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
 }
 
 /**
- * P4-1 "Open full output ↗" — the footer affordance inside a tool card's expanded
- * body (prototype Messages.jsx:563 "Inspector"/566 "Open full output"). Opens the
- * `ToolInspector` drawer over this card's real projected row. Sits below the body
- * so a collapsed card stays quiet; a running/errored card (default-expanded) shows
- * it immediately.
+ * "Inspector ↗" — the footer affordance inside a tool card's expanded body.
+ * Opens the `ToolInspector` drawer over this card's real projected row. Sits
+ * below the body so a collapsed card stays quiet; a running/errored card
+ * (default-expanded) shows it immediately.
+ *
+ * The label is the prototype's, and the distinction is deliberate: its footer
+ * button reads "Inspector" (`Messages.jsx:564`) while the reveal band's reads
+ * "Open full output" (`:452`). Both routes end at the same drawer, but they are
+ * scoped differently — the footer always offers it, the band offers it only for
+ * output the card had to cut — so they must not share one label. This one
+ * carried the band's wording until P4-45.
  */
 function ToolInspectorLaunch({ onOpen }: { onOpen: () => void }) {
   return (
@@ -993,7 +999,7 @@ function ToolInspectorLaunch({ onOpen }: { onOpen: () => void }) {
         onClick={onOpen}
         className="inline-flex items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.06] px-2.5 py-1 font-mono text-[10.5px] text-accent-soft hover:bg-accent/10"
       >
-        Open full output
+        Inspector
         <span aria-hidden>↗</span>
       </button>
     </div>
@@ -1423,25 +1429,21 @@ function PlainLinesBody({
 /**
  * GenerateImage result. The projector carries only the flattened result text,
  * NOT the inline image bytes/path structure — the prototype's inline image
- * tile + Open/Copy actions need a projector data-contract change (§5 flag),
- * so this renders the real result text with a note instead of an invented tile.
+ * tile + Open/Copy actions need a projector data-contract change (§5 flag), so
+ * this renders the real result text and nothing else. It used to print that
+ * flag at the user as a roadmap note; the deferral belongs in the ledger and
+ * STATUS, not on the transcript (CLAUDE.md §7). The result text above it
+ * already says what happened.
  */
 function ImageResultBody({ content, isError }: { content: string; isError: boolean }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <pre
-        className={`overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
-          isError ? 'text-tone-danger' : 'text-text-muted'
-        }`}
-      >
-        {content}
-      </pre>
-      {!isError ? (
-        <span className="font-mono text-[10px] italic text-text-subtle/70">
-          inline image tile pending a projector image-payload seam
-        </span>
-      ) : null}
-    </div>
+    <pre
+      className={`overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
+        isError ? 'text-tone-danger' : 'text-text-muted'
+      }`}
+    >
+      {content}
+    </pre>
   )
 }
 
@@ -1967,7 +1969,9 @@ function RedactedThinkingBlock() {
 /**
  * SystemNoticeRow: the notice box for the three projected notice types
  * (api_retry / local_command_output / account_diagnostic), each with its own
- * glyph + tone and a trailing debug tag.
+ * glyph + tone. The type is carried by that glyph and tone alone: it used to
+ * also print the raw discriminant in the corner, which is a debug tag, not a
+ * word anyone reads (CLAUDE.md §7).
  */
 function SystemNoticeBox({
   noticeType,
@@ -1984,9 +1988,6 @@ function SystemNoticeBox({
       </span>
       <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs text-text-muted">
         {content}
-      </span>
-      <span className="shrink-0 font-mono text-[9.5px] text-text-subtle/70">
-        {noticeType}
       </span>
     </div>
   )

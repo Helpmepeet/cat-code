@@ -151,11 +151,6 @@ const KNOWN: { text: string; why: string }[] = [
     text: 'P4-7 exposes a read-only snapshot; desktop editing waits for a full-fidelity writer.',
     why: 'pending: agentConfigDomain.ts readOnlyReason, owned by the agent-config write path',
   },
-  // PENDING — owner: the live TranscriptView session (uncommitted 2026-07-28).
-  {
-    text: 'inline image tile pending a projector image-payload seam',
-    why: 'pending: TranscriptView.tsx placeholder, owned by the live transcript session',
-  },
 ]
 
 const KNOWN_TEXT = new Set(KNOWN.map(entry => entry.text))

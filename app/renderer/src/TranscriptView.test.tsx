@@ -456,7 +456,7 @@ test('P4-18b: each tool family renders its own glyph + word header', () => {
   }
 })
 
-test('P4-18b: a GenerateImage card flags the missing inline-image seam, never mocks a tile', () => {
+test('P4-18b: a GenerateImage card renders its real result text and never mocks a tile', () => {
   const html = render(
     toolRow({
       toolName: 'GenerateImage',
@@ -468,7 +468,12 @@ test('P4-18b: a GenerateImage card flags the missing inline-image seam, never mo
   )
 
   expect(html).toContain('saved to /tmp/cat.png') // real result text
-  expect(html).toContain('inline image tile pending') // flagged, not mocked
+  // P4-45: the missing inline-image tile is still deferred, but the deferral is
+  // recorded in the ledger, not printed under every image the user generates.
+  expect(html).not.toContain('inline image tile pending')
+  // ("seam" alone is not assertable here: `border-shell-seam` is a Tailwind
+  // token. `userVisibleText.test.ts` strips class names and enforces the word.)
+  expect(html).not.toContain('image-payload')
 })
 
 // P4-8c: a top-level Agent tool-use row (the DelegateGroup member / lone card).
@@ -949,7 +954,7 @@ test('P4-18a: a compact-boundary row renders the compaction seam', () => {
   expect(html).toContain('auto')
 })
 
-test('P4-18a: a system-notice row renders the notice box with its tag', () => {
+test('P4-18a: a system-notice row renders the notice box, never its raw type', () => {
   const html = render({
     ...frameSource,
     id: 's:f:system-notice',
@@ -959,7 +964,29 @@ test('P4-18a: a system-notice row renders the notice box with its tag', () => {
   })
 
   expect(html).toContain('retrying after 429')
-  expect(html).toContain('api_retry')
+  expect(html).toContain('↻') // the glyph is what distinguishes the three types
+  // P4-45: the discriminant used to print in the corner of the most-read
+  // surface in the app. It is a debug tag (CLAUDE.md §7).
+  expect(html).not.toContain('api_retry')
+})
+
+test('P4-45: no notice type prints its discriminant', () => {
+  for (const noticeType of [
+    'api_retry',
+    'local_command_output',
+    'account_diagnostic',
+  ] as const) {
+    const html = render({
+      ...frameSource,
+      id: `s:f:${noticeType}`,
+      kind: 'system-notice',
+      noticeType,
+      content: 'something happened',
+    })
+
+    expect(html).toContain('something happened')
+    expect(html).not.toContain(noticeType)
+  }
 })
 
 test('P4-18a: snip-boundary and tombstone typed-degraded rows still render', () => {
@@ -1186,7 +1213,11 @@ test('P4-1: a real projected tool card renders the open-from-card inspector affo
   // Default-expanded (error status), so the body — and the launch affordance
   // wired to the inspector via context — appears in the real render path.
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[projectedBashRow()]} />)
-  expect(html).toContain('Open full output')
+  expect(html).toContain('Inspector')
+  // P4-45: this footer is ALWAYS offered, so it must not wear the label of the
+  // reveal band, which appears only when output was cut. This output is short:
+  // there is no band here, and therefore no "Open full output" anywhere.
+  expect(html).not.toContain('Open full output')
 })
 
 test('P4-1: the inspector overlay renders the REAL projected row (drawer + backdrop)', () => {
@@ -1392,6 +1423,12 @@ test('P4-36 — the tail of a truncated read stays visible, with its real line n
 test('P4-36 — the band offers the route to the complete text', () => {
   const html = render(longToolRow('read', 900))
   expect(html).toContain('Open full output')
+  // P4-45: this card renders BOTH routes to the drawer (the always-present
+  // footer and this band), so a bare `toContain` passed even when the footer
+  // was the only thing carrying the label. Exactly one button says it now, and
+  // the other says "Inspector".
+  expect(html.split('Open full output').length - 1).toBe(1)
+  expect(html).toContain('Inspector')
 })
 
 test('P4-36 — output under the window renders whole, with no band', () => {

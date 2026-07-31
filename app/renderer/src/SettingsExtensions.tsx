@@ -101,14 +101,6 @@ function EmptyRow({ children }: { children: ReactNode }) {
   return <p className="text-[12.5px] text-text-subtle">{children}</p>
 }
 
-function DeferredNote({ children }: { children: ReactNode }) {
-  return (
-    <div className="mb-4 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-2 text-[11.5px] leading-relaxed text-text-subtle">
-      {children}
-    </div>
-  )
-}
-
 function WaitingRow() {
   return (
     <EmptyRow>Open a session to see its extensions.</EmptyRow>
@@ -134,10 +126,6 @@ export function McpPanel({ snapshot }: { snapshot: ExtensionsSnapshot | null }) 
   const servers = snapshot.mcp
   return (
     <PaneSection>
-      <DeferredNote>
-        Shown from configuration only. Connection status, and connect /
-        authenticate / remove, are not available here yet.
-      </DeferredNote>
       {servers === null ? (
         <EmptyRow>MCP configuration could not be read.</EmptyRow>
       ) : servers.length === 0 ? (
@@ -216,10 +204,7 @@ export function PluginsPanel({
         ))}
       </div>
       {tab === 'marketplace' ? (
-        <DeferredNote>
-          Browsing and installing are not available here. Install plugins from
-          the terminal.
-        </DeferredNote>
+        <EmptyRow>Install plugins from the terminal.</EmptyRow>
       ) : plugins === null ? (
         <EmptyRow>Plugins could not be loaded.</EmptyRow>
       ) : plugins.length === 0 ? (
