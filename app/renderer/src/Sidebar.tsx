@@ -17,16 +17,29 @@
  *
  * §0 fidelity flags (divergences from the prototype, by design):
  *  - Rows render NO visible status chip: the prototype's rows are bare, and the
- *    operator ruled out per-row status labels (2026-07-20). Status stays in the
- *    `aria-label` only. A browse-only history row is still non-interactive.
+ *    operator ruled out per-row status labels (2026-07-20). Status TEXT stays in
+ *    the `aria-label` only (the O1 dot below is unlabeled, and is the single
+ *    exception). A browse-only history row is still non-interactive.
  *  - The per-workspace "+" renders only for a group that has at least one
  *    registry row to name (HC1: createSessionInWorkspace needs a registry id,
  *    not a path); a pure-terminal-history workspace has no such id, so its "+"
  *    is hidden (🔁 adapted — a fresh session there still goes via ⌘T / picker).
- *  - No per-row status dot: the prototype's sidebar rows carry none (title +
- *    `time · model` only), so the earlier real-added health dot was removed
- *    2026-07-14 to match the prototype (operator decision). Live/dead/busy state
- *    still surfaces on the TabBar.
+ *  - ➕ real-added, and a deliberate departure from the prototype (operator
+ *    ruling O1, 2026-07-31): a single small unlabeled dot on LIVE rows, absent
+ *    otherwise. It is the minimum exception to the 2026-07-20 bare-row ruling,
+ *    matching the standing live-vs-not-live target with no text. Its BOUND: no
+ *    chip, no status word, no per-state colour vocabulary, and nothing at all on
+ *    a row that is not live. It supersedes the note that stood here from
+ *    2026-07-14, when the earlier per-tone health dot was removed for prototype
+ *    parity — that dot carried exactly the colour vocabulary this ruling
+ *    forbids, so it does not come back. Liveness is read from `row.live`
+ *    (`sessionsCatalogState.ts:200` — a registry row with a running process),
+ *    NOT `deriveMergedRowVisual().kind`, which also calls a non-restorable
+ *    `exited` row live. Decorative (`aria-hidden`): the state is already in the
+ *    row's `aria-label`, and a second announcement would be a duplicate. It is
+ *    absolutely positioned in the row's own left padding, so its presence never
+ *    reflows the title or the `time · model` line. Richer per-state status still
+ *    surfaces on the TabBar.
  *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
  *    Accounts (P4-5), and Settings. None are mocked.
  *  - Per-row actions (#11): each session row raises the SAME P4-6b
@@ -927,6 +940,17 @@ export function SidebarRowItem({
           : undefined
       }
     >
+      {/* O1 (operator ruling 2026-07-31) — the live-only dot. One tone, no
+       * label. Absolutely positioned in the row's own left padding so a live row
+       * and a not-live row lay out identically. Static class: an interpolated
+       * arbitrary value silently no-ops in this Tailwind v4 setup. */}
+      {row.live ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-[2px] top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-tone-good"
+        />
+      ) : null}
+
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <span

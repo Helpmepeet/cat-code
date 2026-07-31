@@ -234,6 +234,85 @@ test('no row renders a visible status label; status stays in aria-label only', (
   expect(history).toContain('aria-label="session H, history"')
 })
 
+// ── O1 (operator ruling 2026-07-31): the live-only dot ───────────────────────
+// A single small unlabeled dot on LIVE rows, absent otherwise. Bound: no chip,
+// no status word, no per-state colour vocabulary, nothing at all on a not-live
+// row. Liveness comes from `row.live` (a registry row with a running process),
+// not from `deriveMergedRowVisual().kind`, which also calls a non-restorable
+// `exited` row live. The exact markup is asserted so an interpolated
+// arbitrary-value class (the Tailwind v4 trap, invisible to a headless test)
+// cannot slip in.
+const LIVE_DOT =
+  '<span aria-hidden="true" class="pointer-events-none absolute left-[2px] top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-tone-good"></span>'
+
+test('a live registry row carries the O1 dot, unlabeled and announced only once', () => {
+  const html = renderRow(registryRow('l', { displayLabel: 'L' }))
+  expect(html).toContain(LIVE_DOT)
+  // Decorative: the state is already in the aria-label, so the dot adds no
+  // second announcement and no visible text.
+  expect(html).toContain('aria-label="session L, live"')
+  expect(html).not.toContain('>live<')
+})
+
+test('a restorable registry row carries no dot at all', () => {
+  const html = renderRow(
+    registryRow('r', {
+      displayLabel: 'R',
+      live: false,
+      restorable: true,
+      status: 'exited',
+    }),
+  )
+  expect(html).not.toContain('rounded-full')
+})
+
+test('a non-restorable exited registry row carries no dot (row.live, not visual.kind)', () => {
+  // `deriveMergedRowVisual` folds this row to kind `live` (inRegistry && !restorable);
+  // `row.live` is false because the process is gone. The dot follows `row.live`.
+  const html = renderRow(
+    registryRow('x', {
+      displayLabel: 'X',
+      live: false,
+      restorable: false,
+      status: 'exited',
+    }),
+  )
+  expect(html).not.toContain('rounded-full')
+})
+
+test('history rows carry no dot, openable or browse-only', () => {
+  const openable = renderRow(
+    historyRow('h', { displayLabel: 'H', cwd: '/tmp/proj' }),
+  )
+  expect(openable).not.toContain('rounded-full')
+
+  const browseOnly = renderRow(historyRow('o', { displayLabel: 'O', cwd: '' }))
+  expect(browseOnly).not.toContain('rounded-full')
+})
+
+test('a mixed group paints exactly one dot in exactly one tone', () => {
+  const html = renderGroup([
+    registryRow('a', { displayLabel: 'Alpha' }),
+    registryRow('b', {
+      displayLabel: 'Beta',
+      live: false,
+      restorable: true,
+      status: 'exited',
+    }),
+    registryRow('c', {
+      displayLabel: 'Gamma',
+      live: false,
+      restorable: true,
+      status: 'disconnected',
+    }),
+    historyRow('h', { displayLabel: 'Delta', cwd: '/tmp/proj' }),
+  ])
+  expect(html.match(/rounded-full/g)).toHaveLength(1)
+  // One tone only — no per-state colour vocabulary.
+  expect(html.match(/bg-tone-/g)).toHaveLength(1)
+  expect(html).toContain(LIVE_DOT)
+})
+
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────
 
 test('a workspace group with a registry row exposes a "+" when onNewSessionInWorkspace is wired', () => {
