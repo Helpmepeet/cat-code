@@ -1333,3 +1333,110 @@ test('P4-38 — the copy payload is the whole markdown source, not the visible p
   // `shown` is still what gets RENDERED, so the contrast above is meaningful.
   expect(flat).toContain('{shown}')
 })
+
+/* --------------------------------------------------------------------------- *
+ * P4-36 — inline truncation reveal band (prototype Messages.jsx:438-457,546-556).
+ *
+ * The defect: `NumberedBody` (file read) and `AdditionsBody` (file write) sliced
+ * the content and rendered NOTHING about the slice, so a 900-line read showed 400
+ * lines that simply stopped and the last visible line read as the end of the file.
+ *
+ * SSR-ONLY LIMIT: `renderToStaticMarkup` cannot click "Show N more", so what these
+ * tests pin is the first paint of each state. The reveal itself is proven against
+ * the pure window in `inlineOutputWindow.test.ts`.
+ *
+ * Cards collapse by default, so these rows are `status: 'error'` — the one status
+ * that expands a read/write card (`ToolCard` `defaultExpanded`).
+ * --------------------------------------------------------------------------- */
+
+function longToolRow(family: ToolFamily, lineCount: number): NestedTranscriptRow {
+  return toolRow({
+    toolName: family === 'read' ? 'Read' : 'Write',
+    toolFamily: family,
+    input: { file_path: '/w/big.ts' },
+    status: 'error',
+    result: {
+      content: Array.from({ length: lineCount }, (_, i) => `src line ${i + 1}`).join('\n'),
+      isError: true,
+      diff: null,
+    },
+  })
+}
+
+test('P4-36 — a long file READ no longer stops silently: it states the gap', () => {
+  const html = render(longToolRow('read', 900))
+
+  // 900 lines, head 30, tail 6 → 864 in the gap.
+  expect(html).toContain('864 lines hidden')
+  expect(html).toContain('Show 100 more')
+})
+
+test('P4-36 — a long file WRITE states the gap too (the second silent body)', () => {
+  const html = render(longToolRow('write', 900))
+
+  expect(html).toContain('864 lines hidden')
+  expect(html).toContain('Show 100 more')
+})
+
+test('P4-36 — the tail of a truncated read stays visible, with its real line numbers', () => {
+  const html = render(longToolRow('read', 900))
+
+  expect(html).toContain('src line 1') // head
+  expect(html).toContain('src line 900') // tail: the file's true last line
+  expect(html).not.toContain('src line 500') // the gap really is hidden
+  // The tail is numbered 895..900, not 1..6.
+  expect(html).toContain('>895<')
+  expect(html).toContain('>900<')
+})
+
+test('P4-36 — the band offers the route to the complete text', () => {
+  const html = render(longToolRow('read', 900))
+  expect(html).toContain('Open full output')
+})
+
+test('P4-36 — output under the window renders whole, with no band', () => {
+  const html = render(longToolRow('read', 30))
+
+  expect(html).toContain('src line 30')
+  expect(html).not.toContain('lines hidden')
+  expect(html).not.toContain('Show ')
+})
+
+test('P4-36 — one line over the window bands, and offers exactly that line', () => {
+  const html = render(longToolRow('read', 37))
+
+  expect(html).toContain('1 line hidden') // singular, not "1 lines"
+  expect(html).toContain('Show 1 more') // never offers more than exists
+  expect(html).toContain('src line 37') // the tail is still the real last line
+})
+
+test('P4-36 — a body shorter than the tail renders whole', () => {
+  const html = render(longToolRow('write', 3))
+
+  expect(html).toContain('src line 1')
+  expect(html).toContain('src line 3')
+  expect(html).not.toContain('lines hidden')
+})
+
+test('P4-36 — an empty result keeps its own message and never bands', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Read',
+      toolFamily: 'read',
+      input: { file_path: '/w/empty.ts' },
+      status: 'error',
+      result: { content: '', isError: true, diff: null },
+    }),
+  )
+
+  expect(html).toContain('Failed with no output.')
+  expect(html).not.toContain('lines hidden')
+})
+
+test('P4-36 — bash keeps its band too, so the four bodies share one grammar', () => {
+  const html = render(longToolRow('bash', 900))
+
+  expect(html).toContain('864 lines hidden')
+  // The old one-line note is gone from every body.
+  expect(html).not.toContain('Open the full-output inspector to view all')
+})

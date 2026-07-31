@@ -80,6 +80,11 @@ import {
   findNestedToolUseRow,
   resolveToolCardExpanded,
 } from './transcriptViewModel.js'
+import {
+  INLINE_HEAD_LINES,
+  revealMoreLines,
+  selectInlineOutputWindow,
+} from './inlineOutputWindow.js'
 
 /**
  * P4-1 open-from-card handle: a tool card calls this with its own REAL projected
@@ -1151,6 +1156,13 @@ function ToolCardBody({
   row: ToolUseNestedRow
   content: string
 }) {
+  // Read before any early return so the hook order is stable across families.
+  // The reveal band's escape hatch is the SAME `ToolInspectorContext` route the
+  // card footer uses, over this same real projected row; null outside a
+  // transcript, where the band simply omits the button.
+  const openInspector = useContext(ToolInspectorContext)
+  const openFull = openInspector ? () => openInspector(row) : null
+
   if (row.result?.diff) return <DiffView diff={row.result.diff} />
 
   const errorTone = row.result?.isError === true
@@ -1173,15 +1185,15 @@ function ToolCardBody({
 
   switch (row.toolFamily) {
     case 'bash':
-      return <BashBody content={content} isError={errorTone} />
+      return <BashBody content={content} isError={errorTone} onOpenFull={openFull} />
     case 'read':
-      return <NumberedBody content={content} />
+      return <NumberedBody content={content} onOpenFull={openFull} />
     case 'write':
-      return <AdditionsBody content={content} />
+      return <AdditionsBody content={content} onOpenFull={openFull} />
     case 'imagegen':
       return <ImageResultBody content={content} isError={errorTone} />
     default:
-      return <PlainLinesBody content={content} isError={errorTone} />
+      return <PlainLinesBody content={content} isError={errorTone} onOpenFull={openFull} />
   }
 }
 
@@ -1206,21 +1218,63 @@ function bashLineClass(line: string): string {
   return 'text-text-muted'
 }
 
-const MAX_INLINE_TOOL_LINES = 400
+/**
+ * The inner scroll box every inline body shares (prototype `Messages.jsx:546`
+ * `maxHeight:340, overflowY:auto, overflowX:auto`). The head+tail window and its
+ * reveal band live INSIDE it, exactly as the prototype composes them, so the two
+ * models are the same model: the window bounds how much is built, the box bounds
+ * how much of it a card shows at once.
+ */
+const INLINE_OUTPUT_SCROLLER = 'max-h-[340px] overflow-auto'
 
-function BashBody({ content, isError }: { content: string; isError: boolean }) {
+/**
+ * `useState` half of the head+tail window. The reveal is monotonic, matching the
+ * prototype: `headShown` only grows, and the band removes itself once the gap
+ * closes, so there is no collapse control to un-reveal.
+ */
+function useInlineOutputWindow(lines: string[]) {
+  const [headShown, setHeadShown] = useState(INLINE_HEAD_LINES)
+  return {
+    window: selectInlineOutputWindow(lines, headShown),
+    revealMore: () =>
+      setHeadShown(shown => revealMoreLines(shown, lines.length)),
+  }
+}
+
+function BashBody({
+  content,
+  isError,
+  onOpenFull,
+}: {
+  content: string
+  isError: boolean
+  onOpenFull: (() => void) | null
+}) {
   const lines = content.split('\n')
-  const shown = lines.slice(0, MAX_INLINE_TOOL_LINES)
+  const { window, revealMore } = useInlineOutputWindow(lines)
+  const renderLines = (slice: string[]) => (
+    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed">
+      {slice.map((line, index) => (
+        <div key={index} className={isError ? 'text-tone-danger' : bashLineClass(line)}>
+          {line || ' '}
+        </div>
+      ))}
+    </pre>
+  )
   return (
-    <div>
-      <pre className="max-h-[340px] overflow-auto whitespace-pre font-mono text-[11.5px] leading-relaxed">
-        {shown.map((line, index) => (
-          <div key={index} className={isError ? 'text-tone-danger' : bashLineClass(line)}>
-            {line || ' '}
-          </div>
-        ))}
-      </pre>
-      <ToolOverflowNote total={lines.length} shown={shown.length} unit="lines" />
+    <div className={INLINE_OUTPUT_SCROLLER}>
+      {renderLines(window.head)}
+      {window.truncated ? (
+        <>
+          <InlineRevealBand
+            hidden={window.hidden}
+            revealStep={window.revealStep}
+            onReveal={revealMore}
+            onOpenFull={onOpenFull}
+          />
+          {renderLines(window.tail)}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -1241,14 +1295,18 @@ function BashTailPeek({ content }: { content: string }) {
   )
 }
 
-function NumberedBody({ content }: { content: string }) {
-  const lines = content.split('\n').slice(0, MAX_INLINE_TOOL_LINES)
+/**
+ * The file-READ body. `startLine` exists because the tail is not the head: after
+ * the window splits, numbering the tail from 1 would label the last lines of a
+ * 900-line file as its first six.
+ */
+function NumberedLines({ lines, startLine }: { lines: string[]; startLine: number }) {
   return (
-    <pre className="max-h-[340px] overflow-auto whitespace-pre font-mono text-[11.5px] leading-relaxed text-text-muted">
+    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-text-muted">
       {lines.map((line, index) => (
         <div key={index} className="flex">
           <span className="mr-3 w-8 shrink-0 select-none text-right tabular-nums text-text-subtle/60">
-            {index + 1}
+            {startLine + index}
           </span>
           <span className="min-w-0">{line || ' '}</span>
         </div>
@@ -1257,11 +1315,37 @@ function NumberedBody({ content }: { content: string }) {
   )
 }
 
-/** File-write additions view: every line prefixed with a green `+`. */
-function AdditionsBody({ content }: { content: string }) {
-  const lines = content.split('\n').slice(0, MAX_INLINE_TOOL_LINES)
+function NumberedBody({
+  content,
+  onOpenFull,
+}: {
+  content: string
+  onOpenFull: (() => void) | null
+}) {
+  const lines = content.split('\n')
+  const { window, revealMore } = useInlineOutputWindow(lines)
   return (
-    <pre className="max-h-[340px] overflow-auto whitespace-pre font-mono text-[11.5px] leading-relaxed text-tone-success">
+    <div className={INLINE_OUTPUT_SCROLLER}>
+      <NumberedLines lines={window.head} startLine={1} />
+      {window.truncated ? (
+        <>
+          <InlineRevealBand
+            hidden={window.hidden}
+            revealStep={window.revealStep}
+            onReveal={revealMore}
+            onOpenFull={onOpenFull}
+          />
+          <NumberedLines lines={window.tail} startLine={window.tailStartLine} />
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+/** File-write additions view: every line prefixed with a green `+`. */
+function AdditionLines({ lines }: { lines: string[] }) {
+  return (
+    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-tone-success">
       {lines.map((line, index) => (
         <div key={index} className="flex">
           <span className="mr-2 w-3 shrink-0 select-none text-right">+</span>
@@ -1272,19 +1356,66 @@ function AdditionsBody({ content }: { content: string }) {
   )
 }
 
-function PlainLinesBody({ content, isError }: { content: string; isError: boolean }) {
+function AdditionsBody({
+  content,
+  onOpenFull,
+}: {
+  content: string
+  onOpenFull: (() => void) | null
+}) {
   const lines = content.split('\n')
-  const shown = lines.slice(0, MAX_INLINE_TOOL_LINES).join('\n')
+  const { window, revealMore } = useInlineOutputWindow(lines)
   return (
-    <div>
-      <pre
-        className={`max-h-[340px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
-          isError ? 'text-tone-danger' : 'text-text-muted'
-        }`}
-      >
-        {shown}
-      </pre>
-      <ToolOverflowNote total={lines.length} shown={lines.slice(0, MAX_INLINE_TOOL_LINES).length} unit="lines" />
+    <div className={INLINE_OUTPUT_SCROLLER}>
+      <AdditionLines lines={window.head} />
+      {window.truncated ? (
+        <>
+          <InlineRevealBand
+            hidden={window.hidden}
+            revealStep={window.revealStep}
+            onReveal={revealMore}
+            onOpenFull={onOpenFull}
+          />
+          <AdditionLines lines={window.tail} />
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function PlainLinesBody({
+  content,
+  isError,
+  onOpenFull,
+}: {
+  content: string
+  isError: boolean
+  onOpenFull: (() => void) | null
+}) {
+  const lines = content.split('\n')
+  const { window, revealMore } = useInlineOutputWindow(lines)
+  const toneClass = isError ? 'text-tone-danger' : 'text-text-muted'
+  const renderLines = (slice: string[]) => (
+    <pre
+      className={`whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${toneClass}`}
+    >
+      {slice.join('\n')}
+    </pre>
+  )
+  return (
+    <div className={INLINE_OUTPUT_SCROLLER}>
+      {renderLines(window.head)}
+      {window.truncated ? (
+        <>
+          <InlineRevealBand
+            hidden={window.hidden}
+            revealStep={window.revealStep}
+            onReveal={revealMore}
+            onOpenFull={onOpenFull}
+          />
+          {renderLines(window.tail)}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -1314,19 +1445,49 @@ function ImageResultBody({ content, isError }: { content: string; isError: boole
   )
 }
 
-function ToolOverflowNote({
-  total,
-  shown,
-  unit,
+/**
+ * P4-36 inline truncation reveal band (prototype `Messages.jsx:438-457`), rendered
+ * in the gap between the window's head and tail.
+ *
+ * It replaces the older one-line overflow note, which two of the four bodies never
+ * called: a file read and a file write simply stopped mid-output, so the last
+ * visible line read as the end of the file. The band states the gap, offers the
+ * next step of it, and keeps the route to the complete text one click away.
+ */
+function InlineRevealBand({
+  hidden,
+  revealStep,
+  onReveal,
+  onOpenFull,
 }: {
-  total: number
-  shown: number
-  unit: string
+  hidden: number
+  revealStep: number
+  onReveal: () => void
+  onOpenFull: (() => void) | null
 }) {
-  if (total <= shown) return null
   return (
-    <div className="mt-1 border-t border-shell-seam pt-1 font-mono text-[10px] text-text-subtle/70">
-      {total - shown} more {unit}. Open the full-output inspector to view all
+    <div className="flex items-center gap-2.5 border-y border-shell-seam bg-white/[0.015] px-3 py-1.5">
+      <span className="shrink-0 font-mono text-[11px] text-text-subtle">
+        {hidden} {hidden === 1 ? 'line' : 'lines'} hidden
+      </span>
+      <span className="flex-1" />
+      <button
+        type="button"
+        onClick={onReveal}
+        className="shrink-0 rounded-md border border-white/10 px-2.5 py-0.5 font-mono text-[11px] text-text-muted hover:bg-white/[0.04]"
+      >
+        Show {revealStep} more
+      </button>
+      {onOpenFull ? (
+        <button
+          type="button"
+          onClick={onOpenFull}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.06] px-2.5 py-0.5 font-mono text-[11px] text-accent-soft hover:bg-accent/10"
+        >
+          Open full output
+          <span aria-hidden>↗</span>
+        </button>
+      ) : null}
     </div>
   )
 }
