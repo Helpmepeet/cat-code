@@ -73,6 +73,10 @@ type WelcomeScreenProps =
       onOpenRecent: (recent: RecentWorkspace) => void
       /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
       onOpenFolder: () => void
+      rosterFailure?: {
+        retrying: boolean
+        onRetry: () => void
+      }
     }
   | {
       variant: 'session'
@@ -142,6 +146,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                     recents={props.recents}
                     onOpenRecent={props.onOpenRecent}
                     onOpenFolder={props.onOpenFolder}
+                    rosterFailure={props.rosterFailure}
                   />
                 )}
               </MetaCol>
@@ -228,12 +233,36 @@ function ProjectPicker({
   recents,
   onOpenRecent,
   onOpenFolder,
+  rosterFailure,
 }: {
   recents: readonly RecentWorkspace[]
   onOpenRecent: (recent: RecentWorkspace) => void
   onOpenFolder: () => void
+  rosterFailure?: {
+    retrying: boolean
+    onRetry: () => void
+  }
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
+
+  if (rosterFailure) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <span className="text-[12.5px] text-tone-danger">
+          Recent projects could not load.
+        </span>
+        <button
+          type="button"
+          disabled={rosterFailure.retrying}
+          aria-busy={rosterFailure.retrying}
+          onClick={rosterFailure.onRetry}
+          className="text-[12.5px] font-medium text-accent transition-opacity disabled:opacity-50"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
 
   const triggerLabel = recents.length > 0 ? recents[0]!.name : 'Open a project'
 

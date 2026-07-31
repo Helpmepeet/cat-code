@@ -96,6 +96,43 @@ test('the branch chooser + worktree option are CUT (absent)', () => {
   expect(html).toContain('Open a project')
 })
 
+test('P4-55 renders a truthful retry in place of the false empty roster', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={null}
+      orchestratorActive={false}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+      rosterFailure={{ retrying: false, onRetry: noop }}
+    />,
+  )
+
+  expect(html).toContain('Recent projects could not load.')
+  expect(html).toContain('>Retry</button>')
+  expect(html).not.toContain('Open a project')
+  expect(html).not.toContain('No recent projects yet.')
+  expect(html).not.toContain('aria-live')
+  expect(html).not.toContain('—')
+})
+
+test('P4-55 keeps the failure visible and disables duplicate retries while reading', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={null}
+      orchestratorActive={false}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+      rosterFailure={{ retrying: true, onRetry: noop }}
+    />,
+  )
+
+  expect(html).toContain('Recent projects could not load.')
+  expect(html).toContain('disabled=""')
+  expect(html).toContain('aria-busy="true"')
+})
+
 const FIRST_RUN_ORDER = 'Open a project to start. Sign in once it opens.'
 
 test('P4-48 — with no account anywhere, the launcher states the order of the first two steps', () => {

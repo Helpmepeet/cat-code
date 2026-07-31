@@ -1701,3 +1701,33 @@ test('P4-54: shell lifecycle failures persist until the dismiss control clears t
   expect(shellErrorBar).toContain('aria-label="Dismiss shell error"')
   expect(shellErrorBar).toContain('onClick={() => setShellError(null)}')
 })
+
+test('P4-55: initial roster reads and launcher retries share one truthful hydrate path', () => {
+  // The async state machine and snapshot/live-event merge are exercised in
+  // rosterBootstrap.test.ts. This SSR-only suite pins the App wiring around it:
+  // mount and Retry both call one callback, and only its successful snapshot
+  // marks the bootstrap ready.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const hydrateStart = source.indexOf('  const hydrateHostRoster = useCallback(')
+  const hydrateEnd = source.indexOf(
+    '\n\n  // Host control plane:',
+    hydrateStart,
+  )
+  expect(hydrateStart).toBeGreaterThan(-1)
+  expect(hydrateEnd).toBeGreaterThan(hydrateStart)
+  const hydrateBody = source.slice(hydrateStart, hydrateEnd)
+
+  expect(hydrateBody).toContain(
+    'listSessions: () => getBridge().listSessions()',
+  )
+  expect(hydrateBody).toContain("dispatchRosterBootstrap({ type: 'read-failed' })")
+  expect(hydrateBody).toContain("dispatchShell({\n          type: 'hydrate'")
+  expect(hydrateBody).toContain(
+    "dispatchRosterBootstrap({ type: 'read-succeeded' })",
+  )
+  expect(source).toContain('void hydrateHostRoster()')
+  expect(source).toContain('onRetry: () => void hydrateHostRoster()')
+  expect(source).toContain(
+    "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
+  )
+})

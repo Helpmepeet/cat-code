@@ -52,6 +52,12 @@ import {
   sessionAtSlot,
   type ShellState,
 } from './shellState.js'
+import {
+  attemptRosterBootstrap,
+  createRosterBootstrapState,
+  mergeRosterSnapshot,
+  reduceRosterBootstrapState,
+} from './rosterBootstrap.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
@@ -492,7 +498,12 @@ export function App() {
   // the transcript back to pending (`selectLatchedExportPreview`).
   const [latchedExport, setLatchedExport] =
     useState<LatchedExportPreview | null>(null)
-  const [hostSnapshotReady, setHostSnapshotReady] = useState(false)
+  const [rosterBootstrap, dispatchRosterBootstrap] = useReducer(
+    reduceRosterBootstrapState,
+    undefined,
+    createRosterBootstrapState,
+  )
+  const hostSnapshotReady = rosterBootstrap.status === 'ready'
   const [workspaceLayout, setWorkspaceLayoutState] =
     useState<WorkspaceLayoutState>(
       () =>
@@ -637,6 +648,7 @@ export function App() {
   // Ids a live `session-removed` dropped before the initial snapshot folded in —
   // so the baseline hydrate never resurrects a row the host already reaped (F3).
   const removedIdsRef = useRef<Set<SessionId>>(new Set())
+  const rosterReadAttemptRef = useRef(0)
 
   /**
    * One admission queue + one reservation ledger for startup and same-launch
@@ -770,6 +782,29 @@ export function App() {
     return unsubscribe
   }, [])
 
+  const hydrateHostRoster = useCallback(() => {
+    const attempt = ++rosterReadAttemptRef.current
+    return attemptRosterBootstrap({
+      listSessions: () => getBridge().listSessions(),
+      onStarted: () => {
+        dispatchRosterBootstrap({ type: 'read-started' })
+      },
+      onSnapshot: sessions => {
+        if (attempt !== rosterReadAttemptRef.current) return
+        dispatchShell({
+          type: 'hydrate',
+          sessions,
+          removed: removedIdsRef.current,
+        })
+        dispatchRosterBootstrap({ type: 'read-succeeded' })
+      },
+      onFailure: () => {
+        if (attempt !== rosterReadAttemptRef.current) return
+        dispatchRosterBootstrap({ type: 'read-failed' })
+      },
+    })
+  }, [])
+
   // Host control plane: hydrate the roster once, then stay live off the event
   // stream. Switching tabs never unsubscribes anything (the P2 frame stream and
   // the P3-4 stores are keyed by sessionId and stay resident); this projection
@@ -781,7 +816,6 @@ export function App() {
   // that emits no host event) is never clobbered by a stale roster.
   useEffect(() => {
     const bridge = getBridge()
-    let cancelled = false
     // Subscribe-before-snapshot (F3): install the live stream FIRST so no
     // session-added/status/removed can slip through the gap between the snapshot
     // read and the subscription. The snapshot is then folded as a BASELINE that
@@ -838,29 +872,13 @@ export function App() {
       }
       dispatchShell({ type: 'event', event })
     })
-    void bridge
-      .listSessions()
-      .then(sessions => {
-        if (!cancelled) {
-          dispatchShell({
-            type: 'hydrate',
-            sessions,
-            removed: removedIdsRef.current,
-          })
-        }
-      })
-      .catch(() => {
-        /* a failed initial list degrades to a live-only roster */
-      })
-      .finally(() => {
-        if (!cancelled) setHostSnapshotReady(true)
-      })
+    void hydrateHostRoster()
     return () => {
-      cancelled = true
+      rosterReadAttemptRef.current += 1
       preloadCancelledRef.current = true
       unsubscribe()
     }
-  }, [queueTranscriptPreload])
+  }, [hydrateHostRoster, queueTranscriptPreload])
 
   // F2 — fold the cold-launch sessions-catalog baseline (the global engine-history
   // enumeration a sidecar last persisted to disk) as the lowest-precedence catalog
@@ -2940,6 +2958,14 @@ export function App() {
             }
             onOpenRecent={openRecentWorkspace}
             onOpenFolder={() => void newSession()}
+            rosterFailure={
+              rosterBootstrap.status === 'failure'
+                ? {
+                    retrying: rosterBootstrap.retrying,
+                    onRetry: () => void hydrateHostRoster(),
+                  }
+                : undefined
+            }
           />
         ) : (
           /* P4-50 (O2a) — the account-health bar is pinned HERE, above the
@@ -4171,17 +4197,7 @@ function reduceShell(state: ShellState, action: ShellAction): ShellState {
     //    `lastAttachedAt` (a live status that superseded the snapshot wins; a
     //    snapshot row never rolls a live update backwards);
     //  - a genuinely new id (only in the snapshot) is added.
-    let next = state
-    for (const session of action.sessions) {
-      const id = session.appSessionId
-      if (action.removed.has(id)) continue
-      const existing = next.byId[id]
-      if (existing && existing.lastAttachedAt >= session.lastAttachedAt) {
-        continue // live descriptor is at least as fresh — don't roll back
-      }
-      next = reduceShellState(next, { type: 'session-added', session })
-    }
-    return next
+    return mergeRosterSnapshot(state, action.sessions, action.removed)
   }
   if (action.type === 'event') return reduceShellState(state, action.event)
   return reduceShellState(state, action)
