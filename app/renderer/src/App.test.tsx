@@ -1663,3 +1663,41 @@ test('P4-50: a cold start renders no account-health bar', () => {
   expect(html).not.toContain('Codex usage limit reached')
   expect(html).not.toContain('No Codex account is ready to use')
 })
+
+test('P4-54: shell lifecycle failures persist until the dismiss control clears them', () => {
+  // App cannot be mounted in this SSR-only suite, so this pins only the
+  // lifecycle wiring source text can prove: all seven operation paths still
+  // replace the current failure, no success path clears it, and the rendered
+  // bar owns the sole explicit clear.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const operationsStart = source.indexOf('  const newSession = useCallback(')
+  const operationsEnd = source.indexOf('\n  function submitSession(', operationsStart)
+  expect(operationsStart).toBeGreaterThan(-1)
+  expect(operationsEnd).toBeGreaterThan(operationsStart)
+  const operations = source.slice(operationsStart, operationsEnd)
+
+  for (const writer of [
+    'const newSession = useCallback(',
+    'const newSessionInWorkspace = useCallback(',
+    'const closeTab = useCallback(',
+    'const restartTab = useCallback(',
+    'const restoreLiveSession = useCallback(',
+    'const performRestore = useCallback(',
+    'const openHistorySession = useCallback(',
+  ]) {
+    expect(operations).toContain(writer)
+  }
+  expect(operations).toContain('setShellError(hostErrorMessage(result.error))')
+  expect(operations).toContain('setShellError(hostErrorMessage(closeResult.error))')
+  expect(operations).toContain('setShellError(errorMessage(error))')
+  expect(operations).not.toContain('setShellError(null)')
+
+  expect(source.match(/setShellError\(null\)/g)).toHaveLength(1)
+  const shellErrorBarStart = source.indexOf('{shellError ? (')
+  const shellErrorBarEnd = source.indexOf('\n        ) : null}', shellErrorBarStart)
+  expect(shellErrorBarStart).toBeGreaterThan(-1)
+  expect(shellErrorBarEnd).toBeGreaterThan(shellErrorBarStart)
+  const shellErrorBar = source.slice(shellErrorBarStart, shellErrorBarEnd)
+  expect(shellErrorBar).toContain('aria-label="Dismiss shell error"')
+  expect(shellErrorBar).toContain('onClick={() => setShellError(null)}')
+})

@@ -1109,7 +1109,6 @@ export function App() {
       if (result.ok) {
         setActiveSessionId(result.value.appSessionId)
         setActiveView('chat')
-        setShellError(null)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
@@ -1129,7 +1128,6 @@ export function App() {
       if (result.ok) {
         setActiveSessionId(result.value.appSessionId)
         setActiveView('chat')
-        setShellError(null)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
@@ -1596,7 +1594,6 @@ export function App() {
     try {
       const result = await bridge.closeSession(sessionId)
       if (!result.ok) setShellError(hostErrorMessage(result.error))
-      else setShellError(null)
     } catch (error) {
       setShellError(errorMessage(error))
     }
@@ -1606,7 +1603,6 @@ export function App() {
     // The dead-tab affordance: re-spawn over the existing CH_RESTART channel.
     try {
       getBridge().restart(sessionId)
-      setShellError(null)
     } catch (error) {
       setShellError(errorMessage(error))
     }
@@ -1642,14 +1638,11 @@ export function App() {
             const closeResult = await bridge.closeSession(sessionId)
             if (!closeResult.ok) {
               setShellError(hostErrorMessage(closeResult.error))
-            } else {
-              setShellError(null)
             }
             return
           }
           setActiveSessionId(result.value.appSessionId)
           setActiveView('chat')
-          setShellError(null)
         } else {
           lazyRestoreClaimsRef.current.delete(sessionId)
           cancelledRestoresRef.current.delete(sessionId)
@@ -1681,7 +1674,6 @@ export function App() {
     )
     setActiveSessionId(sessionId)
     setActiveView('chat')
-    setShellError(null)
   }, [])
 
   // PL-A store-first path: a startup-preloaded transcript opens synchronously
@@ -1750,7 +1742,6 @@ export function App() {
           return
         }
         const descriptor = result.value
-        setShellError(null)
         if (descriptor.restorable) {
           performRestore(descriptor.appSessionId)
           return
@@ -2770,8 +2761,17 @@ export function App() {
         ) : null}
 
         {shellError ? (
-          <div className="border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
-            {shellError}
+          <div className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
+            <span className="min-w-0 flex-1">{shellError}</span>
+            <button
+              type="button"
+              onClick={() => setShellError(null)}
+              title="Dismiss"
+              aria-label="Dismiss shell error"
+              className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"
+            >
+              ×
+            </button>
           </div>
         ) : null}
 
