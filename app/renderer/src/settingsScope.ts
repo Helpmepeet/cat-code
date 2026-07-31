@@ -408,9 +408,9 @@ const RAIL: Record<
 }
 
 /**
- * Which editor pane each rail item hosts, for search. Only the four items that
- * render `SettingsPane` appear; the rest carry no editable-setting rows, so a
- * query can only reach them through their own label and description.
+ * Which editor pane each rail item hosts, for search. Items that render
+ * `SettingsPane` appear; the rest carry no editable-setting rows, so a query can
+ * only reach them through their own label and description.
  */
 const RAIL_ITEM_PANE: Partial<Record<SettingsRailItemId, EditableSettingPane>> =
   {
@@ -418,6 +418,7 @@ const RAIL_ITEM_PANE: Partial<Record<SettingsRailItemId, EditableSettingPane>> =
     model: 'model',
     privacy: 'privacy',
     interface: 'theme',
+    memory: 'memory',
   }
 
 /**

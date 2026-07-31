@@ -270,7 +270,9 @@ export function SettingsShell({
         ) : null}
         {writeLayer ? (
           <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
-            {SETTINGS_APPLY_NOTE}
+            {activeItem === 'memory'
+              ? 'Auto memory edits are saved immediately. Features use the new value when they next check the setting.'
+              : SETTINGS_APPLY_NOTE}
             {engine === 'live' && settingsWereRead(snapshot) ? (
               <>
                 {' '}

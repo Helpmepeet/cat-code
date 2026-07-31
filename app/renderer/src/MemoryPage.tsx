@@ -106,9 +106,8 @@ function MemorySummary({ snapshot }: { snapshot: MemorySnapshot }) {
             Memory sources
           </h3>
           <p className="mt-0.5 text-[12px] text-text-subtle">
-            Current session: auto memory{' '}
-            {snapshot.autoMemoryEnabled ? 'enabled' : 'disabled'}. Changes apply
-            to sessions started afterwards.
+            When this session opened, auto memory was{' '}
+            {snapshot.autoMemoryEnabled ? 'enabled' : 'disabled'}.
           </p>
         </div>
         <div className="rounded-lg border border-shell-seam bg-shell-hover px-3 py-2 text-right">

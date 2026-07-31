@@ -842,7 +842,7 @@ test('the page states once, globally, that edits apply to later sessions', () =>
   expect(head).toContain('apply to sessions started afterwards')
 })
 
-test('Memory uses the shared settings editor while keeping current-session truth', () => {
+test('Memory separates the current saved setting from the opened-session observation', () => {
   const settings: SettingsSnapshot = {
     ...SNAPSHOT,
     layers: [
@@ -880,30 +880,34 @@ test('Memory uses the shared settings editor while keeping current-session truth
   }
 
   const html = decode(
-    paneMarkup(
-      renderToStaticMarkup(
-        <SettingsShell
-          initialCategory="memory"
-          memorySnapshot={memory}
-          snapshot={settings}
-        />,
-      ),
+    renderToStaticMarkup(
+      <SettingsShell
+        initialCategory="memory"
+        memorySnapshot={memory}
+        snapshot={settings}
+      />,
     ),
   )
+  const pane = paneMarkup(html)
 
   // Saved layer value: the shared Field/Toggle/SourceBadge/reset grammar.
-  expect(html).toContain('>Auto memory<')
-  expect(html).toContain('role="switch"')
-  expect(html).toContain('aria-checked="false"')
-  expect(html).toContain('>User<')
-  expect(html).toContain(`title="${USER_FILE}"`)
-  expect(html).toContain('Reset to default')
-
-  // Runtime value: the spawn-time Memory snapshot stays separate from the saved
-  // false value and states when the saved change fully applies.
+  expect(pane).toContain('>Auto memory<')
+  expect(pane).toContain('role="switch"')
+  expect(pane).toContain('aria-checked="false"')
+  expect(pane).toContain('>User<')
+  expect(pane).toContain(`title="${USER_FILE}"`)
+  expect(pane).toContain('Reset to default')
   expect(html).toContain(
-    'Current session: auto memory enabled. Changes apply to sessions started afterwards.',
+    'Auto memory edits are saved immediately. Features use the new value when they next check the setting.',
   )
+  expect(html).not.toContain('apply to sessions started afterwards')
+
+  // Historical value: `memory.snapshot` is not re-emitted after a settings
+  // write, so it may only describe what the session observed when it opened.
+  expect(html).toContain(
+    'When this session opened, auto memory was enabled.',
+  )
+  expect(html).not.toContain('Current session: auto memory')
 })
 
 test('renders with no snapshot at all without claiming anything', () => {

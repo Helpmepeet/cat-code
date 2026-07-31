@@ -1015,6 +1015,8 @@ describe('functional rail', () => {
     expect(found('output style')).toEqual(['Interface'])
     expect(found('retention')).toEqual(['Privacy & Data'])
     expect(found('thinking')).toContain('Model & Reasoning')
+    expect(found('auto memory')).toEqual(['Memory'])
+    expect(found('auto')).toEqual(['Memory'])
     // A word that lives only in a category's own description.
     expect(found('effort')).toEqual(['Model & Reasoning'])
     // Category names still work, and nonsense still finds nothing.
