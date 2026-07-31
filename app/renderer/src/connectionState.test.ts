@@ -2,10 +2,28 @@ import { expect, test } from 'bun:test'
 import {
   createConnectionState,
   isAppReadyFrame,
+  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
 } from './connectionState.js'
+import type { ConnectionSnapshot } from './connectionState.js'
+import { resolvePendingSubmit } from './composerState.js'
 import type { ServerFrame } from '../../shared/protocol.js'
+
+/** Adding a status to the union without listing it here is a compile error, so
+ * the two assertions below can never silently stop covering a member. */
+const STATUS_COVERAGE: Record<ConnectionSnapshot['status'], true> = {
+  connecting: true,
+  starting: true,
+  ready: true,
+  dead: true,
+  disconnected: true,
+  failed: true,
+  exited: true,
+}
+const ALL_STATUSES = Object.keys(
+  STATUS_COVERAGE,
+) as ConnectionSnapshot['status'][]
 
 const validReady = {
   kind: 'ready',
@@ -135,4 +153,21 @@ test('typed forward failures update only the addressed session state', () => {
   })
   expect(selectConnection(state, 'session-2').status).toBe('disconnected')
   expect(selectConnection(state, 'session-1').status).toBe('ready')
+})
+
+test('classifies the spawn-in-flight statuses as transient and the rest as terminal', () => {
+  const terminal = ALL_STATUSES.filter(status =>
+    isTerminalConnectionStatus(status),
+  )
+  expect(terminal.sort()).toEqual(['dead', 'disconnected', 'exited', 'failed'])
+})
+
+test('the terminal partition agrees with the parked-prompt classifier', () => {
+  for (const status of ALL_STATUSES) {
+    // `release` is `resolvePendingSubmit`'s "this spawn will never complete"
+    // arm. A second, divergent list is exactly what this pins shut.
+    const releases =
+      resolvePendingSubmit({ status, inputEnabled: false }) === 'release'
+    expect(isTerminalConnectionStatus(status)).toBe(releases)
+  }
 })

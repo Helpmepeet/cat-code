@@ -162,6 +162,7 @@ import {
 } from './workspaceLayout.js'
 import {
   createConnectionState,
+  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
   type ConnectionSnapshot,
@@ -4021,11 +4022,10 @@ export function ConnectionRecovery({
   sessionId: SessionId | null
 }) {
   const [restartError, setRestartError] = useState<string | null>(null)
-  if (
-    !sessionId ||
-    connection.status === 'connecting' ||
-    connection.status === 'ready'
-  ) {
+  // Only a TERMINAL connection earns a failure bar and a Restart invitation. A
+  // still-spawning session (`connecting`/`starting`) has not failed, so the
+  // shared partition decides this rather than a local status list.
+  if (!sessionId || !isTerminalConnectionStatus(connection.status)) {
     return null
   }
 

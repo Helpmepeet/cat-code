@@ -35,6 +35,43 @@ export function selectConnection(
   return sessionId ? (state.sessions[sessionId] ?? CONNECTING) : CONNECTING
 }
 
+/**
+ * Terminal vs transient for the connection union — the partition a recovery
+ * affordance must read before it calls a session failed.
+ *
+ * `starting` is TRANSIENT, not a spawn-lifecycle failure. It is projected below
+ * from an `error` frame carrying `session_not_ready`, which the supervisor mints
+ * only while the child is still `spawning`/`connecting`
+ * (`sendFailureCodeForStatus`, `app/supervisor/supervisor.ts:509`) and which is
+ * the single send-failure code the wire marks `retryable: true`
+ * (`SidecarSendError.retryable`, `supervisor.ts:127`; `ErrorFrame.retryable`,
+ * `app/shared/protocol.ts:564`). The spawn has not failed, it has not finished.
+ * The other two codes are non-retryable and map to `dead` / `disconnected`.
+ *
+ * This partition must agree with `resolvePendingSubmit` (`composerState.ts`),
+ * which splits the SAME union for parked prompts: everything terminal here is
+ * exactly what it `release`s. `connectionState.test.ts` pins that agreement.
+ */
+export function isTerminalConnectionStatus(
+  status: ConnectionSnapshot['status'],
+): boolean {
+  switch (status) {
+    case 'connecting':
+    case 'starting':
+    case 'ready':
+      return false
+    case 'dead':
+    case 'disconnected':
+    case 'failed':
+    case 'exited':
+      return true
+    default: {
+      const exhaustive: never = status
+      return exhaustive
+    }
+  }
+}
+
 export function reduceConnectionState(
   state: ConnectionState,
   frame: ServerFrame,

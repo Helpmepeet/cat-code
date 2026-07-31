@@ -20,6 +20,7 @@ import {
   shouldShowAnthropicPoolAccount,
   shouldShowFirstRunOAuth,
 } from './appModel.js'
+import type { ConnectionSnapshot } from './connectionState.js'
 import { createTranscriptState } from './transcriptProjector.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type {
@@ -1058,21 +1059,34 @@ test('debug export explicitly marks lossy raw-message retention', () => {
 })
 
 test('renders a restart control only for a terminal session state', () => {
-  const terminal = renderToStaticMarkup(
-    <ConnectionRecovery
-      connection={{ status: 'disconnected', inputEnabled: false }}
-      sessionId="session-1"
-    />,
-  )
-  const ready = renderToStaticMarkup(
-    <ConnectionRecovery
-      connection={{ status: 'ready', inputEnabled: true }}
-      sessionId="session-1"
-    />,
-  )
+  const render = (status: ConnectionSnapshot['status']) =>
+    renderToStaticMarkup(
+      <ConnectionRecovery
+        connection={{ status, inputEnabled: status === 'ready' }}
+        sessionId="session-1"
+      />,
+    )
 
-  expect(terminal).toContain('Restart')
-  expect(ready).not.toContain('Restart')
+  // Transient — the spawn is still in flight. `starting` comes from the one
+  // retryable send-failure code, so a red bar inviting a restart would be a
+  // lie about a session that is merely slow to come up.
+  for (const status of ['connecting', 'starting', 'ready'] as const) {
+    expect(render(status)).not.toContain('Restart')
+  }
+
+  // Terminal — the session will not come back on its own.
+  for (const status of ['dead', 'disconnected', 'failed', 'exited'] as const) {
+    expect(render(status)).toContain('Restart')
+  }
+
+  // No session at all: nothing to restart.
+  const noSession = renderToStaticMarkup(
+    <ConnectionRecovery
+      connection={{ status: 'dead', inputEnabled: false }}
+      sessionId={null}
+    />,
+  )
+  expect(noSession).not.toContain('Restart')
 })
 
 test('permission bridge failures are returned to the caller for reducer recovery', () => {
