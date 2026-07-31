@@ -36,10 +36,10 @@
  *    (`sessionsCatalogState.ts:200` — a registry row with a running process),
  *    NOT `deriveMergedRowVisual().kind`, which also calls a non-restorable
  *    `exited` row live. Decorative (`aria-hidden`): the state is already in the
- *    row's `aria-label`, and a second announcement would be a duplicate. It is
- *    absolutely positioned in the row's own left padding, so its presence never
- *    reflows the title or the `time · model` line. Richer per-state status still
- *    surfaces on the TabBar.
+ *    row's `aria-label`, and a second announcement would be a duplicate. It sits
+ *    in a fixed leading lane that EVERY row reserves, centred on the title's
+ *    line box, so its presence never reflows the title or the `time · model`
+ *    line. Richer per-state status still surfaces on the TabBar.
  *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
  *    Accounts (P4-5), and Settings. None are mocked.
  *  - Per-row actions (#11): each session row raises the SAME P4-6b
@@ -884,7 +884,7 @@ export function SidebarRowItem({
   return (
     <div
       className={
-        'group relative flex select-none items-center gap-2 rounded-md border px-2 py-1.5 transition-colors ' +
+        'group relative flex select-none items-center gap-2 rounded-md border py-1.5 pl-1 pr-2 transition-colors ' +
         (openable ? 'cursor-pointer ' : 'cursor-default ') +
         (isActive
           ? 'border-accent/[0.18] bg-accent/[0.09]'
@@ -941,15 +941,21 @@ export function SidebarRowItem({
       }
     >
       {/* O1 (operator ruling 2026-07-31) — the live-only dot. One tone, no
-       * label. Absolutely positioned in the row's own left padding so a live row
-       * and a not-live row lay out identically. Static class: an interpolated
-       * arbitrary value silently no-ops in this Tailwind v4 setup. */}
-      {row.live ? (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute left-[2px] top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-tone-good"
-        />
-      ) : null}
+       * label. The LANE renders on every row and only the dot inside it is
+       * conditional, so a live row and a not-live row share one text edge and
+       * neither reflows. `self-start` plus a lane exactly as tall as the title's
+       * line box centres the dot on the TITLE; centring it on the row instead
+       * dropped it into the gap between the title and the `time · model` line
+       * and read as floating (operator, 2026-07-31). Static classes: an
+       * interpolated arbitrary value silently no-ops in this Tailwind v4 setup. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none flex h-4 w-1.5 shrink-0 items-center self-start"
+      >
+        {row.live ? (
+          <span className="h-1.5 w-1.5 rounded-full bg-tone-good" />
+        ) : null}
+      </span>
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">

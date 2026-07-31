@@ -242,8 +242,16 @@ test('no row renders a visible status label; status stays in aria-label only', (
 // `exited` row live. The exact markup is asserted so an interpolated
 // arbitrary-value class (the Tailwind v4 trap, invisible to a headless test)
 // cannot slip in.
+//
+// PLACEMENT IS NOT COVERED HERE, by construction: this suite renders to static
+// markup, so it pins WHICH rows carry a dot and cannot see WHERE the dot lands.
+// The lane's geometry (centred on the title's line box, reserved on every row so
+// live and not-live share a text edge) is operator-verified only.
+const LIVE_DOT_LANE_OPEN =
+  '<span aria-hidden="true" class="pointer-events-none flex h-4 w-1.5 shrink-0 items-center self-start">'
 const LIVE_DOT =
-  '<span aria-hidden="true" class="pointer-events-none absolute left-[2px] top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-tone-good"></span>'
+  `${LIVE_DOT_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-good"></span></span>`
+const EMPTY_DOT_LANE = `${LIVE_DOT_LANE_OPEN}</span>`
 
 test('a live registry row carries the O1 dot, unlabeled and announced only once', () => {
   const html = renderRow(registryRow('l', { displayLabel: 'L' }))
@@ -264,6 +272,9 @@ test('a restorable registry row carries no dot at all', () => {
     }),
   )
   expect(html).not.toContain('rounded-full')
+  // The lane still renders, so this row's title starts at the same x as a live
+  // row's and the dot's presence never shifts text.
+  expect(html).toContain(EMPTY_DOT_LANE)
 })
 
 test('a non-restorable exited registry row carries no dot (row.live, not visual.kind)', () => {
@@ -288,6 +299,10 @@ test('history rows carry no dot, openable or browse-only', () => {
 
   const browseOnly = renderRow(historyRow('o', { displayLabel: 'O', cwd: '' }))
   expect(browseOnly).not.toContain('rounded-full')
+
+  // Both keep the reserved lane, so a mixed group has one straight text edge.
+  expect(openable).toContain(EMPTY_DOT_LANE)
+  expect(browseOnly).toContain(EMPTY_DOT_LANE)
 })
 
 test('a mixed group paints exactly one dot in exactly one tone', () => {
