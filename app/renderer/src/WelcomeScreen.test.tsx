@@ -96,6 +96,80 @@ test('the branch chooser + worktree option are CUT (absent)', () => {
   expect(html).toContain('Open a project')
 })
 
+const FIRST_RUN_ORDER = 'Open a project to start. Sign in once it opens.'
+
+test('P4-48 — with no account anywhere, the launcher states the order of the first two steps', () => {
+  // The defect: the sign-in card cannot render before a project is open, so a
+  // genuine first launch offered no clue that opening one comes first.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([])}
+      orchestratorActive={false}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+  expect(html).toContain(FIRST_RUN_ORDER)
+  // Copy only: the ruling authorised no sign-in control on this screen.
+  expect(html).not.toContain('Open browser to sign in')
+  // User-visible text rule (CLAUDE.md §7): no em dash on any read surface.
+  expect(html).not.toContain('—')
+})
+
+test('P4-48 — an account already in the pool silences the line', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[recent({ cwd: '/w/cat-code', appSessionId: 'a' })]}
+      accounts={pool([account({ id: 'main', isDefault: true })])}
+      orchestratorActive={false}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+  expect(html).not.toContain(FIRST_RUN_ORDER)
+})
+
+test('P4-48 — a configured Anthropic route silences the line even with an empty pool', () => {
+  // `shouldShowFirstRunOAuth` is the gate this copy mirrors: an API key, Bedrock,
+  // Vertex or Foundry route means no sign-in card ever appears, so promising one
+  // would be false.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={{ ...pool([]), anthropicRouteAvailable: true }}
+      orchestratorActive={false}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+  expect(html).not.toContain(FIRST_RUN_ORDER)
+})
+
+test('P4-48 — an unreported pool claims nothing', () => {
+  // Null is "not known yet", not "no account". Claiming a sign-in step here
+  // would flash a false instruction at a signed-in user during boot.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={null}
+      orchestratorActive={false}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+  expect(html).not.toContain(FIRST_RUN_ORDER)
+})
+
+test("P4-48 — the 'session' variant never carries the line", () => {
+  // A session exists, so the real sign-in card is reachable and the launcher's
+  // ordering advice is neither true nor needed.
+  const html = renderToStaticMarkup(
+    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={pool([])} orchestratorActive={false} />,
+  )
+  expect(html).not.toContain(FIRST_RUN_ORDER)
+})
+
 test('the Codex table renders real pool rows (alias, capped badge, usage %)', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen

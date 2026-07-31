@@ -32,9 +32,17 @@
  *    global projects-trust feed is out of scope (no new feed rule).
  *  - Per-window reset: the pool seam carries ONE `usageResetAt`, not per-5h/weekly,
  *    so one reset label is shown (prototype's two reset columns were mock).
+ *
+ * ➕ real-added (ruled), P4-48 — the first-run order line under the greeting. It
+ * has no prototype counterpart: `Startup.jsx:461-489` gates trust and OAuth at
+ * APP level before any session, which `decisions/STARTUP-GATES.md` §1.2 declined
+ * on 2026-07-31 ("fix discoverability, not architecture"). Copy only: no sign-in
+ * control lives here, because an account verb needs an engine process to carry
+ * it.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { shouldShowFirstRunOAuth } from './appModel.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
@@ -84,6 +92,17 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
   const { accounts, orchestratorActive } = props
   const onToggleOrchestrator =
     props.variant === 'session' ? props.onToggleOrchestrator : undefined
+  // The sign-in card's OWN predicate, read against the session-free pool view
+  // the launcher already gets, so the line promises a sign-in step on exactly
+  // the states that produce one: a configured Anthropic route or any pooled
+  // account silences it, as does a snapshot that has not reported yet. Nothing
+  // here surfaces a sign-in control — an account verb needs an engine process
+  // to carry it (`App.tsx` sendAccountVerb answers `ok:false` without one), so
+  // `STARTUP-GATES.md` §1.2 ruled this discoverability copy instead.
+  // `trustGateVisible` is false because that gate is per-project and this
+  // screen renders only while no project is open.
+  const showFirstRunOrder =
+    props.variant !== 'session' && shouldShowFirstRunOAuth(accounts, false)
   return (
     <div className="flex min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[1180px] px-10 pb-8 pt-10">
@@ -98,8 +117,15 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               <span className="text-text-primary">cat </span>
               <span className="text-accent">code</span>
             </h1>
-            <div className="mb-8 text-[26px] font-medium tracking-[-0.02em] text-text-primary">
-              Welcome back
+            <div className="mb-8">
+              <div className="text-[26px] font-medium tracking-[-0.02em] text-text-primary">
+                Welcome back
+              </div>
+              {showFirstRunOrder ? (
+                <p className="mt-2 text-[14px] text-text-muted">
+                  Open a project to start. Sign in once it opens.
+                </p>
+              ) : null}
             </div>
 
             {/* Meta strip with vertical dividers */}
