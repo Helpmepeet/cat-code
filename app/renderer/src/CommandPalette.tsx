@@ -23,6 +23,8 @@ import {
 } from './commandPaletteModel.js'
 import { useModalFocus } from './overlayFocus.js'
 
+const COMMAND_PALETTE_LAYER_CLASS = 'z-[210]'
+
 export function CommandPalette({
   open,
   onClose,
@@ -108,7 +110,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-start justify-center bg-black/55 px-4 pt-[12vh] backdrop-blur-sm"
+      className={`fixed inset-0 ${COMMAND_PALETTE_LAYER_CLASS} flex items-start justify-center bg-black/55 px-4 pt-[12vh] backdrop-blur-sm`}
       onMouseDown={onClose}
     >
       <div

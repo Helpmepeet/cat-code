@@ -649,7 +649,7 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| Backdrop overlay (fixed inset-0, dim scrim, blur) | chrome | ✅ built | `app/renderer/src/CommandPalette.tsx:103` | `bg-black/55 … pt-[12vh] backdrop-blur-sm`; real z-40 vs proto z-100 (token scale). |
+| Backdrop overlay (fixed inset-0, dim scrim, blur) | chrome | ✅ built | `app/renderer/src/CommandPalette.tsx` | `bg-black/55 … pt-[12vh] backdrop-blur-sm`; `z-[210]` is the dedicated global-palette layer above every current `useModalFocus` owner, because ⌘K deliberately opens the palette without closing the modal it interrupts. `CommandPalette.test.tsx` inventories those owners and fails if any reaches or exceeds the palette layer. |
 | Backdrop click-to-dismiss | control | 🔁 adapted | `app/renderer/src/CommandPalette.tsx:104,111,203` | `onClick`→`onMouseDown` so a row click lands before backdrop close (documented `:202`). |
 | Dialog container (rounded card, seam border, shadow) | chrome | 🔁 adapted | `app/renderer/src/CommandPalette.tsx:106-112` | `max-w-xl` (576px) vs proto 640; `shell-chrome`/`shell-seam` tokens (P3-5 grammar) not hex. |
 | Dialog a11y (role=dialog, aria-modal, aria-label) | chrome | ➕ real-added | `app/renderer/src/CommandPalette.tsx:108-110` | Prototype has no ARIA; GUI-verified AXGroup "Command palette" (`STATUS.md:162`). |
