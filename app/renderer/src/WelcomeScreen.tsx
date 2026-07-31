@@ -326,7 +326,6 @@ function ProjectPicker({
             <span className="flex-1 text-[12.5px] text-text-primary">
               Open folder…
             </span>
-            <span className="font-mono text-[11px] text-text-faint">⌘O</span>
           </button>
         </div>
       ) : null}

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { OrchestratorReflect, RecentItem, WelcomeScreen } from './WelcomeScreen.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
@@ -94,6 +95,22 @@ test('the branch chooser + worktree option are CUT (absent)', () => {
   expect(html).not.toContain('feat/cat-launcher')
   // With no recents the trigger invites a first project instead of a mock path.
   expect(html).toContain('Open a project')
+})
+
+test('P4-59 keeps Open folder actionable without advertising an unbound shortcut', () => {
+  // The package has no DOM harness, and the menu is closed during SSR. Pin the
+  // menu item's handler wiring in its exact source region, following App.test.tsx.
+  const source = readFileSync(new URL('./WelcomeScreen.tsx', import.meta.url), 'utf8')
+  const pickerStart = source.indexOf('function ProjectPicker({')
+  const pickerEnd = source.indexOf('\n/**\n * One recent-project row.', pickerStart)
+  const picker = source.slice(pickerStart, pickerEnd).replace(/\s+/g, ' ')
+
+  expect(pickerStart).toBeGreaterThan(-1)
+  expect(pickerEnd).toBeGreaterThan(pickerStart)
+  expect(picker).toContain('role="menuitem"')
+  expect(picker).toContain('Open folder…')
+  expect(picker).toContain('onClick={() => { close() onOpenFolder() }}')
+  expect(picker).not.toContain('⌘O')
 })
 
 test('P4-55 renders a truthful retry in place of the false empty roster', () => {
