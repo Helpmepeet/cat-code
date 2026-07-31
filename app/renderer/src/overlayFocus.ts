@@ -85,6 +85,108 @@ export function overlayEscapeAction({
     : null
 }
 
+type ModalFocusOwner = symbol
+
+type ModalFocusEntry = {
+  owner: ModalFocusOwner
+  container: HTMLElement | null
+  restoreTarget: HTMLElement | null
+}
+
+export type ModalFocusStack = {
+  register(
+    owner: ModalFocusOwner,
+    container: HTMLElement | null,
+    restoreTarget: HTMLElement | null,
+  ): void
+  unregister(owner: ModalFocusOwner): {
+    restoreTarget: HTMLElement | null
+    shouldRestore: boolean
+  }
+  isTop(owner: ModalFocusOwner): boolean
+}
+
+function resolveConnectedRestoreTarget(
+  entries: readonly ModalFocusEntry[],
+  initial: HTMLElement | null,
+): HTMLElement | null {
+  let target = initial
+  const visited = new Set<HTMLElement>()
+  while (target && !target.isConnected && !visited.has(target)) {
+    visited.add(target)
+    const owningEntry = [...entries]
+      .reverse()
+      .find(entry => entry.container?.contains(target))
+    target = owningEntry?.restoreTarget ?? null
+  }
+  return target?.isConnected ? target : null
+}
+
+export function createModalFocusStack(): ModalFocusStack {
+  const entries: ModalFocusEntry[] = []
+
+  return {
+    register(owner, container, restoreTarget) {
+      const existing = entries.findIndex(entry => entry.owner === owner)
+      if (existing >= 0) {
+        entries[existing] = { owner, container, restoreTarget }
+        return
+      }
+      entries.push({ owner, container, restoreTarget })
+    },
+
+    unregister(owner) {
+      const index = entries.findIndex(entry => entry.owner === owner)
+      if (index < 0) {
+        return { restoreTarget: null, shouldRestore: false }
+      }
+      const [removed] = entries.splice(index, 1)
+      const wasTop = index === entries.length
+      if (!removed) {
+        return { restoreTarget: null, shouldRestore: false }
+      }
+
+      for (let higher = index; higher < entries.length; higher += 1) {
+        const entry = entries[higher]
+        if (
+          entry?.restoreTarget &&
+          removed.container?.contains(entry.restoreTarget)
+        ) {
+          entry.restoreTarget = removed.restoreTarget
+        }
+      }
+
+      return {
+        restoreTarget: wasTop
+          ? resolveConnectedRestoreTarget(entries, removed.restoreTarget)
+          : null,
+        shouldRestore: wasTop,
+      }
+    },
+
+    isTop(owner) {
+      return entries.at(-1)?.owner === owner
+    },
+  }
+}
+
+export function modalKeyAction(
+  activeOwner: boolean,
+  event: {
+    key: string
+    defaultPrevented: boolean
+    metaKey?: boolean
+    ctrlKey?: boolean
+    altKey?: boolean
+  },
+): 'escape' | 'tab' | null {
+  if (!activeOwner || event.defaultPrevented) return null
+  if (overlayEscapeAction(event) === 'close') return 'escape'
+  return event.key === 'Tab' ? 'tab' : null
+}
+
+const modalFocusStack = createModalFocusStack()
+
 function activeHtmlElement(): HTMLElement | null {
   return document.activeElement instanceof HTMLElement
     ? document.activeElement
@@ -123,35 +225,48 @@ export function useModalFocus({
   initialFocus?: 'first' | 'container'
   restoreOnClose?: boolean
 }): void {
-  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const ownerRef = useRef<ModalFocusOwner>(Symbol('modal-focus-owner'))
+  const initialFocusRef = useRef(initialFocus)
+  const restoreOnCloseRef = useRef(restoreOnClose)
+  initialFocusRef.current = initialFocus
+  restoreOnCloseRef.current = restoreOnClose
 
   useEffect(() => {
     if (!open) return
-    previousFocusRef.current = activeHtmlElement()
+    const owner = ownerRef.current
+    modalFocusStack.register(
+      owner,
+      containerRef.current,
+      activeHtmlElement(),
+    )
     const frame = requestAnimationFrame(() => {
+      if (!modalFocusStack.isTop(owner)) return
       const container = containerRef.current
-      if (initialFocus === 'container') container?.focus()
+      if (initialFocusRef.current === 'container') container?.focus()
       else focusFirst(container, FOCUSABLE_ELEMENT_SELECTOR, true)
     })
     return () => {
       cancelAnimationFrame(frame)
-      if (restoreOnClose) restoreFocus(previousFocusRef.current)
-      previousFocusRef.current = null
+      const removal = modalFocusStack.unregister(owner)
+      if (restoreOnCloseRef.current && removal.shouldRestore) {
+        restoreFocus(removal.restoreTarget)
+      }
     }
-  }, [containerRef, initialFocus, open, restoreOnClose])
+  }, [containerRef, open])
 
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        escapeEnabled &&
-        overlayEscapeAction(event) === 'close'
-      ) {
+      const action = modalKeyAction(
+        modalFocusStack.isTop(ownerRef.current),
+        event,
+      )
+      if (escapeEnabled && action === 'escape') {
         event.preventDefault()
         onEscape()
         return
       }
-      if (event.key !== 'Tab' || event.defaultPrevented) return
+      if (action !== 'tab') return
       const container = containerRef.current
       if (!container) return
       const focusable = selectFocusableElements(container)

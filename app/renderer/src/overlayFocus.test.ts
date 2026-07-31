@@ -1,11 +1,42 @@
 import { expect, test } from 'bun:test'
 import {
   FOCUSABLE_ELEMENT_SELECTOR,
+  createModalFocusStack,
   isFocusableElement,
+  modalKeyAction,
   nextTabStopIndex,
   overlayEscapeAction,
   selectFocusableElements,
 } from './overlayFocus.js'
+
+type FocusNode = HTMLElement & {
+  connected: boolean
+  focusCount: number
+  parentNode: FocusNode | null
+}
+
+function focusNode(parentNode: FocusNode | null = null): FocusNode {
+  const node = {
+    connected: true,
+    focusCount: 0,
+    parentNode,
+    contains(target: Node | null) {
+      let current = target as FocusNode | null
+      while (current) {
+        if (current === node) return true
+        current = current.parentNode
+      }
+      return false
+    },
+    focus() {
+      node.focusCount += 1
+    },
+    get isConnected() {
+      return node.connected
+    },
+  }
+  return node as unknown as FocusNode
+}
 
 type Candidate = {
   tabIndex: number
@@ -104,4 +135,78 @@ test('Escape closes only when a nested control has not already handled it', () =
   expect(
     overlayEscapeAction({ key: 'Enter', defaultPrevented: false }),
   ).toBeNull()
+})
+
+test('only the topmost concurrent modal owns Tab and bare Escape, then the underlying modal is promoted', () => {
+  const stack = createModalFocusStack()
+  const underlyingOwner = Symbol('tasks')
+  const topOwner = Symbol('palette')
+  const opener = focusNode()
+  const underlyingContainer = focusNode()
+  const underlyingButton = focusNode(underlyingContainer)
+  const topContainer = focusNode()
+
+  stack.register(underlyingOwner, underlyingContainer, opener)
+  stack.register(topOwner, topContainer, underlyingButton)
+
+  const tab = { key: 'Tab', defaultPrevented: false }
+  const escape = { key: 'Escape', defaultPrevented: false }
+  expect(modalKeyAction(stack.isTop(underlyingOwner), tab)).toBeNull()
+  expect(modalKeyAction(stack.isTop(underlyingOwner), escape)).toBeNull()
+  expect(modalKeyAction(stack.isTop(topOwner), tab)).toBe('tab')
+  expect(modalKeyAction(stack.isTop(topOwner), escape)).toBe('escape')
+
+  const topRemoval = stack.unregister(topOwner)
+  expect(topRemoval).toEqual({
+    restoreTarget: underlyingButton,
+    shouldRestore: true,
+  })
+  expect(stack.isTop(underlyingOwner)).toBe(true)
+  expect(modalKeyAction(stack.isTop(underlyingOwner), tab)).toBe('tab')
+  expect(modalKeyAction(stack.isTop(underlyingOwner), escape)).toBe('escape')
+})
+
+test('listener refresh cannot reorder already-registered modal ownership', () => {
+  const stack = createModalFocusStack()
+  const underlyingOwner = Symbol('tasks')
+  const topOwner = Symbol('palette')
+  const opener = focusNode()
+  const underlyingContainer = focusNode()
+  const topContainer = focusNode()
+
+  stack.register(underlyingOwner, underlyingContainer, opener)
+  stack.register(topOwner, topContainer, focusNode(underlyingContainer))
+  stack.register(underlyingOwner, underlyingContainer, opener)
+
+  expect(stack.isTop(topOwner)).toBe(true)
+  expect(stack.isTop(underlyingOwner)).toBe(false)
+})
+
+test('concurrent cleanup resolves restoration past removed overlay content', () => {
+  const stack = createModalFocusStack()
+  const underlyingOwner = Symbol('tasks')
+  const topOwner = Symbol('palette')
+  const opener = focusNode()
+  const underlyingContainer = focusNode()
+  const underlyingButton = focusNode(underlyingContainer)
+  const topContainer = focusNode()
+
+  stack.register(underlyingOwner, underlyingContainer, opener)
+  stack.register(topOwner, topContainer, underlyingButton)
+
+  underlyingContainer.connected = false
+  underlyingButton.connected = false
+  topContainer.connected = false
+
+  const underlyingRemoval = stack.unregister(underlyingOwner)
+  expect(underlyingRemoval).toEqual({
+    restoreTarget: null,
+    shouldRestore: false,
+  })
+  const topRemoval = stack.unregister(topOwner)
+  expect(topRemoval).toEqual({
+    restoreTarget: opener,
+    shouldRestore: true,
+  })
+  expect(topRemoval.restoreTarget).not.toBe(underlyingButton)
 })
