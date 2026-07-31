@@ -21,6 +21,63 @@ export function permissionActionForKey(
 }
 
 /**
+ * Elements that already act on Enter/Escape themselves. The plain-key permission
+ * shortcuts are a shortcut for "focus is on nothing"; whenever focus sits inside
+ * one of these the focused control decides, so Enter on the card's own Deny
+ * button denies instead of being swallowed and answered as an allow.
+ *
+ * A tag-name test is not enough: buttons, menu items and dialog contents all
+ * carry their own Enter semantics, and `preventDefault()` on the shortcut path
+ * suppresses the browser's Enter → click.
+ */
+const FOCUSED_KEY_OWNER_SELECTOR =
+  'a[href], button, input, select, textarea, [contenteditable], ' +
+  '[role="button"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
+  '[role="menuitemcheckbox"], [role="option"], [role="listbox"], ' +
+  '[role="dialog"], [role="alertdialog"]'
+
+/**
+ * Marks the ONE card the four shortcuts act on (`selectVisiblePermission`'s
+ * pick) as the element that HOSTS the keys rather than owning them.
+ *
+ * It exists because the card's own `<section>` is `role="alertdialog"`, which is
+ * in the selector above, and `closest()` matches the element itself and not only
+ * its ancestors. Focusing the card so the composer stops swallowing keys would
+ * therefore make the card its own key owner and leave all four keys exactly as
+ * dead as leaving focus in the composer did.
+ */
+export const PERMISSION_KEY_HOST_ATTR = 'data-permission-key-host'
+
+/** The `hasAttribute` slice of an `Element`, so this stays unit-testable. */
+type KeyOwnerLike = { hasAttribute(name: string): boolean }
+/** The `closest` slice of an `Element` (a keydown/focus target). */
+type KeyTargetLike = { closest(selector: string): KeyOwnerLike | null }
+
+function isKeyTarget(value: unknown): value is KeyTargetLike {
+  if (typeof value !== 'object' || value === null) return false
+  return typeof Reflect.get(value, 'closest') === 'function'
+}
+
+/**
+ * Whether the four permission shortcuts are live for a given focus target.
+ *
+ * Live when focus is on nothing element-like (`document`, `window`, `null`), on
+ * an element that owns no keys of its own, or on the marked host card. Dead
+ * everywhere else — the composer textarea it starts in, every button on the
+ * card including the show/hide-input disclosure, and the deny-feedback field,
+ * where typing the letter `n` must never deny.
+ *
+ * One predicate serves both consumers so they can never disagree: App's keydown
+ * handler decides whether to act, and the card decides whether to advertise.
+ */
+export function permissionKeysAreLive(target: unknown): boolean {
+  if (!isKeyTarget(target)) return true
+  const owner = target.closest(FOCUSED_KEY_OWNER_SELECTOR)
+  if (owner === null) return true
+  return owner.hasAttribute(PERMISSION_KEY_HOST_ATTR)
+}
+
+/**
  * Where the rule would be kept, in the words the engine's own save-destination
  * picker shows a user (`src/components/permissions/rules/AddPermissionRules.tsx:20-37`).
  * `session` and `cliArg` are not settings files at all: they last for the run.

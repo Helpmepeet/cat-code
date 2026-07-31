@@ -1486,9 +1486,9 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   // AccountsPage.test.tsx) and App cannot be mounted, so the handler cannot be
   // executed here and no test in this package can press a key. This asserts only
   // what source text can decide — which guard the handler applies, and that the
-  // listener is not attached while another surface owns the keyboard. Executable
-  // coverage needs the predicate to live in a .ts module and a DOM harness; both
-  // are flagged in the report.
+  // listener is not attached while another surface owns the keyboard. The guard
+  // itself is now an executable predicate (`permissionKeysAreLive`, unit-tested
+  // in PermissionPrompt.test.tsx); a DOM harness is still flagged in the report.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const effectStart = source.indexOf(
     'const dedicatedFlowOwnsKeyboard =',
@@ -1506,20 +1506,51 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   // browser's Enter → click. The guard must cover any control that acts on the
   // key itself, buttons above all.
   expect(effectBody).not.toContain("target.tagName === 'INPUT'")
-  expect(effectBody).toContain('target.closest(FOCUSED_KEY_OWNER_SELECTOR)')
-  expect(source).toContain('const FOCUSED_KEY_OWNER_SELECTOR =')
-  const selectorStart = source.indexOf('const FOCUSED_KEY_OWNER_SELECTOR =')
-  const selector = source.slice(selectorStart, source.indexOf('\n\n', selectorStart))
+  expect(effectBody).toContain('if (!permissionKeysAreLive(event.target)) return')
+
+  const model = readFileSync(
+    new URL('./permissionPromptModel.ts', import.meta.url),
+    'utf8',
+  )
+  expect(model).toContain('const FOCUSED_KEY_OWNER_SELECTOR =')
+  const selectorStart = model.indexOf('const FOCUSED_KEY_OWNER_SELECTOR =')
+  const selector = model.slice(selectorStart, model.indexOf('\n\n', selectorStart))
   for (const owner of [
     'button',
     'input',
     'textarea',
     '[role="menuitem"]',
     '[role="menuitemradio"]',
+    // Load-bearing for the marker: the card's own section carries this role, so
+    // without the host exemption, focusing the card kills all four keys.
     '[role="alertdialog"]',
   ]) {
     expect(selector).toContain(owner)
   }
+
+  // P4-43 — the card that takes focus and advertises the keys must be exactly
+  // the request the handler answers. A card advertising keys the listener does
+  // not deliver is the dead affordance this session removed.
+  expect(source).toContain(
+    'const permissionKeyTargetRequestId =\n' +
+      '    pendingPermission && !dedicatedFlowOwnsKeyboard\n' +
+      '      ? pendingPermission.requestId\n' +
+      '      : null',
+  )
+  const queueStart = source.indexOf('<PermissionQueue')
+  const queueBody = source.slice(queueStart, source.indexOf('/>', queueStart))
+  expect(queueBody).toContain(
+    'keyboardTargetRequestId={permissionKeyTargetRequestId}',
+  )
+  // Split workspace: one queue per pane, and only the active pane's card may
+  // take focus — the handler acts solely on the activeSessionId's request.
+  expect(source).toContain(
+    'permissionKeyTargetRequestId={\n' +
+      '\t              sessionId === activeSessionId\n' +
+      '\t                ? permissionKeyTargetRequestId\n' +
+      '\t                : null\n' +
+      '\t            }',
+  )
 
   // Propagation is target → document → window, so this document listener fires
   // BEFORE AskQuestionFlow's and PlanPanel's own window listeners: one Enter

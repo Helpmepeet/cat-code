@@ -11,7 +11,10 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
-import { permissionActionForKey } from './permissionPromptModel.js'
+import {
+  permissionActionForKey,
+  permissionKeysAreLive,
+} from './permissionPromptModel.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
@@ -362,22 +365,6 @@ const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 /** Stable empty notice list so a healthy pool re-renders nothing (P4-50). */
 const EMPTY_BANNERS: readonly BannerNotice[] = []
-
-/**
- * Elements that already act on Enter/Escape themselves. The plain-key permission
- * shortcuts are a shortcut for "focus is on nothing"; whenever focus sits inside
- * one of these the focused control decides, so Enter on the card's own Deny
- * button denies instead of being swallowed and answered as an allow.
- *
- * A tag-name test is not enough: buttons, menu items and dialog contents all
- * carry their own Enter semantics, and `preventDefault()` here suppresses the
- * browser's Enter → click.
- */
-const FOCUSED_KEY_OWNER_SELECTOR =
-  'a[href], button, input, select, textarea, [contenteditable], ' +
-  '[role="button"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
-  '[role="menuitemcheckbox"], [role="option"], [role="listbox"], ' +
-  '[role="dialog"], [role="alertdialog"]'
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
@@ -2015,6 +2002,15 @@ export function App() {
     selectAskQuestion(permissions, activeSessionId) !== null ||
     selectPlanReview(permissions, activeSessionId) !== null
 
+  // The card that takes focus and advertises the keys, kept in lockstep with the
+  // listener below so a card can never claim keys the listener does not deliver:
+  // exactly the request the handler answers, and nothing while a dedicated flow
+  // holds the keyboard.
+  const permissionKeyTargetRequestId =
+    pendingPermission && !dedicatedFlowOwnsKeyboard
+      ? pendingPermission.requestId
+      : null
+
   useEffect(() => {
     if (!pendingPermission || !activeSessionId) return
     if (dedicatedFlowOwnsKeyboard) return
@@ -2022,14 +2018,9 @@ export function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       // Never hijack a key the focused element already acts on: the deny
       // feedback field, and every button/menu item whose own Enter this would
-      // otherwise suppress.
-      const target = event.target
-      if (
-        target instanceof Element &&
-        target.closest(FOCUSED_KEY_OWNER_SELECTOR)
-      ) {
-        return
-      }
+      // otherwise suppress. The one exemption is the card the shortcuts act on,
+      // which hosts them rather than owning them (`permissionKeysAreLive`).
+      if (!permissionKeysAreLive(event.target)) return
       const action = permissionActionForKey(event)
       if (!action) return
 
@@ -2356,6 +2347,11 @@ export function App() {
 	            }}
 	            partialCount={panelPartialCount}
 	            permissionContext={selectPermissionContext(permissions, sessionId)}
+	            permissionKeyTargetRequestId={
+	              sessionId === activeSessionId
+	                ? permissionKeyTargetRequestId
+	                : null
+	            }
 	            permissionQueue={sessionDisplayQueue}
 	            planReview={sessionPlanReview}
 	            prompt={selectPromptDraft(promptDrafts, sessionId)}
@@ -3088,6 +3084,7 @@ export function SessionPane({
   pastes,
   pendingSubmit = null,
   permissionContext,
+  permissionKeyTargetRequestId = null,
   permissionQueue,
   planReview,
   prompt,
@@ -3722,6 +3719,7 @@ export function SessionPane({
 
       <PermissionQueue
         items={permissionQueue}
+        keyboardTargetRequestId={permissionKeyTargetRequestId}
         onAllow={allowPermission}
         onDeny={denyPermission}
         onRestore={restorePermission}
@@ -4252,6 +4250,11 @@ type SessionPaneProps = {
   onToggleOrchestrator?: (next: boolean) => void
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
+  /** P4-43 — the request the shortcuts act on in THIS pane, or null. A split
+   * workspace renders one queue per pane, and only the active pane's card may
+   * take focus: App's keydown handler acts solely on the activeSessionId.
+   * Absent = no card here owns the keyboard, which is the safe default. */
+  permissionKeyTargetRequestId?: string | null
   permissionQueue: ReturnType<typeof selectPermissionQueue>
   /** P4-11 — the pending ExitPlanMode review, or `null`; drives PlanBar/PlanPanel. */
   planReview: PlanReview | null

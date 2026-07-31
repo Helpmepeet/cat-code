@@ -15,11 +15,18 @@ import {
  */
 export function PermissionQueue({
   items,
+  keyboardTargetRequestId = null,
   onAllow,
   onDeny,
   onRestore,
 }: {
   items: PermissionQueueItem[]
+  /**
+   * The request App's keydown handler acts on, or null when no card owns the
+   * keyboard here (a background pane, or a dedicated flow holding the keys).
+   * Stacked cards mean the focus must land on THAT card, not the last rendered.
+   */
+  keyboardTargetRequestId?: string | null
   onAllow: (requestId: string, applySuggestions: number[]) => void
   onDeny: (requestId: string, message?: string) => void
   onRestore: (requestId: string) => void
@@ -45,6 +52,7 @@ export function PermissionQueue({
           // it is already the only one the keyboard offers for these requests.
           denyOnly={isAskUserQuestionRequest(item.request)}
           key={item.request.requestId}
+          keyboardTarget={item.request.requestId === keyboardTargetRequestId}
           onAllow={applySuggestions =>
             onAllow(item.request.requestId, applySuggestions)
           }

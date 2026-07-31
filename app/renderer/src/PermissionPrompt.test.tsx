@@ -8,6 +8,8 @@ import {
   describeSuggestion,
   formatPermissionInput,
   permissionActionForKey,
+  permissionKeysAreLive,
+  PERMISSION_KEY_HOST_ATTR,
   selectPermissionPreview,
 } from './permissionPromptModel.js'
 import type { PermissionRequest } from './permissionState.js'
@@ -25,6 +27,7 @@ const REQUEST: PermissionRequest = {
 test('renders the requested tool, the command itself, controls, and inline key hints', () => {
   const html = renderToStaticMarkup(
     <PermissionPrompt
+      keyboardTarget
       onAllow={() => {}}
       onDeny={() => {}}
       request={REQUEST}
@@ -461,4 +464,66 @@ test('maps the permission keyboard contract and ignores unrelated keys', () => {
   expect(permissionActionForKey({ key: 'x' })).toBeNull()
   expect(permissionActionForKey({ key: 'Enter', metaKey: true })).toBeNull()
   expect(permissionActionForKey({ key: 'n', ctrlKey: true })).toBeNull()
+})
+
+/**
+ * A focus target described the way `Element.closest` answers about it: the
+ * nearest ancestor-or-self matching `FOCUSED_KEY_OWNER_SELECTOR`, or null when
+ * there is none. `owner: 'host'` is that element carrying the marker the card
+ * puts on itself.
+ *
+ * LAYER HONESTY: this stands in for the DOM, so it cannot prove that the
+ * selector matches the card's `<section>` — the SSR assertions below pin the
+ * attributes the real `closest` would read, and only the operator's GUI run can
+ * prove a key press arrives.
+ */
+function focusTarget(owner: 'host' | 'control' | null) {
+  return {
+    closest: () =>
+      owner === null
+        ? null
+        : { hasAttribute: (name: string) => owner === 'host' && name === PERMISSION_KEY_HOST_ATTR },
+  }
+}
+
+test('the four shortcuts are live only where no control owns the key', () => {
+  // The defect: focus sits in the composer textarea after sending, so the guard
+  // bailed and all four advertised keys did nothing.
+  expect(permissionKeysAreLive(focusTarget('control'))).toBe(false)
+  // The trap: the card's own <section> is role="alertdialog", which IS in the
+  // selector, and closest() matches the element itself. Focusing the card
+  // without the marker would leave the keys exactly as dead.
+  expect(permissionKeysAreLive(focusTarget('host'))).toBe(true)
+  // Focus on nothing, or on a plain element: the original "focus is on nothing"
+  // case the shortcuts were always meant for.
+  expect(permissionKeysAreLive(focusTarget(null))).toBe(true)
+  expect(permissionKeysAreLive(null)).toBe(true)
+  expect(permissionKeysAreLive(undefined)).toBe(true)
+  // A keydown whose target is `document` or `window` has no `closest` at all.
+  expect(permissionKeysAreLive({})).toBe(true)
+})
+
+test('only the card the shortcuts act on hosts them, takes focus, and says so', () => {
+  const target = renderToStaticMarkup(
+    <PermissionPrompt
+      keyboardTarget
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={REQUEST}
+    />,
+  )
+  // The marker `permissionKeysAreLive` looks for, and the tabIndex that lets the
+  // card be focused at all.
+  expect(target).toContain(`${PERMISSION_KEY_HOST_ATTR}=""`)
+  expect(target).toContain('tabindex="-1"')
+  expect(target).toContain('Enter allow · N / ⌫ deny · Esc snooze')
+
+  // Every other card in a stacked queue: the keys do not act on it, so it neither
+  // claims them nor advertises them. `selectVisiblePermission` picks exactly one.
+  const other = renderToStaticMarkup(
+    <PermissionPrompt onAllow={() => {}} onDeny={() => {}} request={REQUEST} />,
+  )
+  expect(other).not.toContain(PERMISSION_KEY_HOST_ATTR)
+  expect(other).not.toContain('tabindex')
+  expect(other).not.toContain('Enter allow')
 })

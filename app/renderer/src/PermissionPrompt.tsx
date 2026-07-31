@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PermissionRequest } from './permissionState.js'
 import {
   describeSuggestion,
   formatPermissionInput,
+  permissionKeysAreLive,
   selectPermissionPreview,
   type PermissionPreview,
   type PermissionPreviewLine,
@@ -58,6 +59,7 @@ export function PermissionPrompt({
   request,
   submitted,
   denyOnly,
+  keyboardTarget,
   onAllow,
   onDeny,
 }: {
@@ -66,6 +68,12 @@ export function PermissionPrompt({
   submitted?: boolean
   /** Hide every allow path: this request can only be answered by denying it. */
   denyOnly?: boolean
+  /**
+   * This is the card `selectVisiblePermission` picked AND no dedicated flow owns
+   * the keyboard, so the four shortcuts act on THIS request. Only such a card
+   * takes focus, hosts the keys, and advertises them.
+   */
+  keyboardTarget?: boolean
   onAllow: (applySuggestions: number[]) => void
   onDeny: (message?: string) => void
 }) {
@@ -83,11 +91,52 @@ export function PermissionPrompt({
     : []
   const workerId = request.request.agent_id
 
+  const sectionRef = useRef<HTMLElement>(null)
+  // Optimistic: the effect below is about to focus this card. It corrects itself
+  // from the real `activeElement`, and every later focus move re-derives it.
+  const [keysLive, setKeysLive] = useState(keyboardTarget === true)
+
+  // Nothing moved focus when a card appeared, so the composer textarea kept it
+  // and every advertised key was swallowed by the focused-control guard. Take
+  // the keyboard the way the app's other keyboard-owning card already does
+  // (`PlanPanel.tsx:99-110`): focus after the commit that produced the card, and
+  // hand focus back on the way out.
+  useEffect(() => {
+    if (!keyboardTarget) {
+      setKeysLive(false)
+      return
+    }
+    const node = sectionRef.current
+    if (!node) return
+    const previous = document.activeElement
+    const timer = setTimeout(() => {
+      node.focus()
+      setKeysLive(document.activeElement === node)
+    }, 0)
+    return () => {
+      clearTimeout(timer)
+      // Only if this card still holds the keyboard: never yank focus away from
+      // wherever the user moved it in the meantime.
+      if (document.activeElement === node && previous instanceof HTMLElement) {
+        previous.focus()
+      }
+    }
+  }, [keyboardTarget])
+
+  const hintVisible = keyboardTarget === true && keysLive && !denyOnly
+
   return (
     <section
       aria-labelledby={titleId}
-      className="border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3"
+      className="border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3 focus:outline-none"
+      // Literal because JSX needs a literal attribute name; the reader is
+      // `PERMISSION_KEY_HOST_ATTR` in `permissionPromptModel.ts`.
+      data-permission-key-host={keyboardTarget ? '' : undefined}
+      onBlur={event => setKeysLive(permissionKeysAreLive(event.relatedTarget))}
+      onFocus={event => setKeysLive(permissionKeysAreLive(event.target))}
+      ref={sectionRef}
       role="alertdialog"
+      tabIndex={keyboardTarget ? -1 : undefined}
     >
       {workerId ? (
         <div className="mb-2 flex items-center gap-2">
@@ -195,13 +244,17 @@ export function PermissionPrompt({
         value={denyMessage}
       />
 
-      {/* The generic shortcuts skip this request entirely (`selectVisiblePermission`),
-       * so advertising them on a deny-only card would be a dead affordance. */}
-      {denyOnly ? null : (
+      {/* Shown exactly while the keys work. The generic shortcuts skip a
+       * deny-only request entirely (`selectVisiblePermission`), they act on one
+       * card at a time, and they stand down whenever focus sits in a control
+       * that owns them itself — the deny field above, every button on this card,
+       * the composer. Advertising them in any of those states is the dead
+       * affordance this strip used to be. */}
+      {hintVisible ? (
         <p className="mt-2 font-mono text-[11px] text-text-subtle">
           Enter allow · N / ⌫ deny · Esc snooze
         </p>
-      )}
+      ) : null}
     </section>
   )
 }
