@@ -1,6 +1,37 @@
 import { useState } from 'react'
 import type { PermissionRequest } from './permissionState.js'
-import { describeSuggestion } from './permissionPromptModel.js'
+import {
+  describeSuggestion,
+  formatPermissionInput,
+  selectPermissionPreview,
+  type PermissionPreview,
+  type PermissionPreviewLine,
+} from './permissionPromptModel.js'
+
+/**
+ * Exact prototype `PQDiff` line grammar (`Permissions.jsx:139-143`): the add /
+ * remove washes are rgba(34,197,94,0.1) / rgba(239,68,68,0.1) over #86efac /
+ * #fca5a5 bodies, context in #52525b. Literal hexes, not the green-500/red-500
+ * utilities, because Tailwind v4's oklch palette drifted those. Static classes
+ * only (the interpolated-arbitrary-value trap silently produces no CSS).
+ *
+ * The transcript's post-execution diff carries the same values
+ * (`TranscriptView.tsx` `DIFF_ROW_CLASS`) because the prototype uses one
+ * grammar in both places. They are not shared through a module: these rows have
+ * no line-number gutter and are built from a snippet, not from hunks, so
+ * nothing but the three class strings would be common.
+ */
+const PREVIEW_LINE_CLASS: Record<PermissionPreviewLine['kind'], string> = {
+  add: 'bg-[#22c55e]/10 text-[#86efac]',
+  del: 'bg-[#ef4444]/10 text-[#fca5a5]',
+  ctx: 'text-text-faint',
+}
+
+const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
+  add: '+ ',
+  del: '− ',
+  ctx: '  ',
+}
 
 /**
  * One permission card. Options map 1:1 to the S2 §5 payload contract:
@@ -15,6 +46,13 @@ import { describeSuggestion } from './permissionPromptModel.js'
  * with NO answers — the thing `permissionState.ts`'s `selectVisiblePermission`
  * comment forbids and the keyboard path already refuses
  * (decisions/ASK-USER-QUESTION-ANSWER.md). Mouse and keyboard must agree.
+ *
+ * The body shows the thing being approved, not the request that carries it: a
+ * command, a path, a URL, a file's new content, an edit's before and after.
+ * `selectPermissionPreview` decides which, per family, and returns null when it
+ * cannot say honestly — the raw input is one click away either way, and starts
+ * open on a card that has no preview. It used to be the ONLY body: every card,
+ * for every tool, rendered `JSON.stringify(input)`.
  */
 export function PermissionPrompt({
   request,
@@ -32,6 +70,13 @@ export function PermissionPrompt({
   onDeny: (message?: string) => void
 }) {
   const [denyMessage, setDenyMessage] = useState('')
+  const preview = selectPermissionPreview(
+    request.request.tool_name,
+    request.request.input,
+  )
+  // Opened by default exactly when nothing could be promoted, so a card never
+  // hides the only description of what it is about to allow.
+  const [inputShown, setInputShown] = useState(preview === null)
   const titleId = `permission-title-${request.requestId}`
   const suggestions = Array.isArray(request.request.permission_suggestions)
     ? request.request.permission_suggestions
@@ -106,9 +151,23 @@ export function PermissionPrompt({
         </div>
       </div>
 
-      <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded border border-text-subtle/50 p-3 font-mono text-xs text-text-muted">
-        {JSON.stringify(request.request.input, null, 2)}
-      </pre>
+      {preview ? <PermissionPreviewBlock preview={preview} /> : null}
+
+      <div className="mt-2">
+        <button
+          aria-expanded={inputShown}
+          className="rounded border border-text-subtle/50 px-2 py-1 font-mono text-[11px] text-text-muted hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          onClick={() => setInputShown(shown => !shown)}
+          type="button"
+        >
+          {inputShown ? 'Hide input' : 'Show input'}
+        </button>
+        {inputShown ? (
+          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded border border-text-subtle/50 p-3 font-mono text-xs text-text-muted">
+            {formatPermissionInput(request.request.input)}
+          </pre>
+        ) : null}
+      </div>
 
       {!denyOnly && suggestions.length > 0 ? (
         <div aria-label="Always allow options" className="mt-2 flex flex-col gap-1">
@@ -144,5 +203,54 @@ export function PermissionPrompt({
         </p>
       )}
     </section>
+  )
+}
+
+/**
+ * The thing being approved, in the prototype's two preview forms: the labelled
+ * payload block (`Permissions.jsx:550-559`) for a promoted field, and the
+ * file-header-over-body block (`:544-548`) for a write or an edit.
+ *
+ * Everything here is a text node. This is model-authored tool input arriving
+ * from the wire, so a URL is never a link, a path is never a control, and no
+ * branch ever sets inner HTML.
+ */
+function PermissionPreviewBlock({ preview }: { preview: PermissionPreview }) {
+  if (preview.kind === 'field') {
+    return (
+      <div className="mt-3 rounded-[9px] border border-white/[0.07] bg-black/30 px-[11px] py-[9px]">
+        <div className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.08em] text-text-faint">
+          {preview.label}
+        </div>
+        <code className="block max-h-36 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-accent">
+          {preview.value}
+        </code>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-[9px] border border-white/[0.07]">
+      <div className="truncate border-b border-white/[0.05] bg-black/30 px-[11px] py-[5px] font-mono text-[11px] text-text-muted">
+        {preview.path}
+      </div>
+      {preview.kind === 'content' ? (
+        <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-words bg-black/30 px-[11px] py-[9px] font-mono text-[11.5px] leading-[1.55] text-text-muted">
+          {preview.body}
+        </pre>
+      ) : (
+        <div className="max-h-28 overflow-auto bg-black/30 font-mono text-[11.5px] leading-[1.55]">
+          {preview.lines.map((line, index) => (
+            <div
+              className={`whitespace-pre px-[11px] ${PREVIEW_LINE_CLASS[line.kind]}`}
+              key={index}
+            >
+              {PREVIEW_LINE_SIGN[line.kind]}
+              {line.text}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

@@ -4,8 +4,11 @@ import {
   PermissionPrompt,
 } from './PermissionPrompt.js'
 import {
+  buildChangeLines,
   describeSuggestion,
+  formatPermissionInput,
   permissionActionForKey,
+  selectPermissionPreview,
 } from './permissionPromptModel.js'
 import type { PermissionRequest } from './permissionState.js'
 
@@ -19,7 +22,7 @@ const REQUEST: PermissionRequest = {
   },
 }
 
-test('renders the requested tool, exact input, controls, and inline key hints', () => {
+test('renders the requested tool, the command itself, controls, and inline key hints', () => {
   const html = renderToStaticMarkup(
     <PermissionPrompt
       onAllow={() => {}}
@@ -30,7 +33,13 @@ test('renders the requested tool, exact input, controls, and inline key hints', 
 
   expect(html).toContain('Permission required')
   expect(html).toContain('Bash')
-  expect(html).toContain('&quot;command&quot;: &quot;date&quot;')
+  // The command is the body now, under its own label — not a JSON payload.
+  expect(html).toContain('Command')
+  expect(html).toContain('>date<')
+  expect(html).not.toContain('&quot;command&quot;: &quot;date&quot;')
+  // …and the exact input is still one click away, collapsed.
+  expect(html).toContain('Show input')
+  expect(html).toContain('aria-expanded="false"')
   expect(html).toContain('Allow')
   expect(html).toContain('Deny')
   expect(html).toContain('Enter allow')
@@ -38,6 +47,101 @@ test('renders the requested tool, exact input, controls, and inline key hints', 
   expect(html).toContain('Esc snooze')
   // No engine-minted suggestions on this request → no always-allow option.
   expect(html).not.toContain('Always allow')
+})
+
+test('a tool with no recognised family shows its input, opened', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        requestId: 'perm-mcp',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'mcp__notion__search',
+          input: { query: 'roadmap' },
+          tool_use_id: 'toolu-mcp',
+        },
+      }}
+    />,
+  )
+  // Nothing can be promoted honestly, so nothing is hidden either.
+  expect(html).toContain('aria-expanded="true"')
+  expect(html).toContain('Hide input')
+  expect(html).toContain('&quot;query&quot;: &quot;roadmap&quot;')
+})
+
+test('an edit shows its file and the change, with no line numbers anywhere', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        requestId: 'perm-edit',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Edit',
+          input: {
+            file_path: '/repo/src/server.ts',
+            old_string: 'const port = 3000\nstart(port)',
+            new_string: 'const port = 8080\nstart(port)',
+          },
+          tool_use_id: 'toolu-edit',
+        },
+      }}
+    />,
+  )
+  expect(html).toContain('/repo/src/server.ts')
+  expect(html).toContain('const port = 3000')
+  expect(html).toContain('const port = 8080')
+  expect(html).toContain('+ ')
+  expect(html).toContain('− ')
+  // A patch over two snippets numbers the SNIPPET, not the file. The gutter the
+  // transcript diff carries must not appear here at all.
+  expect(html).not.toContain('tabular-nums')
+})
+
+test('a write shows the file and the content it would write', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        requestId: 'perm-write',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Write',
+          input: { file_path: '/repo/notes.md', content: '# Notes\nfirst' },
+          tool_use_id: 'toolu-write',
+        },
+      }}
+    />,
+  )
+  expect(html).toContain('/repo/notes.md')
+  expect(html).toContain('# Notes')
+  expect(html).toContain('first')
+})
+
+test('a fetched URL is promoted as text, never as a link', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        requestId: 'perm-web',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'WebFetch',
+          input: { url: 'https://example.com/docs', prompt: 'summarise' },
+          tool_use_id: 'toolu-web',
+        },
+      }}
+    />,
+  )
+  expect(html).toContain('URL')
+  expect(html).toContain('https://example.com/docs')
+  // Model-authored input never becomes a live control.
+  expect(html).not.toContain('<a ')
 })
 
 test('a deny-only card offers no allow path at all', () => {
@@ -241,6 +345,111 @@ test('describeSuggestion covers every PermissionUpdate variant mirrored by the s
       directories: ['/tmp/y', '/tmp/z'],
     }),
   ).toBe('remove directory /tmp/y, /tmp/z · This session')
+})
+
+test('promotes the field each tool own renderToolUseMessage promotes', () => {
+  // Every name is the `*_TOOL_NAME` constant behind a `case` in the engine's
+  // own per-family switch (PermissionRequest.tsx:47-82); every field is the one
+  // that tool's renderToolUseMessage shows.
+  expect(selectPermissionPreview('Bash', { command: 'ls -la' })).toEqual({
+    kind: 'field',
+    label: 'Command',
+    value: 'ls -la',
+  })
+  expect(
+    selectPermissionPreview('PowerShell', { command: 'Get-ChildItem' }),
+  ).toEqual({ kind: 'field', label: 'Command', value: 'Get-ChildItem' })
+  expect(selectPermissionPreview('Read', { file_path: '/a/b.ts' })).toEqual({
+    kind: 'field',
+    label: 'Path',
+    value: '/a/b.ts',
+  })
+  expect(selectPermissionPreview('Glob', { pattern: '**/*.ts' })).toEqual({
+    kind: 'field',
+    label: 'Pattern',
+    value: '**/*.ts',
+  })
+  expect(selectPermissionPreview('Grep', { pattern: 'TODO' })).toEqual({
+    kind: 'field',
+    label: 'Pattern',
+    value: 'TODO',
+  })
+  expect(selectPermissionPreview('WebFetch', { url: 'https://a.dev' })).toEqual({
+    kind: 'field',
+    label: 'URL',
+    value: 'https://a.dev',
+  })
+  expect(selectPermissionPreview('Skill', { skill: 'commit' })).toEqual({
+    kind: 'field',
+    label: 'Skill',
+    value: 'commit',
+  })
+  expect(
+    selectPermissionPreview('NotebookEdit', { notebook_path: '/a/n.ipynb' }),
+  ).toEqual({ kind: 'field', label: 'Notebook', value: '/a/n.ipynb' })
+  expect(
+    selectPermissionPreview('Write', { file_path: '/a/b.md', content: 'hi' }),
+  ).toEqual({ kind: 'content', path: '/a/b.md', body: 'hi' })
+})
+
+test('a tool outside the family map has no preview, like the engine fallback', () => {
+  // The engine answers FallbackPermissionRequest here; this answers "show the
+  // input", never a guessed field.
+  expect(selectPermissionPreview('mcp__linear__create', { title: 'x' })).toBeNull()
+  expect(selectPermissionPreview('SomeFutureTool', { anything: 1 })).toBeNull()
+  // AskUserQuestion and the plan tools keep their own surfaces.
+  expect(selectPermissionPreview('AskUserQuestion', { questions: [] })).toBeNull()
+  expect(selectPermissionPreview('ExitPlanMode', { plan: 'x' })).toBeNull()
+})
+
+test('a recognised family whose input does not match falls back, never throws', () => {
+  expect(selectPermissionPreview('Bash', null)).toBeNull()
+  expect(selectPermissionPreview('Bash', 'not an object')).toBeNull()
+  expect(selectPermissionPreview('Bash', [1, 2, 3])).toBeNull()
+  expect(selectPermissionPreview('Bash', {})).toBeNull()
+  expect(selectPermissionPreview('Bash', { command: 42 })).toBeNull()
+  expect(selectPermissionPreview('Bash', { command: '' })).toBeNull()
+  expect(selectPermissionPreview('Write', { file_path: '/a' })).toBeNull()
+  expect(selectPermissionPreview('Edit', { file_path: '/a', old_string: 'x' })).toBeNull()
+  // Writing an empty file is a real request, not a broken one.
+  expect(
+    selectPermissionPreview('Write', { file_path: '/a', content: '' }),
+  ).toEqual({ kind: 'content', path: '/a', body: '' })
+})
+
+test('an edit preview is signed change lines and carries no numbering', () => {
+  const preview = selectPermissionPreview('Edit', {
+    file_path: '/a/b.ts',
+    old_string: 'keep\ndrop me\ntail',
+    new_string: 'keep\nadd me\ntail',
+  })
+  expect(preview).toEqual({
+    kind: 'change',
+    path: '/a/b.ts',
+    lines: [
+      { kind: 'ctx', text: 'keep' },
+      { kind: 'del', text: 'drop me' },
+      { kind: 'add', text: 'add me' },
+      { kind: 'ctx', text: 'tail' },
+    ],
+  })
+})
+
+test('buildChangeLines keeps blank lines the user wrote and drops the split artifact', () => {
+  expect(buildChangeLines('a\n', 'a\n\nb\n')).toEqual([
+    { kind: 'ctx', text: 'a' },
+    { kind: 'add', text: '' },
+    { kind: 'add', text: 'b' },
+  ])
+  expect(buildChangeLines('', '')).toBeNull()
+})
+
+test('formatPermissionInput survives a value JSON.stringify refuses', () => {
+  expect(formatPermissionInput({ a: 1 })).toBe('{\n  "a": 1\n}')
+  const circular: Record<string, unknown> = {}
+  circular.self = circular
+  expect(() => formatPermissionInput(circular)).not.toThrow()
+  expect(formatPermissionInput(undefined)).toBe('undefined')
 })
 
 test('maps the permission keyboard contract and ignores unrelated keys', () => {
