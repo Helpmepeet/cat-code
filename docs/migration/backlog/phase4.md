@@ -4365,3 +4365,511 @@ other ledger row and not the Part D totals. Kill any sidecar you spawn. Update y
 re-read `STATUS.md` immediately before writing and touch only your own row.
 ```
 ─── PASTE ───
+
+
+# TRANCHE J — the UX-gap audit's third implementation wave (generated 2026-07-31)
+
+Source: `docs/migration/reviews/2026-07-31-app-ux-gap-audit.md` and
+`docs/migration/reviews/2026-07-31-app-ux-gap-prototype-coverage.md`, re-scoped after TRANCHE H and
+TRANCHE I landed. This tranche contains only behavior defined elsewhere or removal of a false
+affordance. If current-source recon shows that an item needs an operator judgment, the owning session
+STOPS and reports instead of deciding.
+
+**Ten sessions, ten items. Screen-reader announcements are explicitly absent.**
+
+| Session | Item | What it is |
+|---|---|---|
+| **P4-51** | audit 25, focus half | Shared focus trap/restore across overlays |
+| **P4-52** | audit 25, motion half | Stylesheet-level reduced-motion neutralization |
+| **P4-53** | audit 25, sidebar half | Keyboard access to the sidebar session roster |
+| **P4-54** | audit 8, dismiss half | Shell lifecycle errors stay until explicitly dismissed |
+| **P4-55** | audit 18, failure half | Initial session-roster read failure is visible and retryable |
+| **P4-56** | audit 16b | `autoMemoryEnabled` becomes a boundary-validated editable setting |
+| **P4-57** | audit 16c + Memory analogue | Copy-only affordances for displayed Agents and Memory paths |
+| **P4-58** | audit 1, minimum half | Honest read-only composer placeholder during a turn |
+| **P4-59** | audit 14, false half | Remove the unbound `⌘O` launcher hint |
+| **P4-60** | audit 5, label half | Map result error subtypes to truthful sentences |
+
+## The rule that governs every session in this tranche
+
+TRANCHE I found three facts absent from every audit revision: no desktop retention sweep call,
+`DeferredNote` referred to two different components, and permission `title`/`display_name` were never
+set on the wire. Therefore every session below must:
+
+1. Re-verify every cited anchor in current source before building.
+2. Name in its report the existing contract or call path the fix satisfies. The audit and prototype
+   are evidence and visual references, never the runtime contract.
+3. STOP if the remaining defect needs an operator judgment, touches a locked decision, or changes the
+   security baseline. Do not manufacture a design to keep moving.
+4. Leave the **21 pending TRANCHE I §0 flags** alone. Do not re-litigate, close, or “fix” them.
+5. Separate headless proof from operator proof. Static rendering can pin markup, attributes,
+   `tabIndex`, handlers, and pure decisions. It cannot prove focus movement, hover reveal, clipboard
+   round-trips, or that animation visibly stopped.
+6. Treat the shared git index as volatile. Stage only explicit owned paths and run `git commit`
+   **within seconds of staging**. Never stage and then test, inspect, edit, or report. A neighbouring
+   session cleared another worker's staged state during TRANCHE I.
+
+## Sequencing by file ownership
+
+P4-51 runs alone first. It must inventory the current overlay population before editing, and its
+legitimate file set is wider than any other item in this tranche. Running anything else in the
+renderer beside it would make its final ownership fence fictional.
+
+After P4-51 commits:
+
+```text
+Wave 2, parallel-safe:
+  P4-52  theme.css
+  P4-53  Sidebar.tsx
+  P4-54  App.tsx shell-error region
+  P4-56  settings boundary + Memory settings route
+  P4-60  TranscriptView.tsx ResultSeam
+
+Wave 3, after all Wave 2 owners commit:
+  P4-55  App.tsx roster-hydration region + launcher failure surface
+  P4-57  MemoryPage.tsx + AgentsPage.tsx copy affordances
+
+Wave 4, after Wave 3 owners commit:
+  P4-58  App.tsx composer placeholder
+  P4-59  WelcomeScreen.tsx dead shortcut hint
+```
+
+The serialized lanes are:
+
+- `App.tsx`: **P4-54 → P4-55 → P4-58**.
+- `MemoryPage.tsx`: **P4-56 → P4-57**.
+- `WelcomeScreen.tsx`: P4-51 may touch focus lifecycle, then **P4-55 → P4-59**.
+
+At most one live session owns a file. If recon needs another live session's file, STOP and report.
+
+
+## P4-51 · ⬜ — Shared focus trap and restore across overlays (audit 25)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 7/10 · 🖐 GUI
+
+You are running P4-51 of the Cat Code desktop-app migration in `/Users/pt/cat-code`, branch
+`migration`. Echo the header above before starting. Run autonomously through implementation, tests,
+STATUS update, and commit. This session runs ALONE before every other TRANCHE J session.
+
+Read the Phase 4 Standing rules, your STATUS row, `docs/migration/decisions/SECURITY-MINIMUM.md`,
+`docs/migration/process/GUI-VERIFICATION.md`, audit finding 25, and its coverage companion. Re-derive
+the overlay inventory from CURRENT production source before editing. Report the exact focus contract
+or call path you satisfy.
+
+The defined behavior is the focus lifecycle already implemented in two places:
+`PlanPanel.tsx` captures/restores the prior element and moves focus into the dialog;
+`composerPopover.ts` moves focus into a menu, supports its established roving-key contract, and
+restores the trigger on Escape/selection. Extract the shared behavior rather than creating a third
+variant, then adopt it in every current overlay that lacks the corresponding contract:
+
+- modal dialogs trap Tab and Shift+Tab inside the open dialog, accept Escape unless a nested control
+  already handled it, and restore the element that opened them;
+- menus/popovers move focus into their owned items, keep their existing menu semantics, close on
+  Escape, and restore their trigger where that is the current house contract;
+- drawers or non-modal surfaces must be classified from source before changing them. Do not turn a
+  non-modal surface into a modal by accident.
+
+Start with a source inventory of production `role="dialog"`, `role="alertdialog"`, `role="menu"`,
+`aria-modal`, and portal/fixed-overlay owners. Record which already comply, which need adoption, and
+which are intentionally non-modal. `SAModal` is a stale-audit trap: current source already has an
+Escape listener. Preserve it while adding the missing trap/restore behavior. `AccountRowMenu` was
+audited as declaring `role="menu"` without the roving behavior already available next door; reconcile
+that against current source.
+
+FILE FENCE: you own a new or extracted shared focus module, its tests, and only focus-lifecycle
+regions in the current overlay owners your inventory proves need it. Because this session runs alone,
+the exact list is derived rather than frozen stale here. OUT: visual redesign, copy changes,
+screen-reader/live-region announcements, sidebar roster expansion (P4-53), reduced motion (P4-52),
+shell/roster/composer state in `App.tsx` (P4-54/P4-55/P4-58), Memory/Agents setting or copy work,
+launcher shortcut copy, and result labels. If correct focus behavior needs product judgment, a new
+preload/protocol surface, or a security-baseline change, STOP and report.
+
+Tests must honestly distinguish pure/structural proof from interaction. Unit-test focusable-element
+selection, wrap-around Tab decisions, Escape/defaultPrevented precedence, and emitted structural
+attributes where possible. Do not claim SSR proves that focus moved or returned.
+
+Run the current desktop battery from CLAUDE.md via `verifying-cat-code-changes`: `bun test app/`,
+`bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar`,
+`bun run --cwd app test:hardening`, and `bun run --cwd app renderer:build`. Run the user-visible
+em-dash sweep and an exhaustive stale-reference search. Print exact operator steps for keyboard-only
+Tab, Shift+Tab, Escape, nested controls, and trigger restoration across every adopted overlay. Do not
+drive the GUI.
+
+Leave all 21 pending TRANCHE I §0 flags untouched. Update only P4-51 in STATUS. Stage explicit owned
+paths only, then commit WITHIN SECONDS of staging; do not do any work between stage and commit. Report
+the commit SHA, actual battery outcomes, honest headless-vs-operator evidence, inventory, contract
+line, and any new §0 proposal. Do not write DONE.md and do not push.
+```
+─── PASTE ───
+
+
+## P4-52 · ⬜ — Stylesheet-level reduced-motion support (audit 25)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 3/10 · 🖐 GUI
+
+You are running P4-52 of the Cat Code desktop-app migration in `/Users/pt/cat-code`, branch
+`migration`. Run only after P4-51 commits. Echo the header above, then execute autonomously through
+implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, your STATUS row, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding
+25, and the companion. Re-derive every animation class/keyframe from CURRENT source before editing,
+and report the accessibility contract the fix satisfies.
+
+Implement reduced-motion as a stylesheet-level neutralization in
+`app/renderer/src/theme.css`, not per-component edits. It must cover Tailwind's continuously running
+utilities (`animate-pulse`, `animate-ping`, `animate-spin`, and any current equivalents) and the
+renderer-owned keyframe classes without deleting the classes or changing their ordinary-motion
+appearance. The acceptance criterion is that visible motion stops when the operating-system
+`prefers-reduced-motion: reduce` preference is active, not that every component file changed.
+Reconcile the exact CSS behavior with WCAG 2.2.2 and the engine/terminal precedent
+(`prefersReducedMotion` in current `src/`), but do not add a renderer settings seam in this session.
+
+FILE FENCE: `app/renderer/src/theme.css` plus the smallest existing stylesheet/source test that can
+pin the media rule. No production TS/TSX edits. OUT: screen-reader announcements, sidebar focus,
+light theme, animation redesign, replacing spinners with new static artwork, and wiring the engine
+setting across the desktop boundary. If current source proves OS-only CSS cannot satisfy the defined
+contract without a product decision, STOP and report.
+
+Headless tests may prove the media query and its declarations exist and the renderer still builds.
+They cannot prove motion visibly stops. Run the full current desktop battery via
+`verifying-cat-code-changes`, the user-visible em-dash sweep, and stale-reference sweep. Print exact
+operator steps to enable reduced motion, exercise streaming, a waiting permission tab, account
+loading, and another current spinner/pulse, and compare with the preference off. Do not drive the GUI.
+
+Leave the 21 TRANCHE I §0 flags untouched. Update only P4-52 in STATUS. Stage explicit paths and
+commit WITHIN SECONDS; never stage before more work. Report the commit SHA, contract line, animation
+inventory, actual battery results, what headless checks prove, and what remains operator-only. No
+DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-53 · ⬜ — Keyboard access to the sidebar session roster (audit 25)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 4/10 · 🖐 GUI
+
+You are running P4-53 in `/Users/pt/cat-code` on `migration`, after P4-51 commits. Echo the header and
+run autonomously through implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding 25, and
+the companion. Re-derive the current `Sidebar` open-state and focus path before editing. Report the
+contract/call path that makes the keyboard route correct.
+
+Current audit evidence to verify: the rail expands from pointer entry, while the session roster,
+search, workspace controls, row actions, and the pin control exist only in the expanded rendering
+branch. A keyboard user can reach collapsed nav buttons but cannot reveal and enter that branch.
+Implement the existing focus-within pattern for the `<aside>`: entering by keyboard must expand the
+rail, focus moving within it must keep it open, leaving the rail must release only the focus-owned
+expansion, and pointer/pin/menu-active behavior must remain unchanged. Ensure the pin control itself
+has a reachable keyboard path instead of depending on an already-expanded branch. Do not change the
+roster's data, ordering, liveness dot, labels, or visual grammar.
+
+FILE FENCE: `Sidebar.tsx`, its state/helper module only if current style requires one, and colocated
+tests. OUT: overlay focus traps (P4-51), screen-reader announcements, tab-bar status, session-row
+restyling, and any change to P4-44's ruled live-only dot. If satisfying the keyboard route requires a
+new visual/product decision, STOP.
+
+SSR can pin focus handlers, DOM presence, `tabIndex`, and accessible labels. It cannot press Tab,
+observe expansion, or prove focus remains inside. Run the full desktop battery via
+`verifying-cat-code-changes`, em-dash sweep, and stale-reference sweep. Print exact operator steps:
+start with the rail collapsed, Tab into it without a pointer, reach search/roster/workspace actions,
+pin and unpin, Shift+Tab, leave the rail, and confirm hover/menu behavior did not regress. Do not
+drive the GUI.
+
+Do not touch the 21 pending TRANCHE I §0 flags. Update only P4-53 in STATUS. Stage explicit paths and
+commit WITHIN SECONDS of staging. Report SHA, contract line, battery outcomes, headless proof,
+operator-only proof, and any new §0 proposal. No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-54 · ⬜ — Shell lifecycle errors dismiss explicitly (audit 8)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 3/10 · 🖐 GUI
+
+You are running P4-54 in `/Users/pt/cat-code` on `migration`, after P4-51 commits and before P4-55
+or P4-58. Echo the header and execute autonomously through commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding 8, and the
+companion. Re-derive every CURRENT `shellError` writer and clearer in `App.tsx` before editing. Name
+the shell-lifecycle call path your report satisfies.
+
+Fix only the unambiguous lifecycle: a shell lifecycle failure remains visible until the operator
+dismisses it or a newer shell lifecycle failure replaces it. Add a clearly named dismiss control.
+Ordinary later successes, especially unrelated actions, must not erase a failure as a side effect.
+Preserve current error text and the seven real host/supervisor operation paths unless current source
+has changed their set.
+
+This is NOT P4-50 account health and must not enter `BannerStack`, account snapshots, submit gating,
+or any deleted reauth-wall machinery. It is not the roster-hydration error P4-55 owns. Retry actions,
+per-verb titles, and redesigning the bar are out of scope because the operator has not selected those
+behaviors. If the current state shape cannot distinguish these error classes without a design
+decision, STOP and report.
+
+FILE FENCE: the `shellError` state/writer/render region of `App.tsx` and focused App tests only.
+P4-55 and P4-58 own other App regions later. Structural tests must pin the dismiss control and prove
+success paths no longer clear the error; do not claim SSR proves a click.
+
+Run the full desktop battery via `verifying-cat-code-changes`, em-dash sweep, and stale-reference
+sweep. Print exact operator steps that cause a safe shell lifecycle failure, dismiss it, and verify an
+unrelated success neither clears nor hides an undismissed failure. Do not damage a real session merely
+to stage the failure, and do not drive the GUI.
+
+Leave all 21 pending TRANCHE I §0 flags alone. Update only P4-54 in STATUS. Stage explicit files and
+commit WITHIN SECONDS; do no testing or inspection after staging and before commit. Report SHA,
+contract line, all writers/clearers found, actual battery results, proof boundary, and §0 proposals.
+No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-55 · ⬜ — Initial session-roster read failure is visible and retryable (audit 18)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 5/10 · 🖐 GUI
+
+You are running P4-55 in `/Users/pt/cat-code` on `migration`. Run after P4-54 commits and before
+P4-58/P4-59. Echo the header and execute autonomously through commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding 18, and
+the companion. Re-derive the current host-roster bootstrap from `listSessions()` through the shell
+reducer and launcher render. Name that call path in your report.
+
+Fix the external-boundary failure that current source swallows: a rejected initial `listSessions()`
+must not be represented as a successful empty snapshot or set the same ready state as a successful
+hydrate. Surface a distinct, user-actionable failure and a retry that re-enters the SAME host API
+hydrate path. A successful retry clears the failure and marks the snapshot ready; a failed retry
+remains a failure. Preserve live host events received before/during retry and the reducer's
+removed-session protections.
+
+The cold-launch empty-state flash is a separate half of audit 18 and is OUT unless current source
+proves it is inseparable from the failure-state correction. Do not resurrect the cut HydrationOverlay,
+reuse its copy, merge this into shell lifecycle errors (P4-54), or touch account-health banners. If
+there is no existing product grammar sufficient for a truthful minimal failure+retry surface, STOP
+and report the decision gap rather than inventing one.
+
+FILE FENCE: the roster bootstrap/failure state in `App.tsx`, the smallest launcher component region
+needed to render the failure/retry, a pure helper only if current style requires it, and focused tests.
+P4-59 later owns only the dead `⌘O` hint. Tests must cover initial reject, repeated reject, successful
+retry, and host events surviving retry. State exactly what static/logic tests prove and what they do
+not.
+
+Run the full desktop battery via `verifying-cat-code-changes`, em-dash sweep, and stale-reference
+sweep. Print exact safe operator steps if the dev harness can inject a list failure; otherwise mark
+the live failure UNVERIFIED and explain the headless substitute. Do not modify shared host state to
+manufacture an error and do not drive the GUI.
+
+Leave the 21 pending TRANCHE I §0 flags untouched. Update only P4-55 in STATUS. Stage explicit owned
+paths and commit WITHIN SECONDS. Report SHA, contract path, state transitions, battery results,
+headless/operator split, and new §0 proposals. No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-56 · ⬜ — Make `autoMemoryEnabled` editable through the established settings boundary (audit 16b)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 6/10 · 🖐 GUI
+
+You are running P4-56 in `/Users/pt/cat-code` on `migration`, after P4-51 and before P4-57. Echo the
+header and run autonomously through implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding 16b, and
+the companion. Read P4-41's backlog block and current implementation first: this change rides its
+existing `settings.setValue`/clear infrastructure and does not design another writer. Re-derive the
+engine key, default, source precedence, and runtime consumer from current `src/`; cite them and name
+the full renderer → preload/main → sidecar validation → `SettingsUpdater` call path in your report.
+
+Add the real `autoMemoryEnabled` boolean key to the closed editable-settings registry and expose it in
+the existing Memory settings surface, replacing the read-only sentence with the established settings
+control/provenance/reset grammar. Preserve the Memory snapshot as the runtime truth shown by the page.
+Do not fake immediate effect if the engine reads the setting only at a defined lifecycle point; state
+the real effect timing in user-facing behavior and report.
+
+This widens the renderer's write vocabulary. The sidecar remains the trust boundary: validate the key,
+boolean value, editable source, and clear token through the existing P4-41 path. Add a boundary test
+that accepts the valid key/value and rejects wrong type, non-editable source, and an unknown key,
+following P4-41's current pattern. Do not add a new inbound frame kind, preload method, protocol
+version, write path, or dependency. If current source shows the key cannot use P4-41 unchanged, or a
+security-baseline/locked-decision change would be required, STOP and report.
+
+FILE FENCE: `app/shared/settingsEditable.ts` and its tests; the existing sidecar boundary test(s)
+needed to pin the widened allowlist; `SettingsShell.tsx`/`SettingsEditors.tsx`/`MemoryPage.tsx` only
+as current architecture requires to place the established control; focused tests. OUT: editing memory
+file contents, opening files, copy-path work (P4-57), auto-memory directory changes, team-memory
+controls, and any screen-reader announcement work.
+
+Run the full desktop battery via `verifying-cat-code-changes`, including hardening and renderer build,
+plus em-dash and stale-reference sweeps. Print exact operator steps using a disposable settings layer:
+toggle, verify persisted source/value, reset to default, and restore the original state. Do not change
+the operator's real setting yourself and do not drive the GUI.
+
+Do not touch the 21 pending TRANCHE I §0 flags. Update only P4-56 in STATUS. Stage explicit paths and
+commit WITHIN SECONDS. Report SHA, contract/call path, engine anchors, boundary cases, effect timing,
+battery results, proof split, and §0 proposals. No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-57 · ⬜ — Copy-only affordances for displayed Agents and Memory paths (audit 16c)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 3/10 · 🖐 GUI
+
+You are running P4-57 in `/Users/pt/cat-code` on `migration`, after P4-56 commits. Echo the header and
+run autonomously through implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding 16c, the
+Memory analogue in finding 25's companion/gaps, and current Agents/Memory source. Re-derive every row
+that visibly presents a filesystem path. Name the existing clipboard/toast contract you reuse.
+
+Add a keyboard-reachable copy affordance beside each displayed Agents or Memory path that the user
+otherwise has to select by hand. Copy the exact path already supplied by the trusted read snapshot;
+do not reconstruct, normalize, resolve, or open it. Use the renderer's existing clipboard success and
+failure grammar rather than inventing another one, and keep path text a text node.
+
+COPY ONLY is a hard scope boundary. Opening/revealing a file needs a privileged host verb over a
+registry-resolved identifier and is blocked by SECURITY-MINIMUM HC1. Add no preload method, host API,
+IPC, clickable file URL, shell command, or renderer-authored path request. Do not build toward an open
+verb and do not re-litigate the parked seam. P4-56 owns the auto-memory toggle and must already be
+committed.
+
+FILE FENCE: `MemoryPage.tsx`, `AgentsPage.tsx`, an existing shared copy primitive only if one already
+fits both without widening behavior, and colocated tests. Do not touch settings/sidecar/protocol code.
+Tests must pin button presence, accessible names, and exact payload wiring where source testing is the
+house precedent. SSR cannot prove clipboard writes or confirmation timing.
+
+Run the full desktop battery via `verifying-cat-code-changes`, em-dash sweep, and stale-reference
+sweep. Print exact operator steps to copy representative instruction-file, auto-memory, agent-memory,
+and agent-definition paths, paste them into a plain text field, and verify no affordance opens or
+executes them. Do not drive the GUI.
+
+Leave all 21 pending TRANCHE I §0 flags untouched. Update only P4-57 in STATUS. Stage explicit paths
+and commit WITHIN SECONDS. Report SHA, inventory of copyable rows, contract line, battery outcomes,
+headless/operator split, and new §0 proposals. No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-58 · ⬜ — Honest composer placeholder while input is read-only mid-turn (audit 1)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 2/10 · 🖐 GUI
+
+You are running P4-58 in `/Users/pt/cat-code` on `migration`, after P4-55 commits. Echo the header and
+run autonomously through implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, GUI-VERIFICATION, audit finding 1, and the
+companion. Re-derive `generating`, `composerGate.editable`, `readOnly`, and `composerPlaceholder` from
+CURRENT App source. Name the state contract your change satisfies.
+
+When the textarea is read-only because a ready session is mid-turn, its placeholder must say plainly
+that input is unavailable until the current response finishes. Preserve the ordinary ready placeholder
+and the separate connecting/dead/no-session states. The placeholder and `readOnly` must be driven by
+the same state decision so they cannot disagree.
+
+This is the minimum honest-signal half only. OUT: a queue, `pendingSubmit` changes, keeping the field
+editable, send/stop redesign, caret/focus behavior, sidecar acceptance experiments, or any new wire
+surface. Those are undecided. Do not make typing appear accepted when it is still discarded.
+
+FILE FENCE: the composer-gate/placeholder region of `App.tsx` and focused tests only. P4-54/P4-55 must
+already be committed. Cover ordinary ready, ready+mid-turn read-only, connecting, terminal, preview,
+and no-session states without weakening existing composer tests. Static markup can prove the
+placeholder/readOnly pairing; it cannot prove what an operator perceives during a live turn.
+
+Run the full desktop battery via `verifying-cat-code-changes`, em-dash sweep, and stale-reference
+sweep. Print exact operator steps to submit a long-running turn, inspect the read-only field and
+placeholder, attempt typing, then confirm the ordinary placeholder returns when input re-enables. Do
+not drive the GUI.
+
+Leave the 21 pending TRANCHE I §0 flags alone. Update only P4-58 in STATUS. Stage explicit paths and
+commit WITHIN SECONDS. Report SHA, contract line, state matrix, battery outcomes, proof split, and §0
+proposals. No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-59 · ⬜ — Remove the launcher's false `⌘O` affordance (audit 14)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 2/10
+
+You are running P4-59 in `/Users/pt/cat-code` on `migration`, after P4-55 and P4-51 commit. Echo the
+header and run autonomously through implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, audit finding 14, and the companion.
+Re-derive the current renderer/main shortcut set and launcher markup before editing. Name the
+command-routing contract that proves the hint is false.
+
+Remove the `⌘O` text from the launcher control because no renderer chord or Electron menu binds it.
+Keep the Open folder button and its click behavior unchanged.
+
+OUT: binding `⌘O`, adding a menu item, adding a `⌘K` palette affordance, changing shortcut policy,
+restyling the picker, or changing any command-palette route. Those are operator decisions that have
+not been made. If current source now contains a real `⌘O` binding, STOP and report that the defect is
+already obsolete instead of removing a true hint.
+
+FILE FENCE: `WelcomeScreen.tsx` and its focused test only. P4-55 may have touched the launcher and
+must already be committed. Add a regression test that the control remains actionable while the false
+hint is absent, and sweep production source for stale advertised `⌘O` references.
+
+Run the full desktop battery via `verifying-cat-code-changes`, em-dash sweep, and exhaustive stale
+reference search. This is structurally headless-verifiable; do not invent a GUI claim.
+
+Leave all 21 pending TRANCHE I §0 flags untouched. Update only P4-59 in STATUS. Stage explicit paths
+and commit WITHIN SECONDS. Report SHA, contract line, shortcut search evidence, and actual battery
+outcomes. No DONE.md, no push.
+```
+─── PASTE ───
+
+
+## P4-60 · ⬜ — Truthful result labels for every engine error subtype (audit 5)
+
+─── PASTE ───
+```text
+🧠 Model: ANY · Difficulty: 3/10
+
+You are running P4-60 in `/Users/pt/cat-code` on `migration`, after P4-51 commits. Echo the header and
+run autonomously through implementation, verification, STATUS update, and commit.
+
+Read the Phase 4 Standing rules, STATUS, SECURITY-MINIMUM, audit finding 5, and the companion. Read
+the current engine result-message union and every mint site, then the prototype's `RESULT_LABEL` map.
+Re-derive the exact subtype vocabulary; the prototype is copy guidance, not the type contract. Name
+the result-frame → projector → `ResultSeam` call path in your report.
+
+Replace the bare `Errored` fallback with the defined subtype labels:
+`error_during_execution`, `error_max_turns`, `error_max_budget_usd`, and
+`error_max_structured_output_retries` each get their truthful sentence. Preserve the operator ruling
+that successful turns render no result seam. Unknown future error subtypes must degrade to a truthful
+generic failure label, never to `Completed` and never throw.
+
+This session ports the LABEL MAP only. OUT: rendering `row.result` or `errors[]`, multi-line error
+placement, disclosure/show-more, resend, projector shape changes, a new row kind, or changing success
+seam visibility. Those are separate design questions.
+
+FILE FENCE: a pure result-label model if needed by Fast Refresh rules, the `ResultSeam` region of
+`TranscriptView.tsx`, and focused tests. Test every known subtype, the hidden success case, and an
+unknown error subtype. Keep the renderer's display-tolerant behavior and current detail/cost grammar.
+
+Run the full desktop battery via `verifying-cat-code-changes`, em-dash sweep, and stale-reference
+sweep. This label map is headless-verifiable; state exactly that no test here proves where multi-line
+error text should live because that work is out of scope.
+
+Leave all 21 pending TRANCHE I §0 flags untouched. Update only P4-60 in STATUS. Stage explicit paths
+and commit WITHIN SECONDS. Report SHA, engine subtype anchors, contract path, and actual battery
+outcomes. No DONE.md, no push.
+```
+─── PASTE ───
