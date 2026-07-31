@@ -185,3 +185,77 @@ test('a diff-less Bash row shows NO Diff section (contrast to Apply_patch)', () 
 test('renders nothing when there is no row', () => {
   expect(renderToStaticMarkup(<ToolInspector row={null} />)).toBe('')
 })
+
+function bashRowWithOutput(content: string) {
+  return mkToolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: { command: 'ls' },
+    status: 'success',
+    result: { isError: false, content, diff: null },
+  })
+}
+
+test('P4-37: an output carries the copy / search / wrap toolbar', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput('a\nb\n')} />,
+  )
+  expect(html).toContain('aria-label="Search output"')
+  expect(html).toContain('aria-label="Copy output"')
+  expect(html).toContain('Wrap')
+  expect(html).toContain('Copy')
+})
+
+test('P4-37: the output body is line-numbered, and every line of it renders', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput('first\nsecond\nthird')} />,
+  )
+  expect(html).toContain('first')
+  expect(html).toContain('second')
+  expect(html).toContain('third')
+  // 1-based gutter numbers, one per line.
+  expect(html).toContain('>1</span>')
+  expect(html).toContain('>2</span>')
+  expect(html).toContain('>3</span>')
+})
+
+test('P4-37: with no query there is no counter, no stepper and no highlight', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput('alpha\nbeta')} />,
+  )
+  expect(html).not.toContain('aria-label="Next match"')
+  expect(html).not.toContain('aria-label="Previous match"')
+  expect(html).not.toContain('<mark')
+})
+
+test('P4-37: output stays a text node — markup in a tool result is escaped, never mounted', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector
+      row={bashRowWithOutput('<img src=x onerror="boom">\n</div>')} />,
+  )
+  expect(html).toContain('&lt;img src=x onerror=')
+  expect(html).not.toContain('<img src=x')
+})
+
+test('P4-37: a row with no output has no toolbar to hang controls on', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector
+      row={mkToolRow({
+        toolName: 'Bash',
+        toolFamily: 'bash',
+        input: { command: 'ls' },
+        status: 'success',
+        result: { isError: false, content: '', diff: null },
+      })}
+    />,
+  )
+  expect(html).not.toContain('aria-label="Search output"')
+  expect(html).not.toContain('aria-label="Copy output"')
+})
+
+test('no em dash reaches the drawer (CLAUDE.md §7)', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput('a\nb')} />,
+  )
+  expect(html).not.toContain('—')
+})
