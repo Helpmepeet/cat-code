@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -533,6 +533,170 @@ test('the engine-default token is still membership-gated, like any other option'
   // The message reaches a toast, so it must not echo the reserved token back at
   // the user as if it were a model name (CLAUDE.md §7).
   expect(result.message).not.toContain(SETTINGS_ENGINE_DEFAULT)
+})
+
+/* ── P4-41 reset-to-default: the generic clear channel (`value: null`) ─────── */
+
+/** A CLEAR request: the same verb, with `null` where a value would go. */
+const clear = (
+  source: EditableSettingSource,
+  key: string,
+): SettingsVerbMessage => ({
+  type: 'settings.setValue',
+  requestId: 'r-clear',
+  source,
+  key,
+  value: null,
+})
+
+test('P4-41 — a clear REMOVES the key for every control kind, not writes its default', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain([
+    ...MODEL_OPTIONS,
+    ...OUTPUT_STYLE_OPTIONS,
+  ])
+
+  // One key per control kind: boolean, enum, int, dynamic-enum ×2.
+  expect(domain.runVerb(write('userSettings', 'fastMode', true)).ok).toBe(true)
+  expect(
+    domain.runVerb(write('userSettings', 'reasoningDisplay', 'raw')).ok,
+  ).toBe(true)
+  expect(
+    domain.runVerb(write('userSettings', 'cleanupPeriodDays', 7)).ok,
+  ).toBe(true)
+  expect(domain.runVerb(write('userSettings', 'model', 'opus')).ok).toBe(true)
+  expect(
+    domain.runVerb(write('userSettings', 'outputStyle', 'Explanatory')).ok,
+  ).toBe(true)
+
+  for (const key of [
+    'fastMode',
+    'reasoningDisplay',
+    'cleanupPeriodDays',
+    'model',
+    'outputStyle',
+  ]) {
+    const result = domain.runVerb(clear('userSettings', key))
+    expect(result).toEqual({
+      ok: true,
+      message: `Cleared ${key}.`,
+      changed: true,
+    })
+  }
+
+  // The keys are GONE, not re-written at their defaults. `cleanupPeriodDays`
+  // takes part in the generic reset like any other int key and nothing else —
+  // its retention domain and its destructive-`0` confirmation are audit 5a.
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  for (const key of [
+    'fastMode',
+    'reasoningDisplay',
+    'cleanupPeriodDays',
+    'model',
+    'outputStyle',
+  ]) {
+    expect(key in onDisk).toBe(false)
+    expect(domain.getSnapshot()?.editableValues.some(e => e.key === key)).toBe(
+      false,
+    )
+  }
+})
+
+test('P4-41 — a clear leaves every other key in the same file alone', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  expect(domain.runVerb(write('userSettings', 'fastMode', true)).ok).toBe(true)
+  expect(
+    domain.runVerb(write('userSettings', 'cleanupPeriodDays', 90)).ok,
+  ).toBe(true)
+  expect(domain.runVerb(clear('userSettings', 'fastMode')).ok).toBe(true)
+
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect('fastMode' in onDisk).toBe(false)
+  expect(onDisk.cleanupPeriodDays).toBe(90)
+})
+
+test('P4-41 — a clear obeys the SAME key and source allowlists as a write', () => {
+  useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  // Off the editable-key allowlist: refused on the key, before any disk touch.
+  const unknown = domain.runVerb(clear('userSettings', 'apiKey'))
+  expect(unknown.ok).toBe(false)
+  expect(unknown.changed).toBe(false)
+
+  // A read-only layer can no more be cleared than written.
+  const managed = domain.runVerb(
+    clear('policySettings' as EditableSettingSource, 'fastMode'),
+  )
+  expect(managed.ok).toBe(false)
+  expect(managed.changed).toBe(false)
+})
+
+test('P4-41 — a clear needs no captured options, unlike a dynamic-enum write', () => {
+  const settingsFile = useTempConfigHome()
+  // A domain whose registry read failed at spawn: it cannot accept a WRITE to a
+  // dynamic-enum key (nothing to membership-check against), but removing the key
+  // names no option, so the operator is never stranded with an unremovable
+  // override just because a registry was unreadable.
+  const domain = createSidecarSettingsDomain(OUTPUT_STYLE_OPTIONS)
+  expect(
+    domain.runVerb(write('userSettings', 'outputStyle', 'Explanatory')).ok,
+  ).toBe(true)
+
+  const optionless = createSidecarSettingsDomain()
+  expect(optionless.runVerb(write('userSettings', 'outputStyle', 'default')).ok).toBe(
+    false,
+  )
+  expect(optionless.runVerb(clear('userSettings', 'outputStyle')).ok).toBe(true)
+  expect('outputStyle' in JSON.parse(readFileSync(settingsFile, 'utf8'))).toBe(
+    false,
+  )
+})
+
+test('P4-41 — clearing an absent key is a no-op write, never an error', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  // Nothing set it, so the reset affordance should not be on screen at all; if a
+  // stale frame arrives anyway the file must simply stay without the key.
+  expect(domain.runVerb(clear('userSettings', 'fastMode')).ok).toBe(true)
+  expect('fastMode' in JSON.parse(readFileSync(settingsFile, 'utf8'))).toBe(false)
+})
+
+test('P4-41 — null is never WRITTEN, whatever the control kind', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain([
+    ...MODEL_OPTIONS,
+    ...OUTPUT_STYLE_OPTIONS,
+  ])
+  for (const key of ['fastMode', 'reasoningDisplay', 'cleanupPeriodDays', 'model']) {
+    expect(domain.runVerb(clear('userSettings', key)).ok).toBe(true)
+  }
+  // The distinguishability claim, checked against the bytes: `null` is the
+  // remove request and can never land as a value.
+  expect(readFileSync(settingsFile, 'utf8')).not.toContain('null')
+})
+
+test('P4-41 — the reserved token can never be captured as a live style option', async () => {
+  // The one collision an in-band string sentinel admits: a style NAMED after the
+  // token would be offered as a choice whose write clears the key. The capture
+  // filters it, so the sidecar's two removal routes stay unambiguous.
+  const styleDir = mkdtempSync(join(tmpdir(), 'p4-41-styles-'))
+  scratch = styleDir
+  process.env.CLAUDE_CONFIG_DIR = styleDir
+  resetSettingsCache()
+  mkdirSync(join(styleDir, 'output-styles'), { recursive: true })
+  writeFileSync(
+    join(styleDir, 'output-styles', `${SETTINGS_ENGINE_DEFAULT}.md`),
+    '---\ndescription: collide\n---\nbody\n',
+  )
+  const available = await loadAvailableSettingOptions(styleDir)
+  const bucket = available.find(entry => entry.key === 'outputStyle')
+  expect(
+    bucket?.options.some(option => option.value === SETTINGS_ENGINE_DEFAULT),
+  ).toBe(false)
 })
 
 test('availableOptions carries no secret material (secretGuard-clean)', () => {

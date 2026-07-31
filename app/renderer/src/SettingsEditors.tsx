@@ -33,6 +33,7 @@ import type {
   EditableSettingSource,
   EditableSettingSpec,
   EditableSettingValue,
+  SettingsWriteValue,
 } from '../../shared/settingsEditable.js'
 import {
   validateEditableSettingValue,
@@ -43,6 +44,7 @@ import {
   settingsUnreadNote,
 } from './settingsReadState.js'
 import {
+  selectSettingsReset,
   selectSettingsRow,
   settingsRowCommitsUnchanged,
   settingsRowNote,
@@ -56,7 +58,9 @@ import { settingsPaneSpecs } from './settingsEditorModel.js'
 export type SettingWriteInput = {
   source: EditableSettingSource
   key: string
-  value: EditableSettingValue
+  /** A scalar to write, or `null` to REMOVE the key from `source` (P4-41 reset).
+   * The sidecar tells the two apart structurally; see `SettingsWriteValue`. */
+  value: SettingsWriteValue
 }
 
 /**
@@ -172,6 +176,11 @@ function SettingEditor({
     onWrite({ source: row.writeTarget, key: spec.key, value })
   }
 
+  // P4-41 — reset REMOVES the key from this scope's file, rather than writing the
+  // built-in default back the way the prototype's mock does. One selector decides
+  // both whether the affordance exists and what it sends, so they cannot drift.
+  const reset = selectSettingsReset(row, spec.key)
+
   // The badge names the layer the value actually resolves at — provenance stays
   // an annotation on the row and never structures the page (spec §2).
   const badgeSource =
@@ -192,6 +201,8 @@ function SettingEditor({
       editable={!managed}
       label={spec.label}
       managed={managed}
+      modified={reset !== null}
+      onReset={reset ? () => onWrite(reset) : undefined}
       origin={badgeOrigin}
       source={badgeSource}
     >

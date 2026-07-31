@@ -4725,6 +4725,134 @@ test('P4-19 — rejects a mistyped value and a non-allowlisted key at the value 
   expect(received.some(f => f.kind === 'settings.result')).toBe(false)
 })
 
+/**
+ * P4-41 — the CLEAR request (`value: null`) at the boundary. The renderer's reset
+ * button is only safe if the sidecar accepts a clear for EVERY control kind and
+ * still rejects everything it rejected before.
+ */
+function sendSettingsFrame(
+  server: SidecarServer,
+  conn: ReturnType<SidecarServer['addConnection']>,
+  message: Record<string, unknown>,
+): void {
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: message as unknown as ClientFrame['message'],
+    }),
+  )
+}
+
+test('P4-41 — a clear (value: null) reaches the domain for every control kind', () => {
+  const seen: SettingsVerbMessage[] = []
+  const server = makeSettingsServer(verb => {
+    seen.push(verb)
+    return { ok: true, message: `Cleared ${verb.key}.`, changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // boolean · enum · int · dynamic-enum — one key each, all on the same verb.
+  const keys = ['fastMode', 'reasoningDisplay', 'cleanupPeriodDays', 'outputStyle']
+  for (const key of keys) {
+    sendSettingsFrame(server, conn, {
+      type: 'settings.setValue',
+      requestId: `c-${key}`,
+      source: 'userSettings',
+      key,
+      value: null,
+    })
+  }
+
+  expect(seen.map(verb => verb.key)).toEqual(keys)
+  expect(seen.every(verb => verb.value === null)).toBe(true)
+  const results = received.filter(f => f.kind === 'settings.result')
+  expect(results.length).toBe(keys.length)
+  expect(results.every(f => f.kind === 'settings.result' && f.ok)).toBe(true)
+  expect(received.some(f => f.kind === 'error')).toBe(false)
+})
+
+test('P4-41 — a clear is still refused for a non-editable source and an unknown key', () => {
+  let called = false
+  const server = makeSettingsServer(() => {
+    called = true
+    return { ok: true, message: 'Cleared.', changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // Policy is not an editable layer — a clear can no more name it than a write.
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'c1',
+    source: 'policySettings',
+    key: 'fastMode',
+    value: null,
+  })
+  // Off the EDITABLE_SETTINGS allowlist: the key gate runs before the null branch,
+  // so "remove" is no way around the closed vocabulary.
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'c2',
+    source: 'userSettings',
+    key: 'apiKey',
+    value: null,
+  })
+
+  expect(
+    received.filter(f => f.kind === 'error' && f.code === 'bad_request').length,
+  ).toBe(2)
+  expect(received.some(f => f.kind === 'settings.result')).toBe(false)
+  expect(called).toBe(false)
+})
+
+test('P4-41 — admitting null widened nothing else: bad values are still rejected', () => {
+  const server = makeSettingsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // Undefined is not null: a value-less frame fails the schema, it is not read
+  // as a clear.
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'b1',
+    source: 'userSettings',
+    key: 'fastMode',
+  })
+  // An object is not a scalar and not null.
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'b2',
+    source: 'userSettings',
+    key: 'fastMode',
+    value: {},
+  })
+  // Still type-checked per key: boolean key, string value.
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'b3',
+    source: 'userSettings',
+    key: 'fastMode',
+    value: 'on',
+  })
+  // Still strict on keys: an extra field is rejected before the Zod parse.
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'b4',
+    source: 'userSettings',
+    key: 'fastMode',
+    value: null,
+    clear: true,
+  })
+
+  expect(
+    received.filter(f => f.kind === 'error' && f.code === 'bad_request').length,
+  ).toBe(4)
+  expect(received.some(f => f.kind === 'settings.result')).toBe(false)
+})
+
 test('P4-19 — a settings verb with no settings domain fails closed (internal_error)', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

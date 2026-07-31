@@ -20,6 +20,7 @@ import {
   selectSettingsProjects,
   selectSettingsRail,
   selectSettingsRailItem,
+  selectSettingsReset,
   selectSettingsRow,
   selectSettingsWriteLayer,
   settingsRowCommitsUnchanged,
@@ -1086,5 +1087,135 @@ describe('project picker', () => {
     expect(selectProjectEngine('/repo', '/other')).toBe('absent')
     expect(selectProjectEngine('/repo', null)).toBe('absent')
     expect(selectProjectEngine(null, '/repo')).toBe('absent')
+  })
+})
+
+/* ── P4-41: what this layer may REMOVE ────────────────────────────────────── */
+
+describe('definesHere — the precondition for removing a key', () => {
+  test('true only when the CHOSEN layer carries the key, whatever wins', () => {
+    const both = snapshot({
+      layers: [
+        { source: 'userSettings', origin: USER_FILE, keys: ['fastMode'] },
+        { source: 'projectSettings', origin: PROJECT_FILE, keys: ['fastMode'] },
+      ],
+      resolved: [
+        {
+          key: 'fastMode',
+          source: 'projectSettings',
+          editable: true,
+          managed: false,
+        },
+      ],
+      editableValues: [
+        { key: 'fastMode', value: true, source: 'projectSettings' },
+      ],
+    })
+    // Overridden, but the user file DOES set it — so there is something here to
+    // remove, even though this scope cannot display its own value.
+    const user = selectSettingsRow({
+      snapshot: both,
+      key: 'fastMode',
+      layer: 'userSettings',
+    })
+    expect(user.read.kind).toBe('unreadable')
+    expect(user.definesHere).toBe(true)
+    expect(selectSettingsReset(user, 'fastMode')).toEqual({
+      source: 'userSettings',
+      key: 'fastMode',
+      value: null,
+    })
+    // The local layer sets nothing, so it has nothing to remove — even though
+    // the row displays a value and is perfectly writable.
+    const local = selectSettingsRow({
+      snapshot: both,
+      key: 'fastMode',
+      layer: 'localSettings',
+    })
+    expect(local.writeTarget).toBe('localSettings')
+    expect(local.definesHere).toBe(false)
+    expect(selectSettingsReset(local, 'fastMode')).toBeNull()
+  })
+
+  test('an overridden row this layer does NOT set has nothing to remove', () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'projectSettings', origin: PROJECT_FILE, keys: ['fastMode'] },
+        ],
+        resolved: [
+          {
+            key: 'fastMode',
+            source: 'projectSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        editableValues: [
+          { key: 'fastMode', value: true, source: 'projectSettings' },
+        ],
+      }),
+      key: 'fastMode',
+      layer: 'userSettings',
+    })
+    expect(row.annotation.kind).toBe('overridden')
+    expect(row.read.kind).toBe('unset')
+    expect(row.definesHere).toBe(false)
+    expect(selectSettingsReset(row, 'fastMode')).toBeNull()
+  })
+
+  test('a flag override never makes the flag itself resettable', () => {
+    // `flagSettings` outranks the user layer and is not an editable source, so
+    // the reset can only ever remove the USER file's own key — which is exactly
+    // the write this row already permits. It can never name the flag layer.
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'userSettings', origin: USER_FILE, keys: ['fastMode'] },
+          { source: 'flagSettings', origin: 'command line arguments', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'flagSettings', editable: false, managed: false },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'flagSettings' }],
+      }),
+      key: 'fastMode',
+      layer: 'userSettings',
+    })
+    expect(row.annotation).toMatchObject({ kind: 'overridden', by: 'flagSettings' })
+    expect(selectSettingsReset(row, 'fastMode')?.source).toBe('userSettings')
+  })
+
+  test('policy, an unread snapshot, and a project with no engine can remove nothing', () => {
+    const managed = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'userSettings', origin: USER_FILE, keys: ['fastMode'] },
+          { source: 'policySettings', origin: POLICY_FILE, keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'policySettings', editable: false, managed: true },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'policySettings' }],
+      }),
+      key: 'fastMode',
+      layer: 'userSettings',
+    })
+    expect(managed.definesHere).toBe(false)
+    expect(selectSettingsReset(managed, 'fastMode')).toBeNull()
+
+    for (const row of [
+      selectSettingsRow({ snapshot: null, key: 'fastMode', layer: 'userSettings' }),
+      selectSettingsRow({
+        snapshot: snapshot({}),
+        key: 'fastMode',
+        layer: 'projectSettings',
+        engine: 'absent',
+      }),
+      selectSettingsRow({ snapshot: snapshot({}), key: 'fastMode', layer: 'userSettings' }),
+    ]) {
+      expect(row.definesHere).toBe(false)
+      expect(selectSettingsReset(row, 'fastMode')).toBeNull()
+    }
   })
 })

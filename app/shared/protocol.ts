@@ -66,6 +66,7 @@ import type { DebugRendererSnapshot } from './debugState.js'
 import type {
   EditableSettingSource,
   EditableSettingValue,
+  SettingsWriteValue,
 } from './settingsEditable.js'
 
 /** Protocol wire version. Bump only on a breaking frame-shape change. */
@@ -379,6 +380,20 @@ export type RemoteVerbMessage =
  * source; the sidecar re-validates all three (key ∈ allowlist, value matches the
  * key's control type, source ∈ editable layers) and never trusts the frame. A
  * new provenance-carrying `settings.snapshot` is re-emitted when the write lands.
+ *
+ * **P4-41 — reset-to-default, additive under v1, NO `PROTOCOL_VERSION` bump.**
+ * The verb gained no field and no new frame kind: `value` may now be `null`,
+ * meaning REMOVE this key from this layer rather than write a value to it. Every
+ * frame that was valid before is still valid and still means the same thing, so
+ * no reader's existing field changes shape — the addition is one more admitted
+ * value, in a direction that fails closed (a reader without the branch rejects
+ * `null` at its value gate rather than mis-writing it). Why `null` and not a
+ * reserved string: it is outside `EditableSettingValue` by type, rejected by
+ * `validateEditableSettingValue` for all four control kinds, and not a legal
+ * on-disk value for any of these keys (each is `.optional()`, never
+ * `.nullable()`, in `SettingsSchema`) — so it cannot collide with a legitimate
+ * user value the way an in-band sentinel can. See `settingsEditable.ts`
+ * (`SettingsWriteValue`).
  */
 export const SETTINGS_VERB_TYPES = ['settings.setValue'] as const
 
@@ -392,8 +407,12 @@ export type SettingsSetValueMessage = {
   source: EditableSettingSource
   /** A key in the closed `EDITABLE_SETTINGS` allowlist (re-checked at sidecar). */
   key: string
-  /** A non-secret scalar matching the key's control type (re-checked at sidecar). */
-  value: EditableSettingValue
+  /**
+   * A non-secret scalar matching the key's control type, or `null` to REMOVE the
+   * key from `source` (P4-41). Both are re-checked at the sidecar, which tells
+   * them apart structurally — never by a reserved value.
+   */
+  value: SettingsWriteValue
 }
 
 export type SettingsVerbMessage = SettingsSetValueMessage

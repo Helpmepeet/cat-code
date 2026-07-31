@@ -523,6 +523,24 @@ export type SettingsRowModel = {
   /** Where a click lands, or null when this row cannot be written in this
    * scope. Never derived from where the value currently resolves (Law 3). */
   readonly writeTarget: EditableSettingSource | null
+  /**
+   * Whether the CHOSEN layer's own file carries this key — i.e. whether there is
+   * anything here to REMOVE (P4-41, the reset affordance's precondition).
+   *
+   * Deliberately not "the value differs from the built-in default", which is what
+   * the prototype's `modified={g.key !== DEF.key}` means. Our reset removes the
+   * key rather than writing the default back, so the question that decides
+   * whether it can do anything is whether this layer sets the key at all. The two
+   * differ in both directions: a key pinned AT its default is removable, and a
+   * value that differs from the default only because a lower layer supplies it is
+   * not this layer's to remove.
+   *
+   * Carried on the model rather than re-derived from `read`/`annotation` by each
+   * caller, because the overridden case makes those ambiguous: an overridden row
+   * that this layer does set reads `unreadable` for a reason unrelated to whether
+   * the key is present.
+   */
+  readonly definesHere: boolean
 }
 
 /** Precedence rank, high → low; a SMALLER number wins. */
@@ -589,6 +607,7 @@ export function selectSettingsRow({
       read: { kind: 'no-engine' },
       annotation: { kind: 'no-engine' },
       writeTarget: null,
+      definesHere: false,
     }
   }
   if (!snapshot) {
@@ -596,6 +615,7 @@ export function selectSettingsRow({
       read: { kind: 'unread' },
       annotation: { kind: 'unread', sessionOpen },
       writeTarget: null,
+      definesHere: false,
     }
   }
 
@@ -611,6 +631,9 @@ export function selectSettingsRow({
           : { kind: 'set', value, source: winner.source },
       annotation: { kind: 'enforced', origin },
       writeTarget: null,
+      // Policy is never a write target, so a policy-managed row has nothing this
+      // scope could remove even when the user file also sets the key.
+      definesHere: false,
     }
   }
 
@@ -636,6 +659,7 @@ export function selectSettingsRow({
           : { kind: 'set', value: own, source: layer },
       annotation: { kind: 'overridden', by: winner.source, origin },
       writeTarget: layer,
+      definesHere,
     }
   }
 
@@ -648,6 +672,7 @@ export function selectSettingsRow({
           : { kind: 'set', value, source: layer },
       annotation: { kind: 'set-here', origin },
       writeTarget: layer,
+      definesHere: true,
     }
   }
 
@@ -662,6 +687,8 @@ export function selectSettingsRow({
           : { kind: 'set', value, source: winner.source },
       annotation: { kind: 'inherited', from: winner.source, origin },
       writeTarget: layer,
+      // A LOWER layer wins, which can only mean this layer does not set the key.
+      definesHere: false,
     }
   }
 
@@ -672,6 +699,7 @@ export function selectSettingsRow({
       origin: selectLayerOrigin(snapshot, layer),
     },
     writeTarget: layer,
+    definesHere: false,
   }
 }
 
@@ -707,6 +735,7 @@ export function selectPermissionDefaultModeRow({
       read: { kind: 'no-engine' },
       annotation: { kind: 'no-engine' },
       writeTarget: null,
+      definesHere: false,
     }
   }
   if (!snapshot) {
@@ -714,6 +743,7 @@ export function selectPermissionDefaultModeRow({
       read: { kind: 'unread' },
       annotation: { kind: 'unread', sessionOpen },
       writeTarget: null,
+      definesHere: false,
     }
   }
 
@@ -726,6 +756,7 @@ export function selectPermissionDefaultModeRow({
         origin: selectLayerOrigin(snapshot, layer),
       },
       writeTarget: null,
+      definesHere: false,
     }
   }
 
@@ -735,6 +766,7 @@ export function selectPermissionDefaultModeRow({
       read: { kind: 'set', value: winner.value, source: winner.source },
       annotation: { kind: 'enforced', origin },
       writeTarget: null,
+      definesHere: false,
     }
   }
   if (winner.source === layer) {
@@ -742,6 +774,9 @@ export function selectPermissionDefaultModeRow({
       read: { kind: 'set', value: winner.value, source: layer },
       annotation: { kind: 'set-here', origin },
       writeTarget: null,
+      // The layer does set it, but `permissions.defaultMode` is not in the write
+      // allowlist, so nothing here can act on that (spec §7.1).
+      definesHere: true,
     }
   }
   if (rank(winner.source) < rank(layer)) {
@@ -751,13 +786,40 @@ export function selectPermissionDefaultModeRow({
       read: { kind: 'unreadable', by: winner.source, origin },
       annotation: { kind: 'overridden', by: winner.source, origin },
       writeTarget: null,
+      // The snapshot carries no per-layer default mode, so whether this layer
+      // sets it is genuinely unknown — stated as "no", never guessed.
+      definesHere: false,
     }
   }
   return {
     read: { kind: 'set', value: winner.value, source: winner.source },
     annotation: { kind: 'inherited', from: winner.source, origin },
     writeTarget: null,
+    definesHere: false,
   }
+}
+
+/**
+ * What a "Reset to default" click sends, or null when the row has nothing to
+ * remove and the affordance must not be offered at all (P4-41).
+ *
+ * The precondition and the payload are decided in ONE place so they cannot drift
+ * apart — a button that appears under one rule and writes under another is the
+ * shape of the bug this session exists to remove. It is a selector rather than
+ * an inline closure because this package renders SSR-only, so a handler is the
+ * one thing no test here can press.
+ *
+ * `value: null` is the REMOVE request, never a write of the built-in default:
+ * pinning a key at its default is a real state, and reset's job is to un-pin it.
+ * `writeTarget` is already the chosen scope's layer (Law 3) and is null for every
+ * read-only row, so this can only ever name one of the three editable layers.
+ */
+export function selectSettingsReset(
+  row: SettingsRowModel,
+  key: string,
+): { source: EditableSettingSource; key: string; value: null } | null {
+  if (!row.definesHere || row.writeTarget === null) return null
+  return { source: row.writeTarget, key, value: null }
 }
 
 /**

@@ -50,13 +50,17 @@ import {
 } from '../../src/utils/settings/settings.js'
 import { getAllOutputStyles } from '../../src/constants/outputStyles.js'
 import { getModelOptions } from '../../src/utils/model/modelOptions.js'
-import type { EditableSettingSource } from '../shared/settingsEditable.js'
+import type {
+  EditableSettingSource,
+  EditableSettingValue,
+} from '../shared/settingsEditable.js'
 import {
   EDITABLE_SETTING_KEYS,
   EDITABLE_SETTINGS_BY_KEY,
   isEditableSettingSource,
   SETTINGS_ENGINE_DEFAULT,
   validateEditableSettingValue,
+  validateEditableSettingWrite,
 } from '../shared/settingsEditable.js'
 import type {
   SettingSourceId,
@@ -282,17 +286,22 @@ function applySettingsVerb(
   if (!EDITABLE_SETTING_KEYS.has(verb.key)) {
     return { ok: false, message: `not an editable setting: ${verb.key}`, changed: false }
   }
-  const validation = validateEditableSettingValue(verb.key, verb.value)
+  const validation = validateEditableSettingWrite(verb.key, verb.value)
   if (!validation.ok) {
     return { ok: false, message: validation.error, changed: false }
   }
-  const value = validation.value
   // The closed membership gate for a `dynamic-enum` key (the static validator
   // above only bounds the string): the value must be one of the options the
   // sidecar captured at spawn. Fail closed — no captured options ⇒ no write.
-  if (EDITABLE_SETTINGS_BY_KEY.get(verb.key)?.control.kind === 'dynamic-enum') {
+  // A CLEAR (P4-41) names no option, so this gate does not apply to it; the
+  // key/source allowlists above have already run, so a clear is exactly as
+  // constrained as a write about WHERE it may land.
+  if (
+    !validation.clear &&
+    EDITABLE_SETTINGS_BY_KEY.get(verb.key)?.control.kind === 'dynamic-enum'
+  ) {
     const options = availableOptions.find(entry => entry.key === verb.key)?.options
-    if (!options?.some(option => option.value === value)) {
+    if (!options?.some(option => option.value === validation.value)) {
       // The rejected value is NOT echoed. This message reaches a toast, and the
       // one value that can plausibly be rejected here is the reserved
       // `SETTINGS_ENGINE_DEFAULT` token, which is internal vocabulary no user
@@ -306,12 +315,20 @@ function applySettingsVerb(
     }
   }
   const source: EditableSettingSource = verb.source
-  // `SETTINGS_ENGINE_DEFAULT` is a chooser, not a value: it means "this file
-  // should carry no override", so the key is REMOVED rather than written. It
-  // reaches here only because it is one of the captured options above, and it can
-  // never reach a settings file — a settings file holding the token would be a
-  // model name no engine knows.
-  const clearsKey = value === SETTINGS_ENGINE_DEFAULT
+  // Two ways to reach the same removal, and they are NOT the same mechanism:
+  //  - `value === null` (P4-41) is the general clear channel — every control kind,
+  //    outside the value domain by type, so it can never be a user's value;
+  //  - `SETTINGS_ENGINE_DEFAULT` is the `model` select's "no override" OPTION.
+  //    It reaches here only because it is one of the captured options above, and
+  //    it can never reach a settings file — a settings file holding the token
+  //    would be a model name no engine knows.
+  // Both routes collapse into ONE decision the writer below can prove: null =
+  // remove the key, anything else = write that value.
+  const nextValue: EditableSettingValue | null =
+    validation.clear || validation.value === SETTINGS_ENGINE_DEFAULT
+      ? null
+      : validation.value
+  const clearsKey = nextValue === null
   // The SettingsUpdater FUNCTION form (settings.ts:461/480): the engine invokes
   // this under the cross-process lock with the FRESH on-disk settings, and writes
   // the return VERBATIM (no merge). Computing the next object from that
@@ -319,8 +336,8 @@ function applySettingsVerb(
   // computed from a pre-lock read would clobber a concurrent write.
   const { error } = updateSettingsForSource(source, current => {
     const next = { ...(current ?? {}) } as Record<string, unknown>
-    if (clearsKey) delete next[verb.key]
-    else next[verb.key] = value
+    if (nextValue === null) delete next[verb.key]
+    else next[verb.key] = nextValue
     return next
   })
   if (error) {
@@ -410,13 +427,19 @@ export async function loadAvailableSettingOptions(
   }
   try {
     const styles = await getAllOutputStyles(cwd)
-    const options = Object.entries(styles).map(([name, config]) => ({
-      value: name,
-      // The built-in 'default' style has a null config; the prototype labels it
-      // "Default" (Settings.jsx:364). Every other style uses its real name.
-      label: name === 'default' ? 'Default' : (config?.name ?? name),
-      ...(config?.description ? { description: config.description } : {}),
-    }))
+    const options = Object.entries(styles)
+      // The reserved token is a chooser, never a style NAME (settingsEditable.ts).
+      // A user-authored style called after it would otherwise arrive as a
+      // selectable option whose write CLEARS the key instead of setting it —
+      // the one way an in-band string sentinel can collide with a real value.
+      .filter(([name]) => name !== SETTINGS_ENGINE_DEFAULT)
+      .map(([name, config]) => ({
+        value: name,
+        // The built-in 'default' style has a null config; the prototype labels it
+        // "Default" (Settings.jsx:364). Every other style uses its real name.
+        label: name === 'default' ? 'Default' : (config?.name ?? name),
+        ...(config?.description ? { description: config.description } : {}),
+      }))
     if (options.length > 0) {
       available.push({ key: 'outputStyle', options })
     }

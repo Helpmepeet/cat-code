@@ -49,6 +49,29 @@ export type EditableSettingPane = 'general' | 'model' | 'privacy' | 'theme'
 /** A single writable value crossing the wire — a non-secret scalar. */
 export type EditableSettingValue = boolean | string | number
 
+/**
+ * What a `settings.setValue` frame may carry: a scalar to WRITE, or `null` to
+ * REMOVE the key from that layer (P4-41 reset-to-default).
+ *
+ * `null` is the clear channel because it is outside the writable domain by
+ * construction, at every layer that could confuse the two:
+ *
+ *  - **Type:** `EditableSettingValue` is `boolean | string | number`; no control
+ *    kind can ever produce `null`, so a legitimate user value is never `null`.
+ *  - **Validator:** `validateEditableSettingValue` rejects `null` for all four
+ *    control kinds (`typeof null === 'object'`), so even if the clear branch were
+ *    removed the token could not be written.
+ *  - **Engine schema:** every key in `EDITABLE_SETTINGS` is `.optional()` in
+ *    `SettingsSchema` (`src/utils/settings/types.ts`), never `.nullable()`, so
+ *    `null` is not a legal on-disk value for any of them either.
+ *
+ * That is the whole difference from an in-band string sentinel like
+ * `SETTINGS_ENGINE_DEFAULT`: a reserved string lives in the same domain as real
+ * values and can collide with one (a dynamic-enum option literally named after
+ * the token), whereas `null` cannot collide with any value the domain admits.
+ */
+export type SettingsWriteValue = EditableSettingValue | null
+
 export type EditableSettingControl =
   | { kind: 'boolean'; default: boolean }
   | {
@@ -90,6 +113,14 @@ export type EditableSettingControl =
  * string is never written to a settings file. Deliberately not the empty string
  * — `validateEditableSettingValue` rejects zero-length input (a T7 bound) and
  * that bound stays as it is.
+ *
+ * Scope note (P4-41): this token stays what it always was — a SELECT OPTION for
+ * the one key whose engine default is "no override at all". It is NOT the
+ * general clear channel; that is `SettingsWriteValue`'s `null` below, which
+ * cannot collide with a value. Because the token IS a string, the sidecar
+ * additionally refuses to capture it as a live `dynamic-enum` option
+ * (`loadAvailableSettingOptions`), so a user-authored output style named after
+ * it can never be offered as a choice that silently clears the key instead.
  */
 export const SETTINGS_ENGINE_DEFAULT = '__catcode.engineDefault__'
 
@@ -347,4 +378,35 @@ export function validateEditableSettingValue(
       return { ok: false, error: `unhandled control: ${JSON.stringify(never)}` }
     }
   }
+}
+
+/**
+ * One settings WRITE request, resolved into the only two operations that exist:
+ * remove the key from the layer, or write a type-checked value to it.
+ *
+ * This is the single place the two are told apart, and the discrimination is
+ * structural rather than by a reserved value (see `SettingsWriteValue`): `null`
+ * means remove, anything else must pass `validateEditableSettingValue`. The key
+ * allowlist is checked FIRST for both, so a clear can no more reach a
+ * non-editable key than a write can.
+ */
+export type EditableSettingWrite =
+  | { ok: true; clear: true }
+  | { ok: true; clear: false; value: EditableSettingValue }
+  | { ok: false; error: string }
+
+export function validateEditableSettingWrite(
+  key: string,
+  value: unknown,
+): EditableSettingWrite {
+  if (!EDITABLE_SETTINGS_BY_KEY.has(key)) {
+    return { ok: false, error: `not an editable setting: ${key}` }
+  }
+  if (value === null) {
+    return { ok: true, clear: true }
+  }
+  const validation = validateEditableSettingValue(key, value)
+  return validation.ok
+    ? { ok: true, clear: false, value: validation.value }
+    : validation
 }

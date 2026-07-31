@@ -87,7 +87,7 @@ import {
 } from '../shared/protocol.js'
 import {
   EDITABLE_SETTING_SOURCES,
-  validateEditableSettingValue,
+  validateEditableSettingWrite,
 } from '../shared/settingsEditable.js'
 import type { SidecarPermissionDomain } from './permissionDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
@@ -1806,11 +1806,13 @@ export class SidecarServer {
     }
     const verb = parsed.data as SettingsVerbMessage
 
-    // Per-key value-type gate (the strict-key allowlist for the VALUE): a
-    // boolean key rejects a string, an enum key rejects an out-of-set value, an
-    // int key rejects a non-integer/out-of-range number. Rejected at the
-    // boundary, never written.
-    const valueCheck = validateEditableSettingValue(verb.key, verb.value)
+    // Per-key gate (the strict-key allowlist for the VALUE): the key must be in
+    // the closed allowlist, and then either the request is a CLEAR (`value ===
+    // null`, P4-41) or the value must match the key's control type — a boolean
+    // key rejects a string, an enum key rejects an out-of-set value, an int key
+    // rejects a non-integer/out-of-range number. Rejected at the boundary, never
+    // written.
+    const valueCheck = validateEditableSettingWrite(verb.key, verb.value)
     if (!valueCheck.ok) {
       this.sendError(connection, verb.requestId, 'bad_request', valueCheck.error, false)
       return
@@ -3300,17 +3302,23 @@ const remoteVerbMessageSchema = z.discriminatedUnion('type', [
  * P4-19 — sidecar-LOCAL schema for the settings write verb (protocol.ts:
  * SETTINGS_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
  * Structural only: shape + editable-source enum + bounded key/value. The
- * per-KEY value-type match (boolean vs enum vs int) is enforced separately by
- * `validateEditableSettingValue` at the boundary (handleSettingsVerb), and the
- * domain re-checks all three as the last gate before disk. `source` is the
- * closed editable-layer enum — policy/flag can never be named here.
+ * per-KEY value-type match (boolean vs enum vs int) and the write-vs-CLEAR
+ * discrimination are enforced separately by `validateEditableSettingWrite` at
+ * the boundary (handleSettingsVerb), and the domain re-checks all three as the
+ * last gate before disk. `source` is the closed editable-layer enum — policy/flag
+ * can never be named here.
  */
 const settingsRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 const settingsKeySchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+// P4-41 — `null` is admitted as the CLEAR request (remove the key from the
+// layer), never as a value. It is structurally outside the scalar union above,
+// so the two can never be confused here or downstream; `validateEditableSettingWrite`
+// is the one place that branches on it.
 const settingsValueSchema = z.union([
   z.boolean(),
   z.string().max(MAX_TEXT_FIELD_CHARS),
   z.number(),
+  z.null(),
 ])
 
 const settingsVerbMessageSchema = z.discriminatedUnion('type', [

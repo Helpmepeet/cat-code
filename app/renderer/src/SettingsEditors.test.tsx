@@ -15,6 +15,7 @@ import type { SettingsSnapshot } from '../../shared/protocol.js'
 import { SETTINGS_ENGINE_DEFAULT } from '../../shared/settingsEditable.js'
 import { SettingsPane } from './SettingsEditors.js'
 import { settingsPaneSpecs } from './settingsEditorModel.js'
+import { selectSettingsReset, selectSettingsRow } from './settingsScope.js'
 
 /** One `<select>`'s opening tag, by aria-label — the shared control's className
  * carries `disabled:` variants, so a bare /disabled/ match hits every select. */
@@ -674,4 +675,215 @@ test('a project with no engine renders no values and no controls, and names the 
   // The OTHER project's file must not leak in as if it described this one.
   expect(html).not.toContain('/repo/.cat-code/settings.json')
   expect(html).not.toContain('Edits here write to')
+})
+
+/* ── P4-41 reset-to-default ───────────────────────────────────────────────── */
+
+/** The row markup for one setting label, so a reset assertion is per row. */
+function rowFor(html: string, label: string): string {
+  const start = html.indexOf(`>${label}<`)
+  expect(start).toBeGreaterThan(-1)
+  const next = html.indexOf('border-b border-shell-seam', start)
+  return next === -1 ? html.slice(start) : html.slice(start, next)
+}
+
+test('a key set in THIS scope offers Reset to default', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u/settings.json', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'userSettings' }],
+      })}
+    />,
+  )
+  expect(rowFor(html, 'Fast mode')).toContain('Reset to default')
+})
+
+test('a key PINNED at its own built-in default still offers Reset — the pin is what is removed', () => {
+  // `fastMode` defaults to false. The row shows the same value either way, so
+  // "differs from the default" (the prototype's `modified`) would hide the one
+  // affordance that can un-pin it. Ours asks whether the key is HERE.
+  const withPin = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u/settings.json', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [{ key: 'fastMode', value: false, source: 'userSettings' }],
+      })}
+    />,
+  )
+  expect(rowFor(withPin, 'Fast mode')).toContain('Reset to default')
+  expect(rowFor(withPin, 'Fast mode')).toContain('aria-checked="false"')
+
+  const unset = renderToStaticMarkup(
+    <SettingsPane layer="userSettings" onWrite={noop} pane="model" snapshot={snapshot({})} />,
+  )
+  // Same displayed value, nothing to remove, so no affordance.
+  expect(rowFor(unset, 'Fast mode')).toContain('aria-checked="false"')
+  expect(rowFor(unset, 'Fast mode')).not.toContain('Reset to default')
+})
+
+test('a value merely INHERITED from a lower layer is not this scope’s to reset', () => {
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="localSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u/settings.json', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'userSettings' }],
+      })}
+    />,
+  )
+  const row = rowFor(html, 'Fast mode')
+  expect(row).toContain('Inherited from your defaults')
+  expect(row).not.toContain('Reset to default')
+})
+
+test('a policy-managed key offers no reset, and neither does an unread pane', () => {
+  const managed = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'policySettings', origin: '/policy.json', keys: ['fastMode'] },
+          { source: 'userSettings', origin: '/u/settings.json', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'policySettings', editable: false, managed: true },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'policySettings' }],
+      })}
+    />,
+  )
+  // Even though the user file ALSO sets it, policy owns the row: it is read-only,
+  // so this scope offers no write of any kind, removal included.
+  expect(managed).not.toContain('Reset to default')
+
+  const unread = renderToStaticMarkup(
+    <SettingsPane layer="userSettings" onWrite={noop} pane="model" snapshot={null} />,
+  )
+  expect(unread).not.toContain('Reset to default')
+
+  const noEngine = renderToStaticMarkup(
+    <SettingsPane
+      engine="absent"
+      layer="projectSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'projectSettings', origin: '/repo/s.json', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'projectSettings', editable: true, managed: false },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'projectSettings' }],
+      })}
+    />,
+  )
+  expect(noEngine).not.toContain('Reset to default')
+})
+
+test('reset sends a REMOVE for this scope’s layer, not a write of the default', () => {
+  const writes: Array<{ source: string; key: string; value: unknown }> = []
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={input => writes.push(input)}
+      pane="privacy"
+      snapshot={snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: '/u/settings.json',
+            keys: ['cleanupPeriodDays'],
+          },
+        ],
+        resolved: [
+          {
+            key: 'cleanupPeriodDays',
+            source: 'userSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        editableValues: [
+          { key: 'cleanupPeriodDays', value: 7, source: 'userSettings' },
+        ],
+      })}
+    />,
+  )
+  // The int key takes part in the generic reset like any other (audit 5a owns
+  // the retention domain and the destructive-0 confirmation, not this session).
+  expect(rowFor(html, 'Transcript retention (days)')).toContain('Reset to default')
+
+  // SSR cannot click, so the payload is taken from the SAME selector the button
+  // is built from — one source for both the affordance and what it sends.
+  const set = snapshot({
+    layers: [
+      {
+        source: 'userSettings',
+        origin: '/u/settings.json',
+        keys: ['cleanupPeriodDays'],
+      },
+    ],
+    resolved: [
+      {
+        key: 'cleanupPeriodDays',
+        source: 'userSettings',
+        editable: true,
+        managed: false,
+      },
+    ],
+    editableValues: [
+      { key: 'cleanupPeriodDays', value: 7, source: 'userSettings' },
+    ],
+  })
+  const row = selectSettingsRow({
+    snapshot: set,
+    key: 'cleanupPeriodDays',
+    layer: 'userSettings',
+  })
+  // null = remove the key, never 30 (the built-in default) and never 7 (the
+  // value on screen). The default is what the row will FALL BACK to, not what
+  // gets written.
+  expect(selectSettingsReset(row, 'cleanupPeriodDays')).toEqual({
+    source: 'userSettings',
+    key: 'cleanupPeriodDays',
+    value: null,
+  })
+  // Rendering alone writes nothing.
+  expect(writes).toEqual([])
+
+  // ...and the same selector withholds the payload wherever the button is not
+  // rendered, so the two can never disagree.
+  expect(
+    selectSettingsReset(
+      selectSettingsRow({ snapshot: set, key: 'cleanupPeriodDays', layer: 'localSettings' }),
+      'cleanupPeriodDays',
+    ),
+  ).toBeNull()
 })
