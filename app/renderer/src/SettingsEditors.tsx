@@ -35,20 +35,22 @@ import type {
   EditableSettingValue,
   SettingsWriteValue,
 } from '../../shared/settingsEditable.js'
-import {
-  validateEditableSettingValue,
-} from '../../shared/settingsEditable.js'
 import { Field, PaneSection } from './SettingsField.js'
 import {
   SETTINGS_UNKNOWN_VALUE,
   settingsUnreadNote,
 } from './settingsReadState.js'
+import { SAButton, SAModal } from './SAModal.js'
 import {
+  selectSettingsDestructiveWarning,
+  selectSettingsIntCommit,
   selectSettingsReset,
   selectSettingsRow,
+  settingsIntCancelDraft,
   settingsRowCommitsUnchanged,
   settingsRowNote,
   settingsWriteTargetNote,
+  type SettingsDestructiveChoice,
   type SettingsProjectEngine,
   type SettingsRowModel,
 } from './settingsScope.js'
@@ -194,11 +196,18 @@ function SettingEditor({
   // "User" the moment an overridden row could show the user's own value.
   const badgeOrigin = badgeSource ? selectLayerOrigin(snapshot, badgeSource) : null
   const note = settingsRowNote(row)
+  // The persistent half of the destructive-value gate: the confirm covers the
+  // moment of the edit, this covers every later visit to the page. It rides
+  // `Field`'s existing error slot because that is the row's one attention
+  // primitive, and a warning about deleted history should not be whispered in
+  // the same subtle grey as provenance prose.
+  const destructiveWarning = selectSettingsDestructiveWarning(row, spec.key)
 
   return (
     <Field
       desc={spec.description}
       editable={!managed}
+      error={destructiveWarning}
       label={spec.label}
       managed={managed}
       modified={reset !== null}
@@ -448,6 +457,13 @@ function SaveableSelect({
  * A validated integer field. Local edit state so an in-progress / invalid entry
  * shows the inline error and is NOT written; a valid value commits on blur or
  * Enter.
+ *
+ * A value the key declares DESTRUCTIVE is not committed by either trigger. It
+ * opens {@link DestructiveValueDialog} and waits, so the one edit here that
+ * cannot be taken back is the one edit that is asked about. Both triggers share
+ * `selectSettingsIntCommit`, so neither can become a hole around the other, and
+ * a cancel puts the value still in effect back in the field rather than leaving
+ * an unsaved number on screen.
  */
 function IntField({
   value,
@@ -469,6 +485,10 @@ function IntField({
 }) {
   const [draft, setDraft] = useState<string>(String(value))
   const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState<{
+    value: number
+    choice: SettingsDestructiveChoice
+  } | null>(null)
 
   // Reflect an externally-changed value (e.g. a re-emitted snapshot) when the
   // field is not being edited.
@@ -477,19 +497,42 @@ function IntField({
     setLastValue(value)
     setDraft(String(value))
     setError(null)
+    setPending(null)
   }
 
   const commit = () => {
-    const parsed = Number(draft.trim())
-    const validation = validateEditableSettingValue(keyName, parsed)
-    if (!validation.ok) {
-      setError(validation.error)
-      return
+    const decision = selectSettingsIntCommit({
+      key: keyName,
+      draft,
+      current: value,
+      commitUnchanged,
+    })
+    switch (decision.kind) {
+      case 'invalid':
+        setError(decision.error)
+        return
+      case 'unchanged':
+        setError(null)
+        return
+      case 'confirm':
+        setError(null)
+        setPending({ value: decision.value, choice: decision.choice })
+        return
+      case 'write':
+        setError(null)
+        onCommit(decision.value)
+        return
+      default: {
+        const exhaustive: never = decision
+        return exhaustive
+      }
     }
+  }
+
+  const cancelPending = () => {
+    setPending(null)
+    setDraft(settingsIntCancelDraft(value))
     setError(null)
-    if (commitUnchanged || validation.value !== value) {
-      onCommit(validation.value as number)
-    }
   }
 
   return (
@@ -514,6 +557,81 @@ function IntField({
       {error ? (
         <span className="text-[11px] text-tone-danger">{error}</span>
       ) : null}
+      {pending ? (
+        <DestructiveValueDialog
+          choice={pending.choice}
+          onCancel={cancelPending}
+          onConfirm={() => {
+            const next = pending.value
+            setPending(null)
+            onCommit(next)
+          }}
+        />
+      ) : null}
     </div>
+  )
+}
+
+/**
+ * The gate in front of a declared destructive value, on the shared dialog
+ * (`SAModal`, P4-30) rather than an invented one. Every string is the key's own
+ * declaration; this component chooses none of them.
+ *
+ * Dismissing counts as CANCEL, so Escape and a click outside land where the
+ * Cancel button does. Nothing is written until `onConfirm`.
+ */
+function DestructiveValueDialog({
+  choice,
+  onConfirm,
+  onCancel,
+}: {
+  choice: SettingsDestructiveChoice
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <SAModal
+      footer={
+        <>
+          <SAButton label={choice.cancelLabel} onClick={onCancel} />
+          <SAButton
+            label={choice.confirmLabel}
+            onClick={onConfirm}
+            variant="danger-primary"
+          />
+        </>
+      }
+      icon={<DestructiveIcon />}
+      onClose={onCancel}
+      tint="warn"
+      title={choice.title}
+    >
+      <p className="text-[13px] leading-relaxed text-text-muted">
+        {choice.body}
+      </p>
+      <p className="mt-2.5 text-[12.5px] leading-relaxed text-text-subtle">
+        {choice.remedy}
+      </p>
+    </SAModal>
+  )
+}
+
+function DestructiveIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      height="15"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      width="15"
+    >
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" x2="12" y1="9" y2="13" />
+      <line x1="12" x2="12.01" y1="17" y2="17" />
+    </svg>
   )
 }

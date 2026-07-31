@@ -14,15 +14,25 @@
 import { describe, expect, test } from 'bun:test'
 import type { SettingsSnapshot } from '../../shared/protocol.js'
 import {
+  EDITABLE_SETTING_KEYS,
+  validateEditableSettingValue,
+  validateEditableSettingWrite,
+} from '../../shared/settingsEditable.js'
+import {
   SETTINGS_SCOPE_KINDS,
   selectPermissionDefaultModeRow,
   selectProjectEngine,
+  selectSettingsDestructiveChoice,
+  selectSettingsDestructiveWarning,
+  selectSettingsIntCommit,
   selectSettingsProjects,
   selectSettingsRail,
   selectSettingsRailItem,
   selectSettingsReset,
   selectSettingsRow,
   selectSettingsWriteLayer,
+  settingsIntCancelDraft,
+  settingsRailItem,
   settingsRowCommitsUnchanged,
   settingsRowNote,
   settingsWriteTargetNote,
@@ -1217,5 +1227,325 @@ describe('definesHere — the precondition for removing a key', () => {
       expect(row.definesHere).toBe(false)
       expect(selectSettingsReset(row, 'fastMode')).toBeNull()
     }
+  })
+})
+
+/* ── destructive values (P4-47) ───────────────────────────────────────────── */
+
+describe('a legal value that destroys data is gated, not typed away', () => {
+  /**
+   * The whole point of the declaration. `cleanupPeriodDays: 0` is a legitimate
+   * member of the key's domain, so nothing in the write path can refuse it and
+   * nothing should: `src/utils/sessionStorage.ts:1408` stops every transcript
+   * write and `src/utils/cleanup.ts:24-31` moves the retention cutoff to now,
+   * which is a real thing a person may want. It just must not happen because a
+   * digit was typed and the field lost focus.
+   */
+  test('the destructive value asks instead of writing, on the ONE decision both triggers use', () => {
+    const decision = selectSettingsIntCommit({
+      key: 'cleanupPeriodDays',
+      draft: '0',
+      current: 30,
+      commitUnchanged: false,
+    })
+    expect(decision.kind).toBe('confirm')
+    if (decision.kind !== 'confirm') return
+    expect(decision.value).toBe(0)
+    expect(decision.choice.confirmLabel.length).toBeGreaterThan(0)
+    // Blur and Enter both call this, so there is no second path to be a hole.
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: ' 0 ',
+        current: 30,
+        commitUnchanged: true,
+      }).kind,
+    ).toBe('confirm')
+  })
+
+  /** An EMPTY field is `Number('') === 0`, so clearing it and clicking away used
+   * to be a second silent route to the destructive value. It is now the same
+   * gate, not a special case. */
+  test('an emptied field reaches the same gate rather than committing zero', () => {
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: '   ',
+        current: 30,
+        commitUnchanged: false,
+      }).kind,
+    ).toBe('confirm')
+  })
+
+  test('every other value on the same key still commits with no gate at all', () => {
+    // The rejected enum would have deleted exactly these.
+    for (const days of ['7', '45', '365', '3650']) {
+      const decision = selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: days,
+        current: 30,
+        commitUnchanged: false,
+      })
+      expect(decision).toEqual({ kind: 'write', value: Number(days) })
+    }
+  })
+
+  test('the declaration belongs to the key, not to the number zero', () => {
+    expect(selectSettingsDestructiveChoice('cleanupPeriodDays', 0)).not.toBeNull()
+    expect(selectSettingsDestructiveChoice('cleanupPeriodDays', 30)).toBeNull()
+    // A different key at the same value is an ordinary value.
+    expect(selectSettingsDestructiveChoice('autoUpdatesChannel', 0)).toBeNull()
+    expect(selectSettingsDestructiveChoice('notAKey', 0)).toBeNull()
+  })
+
+  test('validation and the no-change guard still run, and run first', () => {
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: 'nope',
+        current: 30,
+        commitUnchanged: false,
+      }).kind,
+    ).toBe('invalid')
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: '-1',
+        current: 30,
+        commitUnchanged: false,
+      }).kind,
+    ).toBe('invalid')
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: '30',
+        current: 30,
+        commitUnchanged: false,
+      }),
+    ).toEqual({ kind: 'unchanged' })
+    // An unset row displays the built-in default, so re-typing it IS a write.
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: '30',
+        current: 30,
+        commitUnchanged: true,
+      }),
+    ).toEqual({ kind: 'write', value: 30 })
+  })
+
+  /** Leaving the typed value on screen after a cancel is its own bug: the field
+   * would claim a setting nobody saved. */
+  test('cancel puts back the value still in effect, never the one refused', () => {
+    expect(settingsIntCancelDraft(30)).toBe('30')
+    expect(settingsIntCancelDraft(7)).toBe('7')
+  })
+
+  /**
+   * Anti-drift. The declaration is keyed by a value inside a domain declared in
+   * another module; if that domain moves (a `min` of 1, a renamed key) the
+   * warning becomes dead code that nobody would notice. This fails instead.
+   */
+  test('the declared destructive value is still a legal value of a real key', () => {
+    const validation = validateEditableSettingValue('cleanupPeriodDays', 0)
+    expect(validation.ok).toBe(true)
+    expect(EDITABLE_SETTING_KEYS.has('cleanupPeriodDays')).toBe(true)
+    expect(selectSettingsDestructiveChoice('cleanupPeriodDays', 0)).not.toBeNull()
+  })
+
+  /**
+   * No second sentinel (the P4-41 fence). `0` stays an ordinary VALUE and `null`
+   * stays the clear channel, told apart structurally at the one place that
+   * decides — so a gate in front of `0` can never be mistaken for a reset, and a
+   * reset can never be mistaken for "keep nothing".
+   */
+  test('zero writes zero and null clears, and nothing here blurs the two', () => {
+    expect(validateEditableSettingWrite('cleanupPeriodDays', 0)).toEqual({
+      ok: true,
+      clear: false,
+      value: 0,
+    })
+    expect(validateEditableSettingWrite('cleanupPeriodDays', null)).toEqual({
+      ok: true,
+      clear: true,
+    })
+    // The gate carries a NUMBER to `onCommit`; it never mints a token.
+    const decision = selectSettingsIntCommit({
+      key: 'cleanupPeriodDays',
+      draft: '0',
+      current: 30,
+      commitUnchanged: false,
+    })
+    expect(decision.kind === 'confirm' && decision.value).toBe(0)
+  })
+})
+
+describe('the row keeps saying so while a destructive value is in effect', () => {
+  function retentionRow(partial: Partial<SettingsSnapshot>) {
+    return selectSettingsRow({
+      snapshot: snapshot(partial),
+      key: 'cleanupPeriodDays',
+      layer: 'userSettings',
+    })
+  }
+
+  test('a saved zero warns, and an ordinary value does not', () => {
+    const zero = retentionRow({
+      layers: [{ source: 'userSettings', origin: USER_FILE, keys: ['cleanupPeriodDays'] }],
+      resolved: [
+        { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
+      ],
+      editableValues: [
+        { key: 'cleanupPeriodDays', value: 0, source: 'userSettings' },
+      ],
+    })
+    expect(zero.annotation.kind).toBe('set-here')
+    // `settingsRowNote` is SILENT here by design (set-here is the ordinary
+    // case), which is exactly why the warning cannot live inside it.
+    expect(settingsRowNote(zero)).toBeNull()
+    expect(
+      selectSettingsDestructiveWarning(zero, 'cleanupPeriodDays'),
+    ).toContain('deleted')
+
+    const seven = retentionRow({
+      layers: [{ source: 'userSettings', origin: USER_FILE, keys: ['cleanupPeriodDays'] }],
+      resolved: [
+        { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
+      ],
+      editableValues: [
+        { key: 'cleanupPeriodDays', value: 7, source: 'userSettings' },
+      ],
+    })
+    expect(
+      selectSettingsDestructiveWarning(seven, 'cleanupPeriodDays'),
+    ).toBeNull()
+  })
+
+  test('an unset row shows the built-in default and has nothing to warn about', () => {
+    const unset = retentionRow({
+      layers: [{ source: 'userSettings', origin: USER_FILE, keys: ['other'] }],
+    })
+    expect(unset.read.kind).toBe('unset')
+    expect(
+      selectSettingsDestructiveWarning(unset, 'cleanupPeriodDays'),
+    ).toBeNull()
+  })
+
+  /**
+   * The one `set` read whose value is NOT in effect. An overridden row carries
+   * THIS layer's own value while a higher layer wins, so a zero there deletes
+   * nothing and warning about it would be a false alarm on a row the operator
+   * cannot even act on from here.
+   */
+  test('a zero that a higher layer overrides deletes nothing, and says nothing', () => {
+    const overridden = retentionRow({
+      layers: [
+        { source: 'userSettings', origin: USER_FILE, keys: ['cleanupPeriodDays'] },
+        { source: 'projectSettings', origin: PROJECT_FILE, keys: ['cleanupPeriodDays'] },
+      ],
+      resolved: [
+        { key: 'cleanupPeriodDays', source: 'projectSettings', editable: true, managed: false },
+      ],
+      editableValues: [
+        { key: 'cleanupPeriodDays', value: 0, source: 'userSettings' },
+        { key: 'cleanupPeriodDays', value: 30, source: 'projectSettings' },
+      ],
+    })
+    expect(overridden.annotation.kind).toBe('overridden')
+    expect(
+      selectSettingsDestructiveWarning(overridden, 'cleanupPeriodDays'),
+    ).toBeNull()
+  })
+
+  /** Inherited IS the resolved value, so the consequence is real even though
+   * this scope's own file says nothing. */
+  test('a zero inherited from a lower layer is in effect, and warns', () => {
+    const inherited = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'projectSettings', origin: PROJECT_FILE, keys: ['other'] },
+          { source: 'userSettings', origin: USER_FILE, keys: ['cleanupPeriodDays'] },
+        ],
+        resolved: [
+          { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'cleanupPeriodDays', value: 0, source: 'userSettings' },
+        ],
+      }),
+      key: 'cleanupPeriodDays',
+      layer: 'projectSettings',
+    })
+    expect(inherited.annotation.kind).toBe('inherited')
+    expect(
+      selectSettingsDestructiveWarning(inherited, 'cleanupPeriodDays'),
+    ).not.toBeNull()
+  })
+})
+
+describe('what the destructive copy is allowed to say (CLAUDE.md §7)', () => {
+  const choice = selectSettingsDestructiveChoice('cleanupPeriodDays', 0)
+
+  test('it names the consequence and what to do, in the operator’s words', () => {
+    expect(choice).not.toBeNull()
+    if (!choice) return
+    const all = [
+      choice.title,
+      choice.body,
+      choice.remedy,
+      choice.confirmLabel,
+      choice.cancelLabel,
+      choice.rowWarning,
+    ]
+    for (const line of all) {
+      expect(line.length).toBeGreaterThan(0)
+      // §7: no em dash anywhere a user can read it.
+      expect(line).not.toContain('—')
+      // §7: no key names, no internal vocabulary.
+      expect(line).not.toContain('cleanupPeriodDays')
+      expect(line.toLowerCase()).not.toContain('persistence')
+      expect(line.toLowerCase()).not.toContain('transcript retention')
+    }
+    // The two halves of the engine behavior, both stated.
+    expect(choice.body.toLowerCase()).toContain('deletes every session')
+    expect(choice.body.toLowerCase()).toContain('cannot be undone')
+    // What to DO, not why we built it this way.
+    expect(choice.remedy.toLowerCase()).toContain('set the number back')
+  })
+
+  /**
+   * The audit's proposed sentence was "Past sessions will be deleted the next
+   * time the app starts". That trigger is wrong for THIS app: the sweep is
+   * reached only from `startBackgroundHousekeeping`
+   * (`src/utils/backgroundHousekeeping.ts:59`), called from the terminal engine
+   * (`src/main.tsx:2910`, `src/screens/REPL.tsx:4474`) and never from this app's
+   * engine processes. So the copy promises no trigger at all.
+   */
+  test('the copy does not promise a trigger this app does not own', () => {
+    if (!choice) return
+    for (const line of [choice.body, choice.remedy, choice.rowWarning]) {
+      expect(line.toLowerCase()).not.toContain('next time the app starts')
+      expect(line.toLowerCase()).not.toContain('restart')
+    }
+  })
+})
+
+/* ── the Remote rail describes the Remote pane (P4-47, 26d) ───────────────── */
+
+describe('the rail promises only what a pane can deliver', () => {
+  /**
+   * `decisions/PAIRED-DEVICES.md` §1-§3 cut the SSH connect mode and the device
+   * roster, and `RemoteSettingsSnapshot` carries only `bridge` and
+   * `commandFilter`, so there is nothing for "saved SSH environments" to be. The
+   * copy is aligned with the cut; the cut is not reopened.
+   */
+  test('the Remote rail no longer advertises saved SSH environments', () => {
+    const remote = settingsRailItem('remote')
+    expect(remote.desc.toLowerCase()).not.toContain('ssh')
+    expect(remote.desc.toLowerCase()).not.toContain('saved')
+    // What the pane actually renders (`RemoteSettingsPage.tsx`).
+    expect(remote.desc).toContain('Remote Control bridge')
+    expect(remote.desc.toLowerCase()).toContain('command filter')
+    expect(remote.desc).not.toContain('—')
   })
 })

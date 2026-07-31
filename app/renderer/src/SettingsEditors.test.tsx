@@ -887,3 +887,79 @@ test('reset sends a REMOVE for this scope’s layer, not a write of the default'
     ),
   ).toBeNull()
 })
+
+/* ── P4-47: the destructive-value gate, where it is RENDERED ──────────────── */
+
+/**
+ * The decisions are proven in `settingsScope.test.ts`. What can go wrong here is
+ * the other half of the 2026-07-27 lesson: a selector that is right and a
+ * consumer that never calls it. These render the real pane and read the markup.
+ *
+ * The dialog itself cannot be proven here (opening it needs a blur or an Enter,
+ * and this package has no DOM harness), so it is an operator step, not a claim.
+ */
+function retentionPane(value: number): string {
+  return renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={noop}
+      pane="privacy"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u.json', keys: ['cleanupPeriodDays'] },
+        ],
+        resolved: [
+          { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'cleanupPeriodDays', value, source: 'userSettings' },
+        ],
+      })}
+    />,
+  )
+}
+
+test('a saved retention of 0 keeps a visible warning on the row', () => {
+  const html = decode(retentionPane(0))
+  expect(html).toContain('value="0"')
+  expect(html).toContain('Every saved session will be deleted')
+  expect(html).toContain('Set this above 0 to keep them.')
+  // Rendered with the row's attention tone, not as another line of grey prose.
+  expect(html).toContain('text-tone-danger')
+})
+
+test('an ordinary retention value renders no warning at all', () => {
+  const html = decode(retentionPane(7))
+  expect(html).toContain('value="7"')
+  expect(html).not.toContain('Every saved session will be deleted')
+})
+
+/**
+ * The confirmation is a gate, not a decoration: nothing may be dispatched until
+ * the operator confirms. Rendering the pane at any value writes nothing, and the
+ * dialog is absent until a commit is attempted.
+ */
+test('rendering the retention row never opens the dialog and never writes', () => {
+  const writes: unknown[] = []
+  const html = renderToStaticMarkup(
+    <SettingsPane
+      layer="userSettings"
+      onWrite={input => writes.push(input)}
+      pane="privacy"
+      snapshot={snapshot({
+        layers: [
+          { source: 'userSettings', origin: '/u.json', keys: ['cleanupPeriodDays'] },
+        ],
+        resolved: [
+          { key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false },
+        ],
+        editableValues: [
+          { key: 'cleanupPeriodDays', value: 0, source: 'userSettings' },
+        ],
+      })}
+    />,
+  )
+  expect(writes).toEqual([])
+  expect(html).not.toContain('role="dialog"')
+  expect(decode(html)).not.toContain('Delete every saved session?')
+})

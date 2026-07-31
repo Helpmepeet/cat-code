@@ -56,6 +56,7 @@ import type {
   EditableSettingSource,
   EditableSettingValue,
 } from '../../shared/settingsEditable.js'
+import { validateEditableSettingValue } from '../../shared/settingsEditable.js'
 import { settingsUnreadNote } from './settingsReadState.js'
 import { settingsPaneSpecs } from './settingsEditorModel.js'
 import { selectEditableValue, selectLayerOrigin, SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
@@ -331,8 +332,14 @@ const RAIL_ITEMS: Record<SettingsRailItemId, SettingsRailItem> = {
   },
   remote: {
     id: 'remote',
+    // There are no saved SSH environments, and there is no roster to save them
+    // in: `decisions/PAIRED-DEVICES.md` §1-§3 cut the SSH connect mode and the
+    // device roster, and `RemoteSettingsSnapshot` carries only `bridge` and
+    // `commandFilter`. The rail now names the three things the pane actually
+    // renders (`RemoteSettingsPage.tsx`): the bridge, its inbound command
+    // filter, and the direct-connect form.
     label: 'Remote',
-    desc: 'Saved SSH environments and the Remote Control bridge',
+    desc: 'The Remote Control bridge, its command filter, and connecting a remote session',
   },
   appearance: {
     id: 'appearance',
@@ -836,6 +843,155 @@ export function selectSettingsReset(
  */
 export function settingsRowCommitsUnchanged(row: SettingsRowModel): boolean {
   return row.read.kind === 'unset' && row.writeTarget !== null
+}
+
+/* ── destructive values ───────────────────────────────────────────────────── */
+
+/**
+ * A value inside a key's legal domain that DESTROYS data once it takes effect.
+ *
+ * Declared per KEY, never branched on inside a control. `IntField` is generic
+ * over every int key, so a `key === '…'` test in it would make one shared
+ * control carry one key's engine semantics, and the next destructive value
+ * would add a second branch rather than a second declaration.
+ *
+ * The home is the renderer rather than `app/shared/settingsEditable.ts` for two
+ * reasons. That module is the SIDECAR's validation boundary, and nothing here
+ * changes what may be written — `0` is and stays an ordinary member of
+ * `{ kind: 'int', min: 0, max: 3650 }` — so leaving it untouched IS the proof
+ * that the boundary is unchanged. And every string below is user-visible copy,
+ * which the §7 sweep (`userVisibleText.test.ts`) reads over `renderer/src` and
+ * not over `app/shared`.
+ */
+export type SettingsDestructiveChoice = {
+  /** The exact value this declaration is about. */
+  readonly value: EditableSettingValue
+  readonly title: string
+  /** What committing it does. */
+  readonly body: string
+  /** What can still be done about it. */
+  readonly remedy: string
+  readonly confirmLabel: string
+  readonly cancelLabel: string
+  /** Kept on the row for as long as the value is the one in effect. */
+  readonly rowWarning: string
+}
+
+/**
+ * `cleanupPeriodDays: 0` is the only one today, and it is not a "stop keeping
+ * new ones" switch. It suppresses every transcript write
+ * (`src/utils/sessionStorage.ts:1408`, `shouldSkipPersistence`) AND makes the
+ * retention cutoff `now` (`src/utils/cleanup.ts:24-31`, `getCutoffDate`), so the
+ * housekeeping sweep unlinks every stored transcript
+ * (`cleanupOldSessionFiles`, `src/utils/cleanup.ts:151`).
+ *
+ * The copy deliberately names NO trigger for the deletion. The audit's proposed
+ * sentence said "the next time the app starts", which is not true here: the
+ * sweep is reached only through `startBackgroundHousekeeping`
+ * (`src/utils/backgroundHousekeeping.ts:59`), which is called from the terminal
+ * engine (`src/main.tsx:2910`, `src/screens/REPL.tsx:4474`) and never from this
+ * app's engine processes, and even there it is scheduled ten minutes in and
+ * re-deferred while the user is active. The write suppression, by contrast, is
+ * immediate and does apply here — hence two clauses with different tenses.
+ */
+const DESTRUCTIVE_SETTING_VALUES: Readonly<
+  Record<string, SettingsDestructiveChoice>
+> = {
+  cleanupPeriodDays: {
+    value: 0,
+    title: 'Delete every saved session?',
+    body:
+      'Keeping transcripts for 0 days stops this app saving new sessions, and ' +
+      'deletes every session already saved. The deletion is not immediate, but ' +
+      'once it runs it cannot be undone.',
+    remedy:
+      'Nothing is deleted yet. Set the number back above 0 and your saved ' +
+      'sessions stay.',
+    confirmLabel: 'Delete saved sessions',
+    cancelLabel: 'Cancel',
+    rowWarning:
+      'Every saved session will be deleted, and new ones are not kept. Set ' +
+      'this above 0 to keep them.',
+  },
+}
+
+/** The declaration for `value` on `key`, or null when it is an ordinary value. */
+export function selectSettingsDestructiveChoice(
+  key: string,
+  value: EditableSettingValue,
+): SettingsDestructiveChoice | null {
+  const declared = DESTRUCTIVE_SETTING_VALUES[key]
+  return declared && declared.value === value ? declared : null
+}
+
+/**
+ * The warning a row keeps for as long as a destructive value is the one IN
+ * EFFECT, or null.
+ *
+ * Deliberately NOT folded into `settingsRowNote`. That function's subject is
+ * provenance — what contradicts the scope the operator chose — and it returns
+ * null for the ordinary `set-here` case, which is exactly the case a saved `0`
+ * lands in. A data-loss warning must not be suppressed by a provenance rule,
+ * and it answers a different question, so it gets its own sentence in its own
+ * slot.
+ */
+export function selectSettingsDestructiveWarning(
+  row: SettingsRowModel,
+  key: string,
+): string | null {
+  // `overridden` is the one `set` read whose value is NOT in effect: it carries
+  // THIS layer's own value while a higher layer wins (`selectSettingsRow`), so
+  // warning on it would promise a deletion that is not going to happen.
+  if (row.read.kind !== 'set' || row.annotation.kind === 'overridden') {
+    return null
+  }
+  return selectSettingsDestructiveChoice(key, row.read.value)?.rowWarning ?? null
+}
+
+/**
+ * What one commit attempt on a validated int field must DO.
+ *
+ * ONE decision for BOTH triggers. The field commits on blur and on Enter, and a
+ * destructive value has to be gated on both, so the choice cannot live in either
+ * handler without the other being a hole. Pure, because this package renders
+ * SSR-only and no test here can press either one.
+ */
+export type SettingsIntCommit =
+  | { kind: 'invalid'; error: string }
+  | { kind: 'unchanged' }
+  | { kind: 'confirm'; value: number; choice: SettingsDestructiveChoice }
+  | { kind: 'write'; value: number }
+
+export function selectSettingsIntCommit({
+  key,
+  draft,
+  current,
+  commitUnchanged,
+}: {
+  key: string
+  draft: string
+  current: number
+  /** Send the value even when it equals what is displayed. True for an unset
+   * row, whose displayed value is the built-in default rather than a saved one,
+   * so re-typing it IS a change to the file (`settingsRowCommitsUnchanged`). */
+  commitUnchanged: boolean
+}): SettingsIntCommit {
+  const validation = validateEditableSettingValue(key, Number(draft.trim()))
+  if (!validation.ok) return { kind: 'invalid', error: validation.error }
+  const value = validation.value as number
+  if (!commitUnchanged && value === current) return { kind: 'unchanged' }
+  const choice = selectSettingsDestructiveChoice(key, value)
+  return choice ? { kind: 'confirm', value, choice } : { kind: 'write', value }
+}
+
+/**
+ * What a cancelled confirmation puts back in the field: the value still in
+ * effect, never the one that was about to be committed. Leaving the typed value
+ * on screen after a cancel is its own bug — the field would go on showing a
+ * number nobody saved, and the next blur would re-ask.
+ */
+export function settingsIntCancelDraft(current: number): string {
+  return String(current)
 }
 
 /**
