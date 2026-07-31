@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { MemorySnapshot } from '../../shared/protocol.js'
 import { AgentTypeChip } from './AgentChrome.js'
 import {
@@ -5,6 +6,7 @@ import {
   selectMemoryInstructionCounts,
 } from './goalMemoryState.js'
 import { formatRelativeTime } from './sessionsCatalogState.js'
+import { useToast } from './toastContext.js'
 
 /**
  * `AutoMem` / `TeamMem` are the engine's own type tokens. They are readable as
@@ -128,8 +130,19 @@ function MemorySummary({ snapshot }: { snapshot: MemorySnapshot }) {
         <Count label={instructionTypeLabel('TeamMem')} value={counts.teamMem} />
       </div>
       <div className="mt-3 space-y-1 font-mono text-[11px] text-text-subtle">
-        <div className="truncate">dir: {snapshot.autoMemoryDir}</div>
-        <div className="truncate">entrypoint: {snapshot.autoMemoryEntrypoint}</div>
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate">dir: {snapshot.autoMemoryDir}</span>
+          <PathCopyButton label="auto-memory directory path" path={snapshot.autoMemoryDir} />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate">
+            entrypoint: {snapshot.autoMemoryEntrypoint}
+          </span>
+          <PathCopyButton
+            label="auto-memory entrypoint path"
+            path={snapshot.autoMemoryEntrypoint}
+          />
+        </div>
       </div>
     </section>
   )
@@ -168,8 +181,11 @@ function InstructionFiles({ snapshot }: { snapshot: MemorySnapshot }) {
                     className="rounded-lg border border-shell-seam bg-shell-hover/30 px-3 py-2"
                     key={`${file.type}:${file.path}`}
                   >
-                    <div className="truncate font-mono text-[11px] text-text-muted">
-                      {file.path}
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-muted">
+                        {file.path}
+                      </span>
+                      <PathCopyButton label="instruction file path" path={file.path} />
                     </div>
                     <div className="mt-1 flex flex-wrap gap-1.5 text-[10.5px] text-text-subtle">
                       {file.parent ? <Pill label="included" /> : <Pill label="direct" />}
@@ -235,9 +251,10 @@ function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
             >
               <div className="flex items-center gap-2">
                 {memory.type ? <MemTypeChip type={memory.type} /> : <Pill label="untyped" />}
-                <span className="truncate font-mono text-[11px] text-text-muted">
-                  {memory.filename}
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-muted">
+                  {memory.filePath}
                 </span>
+                <PathCopyButton label="auto-memory file path" path={memory.filePath} />
               </div>
               {memory.description ? (
                 <p className="mt-1 text-[12px] leading-relaxed text-text-subtle">
@@ -293,6 +310,7 @@ function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
             <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-subtle">
               {agent.directory}
             </span>
+            <PathCopyButton label="agent memory directory path" path={agent.directory} />
             <span className="shrink-0 text-[11px] text-text-faint">
               {agent.fileCount === null
                 ? 'unreadable'
@@ -302,6 +320,45 @@ function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
         ))}
       </div>
     </section>
+  )
+}
+
+function PathCopyButton({ label, path }: { label: string; path: string }) {
+  const [copied, setCopied] = useState(false)
+  const toast = useToast()
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) {
+      toast('Could not write to the clipboard', { tone: 'warn' })
+      return
+    }
+    void clipboard
+      .writeText(path)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+        toast('Path copied to clipboard', { tone: 'success' })
+      })
+      .catch(() => {
+        toast('Could not write to the clipboard', { tone: 'warn' })
+      })
+  }
+
+  return (
+    <button
+      aria-label={copied ? `${label} copied` : `Copy ${label}`}
+      className={`shrink-0 rounded-md border border-shell-seam px-2 py-0.5 text-[10.5px] transition-colors ${
+        copied
+          ? 'text-[#86efac]'
+          : 'text-text-subtle hover:bg-shell-hover hover:text-text-primary'
+      }`}
+      onClick={copy}
+      title={`Copy ${label}`}
+      type="button"
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
   )
 }
 

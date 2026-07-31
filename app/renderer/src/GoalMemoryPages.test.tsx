@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   MemorySnapshot,
@@ -100,6 +101,40 @@ test('renders memory metadata without file contents', () => {
   // which writers are undesigned, under a heading called "Scope" (CLAUDE.md §7).
   expect(html).not.toContain('Memory bodies stay engine-side')
   expect(html).not.toContain('>Scope<')
+})
+
+test('P4-57 renders a keyboard-reachable copy button for every displayed memory path row', () => {
+  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={MEMORY} />)
+
+  for (const label of [
+    'Copy auto-memory directory path',
+    'Copy auto-memory entrypoint path',
+    'Copy instruction file path',
+    'Copy auto-memory file path',
+    'Copy agent memory directory path',
+  ]) {
+    expect(html).toContain(`aria-label="${label}"`)
+  }
+  expect(html.match(/type="button"/g)).toHaveLength(6)
+  expect(html).toContain(MEMORY.autoMemoryDir)
+  expect(html).toContain(MEMORY.autoMemoryEntrypoint)
+  expect(html).toContain(MEMORY.autoMemories[0]!.filePath)
+  expect(html).toContain(MEMORY.agentMemories[0]!.directory)
+})
+
+test('P4-57 wires every memory copy payload directly from its trusted snapshot path', () => {
+  // SSR can prove the buttons and text nodes, but it cannot click them or observe
+  // clipboard writes and confirmation timing. Pin the non-DOM payload wiring at
+  // source, following the TranscriptView copy-control precedent.
+  const source = readFileSync(new URL('./MemoryPage.tsx', import.meta.url), 'utf8')
+  const flat = source.replace(/\s+/g, ' ')
+
+  expect(flat).toContain('path={snapshot.autoMemoryDir}')
+  expect(flat).toContain('path={snapshot.autoMemoryEntrypoint}')
+  expect(flat).toContain('path={file.path}')
+  expect(flat).toContain('path={memory.filePath}')
+  expect(flat).toContain('path={agent.directory}')
+  expect(flat).toContain('.writeText(path)')
 })
 
 test('renders every memory instruction and auto-memory type', () => {

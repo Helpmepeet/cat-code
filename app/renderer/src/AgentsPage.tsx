@@ -11,6 +11,7 @@ import {
   selectAgentConfigGroups,
 } from './agentConfigState.js'
 import { useModalFocus } from './overlayFocus.js'
+import { useToast } from './toastContext.js'
 
 type SourceMeta = {
   label: string
@@ -252,7 +253,7 @@ function AgentRow({
   )
 }
 
-function AgentInspectDrawer({
+export function AgentInspectDrawer({
   definition,
   onClose,
 }: {
@@ -345,7 +346,14 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
   const rows: Array<[string, ReactNode]> = [
     ['Source', <SourceBadge key="source" meta={source} />],
     ...(definition.plugin ? [['Plugin', definition.plugin] as [string, string]] : []),
-    ...(definition.filePath ? [['File', definition.filePath] as [string, string]] : []),
+    ...(definition.filePath
+      ? [
+          [
+            'File',
+            <PathValue key="file-path" path={definition.filePath} />,
+          ] as [string, ReactNode],
+        ]
+      : []),
     ['Model', definition.model ?? 'inherit'],
     ['Provider', 'runtime-selected'],
     ['Tools', toolsLabel(definition.tools)],
@@ -394,6 +402,54 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
         </div>
       ))}
     </div>
+  )
+}
+
+function PathValue({ path }: { path: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="min-w-0 flex-1 break-all">{path}</span>
+      <PathCopyButton label="agent definition file path" path={path} />
+    </span>
+  )
+}
+
+function PathCopyButton({ label, path }: { label: string; path: string }) {
+  const [copied, setCopied] = useState(false)
+  const toast = useToast()
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) {
+      toast('Could not write to the clipboard', { tone: 'warn' })
+      return
+    }
+    void clipboard
+      .writeText(path)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+        toast('Path copied to clipboard', { tone: 'success' })
+      })
+      .catch(() => {
+        toast('Could not write to the clipboard', { tone: 'warn' })
+      })
+  }
+
+  return (
+    <button
+      aria-label={copied ? `${label} copied` : `Copy ${label}`}
+      className={`shrink-0 rounded-md border border-shell-seam px-2 py-0.5 font-sans text-[10.5px] transition-colors ${
+        copied
+          ? 'text-[#86efac]'
+          : 'text-text-subtle hover:bg-shell-hover hover:text-text-primary'
+      }`}
+      onClick={copy}
+      title={`Copy ${label}`}
+      type="button"
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
   )
 }
 

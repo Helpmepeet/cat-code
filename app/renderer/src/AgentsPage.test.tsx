@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AgentConfigSnapshot } from '../../shared/protocol.js'
-import { AgentsPage } from './AgentsPage.js'
+import { AgentInspectDrawer, AgentsPage } from './AgentsPage.js'
 
 const SNAPSHOT: AgentConfigSnapshot = {
   definitions: [
@@ -82,4 +83,27 @@ test('with no session, says what to do rather than naming the missing frame', ()
   // never came and named internals (CLAUDE.md §7).
   expect(html).toContain('Open a session to see its agent definitions')
   expect(html).not.toContain('MOCK')
+})
+
+test('P4-57 agent definition file paths have a keyboard-reachable copy button', () => {
+  const definition = SNAPSHOT.definitions[0]!
+  const html = renderToStaticMarkup(
+    <AgentInspectDrawer definition={definition} onClose={() => {}} />,
+  )
+
+  expect(html).toContain(definition.filePath!)
+  expect(html).toContain('aria-label="Copy agent definition file path"')
+  expect(html).toContain('title="Copy agent definition file path"')
+  expect(html).toContain('type="button"')
+})
+
+test('P4-57 wires the agent copy payload directly from the trusted definition path', () => {
+  // The SSR suite has no DOM or clipboard implementation, so payload and
+  // confirmation timing cannot be exercised here.
+  const source = readFileSync(new URL('./AgentsPage.tsx', import.meta.url), 'utf8')
+  const flat = source.replace(/\s+/g, ' ')
+
+  expect(flat).toContain('<PathValue key="file-path" path={definition.filePath} />')
+  expect(flat).toContain('<PathCopyButton label="agent definition file path" path={path} />')
+  expect(flat).toContain('.writeText(path)')
 })
