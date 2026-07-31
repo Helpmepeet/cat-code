@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
@@ -1250,4 +1251,85 @@ test('P4-33 — the chip is keyboard-reachable, not hover-only', () => {
 test('P4-33 — an empty user turn gets no copy chip', () => {
   // Nothing to put on the clipboard (the prototype's showCopy gate).
   expect(render(userRow('   '))).not.toContain('aria-label="Copy message"')
+})
+
+/* --------------------------------------------------------------------------- *
+ * P4-38 — the same chip on the assistant body (Messages.jsx:2064-2091).
+ *
+ * SSR-ONLY LIMIT: `renderToStaticMarkup` produces no document, so the hover
+ * reveal and the clipboard round-trip are structurally untestable here. What
+ * these tests pin is everything that IS decidable from the markup — the gates,
+ * the host contract the absolute chip depends on, the assistant wording — plus
+ * a source pin on the payload, which never reaches the DOM at all.
+ * --------------------------------------------------------------------------- */
+
+function assistantRow(
+  content: string,
+  streaming?: true,
+): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: 's:m:0:assistant-text',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content,
+    ...(streaming ? { isStreaming: streaming } : {}),
+  }
+}
+
+test('P4-38 — a settled assistant reply carries a copy control, worded for a response', () => {
+  const html = render(assistantRow('Here is the answer.'))
+  expect(html).toContain('aria-label="Copy response"')
+  expect(html).toContain('title="Copy response"')
+  // The user twin's wording must not leak onto the assistant side.
+  expect(html).not.toContain('Copy message')
+})
+
+test('P4-38 — the assistant body is the positioned hover group the chip needs', () => {
+  // The chip is `absolute` + `opacity-0`; without `group relative` on the host it
+  // anchors to a distant ancestor and never reveals, and without the reserved
+  // right gutter the revealed glyph lands on the last line's text.
+  const html = render(assistantRow('Here is the answer.'))
+  expect(html).toContain('group relative pr-8')
+  expect(html).toContain('opacity-0')
+  expect(html).toContain('group-hover:opacity-100')
+  // Same real-added keyboard reach as the user twin; the prototype is hover-only.
+  expect(html).toContain('group-focus-within:opacity-100')
+})
+
+test('P4-38 — no copy chip while the reply is still streaming', () => {
+  const html = render(assistantRow('partial ans', true))
+  expect(html).toContain('animate-pulse') // still streaming: the caret is up
+  expect(html).not.toContain('Copy response')
+})
+
+test('P4-38 — an empty assistant turn gets no copy chip', () => {
+  expect(render(assistantRow('   \n  '))).not.toContain('Copy response')
+})
+
+test('P4-38 — a collapsed reply still offers the copy control', () => {
+  const long = Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n')
+  const html = render(assistantRow(long))
+  expect(html).toContain('Show 20 more lines') // the body IS truncated
+  expect(html).not.toContain('line 79') // the tail is not rendered
+  expect(html).toContain('aria-label="Copy response"')
+})
+
+test('P4-38 — the copy payload is the whole markdown source, not the visible part', () => {
+  // The clipboard payload is a prop, never markup, so SSR cannot observe it.
+  // Pinned at the source instead (the `App.test.tsx` / `userVisibleText.test.ts`
+  // precedent): copying the truncated `shown` is the failure mode this guards.
+  const source = readFileSync(
+    new URL('./TranscriptView.tsx', import.meta.url),
+    'utf8',
+  )
+  const start = source.indexOf('function AssistantProse(')
+  expect(start).toBeGreaterThan(-1)
+  const prose = source.slice(start, source.indexOf('\n}\n', start))
+  const flat = prose.replace(/\s+/g, ' ')
+
+  expect(flat).toContain('<BubbleCopyChip content={content} subject="response" />')
+  expect(flat).not.toContain('content={shown}')
+  // `shown` is still what gets RENDERED, so the contrast above is meaningful.
+  expect(flat).toContain('{shown}')
 })

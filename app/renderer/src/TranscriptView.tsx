@@ -529,8 +529,16 @@ function AssistantProse({
     collapsible && !expanded
       ? content.split('\n').slice(0, PROSE_COLLAPSE_LINES).join('\n')
       : content
+  // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
+  // is still arriving (there is no settled answer to take yet, and the caret owns
+  // that corner), and none on an empty turn.
+  const copyable = !streaming && content.trim().length > 0
   return (
-    <div>
+    // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
+    // the hover/focus group the absolute chip anchors to, and `pr-8` reserves the
+    // corner so the revealed glyph never lands on the last line's text. Without
+    // all three the chip anchors to a distant ancestor and stays invisible.
+    <div className="group relative pr-8">
       <MarkdownErrorBoundary fallback={content}>
         <div className="font-sans font-light text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
           <Markdown
@@ -558,6 +566,13 @@ function AssistantProse({
             ? 'Collapse'
             : `Show ${totalLines - PROSE_COLLAPSE_LINES} more lines`}
         </button>
+      ) : null}
+      {/* Payload is the RAW markdown `content`, never the truncated `shown`: a
+          collapsed body still copies the whole reply. The chip sits at the
+          wrapper's bottom-right, which in the collapsed branch is the reveal
+          button's own row, opposite edge, inside the reserved gutter. */}
+      {copyable ? (
+        <BubbleCopyChip content={content} subject="response" />
       ) : null}
     </div>
   )
@@ -1317,17 +1332,48 @@ function ToolOverflowNote({
 }
 
 /**
- * P4-33 — the hover-reveal copy chip inside a user bubble (Messages.jsx:2094).
- * Quiet until the bubble is hovered or something inside it takes focus, then a
- * small clipboard glyph in the notched corner; the tick pins itself visible for
- * a beat so the confirmation survives the pointer leaving.
+ * Per-host wording. The prototype splits it: the assistant side toasts `Copied
+ * response` (Messages.jsx:2067) and the user twin `Copied message` (`:2097`).
+ * P4-38 parameterizes rather than forks `BubbleCopyChip`, so the reveal, tick,
+ * timing and colour grammar stay ONE implementation across both hosts.
+ */
+const COPY_CHIP_TEXT = {
+  message: {
+    idle: 'Copy message',
+    done: 'Message copied',
+    toast: 'Copied message',
+  },
+  response: {
+    idle: 'Copy response',
+    done: 'Response copied',
+    toast: 'Copied response',
+  },
+} as const
+
+/**
+ * P4-33 — the hover-reveal copy chip inside a user bubble (Messages.jsx:2094);
+ * P4-38 mounts the same chip on the assistant body (`:2077`).
+ * Quiet until the host is hovered or something inside it takes focus, then a
+ * small clipboard glyph in the bottom-right corner; the tick pins itself visible
+ * for a beat so the confirmation survives the pointer leaving.
+ *
+ * HOST CONTRACT: the chip is `absolute`, so its host must be the positioned
+ * hover group AND reserve the corner — `group relative … pr-8`. Mounted under a
+ * host that is neither, it anchors to a distant ancestor and never reveals.
  *
  * `group-focus-within` is a real-added a11y fix: the prototype reveals on hover
  * ONLY, which leaves the control unreachable by keyboard. Icons are drawn inline
  * per component, the house pattern (there is no shared icon set).
  */
-function BubbleCopyChip({ content }: { content: string }) {
+function BubbleCopyChip({
+  content,
+  subject,
+}: {
+  content: string
+  subject: keyof typeof COPY_CHIP_TEXT
+}) {
   const [copied, setCopied] = useState(false)
+  const text = COPY_CHIP_TEXT[subject]
   const toast = useToast()
   const copy = (): void => {
     const clipboard =
@@ -1340,7 +1386,7 @@ function BubbleCopyChip({ content }: { content: string }) {
         setTimeout(() => setCopied(false), 1300)
         // The prototype toasts as well as ticking (Messages.jsx:2096): the tick
         // is in the corner the pointer just left, so it is easy to miss.
-        toast('Copied message', { tone: 'success' })
+        toast(text.toast, { tone: 'success' })
       })
       .catch(() => {})
   }
@@ -1348,8 +1394,8 @@ function BubbleCopyChip({ content }: { content: string }) {
     <button
       type="button"
       onClick={copy}
-      aria-label={copied ? 'Message copied' : 'Copy message'}
-      title="Copy message"
+      aria-label={copied ? text.done : text.idle}
+      title={text.idle}
       className={`absolute bottom-1.5 right-2 inline-flex items-center justify-center rounded-md p-1 opacity-0 transition-[color,opacity] duration-150 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
         copied
           ? 'text-[#86efac] opacity-100'
@@ -1403,7 +1449,9 @@ function UserBubble({ content }: { content: string }) {
     <div className="flex justify-end">
       <div className="group relative max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 pr-8 text-sm leading-relaxed text-text-primary">
         {content}
-        {copyable ? <BubbleCopyChip content={content} /> : null}
+        {copyable ? (
+          <BubbleCopyChip content={content} subject="message" />
+        ) : null}
       </div>
     </div>
   )
