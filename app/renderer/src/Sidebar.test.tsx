@@ -12,7 +12,7 @@ import type { WorkspaceDropEdge } from './sidebarWorkspaceOrder.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
 // SESSIONS-UNIFICATION). It collapses to the rail by default under
-// renderToStaticMarkup (`open = pinned || hovering`), so the expanded group
+// renderToStaticMarkup (all open sources are initially false), so the expanded group
 // header (#10 "+") and rows (#11 ⋮ / open-from-history) are exercised by
 // rendering the exported subcomponents directly.
 
@@ -447,6 +447,18 @@ test('P4-33 — the rail stays collapsed when no row menu is open', () => {
   const html = renderSidebar()
   expect(html).toContain(ASIDE_COLLAPSED)
   expect(html).not.toContain(ASIDE_EXPANDED)
+})
+
+test('P4-53 — the collapsed rail keeps the pin as its stable keyboard entry target', () => {
+  const html = renderSidebar()
+  expect(html).toContain('aria-label="Pin sidebar open"')
+  expect(html).toContain(
+    'class="pointer-events-none absolute inset-0 h-[50px] w-12 opacity-0"',
+  )
+  expect(html).not.toContain('aria-label="Search sessions"')
+  // SSR proves the pin is present and natively focusable before expansion. It
+  // cannot dispatch focus, observe the capture handler, or prove the next Tab
+  // reaches search/roster controls; those remain operator-only checks.
 })
 
 test('P4-33 — a sidebar-anchored row menu holds the rail expanded', () => {

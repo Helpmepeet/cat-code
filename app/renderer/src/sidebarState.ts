@@ -45,6 +45,25 @@ import type { ShellState } from './shellState.js'
 import type { TabTone } from './tabStatus.js'
 
 /**
+ * The independent reasons the sidebar rail stays expanded. Keeping this
+ * derivation pure prevents focus entry from replacing the established pointer,
+ * pin, or row-menu ownership rules.
+ */
+export function selectSidebarOpen({
+  pinned,
+  hovering,
+  menuActive,
+  focusWithin,
+}: {
+  pinned: boolean
+  hovering: boolean
+  menuActive: boolean
+  focusWithin: boolean
+}): boolean {
+  return pinned || hovering || menuActive || focusWithin
+}
+
+/**
  * Resolve a nav-rail click into the view to switch to, or `null` when the
  * item is disabled. Pure so `Sidebar.tsx`'s `NavItemExpanded` and
  * `NavItemRail` can BOTH route every click through the same tested logic

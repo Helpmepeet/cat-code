@@ -84,6 +84,7 @@ import {
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
+  selectSidebarOpen,
   selectVisibleSidebarRows,
   shouldShowSidebarGroupExpansionToggle,
   sidebarActivityKey,
@@ -239,6 +240,7 @@ export function Sidebar({
   const [search, setSearch] = useState('')
   const [pinned, setPinned] = useState(false)
   const [hovering, setHovering] = useState(false)
+  const [focusWithin, setFocusWithin] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
@@ -262,7 +264,12 @@ export function Sidebar({
   const headerRefs = useRef(new Map<string, HTMLButtonElement>())
   const refocusCwd = useRef<string | null>(null)
 
-  const open = pinned || hovering || menuActive
+  const open = selectSidebarOpen({
+    pinned,
+    hovering,
+    menuActive,
+    focusWithin,
+  })
 
   const onEnter = () => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -423,16 +430,28 @@ export function Sidebar({
         ref={asideRef}
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
+        onFocusCapture={() => setFocusWithin(true)}
+        onBlurCapture={event => {
+          const nextTarget = event.relatedTarget
+          if (
+            nextTarget instanceof Node &&
+            event.currentTarget.contains(nextTarget)
+          ) {
+            return
+          }
+          setFocusWithin(false)
+        }}
         aria-label="Primary"
         className={
           'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
           (open ? 'w-60 shadow-[4px_0_24px_rgba(0,0,0,0.45)]' : 'w-12')
         }
       >
-        {/* Logo + pin */}
+        {/* Logo + pin. The pin stays mounted while collapsed so Tab has a stable
+         * first entry target; focus capture expands the rail before it paints. */}
         <div
           className={
-            'flex h-[50px] shrink-0 items-center ' +
+            'relative flex h-[50px] shrink-0 items-center ' +
             (open ? 'justify-between pl-4 pr-2.5' : 'justify-center')
           }
         >
@@ -446,23 +465,23 @@ export function Sidebar({
               </span>
             ) : null}
           </div>
-          {open ? (
-            <button
-              type="button"
-              onClick={() => setPinned(value => !value)}
-              title={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
-              aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
-              aria-pressed={pinned}
-              className={
-                'flex h-[22px] w-[22px] items-center justify-center rounded ' +
-                (pinned
-                  ? 'bg-accent/[0.12] text-accent'
-                  : 'text-text-faint hover:text-text-muted')
-              }
-            >
-              <PinIcon />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setPinned(value => !value)}
+            title={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+            aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+            aria-pressed={pinned}
+            className={
+              open
+                ? 'flex h-[22px] w-[22px] items-center justify-center rounded ' +
+                  (pinned
+                    ? 'bg-accent/[0.12] text-accent'
+                    : 'text-text-faint hover:text-text-muted')
+                : 'pointer-events-none absolute inset-0 h-[50px] w-12 opacity-0'
+            }
+          >
+            <PinIcon />
+          </button>
         </div>
 
         {open ? (
@@ -574,7 +593,7 @@ export function Sidebar({
 // surfaces group AND label the unified roster identically (no local dup).
 
 // Exported for SSR tests: the sidebar collapses to the rail by default
-// (`open = pinned || hovering`, both false under renderToStaticMarkup), so the
+// (all four open sources are false under renderToStaticMarkup), so the
 // expanded group header (#10 "+") and rows (#11 ⋮) are only reachable by
 // rendering these subcomponents directly (SessionActionsMenu.test idiom).
 export function SessionGroup({

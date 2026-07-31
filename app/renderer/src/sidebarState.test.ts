@@ -7,6 +7,7 @@ import {
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
+  selectSidebarOpen,
   selectShellDescriptors,
   selectVisibleSidebarRows,
   shouldShowSidebarGroupExpansionToggle,
@@ -39,6 +40,43 @@ function added(session: SessionDescriptor) {
 }
 
 const rows10 = Array.from({ length: 10 }, (_, i) => descriptor(`r${i}`))
+
+describe('selectSidebarOpen', () => {
+  test('focus within independently expands an otherwise collapsed rail', () => {
+    expect(
+      selectSidebarOpen({
+        pinned: false,
+        hovering: false,
+        menuActive: false,
+        focusWithin: true,
+      }),
+    ).toBe(true)
+  })
+
+  test('releasing focus ownership preserves pointer, pin, and menu ownership', () => {
+    for (const source of ['pinned', 'hovering', 'menuActive'] as const) {
+      expect(
+        selectSidebarOpen({
+          pinned: source === 'pinned',
+          hovering: source === 'hovering',
+          menuActive: source === 'menuActive',
+          focusWithin: false,
+        }),
+      ).toBe(true)
+    }
+  })
+
+  test('the rail collapses only when every open source is absent', () => {
+    expect(
+      selectSidebarOpen({
+        pinned: false,
+        hovering: false,
+        menuActive: false,
+        focusWithin: false,
+      }),
+    ).toBe(false)
+  })
+})
 
 test('selectVisibleSidebarRows shows every row at/under the cap (no toggle)', () => {
   const rows = rows10.slice(0, 6)
