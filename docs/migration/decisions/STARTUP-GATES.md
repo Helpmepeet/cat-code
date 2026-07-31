@@ -31,6 +31,23 @@ From G1+G2, the real, buildable startup surface is:
    including the Codex `waiting_for_alias` step). After first-run, auth lives in the Accounts
    domain (W4), not a startup gate.
 
+   > **Clarification (2026-07-31 — operator ruling). §1.1 stands unchanged.** The UX gap audit
+   > (finding 2) observed that on a genuine first launch there is no session, so the accounts
+   > snapshot is session-keyed and null (`App.tsx:2396`, `accountsState.ts:106`) and
+   > `shouldShowFirstRunOAuth` (`appModel.ts:14`) cannot fire — the user must guess the sequence
+   > (pick a folder, session spawns, trust gate, *then* sign-in). The audit initially proposed
+   > reading the global pool instead; that was withdrawn, because account **verbs** need an engine
+   > process to carry them (`App.tsx:1178` answers with a real `ok:false` outcome when there is no
+   > session), so exposing sign-in earlier would surface a control with nothing behind it.
+   >
+   > **Ruled: fix discoverability, not architecture.** The launcher tells the user what to do first
+   > so the sequence is visible rather than guessed. Per-session-create trust is unchanged; account
+   > writes stay session-scoped; no host-plane account-write path is authorized by this ruling.
+   > Explicitly NOT ruled in: moving the `user` settings scope to a host-plane read. That is
+   > architecturally clean (the user layer is session-invariant by design,
+   > `settingsScope.ts:33`) and is untouched by this ruling, but it was not selected and needs its
+   > own decision.
+
 Both are adapts of real machinery; Phase-4 rows can be generated for them regardless of §5.
 
 ## 2. Why read-only mode is not an adapt (G3 detail)
@@ -153,6 +170,22 @@ whether even that blocks or just disables submit is §5-Q2.
 > sign-in. Pinned by `app/renderer/src/StartupSurfaces.test.tsx`. A nicer proactive treatment is
 > still deferred (out of scope). Operator GUI eyeball owed at the all-accounts-dead stage: confirm
 > nothing renders and a send proceeds to the request-time pool error.
+>
+> **Revision (2026-07-31 — operator ruling). #12 stands; the "nicer proactive treatment" deferred
+> above is now RULED IN, bounded.** Prompted by the UX gap audit
+> (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`, finding 9 / operator question O2):
+> quota exhaustion currently surfaces only as a `cat_code_account_diagnostic` notice **inside the
+> scrolling transcript** (`TranscriptView.tsx:1763`), so it scrolls out of view while subsequent
+> turns keep failing at request time. #12's reasoning — no wall, no submit block, failure surfaces
+> naturally — is unchanged and remains binding.
+>
+> **Ruled:** account/quota diagnostics get a **pinned, dismissable, non-blocking** surface above the
+> transcript, mounting the already-built `BannerStack` (`app/renderer/src/BannerStack.tsx`, currently
+> zero production importers). Constraints that make this compatible with #12 rather than a reversal
+> of it: it never blocks submit, it is always dismissable, it carries no re-auth wall semantics, and
+> it does not reintroduce `ReauthWall.tsx` or `reauthBannerState.ts`. Scope is **account health
+> only** — shell lifecycle errors are a separate surface and a separate finding (audit finding 8);
+> do not merge the two error classes into one banner plane.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics

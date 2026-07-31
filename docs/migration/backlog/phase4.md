@@ -2316,3 +2316,2052 @@ doc refs fixed. Kill any sidecar you spawn. Update your STATUS row last — **re
 immediately before writing and touch only your own row.**
 ```
 ─── PASTE ───
+
+---
+
+# TRANCHE H — the UX-gap audit's startable wave (generated 2026-07-31)
+
+Source: `docs/migration/reviews/2026-07-31-app-ux-gap-audit.md` (rev 6) and its companion
+`docs/migration/reviews/2026-07-31-app-ux-gap-prototype-coverage.md` (rev 3). The audit ranks by
+hypothesized user pain rather than prototype fidelity, so it surfaced work the ledger classes as
+low-priority deferrals or, in four cases, does not see at all.
+
+**Seven sessions, six findings.** Finding 6 splits in two: its inline half and its inspector half
+are different surfaces with different costs, and bundling them risks the cheap half being degraded
+when the expensive half runs long.
+
+| Session | Finding | What it is |
+|---|---|---|
+| **P4-35** | 24a | `starting` renders as a red failure in `ConnectionRecovery` |
+| **P4-36** | 6 (inline half) | Read/Write output truncates silently; no reveal band |
+| **P4-37** | 6 (inspector half) | The full-output inspector cannot be copied or searched |
+| **P4-38** | 7 | Assistant messages have no copy affordance |
+| **P4-39** | 19 | Session actions menu has no bottom-flip |
+| **P4-40** | 20 | Welcome recents are inert for terminal-only projects |
+| **P4-41** | 15 | No reset-to-default for any editable engine setting |
+
+## The rule that governs every session in this tranche
+
+**The audit's defects are reliable. Its proposed fixes are not.** Six adversarial review rounds
+withdrew or corrected **seven** of the "Improvement" lines — including two that were wrong in the
+dangerous direction — while almost no defect was withdrawn. Findings 5a, 7, 10, 11, 12, 19, and 20
+all shipped a fix recommendation that a later round retracted.
+
+So each dispatched prompt below carries the finding's **evidence** and forbids it from carrying the
+finding's **conclusion** as settled. Every session must:
+
+1. **Re-verify every anchor in current source before building.** The tree is shared and moves.
+2. **Name, in its report, the contract or call path the fix satisfies** — the existing function,
+   type, or invariant that makes the change correct. One line. "The audit said so" is not a
+   justification, and neither is "the prototype does it": the prototype's mock data is never the
+   contract (finding 5a's retention enum is the standing example of a prototype design that would
+   have deleted legitimate values).
+3. **Report a deviation as a §0 proposal**, never a silent narrowing, per the standing rules above.
+
+## Disposition reconciliation (read before questioning a session's scope)
+
+The coverage document's bucket table classes **6, 7, 15, 19, 20** as bucket **A** (port now) and
+**24a** as bucket **C** (no prototype design). Its headline "only 5 are startable today" counts
+bucket A alone. **24a is startable regardless**: the same document's bucket-C row for it reads
+"Question: none for the one-line guard, which is unambiguous", and the audit lists it in
+Highest-confidence work as source-verified, self-contained, and reversing no ruling. Bucket C means
+"invent the design", not "blocked" — and 24a needs no design. The tone-grammar question that *does*
+need design is **24b**, which is a separate item and needs an operator ruling.
+
+## Parked — recorded so they do not become invisible
+
+Neither group is a session. Both are listed here because the audit's own findings for them are
+source-verified and would otherwise be lost between an audit doc and nobody's backlog.
+
+**Seam-blocked — a boundary/seam owner is needed before any renderer work (3):**
+
+| # | What is blocked | The missing seam |
+|---|---|---|
+| 9 | Interrupting renders as a `UserBubble` the user never wrote | Engine-authored provenance on the interrupt carrier. `createUserInterruptionMessage` (`src/utils/messages.ts:557-572`) calls plain `createUserMessage` and sets no synthetic/meta flag, so the literal lands as an ordinary `user-text` row. String-matching the engine's literal in the renderer is forbidden (repo mistake #10), so this is a protocol question. **Note:** ledger §05's claim that the carrier is "suppressed at the projector via `isSynthetic`" is false; do not size the work from it. **Finding 11's `↑`-history seed is coupled to this** — an unfiltered `user-text` seed would import `[Request interrupted by user]` into recall as though typed. |
+| 10a | No file completion in `@` mentions | A cross-plane file-list read seam. `composerState.ts:60-70` records that the engine's `@`-file index is not on the wire; `MentionPicker` is already source-agnostic, so the renderer half is not the gap. Needs a host/sidecar owner + boundary review. |
+| 16a | Goals is a read-only page for a writable engine object | No inbound goal-mutation verb exists. All 25 §22 rows are Part C ❓ with owner **UNASSIGNED** and P4-10 is spent. The prototype has a full design (`GoalsPage.jsx:63,110-115,226-260`: per-row Resume/Pause/Replace/Clear + a Create dialog), so this is the largest un-owned cluster in the ledger: design-complete, wire-blocked. |
+
+The **open-the-file** capability belongs in this group too (three pages list files the user cannot
+reach). Both prototype actions are stubs, and `SECURITY-MINIMUM.md` HC1 forbids the renderer
+authoring a filesystem path, so it needs a host-API verb taking a registry-resolved identifier.
+Building it from the prototype alone yields either another dead button or an unsafe IPC.
+
+**~~Awaiting an operator ruling~~ — ALL FIVE RESOLVED 2026-07-31, and every one is now a TRANCHE I
+session. Nothing in this register awaits a ruling.** The table is kept because the *bounds* each
+resolution carries are what a session must respect; it is no longer a parking lot.
+
+| # | The ask | Resolution (2026-07-31) | Owner |
+|---|---|---|---|
+| 2a | App-level trust and OAuth gate before any session exists | **RULED — fix discoverability only.** `STARTUP-GATES.md` §1.2 clarification: §1.1 stands, trust stays per-session-create, account writes stay session-scoped, no host-plane account-write path is authorized, and moving the `user` settings scope to a host-plane read is explicitly NOT ruled in. (Finding **2b**, the session-free *user-settings* read, remains a separate bucket-C design question with no owner.) | **P4-48** |
+| 24b | A connection tone grammar to replace the four-state one | **RULED — minimal two-tone, no chip.** Transient reads neutral or warn, terminal reads danger; no dot, no chip, no restored `ConnectionChip.tsx`. CC-5 #6 is not reopened: the deleted component stays deleted. | **P4-49** |
+| 26d | An SSH connect mode behind the Remote rail's description | **NOT A RULING QUESTION — mis-filed.** Aligning the rail's copy with a cut feature does not reopen the cut; `decisions/PAIRED-DEVICES.md` §1-§3 stands as written. The one-line copy fix was always actionable, and this register wrongly parked it. | **P4-47** |
+| O1 | Sidebar per-row session state for the closed-session case | **RULED — live-only dot, no text.** A single small unlabeled dot on live rows, absent otherwise; no chip, no status word, no per-state colour vocabulary. The minimum exception to the 2026-07-20 bare-row ruling. | **P4-44** |
+| O2a | A blocking reauth gate | **RULED — pinned, dismissable, non-blocking `BannerStack` above the transcript, account health ONLY.** `STARTUP-GATES.md` #12 is unchanged rather than reversed: never blocks submit, always dismissable, no re-auth wall semantics, does not resurrect `ReauthWall.tsx` / `reauthBannerState.ts`. Shell lifecycle errors (finding 8) stay a separate surface. **O2b** remains a bucket-C design question. | **P4-50** |
+
+> **Why this correction exists.** As written before 2026-07-31 this register told a reader that five
+> available items were blocked on the operator. Four had been ruled on the same day and the fifth was
+> never a ruling question at all. A parked register that has gone stale costs more than no register:
+> the next session reads it and walks past work that is ready.
+
+## Known ledger drift — note it, do not fix it here
+
+`PARITY-LEDGER.md` has four rows that overstate what shipped, plus a headline count that disagrees
+with its own Part D totals; both are recorded at the end of the coverage document. Two further rows
+were found while scoping this tranche and are recorded here for the same reason:
+
+- **§12 `:912`** ("ConnectionChip: hidden when healthy", ✅ built) cites the very guard that omits
+  `starting`, and its `App.tsx:3483-3489` anchor has drifted to `:4024`.
+- **§05 `:387`** (inline truncation reveal band) defers head+tail windowing, progressive reveal and
+  the capped-bytes footer together as needing "projector byte metadata". Only the byte footer needs
+  it. **A P4-36 that reads this row and stops would build nothing.**
+
+Reconciling the ledger is not part of any session below. Each session updates only the rows it
+actually changed.
+
+## Dependency / ordering
+
+```
+P4-36 (inline reveal band) ─▶ P4-37 (its note points at the inspector this session makes usable)
+P4-41 boundary half ────────▶ P4-41 renderer half   [same session, sequenced — see its entry]
+P4-35, P4-38, P4-39, P4-40  [standalone — run any time]
+```
+Everything in **Standing rules** at the top of this file still applies.
+
+
+## P4-35 · ⬜ — A benign transient renders as a red failure (`ConnectionRecovery` guard, audit 24a)
+
+The smallest session in the tranche, and the work is the derivation rather than the edit. `starting`
+is not a spawn-lifecycle state: it is produced by an **error frame**, and something else already
+classifies it as transient. Say which, or the fix is a guess that happens to look right.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 2/10
+
+You are running P4-35 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 24a) whose "what is missing" findings survived six adversarial review rounds, and whose
+proposed FIXES did not: seven were withdrawn or corrected, two of them wrong in the dangerous
+direction. Treat the evidence below as reliable and the suggested fix as an untested hypothesis.
+Re-verify every anchor in current source before you touch anything (the tree is shared and moves).
+**Your report MUST name, in one line, the contract or call path your fix satisfies** — the existing
+function, type, or invariant that makes it correct. "The audit said so" is not a justification.
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+`ConnectionRecovery` (`app/renderer/src/App.tsx:4016`) returns null for exactly three conditions:
+
+    if (!sessionId || connection.status === 'connecting' || connection.status === 'ready')
+
+Everything else renders `<span>Session {connection.status}.</span>` in `text-tone-danger` beside a
+Restart button (`:4032-4050`). The status union is `'connecting' | 'starting' | 'ready' | 'dead' |
+LifecycleFrame['status']` (`app/renderer/src/connectionState.ts:8-16`, lifecycle statuses
+`'disconnected' | 'failed' | 'exited'` at `app/shared/protocol.ts:2050-2054`). So a session that is
+merely `starting` gets a red failure bar and an invitation to restart it.
+
+=== WHAT YOU MUST ESTABLISH BEFORE EDITING ===
+Do not add a string to a condition and call it done. Answer these in your report, from source:
+
+1. **Who produces `starting`, and what does it mean?** `connectionState.ts:66-85` is the place to
+   look. Note what KIND of frame it comes from before you assume it is a spawn state.
+2. **Is there an existing classifier that already partitions this union into transient vs terminal?**
+   If one exists, your guard should agree with it rather than invent a second, divergent list. Name
+   it in your report and state whether your fix aligns or deviates.
+3. **Can a session sit in this status indefinitely?** If suppressing the bar can hide a stuck spawn,
+   say so and say what bounds it. Silently hiding a real failure is a worse bug than the one you
+   are fixing.
+
+=== SCOPE — READ THE FENCE ===
+IN: the guard, plus a test in `app/renderer/src/App.test.tsx` (`ConnectionRecovery` is already
+rendered directly there at `:1062,:1068`, so this needs no new harness) that fails before your fix
+and passes after, covering every member of the status union rather than just the one you added.
+
+OUT, and each for a recorded reason:
+- **The raw status word in the copy.** `Session dead.` / `Session exited.` prints an engine
+  discriminant at the user (CLAUDE.md §7). Real, and NOT yours: it is audit finding 26c's class.
+- **Any connection tone grammar** (dot, pulse, ring, four-state vocabulary). That is audit finding
+  **24b**, which reverses CC-5 ruling #6 (`ConnectionChip.tsx` was deleted by that ruling) and is
+  **blocked on an operator ruling**. Restoring any part of it here reopens a locked decision.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change — if you think you
+need one, you have left the scope. Security baseline untouched (`decisions/SECURITY-MINIMUM.md`
+T4/T5a/T6/T7 + HC1-HC4). `app/` is strict TypeScript; keep it that way. No new deps. Branch
+`migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail** — a DROP is a regression) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new
+owned · `bun run --cwd app test:hardening` 19/19.
+
+Report: the one-line contract statement (required), the three answers above, commands with actual
+outcomes.
+
+Ledger: `PARITY-LEDGER.md` §12 row `:912` claims "ConnectionChip: hidden when healthy ✅ built" and
+cites this guard at a stale `App.tsx:3483-3489`. Correct THAT ROW's anchor and its claim to match
+what ships. Do not touch any other ledger row and do not touch the Part D totals. Update your
+STATUS row last: `STATUS.md` is multi-writer, so **re-read it immediately before writing and touch
+only your own row.**
+```
+─── PASTE ───
+
+
+## P4-36 · ⬜ — Read and Write output truncates silently (inline reveal band, audit 6 first half)
+
+Read your ledger row `:387` and then read the note above it in this tranche: that row defers three
+things together and only one of them is actually blocked. If you build nothing because the row says
+deferred, this session has failed.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 4/10 · 🖐 GUI
+
+You are running P4-36 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 6) whose defect claims survived six adversarial review rounds and whose proposed fixes
+often did not. Treat the evidence below as reliable and the suggested fix as an untested
+hypothesis. Re-verify every anchor in current source before building. **Your report MUST name, in
+one line, the contract or call path your fix satisfies.** "The audit said so" and "the prototype
+does it" are both insufficient: the prototype's mock data is never the contract.
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+`MAX_INLINE_TOOL_LINES = 400` (`app/renderer/src/TranscriptView.tsx:1194`). Four body renderers cap
+at it; only two say so.
+
+- `BashBody` (`:1196-1211`) slices and calls `<ToolOverflowNote …/>` at `:1208`. ✅
+- `PlainLinesBody` (`:1260-1275`) slices and calls it at `:1272`. ✅
+- `NumberedBody` (`:1229-1243`) — the **file-read** body — slices at `:1230` and renders **nothing**.
+- `AdditionsBody` (`:1246-1258`) — the **file-write** body — slices at `:1247` and renders nothing.
+
+So a 900-line file read shows 400 lines that simply stop. The last visible line looks like the end
+of the file, and nothing cues the user to doubt it. Silent truncation is worse than visible
+truncation: the user forms a wrong belief with no signal.
+
+`ToolOverflowNote` (`:1302-1317`) already exists and renders `{N} more {unit}. Open the full-output
+inspector to view all`. The escape hatch it points at is real: the projector does not truncate, and
+the inspector reads the full `row.result.content` (`app/renderer/src/toolInspectorModel.ts:57`).
+
+=== THE OTHER HALF: THE REVEAL BAND ===
+The prototype does more than confess (`~/catcode_prototype/cat-app/Messages.jsx:438-457`): a strip
+reading `{N} lines hidden`, then **Show {min(100, remaining)} more** and **Open full output ↗**. Its
+window is head+tail (`HEAD0 = 30`, `TAIL = 6`), so the last 6 lines stay visible no matter how long
+the output is. The app collapses all of that into one sentence with no progressive reveal and no
+tail.
+
+**The composition question is real and is yours to raise, not to silently resolve.** The app's
+bodies are a 400-line slice inside a `max-h-[340px] overflow-auto` scroll box; the prototype's band
+sits under a head+tail window with no inner scroller. Those are different models. If they cannot be
+reconciled to read as the prototype, that is a §0 flag with the trade-off stated (extend-engine vs
+change-UI), raised as a PROPOSAL to the operator, never a silent drop.
+
+=== SCOPE — READ THE FENCE ===
+IN: the missing note on both bodies; the head+tail window; the progressive reveal; the
+`Open full output` route into the inspector.
+
+OUT, with the reason:
+- **The `capped at {bytes}` footer.** The projector carries no byte metadata. This is the ONE part
+  of ledger row `:387` that is genuinely blocked.
+- **Stdout/stderr stream tabs.** The fold does not preserve the split. Belongs with P4-37 if the
+  seam ever lands.
+- **Inspector copy / search / wrap.** That is **P4-37**, running after this one. Your note points at
+  a drawer that is not yet copyable; that is expected and is not your gap to close.
+
+**Ledger warning.** Your row is `PARITY-LEDGER.md` §05 `:387`, which reads "Head+tail windowing +
+progressive reveal + capped-bytes need projector byte metadata → §0 deferral". That is **wrong for
+two of the three**: head+tail and progressive reveal operate on the content string already in hand.
+Only the byte footer needs metadata. Verify this yourself before accepting either reading, and
+correct the row to match what ships.
+
+=== PROTOTYPE — THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Read `~/catcode_prototype/cat-app/Messages.jsx:255-352,406-457` before writing code. Run it
+side-by-side: the runner is `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside
+`cat-app/`). PROGRAM-PLAN §6 applies in full: a surface is done when it READS as the prototype, not
+when its data is wired. Port ZERO prototype code. No inline `style={{}}` — P0-2 tokens and the
+Tailwind idiom, and beware the dynamic-class trap (interpolated arbitrary values silently no-op).
+
+Enumerate STATES, not one screenshot: under the cap, one line over, far over, a body whose tail is
+shorter than TAIL, and an empty result. A surface can match in one state and be wrong in another.
+
+**User-visible text (CLAUDE.md §7):** no em dash anywhere a user can read it, including
+`aria-label`s and titles. Check with `rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm
+every remaining hit is a code comment.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change. Security baseline
+untouched (T4/T5a/T6/T7 + HC1-HC4). This surface renders untrusted tool output: everything stays a
+text node, never `dangerouslySetInnerHTML`. `app/` is strict. No new deps. Branch `migration`,
+commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail**) · `bunx tsc --noEmit -p
+app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned ·
+`bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill** and paste BOTH artifacts: the filled **FIDELITY**
+block (surfaces, states compared, prototype anchors, artifacts per state, open mismatches,
+operator-approved deviations) and the **SURFACE ACCEPTANCE** tiered verdict. An open, unapproved
+mismatch stops a fidelity-pass claim; a §0 flag is a proposal, not a closure.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation): have the agent read
+a file well over 400 lines and write one, then confirm both cards state what was hidden, the reveal
+extends the body, and the tail is still visible. Migration test turns use `gpt-5.6-luna` at low
+effort on a healthy account.
+
+Report: the one-line contract statement (required). Ledger: correct §05 `:387` to what actually
+ships, including which of its three deferrals was real. Touch no other ledger row and not the Part D
+totals. Kill any sidecar you spawn. Update your STATUS row last — re-read `STATUS.md` immediately
+before writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-37 · ⬜ — The full-output inspector cannot be copied or searched (audit 6 second half)
+
+Run after P4-36. `ToolInspector.tsx` is 137 lines with zero copy, search or wrap: the ledger's
+"🔁 adapted (Esc, search+match-step, wrap, copy, capped footer)" tag is one of the four rows the
+coverage document recorded as overstating what shipped.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 5/10 · 🖐 GUI
+
+You are running P4-37 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 6) whose defect claims survived six adversarial review rounds and whose proposed fixes
+often did not. Treat the evidence below as reliable and the suggested fix as an untested
+hypothesis. Re-verify every anchor before building. **Your report MUST name, in one line, the
+contract or call path your fix satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+`app/renderer/src/ToolInspector.tsx` is **137 lines**. It renders Tool / Summary / Status / Input /
+Diff / Output sections and nothing else. `rg -n 'copy|search|wrap' app/renderer/src/ToolInspector.tsx`
+returns only `whitespace-pre-wrap` CSS classes. This is the drawer that every truncated tool card
+tells the user to open (`ToolOverflowNote`, `TranscriptView.tsx:1302-1317`), so it is the app's only
+route to a full 900-line output, and it can be neither copied nor searched.
+
+**The data is not the constraint.** `describeToolForInspector` takes `output` straight from
+`row.result?.content` (`app/renderer/src/toolInspectorModel.ts:57`) and the projector does not
+truncate. The full text is already in hand.
+
+**Ledger drift, verified:** §05 row `:391` tags this "🔁 adapted (Esc, search+match-step, wrap,
+copy, capped footer)". Three of those do not exist. Do not size the work from that row.
+
+=== WHAT THE PROTOTYPE CARRIES ===
+`~/catcode_prototype/cat-app/Messages.jsx:255-352`:
+
+- **Copy** writing the active stream's text, toast `Copied output` (`:337-340`).
+- **Search** computing matching line numbers, showing `k/N`, with `‹ ›` steppers that **wrap
+  around**, scroll the active line to vertical center, and highlight it (`:271-284,325-335`).
+- **Wrap** toggle.
+- Stdout/stderr **tab pills** with per-stream line counts, when both exist.
+
+The app already has two copy idioms to follow rather than invent: `CodeBlock`
+(`TranscriptView.tsx:665`) and `BubbleCopyChip` (`:1329`). Follow the house pattern.
+
+**Updated 2026-07-31 after P4-38 landed:** `BubbleCopyChip` no longer hardcodes "message" — it takes
+a `subject` prop resolved through a `COPY_CHIP_TEXT` map (`TranscriptView.tsx:1341-1352`). It is
+still a pattern to imitate rather than a component to mount here: it is a corner chip on a
+positioned bubble, and the inspector's copy control belongs in the drawer's own header. But if you
+add a third subject, extend that map rather than starting a new one.
+
+=== SCOPE — READ THE FENCE ===
+IN: copy, search with match-stepping and scroll-to-center, wrap. None of these is blocked by
+anything.
+
+OUT, with the reason:
+- **Stdout/stderr tab pills.** The fold does not preserve the stream split; there is one `output`
+  string. Building tabs over a single stream is a fake.
+- **The `capped at {bytes}` footer.** The projector carries no byte metadata.
+Flag both as §0 deferrals naming the seam each needs. Do not mock either.
+
+**Search is pure interaction, and the `app/` renderer suite is SSR-only** — no headless test in this
+repo can press a key, fire focus, or run a scroll effect. So put the searchable logic in a pure,
+exported, unit-tested helper (match-line computation, `k/N`, wrap-around stepping) and keep the DOM
+layer thin. A component-only implementation is structurally unverifiable here, which is exactly how
+past interaction bugs reached the operator through green batteries.
+
+=== PROTOTYPE — THE ACCEPTANCE BAR ===
+Read `Messages.jsx:255-352` before writing code, and run it side-by-side via
+`~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside `cat-app/`). PROGRAM-PLAN §6:
+done means it READS as the prototype. Port ZERO prototype code; no inline `style={{}}`; beware the
+dynamic-class trap. States to compare: no query, a query with zero matches, one match, many matches
+mid-stepping, wrap on and off, and copy in its confirmed state.
+
+**User-visible text (CLAUDE.md §7):** no em dash anywhere a user can read it, including the
+no-value placeholder (write `none`) and `aria-label`s. This file's doc comment currently says the
+drawer degrades to `—`; if that reaches the screen, it is a §7 violation you are now touching.
+
+=== GROUND RULES ===
+Renderer-only. This surface renders untrusted tool input and model output: everything stays a text
+node, never `dangerouslySetInnerHTML`, never a live control. Zero `as` casts in the tolerant-narrowing
+code. No new inbound vocabulary or preload channel; security baseline untouched (T4/T5a/T6/T7 +
+HC1-HC4). `app/` is strict. No new deps. Branch `migration`, commit your own explicit paths.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail**) · `bunx tsc --noEmit -p
+app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned ·
+`bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict. An open, unapproved mismatch stops a fidelity-pass claim.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO automation): open a long tool result, open the inspector, copy it
+and paste elsewhere to confirm the full text landed, then search for a term appearing several times
+and step past the last match to confirm it wraps to the first and the line is centered. Migration
+test turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement (required). Ledger: correct §05 `:391` to state what
+actually ships and what stayed deferred with its seam. Touch no other ledger row and not the Part D
+totals. Kill any sidecar you spawn. Update your STATUS row last — re-read `STATUS.md` immediately
+before writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-38 · ⬜ — Assistant messages have no copy affordance (audit 7)
+
+The design exists and the gates are specified. **The mount does not.** Rev 2 of the audit called
+this a drop-in and rev 3 withdrew that; the withdrawal is the important part of this prompt.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 4/10 · 🖐 GUI
+
+You are running P4-38 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 7) whose defect claims survived six adversarial review rounds and whose proposed fixes
+often did not — **this finding's own fix was withdrawn once already**. Treat the evidence below as
+reliable and any suggested shape as an untested hypothesis. Re-verify every anchor before building.
+**Your report MUST name, in one line, the contract or call path your fix satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+The user's own message has a hover copy chip; fenced code blocks have one; the assistant's prose has
+neither. The only whole-message export paths dump the entire session as raw JSON behind a
+sensitive-content warning. Hand-selecting rendered markdown loses formatting and picks up
+interleaved tool cards.
+
+- `AssistantProse` — `app/renderer/src/TranscriptView.tsx:518-564`, mounted at `:387`.
+- `BubbleCopyChip` — `:1329-1391`.
+- `UserBubble` — `:1398-1410`, the only mount.
+
+=== THE TRAP: THIS IS NOT A DROP-IN MOUNT ===
+`BubbleCopyChip` is `absolute bottom-1.5 right-2 opacity-0` and reveals through `group-hover` /
+`group-focus-within` (`:1353`). Its host supplies what makes that work: `UserBubble`'s inner div is
+`group relative` **and reserves the corner with `pr-8`** (`:1404`). `AssistantProse` returns a bare
+`<div>` (`:533`) that is neither `relative` nor `group` and reserves nothing. Mounted as-is, the
+chip positions against a distant ancestor and stays invisible to pointer users. **The work is the
+positioned wrapper, and it has to behave in two states the user bubble never sees:**
+
+1. **Streaming.** `AssistantProse` renders a pulsing caret while `streaming` (`:545-550`). The
+   prototype's gate is `showCopy = !msg.streaming && content.trim().length > 0`
+   (`~/catcode_prototype/cat-app/Messages.jsx:2064-2091`) — no chip mid-stream, none on an empty turn.
+2. **The collapsed-prose branch.** Over `PROSE_COLLAPSE_LINES` (60) the body renders a truncated
+   `shown` plus a "Show N more lines" button (`:527-531,551-561`). Decide what the chip copies and
+   where it sits relative to that button, and say why.
+
+**The payload is the raw markdown source** (`content`), not the rendered DOM and **not** `shown`.
+Copying the truncated view when the body is collapsed is the failure mode to avoid.
+
+**Copy that must differ from the twin.** The prototype's assistant toast is `Copied response`; the
+user twin says `Copied message`. `BubbleCopyChip` hardcodes "message" in its `aria-label`, `title`
+and toast (`:1343,1351,1352`). Parameterize or fork — state which and why. Keep the app's
+`group-focus-within` keyboard reach, which is a deliberate real-added a11y improvement over the
+prototype's hover-only reveal.
+
+=== SCOPE — READ THE FENCE ===
+IN: the positioned wrapper, the chip mount, the streaming and empty gates, the collapsed-branch
+behavior, the assistant-specific copy.
+
+OUT: the **"Assistant" eyebrow label** (ledger §05 `:368`, a separate deferred row) and any bubble
+shape or framing for the assistant side (`:367`). Adding either turns a copy affordance into a
+transcript reskin.
+
+=== PROTOTYPE — THE ACCEPTANCE BAR ===
+`~/catcode_prototype/cat-app/Messages.jsx:2064-2091`. Read it before writing code; run it
+side-by-side via `~/catcode_prototype/CatCode Web App.html` (repo root, NOT inside `cat-app/`).
+Colors are specified there: idle `#71717a`, hover `#d4d4d8`, copied `#86efac`, reverting after
+1300ms. PROGRAM-PLAN §6 in full: done means it READS as the prototype; the prototype IS the visual
+grammar, do not invent a parallel one. Port ZERO prototype code; no inline `style={{}}` — tokens and
+the Tailwind idiom, and beware the dynamic-class trap (interpolated arbitrary values silently
+no-op; use a static map).
+
+Enumerate STATES: streaming, just-finished, empty turn, short body, collapsed body, expanded body,
+hover, keyboard focus, and the copied confirmation.
+
+**User-visible text (CLAUDE.md §7):** no em dash anywhere a user can read it, `aria-label`s
+included.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change; security baseline
+untouched (T4/T5a/T6/T7 + HC1-HC4). `app/` is strict. No new deps. Branch `migration`, commit your
+own explicit paths, never `git add -A`.
+
+Note the Fast Refresh boundary: production `app/renderer/src/**/*.tsx` modules export React
+components only at runtime. Helpers and constants move to an adjacent `.ts` file
+(`lint:fast-refresh` enforces this).
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail**) · `bunx tsc --noEmit -p
+app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned ·
+`bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**The `app/` renderer suite is SSR-only**, so hover reveal and the copy round-trip are structurally
+invisible to it. Test what is testable headlessly (the gates: streaming, empty, collapsed payload)
+and state plainly in your report which behaviors only the GUI step can confirm. Do not report a
+green battery as evidence that the chip appears.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict. An open, unapproved mismatch stops a fidelity-pass claim.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation): send a turn and
+watch a full reply stream in — no chip while streaming, chip on hover once it settles; copy it and
+paste into an editor to confirm raw markdown, not rendered text; then do the same on a reply long
+enough to collapse and confirm the clipboard holds the WHOLE reply, not the visible part; then
+reach the chip by keyboard alone. Migration test turns use `gpt-5.6-luna` at low effort on a healthy
+account.
+
+Report: the one-line contract statement (required). Ledger: flip §05 `:369` (AssistantBubble
+hover-reveal copy chip, currently ⬜ deferred owner-flagged) with a real `app/…:line`, and leave
+`:367`/`:368` alone. Touch no other ledger row and not the Part D totals. Kill any sidecar you
+spawn. Update your STATUS row last — re-read `STATUS.md` immediately before writing and touch only
+your own row.
+```
+─── PASTE ───
+
+
+## P4-39 · ⬜ — The session actions menu runs off the bottom of the window (audit 19)
+
+**This session ships with its UNVERIFIED tag intact and must not claim the finding closed.** Whether
+the app's menu clips today is unconfirmed, and the prototype's constant threshold suits the
+prototype's menu, not necessarily this one.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 3/10 · 🖐 GUI
+
+You are running P4-39 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 19) whose defect claims survived six adversarial review rounds and whose proposed fixes
+often did not. Re-verify every anchor before building. **Your report MUST name, in one line, the
+contract or call path your fix satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+`SessionActionsMenu` applies the anchor raw: `style={{ top: anchor.top, left: anchor.left }}`
+(`app/renderer/src/SessionActionsMenu.tsx:74`), on a `fixed` `w-[232px]` panel (`:70-75`). Its own
+doc comment concedes the gap: "The remaining §17 menu gap is the anchor's bottom-flip (`placeAbove`),
+which stays owned by the anchor call sites" (`:15-16`). **No call site implements it.** Three
+produce anchors and all three clamp horizontally only:
+
+- `TabBar.tsx:312-321` — `{ top: rect.bottom + 4, left: Math.max(8, rect.right - 232) }`.
+- `Sidebar.tsx` — the kebab path is identical; the **right-click path passes raw pointer coordinates
+  with no clamp at all**.
+- `SessionsPage.tsx` — rects at `:676,:744,:900` routed through `onOpenRowActions` to App.
+
+The menu is roughly 300px tall, so opening it from a bottom row puts the lower rows out of reach
+with no scroll.
+
+**A tested precedent exists in this repo.** `placeTagPopover`
+(`app/renderer/src/sessionsPageState.ts:237-253`) is a pure function returning a discriminated
+placement (`{placeAbove: true, bottom, left} | {placeAbove: false, top, left}`), flipping on
+`rect.bottom > viewport.height / 2` and clamping left against width and margin constants. It is the
+same idea, already unit-tested, and its shape is compatible.
+
+The prototype does it in two lines (`~/catcode_prototype/cat-app/SessionActions.jsx:112-113`):
+`placeAbove = anchor.top > window.innerHeight - 320`, anchoring the flipped menu to `bottom` so it
+grows upward with the same 4px offset either way. **The threshold is a constant, not a measurement.**
+
+=== THE CARRY CONDITION — DO NOT DROP IT ===
+Audit rev 4 retired this finding's UNVERIFIED caveat and **rev 5 restored it**. Two separate things
+are still unknown:
+
+1. **Whether the app's menu clips today.** The ~300px height is inferred from row count, never
+   measured.
+2. **What threshold suits THIS menu.** A constant that suits the prototype's rows, fonts, zoom and
+   viewport says nothing about the app's, whose row set is different.
+
+Therefore: **port the mechanism, unit-test the placement helper, and leave live confirmation as an
+operator step.** Your report must state explicitly that the finding stays UNVERIFIED until the
+operator confirms clipping and the flip in the running app. **Do not write "finding 19 closed" in
+STATUS or the ledger.** If you find a way to derive the height rather than assume it, say so and say
+what it costs; do not silently substitute one guess for another.
+
+=== SCOPE ===
+IN: move placement into the component (or into one shared pure helper the component calls), covering
+all three call sites including the unclamped right-click path; unit tests over the helper for
+near-top, near-bottom, exact-threshold, viewport-narrower-than-the-menu, and the raw-pointer case.
+
+OUT: the menu's contents, its verbs, and the dialog layer P4-30 built. This is placement only.
+
+=== GROUND RULES ===
+Renderer-only, pure geometry. No new inbound vocabulary, no preload channel, no protocol change;
+security baseline untouched (T4/T5a/T6/T7 + HC1-HC4). `app/` is strict. No new deps. Follow the
+house convention: pure placement logic in a `.ts` module (the `sessionsPageState.ts` precedent), not
+inside the `.tsx` — the Fast Refresh boundary is lint-enforced. The existing `§0 EXCEPTION` comment
+at `SessionActionsMenu.tsx:68-69` explains why this one geometry style attribute is allowed; keep
+that justification accurate if the shape changes. Branch `migration`, commit your own explicit paths.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail**) · `bunx tsc --noEmit -p
+app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned ·
+`bun run --cwd app test:hardening` 19/19.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation). The operator step is
+the verification this session cannot do: open the ⋯ menu from the **bottom-most** session row in the
+sidebar, from the bottom-most Sessions-page row, and by right-clicking near the bottom edge; in each
+case every row must be reachable. Ask them to note whether the menu clipped BEFORE the fix if they
+still have a pre-fix build, since that is the open question. Migration test turns use `gpt-5.6-luna`
+at low effort on a healthy account.
+
+Report: the one-line contract statement (required), and an explicit UNVERIFIED line naming what the
+operator step is expected to settle. Ledger: §17 row `:1242` records the missing `placeAbove`
+accurately; update it to what ships and keep the unverified qualifier. Touch no other ledger row and
+not the Part D totals. Update your STATUS row last — re-read `STATUS.md` immediately before writing
+and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-40 · ⬜ — Welcome recents are inert for terminal-only projects (audit 20)
+
+**This is not a deletion.** Removing the disabled rendering alone ships a clickable no-op, because
+two separate early-returns discard the click. An earlier revision of the coverage document said
+"delete the invented disabled row" and was corrected; that correction is the point of this prompt.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 5/10 · 🖐 GUI
+
+You are running P4-40 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 20) whose defect claims survived six adversarial review rounds and whose proposed fixes
+often did not — **this finding's fix was restated twice before it was right**. Re-verify every
+anchor before building. **Your report MUST name, in one line, the contract or call path your fix
+satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+A recent workspace whose sessions were all created in the terminal renders disabled, with the title
+"Open this project from the terminal. The desktop cannot restore it yet."
+(`app/renderer/src/WelcomeScreen.tsx:328-335`). **That statement is no longer true.**
+`openHistorySession` shipped, and both the sidebar and the Sessions page already open exactly those
+rows by engine id.
+
+=== THE TRAP — READ THIS BEFORE YOU TOUCH THE DISABLED BRANCH ===
+The disabled state is not decoration. A history-only workspace is deliberately given
+`appSessionId: null` (`app/renderer/src/sessionsCatalogState.ts:577-607`, and the doc comment at
+`:586-594` already names the fix), and **two** independent guards discard the click:
+
+- the picker handler — `WelcomeScreen.tsx:245-249`, `if (recent.appSessionId == null) return`
+- the App callback — `App.tsx:2890-2894`, the same test again
+
+**Delete the disabled rendering and nothing else, and you ship a row that looks live while every
+click is silently swallowed.** The disabled state is the honest consequence of the launcher opening
+by app id; it is not an invention to remove.
+
+=== THE SHAPE, AND WHY IT IS THE ONLY SAFE ONE ===
+The route already exists and is decided (SESSIONS-UNIFICATION, operator ruling 2026-07-20):
+
+- `resolveSessionOpenRoute` (`sessionsCatalogState.ts:415-430`) is **the single open decision** and
+  already returns `{ kind: 'history', engineSessionId }` for a row that is not in the registry and
+  has a cwd. Its parameter is a `Pick<MergedSessionRow, …>`, so it is reusable by shape.
+- `openCatalogRow` (`App.tsx:1751-1759`) routes that verdict.
+- `openHistorySession` (`App.tsx:1721-1743`) calls `bridge.openHistorySession(engineSessionId)`.
+
+**That last hop is the security-relevant one.** Main resolves the workspace from the engine-written
+baseline rather than from a renderer-supplied string, which is what keeps it inside
+`SECURITY-MINIMUM.md` **HC1: the renderer never authors a filesystem path.** Any design where the
+recent row hands a `cwd` across the boundary is a baseline violation, not a shortcut. So the work is:
+carry a representative history engine id on `RecentWorkspace`, and route null-app-id recents through
+the existing path — not a new IPC, not a path-authored one.
+
+Note that `selectRecentWorkspaces` currently drops empty-cwd rows outright (`:644`) and adopts only
+the first openable **app** id (`:662-667`); it never carries an engine id. Work out for yourself
+which rows remain genuinely unopenable after your change and whether the disabled branch still has a
+reachable case at all. If it does not, say so rather than leaving dead UI behind.
+
+=== SCOPE ===
+IN: the selector change, the two early-returns, the routing, and the copy. Tests: a selector test
+(a history-only workspace yields an openable identity) **and** a wiring test (the null-app-id path
+reaches the history route rather than returning). Both, not one.
+
+OUT: the prototype's in-picker trust modal (ledgered adapted — the real gate fires post-spawn) and
+its `Open read-only` action (a recorded cut). Port the openability, not the modal.
+
+=== PROTOTYPE ===
+`~/catcode_prototype/cat-app/Welcome.jsx:216,238-260`: every recent row is a live button and
+`choose(path)` has exactly one branch, untrusted to the trust prompt, otherwise open. There is no
+disabled state and no "cannot be restored" copy anywhere. That is the target state; the mechanism is
+ours, because the prototype has no session concept.
+
+**User-visible text (CLAUDE.md §7):** whatever replaces the stale title must tell the user what to
+DO, not what we have not built. No em dash. No engineering vocabulary (no "history row", no "engine
+id").
+
+=== GROUND RULES ===
+Renderer-side routing over an EXISTING host verb. If you find yourself adding a preload channel or a
+new inbound frame kind, stop: that is a boundary change needing sidecar validation, a boundary test
+and a decision reference (repo mistake #5), and it is almost certainly a sign you have left the
+`openHistorySession` path. Security baseline untouched (T4/T5a/T6/T7 + HC1-HC4). `app/` is strict.
+No new deps. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail**) · `bunx tsc --noEmit -p
+app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned ·
+`bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation): with a project whose
+sessions were all created in the terminal, open the Welcome project picker, confirm the row is live
+rather than greyed, click it, and confirm a real session opens showing that transcript. The failure
+this guards against is a row that looks live and does nothing, so a click that produces no visible
+result is a FAIL, not an inconclusive. Migration test turns use `gpt-5.6-luna` at low effort on a
+healthy account.
+
+Report: the one-line contract statement (required), and state explicitly whether the disabled branch
+still has a reachable case. Ledger: §29 rows `:1989-:1992` cover the recent-item rows; update the
+ones you changed with a real `app/…:line`, tagging per the ledger's vocabulary. §29 is recorded
+CLOSED in Part C — do not reopen its count. Touch no other ledger row and not the Part D totals.
+Kill any sidecar you spawn. Update your STATUS row last — re-read `STATUS.md` immediately before
+writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-41 · ⬜ — No reset-to-default for any editable engine setting (audit 15)
+
+**Both halves in one session, sequenced boundary-first, with a stop condition.** The renderer half
+is meaningless without the sidecar half: wiring `onReset` today produces a button whose write the
+sidecar rejects, which is worse than no button. They are also one change, roughly a validator branch
+plus a wiring pass, so splitting them costs two sittings and an interface negotiation between them.
+**But the boundary half is a real inbound-surface decision**, so the prompt below forbids building
+the renderer half until it is settled, and orders a STOP-and-report if the shape turns out to need a
+new frame kind or a protocol version bump.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (system-architecture) · Difficulty: 6/10 · 🖐 GUI
+
+You are running P4-41 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 15) whose defect claims survived six adversarial review rounds and whose proposed fixes
+often did not — that finding's own numbers were wrong in rev 1 and corrected in rev 2. Treat the
+evidence below as reliable and any suggested shape as an untested hypothesis. Re-verify every anchor
+before building. **Your report MUST name, in one line, the contract or call path your fix
+satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+Setting a value back to its default **pins** it rather than removing it. There is no way to
+un-write an engine settings key from the desktop.
+
+- The primitive works. `Field` renders a "Reset to default" button gated on
+  `modified && !managed && editable && onReset` (`app/renderer/src/SettingsField.tsx:184-192`).
+- The editor never supplies it. `SettingsEditors.tsx:189-197` passes `desc` / `editable` / `label` /
+  `managed` / `origin` / `source` and **never** `modified` or `onReset` — `rg -n 'modified|onReset'`
+  over that file returns nothing.
+- The only two call sites in the shell are app-local view preferences, not engine keys
+  (`SettingsShell.tsx:788-789,864-865`: accent and code theme).
+- So **all 14 registry keys** (`app/shared/settingsEditable.ts:123`, `EDITABLE_SETTINGS`) ship
+  without the control.
+
+The consequence is scope-dependent and worth stating precisely, because precedence is
+policy ▸ flag ▸ local ▸ project ▸ user (`app/renderer/src/settingsState.ts:140-145`): a pinned
+**user** value is overridden by every layer above it, so it mostly harms machine-wide defaults; a
+pinned **local** value genuinely shadows project settings.
+
+=== THE GATE — WHY THE SIDECAR HALF COMES FIRST ===
+The clear mechanism already exists and is control-kind-agnostic. `app/sidecar/settingsDomain.ts:314-325`:
+
+    const clearsKey = value === SETTINGS_ENGINE_DEFAULT
+    ... if (clearsKey) delete next[verb.key]; else next[verb.key] = value
+
+written through `updateSettingsForSource`'s under-lock SettingsUpdater FUNCTION form, which is the
+P3-5a/DR-2 no-lost-update fix. **Do not simplify or bypass that form** — this is a cross-process
+read-modify-write and the locking is load-bearing.
+
+**The blocker is upstream of it.** `validateEditableSettingValue`
+(`app/shared/settingsEditable.ts:289-350`) types the value per control kind:
+`boolean` requires `typeof value === 'boolean'`; `enum` requires membership in a static list;
+`int` requires an integer in range; only `dynamic-enum` accepts a bounded string. So the
+`SETTINGS_ENGINE_DEFAULT` sentinel (`:94`) can only survive validation for `dynamic-enum`, and the
+sidecar then additionally requires it to be one of the captured live options
+(`settingsDomain.ts:293-307`). That is why reset exists for two keys and no others.
+
+The wire shape today is `SettingsSetValueMessage { type, requestId, source, key, value }`
+(`app/shared/protocol.ts:388-397`) with `EditableSettingValue = boolean | string | number`
+(`settingsEditable.ts:50`).
+
+**Order of work, and the stop condition:**
+
+1. **Decide and land the clear path at the sidecar first**, with boundary tests: a valid clear
+   accepted for **each** control kind, and invalid frames still rejected. The sidecar is the trust
+   boundary; validation there is not optional and is not satisfied by validating in the preload.
+2. **Only then** wire `modified` / `onReset` in `SettingsEditors.tsx`.
+3. **STOP and report before building the renderer half** if the shape you derive needs a **new
+   inbound frame kind** or a **protocol version bump**. `app/shared/protocol.ts` is a versioned
+   contract: additive changes only, version bump only on a breaking shape change, and every new
+   inbound frame kind needs a sidecar-local schema, a boundary test, and a doc comment citing its
+   decision. A half-wired reset button that produces a rejected write is a worse outcome than
+   shipping nothing.
+
+Whatever you choose, state in your report which contract makes a "remove this key" request
+distinguishable from a "write this value" request, and how the sidecar can never confuse the two.
+A sentinel that could collide with a legitimate user value is a bug, not a design.
+
+=== THE TRAP — LEAVE TRANSCRIPT RETENTION ALONE ===
+`cleanupPeriodDays` (`settingsEditable.ts:235-241`, `{ kind: 'int', min: 0, max: 3650, default: 30 }`)
+participates in your generic reset exactly like every other int key. **Do not do anything else to
+it.** Specifically:
+
+- Do **not** narrow its domain. A previously proposed 30/60/90/Forever enum was **rejected**: it
+  would delete every legitimate value in between (7, 45, 365) and `Forever` has no wire
+  representation at all.
+- Do **not** add the destructive-value confirmation. `0` deletes existing transcripts at startup
+  retroactively (`src/utils/settings/types.ts:331`, `src/utils/cleanup.ts:25-30`) and that is
+  **audit finding 5a**, a separate item with its own owner. Two sessions editing the same field
+  with different mental models is how contradictory behavior lands.
+
+=== SCOPE ===
+IN: the sidecar clear path for all control kinds with boundary tests; `modified` / `onReset` for the
+14 registry keys; the `managed` and flag-override cases staying correctly non-resettable (the
+primitive's gate already encodes this, so prove it still holds).
+
+OUT: any new settings key, any change to precedence, any editor redesign, and the retention field
+beyond generic reset.
+
+Prototype reference (`~/catcode_prototype/cat-app/Settings.jsx:98-122`): the idiom is uniform,
+`modified={g.key !== DEF.key} onReset={() => reset('key')}` on every engine-settings field, with the
+button reading exactly **"Reset to default"** and shown only when modified. Note two things the
+prototype gets differently: its reset **writes the default value back** while ours must **remove the
+key**, and its IDE-pane fields (`:510`) deliberately pass neither, being local connection toggles
+rather than settings-file keys. Its one deliberate exception (`:181`) is a flag-sourced field that
+passes `modified` unconditionally with an `onReset` raising a warn toast. The prototype's mock data
+is never the contract; real engine shapes win.
+
+=== GROUND RULES ===
+Security baseline is a hard gate (`decisions/SECURITY-MINIMUM.md` T4/T5a/T6/T7 + HC1-HC4): inbound
+vocabulary is a **closed allowlist validated at the sidecar**, never only at the preload; directional
+frame limits stay unswapped; secrets stay engine-side. Preserve the `SettingsUpdater`-under-lock form.
+`app/` is strict. No new deps. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31: **1994 pass / 0 fail**) · `bunx tsc --noEmit -p
+app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned ·
+`bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok. Boundary tests for
+the clear path are part of DONE, not a nice-to-have.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation): change a boolean
+key and an int key at the User scope, confirm "Reset to default" appears on each, press it, and
+confirm the row returns to its default **and its source badge stops naming the user layer** (the
+point is that the key was removed, not re-written). Then confirm a policy-managed row still offers
+no reset. Migration test turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement (required), plus the sentinel-vs-value distinguishability
+argument. Ledger: §11 row `:796` and Part B row `:2277` both record the primitive as built but
+DORMANT; update them to what actually ships. Touch no other ledger row and not the Part D totals.
+Kill any sidecar you spawn. Update your STATUS row last — re-read `STATUS.md` immediately before
+writing and touch only your own row.
+```
+─── PASTE ───
+
+
+# TRANCHE I — the UX-gap audit's second wave (generated 2026-07-31)
+
+Same two sources as TRANCHE H — `docs/migration/reviews/2026-07-31-app-ux-gap-audit.md` (rev 6) and
+`docs/migration/reviews/2026-07-31-app-ux-gap-prototype-coverage.md` (rev 3) — plus the **four
+operator rulings of 2026-07-31**, recorded in `decisions/STARTUP-GATES.md` (2a §1.2, O2a #12
+revision) and in the coverage document's *Operator rulings* section (O1 and 24b, which have no
+decision doc of their own and are canonical there).
+
+**Nine sessions, ten items, plus one open defect TRANCHE H left behind.**
+
+| Session | Item | What it is |
+|---|---|---|
+| **P4-42** | audit 3 | Permission prompts show raw JSON instead of the command or the diff |
+| **P4-43** | audit 12 | The permission card's advertised keyboard shortcuts are dead |
+| **P4-44** | O1 (ruled) | Sidebar rows cannot be told live from not-live |
+| **P4-45** | audit 26c **+ TRANCHE H's open defect** | Three rendered engineering notes, and two buttons sharing one label |
+| **P4-46** | audit 26a | The window has no minimum size |
+| **P4-47** | audit 5a **+** 26d (ruled) | Retention `0` destroys history silently; the Remote rail advertises a cut SSH mode |
+| **P4-48** | 2a (ruled) | The launcher never tells a first-run user what to do first |
+| **P4-49** | 24b (ruled) | No connection tone grammar, and the bar prints a raw status word |
+| **P4-50** | O2a (ruled) | Account health surfaces only inside the scrolling transcript |
+
+## The rule that governs every session in this tranche
+
+Unchanged from TRANCHE H, because it has not stopped being true. **The audit's defects are reliable.
+Its proposed fixes are not.** Six adversarial review rounds withdrew or corrected **seven** of the
+"Improvement" lines — two of them wrong in the dangerous direction — while almost no defect was
+withdrawn. So every prompt below carries the finding's **evidence** and forbids it from carrying the
+finding's **conclusion** as settled. Every session must:
+
+1. **Re-verify every anchor in current source before building.** Everything below was verified at tip
+   `39351bd` on 2026-07-31; the tree is shared and moves.
+2. **Name, in its report, the contract or call path the fix satisfies** — the existing function, type,
+   or invariant that makes the change correct. One line. "The audit said so" is not a justification,
+   and neither is "the prototype does it": the prototype's mock data is never the contract.
+3. **Report a deviation as a §0 proposal**, never a silent narrowing.
+
+TRANCHE H proved the rule earns its keep. P4-36 found the prompt's own premise wrong (it claimed the
+prototype's reveal band and the app's inner scroller were different composition models; they are the
+same) and P4-40 found that the fix as first written would have offered ~40 dead temp-dir workspaces.
+Both were caught because the prompt told them to derive rather than to implement.
+
+## The four rulings carry BOUNDS, not just choices
+
+A ruling is a permission to build one specific thing, not a licence to solve the underlying problem
+well. Each prompt quotes its bound **verbatim** rather than paraphrasing it. **A session that exceeds
+its bound is wrong even if the result looks better** — the standing precedent is the sidebar status
+chips, which no one asked for and the operator reversed on sight. If a session believes its bound
+prevents a correct result, that is a §0 proposal to the operator, not a decision it may take.
+
+| Session | Bound in one line |
+|---|---|
+| P4-44 (O1) | A dot. No chip, no status word, no per-state colour vocabulary. |
+| P4-49 (24b) | Two tones. No dot, no chip, no restored `ConnectionChip.tsx`. |
+| P4-48 (2a) | Discoverability copy. No host-plane account writes, no session-free settings read. |
+| P4-50 (O2a) | Account health only, never blocks submit, always dismissable, no resurrected wall files. |
+
+## Sequencing is by FILE OWNERSHIP. This is not advisory.
+
+TRANCHE H ran sessions in parallel that shared files, and two of them reported each other's work as a
+failure: **P4-38** recorded eleven `tsc` errors that were entirely P4-39's uncommitted
+`sessionActions.ts` change, and **P4-41** recorded a failing `sessionsCatalogState.ts` suite that was
+P4-40 mid-edit. Both were false alarms. Both cost real time, and both sessions were correct to report
+them as not-theirs — the process failed, not the workers.
+
+Four files in this wave carry more than one item. The rule for this tranche is **at most one live
+session per file**, and the waves below are the parallel-safe partition.
+
+| Contended file | Wants it | Resolution |
+|---|---|---|
+| `PermissionPrompt.tsx` | P4-42 (audit 3), P4-43 (audit 12) | **Sequenced, 42 first.** 42 rewrites the card body; 43's focus-and-keys mechanism has to be designed against the card that actually ships, including any disclosure control 42 adds. Reversing the order makes 43 design against a body that is about to be replaced. |
+| `App.tsx` | P4-43 (audit 12), P4-49 (24b), P4-50 (O2a) | **Sequenced, 49 → 50 → 43.** Three disjoint regions, but one uncommitted edit anywhere in this 4,243-line file is what produced TRANCHE H's false reds. 49 is smallest and unblocks 50's placement decision; 43 runs last because it is also gated on 42. |
+| `TranscriptView.tsx` | P4-45 (26c + the label defect), P4-42 **only if** it reuses `DiffView` | **45 first.** 45 is small and lands quickly; 42 may then extract or export what it reuses. 42 may not make behavioural changes there. |
+| `settingsScope.ts` | audit 5a's inline warning, 26d's rail copy | **Merged into P4-47.** 26d is one line of copy; splitting it into its own session would put two writers in one file to save nothing. |
+
+```
+Wave 1  (parallel-safe, disjoint files)
+  P4-44  Sidebar.tsx
+  P4-45  TranscriptView.tsx · SettingsExtensions.tsx
+  P4-46  app/main/main.ts
+  P4-47  SettingsEditors.tsx · settingsScope.ts
+  P4-48  WelcomeScreen.tsx
+  P4-49  App.tsx · connectionState.ts
+
+Wave 2  (after wave 1 lands)
+  P4-42  PermissionPrompt.tsx   [needs P4-45 out of TranscriptView.tsx]
+  P4-50  App.tsx                [needs P4-49 out of App.tsx]
+
+Wave 3
+  P4-43  PermissionPrompt.tsx · App.tsx   [needs P4-42 and P4-50]
+```
+
+**Every session states its file fence in its own prompt and must honour it.** If a session concludes
+it needs a file another session owns this wave, that is a STOP-and-report, not a small edit. And the
+TRANCHE H habit that worked stays: before debugging a red, run `git status` on the failing file; if it
+is dirty and you did not edit it, report it as not-yours-and-unfixed.
+
+## The defect TRANCHE H left open, and its owner
+
+**Two differently-scoped buttons now carry the identical label `Open full output ↗`:** the tool
+card's footer (`ToolInspectorLaunch`, `TranscriptView.tsx:988-999`) and the inline reveal band
+P4-36 built (`InlineRevealBand`, `:1457-1497`). P4-36 raised it as an OPEN, UNAPPROVED §0 with a
+proposed fix — relabel the FOOTER to the prototype's `Inspector` (`Messages.jsx:563`) — and assigned
+it to P4-37. **P4-37 finished without taking it**, correctly: P4-36 was still live in that file. Its
+report handed the fix to "whoever next owns `TranscriptView.tsx`". That is **P4-45**, which owns the
+file in wave 1. The proposal remains a proposal; P4-45 verifies it and decides.
+
+## Parked — unchanged from TRANCHE H, restated so it does not go missing
+
+**Seam-blocked (3)** — a boundary/seam owner is needed before any renderer work: **9** (engine-authored
+provenance on the interrupt carrier), **10a** (a cross-plane file-list read seam), **16a Goals** (no
+inbound goal-mutation verb; all 25 §22 rows are Part C ❓ with owner UNASSIGNED). The **open-the-file**
+capability belongs here too: `SECURITY-MINIMUM.md` HC1 forbids the renderer authoring a filesystem
+path, so it needs a host-API verb over a registry-resolved identifier. Full statements are in TRANCHE
+H's parked register above; nothing about them changed.
+
+**Bucket C (design first)** — the 21 items enumerated with their design questions in the coverage
+document. Not blocked, not scoped: each needs a design decision before a session can be written.
+Finding **2b** (the session-free user-settings read) sits here and is explicitly NOT covered by the 2a
+ruling.
+
+## Known ledger drift — note it, do not fix it here
+
+The four rows recorded at the end of the coverage document plus the two found while scoping TRANCHE H
+still stand, minus whatever TRANCHE H's sessions corrected in passing. Reconciling the ledger is not
+part of any session below; each session updates only the rows it actually changed.
+
+
+## P4-42 · ⬜ — Permission prompts show raw JSON instead of the command or the diff (audit 3)
+
+The largest and highest-value item in the wave, and the one whose "port the prototype's variant
+table" framing is most likely to mislead. The prototype's table is keyed on a field the real request
+does not have, and half its columns are mock fixture fields the ledger already cut. What ports is the
+**shape** (per family: a label, and the one field worth promoting), not the table.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 7/10 · 🖐 GUI
+
+You are running P4-42 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 3) whose "what is missing" claims survived six adversarial review rounds, and whose proposed
+FIXES did not: seven were withdrawn or corrected, two of them wrong in the dangerous direction.
+Treat the evidence below as reliable and every suggested shape as an untested hypothesis. Re-verify
+every anchor in current source before you touch anything (verified at tip `39351bd`, 2026-07-31; the
+tree is shared and moves). **Your report MUST name, in one line, the contract or call path your fix
+satisfies** — the existing function, type or invariant that makes it correct. "The audit said so" is
+not a justification, and neither is "the prototype does it".
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+`app/renderer/src/PermissionPrompt.tsx:109-111` renders, for EVERY tool:
+
+    <pre className="mt-3 max-h-36 overflow-auto …">
+      {JSON.stringify(request.request.input, null, 2)}
+    </pre>
+
+So approving a shell command means reading `{"command": "…", "timeout": 120000}`, and approving an
+edit means reading `old_string`/`new_string` as escaped JSON with literal `\n`. This is the app's
+only safety gate and its least legible surface. The terminal engine has fifteen per-family renderers
+(`src/components/permissions/`), routed at `src/components/permissions/PermissionRequest.tsx:47-80`.
+
+=== WHAT YOU ACTUALLY HAVE TO WORK WITH ===
+`PermissionRequest` is the wire's `permission.requested` payload (`permissionState.ts:27-30`, an
+`Extract` over `AppSessionEvent`). Establish its real field set from the type, not from this prompt.
+Today it carries `tool_name`, `display_name`, `title`, `input`, `decision_reason`, `blocked_path`,
+`permission_suggestions`, `agent_id`. `input` is unstructured: runtime-narrow it with ZERO `as`
+casts, house rule, and fall back rather than throw on a shape you do not recognise.
+
+**Trap 1 — the engine routes by TOOL OBJECT IDENTITY, not by name.** That switch is
+`case FileEditTool:` / `case BashTool:` / `case GlobTool: case GrepTool: case FileReadTool:` and so
+on. The desktop only has `tool_name` on the wire, so your family map keys on strings. Derive each
+string from the tool definition the engine switch names, cite the `src/…:line` you took it from, and
+say what happens for a tool that is not in your map (the engine's answer is
+`FallbackPermissionRequest`; yours should be the raw-input fallback, not a crash and not a guess).
+
+**Trap 2 — there is no diff on a permission request, and you cannot compute the real one.**
+`DiffView` (`TranscriptView.tsx:2445`) consumes a `ToolDiffProjection`, which the projector builds
+from the engine's POST-execution `structuredPatch` (`transcriptProjector.ts:1138`
+`extractDiffProjection`). A permission request is PRE-execution: no `structuredPatch`, no file
+contents. The engine's own edit card computes its diff by reading the file from disk
+(`src/components/FileEditToolDiff.tsx:129,143` → `getPatchForDisplay`), which the renderer must never
+do (HC1: the renderer authors no filesystem path and has no filesystem). The `diff` package IS
+already an app dependency (`app/package.json:26`; already imported at `TranscriptView.tsx:39`), so a
+patch computed over `old_string` vs `new_string` alone is available with no new dep — **but a patch
+over two snippets is not the file's patch, and its line numbers are not the file's line numbers.**
+Presenting snippet line numbers as file line numbers is the failure mode here. Decide, and say in
+your report which of these you shipped and why: a before/after presentation with no line numbers, a
+computed snippet patch with its numbering suppressed, or something else. Do not silently invent
+numbering.
+
+**Trap 3 — half the prototype's table is mock.** `~/catcode_prototype/cat-app/Permissions.jsx:58-73`
+is a 15-entry `PV` map keyed on `item.variant`, a field of the prototype's mock queue. Its
+`head.preview` / `head.diff` / `head.cwd` / `head.method` / `head.skillDesc` / `head.classifier` are
+fixture fields with no wire counterpart — `PARITY-LEDGER.md` §07 already records `classifier-routed`
+and the lane colours as ✂️ cut, and `head.warn` as a cut MOCK string. What ports is the SHAPE: per
+family, an uppercase preview label plus the one field worth promoting into a legible preview. What
+does not port is any field the request does not carry.
+
+=== SCOPE — READ THE FENCE ===
+IN: a per-family preview inside the existing card. At minimum the families the audit names — a shell
+command in mono, a file edit/write, a fetched URL — plus a labelled generic preview for the rest and
+a collapsed "show raw input" fallback for anything unrecognised. The family map and its field
+extraction belong in a pure, exported, unit-tested module (`permissionPromptModel.ts` is the existing
+home, or an adjacent `.ts`), not inside the `.tsx`: the renderer suite is SSR-only, so a decision
+table living in a component is barely testable, and `lint:fast-refresh` forbids non-component exports
+from a production `.tsx` anyway.
+
+OUT, each for a recorded reason:
+- **`AskUserQuestion` and `ExitPlanMode`.** They have their own renderers (`AskQuestionFlow`,
+  `PlanPanel`) and never reach this card except through the `denyOnly` unreadable-question fallback.
+  Leave both alone, and leave the `denyOnly` path's behaviour unchanged.
+- **Client-side rule synthesis** (`ruleImplication`, `scopeFromRule`, `dirOf`). A recorded cut:
+  `decisions/PERMISSION-BOUNDARY.md §2` — rendering a guessed rule that differs from what persists is
+  a correctness bug. Always-allow stays engine-minted suggestion selection by index (C1/T6b).
+- **Lane priority, lane accents, lane tags, the classifier badge, the warn banner.** All ✂️ cut in
+  ledger §07 as mock-only vocabulary.
+- **The keyboard.** The advertised shortcuts are dead and that is **P4-43**, running after you. Do
+  not fix them, and do not make them worse: if your preview adds a focusable control (a disclosure
+  button is the obvious one), say so plainly in your report, because it changes the surface P4-43 has
+  to make work.
+
+**File fence.** You own `PermissionPrompt.tsx` and any new model module. `App.tsx` belongs to other
+sessions this wave — you should not need it, since `PermissionQueue` already hands you the whole
+request. `TranscriptView.tsx`: touch it ONLY to export or extract a renderer you reuse (P4-45 lands
+there first and must be finished before you start); no behavioural change there is in your scope. If
+you conclude you need a file you do not own, STOP and report.
+
+=== PROTOTYPE — THE ACCEPTANCE BAR, NOT A REFERENCE ===
+Read `~/catcode_prototype/cat-app/Permissions.jsx:58-73` (the variant table) and `:530-570` (how a
+preview, a diff and a network detail actually render) before writing code, and run it side by side:
+the runner is `~/catcode_prototype/CatCode Web App.html` (prototype repo root, NOT inside
+`cat-app/`). PROGRAM-PLAN §6 applies in full — a surface is done when it READS as the prototype, not
+when its data is wired. Port ZERO prototype code. No inline `style={{}}`: P0-2 tokens and the
+Tailwind idiom, and beware the dynamic-class trap (interpolated arbitrary values silently no-op; use
+a static map).
+
+Enumerate STATES, not one screenshot: a Bash request, an Edit, a Write, a WebFetch, a tool with no
+recognised family, a request with `decision_reason` and `blocked_path` set, a worker-relayed request
+(`agent_id`), a request with several always-allow suggestions, the `denyOnly` card, and an in-flight
+`submitted` card.
+
+**User-visible text (CLAUDE.md §7):** no em dash anywhere a user can read it, `aria-label`s and
+`title`s included; no engineering vocabulary; no file:line citations. Check with
+`rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining hit is a code comment.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change — if you think you
+need one you have left the scope. Security baseline untouched (`decisions/SECURITY-MINIMUM.md`
+T4/T5a/T6/T7 + HC1-HC4), and note that this surface renders untrusted model-authored tool input:
+everything stays a text node, never `dangerouslySetInnerHTML`, never a live control, never a
+clickable URL. `app/` is strict TypeScript. No new deps. Branch `migration`, commit your own explicit
+paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail** — a DROP is a
+regression) · `bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar`
+zero new owned · `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill** and paste BOTH artifacts: the filled **FIDELITY**
+block and the **SURFACE ACCEPTANCE** tiered verdict. An open, unapproved mismatch stops a
+fidelity-pass claim; a §0 flag is a proposal, not a closure.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO cua-driver / claude-in-chrome / any automation): drive a turn that
+asks to run a shell command and one that asks to edit a file, and confirm each card shows the thing
+being approved rather than JSON, that the raw input is still reachable, and that Allow / Deny /
+Always-allow still answer correctly. Migration test turns use `gpt-5.6-luna` at low effort on a
+healthy account.
+
+Report: the one-line contract statement (required); the tool-name derivation with its `src/…:line`;
+your Edit-preview decision and why; and whether you added a focusable control (P4-43 needs to know).
+Ledger: `PARITY-LEDGER.md` §07 has roughly ten rows whose evidence all points at the JSON `<pre>` at
+a stale `PermissionPrompt.tsx:129-131` (generic payload preview, file-edit diff preview, inline
+command title, web-fetch method badge, skill description, cwd line, sandbox network detail,
+computer-use preview). Update exactly the rows your change makes wrong, with real anchors and the
+ledger's own tags. Touch no other ledger row and not the Part D totals. Kill any sidecar you spawn.
+Update your STATUS row last — `STATUS.md` is multi-writer, so re-read it immediately before writing
+and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-43 · ⬜ — The permission card's advertised keyboard shortcuts are dead (audit 12)
+
+The coverage document calls this a straight revert of an adaptation, and the prototype does supply
+the mechanism verbatim. **It still does not work here**, for a reason neither document caught: the
+card's own `role="alertdialog"` is in the selector the guard tests. Ported literally, the fix leaves
+all four keys as dead as it found them.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 4/10 · 🖐 GUI
+
+You are running P4-43 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+Run AFTER P4-42 (it rewrites this card's body) and AFTER P4-50 (it is live in `App.tsx`).
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+This session comes from a UX audit (`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`,
+finding 12) whose defect claims survived six adversarial review rounds and whose proposed fixes often
+did not — **this finding's first fix was withdrawn as insufficient**, and the replacement it names is
+also not sufficient (see the trap below). Re-verify every anchor before building. **Your report MUST
+name, in one line, the contract or call path your fix satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+The card prints `Enter allow · N / ⌫ deny · Esc snooze` (`app/renderer/src/PermissionPrompt.tsx:141-145`).
+The handler that would honour those keys is a `document` keydown listener in App
+(`App.tsx:1988-2024`), and it bails on its first condition:
+
+    if (target instanceof Element && target.closest(FOCUSED_KEY_OWNER_SELECTOR)) return
+
+`FOCUSED_KEY_OWNER_SELECTOR` is `App.tsx:371-375`. The normal flow leaves focus in the composer
+textarea after sending, so on most permission requests all four advertised keys do nothing, with no
+signal why. The guard is correct — it exists so the deny-feedback field and every button keep their
+own Enter. Nothing moves focus when a card appears.
+
+=== THE TRAP THE DOCUMENTS MISS — VERIFY IT FIRST, IT DECIDES THE DESIGN ===
+The audit's surviving proposal, and the prototype's mechanism, is: blur the active element and focus
+a `tabIndex={-1}` card container on mount (`~/catcode_prototype/cat-app/Permissions.jsx:360-365`
+focus effect, `:437` the `tabIndex={-1}` card), keys bound on a window listener.
+
+**`FOCUSED_KEY_OWNER_SELECTOR` contains `[role="alertdialog"]`, and the card's own `<section>` is
+`role="alertdialog"` (`PermissionPrompt.tsx:42-46`.)** `target.closest()` matches the element itself,
+not only its ancestors. So focusing the card container makes `event.target` the section, `.closest()`
+matches it, and the handler returns — the ported mechanism is exactly as dead as what it replaced,
+and a session that ships it and tests only that focus moved would close this finding falsely.
+
+Confirm that yourself before choosing a design. Then note the two constraints any working design must
+satisfy:
+
+1. **The deny-feedback `<input>` lives INSIDE the card** (`PermissionPrompt.tsx:130-137`). Typing `n`
+   there must never deny. Whatever you build, that field keeps its keys.
+2. **A `document` listener fires before a `window` listener, and two dedicated flows own the keyboard
+   when they are up.** `dedicatedFlowOwnsKeyboard` (`App.tsx:1978-1981`) exists because
+   `AskQuestionFlow` and `PlanPanel` register `window` listeners, and a single Enter must never
+   resolve two unrelated requests. If you move this listener, say what the new ordering is and prove
+   the double-resolve cannot come back.
+
+Also note which card the keys act on: `selectVisiblePermission` picks the first un-answered,
+un-snoozed request, and `AskUserQuestion` requests are excluded from it. If several cards are
+stacked, focus must land on THAT card, not on the last one rendered.
+
+=== SCOPE — READ THE FENCE ===
+IN: making the four advertised keys work when a card appears, from the state the user is actually in
+(focus in the composer); and making the hint tell the truth in whatever states remain. If a key
+cannot be live in some state, the hint must not advertise it in that state (CLAUDE.md §7: never
+advertise a dead affordance).
+
+OUT, with the reason:
+- **The keyset.** Enter / N / ⌫ / Esc is the shipped vocabulary (`permissionActionForKey`,
+  `permissionPromptModel.ts:12-20`). No cursor navigation, no 1-9 direct pick — ledger §07 records
+  both as ✂️ cut.
+- **The composer's autofocus.** The audit says decide both together. Deciding is in scope; CHANGING
+  the composer is not, because it is a different surface with different owners. If you conclude the
+  composer must change, STOP and report with the argument.
+- **Card layout, copy and previews.** P4-42 owns the body. You are adding focus and key behaviour to
+  the card it ships.
+
+**File fence.** You own `PermissionPrompt.tsx` and the permission keyboard region of `App.tsx`. Both
+had another owner earlier in this wave (P4-42, P4-50) — confirm both have landed and the tree is
+clean for those files before you start, and `git status` any red before debugging it.
+
+**Interaction is structurally invisible to this repo's test suite** (the `app/` renderer suite is
+SSR-only: no keypress, no focus, no effects). So put every decision you can into pure exported
+helpers with unit tests — which element should own the keys, whether a given event target should be
+ignored, which card is the target — and keep the DOM layer thin. State plainly which behaviours only
+the operator's GUI run can confirm. A green battery is not evidence that a key works.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change; security baseline
+untouched (T4/T5a/T6/T7 + HC1-HC4) — note that the permission round-trip is itself a security
+surface: a keyboard path must answer the SAME engine-minted request id the buttons do (T5a), never a
+renderer-chosen one. `app/` is strict. No new deps. Branch `migration`, commit your own explicit
+paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**, plus whatever
+earlier wave-I sessions added) · `bunx tsc --noEmit -p app/tsconfig.json` clean ·
+`bun run --cwd app typecheck:sidecar` zero new owned · `bun run --cwd app test:hardening` 19/19 ·
+`bun run --cwd app renderer:build` ok.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO automation): send a turn that triggers a permission request without
+touching the mouse, then press Enter to allow. Repeat for N, Backspace and Esc on later requests.
+Then click into the deny-feedback field, type a sentence containing the letter n, and confirm nothing
+is denied. Then, with a question card up (`AskUserQuestion`), confirm one Enter answers only the
+question. Migration test turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement (required); confirmation or refutation of the
+`role="alertdialog"` trap with the source you checked; the listener-ordering argument; and an explicit
+list of what only the GUI step can settle. Ledger: §07's `Composer-focus steal (blur composer, focus
+card, 200ms debounce)` row is currently 🔁 adapted with the stale evidence `App.tsx:669-702`, and the
+`Footer key-hint strip` row records the hint. Update both to what ships. Touch no other ledger row and
+not the Part D totals. Update your STATUS row last — re-read `STATUS.md` immediately before writing
+and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-44 · ⬜ — Sidebar rows cannot be told live from not-live (O1, ruled 2026-07-31)
+
+The smallest ruled item. The whole risk is scope: the last time a session decided a sidebar row
+needed more state than it was given, the operator reversed it on sight.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 2/10 · 🖐 GUI
+
+You are running P4-44 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE RULING AND ITS BOUND (quoted verbatim — do not paraphrase, do not exceed) ===
+From the Operator rulings section of
+`docs/migration/reviews/2026-07-31-app-ux-gap-prototype-coverage.md`, which is the canonical record
+for this ruling (it has no decision doc of its own):
+
+> **O1 sidebar session state — Live-only dot, no text.** A single small unlabeled dot on live rows,
+> absent otherwise. The minimum exception to the 2026-07-20 bare-row ruling, matching the standing
+> operator target of live-vs-not-live with no text. No chip, no status word, no per-state colour
+> vocabulary. The data already exists at `Sidebar.tsx:839`.
+
+Read that as four prohibitions: **no chip, no status word, no per-state colour vocabulary, and
+nothing at all on a row that is not live.** One dot, one tone, present or absent. If you believe the
+bound produces a worse result, that is a §0 proposal in your report, not a decision you may take. The
+standing precedent is the per-session status chips a previous session added unasked; the operator
+reversed them on sight.
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+A cleanly-closed session leaves the tab bar entirely (`shellState.ts`), so for that session the
+sidebar is the only surface it appears on — and the sidebar row carries its state in `aria-label`
+only (`Sidebar.tsx:886`, `aria-label={`session ${title}, ${visual.label}…`}`). Sighted users cannot
+tell a running session from a closed one.
+
+The data is already on the row and already derived. `MergedSessionRow.live` is
+`sessionsCatalogState.ts:117` ("A live registry row with a running process"), and the row component
+already computes `deriveMergedRowVisual(row)` (`sidebarState.ts:205`) for its openable/intent
+decisions. **Re-verify which of those two is the honest source for "live"** and use it; do not
+introduce a third derivation, and do not re-key liveness off connection state, which the sidebar does
+not read.
+
+=== THE §0 COMMENT THAT WILL CONTRADICT YOUR CODE ===
+`Sidebar.tsx:26-29` records the opposite of what you are about to ship:
+
+> No per-row status dot: the prototype's sidebar rows carry none (title + `time · model` only), so
+> the earlier real-added health dot was removed 2026-07-14 to match the prototype (operator
+> decision). Live/dead/busy state still surfaces on the TabBar.
+
+Update it to record the 2026-07-31 ruling and its bound, so the next reader does not "fix" your dot
+back out. That paragraph is the reason this session exists at all.
+
+=== SCOPE — READ THE FENCE ===
+IN: the dot on live rows in the sidebar roster, the comment above, and a unit test over whichever
+pure derivation decides it (a live row shows it; restorable, history and browse-only rows do not).
+
+OUT: the collapsed rail, the workspace group headers, the Sessions page, the TabBar, and any
+`sessionStatusVisual.ts` / `tabStatus.ts` change. Audit finding 4 (a working indicator on the TAB
+bar) is a different finding with no owner, and P4-49 is live in the connection-tone surface this
+wave. Also out: the row's `aria-label`, which already carries the state — the dot is decorative, so
+mark it `aria-hidden` and do not add a second announcement of the same fact.
+
+**File fence.** You own `Sidebar.tsx` and, if the derivation belongs there, `sidebarState.ts`. Do not
+edit `App.tsx`, `sessionsCatalogState.ts`, `TabBar.tsx` or `sessionStatusVisual.ts`.
+
+=== PROTOTYPE ===
+`~/catcode_prototype/cat-app/Sidebar.jsx` rows are title + `time · model` with no dot at all, so this
+element is a deliberate, operator-ruled departure from the prototype rather than parity work. Tag it
+that way in your report and in the ledger (➕ real-added, under the 2026-07-31 ruling). Everything
+else about the row stays exactly as the prototype has it: no reflow, no new spacing grammar, and the
+dot must not push the title or the `time · model` line around when it appears.
+
+**User-visible text (CLAUDE.md §7):** there is none to add, and that is the point — a dot with a
+label is a chip, and a chip is out of bounds.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change; security baseline
+untouched (T4/T5a/T6/T7 + HC1-HC4). `app/` is strict. No new deps. Use a static Tailwind class, never
+an interpolated arbitrary value (the dynamic-class trap silently no-ops and headless tests cannot see
+it). Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO automation): with one session open and at least one closed or
+terminal-created session in the roster, confirm exactly one row carries the dot; close the live
+session and confirm the dot goes with it; confirm no row gained text and no row moved. Migration test
+turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement (required), and which field you took liveness from. Ledger:
+§02 has two adjacent ✂️ cut rows, `Runtime status dot per row` and `Runtime status chip per row
+(live/starting/crashed/closed)`. Flip **only the dot row**, tagging it as real-added under the ruling;
+**the chip row stays ✂️ cut** — that is the bare-row ruling, still in force. Touch no other ledger row
+and not the Part D totals. Update your STATUS row last — re-read `STATUS.md` immediately before
+writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-45 · ⬜ — Three rendered engineering notes, and two buttons sharing one label (audit 26c + the TRANCHE H carry-forward)
+
+A copy session with a real trap: one of the three notes is recorded in `CLAUDE.md` as having been
+deleted on 2026-07-27 after the operator rejected the page. It is alive and rendering. Runs FIRST in
+this wave because two other sessions want this file later.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 2/10
+
+You are running P4-45 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== WHAT THIS SESSION IS ===
+Four user-visible-text defects, three from the UX audit
+(`docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`, finding 26c) and one left open by TRANCHE
+H. No behaviour changes. Re-verify every anchor before editing (verified at tip `39351bd`,
+2026-07-31). **Your report MUST name, in one line, the contract or rule each change satisfies** — for
+this session that is CLAUDE.md §7, quoted below, and you should be able to say which clause each edit
+answers.
+
+=== THE RULE YOU ARE ENFORCING (CLAUDE.md §7, verbatim) ===
+Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`, `aria-label`, toasts,
+disabled-reasons, empty states, console warnings.
+
+> - **No em dash (—) in any of it. Ever.** Rewrite the sentence: split it in two, or use a comma or
+>   colon. This includes the `'—'` no-value placeholder (write `none`) and ` — ` as an aria-label
+>   separator (write `, `).
+> - **Never render engineering notes.** No `file.ts:123` citations, no session ids (`P4-6b`,
+>   `CC-19`), no internal vocabulary (read seam, write allowlist, sidecar review, registry row,
+>   host-API gap, `MAX_*` constant names). A deviation belongs in your report and the STATUS row,
+>   which is what §9 asks for; a component that exists to print your to-do list on the page is the
+>   bug (`DeferredNote`, deleted 2026-07-27 after the operator rejected the page).
+> - **Say only what is surprising.** Restating the state the user just chose is noise; spend prose on
+>   what contradicts it.
+> - Tell the user what to DO ("Change it from the CLI"), not why we have not built it ("needs a
+>   recorded permission-boundary review").
+
+=== THE FOUR DEFECTS (source-verified 2026-07-31, re-verify) ===
+
+**1. `DeferredNote` is alive.** `app/renderer/src/SettingsExtensions.tsx:104` defines it; two call
+sites render it: `:137-140` on the MCP panel ("Shown from configuration only. Connection status, and
+connect / authenticate / remove, are not available here yet.") and `:219-222` on Plugins ("Browsing
+and installing are not available here. Install plugins from the terminal."). **CLAUDE.md §7 names
+this component as deleted on 2026-07-27 after the operator rejected the page, and it is rendering.**
+Either the deletion never landed or it came back; establish which if it is cheap, and say so. Both
+strings explain what we have not built; one of them also tells the user what to do instead, which is
+the half worth keeping. If both call sites lose their prose, delete the component too — a helper that
+exists to print roadmap notes should not survive to be reused.
+
+**2. `SystemNoticeBox` prints its discriminant.** `TranscriptView.tsx:1972-1992` renders, on every
+projected notice row, a trailing `<span>{noticeType}</span>` — literally `api_retry`,
+`local_command_output` or `account_diagnostic` on the app's most-read surface. It is a debug tag. The
+glyph and tone already distinguish the three (`NOTICE_STYLE`, `:1996-2003`). Decide between removing
+it and replacing it with something a user would recognise, and say which and why.
+
+**3. `ImageResultBody` renders a roadmap note.** `TranscriptView.tsx:1429-1447` prints
+`inline image tile pending a projector image-payload seam` beneath every successful image result.
+"Seam" is internal vocabulary and the sentence is a to-do item. The result text above it already says
+what happened.
+
+**4. Two buttons, one label — TRANCHE H's open §0.** `ToolInspectorLaunch` (`:988-999`, the tool
+card's footer) and `InlineRevealBand` (`:1457-1497`, the truncation band P4-36 added) both render
+`Open full output ↗`, in the same card, with the same styling. P4-36 raised this as OPEN and
+UNAPPROVED and proposed relabelling the FOOTER to the prototype's `Inspector`
+(`~/catcode_prototype/cat-app/Messages.jsx:563` footer vs `:566` band). It assigned the fix to P4-37,
+which finished without taking it (P4-36 was still live in the file) and handed it to whoever next
+owns this file. **That is you, and the proposal is still a proposal:** verify the prototype
+distinction yourself, decide, and state what you chose. Note that `TranscriptView.test.tsx:1189` and
+`:1394` both assert `'Open full output'` — work out which button each covers before you touch either
+label, or you will make one of them pass for the wrong reason.
+
+=== SCOPE — READ THE FENCE ===
+IN: the four above, in `TranscriptView.tsx` and `SettingsExtensions.tsx` only. If removing a note
+leaves an empty wrapper, remove the wrapper. Extend the existing user-visible-text tests
+(`userVisibleText.test.ts` is the enforcement point for the em-dash rule) or the surface's own SSR
+tests so each removal is pinned — a note nobody tests is a note that comes back.
+
+OUT: any behavioural change, any restyle, any new component, and every other §7 offender in the app.
+In particular `ConnectionRecovery`'s `Session {status}.` copy is the same class and is **P4-49's**
+this wave, not yours.
+
+**File fence.** You own `TranscriptView.tsx` and `SettingsExtensions.tsx`. Nothing else. If your §7
+sweep finds more of this class in files you do not own, **list them in your report with anchors and
+do not fix them** — an unowned finding recorded is a finding that gets a session; an unowned finding
+fixed inside someone else's live file is TRANCHE H's false-red story repeating.
+
+=== GROUND RULES ===
+Renderer-only, copy-only. No new inbound vocabulary, no preload channel, no protocol change; security
+baseline untouched (T4/T5a/T6/T7 + HC1-HC4). This surface renders untrusted tool output: everything
+stays a text node. `app/` is strict. No new deps. Branch `migration`, commit your own explicit paths,
+never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok. Also run
+`rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining hit is a code comment.
+
+Report: the one-line rule statement per change (required); your decision on the duplicate label with
+the prototype evidence you checked; whatever you established about `DeferredNote`'s supposed 2026-07-27
+deletion; and any further §7 offenders you found but did not touch. Ledger: update only the rows your
+change makes wrong — §05 for the notice and image rows, §25 for the extensions panels. Touch no other
+ledger row and not the Part D totals. Update your STATUS row last — re-read `STATUS.md` immediately
+before writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-46 · ⬜ — The window has no minimum size (audit 26a)
+
+One line in the main process, and one number that must be derived rather than chosen by feel. The
+audit's own claim that things clip is explicitly UNVERIFIED, so the operator step is the evidence.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 2/10 · 🖐 GUI
+
+You are running P4-46 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+From `docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`, finding 26a. Its defect claims survived
+six adversarial review rounds; its fixes often did not. **This one ships with its UNVERIFIED tag
+intact:** the audit states plainly that "actual clipping behavior at narrow widths was not observed".
+Re-verify every anchor before building. **Your report MUST name, in one line, the contract or
+constraint your number satisfies.**
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+`app/main/main.ts:684-690` constructs the one `BrowserWindow` with `width: 1100, height: 720` and no
+`minWidth` / `minHeight`. The window can therefore be dragged to any size the platform allows, over a
+renderer that is largely non-responsive: responsive prefixes appear in only six files (all
+`sm:grid-cols-*`), and several columns do not shrink.
+
+=== DERIVE THE NUMBER, DO NOT PICK IT ===
+A minimum window size is a claim about the widest thing that must stay usable. Find the real
+constraints in source and name the binding one in your report. Known non-shrinking chrome to check,
+and re-verify each: the Settings rail is `w-[240px] shrink-0` (`SettingsShell.tsx:294`), the session
+actions menu is a fixed `w-[232px]` panel (`SessionActionsMenu.tsx`), the sidebar has an expanded
+width, and the transcript column is centre-constrained (P4-24). Height has its own floor: the
+composer, the tab bar and at least a few transcript rows have to coexist.
+
+A number derived from the layout is defensible and re-derivable when the layout changes. A number
+chosen because it looks about right is neither, and this is the kind of constant that survives
+untouched for years.
+
+=== SCOPE — READ THE FENCE ===
+IN: `minWidth` / `minHeight` on the window, and a test if the construction is reachable by one
+(check how `app/main` is tested today before promising one; if it is not testable, say so plainly
+rather than inventing a harness).
+
+OUT: the default `width`/`height`, window position or state persistence, any responsive CSS work
+(that neighbours audit 26b, the light-theme and responsiveness item, which is bucket-C and unowned),
+and every `webPreferences` key.
+
+**File fence.** You own `app/main/main.ts`. Nothing in `app/renderer/` is yours this wave.
+
+**This file is the BrowserWindow security surface** (`decisions/SECURITY-MINIMUM.md` §3: sandbox,
+contextIsolation, nodeIntegration off, webviewTag off, webSecurity on, the preload path, the CSP
+header). Touch none of it, and prove it with `test:hardening` all-pass.
+
+=== GROUND RULES ===
+Main-process only. No new inbound vocabulary, no preload channel, no protocol change. `app/` is
+strict. No new deps. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use
+the P3-H harness, then WAIT; NO automation): drag the window to its new floor and confirm it stops
+there; at that size, open Settings, open the sidebar, open a session actions menu and read a
+transcript row, and confirm nothing is clipped or unreachable. **Ask the operator to say what DID
+clip before the change if they still have a pre-fix build** — that is the audit's open question and
+this session cannot answer it. Migration test turns use `gpt-5.6-luna` at low effort on a healthy
+account.
+
+Report: the one-line constraint statement (required), the binding constraint with its `app/…:line`,
+and an explicit UNVERIFIED line naming what the operator step is expected to settle. Ledger: if no row
+covers window sizing, say so rather than inventing one. Touch no ledger row you did not make wrong and
+not the Part D totals. Update your STATUS row last — re-read `STATUS.md` immediately before writing
+and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-47 · ⬜ — Retention `0` destroys history silently (audit 5a) **+** the Remote rail advertises a cut SSH mode (26d)
+
+The most destructive unbuilt item in the wave. P4-41 correctly excluded it from its scope, which left
+it unowned. It carries a second, unrelated one-line copy fix **only** because both write
+`settingsScope.ts` and this tranche allows one live session per file.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 5/10 · 🖐 GUI
+
+You are running P4-47 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+Two items, one session. **They are unrelated**; they share this session only because both touch
+`app/renderer/src/settingsScope.ts` and this tranche permits one live session per file. Item B is one
+line. Do not let it ride along unfinished behind item A.
+
+=== THE AUDIT PROPOSES; YOU DERIVE ===
+From `docs/migration/reviews/2026-07-31-app-ux-gap-audit.md`, findings 5a and 26d. Defect claims
+survived six adversarial review rounds; proposed fixes often did not — **finding 5a's own history is
+the cautionary tale of this whole audit**: rev 1 called it a copy mismatch, rev 2 "corrected" that in
+the dangerous direction by declaring existing rows unaffected, rev 3 reversed rev 2 with engine
+citations, rev 4 proposed a bounded enum, and rev 5 withdrew the enum. Re-verify every anchor before
+building (verified at tip `39351bd`, 2026-07-31). **Your report MUST name, in one line, the contract
+or call path your fix satisfies.**
+
+=== ITEM A — THE DEFECT (source-verified 2026-07-31 against the ENGINE, re-verify) ===
+`cleanupPeriodDays = 0` does not merely stop future writes. The engine's own schema says so:
+
+> "Number of days to retain chat transcripts (default: 30). Setting to 0 disables session persistence
+> entirely: no transcripts are written and existing transcripts are deleted at startup."
+> — `src/utils/settings/types.ts:325-332`
+
+and `getCutoffDate()` multiplies the period by a day in ms (`src/utils/cleanup.ts:24-31`), so `0`
+yields a cutoff of *now* and startup cleanup sweeps everything.
+
+The desktop makes that reachable by typing a digit and clicking away. `IntField`
+(`app/renderer/src/SettingsEditors.tsx:452-519`) commits on `onBlur` and on Enter, with no
+confirmation of any kind. The consequence lands on the NEXT launch, far from the action that caused
+it, and it is not recoverable.
+
+**What changed since the audit was written:** P4-41 landed, so an engine settings key can now be
+cleared from the UI (`value: null` is the clear request; `selectSettingsReset` decides the
+affordance). Check what that means for this field before designing: the choice is now reversible
+BEFORE the next launch, which is exactly the pairing the audit's finding 15 asked for, and it may
+change what your confirmation needs to say.
+
+=== ITEM A — THE FENCES, WHICH ARE THE POINT ===
+- **Do NOT narrow the domain.** A 30 / 60 / 90 / Forever enum was proposed and **rejected twice**
+  (audit rev 5; coverage document bucket B-rejected). The registry declares
+  `{ kind: 'int', min: 0, max: 3650, default: 30 }` (`app/shared/settingsEditable.ts:235-241`), so an
+  enum deletes every legitimate value in between (7, 45, 365) and `Forever` has **no wire
+  representation at all**. Do not resurrect it in any form.
+- **Do NOT touch P4-41's generic reset.** It landed days ago and every key uses it.
+- **Do NOT add a second sentinel.** `null` already means "clear this key" (P4-41). `0` is a
+  legitimate value that means "keep nothing". Those must stay distinguishable end to end; say how in
+  your report.
+- **`IntField` is generic over every int key.** A hardcoded `keyName === 'cleanupPeriodDays'` branch
+  in a shared control is the cheap answer; a declared property of the key is the honest one. If you
+  put it in `app/shared/settingsEditable.ts`, that file is **shared with the sidecar and is part of
+  the validation boundary** — the addition must be display-only, must not change what
+  `validateEditableSettingValue` accepts or rejects, and you must prove that with the existing
+  boundary tests. State which home you chose and why.
+
+Questions your report must answer, from source: does the confirmation fire on the blur path, the
+Enter path, or both? What does Cancel leave in the field (leaving `0` visible after a cancelled
+confirm is its own bug)? Does the persistent warning the audit asks for belong in `settingsRowNote`
+(`settingsScope.ts:900`), which already exists to say only what is surprising, or on the control?
+`SAModal` (`app/renderer/src/SAModal.tsx`, P4-30) is the app's shared modal — use it rather than
+inventing a dialog.
+
+**User-visible text (CLAUDE.md §7)** applies to every string here: no em dash; no key names, no
+"engine", no internal vocabulary; tell the user what will happen and what to do. The audit's sentence
+("Past sessions will be deleted the next time the app starts, and cannot be restored") is a starting
+point, not approved copy — it has to name a consequence the user recognises, in this app's voice.
+
+=== ITEM B — THE REMOTE RAIL ADVERTISES A CUT FEATURE (26d) ===
+`app/renderer/src/settingsScope.ts:333-336` describes the Remote category as
+`'Saved SSH environments and the Remote Control bridge'`. There are no saved SSH environments:
+`decisions/PAIRED-DEVICES.md` §1-§3 cut the SSH connect mode and the device roster, and
+`RemoteSettingsSnapshot` carries only `bridge` and `commandFilter`, so nothing of the sort crosses the
+wire. The rail promises a pane that cannot exist.
+
+**This is copy only, and it does not reopen the cut.** It was mis-filed in TRANCHE H's register as
+awaiting an operator ruling; aligning a description with a decided cut is not a reversal of it. Do not
+build an SSH surface, do not touch the wire, do not touch `RemoteSettingsPage.tsx`. Describe what the
+pane actually offers.
+
+=== SCOPE — READ THE FENCE ===
+IN: item A's confirmation, its persistent warning, and its tests; item B's one description string.
+
+OUT: any other settings key, any change to precedence or to the write path, the editor's layout, and
+anything in the Remote pane beyond the rail description.
+
+**File fence.** You own `SettingsEditors.tsx`, `settingsScope.ts`, and `app/shared/settingsEditable.ts`
+if you choose that home for the destructive-value declaration. You do NOT own `App.tsx`,
+`SettingsShell.tsx` beyond a mount you cannot avoid (say so if you need it), or anything in the
+transcript.
+
+**The confirmation is an interaction, and the `app/` renderer suite is SSR-only** — it cannot click a
+button or fire a blur. Put the decisions in pure exported helpers (is this key's value destructive;
+what does the confirm say; what does cancel restore) with unit tests, and keep the DOM layer thin.
+Green tests are not evidence that the dialog appears.
+
+=== GROUND RULES ===
+Renderer-side over the EXISTING settings write path. No new inbound vocabulary, no preload channel, no
+protocol change; the sidecar remains the trust boundary and its validation is unchanged. Security
+baseline untouched (T4/T5a/T6/T7 + HC1-HC4). Preserve the `SettingsUpdater`-under-lock FUNCTION form
+(the P3-5a/DR-2 no-lost-update fix) — you should not be near it, and if you are, stop. `app/` is
+strict. No new deps. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, then WAIT; NO automation): in Settings, type `0` into transcript retention and click
+away; confirm a dialog names the consequence, that cancelling leaves the previous value in the field,
+and that confirming leaves a visible warning while the value is `0`. Then confirm the value can be
+undone from the UI. **Do not ask the operator to leave `0` committed and relaunch** — that would
+delete their real transcripts. Also confirm the Remote rail description matches the pane. Migration
+test turns use `gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement per item (required); where the destructive-value rule lives
+and why; the `0`-versus-`null` distinguishability argument; and the exact copy you shipped. Ledger:
+§11's retention row (`Privacy ▸ Conversation retention select`, currently 🔁 adapted over `IntField`)
+and whichever row records the Remote rail description — if none does, say so rather than inventing
+one. Touch no other ledger row and not the Part D totals. Update your STATUS row last — re-read
+`STATUS.md` immediately before writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-48 · ⬜ — The launcher never tells a first-run user what to do first (2a, ruled 2026-07-31)
+
+Copy on the launcher, and nothing else. The ruling is unusually explicit about what it does NOT
+authorize, because the audit's own proposal here was withdrawn for manufacturing a dead end.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 3/10 · 🖐 GUI
+
+You are running P4-48 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE RULING AND ITS BOUND (quoted verbatim — do not paraphrase, do not exceed) ===
+`decisions/STARTUP-GATES.md` §1.2, the 2026-07-31 clarification:
+
+> **Ruled: fix discoverability, not architecture.** The launcher tells the user what to do first so
+> the sequence is visible rather than guessed. Per-session-create trust is unchanged; account writes
+> stay session-scoped; no host-plane account-write path is authorized by this ruling. Explicitly NOT
+> ruled in: moving the `user` settings scope to a host-plane read. That is architecturally clean (the
+> user layer is session-invariant by design, `settingsScope.ts:33`) and is untouched by this ruling,
+> but it was not selected and needs its own decision.
+
+The same section records WHY the obvious fix was withdrawn:
+
+> The audit initially proposed reading the global pool instead; that was withdrawn, because account
+> **verbs** need an engine process to carry them (`App.tsx:1178` answers with a real `ok:false`
+> outcome when there is no session), so exposing sign-in earlier would surface a control with nothing
+> behind it.
+
+So: **copy, not a gate.** No sign-in control on the launcher, no host-plane account write, no
+session-free settings read.
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+On a genuine first launch there is no session, so `selectAccountsSnapshot(accounts, activeSessionId)`
+returns null (`accountsState.ts:106`), so `shouldShowFirstRunOAuth` (`appModel.ts:14-27`) is
+structurally unreachable — it requires a non-null snapshot. The user's only path to signing in is to
+guess the sequence: pick a folder, native picker, session spawns, trust gate, and only then does the
+sign-in card appear. Nothing on screen suggests any of that. The flow does not hang and the paste-code
+and error phases both exist; the gap is that the sequence is invisible.
+
+**You need no new data path, and must not add one.** The launcher already receives a session-free
+accounts snapshot: `App.tsx:2907` passes
+`accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}` into `WelcomeScreen`.
+Whether your copy should be conditional on that snapshot, or unconditional, is yours to derive and
+state. If you conclude you need data the launcher is not already given, STOP and report — that is
+architecture, which this ruling does not authorize.
+
+=== SCOPE — READ THE FENCE ===
+IN: copy on the launcher that makes the first-run sequence visible, in `WelcomeScreen.tsx`.
+
+OUT, each because the ruling says so:
+- **Switching `shouldShowFirstRunOAuth` to the global snapshot.** That is precisely the withdrawn
+  proposal: a sign-in surface with no process to execute it.
+- **Any host-plane account write**, any new verb, any new preload method.
+- **The session-free `user` settings read**, and the Settings empty state
+  ("No session is open, so your settings files have not been read yet.", `settingsReadState.ts:45`).
+  That is finding 2b, a separate bucket-C item explicitly NOT ruled in.
+- **The trust gate.** Per-session-create trust is unchanged.
+
+**File fence.** You own `WelcomeScreen.tsx`. Not `App.tsx` (two other sessions are in it this wave),
+not `appModel.ts`, not `accountsState.ts`, not `StartupSurfaces.tsx`.
+
+=== USER-VISIBLE TEXT — THIS IS THE DELIVERABLE (CLAUDE.md §7, verbatim) ===
+> - **No em dash (—) in any of it. Ever.** Rewrite the sentence: split it in two, or use a comma or
+>   colon. This includes the `'—'` no-value placeholder (write `none`) and ` — ` as an aria-label
+>   separator (write `, `).
+> - **Never render engineering notes.** No `file.ts:123` citations, no session ids, no internal
+>   vocabulary (read seam, write allowlist, sidecar review, registry row, host-API gap, `MAX_*`
+>   constant names).
+> - **Say only what is surprising.** Restating the state the user just chose is noise.
+> - Tell the user what to DO ("Change it from the CLI"), not why we have not built it.
+
+A previous session shipped roadmap prose on a settings page and the operator rejected the page on
+sight. Write what the user does next, in the order they do it. Do not explain the session model, do
+not mention sessions spawning, and do not apologise for the sequence.
+
+=== PROTOTYPE ===
+`~/catcode_prototype/cat-app/Startup.jsx:461-489` gates trust and OAuth at app level before any
+session exists. **That is the design the ruling declined** — do not port it, do not port its wording,
+and do not treat its existence as backing for a control. The prototype has no session concept, so it
+cannot inform this at all: your copy is net-new under a ruling. Tag it ➕ real-added (ruled) in your
+report and the ledger, not as parity work. The launcher's existing visual grammar
+(`WelcomeScreen.tsx`, P4-17, `decisions/WELCOME-LAUNCHER.md`) is the bar: your text lives inside it,
+it does not restyle it.
+
+=== GROUND RULES ===
+Renderer-only, copy-only. No new inbound vocabulary, no preload channel, no protocol change; security
+baseline untouched (T4/T5a/T6/T7 + HC1-HC4) — HC1 in particular: the renderer authors no path, and
+"Open folder…" through the native picker stays the only way a cwd is chosen. `app/` is strict. No new
+deps. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok. Also run
+`rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining hit is a code comment.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, then WAIT; NO automation): open the app with no session and read the launcher as a
+first-time user would. The question to answer is whether the next action is now obvious without
+prior knowledge. If the operator can stage a no-account state safely, ask whether the copy still reads
+correctly there; **do not ask them to remove a real account to test it.** Migration test turns use
+`gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement (required); the exact copy you shipped; whether it is
+conditional on the accounts snapshot and why; and an explicit statement that no account verb, no new
+data path and no settings read were added. Ledger: §29 Welcome rows — add or update only what your
+change makes wrong, tagged ➕ real-added (ruled). §29 is recorded CLOSED in Part C; do not reopen its
+count. Touch no other ledger row and not the Part D totals. Update your STATUS row last — re-read
+`STATUS.md` immediately before writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-49 · ⬜ — No connection tone grammar, and the bar prints a raw status word (24b, ruled 2026-07-31)
+
+Builds directly on P4-35, which landed the terminal-vs-transient partition this session should
+consume rather than re-derive. It also picks up the one §7 offender P4-35 fenced out as not-its-own.
+
+─── PASTE ───
+```
+🧠 Model: ANY · Difficulty: 3/10 · 🖐 GUI
+
+You are running P4-49 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+
+=== THE RULING AND ITS BOUND (quoted verbatim — do not paraphrase, do not exceed) ===
+From the Operator rulings section of
+`docs/migration/reviews/2026-07-31-app-ux-gap-prototype-coverage.md`, canonical for this ruling:
+
+> **24b connection tone — Minimal two-tone, no chip.** Transient states read neutral or warn;
+> terminal states read danger. No dot, no chip, no restored `ConnectionChip.tsx`. Enough grammar that
+> the next transient cannot present as a failure, and no more.
+
+`ConnectionChip.tsx` was deleted by CC-5 ruling #6 and **stays deleted**. "Enough grammar and no
+more" is the whole bound: a partition and two tones, not a vocabulary.
+
+=== THE STATE OF PLAY (source-verified 2026-07-31, re-verify) ===
+P4-35 landed hours ago and changed the ground under this finding. `ConnectionRecovery`
+(`app/renderer/src/App.tsx:4034-4068`) now returns null unless
+`isTerminalConnectionStatus(connection.status)` (`connectionState.ts:55-73`), a shared partition with
+its own exhaustiveness tripwire whose agreement with `resolvePendingSubmit` is pinned by
+`connectionState.test.ts`. So a `starting` session no longer paints a red failure bar.
+
+**What is still missing is what 24b is about:** the app has no tone grammar for a connection state at
+all. The next transient state anyone adds inherits whatever its author picks, which is how `starting`
+became a red failure in the first place. Consume P4-35's partition — do not re-derive the
+classification, do not create a second list that can drift from it, and keep its tripwire and its
+pinned agreement green.
+
+=== YOUR SECOND, FENCED-IN ITEM: THE COPY ===
+`ConnectionRecovery` renders `<span>Session {connection.status}.</span>`, so a user reads
+`Session dead.` or `Session exited.` — the engine's own discriminant, printed at them. P4-35 fenced
+this out explicitly and correctly ("Real, and NOT yours: it is audit finding 26c's class"). **It is
+yours**, because you are already rewriting this component's presentation and no other session owns
+this string: P4-45 owns three different instances of the same class in files you do not touch. Map
+each terminal status to a sentence the user can act on, next to a Restart button that already exists.
+
+**User-visible text (CLAUDE.md §7):** no em dash; no engineering vocabulary or discriminants; say only
+what is surprising; tell the user what to DO. Check with
+`rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining hit is a code comment.
+
+=== SCOPE — READ THE FENCE ===
+IN: a two-tone derivation over the connection status union, consumed by the connection surface; the
+per-status copy above; unit tests over the derivation covering every member of the union (the union is
+`'connecting' | 'starting' | 'ready' | 'dead' | 'disconnected' | 'failed' | 'exited'`,
+`connectionState.ts:8-16` over `protocol.ts`).
+
+OUT, each with its reason:
+- **Any dot, chip, pulse, ring, or four-state vocabulary**, and any restoration of
+  `ConnectionChip.tsx`. The ruling names all of them.
+- **`sessionStatusVisual.ts`, `tabStatus.ts`, the TabBar and the Sidebar.** Audit finding 4 (a working
+  indicator on tabs) is unowned, and the sidebar's live dot is **P4-44's** this same wave. Two
+  sessions editing one tone vocabulary is how a two-tone bound becomes a four-state one by accident.
+- **The composer gate and the parked-prompt path.** `resolvePendingSubmit` already partitions this
+  union for a different purpose; agree with it, do not touch it.
+
+**File fence.** You own `App.tsx`'s `ConnectionRecovery` region and `connectionState.ts`. Two other
+sessions want `App.tsx` after you (P4-50, then P4-43), so commit promptly and keep your diff inside
+that region.
+
+=== GROUND RULES ===
+Renderer-only. No new inbound vocabulary, no preload channel, no protocol change; security baseline
+untouched (T4/T5a/T6/T7 + HC1-HC4). `app/` is strict — a closed union gets a compile-time
+exhaustiveness tripwire (`default` case assigning to `never`), which is how P4-35 built its partition
+and how yours should agree with it. No new deps. Use static Tailwind classes, never interpolated
+arbitrary values. Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, then WAIT; NO automation): stage a terminal connection state (the harness's own kill
+path is the honest way; the operator should not be asked to kill processes by pattern) and confirm the
+bar reads as a failure with a sentence rather than a status word, and that Restart still works. If a
+transient state can be observed at all, confirm it does not read as a failure. **Say plainly in your
+report which states the operator can realistically stage and which cannot be exercised**; an
+unstageable state is UNVERIFIED, not passed. Migration test turns use `gpt-5.6-luna` at low effort on
+a healthy account.
+
+Report: the one-line contract statement (required); the exact copy per terminal status; and how your
+derivation is pinned to P4-35's partition so the two cannot drift. Ledger: §01's
+`Connection→banner injection effect` row (🔁 adapted, evidence `App.tsx:1059`) and §12's
+`ConnectionChip: hidden when healthy` row, which P4-35 re-anchored. Update only what your change makes
+wrong. Touch no other ledger row and not the Part D totals. Update your STATUS row last — re-read
+`STATUS.md` immediately before writing and touch only your own row.
+```
+─── PASTE ───
+
+
+## P4-50 · ⬜ — Account health surfaces only inside the scrolling transcript (O2a, ruled 2026-07-31)
+
+The ruling turns a two-year-old built-and-unused primitive into its first production mount. Its bounds
+exist because the previous version of this surface was a wall the operator removed; every clause of
+the quote below is a thing that made it a wall.
+
+─── PASTE ───
+```
+🧠 Model: CLAUDE (visual-design) · Difficulty: 5/10 · 🖐 GUI
+
+You are running P4-50 of the CatCode desktop-app migration (~/cat-code, branch `migration`).
+Echo the header line above back to the operator before starting.
+Run AFTER P4-49 (it is live in `App.tsx`).
+
+=== THE RULING AND ITS BOUND (quoted verbatim — do not paraphrase, do not exceed) ===
+`decisions/STARTUP-GATES.md`, the 2026-07-31 revision of ruling #12:
+
+> **Ruled:** account/quota diagnostics get a **pinned, dismissable, non-blocking** surface above the
+> transcript, mounting the already-built `BannerStack` (`app/renderer/src/BannerStack.tsx`, currently
+> zero production importers). Constraints that make this compatible with #12 rather than a reversal
+> of it: it never blocks submit, it is always dismissable, it carries no re-auth wall semantics, and
+> it does not reintroduce `ReauthWall.tsx` or `reauthBannerState.ts`. Scope is **account health
+> only** — shell lifecycle errors are a separate surface and a separate finding (audit finding 8); do
+> not merge the two error classes into one banner plane.
+
+#12 itself is unchanged and still binding: no wall, no submit block, a send at zero-healthy proceeds
+and fails naturally at request time with the engine's own typed pool error.
+
+=== THE DEFECT (source-verified 2026-07-31, re-verify) ===
+Quota exhaustion surfaces only as a grey `account_diagnostic` notice INSIDE the scrolling transcript
+(`TranscriptView.tsx`, `SystemNoticeBox`), so it scrolls out of view while subsequent turns keep
+failing at request time. The user sees repeated failures with the explanation somewhere above.
+
+=== WHAT ALREADY EXISTS — REUSE IT, DO NOT REBUILD IT ===
+- **The primitive.** `BannerStack.tsx` (P4-1) with tones, actions, and a dismiss that hides when
+  `dismissable === false`. `bannerStackModel.ts` is its pure, tested stacking model
+  (`upsertBanner` / `dismissBanner` / `useBannerStack`). Ledger §05 records `BannerStack` as ⬜
+  deferred with **zero production importers** — this session is that importer.
+- **The derivation, with real copy and real actions.** The Accounts page already derives a usage-cap
+  banner from the same domain: `AccountsPage.tsx:896-935` renders `{alias}: usage limit reached` with
+  Switch / Resets / Dismiss, over `selectCapAccount` (`accountsState.ts:184`). **Reuse that
+  derivation.** Two disagreeing account-health models on two surfaces is worse than one surface.
+- **The data, session-free.** `AccountsSnapshot` (`app/shared/protocol.ts:1705-1733`) carries
+  `readyCount`, `poolCount`, and the Anthropic-pool equivalents; `selectGlobalAccountsSnapshot`
+  (`accountsState.ts:152`) already gives a session-free read. **No new seam, no new frame, no new
+  preload method** — if you think you need one, you have left the scope.
+
+=== THE DECISIONS THAT ARE ACTUALLY YOURS ===
+State each in your report, with its reasoning:
+
+1. **Which account-health states earn a pinned banner at all.** Not every degradation is worth
+   interrupting for. "Say only what is surprising" (CLAUDE.md §7) applies to a banner more than to any
+   other surface in this app.
+2. **What dismissal means.** The deleted implementation used
+   `localStorage['catcode:dismissedReauth']` keys; #12 deleted them and you must not reintroduce
+   them. Decide the lifetime: a banner that returns on the next frame is nagware, and one that never
+   returns after the state changes is a silent failure. Say which failure you chose to avoid and how.
+3. **What happens to the transcript notice.** It stays where it is — another session (P4-45) is
+   editing that file this wave. If the same fact now appears in two places, that is a design choice
+   you state explicitly, not one you stumble into.
+4. **What the actions do.** Switch and Resets already exist on the Accounts page; a banner action that
+   navigates rather than acts is a legitimate answer. An action that needs an account verb needs a
+   session, and account writes stay session-scoped (`decisions/STARTUP-GATES.md` §1.2) — so a banner
+   with no session must not offer one.
+
+=== SCOPE — READ THE FENCE ===
+IN: the derivation from the accounts domain, the mount above the transcript, dismissal, and unit tests
+over the derivation (which snapshot yields which banner, and which yields none).
+
+OUT, each with its reason:
+- **Shell lifecycle errors.** The transport-error bar (`App.tsx:2722`) has seven writers and is audit
+  finding 8, unowned. The ruling names it as a separate surface. Do not route it here, and do not
+  "improve" it in passing.
+- **`ReauthWall.tsx` / `reauthBannerState.ts` / `selectReauthWall` / `selectVisibleReauthBanners` /
+  `selectAuthSubmitBlocked`.** Deleted by #12. Do not recreate any of them under a new name.
+- **Any submit gate.** The composer send is never disabled by account health. If your change can
+  disable a send, it is wrong.
+- **The Accounts page itself.** You read its derivation; you do not restyle it.
+
+**File fence.** You own the banner region of `App.tsx` and whatever new derivation module you add.
+P4-49 is in `App.tsx` before you and P4-43 after you: confirm P4-49 has landed and the file is clean
+before starting, and commit promptly. You do not own `TranscriptView.tsx` (P4-45),
+`AccountsPage.tsx`, or `accountsState.ts` beyond adding a selector if the existing ones do not fit.
+
+=== PROTOTYPE ===
+There is **no prototype design for a non-blocking quota surface** — the prototype's answer was the
+blocking `ReauthGate` that #12 removed, and its `MOCK_BANNERS` fixture is empty
+(`~/catcode_prototype/cat-app/data.js:3439`). The visual grammar you follow is `BannerStack`'s own,
+already built to the prototype's banner rows (`Surfaces.jsx:786-833`). Tag the surface ➕ real-added
+(ruled) rather than claiming parity. Port ZERO prototype code; no inline `style={{}}`; beware the
+dynamic-class trap.
+
+**User-visible text (CLAUDE.md §7):** the banner's title, detail and action labels are all deliverables
+here. No em dash. No engineering vocabulary, no discriminants, no `MAX_*` names, no session ids. Tell
+the user what to DO, not why the state exists. Say only what is surprising: a banner restating that
+they are signed in is noise.
+
+=== GROUND RULES ===
+Renderer-only over existing seams. No new inbound vocabulary, no preload channel, no protocol change.
+Security baseline is a hard gate (T4/T5a/T6/T7 + HC1-HC4): account status reaching the renderer is
+redacted by `secretGuard` on outbound frames and **no credential material may appear in a banner** —
+not an alias-plus-token, not an error body echoed verbatim. Banner text is untrusted status text and
+renders as text nodes, which `BannerStack.tsx:10` already documents. `app/` is strict. No new deps.
+Branch `migration`, commit your own explicit paths, never `git add -A`.
+
+=== DELIVERABLE / DONE WHEN ===
+`bun test app/` green (baseline 2026-07-31 at tip `39351bd`: **2087 pass / 0 fail**) ·
+`bunx tsc --noEmit -p app/tsconfig.json` clean · `bun run --cwd app typecheck:sidecar` zero new owned
+· `bun run --cwd app test:hardening` 19/19 · `bun run --cwd app renderer:build` ok.
+
+**Invoke the `verifying-cat-code-changes` skill**; paste the filled **FIDELITY** block and the
+**SURFACE ACCEPTANCE** tiered verdict.
+
+GUI (operator's — STOP and print exact steps per `docs/migration/process/GUI-VERIFICATION.md`, use the
+P3-H harness, then WAIT; NO automation): the honest step is to confirm the banner does NOT appear on a
+healthy pool, that it does not move or block the composer, and that dismissing it leaves the app
+usable. **A capped account is expensive to stage on purpose; do not ask the operator to burn quota.**
+If the harness can inject a snapshot, that is the route; otherwise state plainly that the capped-state
+render is UNVERIFIED and covered only by unit tests over the derivation. Migration test turns use
+`gpt-5.6-luna` at low effort on a healthy account.
+
+Report: the one-line contract statement (required); the four decisions above with their reasoning; the
+exact banner copy; and an explicit statement that submit is never gated and that no wall file was
+recreated. Ledger: §05's `BannerStack (session banners with action/dismiss)` row (⬜ deferred, zero
+production importers) and §12's BannerStack rows. Update only what your change makes wrong. Touch no
+other ledger row and not the Part D totals. Kill any sidecar you spawn. Update your STATUS row last —
+re-read `STATUS.md` immediately before writing and touch only your own row.
+```
+─── PASTE ───
