@@ -16,6 +16,7 @@ import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   ExtensionsSnapshot,
+  MemorySnapshot,
   PermissionContextSnapshot,
   SettingsSnapshot,
 } from '../../shared/protocol.js'
@@ -839,6 +840,70 @@ test('the Extensions group renders the real library, not stubs', () => {
 test('the page states once, globally, that edits apply to later sessions', () => {
   const head = headMarkup(renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />))
   expect(head).toContain('apply to sessions started afterwards')
+})
+
+test('Memory uses the shared settings editor while keeping current-session truth', () => {
+  const settings: SettingsSnapshot = {
+    ...SNAPSHOT,
+    layers: [
+      {
+        source: 'userSettings',
+        origin: USER_FILE,
+        keys: ['autoMemoryEnabled'],
+      },
+    ],
+    resolved: [
+      {
+        key: 'autoMemoryEnabled',
+        source: 'userSettings',
+        editable: true,
+        managed: false,
+      },
+    ],
+    editableValues: [
+      {
+        key: 'autoMemoryEnabled',
+        value: false,
+        source: 'userSettings',
+      },
+    ],
+  }
+  const memory: MemorySnapshot = {
+    autoMemoryEnabled: true,
+    autoMemoryDir: '/Users/pt/.cat-code/projects/repo/memory/',
+    autoMemoryEntrypoint:
+      '/Users/pt/.cat-code/projects/repo/memory/MEMORY.md',
+    instructionFiles: [],
+    autoMemories: [],
+    agentMemories: [],
+    notes: [],
+  }
+
+  const html = decode(
+    paneMarkup(
+      renderToStaticMarkup(
+        <SettingsShell
+          initialCategory="memory"
+          memorySnapshot={memory}
+          snapshot={settings}
+        />,
+      ),
+    ),
+  )
+
+  // Saved layer value: the shared Field/Toggle/SourceBadge/reset grammar.
+  expect(html).toContain('>Auto memory<')
+  expect(html).toContain('role="switch"')
+  expect(html).toContain('aria-checked="false"')
+  expect(html).toContain('>User<')
+  expect(html).toContain(`title="${USER_FILE}"`)
+  expect(html).toContain('Reset to default')
+
+  // Runtime value: the spawn-time Memory snapshot stays separate from the saved
+  // false value and states when the saved change fully applies.
+  expect(html).toContain(
+    'Current session: auto memory enabled. Changes apply to sessions started afterwards.',
+  )
 })
 
 test('renders with no snapshot at all without claiming anything', () => {

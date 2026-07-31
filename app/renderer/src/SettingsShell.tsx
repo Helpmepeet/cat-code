@@ -579,7 +579,20 @@ function ScopeBody({
         />
       )
     case 'memory':
-      return <MemoryPage embedded snapshot={memorySnapshot} />
+      return (
+        <>
+          <SettingsPane
+            engine={engine}
+            layer={writeLayer}
+            noEngineNote={noEngineNote}
+            onWrite={onSettingWrite}
+            pane="memory"
+            sessionOpen={sessionOpen}
+            snapshot={snapshot}
+          />
+          <MemoryPage embedded snapshot={memorySnapshot} />
+        </>
+      )
     case 'agents':
       return <AgentsPage embedded snapshot={agentsSnapshot} />
     case 'skills':

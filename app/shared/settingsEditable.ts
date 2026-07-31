@@ -44,7 +44,12 @@ export function isEditableSettingSource(
 }
 
 /** A settings-shell category a core editor renders under. */
-export type EditableSettingPane = 'general' | 'model' | 'privacy' | 'theme'
+export type EditableSettingPane =
+  | 'general'
+  | 'model'
+  | 'privacy'
+  | 'theme'
+  | 'memory'
 
 /** A single writable value crossing the wire — a non-secret scalar. */
 export type EditableSettingValue = boolean | string | number
@@ -269,6 +274,17 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     description:
       'Days to retain chat transcripts (default: 30). 0 disables persistence entirely.',
     control: { kind: 'int', min: 0, max: 3650, default: 30 },
+  },
+  // ── Memory ────────────────────────────────────────────────────────────────
+  {
+    key: 'autoMemoryEnabled',
+    pane: 'memory',
+    label: 'Auto memory',
+    description:
+      'Let new sessions read and write automatic memories for this project (default: on).',
+    // `SettingsSchema` leaves the key optional; `isAutoMemoryEnabled()` supplies
+    // the true runtime default (`src/memdir/paths.ts`).
+    control: { kind: 'boolean', default: true },
   },
   // ── Theme & Output ────────────────────────────────────────────────────────
   {

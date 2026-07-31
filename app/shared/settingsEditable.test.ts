@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   EDITABLE_SETTINGS_BY_KEY,
   validateEditableSettingValue,
+  validateEditableSettingWrite,
 } from './settingsEditable.js'
 
 /* ── P4-19 dynamic-enum (output style) ──────────────────────────────────────── */
@@ -47,4 +48,25 @@ test('dynamic-enum validator rejects a non-string, an empty string, and over-len
 
 test('an unknown key is still rejected regardless of control kind', () => {
   expect(validateEditableSettingValue('notAKey', 'default').ok).toBe(false)
+})
+
+test('autoMemoryEnabled is a default-on boolean in the memory pane', () => {
+  const spec = EDITABLE_SETTINGS_BY_KEY.get('autoMemoryEnabled')
+  expect(spec?.pane).toBe('memory')
+  expect(spec?.control).toEqual({ kind: 'boolean', default: true })
+  expect(validateEditableSettingValue('autoMemoryEnabled', true)).toEqual({
+    ok: true,
+    value: true,
+  })
+  expect(validateEditableSettingValue('autoMemoryEnabled', false)).toEqual({
+    ok: true,
+    value: false,
+  })
+  expect(validateEditableSettingValue('autoMemoryEnabled', 'true').ok).toBe(
+    false,
+  )
+  expect(validateEditableSettingWrite('autoMemoryEnabled', null)).toEqual({
+    ok: true,
+    clear: true,
+  })
 })

@@ -376,7 +376,13 @@ test('the default-model select degrades disabled when the model registry was unr
 })
 
 test('every pane renders at its defaults without throwing, snapshot or not', () => {
-  for (const pane of ['general', 'model', 'privacy', 'theme'] as const) {
+  for (const pane of [
+    'general',
+    'model',
+    'privacy',
+    'theme',
+    'memory',
+  ] as const) {
     const html = renderToStaticMarkup(
       <SettingsPane layer="userSettings" onWrite={noop} pane={pane} snapshot={null} />,
     )
@@ -387,9 +393,9 @@ test('every pane renders at its defaults without throwing, snapshot or not', () 
 /* ── spec §5: keys removed from the UI ────────────────────────────────────── */
 
 test('the deprecated and terminal-only keys are no longer rendered anywhere', () => {
-  const rendered = (['general', 'model', 'privacy', 'theme'] as const).flatMap(
-    pane => settingsPaneSpecs(pane).map(spec => spec.key),
-  )
+  const rendered = (
+    ['general', 'model', 'privacy', 'theme', 'memory'] as const
+  ).flatMap(pane => settingsPaneSpecs(pane).map(spec => spec.key))
   for (const gone of [
     'includeCoAuthoredBy',
     'spinnerTipsEnabled',

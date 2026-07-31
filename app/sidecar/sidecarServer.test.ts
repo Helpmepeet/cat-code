@@ -4853,6 +4853,90 @@ test('P4-41 — admitting null widened nothing else: bad values are still reject
   expect(received.some(f => f.kind === 'settings.result')).toBe(false)
 })
 
+test('P4-56 — autoMemoryEnabled accepts a boolean write and a clear', () => {
+  const seen: SettingsVerbMessage[] = []
+  const server = makeSettingsServer(verb => {
+    seen.push(verb)
+    return { ok: true, message: `Updated ${verb.key}.`, changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'memory-on',
+    source: 'projectSettings',
+    key: 'autoMemoryEnabled',
+    value: true,
+  })
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'memory-clear',
+    source: 'projectSettings',
+    key: 'autoMemoryEnabled',
+    value: null,
+  })
+
+  expect(seen).toEqual([
+    {
+      type: 'settings.setValue',
+      requestId: 'memory-on',
+      source: 'projectSettings',
+      key: 'autoMemoryEnabled',
+      value: true,
+    },
+    {
+      type: 'settings.setValue',
+      requestId: 'memory-clear',
+      source: 'projectSettings',
+      key: 'autoMemoryEnabled',
+      value: null,
+    },
+  ])
+  expect(
+    received.filter(f => f.kind === 'settings.result' && f.ok).length,
+  ).toBe(2)
+  expect(received.some(f => f.kind === 'error')).toBe(false)
+})
+
+test('P4-56 — autoMemoryEnabled rejects wrong type, source, and unknown key', () => {
+  let called = false
+  const server = makeSettingsServer(() => {
+    called = true
+    return { ok: true, message: 'Updated.', changed: true }
+  })
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'memory-wrong-type',
+    source: 'userSettings',
+    key: 'autoMemoryEnabled',
+    value: 'true',
+  })
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'memory-wrong-source',
+    source: 'policySettings',
+    key: 'autoMemoryEnabled',
+    value: true,
+  })
+  sendSettingsFrame(server, conn, {
+    type: 'settings.setValue',
+    requestId: 'memory-unknown-key',
+    source: 'userSettings',
+    key: 'autoMemoryEnabledUnknown',
+    value: true,
+  })
+
+  expect(
+    received.filter(f => f.kind === 'error' && f.code === 'bad_request').length,
+  ).toBe(3)
+  expect(received.some(f => f.kind === 'settings.result')).toBe(false)
+  expect(called).toBe(false)
+})
+
 test('P4-19 — a settings verb with no settings domain fails closed (internal_error)', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
