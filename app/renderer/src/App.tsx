@@ -1154,6 +1154,25 @@ export function App() {
     }
   }, [])
 
+  /**
+   * The sidebar's "New chat" (design source `components/sidebar/index.html`).
+   * The design source leaves it unwired; here a session cannot exist without a
+   * workspace, so it opens one in the workspace already on screen — no picker,
+   * no prompt — and only falls back to the picker when nothing is open. The
+   * Projects "+" is the deliberate picker path, so routing both there would give
+   * the rail two identical buttons.
+   */
+  const newChat = useCallback(async () => {
+    // Only a REGISTRY row can name a workspace to the host (HC1), so this asks
+    // the merged catalog rather than trusting `activeSessionId` on its own.
+    const repId = activeSessionRow?.appSessionId ?? null
+    if (repId) {
+      await newSessionInWorkspace(repId)
+      return
+    }
+    await newSession()
+  }, [activeSessionRow, newSession, newSessionInWorkspace])
+
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const bridge = getBridge()
@@ -2579,6 +2598,15 @@ export function App() {
           renamingSession?.origin === 'sidebar'
         }
         onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
+        onNewChat={() => void newChat()}
+        /* The Projects header's "+": the native picker, so the renderer never
+         * authors a cwd (HC1). The session created in the chosen folder is what
+         * makes the group appear — there is no empty-workspace record to keep. */
+        onAddProject={() => void newSession()}
+        accountAlias={
+          selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
+          null
+        }
         modelForSession={id =>
           selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
           null

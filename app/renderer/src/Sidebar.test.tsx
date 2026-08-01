@@ -8,6 +8,7 @@ import {
   type WorkspaceReorderHandlers,
 } from './Sidebar.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
+import { SIDEBAR_PINNED_SESSIONS_STORAGE_KEY } from './sidebarPinnedSessions.js'
 import type { WorkspaceDropEdge } from './sidebarWorkspaceOrder.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
@@ -421,7 +422,9 @@ test('the dragged header is dimmed with a STATIC class (no interpolated arbitrar
  * is why these render the whole Sidebar rather than a subcomponent.
  * --------------------------------------------------------------------------- */
 
-function renderSidebar(over: { menuActive?: boolean } = {}) {
+function renderSidebar(
+  over: Partial<Parameters<typeof Sidebar>[0]> = {},
+): string {
   return renderToStaticMarkup(
     <Sidebar
       rows={[registryRow('s1')]}
@@ -492,4 +495,209 @@ test('P4-33 — holding it open reveals the row content the menu is anchored to'
   // The point of the guard is that the ANCHOR stays visible, not merely that a
   // width changed: the expanded rail renders the row title.
   expect(renderSidebar({ menuActive: true })).toContain('Alpha')
+})
+
+/* --------------------------------------------------------------------------- *
+ * Design source `components/sidebar/index.html` (2026-08-01): New chat, the
+ * Pinned section, the Projects header, and the account/destinations footer.
+ *
+ * These render the WHOLE Sidebar with `menuActive` — the only SSR-reachable way
+ * into the expanded branch (all four open sources are false under
+ * `renderToStaticMarkup`). Ordering/pin LOGIC is proven in
+ * `sidebarPinnedSessions.test.ts`; what follows is the DOM wiring over it.
+ * --------------------------------------------------------------------------- */
+
+/** A seeded storage stub, so a pin exists before the first render. */
+function storage(seed: Record<string, string> = {}) {
+  const store = new Map(Object.entries(seed))
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+  }
+}
+
+function pinning(...sessionIds: string[]) {
+  return storage({
+    [SIDEBAR_PINNED_SESSIONS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      sessionIds,
+    }),
+  })
+}
+
+// ── New chat / Add project ───────────────────────────────────────────────────
+
+test('New chat renders above the list only when wired', () => {
+  expect(renderSidebar({ menuActive: true, onNewChat: noop })).toContain(
+    'New chat',
+  )
+  expect(renderSidebar({ menuActive: true })).not.toContain('New chat')
+})
+
+test('the Projects header carries an "add project" only when wired', () => {
+  const wired = renderSidebar({ menuActive: true, onAddProject: noop })
+  expect(wired).toContain('aria-label="Add project"')
+  // No em dash in user-visible text (CLAUDE.md §7).
+  expect(wired).toContain('title="Add project: choose a folder"')
+  expect(renderSidebar({ menuActive: true })).not.toContain('Add project')
+})
+
+test('the Projects section header is always present, empty roster included', () => {
+  expect(renderSidebar({ menuActive: true })).toContain('Projects')
+  const empty = renderSidebar({ menuActive: true, rows: [] })
+  expect(empty).toContain('Projects')
+  expect(empty).toContain('No sessions yet.')
+  // Nothing is pinned, so the section that would hold pins never renders.
+  expect(empty).not.toContain('>Pinned<')
+})
+
+// ── Pinned section ───────────────────────────────────────────────────────────
+
+test('a pinned session is LIFTED into the Pinned section, not duplicated below', () => {
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [
+      registryRow('s1', { displayLabel: 'Alpha' }),
+      registryRow('s2', { displayLabel: 'Beta' }),
+    ],
+    storage: pinning('engine-s1'),
+  })
+  expect(html).toContain('>Pinned<')
+  // Exactly once on the page: the Pinned section owns it now.
+  expect(html.match(/>Alpha</g)).toHaveLength(1)
+  expect(html.match(/>Beta</g)).toHaveLength(1)
+  // Its project group still renders, holding only what is left.
+  expect(html).toContain('>proj<')
+})
+
+test('the Pinned section is absent when nothing is pinned', () => {
+  expect(renderSidebar({ menuActive: true })).not.toContain('>Pinned<')
+})
+
+test('a pinned row is a reorder drag handle; an unpinned one is not', () => {
+  const rows = [
+    registryRow('s1', { displayLabel: 'Alpha' }),
+    registryRow('s2', { displayLabel: 'Beta' }),
+  ]
+  // One workspace header carries ⌥↑/⌥↓ already; pinning a row adds a second
+  // holder of the same shortcut, on the row itself.
+  const unpinned = renderSidebar({ menuActive: true, rows })
+  expect(
+    unpinned.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
+  ).toHaveLength(1)
+
+  const html = renderSidebar({
+    menuActive: true,
+    rows,
+    storage: pinning('engine-s1'),
+  })
+  expect(
+    html.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
+  ).toHaveLength(2)
+  // Exactly one cursor class on the row: `cursor-pointer cursor-grab` together
+  // would be resolved by Tailwind's emit order, not by the order written.
+  expect(html).toContain('transition-colors cursor-grab ')
+  expect(html).not.toContain('cursor-pointer cursor-grab')
+})
+
+// ── The row's pin button ─────────────────────────────────────────────────────
+
+test('the pin button renders only when a pin handler is wired', () => {
+  const wired = renderToStaticMarkup(
+    <SidebarRowItem
+      row={registryRow('a', { displayLabel: 'Alpha' })}
+      isActive={false}
+      onSelectLive={noop}
+      onRestore={noop}
+      onOpenHistory={noop}
+      onTogglePin={noop}
+    />,
+  )
+  expect(wired).toContain('aria-label="Pin Alpha"')
+  expect(wired).toContain('title="Pin to top"')
+  expect(wired).toContain('aria-pressed="false"')
+
+  expect(renderRow(registryRow('a', { displayLabel: 'Alpha' }))).not.toContain(
+    'aria-label="Pin Alpha"',
+  )
+})
+
+test('a pinned row reads pressed and offers the unpin', () => {
+  const html = renderToStaticMarkup(
+    <SidebarRowItem
+      row={registryRow('a', { displayLabel: 'Alpha' })}
+      isActive={false}
+      pinned
+      onSelectLive={noop}
+      onRestore={noop}
+      onOpenHistory={noop}
+      onTogglePin={noop}
+    />,
+  )
+  expect(html).toContain('aria-pressed="true"')
+  expect(html).toContain('aria-label="Unpin Alpha"')
+  expect(html).toContain('title="Unpin"')
+})
+
+test('a browse-only row offers no actions at all (nothing to act on)', () => {
+  const html = renderToStaticMarkup(
+    <SidebarRowItem
+      row={historyRow('h', { displayLabel: 'Orphan', cwd: '' })}
+      isActive={false}
+      onSelectLive={noop}
+      onRestore={noop}
+      onOpenHistory={noop}
+      onOpenRowActions={noop}
+      onTogglePin={noop}
+    />,
+  )
+  expect(html).not.toContain('aria-label="Pin Orphan"')
+  expect(html).not.toContain('Session actions for')
+})
+
+// ── Footer: account + destinations ───────────────────────────────────────────
+
+test('the footer names the active account, and links it to the Accounts page', () => {
+  const html = renderSidebar({ menuActive: true, accountAlias: 'pubmtaki' })
+  // No em dash in user-visible text (CLAUDE.md §7).
+  expect(html).toContain('aria-label="Active account: pubmtaki"')
+  expect(html).toContain('>pubmtaki<')
+  expect(html).toContain('>P<')
+})
+
+test('no account resolved yet leaves the footer with just the destinations toggle', () => {
+  const html = renderSidebar({ menuActive: true, accountAlias: null })
+  expect(html).not.toContain('Active account')
+  expect(html).toContain('aria-label="Show destinations"')
+})
+
+test('the destinations start folded, inert, and out of the tab order', () => {
+  const html = renderSidebar({ menuActive: true })
+  expect(html).toContain('aria-expanded="false"')
+  // Folded it is visually gone but still in flow; without `inert` Tab would walk
+  // five invisible destinations.
+  expect(html).toContain('inert=""')
+  expect(html).toContain('grid-rows-[0fr] opacity-0')
+  // Every destination is still MOUNTED (the focus-handoff ref map depends on it).
+  expect(html).toContain('data-sidebar-nav-id="settings"')
+})
+
+test('the unfold stagger uses static delay classes, never an interpolated one', () => {
+  // An arbitrary-value class built at runtime silently no-ops in this Tailwind
+  // v4 setup and a headless test cannot see the difference — so the folded state
+  // must carry no delay class at all, and the source must hold literals.
+  const folded = renderSidebar({ menuActive: true })
+  expect(folded).not.toContain('delay-[')
+  expect(folded).toContain('translate-y-1.5 scale-95 opacity-0')
+})
+
+test('the collapsed rail keeps the account glyph above the destination icons', () => {
+  const html = renderSidebar({ accountAlias: 'pubmtaki' })
+  expect(html).toContain('title="Active account: pubmtaki"')
+  expect(html).toContain('>P<')
+  // The rail is the reason the expanded footer may keep its list folded: every
+  // destination stays one click away here.
+  for (const id of ['chat', 'sessions', 'goals', 'accounts', 'settings']) {
+    expect(html).toContain(`data-sidebar-nav-id="${id}"`)
+  }
 })

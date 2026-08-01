@@ -1,47 +1,66 @@
 /**
- * Sidebar (P4-4 fidelity true-up) — the shell's left rail, trued up to the
- * prototype's `Sidebar.jsx` grammar: a hover-expanding rail (48px → 240px, pin,
- * shadow, easing), a paw logo, session search, workspace grouping (by cwd), and
- * a nav destination rail — replacing P3-5b's static 240px roster.
+ * Sidebar — the shell's left rail: a hover-expanding rail (48px → 240px, pin,
+ * shadow, easing), a paw logo, session search, a New chat action, a Pinned
+ * section, workspace ("Projects") grouping by cwd, and a footer that carries the
+ * active account plus the nav destinations.
+ *
+ * Design source (2026-08-01): the operator's Claude Design project "Cat Code
+ * Sidebar", `components/sidebar/index.html`. It supersedes the older
+ * `Sidebar.jsx` prototype grammar for THIS surface; anything it does not speak
+ * to (recency subtitle, workspace reordering, the live dot) is unchanged from
+ * the P4-4 true-up below.
  *
  * Data (SESSIONS-UNIFICATION — operator ruling 2026-07-20): it renders the
  * MERGED roster — desktop registry rows ∪ terminal-created history — via the
  * D5-blessed shared selector `selectMergedSessionRows` (App computes it as
- * `sessionCatalogRows`; no second merge). This is the ruling that a session
- * created in the terminal is the SAME session as one created in the app: the
- * whole enumeration is listed and grouped by workspace, exactly as the prototype
- * `Sidebar.jsx` receives the entire session list. A registry row raises the same
+ * `sessionCatalogRows`; no second merge). A registry row raises the same
  * switch/restore intents as before; a terminal-history row with a resolvable
  * workspace raises `onOpenHistory` (the Part-A host path, opening it by engine
  * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
- * §0 fidelity flags (divergences from the prototype, by design):
- *  - Rows render NO visible status chip: the prototype's rows are bare, and the
- *    operator ruled out per-row status labels (2026-07-20). Status TEXT stays in
- *    the `aria-label` only (the O1 dot below is unlabeled, and is the single
- *    exception). A browse-only history row is still non-interactive.
+ * §0 fidelity flags (divergences from the design source, by design):
+ *  - ➕ KEPT, not in the design source: the `time · model` subtitle and the O1
+ *    live dot. The design source's rows are title-only because its sample data
+ *    carries no timestamps or models at all, not because the operator asked for
+ *    the subtitle to go; dropping real, already-shipped information on that
+ *    reading would be a silent cut. Both stay.
+ *  - 🔁 adapted: the design source also drags SESSION rows to reorder them
+ *    inside a project. That is not built. A manual per-project row order would
+ *    fight the CC-2 float-to-top ruling (a row rises only when its session sends
+ *    a message, `sidebarState.ts`), and the two orders cannot both win. Manual
+ *    ordering IS offered where it is the only sensible order: inside the Pinned
+ *    section, which exists for exactly that.
+ *  - 🔁 adapted: "New chat" opens a session in the ACTIVE workspace with no
+ *    picker, falling back to the picker when nothing is open. The design source
+ *    leaves the button unwired; a session here cannot exist without a workspace,
+ *    and the picker is already what the Projects "+" does, so making both open
+ *    it would give the rail two identical buttons.
+ *  - Rows render NO visible status chip: the design source's rows are bare, and
+ *    the operator ruled out per-row status labels (2026-07-20). Status TEXT
+ *    stays in the `aria-label` only (the O1 dot below is unlabeled, and is the
+ *    single exception). A browse-only history row is still non-interactive.
  *  - The per-workspace "+" renders only for a group that has at least one
  *    registry row to name (HC1: createSessionInWorkspace needs a registry id,
  *    not a path); a pure-terminal-history workspace has no such id, so its "+"
  *    is hidden (🔁 adapted — a fresh session there still goes via ⌘T / picker).
- *  - ➕ real-added, and a deliberate departure from the prototype (operator
- *    ruling O1, 2026-07-31): a single small unlabeled dot on LIVE rows, absent
- *    otherwise. It is the minimum exception to the 2026-07-20 bare-row ruling,
- *    matching the standing live-vs-not-live target with no text. Its BOUND: no
- *    chip, no status word, no per-state colour vocabulary, and nothing at all on
- *    a row that is not live. It supersedes the note that stood here from
- *    2026-07-14, when the earlier per-tone health dot was removed for prototype
- *    parity — that dot carried exactly the colour vocabulary this ruling
- *    forbids, so it does not come back. Liveness is read from `row.live`
- *    (`sessionsCatalogState.ts:200` — a registry row with a running process),
- *    NOT `deriveMergedRowVisual().kind`, which also calls a non-restorable
- *    `exited` row live. Decorative (`aria-hidden`): the state is already in the
- *    row's `aria-label`, and a second announcement would be a duplicate. It sits
- *    in a fixed leading lane that EVERY row reserves, centred on the title's
- *    line box, so its presence never reflows the title or the `time · model`
- *    line. Richer per-state status still surfaces on the TabBar.
+ *  - ➕ real-added, and a deliberate departure (operator ruling O1, 2026-07-31):
+ *    a single small unlabeled dot on LIVE rows, absent otherwise. It is the
+ *    minimum exception to the 2026-07-20 bare-row ruling, matching the standing
+ *    live-vs-not-live target with no text. Its BOUND: no chip, no status word,
+ *    no per-state colour vocabulary, and nothing at all on a row that is not
+ *    live. Liveness is read from `row.live` (`sessionsCatalogState.ts:200` — a
+ *    registry row with a running process), NOT `deriveMergedRowVisual().kind`,
+ *    which also calls a non-restorable `exited` row live. Decorative
+ *    (`aria-hidden`): the state is already in the row's `aria-label`, and a
+ *    second announcement would be a duplicate. It sits in a fixed leading lane
+ *    that EVERY row reserves, centred on the title's line box, so its presence
+ *    never reflows the title or the `time · model` line. Richer per-state status
+ *    still surfaces on the TabBar.
  *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
- *    Accounts (P4-5), and Settings. None are mocked.
+ *    Accounts (P4-5), and Settings. None are mocked. They now live behind the
+ *    footer's unfold toggle (the design source's placement) rather than as a
+ *    permanently-open list; the COLLAPSED rail still shows all five as icons, so
+ *    no destination is ever more than one click away.
  *  - Per-row actions (#11): each session row raises the SAME P4-6b
  *    `SessionActionsMenu` as the TabBar — a hover-revealed ⋮ kebab and a
  *    right-click both call `onOpenRowActions(sessionId, anchor)`, which App routes
@@ -58,12 +77,12 @@
  *  - Session-row drag-to-panel is omitted; the built split model is drag-tab-to-
  *    edge (P3-6), which stays intact.
  *  - ➕ real-added (operator, 2026-07-26): the workspace GROUP HEADERS are
- *    drag-reorderable, and the chosen order persists across restarts. The
- *    prototype has no such affordance, so there is nothing to match here. The
- *    order is renderer-local (`sidebarWorkspaceOrder.ts`), keyed on `cwd` (never
- *    the derived label), applied on the SIDEBAR side of the shared
+ *    drag-reorderable, and the chosen order persists across restarts. The order
+ *    is renderer-local (`sidebarWorkspaceOrder.ts`), keyed on `cwd` (never the
+ *    derived label), applied on the SIDEBAR side of the shared
  *    `groupByWorkspace` so the Sessions page keeps frozen-alphabetical, and it
- *    never consults `activeCwd` — CC-2 warp-freedom is intact.
+ *    never consults `activeCwd` — CC-2 warp-freedom is intact. The Pinned
+ *    section's order works the same way (`sidebarPinnedSessions.ts`).
  */
 
 import {
@@ -92,6 +111,21 @@ import {
   sortSidebarSessionRows,
 } from './sidebarState.js'
 import {
+  createPinnedSessions,
+  isSessionPinned,
+  PINNED_SESSION_DRAG_MIME,
+  readPinnedSessionsFromStorage,
+  reducePinnedSessionsMoved,
+  reducePinnedSessionsStepped,
+  reducePinnedSessionsToggled,
+  selectPinnedDropEdge,
+  selectPinnedRows,
+  selectUnpinnedRows,
+  writePinnedSessionsToStorage,
+  type PinnedDropEdge,
+  type PinnedSessions,
+} from './sidebarPinnedSessions.js'
+import {
   createWorkspaceOrder,
   readWorkspaceOrderFromStorage,
   reduceWorkspaceOrderMoved,
@@ -109,15 +143,15 @@ import {
   type WorkspaceGroup,
 } from './sessionsCatalogState.js'
 
-// Rail geometry + hover timing, matching the prototype (RAIL_W/FULL_W/delays).
+// Rail geometry + hover timing, matching the design source (RAIL_W/FULL_W/delays).
 const HOVER_DELAY = 120
 const HIDE_DELAY = 200
 
 /**
  * Max session rows a workspace group shows before a "Show N more" toggle
  * (operator, 2026-07-14: one project's session list grew long enough to bury the
- * rest of the rail). NOT a prototype element — a deliberate declutter deviation.
- * The active session is always kept visible even when it falls past the cap.
+ * rest of the rail). The active session is always kept visible even when it
+ * falls past the cap.
  */
 const SIDEBAR_GROUP_ROW_LIMIT = 6
 
@@ -150,6 +184,16 @@ export type WorkspaceReorderHandlers = {
   onStep: (cwd: string, direction: 'up' | 'down') => void
 }
 
+/** The same shape for a PINNED row, keyed on the merge id instead of a cwd. */
+export type PinnedReorderHandlers = {
+  onDragStart: (sessionId: string) => void
+  onDragOver: (sessionId: string) => void
+  onDragLeave: (sessionId: string) => void
+  onDrop: (sessionId: string) => void
+  onDragEnd: () => void
+  onStep: (sessionId: string, direction: 'up' | 'down') => void
+}
+
 type NavItem = {
   id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
   label: string
@@ -158,9 +202,8 @@ type NavItem = {
   icon: ReactNode
 }
 
-// The prototype's destination rail (Chat/Sessions/Goals/Accounts/Settings — its
-// own comments already dropped Tasks/Agents from the rail). Orchestrator is a
-// per-session chat mode in the prototype, not a nav destination, so it has no
+// The design source's destination list (Chat/Sessions/Goals/Accounts/Settings).
+// Orchestrator is a per-session chat mode, not a nav destination, so it has no
 // rail entry (the standalone Orchestrator page was removed 2026-07-14).
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
@@ -168,6 +211,23 @@ const NAV: NavItem[] = [
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
+]
+
+/**
+ * Per-item entrance delay for the footer's unfold, by NAV index. The list
+ * unfolds UPWARD out of the toggle, so the item nearest the toggle (last) leads
+ * and the topmost trails — the design source's reverse `nth-child` delays.
+ *
+ * A static map, never an interpolated `delay-[${n}ms]`: an arbitrary-value class
+ * built at runtime silently no-ops in this Tailwind v4 setup (CLAUDE.md), and a
+ * headless test cannot see the difference.
+ */
+const NAV_UNFOLD_DELAY = [
+  'delay-[150ms]',
+  'delay-[120ms]',
+  'delay-[90ms]',
+  'delay-[60ms]',
+  'delay-[30ms]',
 ]
 
 type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
@@ -182,6 +242,9 @@ export function Sidebar({
   onOpenHistory,
   onOpenRowActions,
   onNewSessionInWorkspace,
+  onNewChat,
+  onAddProject,
+  accountAlias = null,
   modelForSession,
   menuActive = false,
   storage,
@@ -218,23 +281,35 @@ export function Sidebar({
    * wired.
    */
   onNewSessionInWorkspace?: (repId: SessionId) => void
-  /** Resolved model for a session (the subtitle's "· model", prototype grammar);
-   * null when unknown — e.g. a restorable row that never attached this run. */
+  /** The "New chat" action above the list. App points it at the active
+   * workspace, falling back to the picker (see the §0 flag in the header).
+   * Optional + additive: the button renders only when wired. */
+  onNewChat?: () => void
+  /** The Projects header's "+": choose a folder, and the session created there
+   * makes the group appear. The native picker path (`onNewSession` in App), so
+   * no cwd is authored here. Optional + additive. */
+  onAddProject?: () => void
+  /** The active account's alias for the footer row, or null when no account is
+   * resolved yet — in which case the footer shows only the nav toggle rather
+   * than an empty avatar. */
+  accountAlias?: string | null
+  /** Resolved model for a session (the subtitle's "· model"); null when unknown
+   * — e.g. a restorable row that never attached this run. */
   modelForSession?: (id: SessionId) => string | null
   /**
-   * P4-33 (the prototype's `menuActive`, Sidebar.jsx:80) — true while an overlay
-   * ANCHORED TO A ROW HERE is open (the ⋮ actions menu or the rename editor).
-   * Those render as App-level `fixed` overlays outside this rail's hover box, so
-   * without this the pointer moving toward one fires `onMouseLeave` and collapses
-   * the sidebar out from under a menu still anchored to a now-hidden row.
+   * P4-33 — true while an overlay ANCHORED TO A ROW HERE is open (the ⋮ actions
+   * menu or the rename editor). Those render as App-level `fixed` overlays
+   * outside this rail's hover box, so without this the pointer moving toward one
+   * fires `onMouseLeave` and collapses the sidebar out from under a menu still
+   * anchored to a now-hidden row.
    *
    * App passes false for a TabBar-raised menu even though it shares the same
    * state: pinning the rail open for a tab's ⋯ would slide it over the transcript
    * with nothing here to anchor.
    */
   menuActive?: boolean
-  /** Where the operator's workspace order is persisted. Injectable for tests
-   * (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
+  /** Where the operator's workspace order and pins are persisted. Injectable for
+   * tests (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
    * renderer's own `localStorage`, and `null` disables persistence entirely. */
   storage?: OrderStorage | null
 }) {
@@ -242,6 +317,7 @@ export function Sidebar({
   const [pinned, setPinned] = useState(false)
   const [hovering, setHovering] = useState(false)
   const [focusWithin, setFocusWithin] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
@@ -249,21 +325,31 @@ export function Sidebar({
   const [workspaceOrder, setWorkspaceOrder] = useState<WorkspaceOrder>(
     () => readWorkspaceOrderFromStorage(orderStore) ?? createWorkspaceOrder(),
   )
+  const [pinnedSessions, setPinnedSessions] = useState<PinnedSessions>(
+    () => readPinnedSessionsFromStorage(orderStore) ?? createPinnedSessions(),
+  )
   /** The in-flight header drag: the group being dragged and the one under the
    * pointer. Only the indicator reads it; the order itself changes on drop. */
   const [headerDrag, setHeaderDrag] = useState<{
     from: string
     over: string
   } | null>(null)
+  /** The same, for a row being dragged within the Pinned section. */
+  const [pinDrag, setPinDrag] = useState<{ from: string; over: string } | null>(
+    null,
+  )
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
-   * pointer is genuinely still over it (Sidebar.jsx:106 `sbRef`). */
+   * pointer is genuinely still over it. */
   const asideRef = useRef<HTMLElement | null>(null)
   /** Live workspace-header buttons by cwd, and the one a keyboard step just
    * moved — see the re-focus effect below `reorderHandlers`. */
   const headerRefs = useRef(new Map<string, HTMLButtonElement>())
   const refocusCwd = useRef<string | null>(null)
+  /** The same for pinned rows (a row is the focusable element, not a button). */
+  const pinnedRowRefs = useRef(new Map<string, HTMLDivElement>())
+  const refocusPinnedId = useRef<string | null>(null)
   /** Expanded nav buttons by destination, plus a collapsed rail destination
    * whose focus must survive the branch replacement. */
   const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
@@ -282,8 +368,8 @@ export function Sidebar({
   }
   const onLeave = () => {
     if (showTimer.current) clearTimeout(showTimer.current)
-    // Don't start the hide timer while a row's menu/rename is open
-    // (Sidebar.jsx:99). Reaching for that menu means leaving the rail.
+    // Don't start the hide timer while a row's menu/rename is open. Reaching for
+    // that menu means leaving the rail.
     if (menuActive) return
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }
@@ -298,9 +384,9 @@ export function Sidebar({
   // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
   // the pointer is wherever the menu was with no `onMouseLeave` to follow and
   // `hovering` still true — the rail would stay expanded indefinitely. Re-collapse
-  // unless the pointer really is back over the rail, or it is pinned
-  // (Sidebar.jsx:103-111). `:hover` is the only honest answer here; React has no
-  // synthetic event for "pointer is still inside after an unrelated unmount".
+  // unless the pointer really is back over the rail, or it is pinned. `:hover` is
+  // the only honest answer here; React has no synthetic event for "pointer is
+  // still inside after an unrelated unmount".
   useEffect(() => {
     if (menuActive || pinned) return
     const el = asideRef.current
@@ -309,14 +395,21 @@ export function Sidebar({
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }, [menuActive, pinned])
 
+  // The unfolded destination list is a rail-width overlay of the footer; leaving
+  // the rail collapses it, so it is never re-found mid-air on the next hover.
+  useEffect(() => {
+    if (!open) setNavOpen(false)
+  }, [open])
+
   const query = search.trim().toLowerCase()
-  // Sort (CC-2 warp-free activity order) → filter → group. Recomputes only when
-  // the roster, the query, or the active session changes — not on every hover /
-  // pin / group-collapse re-render (frequent, and leaving the grouping identical).
-  // The active session's cwd only MARKS its workspace group (`current`); group
-  // order is frozen-alphabetical and activeCwd-free (shared `groupByWorkspace`,
-  // which also collects empty-cwd rows under one clearly labeled "Unknown
-  // workspace" bucket rather than a blank header).
+  // Sort (CC-2 warp-free activity order) → partition pins → filter → group.
+  // Recomputes only when the roster, the query, the pins or the active session
+  // changes — not on every hover / pin / group-collapse re-render (frequent, and
+  // leaving the grouping identical). The active session's cwd only MARKS its
+  // workspace group (`current`); group order is frozen-alphabetical and
+  // activeCwd-free (shared `groupByWorkspace`, which also collects empty-cwd rows
+  // under one clearly labeled "Unknown workspace" bucket rather than a blank
+  // header).
   const activeCwd = useMemo(
     () =>
       activeSessionId == null
@@ -331,6 +424,23 @@ export function Sidebar({
     () => sortSidebarSessionRows(rows).filter(isSidebarVisibleRow),
     [rows],
   )
+
+  const matchesQuery = (row: MergedSessionRow) =>
+    !query ||
+    row.displayLabel.toLowerCase().includes(query) ||
+    row.cwd.toLowerCase().includes(query)
+
+  // A pinned session is LIFTED into its own section, never duplicated inside its
+  // project group (the design source's `visibleRows`).
+  const pinnedRows = useMemo(
+    () => selectPinnedRows(railRows, pinnedSessions).filter(matchesQuery),
+    [railRows, pinnedSessions, query],
+  )
+  const groupRows = useMemo(
+    () => selectUnpinnedRows(railRows, pinnedSessions),
+    [railRows, pinnedSessions],
+  )
+
   // ➕ The operator's custom order is applied HERE, on the sidebar side of the
   // shared selector — `groupByWorkspace` itself stays frozen-alphabetical for
   // the Sessions page, which uses the same call.
@@ -341,23 +451,18 @@ export function Sidebar({
   const allGroups = useMemo(
     () =>
       selectOrderedWorkspaceGroups(
-        groupByWorkspace(railRows, activeCwd),
+        groupByWorkspace(groupRows, activeCwd),
         workspaceOrder,
       ),
-    [railRows, activeCwd, workspaceOrder],
+    [groupRows, activeCwd, workspaceOrder],
   )
   const groups = useMemo(() => {
     if (!query) return allGroups
-    const filtered = railRows.filter(
-      row =>
-        row.displayLabel.toLowerCase().includes(query) ||
-        row.cwd.toLowerCase().includes(query),
-    )
     return selectOrderedWorkspaceGroups(
-      groupByWorkspace(filtered, activeCwd),
+      groupByWorkspace(groupRows.filter(matchesQuery), activeCwd),
       workspaceOrder,
     )
-  }, [allGroups, railRows, query, activeCwd, workspaceOrder])
+  }, [allGroups, groupRows, query, activeCwd, workspaceOrder])
 
   // The rendered sequence a reorder is expressed against (what the operator is
   // looking at, search filter included).
@@ -366,11 +471,21 @@ export function Sidebar({
     () => allGroups.map(group => group.cwd),
     [allGroups],
   )
+  const pinnedIds = useMemo(
+    () => pinnedRows.map(row => row.sessionId),
+    [pinnedRows],
+  )
 
   const commitWorkspaceOrder = (next: WorkspaceOrder) => {
     if (next === workspaceOrder) return
     setWorkspaceOrder(next)
     writeWorkspaceOrderToStorage(orderStore, next)
+  }
+
+  const commitPinnedSessions = (next: PinnedSessions) => {
+    if (next === pinnedSessions) return
+    setPinnedSessions(next)
+    writePinnedSessionsToStorage(orderStore, next)
   }
 
   const reorderHandlers: WorkspaceReorderHandlers = {
@@ -418,6 +533,48 @@ export function Sidebar({
     },
   }
 
+  const pinnedReorderHandlers: PinnedReorderHandlers = {
+    onDragStart: id => setPinDrag({ from: id, over: id }),
+    onDragOver: id =>
+      setPinDrag(drag =>
+        drag == null || drag.over === id ? drag : { ...drag, over: id },
+      ),
+    onDragLeave: id =>
+      setPinDrag(drag =>
+        drag == null || drag.over !== id ? drag : { ...drag, over: drag.from },
+      ),
+    onDrop: id => {
+      if (pinDrag) {
+        commitPinnedSessions(
+          reducePinnedSessionsMoved(
+            pinnedSessions,
+            pinnedIds,
+            pinDrag.from,
+            id,
+          ),
+        )
+      }
+      setPinDrag(null)
+    },
+    onDragEnd: () => setPinDrag(null),
+    onStep: (id, direction) => {
+      const next = reducePinnedSessionsStepped(
+        pinnedSessions,
+        pinnedIds,
+        id,
+        direction,
+      )
+      if (next === pinnedSessions) return
+      refocusPinnedId.current = id
+      commitPinnedSessions(next)
+    },
+  }
+
+  const togglePin = (sessionId: string) =>
+    commitPinnedSessions(
+      reducePinnedSessionsToggled(pinnedSessions, sessionId),
+    )
+
   useLayoutEffect(() => {
     const cwd = refocusCwd.current
     if (cwd == null) return
@@ -426,11 +583,28 @@ export function Sidebar({
   }, [workspaceOrder])
 
   useLayoutEffect(() => {
+    const id = refocusPinnedId.current
+    if (id == null) return
+    refocusPinnedId.current = null
+    pinnedRowRefs.current.get(id)?.focus()
+  }, [pinnedSessions])
+
+  useLayoutEffect(() => {
     const navId = refocusNavId.current
     if (navId == null || !open) return
     refocusNavId.current = null
     navRefs.current.get(navId)?.focus()
   }, [open])
+
+  const rowProps = {
+    activeSessionId,
+    onSelectLive,
+    onRestore,
+    onOpenHistory,
+    onOpenRowActions,
+    onTogglePin: togglePin,
+    modelForSession,
+  }
 
   return (
     <>
@@ -512,7 +686,7 @@ export function Sidebar({
         {open ? (
           <>
             {/* Search */}
-            <div className="shrink-0 px-2.5 pb-2.5">
+            <div className="shrink-0 px-2.5 pb-2">
               <div className="relative">
                 <span className="pointer-events-none absolute left-2 top-1/2 flex -translate-y-1/2 text-text-faint">
                   <SearchIcon />
@@ -528,79 +702,224 @@ export function Sidebar({
               </div>
             </div>
 
-            {/* Session groups (by workspace / cwd) */}
+            {/* New chat — the action you came for, above the list. */}
+            {onNewChat ? (
+              <button
+                type="button"
+                onClick={onNewChat}
+                className="mx-2 mb-2 flex shrink-0 items-center gap-[9px] rounded-md px-2 py-1.5 text-[12.5px] font-medium text-[#d4d4d8] transition-colors hover:bg-accent/10 hover:text-accent-soft"
+              >
+                <span
+                  aria-hidden="true"
+                  className="flex h-4 w-4 shrink-0 items-center justify-center"
+                >
+                  <ComposeIcon />
+                </span>
+                <span>New chat</span>
+              </button>
+            ) : null}
+
+            {/* Pinned + Projects */}
             <div
               aria-label="Sessions"
               className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
-              {groups.length === 0 ? (
-                <p className="px-2 py-2 text-xs text-text-subtle">
-                  {rows.length === 0 ? 'No sessions yet.' : 'No matches.'}
-                </p>
-              ) : (
-                groups.map(group => (
-                  <SessionGroup
-                    key={group.cwd}
-                    group={group}
-                    activeSessionId={activeSessionId}
-                    collapsed={collapsedGroups[group.cwd] ?? false}
-                    onToggle={() =>
-                      setCollapsedGroups(prev => ({
-                        ...prev,
-                        [group.cwd]: !(prev[group.cwd] ?? false),
-                      }))
-                    }
-                    onSelectLive={onSelectLive}
-                    onRestore={onRestore}
-                    onOpenHistory={onOpenHistory}
-                    onOpenRowActions={onOpenRowActions}
-                    onNewSessionInWorkspace={onNewSessionInWorkspace}
-                    modelForSession={modelForSession}
-                    reorder={reorderHandlers}
-                    headerRef={element => {
-                      if (element) headerRefs.current.set(group.cwd, element)
-                      else headerRefs.current.delete(group.cwd)
-                    }}
-                    dragging={headerDrag?.from === group.cwd}
-                    dropEdge={
-                      headerDrag != null && headerDrag.over === group.cwd
-                        ? selectWorkspaceDropEdge(
-                            groupCwds,
-                            headerDrag.from,
-                            group.cwd,
-                          )
-                        : null
-                    }
-                  />
-                ))
-              )}
+              {pinnedRows.length > 0 ? (
+                <section className="mb-2.5">
+                  <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+                      Pinned
+                    </span>
+                  </div>
+                  {pinnedRows.map(row => (
+                    <SidebarRowItem
+                      key={row.sessionId}
+                      row={row}
+                      isActive={
+                        row.appSessionId != null &&
+                        row.appSessionId === activeSessionId
+                      }
+                      pinned
+                      pinnedReorder={pinnedReorderHandlers}
+                      rowRef={element => {
+                        if (element) {
+                          pinnedRowRefs.current.set(row.sessionId, element)
+                        } else pinnedRowRefs.current.delete(row.sessionId)
+                      }}
+                      dragging={pinDrag?.from === row.sessionId}
+                      dropEdge={
+                        pinDrag != null && pinDrag.over === row.sessionId
+                          ? selectPinnedDropEdge(
+                              pinnedIds,
+                              pinDrag.from,
+                              row.sessionId,
+                            )
+                          : null
+                      }
+                      {...rowProps}
+                    />
+                  ))}
+                </section>
+              ) : null}
+
+              {/* "Add project" lives on this header: pick a folder, a session is
+               * created there, and the group appears with that row. No empty
+               * group is ever persisted, because the model has no
+               * empty-workspace record to persist. */}
+              <section className="mb-2.5">
+                <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
+                  <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+                    Projects
+                  </span>
+                  {onAddProject ? (
+                    <button
+                      type="button"
+                      onClick={onAddProject}
+                      title="Add project: choose a folder"
+                      aria-label="Add project"
+                      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
+                    >
+                      <PlusIcon />
+                    </button>
+                  ) : null}
+                </div>
+
+                {/* An empty Projects body is only worth explaining when the
+                 * operator cannot see why. Nothing at all, and a search that
+                 * matched no project, both need a line; everything having been
+                 * lifted into Pinned does not — that list is right above it. */}
+                {groups.length === 0 && rows.length === 0 ? (
+                  <p className="px-2 py-2 text-xs text-text-subtle">
+                    No sessions yet.
+                  </p>
+                ) : groups.length === 0 && query ? (
+                  <p className="px-2 py-2 text-xs text-text-subtle">
+                    No matches.
+                  </p>
+                ) : groups.length === 0 ? null : (
+                  groups.map(group => (
+                    <SessionGroup
+                      key={group.cwd}
+                      group={group}
+                      collapsed={collapsedGroups[group.cwd] ?? false}
+                      onToggle={() =>
+                        setCollapsedGroups(prev => ({
+                          ...prev,
+                          [group.cwd]: !(prev[group.cwd] ?? false),
+                        }))
+                      }
+                      onNewSessionInWorkspace={onNewSessionInWorkspace}
+                      reorder={reorderHandlers}
+                      headerRef={element => {
+                        if (element) headerRefs.current.set(group.cwd, element)
+                        else headerRefs.current.delete(group.cwd)
+                      }}
+                      dragging={headerDrag?.from === group.cwd}
+                      dropEdge={
+                        headerDrag != null && headerDrag.over === group.cwd
+                          ? selectWorkspaceDropEdge(
+                              groupCwds,
+                              headerDrag.from,
+                              group.cwd,
+                            )
+                          : null
+                      }
+                      pinnedSessions={pinnedSessions}
+                      {...rowProps}
+                    />
+                  ))
+                )}
+              </section>
             </div>
 
-            {/* Nav destinations (expanded) */}
+            {/* Footer: the active account, and the destinations unfolding
+             * upward out of the toggle (column-reverse puts the list above the
+             * row that owns it). */}
             <nav
               aria-label="Views"
-              className="shrink-0 border-t border-shell-seam px-2 pb-3 pt-2"
+              className="flex shrink-0 flex-col-reverse items-stretch border-t border-shell-seam px-2 pb-2 pt-1.5"
             >
-              {NAV.map(item => (
-                <NavItemExpanded
-                  activeView={activeView}
-                  buttonRef={element => {
-                    if (element) navRefs.current.set(item.id, element)
-                    else navRefs.current.delete(item.id)
-                  }}
-                  item={item}
-                  key={item.id}
-                  onSelectView={onSelectView}
-                />
-              ))}
+              <div className="flex shrink-0 items-center gap-2">
+                {accountAlias ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectView('accounts')}
+                    title={`Active account: ${accountAlias}`}
+                    aria-label={`Active account: ${accountAlias}`}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+                    >
+                      {accountAlias.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 truncate text-[11px] font-medium">
+                      {accountAlias}
+                    </span>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setNavOpen(value => !value)}
+                  aria-expanded={navOpen}
+                  aria-label={navOpen ? 'Hide destinations' : 'Show destinations'}
+                  title={navOpen ? 'Hide destinations' : 'Show destinations'}
+                  className={
+                    'ml-auto flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md transition-[background-color,color,transform] duration-200 ' +
+                    (navOpen
+                      ? 'rotate-90 text-accent-soft'
+                      : 'text-text-faint hover:bg-shell-hover hover:text-text-muted')
+                  }
+                >
+                  <GridIcon />
+                </button>
+              </div>
+
+              <div
+                className={
+                  'grid w-full origin-bottom transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,0.9,0.32,1)] ' +
+                  (navOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')
+                }
+                // Folded away it is visually gone but still in flow, so without
+                // this Tab would walk five invisible destinations.
+                inert={!navOpen}
+              >
+                <div className="flex flex-col overflow-hidden pb-1.5">
+                  {NAV.map((item, index) => (
+                    <NavItemExpanded
+                      activeView={activeView}
+                      buttonRef={element => {
+                        if (element) navRefs.current.set(item.id, element)
+                        else navRefs.current.delete(item.id)
+                      }}
+                      item={item}
+                      key={item.id}
+                      navOpen={navOpen}
+                      unfoldDelay={NAV_UNFOLD_DELAY[index] ?? ''}
+                      onSelectView={onSelectView}
+                    />
+                  ))}
+                </div>
+              </div>
             </nav>
           </>
         ) : (
-          /* Collapsed rail: nav icons only, anchored to the bottom. */
+          /* Collapsed rail: the account glyph over the nav icons, anchored to
+           * the bottom. Every destination stays one click away here, which is
+           * what lets the expanded footer keep them folded. */
           <nav
             aria-label="Views"
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
           >
+            {accountAlias ? (
+              <span
+                title={`Active account: ${accountAlias}`}
+                className="mb-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+              >
+                {accountAlias.slice(0, 1).toUpperCase()}
+              </span>
+            ) : null}
             {NAV.map(item => (
               <NavItemRail
                 activeView={activeView}
@@ -635,6 +954,8 @@ export function SessionGroup({
   onOpenHistory,
   onOpenRowActions,
   onNewSessionInWorkspace,
+  onTogglePin,
+  pinnedSessions = [],
   modelForSession,
   reorder,
   headerRef,
@@ -653,6 +974,13 @@ export function SessionGroup({
     anchor: SessionActionsAnchor,
   ) => void
   onNewSessionInWorkspace?: (repId: SessionId) => void
+  /** Pin toggle for this group's rows. Optional + additive: without it a row
+   * shows only its ⋮ (the pre-Pinned-section markup). */
+  onTogglePin?: (sessionId: string) => void
+  /** Read only to paint an already-pinned row's pin as pressed. A pinned row is
+   * normally lifted into the Pinned section, so this matters for the boundary
+   * where a group still holds one. */
+  pinnedSessions?: PinnedSessions
   modelForSession?: (id: SessionId) => string | null
   /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
    * header is a plain, non-draggable header when this is absent. */
@@ -704,12 +1032,13 @@ export function SessionGroup({
      * group that release would not have dropped onto. It is also what physically
      * MOVES, so the drop indicator belongs on its edges too. */
     <div
-      className="relative mb-4"
+      className="relative mb-1"
       onDragOver={
         reorderable
           ? event => {
               // Only a workspace drag is accepted — a tab dragged for a split
-              // carries `text/sessionId` and must fall through untouched.
+              // carries `text/sessionId`, a pinned row carries its own type, and
+              // both must fall through untouched.
               if (
                 !event.dataTransfer.types.some(
                   type => type.toLowerCase() === WORKSPACE_ORDER_DRAG_MIME,
@@ -760,11 +1089,11 @@ export function SessionGroup({
         />
       ) : null}
       {/* Header row: collapse toggle (flex-1) + the #10 per-workspace "+" so the
-       * "+" sits flush-right of the workspace label (prototype Sidebar.jsx:219).
-       * ➕ The row is also the workspace drag handle. */}
+       * "+" sits flush-right of the workspace label. ➕ The row is also the
+       * workspace drag handle. */}
       <div
         className={
-          'flex select-none items-center gap-1 px-1 pb-1.5 pt-0.5 ' +
+          'group/head flex select-none items-center gap-[5px] px-1 pb-1 pt-0.5 ' +
           (reorderable ? 'cursor-grab ' : '') +
           (dragging ? 'opacity-50' : '')
         }
@@ -818,15 +1147,12 @@ export function SessionGroup({
           }
           className="flex min-w-0 flex-1 items-center gap-1"
         >
-          <span
-            className={
-              'flex shrink-0 text-text-faint transition-transform ' +
-              (collapsed ? '-rotate-90' : '')
-            }
-          >
-            <ChevronIcon />
-          </span>
-          <span className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+          {group.cwd.trim().length > 0 ? (
+            <span className="flex h-[13px] w-[13px] shrink-0 items-center justify-center text-text-subtle group-hover/head:text-accent-soft">
+              {collapsed ? <FolderClosedIcon /> : <FolderOpenIcon />}
+            </span>
+          ) : null}
+          <span className="truncate text-[12.5px] font-medium text-text-muted group-hover/head:text-[#d4d4d8]">
             {group.name}
           </span>
         </button>
@@ -836,7 +1162,7 @@ export function SessionGroup({
             onClick={() => onNewSessionInWorkspace(repId)}
             title="New session in this workspace"
             aria-label="New session in this workspace"
-            className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:text-accent"
+            className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-text-faint opacity-0 transition-[opacity,color,background-color] hover:bg-accent/[0.12] hover:text-accent group-hover/head:opacity-100 focus-visible:opacity-100"
           >
             <PlusIcon />
           </button>
@@ -853,10 +1179,12 @@ export function SessionGroup({
                 row.appSessionId != null &&
                 row.appSessionId === activeSessionId
               }
+              pinned={isSessionPinned(pinnedSessions, row.sessionId)}
               onSelectLive={onSelectLive}
               onRestore={onRestore}
               onOpenHistory={onOpenHistory}
               onOpenRowActions={onOpenRowActions}
+              onTogglePin={onTogglePin}
               modelForSession={modelForSession}
             />
           ))}
@@ -888,6 +1216,12 @@ export function SidebarRowItem({
   onRestore,
   onOpenHistory,
   onOpenRowActions,
+  onTogglePin,
+  pinned = false,
+  pinnedReorder,
+  rowRef,
+  dragging = false,
+  dropEdge = null,
   modelForSession,
 }: {
   row: MergedSessionRow
@@ -899,6 +1233,22 @@ export function SidebarRowItem({
     sessionId: SessionId,
     anchor: SessionActionsAnchor,
   ) => void
+  /** Pin/unpin this row. Optional + additive: the pin button renders only when
+   * wired, so a test or a caller that omits it gets the pre-Pinned markup. */
+  onTogglePin?: (sessionId: string) => void
+  /** This row is currently pinned — its pin reads pressed and stays visible at
+   * rest (an unpin must be reachable without hunting for a hover). */
+  pinned?: boolean
+  /** Reorder handlers, wired only for a row rendered INSIDE the Pinned section:
+   * that is the one list whose order the operator owns. */
+  pinnedReorder?: PinnedReorderHandlers
+  /** The row element, so a keyboard step can put focus back on the row it just
+   * moved (the workspace header's `headerRef` idiom). */
+  rowRef?: (element: HTMLDivElement | null) => void
+  /** This row is the one being dragged (drawn dimmed). */
+  dragging?: boolean
+  /** This row is the drop target; which edge the dragged row would land on. */
+  dropEdge?: PinnedDropEdge | null
   modelForSession?: (id: SessionId) => string | null
 }) {
   const visual = deriveMergedRowVisual(row)
@@ -908,13 +1258,15 @@ export function SidebarRowItem({
   // the transcript mtime for a history row — `sidebarActivityKey` folds both, and
   // never `lastAttachedAt` (open/attach bumps that; see `sidebarState.ts`).
   const recency = formatRecency(sidebarActivityKey(row))
-  // The prototype's subtitle is `time · model` (Sidebar.jsx:271). Only a registry
-  // row that attached this run has a known model; a history row shows none.
+  // The subtitle is `time · model`. Only a registry row that attached this run
+  // has a known model; a history row shows none.
   const model = appSessionId != null ? modelForSession?.(appSessionId) ?? null : null
   const shortModel = model ? model.split('-').slice(-1)[0] : null
 
   const openable = visual.openable
-  const showActions = onOpenRowActions != null && appSessionId != null
+  const showActions = openable && (onOpenRowActions != null || onTogglePin != null)
+  const showKebab = onOpenRowActions != null && appSessionId != null
+  const reorderable = pinnedReorder != null && pinned
 
   // A live registry row focuses its tab; a restorable row re-spawns via restore;
   // a resolvable history row opens by its ENGINE id (Part-A host path); a
@@ -931,9 +1283,17 @@ export function SidebarRowItem({
 
   return (
     <div
+      ref={rowRef}
       className={
         'group relative flex select-none items-center gap-2 rounded-md border py-1.5 pl-1 pr-2 transition-colors ' +
-        (openable ? 'cursor-pointer ' : 'cursor-default ') +
+        // Exactly one cursor class: two of them in the same attribute would be
+        // resolved by Tailwind's own emit order, not by the order written here.
+        (reorderable
+          ? 'cursor-grab '
+          : openable
+            ? 'cursor-pointer '
+            : 'cursor-default ') +
+        (dragging ? 'opacity-50 ' : '') +
         (isActive
           ? 'border-accent/[0.18] bg-accent/[0.09]'
           : openable
@@ -945,6 +1305,7 @@ export function SidebarRowItem({
       aria-current={isActive ? 'true' : undefined}
       aria-disabled={openable ? undefined : 'true'}
       aria-label={`session ${title}, ${visual.label}${openable ? '' : ', open from terminal'}`}
+      aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
       title={
         openable
           ? `${row.cwd || title}${
@@ -956,12 +1317,61 @@ export function SidebarRowItem({
             }`
           : 'This session has no recorded workspace. Open it from the terminal.'
       }
+      draggable={reorderable ? true : undefined}
+      onDragStart={
+        reorderable
+          ? event => {
+              event.dataTransfer.setData(
+                PINNED_SESSION_DRAG_MIME,
+                row.sessionId,
+              )
+              event.dataTransfer.effectAllowed = 'move'
+              pinnedReorder?.onDragStart(row.sessionId)
+            }
+          : undefined
+      }
+      onDragOver={
+        reorderable
+          ? event => {
+              // Only a pinned-row drag is accepted; a workspace header drag and
+              // a tab dragged for a split must fall through untouched.
+              if (
+                !event.dataTransfer.types.some(
+                  type => type.toLowerCase() === PINNED_SESSION_DRAG_MIME,
+                )
+              ) {
+                return
+              }
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              pinnedReorder?.onDragOver(row.sessionId)
+            }
+          : undefined
+      }
+      onDragLeave={
+        reorderable
+          ? event => {
+              const entering = event.relatedTarget as Node | null
+              if (entering && event.currentTarget.contains(entering)) return
+              pinnedReorder?.onDragLeave(row.sessionId)
+            }
+          : undefined
+      }
+      onDrop={
+        reorderable
+          ? event => {
+              event.preventDefault()
+              pinnedReorder?.onDrop(row.sessionId)
+            }
+          : undefined
+      }
+      onDragEnd={reorderable ? () => pinnedReorder?.onDragEnd() : undefined}
       onClick={openable ? activate : undefined}
       onContextMenu={
-        showActions
+        showKebab
           ? event => {
-              // #11 — right-click opens the row's actions menu at the pointer
-              // (prototype Sidebar.jsx:245); suppress the native context menu.
+              // #11 — right-click opens the row's actions menu at the pointer;
+              // suppress the native context menu.
               event.preventDefault()
               event.stopPropagation()
               if (onOpenRowActions && appSessionId != null) {
@@ -980,6 +1390,20 @@ export function SidebarRowItem({
       onKeyDown={
         openable
           ? event => {
+              if (
+                reorderable &&
+                event.altKey &&
+                (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+              ) {
+                // Keyboard path for the pinned reorder drag, the same ⌥↑/⌥↓ the
+                // workspace headers take.
+                event.preventDefault()
+                pinnedReorder?.onStep(
+                  row.sessionId,
+                  event.key === 'ArrowUp' ? 'up' : 'down',
+                )
+                return
+              }
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 activate()
@@ -988,6 +1412,21 @@ export function SidebarRowItem({
           : undefined
       }
     >
+      {/* Drop indicator for a pinned reorder — the workspace groups' rule,
+       * on the row's own edges. Static classes only. */}
+      {dropEdge === 'before' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 top-0 h-[2px] rounded-full bg-accent"
+        />
+      ) : null}
+      {dropEdge === 'after' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 bottom-0 h-[2px] rounded-full bg-accent"
+        />
+      ) : null}
+
       {/* O1 (operator ruling 2026-07-31) — the live-only dot. One tone, no
        * label. The LANE renders on every row and only the dot inside it is
        * conditional, so a live row and a not-live row share one text edge and
@@ -1005,11 +1444,15 @@ export function SidebarRowItem({
         ) : null}
       </span>
 
-      <div className="min-w-0 flex-1">
+      <div
+        className={
+          'min-w-0 flex-1 ' + (pinned && showActions ? 'pr-5' : '')
+        }
+      >
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             className={
-              'truncate text-xs font-medium ' +
+              'truncate text-[13px] font-medium ' +
               (isActive
                 ? 'text-[#fce7f3]'
                 : openable
@@ -1031,34 +1474,75 @@ export function SidebarRowItem({
         ) : null}
       </div>
 
-      {/* #11 — hover-revealed ⋮ kebab: opens the SAME target-session-bound
-       * SessionActionsMenu the TabBar uses (App owns the instance). Registry rows
-       * only — a history row has no desktop session to act on. */}
+      {/* Actions OVERLAY the row's right edge rather than sitting in flow, so a
+       * title gets the rail's full width at rest and only gives it up under the
+       * pointer. The backing is the row's own tint flattened onto the panel
+       * (`.sidebar-row-actions-fade`, accent-derived so it tracks the theme). A
+       * pinned row keeps its pin visible at rest — an unpin must not be a
+       * hover-hunt — while its ⋮ still waits for the pointer. */}
       {showActions ? (
-        <button
-          type="button"
-          className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={event => {
-            event.stopPropagation()
-            const rect = event.currentTarget.getBoundingClientRect()
-            if (onOpenRowActions && appSessionId != null) {
-              // P4-39 — the trigger's rect, right-aligned to the kebab; the menu
-              // owns the gap, the clamp and the bottom-flip.
-              onOpenRowActions(appSessionId, {
-                top: rect.top,
-                bottom: rect.bottom,
-                left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
-              })
-            }
-          }}
-          // Keep key events off the row's activate handler (Enter/Space on the
-          // kebab opens the menu, it must not also fire the row's onKeyDown).
-          onKeyDown={event => event.stopPropagation()}
-          title="Session actions"
-          aria-label={`Session actions for ${title}`}
+        <div
+          className={
+            'absolute inset-y-0 right-1 flex items-center gap-0.5 pl-3.5 transition-opacity ' +
+            (pinned
+              ? 'opacity-100 '
+              : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 focus-within:opacity-100 ') +
+            (isActive
+              ? 'sidebar-row-actions-active'
+              : 'sidebar-row-actions')
+          }
         >
-          <KebabIcon />
-        </button>
+          {showKebab ? (
+            <button
+              type="button"
+              className={
+                'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle transition-[opacity,background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft ' +
+                (pinned
+                  ? 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                  : '')
+              }
+              onClick={event => {
+                event.stopPropagation()
+                const rect = event.currentTarget.getBoundingClientRect()
+                if (onOpenRowActions && appSessionId != null) {
+                  // P4-39 — the trigger's rect, right-aligned to the kebab; the
+                  // menu owns the gap, the clamp and the bottom-flip.
+                  onOpenRowActions(appSessionId, {
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
+                  })
+                }
+              }}
+              // Keep key events off the row's activate handler (Enter/Space on
+              // the kebab opens the menu, it must not also fire onKeyDown).
+              onKeyDown={event => event.stopPropagation()}
+              title="Session actions"
+              aria-label={`Session actions for ${title}`}
+            >
+              <KebabIcon />
+            </button>
+          ) : null}
+          {onTogglePin ? (
+            <button
+              type="button"
+              className={
+                'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded transition-[background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft ' +
+                (pinned ? 'text-accent' : 'text-text-faint')
+              }
+              aria-pressed={pinned}
+              onClick={event => {
+                event.stopPropagation()
+                onTogglePin(row.sessionId)
+              }}
+              onKeyDown={event => event.stopPropagation()}
+              title={pinned ? 'Unpin' : 'Pin to top'}
+              aria-label={`${pinned ? 'Unpin' : 'Pin'} ${title}`}
+            >
+              {pinned ? <PinFilledIcon /> : <PinIcon />}
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )
@@ -1068,14 +1552,23 @@ function NavItemExpanded({
   item,
   activeView,
   buttonRef,
+  navOpen,
+  unfoldDelay,
   onSelectView,
 }: {
   item: NavItem
   activeView: SidebarView
   buttonRef: (element: HTMLButtonElement | null) => void
+  /** The footer is unfolded — items rise into place; folded, they drop back
+   * with no stagger (the delays are an entrance effect only). */
+  navOpen: boolean
+  unfoldDelay: string
   onSelectView: (view: SidebarView) => void
 }) {
   const active = item.enabled && item.id === activeView
+  const motion = navOpen
+    ? `translate-y-0 scale-100 opacity-100 ${unfoldDelay}`
+    : 'translate-y-1.5 scale-95 opacity-0'
   if (!item.enabled) {
     return (
       <button
@@ -1085,7 +1578,10 @@ function NavItemExpanded({
         aria-disabled="true"
         data-sidebar-nav-id={item.id}
         title={`${item.label} is not available yet`}
-        className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
+        className={
+          'flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55 transition-[opacity,transform] duration-200 ' +
+          motion
+        }
       >
         <span className="flex h-5 w-8 shrink-0 items-center justify-center">
           {item.icon}
@@ -1105,10 +1601,11 @@ function NavItemExpanded({
         if (view) onSelectView(view)
       }}
       className={
-        'flex w-full items-center gap-1 rounded-md py-1.5 ' +
+        'flex w-full items-center gap-1 rounded-md py-1.5 transition-[opacity,transform] duration-200 ' +
+        motion +
         (active
-          ? 'bg-accent/[0.09] text-accent-soft'
-          : 'text-text-subtle hover:text-[#d4d4d8]')
+          ? ' bg-accent/[0.09] text-accent-soft'
+          : ' text-text-subtle hover:text-[#d4d4d8]')
       }
     >
       <span className="flex h-5 w-8 shrink-0 items-center justify-center">
@@ -1170,8 +1667,7 @@ function NavItemRail({
 }
 
 /** Relative recency from `lastMessageSentAt` (the CC-2 message-sent signal),
- * falling back to `createdAt` — the real, source-backed subtitle (the
- * prototype's `time`); model/cost are NOT rendered (no real backing, C3). */
+ * falling back to `createdAt` — the real, source-backed subtitle. */
 function formatRecency(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return ''
   const diff = Date.now() - ms
@@ -1183,7 +1679,7 @@ function formatRecency(ms: number): string {
   return `${Math.floor(hrs / 24)}d`
 }
 
-/* ── Icons (ported from the prototype's inline SVGs; attribute-only, no CSS) ── */
+/* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
 
 function PawLogo() {
   return (
@@ -1291,6 +1787,46 @@ function SettingsIcon() {
   )
 }
 
+/** The footer's destination toggle — a 2×2 grid of apps. */
+function GridIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3.5" y="3.5" width="7" height="7" rx="2" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="2" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="2" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="2" />
+    </svg>
+  )
+}
+
+/** "New chat" — the compose pencil. */
+function ComposeIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  )
+}
+
 function PinIcon() {
   return (
     <svg
@@ -1305,6 +1841,15 @@ function PinIcon() {
     >
       <line x1="12" y1="17" x2="12" y2="22" />
       <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z" />
+    </svg>
+  )
+}
+
+/** The pinned state of the row pin — the same silhouette, filled. */
+function PinFilledIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M9 4V3h6v1h-1v6.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17h-6v5h-2v-5H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z" />
     </svg>
   )
 }
@@ -1326,21 +1871,44 @@ function SearchIcon() {
   )
 }
 
-function ChevronIcon() {
+/** An expanded workspace group. */
+function FolderOpenIcon() {
   return (
-    <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
-      <path
-        d="M2 3.5L5 6.5L8 3.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9" />
+      <path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4" />
     </svg>
   )
 }
 
-/** #10 per-workspace "+" glyph (prototype Sidebar.jsx:233). */
+/** A collapsed workspace group. */
+function FolderClosedIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 19V6a2 2 0 0 1 2-2h3.6l2 2.5H19a2 2 0 0 1 2 2V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+    </svg>
+  )
+}
+
+/** #10 per-workspace "+" glyph, and the Projects header's "add project". */
 function PlusIcon() {
   return (
     <svg
@@ -1358,8 +1926,8 @@ function PlusIcon() {
   )
 }
 
-/** #11 per-row actions ⋮ glyph — three vertically-stacked dots (prototype
- * Sidebar.jsx:282, same grammar as the TabBar's ⋯ button). */
+/** #11 per-row actions ⋮ glyph — three vertically-stacked dots (the same
+ * grammar as the TabBar's ⋯ button). */
 function KebabIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

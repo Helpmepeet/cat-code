@@ -238,6 +238,58 @@
     animation: catcode-token-warn-in 0.18s ease both;
   }
 
+  /* Sidebar row actions (design source `components/sidebar/index.html`) — the
+   * ⋮/pin cluster OVERLAYS the row's right edge so a session title gets the
+   * rail's full width at rest. The backing is the row's own tint flattened onto
+   * the panel, so the actions read as part of the row rather than a floating
+   * chip: an accent layer at the row's own alpha over the panel colour. Built
+   * from `--accent-rgb` rather than the design source's hardcoded pink, so it
+   * tracks all five accent themes. Two variants because a hovered row and an
+   * ACTIVE row sit at different alphas.
+   *
+   * ONLY under hover/focus, never at rest. A PINNED row keeps its pin visible
+   * with no pointer on it (`opacity-100`, so an unpin is not a hover-hunt), and
+   * painting the backing then draws a lit rectangle floating over an unlit row.
+   * The design source draws it on `:hover`/`:focus-visible` for exactly this
+   * reason; opacity and backing are two different questions.
+   *
+   * Written as CSS rather than a Tailwind class because both halves need it: a
+   * multi-stop `bg-[linear-gradient(...)]` built in a template string silently
+   * no-ops in this Tailwind v4 setup, and a plain class cannot take a
+   * `group-hover:` variant. `.group` is the row (`Sidebar.tsx`'s
+   * `SidebarRowItem`), and the cluster is its direct child. */
+  .group:hover > .sidebar-row-actions,
+  .group:focus-visible > .sidebar-row-actions,
+  .sidebar-row-actions:focus-within {
+    background-image:
+      linear-gradient(
+        90deg,
+        rgb(var(--accent-rgb) / 0),
+        rgb(var(--accent-rgb) / 0.07) 14px
+      ),
+      linear-gradient(
+        90deg,
+        rgb(from var(--color-surface-panel) r g b / 0),
+        var(--color-surface-panel) 14px
+      );
+  }
+
+  .group:hover > .sidebar-row-actions-active,
+  .group:focus-visible > .sidebar-row-actions-active,
+  .sidebar-row-actions-active:focus-within {
+    background-image:
+      linear-gradient(
+        90deg,
+        rgb(var(--accent-rgb) / 0),
+        rgb(var(--accent-rgb) / 0.09) 14px
+      ),
+      linear-gradient(
+        90deg,
+        rgb(from var(--color-surface-panel) r g b / 0),
+        var(--color-surface-panel) 14px
+      );
+  }
+
   /* P4-17 Welcome hero — the neon-cat pink glow (Welcome.jsx:9 drop-shadow),
    * moved off the prototype's inline `style` onto a class (no-inline-style
    * rule). Accent-derived so it tracks the theme, not a hardcoded pink. */
