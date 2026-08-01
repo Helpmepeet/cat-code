@@ -866,7 +866,23 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
 function persistNextQuarantineProbe(vaultFilePath: string, reason: string): void {
   const vault = readVault(vaultFilePath)
   const refreshState = (vault.refresh ?? {}) as Record<string, unknown>
-  if (refreshState.state === 'reauth_required') return
+  // A verdict that names the token still in the profile is terminal, and its
+  // account never reaches the probe. An UNCORRELATABLE verdict does reach it
+  // (the pool quarantines those), and it needs its backoff reservation like any
+  // other quarantined account, or it re-probes on every tick. The spread below
+  // preserves `state` and `refresh_token_hash`, so recording backoff here never
+  // downgrades the verdict itself.
+  if (refreshState.state === 'reauth_required') {
+    const storedHash = refreshState.refresh_token_hash
+    const currentToken = vault.tokens?.refresh_token
+    if (
+      typeof storedHash === 'string' &&
+      typeof currentToken === 'string' &&
+      storedHash === hashToken(currentToken)
+    ) {
+      return
+    }
+  }
 
   const previousFailures =
     typeof refreshState.consecutive_failures === 'number' &&

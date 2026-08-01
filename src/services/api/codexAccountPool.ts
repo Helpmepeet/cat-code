@@ -10,8 +10,9 @@
  * only becomes possible when there is another selectable account to rotate to.
  */
 
+import { createHash } from 'crypto'
 import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 import { hostname } from 'os'
 
@@ -709,9 +710,13 @@ export function saveCodexTokenToVault(tokens: {
   try {
     const vaultPath = readVaultPath() ?? DEFAULT_VAULT_PATH
     const accountsDir = join(vaultPath, 'accounts')
-    mkdirSync(accountsDir, { recursive: true })
-
     const filePath = options.filePath ?? join(accountsDir, `${tokens.accountId}.json`)
+    // Everything is written beside the TARGET file, not beside the configured
+    // vault: a caller that redirects `filePath` must not have its temp file
+    // land in the real vault and rename across directories.
+    const targetDir = dirname(filePath)
+    mkdirSync(targetDir, { recursive: true })
+
     const existed = existsSync(filePath)
     const existing = existed
       ? (JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>)
@@ -738,13 +743,22 @@ export function saveCodexTokenToVault(tokens: {
         : {}),
     }
     data.last_refresh = new Date().toISOString()
+    // A login mints a new refresh token, which voids any verdict recorded
+    // against the old one. Without this the preserved block outlives the token
+    // it judged and the next load reads the fresh credential as dead.
+    const previousRefreshToken = typeof existingTokens?.refresh_token === 'string'
+      ? existingTokens.refresh_token
+      : undefined
+    if (previousRefreshToken !== tokens.refreshToken) {
+      data.refresh = { state: 'idle' }
+    }
     if (tokens.alias?.trim()) {
       data.alias = tokens.alias.trim()
     } else if (!shouldPreserve) {
       delete data.alias
     }
 
-    const tmpPath = join(accountsDir, `.${Date.now()}.${process.pid}.tmp`)
+    const tmpPath = join(targetDir, `.${Date.now()}.${process.pid}.tmp`)
     writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
     renameSync(tmpPath, filePath)
 
@@ -975,7 +989,7 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
           : 0
       const health = checkAccountHealth(lastRefresh)
       const refresh = data.refresh as Record<string, unknown> | undefined
-      const refreshStatus = getVaultRefreshPoolStatus(refresh, health)
+      const refreshStatus = getVaultRefreshPoolStatus(refresh, health, String(tokens.refresh_token))
       const status = refreshStatus.status
       const planMetadata = getCodexPlanMetadataFromIdToken(
         typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
@@ -1111,9 +1125,34 @@ function isHistoricalTransportReauth(reason: string | undefined): boolean {
   return reason === 'network_or_timeout' || reason === 'stale_in_flight'
 }
 
+/**
+ * Correlate a terminal refresh verdict against the token the profile holds now.
+ * A verdict is only ever about the exact token it was recorded for, which is why
+ * refreshAccountTokens scopes its own terminal check by hash (codexTokenRefresh.ts
+ * `refresh_token_hash === refreshTokenHash`). The loader must agree, or a login
+ * that mints a new refresh token inherits the replaced token's verdict.
+ *
+ * 'uncorrelatable' covers legacy and corrupted profiles: no current writer omits
+ * the hash, so an absent or malformed one is an unknown shape, and unknown shapes
+ * fail closed rather than resurrect an account.
+ */
+function correlateRefreshVerdict(
+  refresh: Record<string, unknown> | undefined,
+  currentRefreshToken: string,
+): 'matches' | 'differs' | 'uncorrelatable' {
+  const stored = refresh?.refresh_token_hash
+  if (typeof stored !== 'string' || !/^[0-9a-f]{64}$/.test(stored) || !currentRefreshToken) {
+    return 'uncorrelatable'
+  }
+  return stored === createHash('sha256').update(currentRefreshToken).digest('hex')
+    ? 'matches'
+    : 'differs'
+}
+
 function getVaultRefreshPoolStatus(
   refresh: Record<string, unknown> | undefined,
   health: 'healthy' | 'dead',
+  currentRefreshToken: string,
 ): {
   status: PoolAccount['status']
   statusReason?: PoolAccountStatusReason
@@ -1141,6 +1180,28 @@ function getVaultRefreshPoolStatus(
   }
 
   if (refresh?.state === 'reauth_required') {
+    const correlation = correlateRefreshVerdict(refresh, currentRefreshToken)
+
+    // The verdict names a token this profile no longer holds: a later login or
+    // rotation replaced it, so the verdict says nothing about the credential
+    // now in the file.
+    if (correlation === 'differs') {
+      return { status: 'healthy' }
+    }
+
+    // Cannot tell which token the verdict belongs to. Never resurrect on a
+    // guess, but do not strand the account either: quarantine hands it to the
+    // probe, which re-derives the truth from the token endpoint.
+    if (correlation === 'uncorrelatable') {
+      return {
+        status: 'quarantined',
+        statusReason: 'probe_pending_transport',
+        lastError: normalizeCodexAccountBlockReason(reason)
+          ?? reason
+          ?? 'Reauthentication state is unverified; re-checking',
+      }
+    }
+
     return {
       status: 'dead',
       statusReason: 'auth_dead',
