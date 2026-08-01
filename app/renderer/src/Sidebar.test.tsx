@@ -8,8 +8,18 @@ import {
   type WorkspaceReorderHandlers,
 } from './Sidebar.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
-import { SIDEBAR_PINNED_SESSIONS_STORAGE_KEY } from './sidebarPinnedSessions.js'
-import type { WorkspaceDropEdge } from './sidebarWorkspaceOrder.js'
+import {
+  PINNED_SESSION_DRAG_MIME,
+  SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
+} from './sidebarPinnedSessions.js'
+import {
+  SESSION_ORDER_DRAG_MIME,
+  SIDEBAR_SESSION_ORDER_STORAGE_KEY,
+} from './sidebarSessionOrder.js'
+import {
+  WORKSPACE_ORDER_DRAG_MIME,
+  type WorkspaceDropEdge,
+} from './sidebarWorkspaceOrder.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
 // SESSIONS-UNIFICATION). It collapses to the rail by default under
@@ -525,6 +535,16 @@ function pinning(...sessionIds: string[]) {
   })
 }
 
+/** A stored per-project row arrangement, as a drag would have left it. */
+function ordering(cwd: string, ...sessionIds: string[]) {
+  return storage({
+    [SIDEBAR_SESSION_ORDER_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      byWorkspace: { [cwd]: sessionIds },
+    }),
+  })
+}
+
 // ── New chat / Add project ───────────────────────────────────────────────────
 
 test('New chat renders above the list only when wired', () => {
@@ -574,30 +594,75 @@ test('the Pinned section is absent when nothing is pinned', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('>Pinned<')
 })
 
-test('a pinned row is a reorder drag handle; an unpinned one is not', () => {
+test('every session row is a reorder drag handle, pinned or in its project', () => {
   const rows = [
     registryRow('s1', { displayLabel: 'Alpha' }),
     registryRow('s2', { displayLabel: 'Beta' }),
   ]
-  // One workspace header carries ⌥↑/⌥↓ already; pinning a row adds a second
-  // holder of the same shortcut, on the row itself.
-  const unpinned = renderSidebar({ menuActive: true, rows })
+  // One workspace header carries ⌥↑/⌥↓, and so does each of the two rows.
+  const html = renderSidebar({ menuActive: true, rows })
   expect(
-    unpinned.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
-  ).toHaveLength(1)
+    html.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
+  ).toHaveLength(3)
+  // Exactly one cursor class on the row: `cursor-pointer cursor-grab` together
+  // would be resolved by Tailwind's emit order, not by the order written.
+  expect(html).toContain('transition-colors cursor-grab ')
+  expect(html).not.toContain('cursor-pointer cursor-grab')
 
-  const html = renderSidebar({
+  // Pinning one moves it to the Pinned section, where it stays a handle — the
+  // count is unchanged, only which list it belongs to.
+  const withPin = renderSidebar({
     menuActive: true,
     rows,
     storage: pinning('engine-s1'),
   })
   expect(
-    html.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
-  ).toHaveLength(2)
-  // Exactly one cursor class on the row: `cursor-pointer cursor-grab` together
-  // would be resolved by Tailwind's emit order, not by the order written.
-  expect(html).toContain('transition-colors cursor-grab ')
-  expect(html).not.toContain('cursor-pointer cursor-grab')
+    withPin.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
+  ).toHaveLength(3)
+})
+
+test('the two row lists accept only their own drag type', () => {
+  // Both are reorderable, but a pinned row dragged over a project row must not
+  // light up a drop edge it would never land on, so the payload types differ.
+  expect(PINNED_SESSION_DRAG_MIME).not.toBe(SESSION_ORDER_DRAG_MIME)
+  // ...and neither collides with the workspace-header drag or the tab→panel
+  // split's `text/sessionId`.
+  for (const mime of [PINNED_SESSION_DRAG_MIME, SESSION_ORDER_DRAG_MIME]) {
+    expect(mime).not.toBe(WORKSPACE_ORDER_DRAG_MIME)
+    expect(mime).not.toBe('text/sessionid')
+  }
+})
+
+test('a row in the "Unknown workspace" bucket is not a drag handle', () => {
+  // That bucket is a catch-all for transcripts whose workspace could not be
+  // reconciled, not a project, so there is no order to persist against it.
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [
+      historyRow('h1', { displayLabel: 'Orphan one', cwd: '' }),
+      historyRow('h2', { displayLabel: 'Orphan two', cwd: '' }),
+    ],
+  })
+  expect(html).toContain('Orphan one')
+  expect(html).not.toContain('aria-keyshortcuts')
+  expect(html).not.toContain('draggable')
+})
+
+test('a hand-arranged group holds its slots, and a new session lands on top', () => {
+  // Stored order is Beta, Alpha. The roster arrives in CC-2 activity order
+  // (Gamma newest), and Gamma has never been dragged.
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [
+      registryRow('s3', { displayLabel: 'Gamma', lastMessageSentAt: 3 }),
+      registryRow('s2', { displayLabel: 'Beta', lastMessageSentAt: 2 }),
+      registryRow('s1', { displayLabel: 'Alpha', lastMessageSentAt: 1 }),
+    ],
+    storage: ordering('/tmp/proj', 'engine-s2', 'engine-s1'),
+  })
+  const order = ['Gamma', 'Beta', 'Alpha'].map(name => html.indexOf(`>${name}<`))
+  expect(order.every(at => at > -1)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
 })
 
 // ── The row's pin button ─────────────────────────────────────────────────────

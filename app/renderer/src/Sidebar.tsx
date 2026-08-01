@@ -122,9 +122,19 @@ import {
   selectPinnedRows,
   selectUnpinnedRows,
   writePinnedSessionsToStorage,
-  type PinnedDropEdge,
   type PinnedSessions,
 } from './sidebarPinnedSessions.js'
+import {
+  createSessionOrder,
+  readSessionOrderFromStorage,
+  reduceSessionOrderMoved,
+  reduceSessionOrderStepped,
+  selectOrderedGroupRows,
+  selectSessionDropEdge,
+  SESSION_ORDER_DRAG_MIME,
+  writeSessionOrderToStorage,
+  type SessionOrder,
+} from './sidebarSessionOrder.js'
 import {
   createWorkspaceOrder,
   readWorkspaceOrderFromStorage,
@@ -184,8 +194,21 @@ export type WorkspaceReorderHandlers = {
   onStep: (cwd: string, direction: 'up' | 'down') => void
 }
 
-/** The same shape for a PINNED row, keyed on the merge id instead of a cwd. */
-export type PinnedReorderHandlers = {
+/**
+ * The same shape for a session ROW, keyed on the merge id instead of a cwd, plus
+ * the drag type that scopes it. One shape serves both reorderable row lists —
+ * the Pinned section and a workspace group — and the `mime` is what keeps them
+ * from accepting each other's drags: a pinned row dragged over a project row
+ * must not light up a drop edge it would never land on. The caller binds the
+ * list; the row only reports what happened to it.
+ */
+/** Which side of the hovered row the dragged row would land on. Shared by both
+ * reorderable row lists (`sidebarPinnedSessions` / `sidebarSessionOrder`). */
+export type RowDropEdge = 'before' | 'after'
+
+export type RowReorderHandlers = {
+  /** The drag payload type this list accepts, and nothing else. */
+  mime: string
   onDragStart: (sessionId: string) => void
   onDragOver: (sessionId: string) => void
   onDragLeave: (sessionId: string) => void
@@ -328,6 +351,9 @@ export function Sidebar({
   const [pinnedSessions, setPinnedSessions] = useState<PinnedSessions>(
     () => readPinnedSessionsFromStorage(orderStore) ?? createPinnedSessions(),
   )
+  const [sessionOrder, setSessionOrder] = useState<SessionOrder>(
+    () => readSessionOrderFromStorage(orderStore) ?? createSessionOrder(),
+  )
   /** The in-flight header drag: the group being dragged and the one under the
    * pointer. Only the indicator reads it; the order itself changes on drop. */
   const [headerDrag, setHeaderDrag] = useState<{
@@ -338,6 +364,14 @@ export function Sidebar({
   const [pinDrag, setPinDrag] = useState<{ from: string; over: string } | null>(
     null,
   )
+  /** The same, for a row being dragged within its workspace group. `cwd` is what
+   * makes a cross-project drop impossible: a row only reacts to a drag that
+   * started in its own group. */
+  const [rowDrag, setRowDrag] = useState<{
+    cwd: string
+    from: string
+    over: string
+  } | null>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
@@ -347,9 +381,11 @@ export function Sidebar({
    * moved — see the re-focus effect below `reorderHandlers`. */
   const headerRefs = useRef(new Map<string, HTMLButtonElement>())
   const refocusCwd = useRef<string | null>(null)
-  /** The same for pinned rows (a row is the focusable element, not a button). */
-  const pinnedRowRefs = useRef(new Map<string, HTMLDivElement>())
-  const refocusPinnedId = useRef<string | null>(null)
+  /** The same for session rows in BOTH reorderable lists (a row is the focusable
+   * element, not a button). Keyed on the merge id, which is unique across the
+   * rail, so one map serves the Pinned section and every group. */
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
+  const refocusRowId = useRef<string | null>(null)
   /** Expanded nav buttons by destination, plus a collapsed rail destination
    * whose focus must survive the branch replacement. */
   const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
@@ -448,21 +484,36 @@ export function Sidebar({
   // The UNFILTERED group sequence. A reorder is expressed against what is on
   // screen, but it FREEZES this one, so groups the search box is hiding keep
   // their current position instead of falling behind the two that were dragged.
+  //
+  // Each group's ROWS then take the operator's per-project order on top of the
+  // CC-2 activity sort they arrive in (`sidebarSessionOrder.ts` — unranked rows
+  // stay on top in activity order, the hand-arranged block holds its slots
+  // below).
+  const orderGroups = (list: WorkspaceGroup[]) =>
+    list.map(group => ({
+      ...group,
+      rows: selectOrderedGroupRows(group.rows, sessionOrder, group.cwd),
+    }))
+
   const allGroups = useMemo(
     () =>
-      selectOrderedWorkspaceGroups(
-        groupByWorkspace(groupRows, activeCwd),
-        workspaceOrder,
+      orderGroups(
+        selectOrderedWorkspaceGroups(
+          groupByWorkspace(groupRows, activeCwd),
+          workspaceOrder,
+        ),
       ),
-    [groupRows, activeCwd, workspaceOrder],
+    [groupRows, activeCwd, workspaceOrder, sessionOrder],
   )
   const groups = useMemo(() => {
     if (!query) return allGroups
-    return selectOrderedWorkspaceGroups(
-      groupByWorkspace(groupRows.filter(matchesQuery), activeCwd),
-      workspaceOrder,
+    return orderGroups(
+      selectOrderedWorkspaceGroups(
+        groupByWorkspace(groupRows.filter(matchesQuery), activeCwd),
+        workspaceOrder,
+      ),
     )
-  }, [allGroups, groupRows, query, activeCwd, workspaceOrder])
+  }, [allGroups, groupRows, query, activeCwd, workspaceOrder, sessionOrder])
 
   // The rendered sequence a reorder is expressed against (what the operator is
   // looking at, search filter included).
@@ -533,7 +584,8 @@ export function Sidebar({
     },
   }
 
-  const pinnedReorderHandlers: PinnedReorderHandlers = {
+  const pinnedReorderHandlers: RowReorderHandlers = {
+    mime: PINNED_SESSION_DRAG_MIME,
     onDragStart: id => setPinDrag({ from: id, over: id }),
     onDragOver: id =>
       setPinDrag(drag =>
@@ -565,9 +617,85 @@ export function Sidebar({
         direction,
       )
       if (next === pinnedSessions) return
-      refocusPinnedId.current = id
+      refocusRowId.current = id
       commitPinnedSessions(next)
     },
+  }
+
+  const commitSessionOrder = (next: SessionOrder) => {
+    if (next === sessionOrder) return
+    setSessionOrder(next)
+    writeSessionOrderToStorage(orderStore, next)
+  }
+
+  /**
+   * One workspace group's row-reorder handlers. Built per group so the drag is
+   * scoped to it by construction: `rowDrag.cwd` gates every callback, which is
+   * how a cross-project drop is refused rather than faked (a session's project
+   * IS its cwd, so "moving" it between groups would mean moving its working
+   * directory).
+   *
+   * The rendered ids decide the drop; the group's FULL id list is what gets
+   * frozen on the first drag — see `sidebarSessionOrder.ts`.
+   */
+  const rowReorderHandlersFor = (cwd: string): RowReorderHandlers => {
+    const renderedIds = (
+      groups.find(group => group.cwd === cwd)?.rows ?? []
+    ).map(row => row.sessionId)
+    const allIds = (
+      allGroups.find(group => group.cwd === cwd)?.rows ?? []
+    ).map(row => row.sessionId)
+    const inThisGroup = (drag: typeof rowDrag) => drag != null && drag.cwd === cwd
+    return {
+      mime: SESSION_ORDER_DRAG_MIME,
+      onDragStart: id => setRowDrag({ cwd, from: id, over: id }),
+      onDragOver: id =>
+        setRowDrag(drag =>
+          !inThisGroup(drag) || drag!.over === id
+            ? drag
+            : { ...drag!, over: id },
+        ),
+      // Park the indicator back on the dragged row itself (which draws none, a
+      // row cannot drop onto itself), so it is never left promising a landing
+      // spot the pointer has already left.
+      onDragLeave: id =>
+        setRowDrag(drag =>
+          !inThisGroup(drag) || drag!.over !== id
+            ? drag
+            : { ...drag!, over: drag!.from },
+        ),
+      onDrop: id => {
+        if (inThisGroup(rowDrag)) {
+          commitSessionOrder(
+            reduceSessionOrderMoved(
+              sessionOrder,
+              cwd,
+              renderedIds,
+              rowDrag!.from,
+              id,
+              allIds,
+            ),
+          )
+        }
+        setRowDrag(null)
+      },
+      onDragEnd: () => setRowDrag(null),
+      onStep: (id, direction) => {
+        const next = reduceSessionOrderStepped(
+          sessionOrder,
+          cwd,
+          renderedIds,
+          id,
+          direction,
+          allIds,
+        )
+        if (next === sessionOrder) return
+        // React's keyed diff moves the stepped row by re-inserting its node,
+        // which drops focus to the body — so a second ⌥↓ would go nowhere.
+        refocusRowId.current = id
+        commitSessionOrder(next)
+      },
+    }
   }
 
   const togglePin = (sessionId: string) =>
@@ -582,12 +710,14 @@ export function Sidebar({
     headerRefs.current.get(cwd)?.focus()
   }, [workspaceOrder])
 
+  // Both row lists hand focus back the same way; whichever order changed, the
+  // stepped row is the one that just moved.
   useLayoutEffect(() => {
-    const id = refocusPinnedId.current
+    const id = refocusRowId.current
     if (id == null) return
-    refocusPinnedId.current = null
-    pinnedRowRefs.current.get(id)?.focus()
-  }, [pinnedSessions])
+    refocusRowId.current = null
+    rowRefs.current.get(id)?.focus()
+  }, [pinnedSessions, sessionOrder])
 
   useLayoutEffect(() => {
     const navId = refocusNavId.current
@@ -740,11 +870,10 @@ export function Sidebar({
                         row.appSessionId === activeSessionId
                       }
                       pinned
-                      pinnedReorder={pinnedReorderHandlers}
+                      reorder={pinnedReorderHandlers}
                       rowRef={element => {
-                        if (element) {
-                          pinnedRowRefs.current.set(row.sessionId, element)
-                        } else pinnedRowRefs.current.delete(row.sessionId)
+                        if (element) rowRefs.current.set(row.sessionId, element)
+                        else rowRefs.current.delete(row.sessionId)
                       }}
                       dragging={pinDrag?.from === row.sessionId}
                       dropEdge={
@@ -825,6 +954,20 @@ export function Sidebar({
                           : null
                       }
                       pinnedSessions={pinnedSessions}
+                      rowReorder={
+                        group.cwd.trim().length > 0
+                          ? rowReorderHandlersFor(group.cwd)
+                          : undefined
+                      }
+                      rowRef={(sessionId, element) => {
+                        if (element) rowRefs.current.set(sessionId, element)
+                        else rowRefs.current.delete(sessionId)
+                      }}
+                      rowDrag={
+                        rowDrag != null && rowDrag.cwd === group.cwd
+                          ? rowDrag
+                          : null
+                      }
                       {...rowProps}
                     />
                   ))
@@ -958,6 +1101,9 @@ export function SessionGroup({
   pinnedSessions = [],
   modelForSession,
   reorder,
+  rowReorder,
+  rowRef,
+  rowDrag = null,
   headerRef,
   dragging = false,
   dropEdge = null,
@@ -985,6 +1131,15 @@ export function SessionGroup({
   /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
    * header is a plain, non-draggable header when this is absent. */
   reorder?: WorkspaceReorderHandlers
+  /** Row reordering WITHIN this group (operator, 2026-08-01). Already scoped to
+   * this group's cwd by the caller, which is what refuses a cross-project drop.
+   * Optional + additive: without it the rows are not drag handles. */
+  rowReorder?: RowReorderHandlers
+  /** Each row element, so a keyboard step can put focus back on the row it just
+   * moved. Keyed on the merge id (the caller keeps one map for the whole rail). */
+  rowRef?: (sessionId: string, element: HTMLDivElement | null) => void
+  /** The in-flight row drag, already filtered to this group by the caller. */
+  rowDrag?: { from: string; over: string } | null
   /** The header button, so a keyboard step can put focus back on the workspace
    * it just moved (the TabBar's per-tab `ref` idiom). */
   headerRef?: (element: HTMLButtonElement | null) => void
@@ -1186,6 +1341,22 @@ export function SessionGroup({
               onOpenRowActions={onOpenRowActions}
               onTogglePin={onTogglePin}
               modelForSession={modelForSession}
+              reorder={rowReorder}
+              rowRef={
+                rowRef
+                  ? element => rowRef(row.sessionId, element)
+                  : undefined
+              }
+              dragging={rowDrag?.from === row.sessionId}
+              dropEdge={
+                rowDrag != null && rowDrag.over === row.sessionId
+                  ? selectSessionDropEdge(
+                      visibleRows.map(r => r.sessionId),
+                      rowDrag.from,
+                      row.sessionId,
+                    )
+                  : null
+              }
             />
           ))}
           {shouldShowSidebarGroupExpansionToggle(
@@ -1218,7 +1389,7 @@ export function SidebarRowItem({
   onOpenRowActions,
   onTogglePin,
   pinned = false,
-  pinnedReorder,
+  reorder,
   rowRef,
   dragging = false,
   dropEdge = null,
@@ -1239,16 +1410,17 @@ export function SidebarRowItem({
   /** This row is currently pinned — its pin reads pressed and stays visible at
    * rest (an unpin must be reachable without hunting for a hover). */
   pinned?: boolean
-  /** Reorder handlers, wired only for a row rendered INSIDE the Pinned section:
-   * that is the one list whose order the operator owns. */
-  pinnedReorder?: PinnedReorderHandlers
+  /** Reorder handlers for the list this row is rendered in (the Pinned section,
+   * or its workspace group). Optional + additive: without them the row is not a
+   * drag handle at all. */
+  reorder?: RowReorderHandlers
   /** The row element, so a keyboard step can put focus back on the row it just
    * moved (the workspace header's `headerRef` idiom). */
   rowRef?: (element: HTMLDivElement | null) => void
   /** This row is the one being dragged (drawn dimmed). */
   dragging?: boolean
   /** This row is the drop target; which edge the dragged row would land on. */
-  dropEdge?: PinnedDropEdge | null
+  dropEdge?: RowDropEdge | null
   modelForSession?: (id: SessionId) => string | null
 }) {
   const visual = deriveMergedRowVisual(row)
@@ -1266,7 +1438,7 @@ export function SidebarRowItem({
   const openable = visual.openable
   const showActions = openable && (onOpenRowActions != null || onTogglePin != null)
   const showKebab = onOpenRowActions != null && appSessionId != null
-  const reorderable = pinnedReorder != null && pinned
+  const reorderable = reorder != null
 
   // A live registry row focuses its tab; a restorable row re-spawns via restore;
   // a resolvable history row opens by its ENGINE id (Part-A host path); a
@@ -1321,30 +1493,33 @@ export function SidebarRowItem({
       onDragStart={
         reorderable
           ? event => {
-              event.dataTransfer.setData(
-                PINNED_SESSION_DRAG_MIME,
-                row.sessionId,
-              )
+              event.dataTransfer.setData(reorder!.mime, row.sessionId)
               event.dataTransfer.effectAllowed = 'move'
-              pinnedReorder?.onDragStart(row.sessionId)
+              reorder?.onDragStart(row.sessionId)
+              // A row lives inside its workspace group, whose own handler would
+              // otherwise read this as the start of a HEADER drag.
+              event.stopPropagation()
             }
           : undefined
       }
       onDragOver={
         reorderable
           ? event => {
-              // Only a pinned-row drag is accepted; a workspace header drag and
-              // a tab dragged for a split must fall through untouched.
+              // Only THIS list's drag is accepted. A pinned row dragged over a
+              // project row, a workspace header drag, and a tab dragged for a
+              // split all fall through untouched rather than lighting up a drop
+              // edge they would never land on.
               if (
                 !event.dataTransfer.types.some(
-                  type => type.toLowerCase() === PINNED_SESSION_DRAG_MIME,
+                  type => type.toLowerCase() === reorder!.mime,
                 )
               ) {
                 return
               }
               event.preventDefault()
+              event.stopPropagation()
               event.dataTransfer.dropEffect = 'move'
-              pinnedReorder?.onDragOver(row.sessionId)
+              reorder?.onDragOver(row.sessionId)
             }
           : undefined
       }
@@ -1353,19 +1528,28 @@ export function SidebarRowItem({
           ? event => {
               const entering = event.relatedTarget as Node | null
               if (entering && event.currentTarget.contains(entering)) return
-              pinnedReorder?.onDragLeave(row.sessionId)
+              reorder?.onDragLeave(row.sessionId)
             }
           : undefined
       }
       onDrop={
         reorderable
           ? event => {
+              if (
+                !event.dataTransfer.types.some(
+                  type => type.toLowerCase() === reorder!.mime,
+                )
+              ) {
+                return
+              }
               event.preventDefault()
-              pinnedReorder?.onDrop(row.sessionId)
+              // Don't let the group's own drop handler also fire for a row move.
+              event.stopPropagation()
+              reorder?.onDrop(row.sessionId)
             }
           : undefined
       }
-      onDragEnd={reorderable ? () => pinnedReorder?.onDragEnd() : undefined}
+      onDragEnd={reorderable ? () => reorder?.onDragEnd() : undefined}
       onClick={openable ? activate : undefined}
       onContextMenu={
         showKebab
@@ -1398,7 +1582,7 @@ export function SidebarRowItem({
                 // Keyboard path for the pinned reorder drag, the same ⌥↑/⌥↓ the
                 // workspace headers take.
                 event.preventDefault()
-                pinnedReorder?.onStep(
+                reorder?.onStep(
                   row.sessionId,
                   event.key === 'ArrowUp' ? 'up' : 'down',
                 )
