@@ -1477,7 +1477,8 @@ export function SidebarRowItem({
       {/* Actions OVERLAY the row's right edge rather than sitting in flow, so a
        * title gets the rail's full width at rest and only gives it up under the
        * pointer. The backing is the row's own tint flattened onto the panel
-       * (`.sidebar-row-actions-fade`, accent-derived so it tracks the theme). A
+       * (`.sidebar-row-actions` in `theme.css`, accent-derived so it tracks the
+       * theme, and painted only under hover/focus). A
        * pinned row keeps its pin visible at rest — an unpin must not be a
        * hover-hunt — while its ⋮ still waits for the pointer. */}
       {showActions ? (
