@@ -989,7 +989,7 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
           : 0
       const health = checkAccountHealth(lastRefresh)
       const refresh = data.refresh as Record<string, unknown> | undefined
-      const refreshStatus = getVaultRefreshPoolStatus(refresh, health, String(tokens.refresh_token))
+      const refreshStatus = getVaultRefreshPoolStatus(refresh, health, tokens.refresh_token)
       const status = refreshStatus.status
       const planMetadata = getCodexPlanMetadataFromIdToken(
         typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
@@ -1138,10 +1138,17 @@ function isHistoricalTransportReauth(reason: string | undefined): boolean {
  */
 function correlateRefreshVerdict(
   refresh: Record<string, unknown> | undefined,
-  currentRefreshToken: string,
+  currentRefreshToken: unknown,
 ): 'matches' | 'differs' | 'uncorrelatable' {
   const stored = refresh?.refresh_token_hash
-  if (typeof stored !== 'string' || !/^[0-9a-f]{64}$/.test(stored) || !currentRefreshToken) {
+  if (typeof stored !== 'string' || !/^[0-9a-f]{64}$/.test(stored)) {
+    return 'uncorrelatable'
+  }
+  // The token side needs narrowing too. The load gate only checks truthiness,
+  // so a corrupted profile can carry a number or object here; coercing it to a
+  // string would produce a confident 'differs' and fail OPEN on exactly the
+  // malformed input this function exists to fail closed on.
+  if (typeof currentRefreshToken !== 'string' || !currentRefreshToken) {
     return 'uncorrelatable'
   }
   return stored === createHash('sha256').update(currentRefreshToken).digest('hex')
@@ -1152,7 +1159,7 @@ function correlateRefreshVerdict(
 function getVaultRefreshPoolStatus(
   refresh: Record<string, unknown> | undefined,
   health: 'healthy' | 'dead',
-  currentRefreshToken: string,
+  currentRefreshToken: unknown,
 ): {
   status: PoolAccount['status']
   statusReason?: PoolAccountStatusReason

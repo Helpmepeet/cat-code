@@ -310,6 +310,21 @@ async function refreshAccountTokensStateful(
 
     // 1. Another process already saved a rotated token.
     if (vault.tokens?.refresh_token && vault.tokens.refresh_token !== refreshToken) {
+      // Adopt the rotation only when the vault holds no terminal verdict for
+      // THAT token. Step 2 below correlates against the token we were called
+      // with, so without this check a caller carrying a stale token (the
+      // quarantine probe passes its in-memory copy) hands back a revoked
+      // rotation as healthy, with no network request.
+      const rotatedHash = hashToken(String(vault.tokens.refresh_token))
+      if (
+        vault.refresh?.state === 'reauth_required' &&
+        vault.refresh.refresh_token_hash === rotatedHash
+      ) {
+        const rotatedReason = vault.refresh.reason || 'refresh outcome is unknown'
+        const rotatedDisplay = normalizeCodexAccountBlockReason(rotatedReason) ?? rotatedReason
+        markAccountDead(accountId, rotatedDisplay)
+        throw new ReauthenticationRequiredError(`Reauthentication required: ${rotatedDisplay}`)
+      }
       const refreshed = refreshedVaultTokensResult(
         vault.tokens,
         accountId,
@@ -866,23 +881,15 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
 function persistNextQuarantineProbe(vaultFilePath: string, reason: string): void {
   const vault = readVault(vaultFilePath)
   const refreshState = (vault.refresh ?? {}) as Record<string, unknown>
-  // A verdict that names the token still in the profile is terminal, and its
-  // account never reaches the probe. An UNCORRELATABLE verdict does reach it
-  // (the pool quarantines those), and it needs its backoff reservation like any
-  // other quarantined account, or it re-probes on every tick. The spread below
-  // preserves `state` and `refresh_token_hash`, so recording backoff here never
-  // downgrades the verdict itself.
-  if (refreshState.state === 'reauth_required') {
-    const storedHash = refreshState.refresh_token_hash
-    const currentToken = vault.tokens?.refresh_token
-    if (
-      typeof storedHash === 'string' &&
-      typeof currentToken === 'string' &&
-      storedHash === hashToken(currentToken)
-    ) {
-      return
-    }
-  }
+  // Never touch a terminal verdict here. The write below is an unlocked
+  // read-modify-write that overwrites `state` and `reason`, so recording backoff
+  // for a reauth_required profile would downgrade the verdict to `unknown` and
+  // could clobber one a concurrent process wrote after this function's read.
+  // An uncorrelatable verdict therefore probes without a backoff reservation,
+  // which costs one extra probe: the first probe leaves the profile in some
+  // other state (idle, a correctly-hashed verdict, or unknown), and the normal
+  // backoff applies from then on.
+  if (refreshState.state === 'reauth_required') return
 
   const previousFailures =
     typeof refreshState.consecutive_failures === 'number' &&
