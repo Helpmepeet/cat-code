@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'crypto'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -1344,5 +1345,84 @@ describe('codexTokenRefresh touchAll refresh skew', () => {
       globalThis.fetch = originalFetch
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('refreshAccountTokens rotation adoption respects a terminal verdict', () => {
+  const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
+
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+    resetCodexLeaseManagerForTest()
+    _resetAccountDiagnosticStreamJsonHookForTesting()
+  })
+
+  // The quarantine probe calls in with its in-memory token, which can be older
+  // than the profile on disk. Adopting the newer token without correlating it
+  // against the stored verdict resurrects a revoked credential, with no network
+  // request to catch the mistake.
+  test('refuses a concurrently rotated token that is itself marked reauth_required', async () => {
+    const accountId = 'rotation-verdict-account'
+    const originalFetch = globalThis.fetch
+    let networkCalls = 0
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      networkCalls++
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      await withVaultAccount(
+        accountId,
+        {
+          tokens: {
+            access_token: 'access',
+            refresh_token: 'rotated-refresh',
+            account_id: accountId,
+            expires_at: Date.now() + 3600_000,
+          },
+          last_refresh: new Date().toISOString(),
+          refresh: {
+            state: 'reauth_required',
+            refresh_token_hash: sha256('rotated-refresh'),
+            marked_at: new Date().toISOString(),
+            reason: 'http_401',
+          },
+        },
+        async filePath => {
+          // Caller still holds the pre-rotation token.
+          await expect(
+            refreshAccountTokens(accountId, 'old-refresh', filePath),
+          ).rejects.toThrow(/Reauthentication required/)
+
+          const account = getPoolStatus().accounts.find(a => a.accountId === accountId)
+          expect(account?.status).toBe('dead')
+          expect(networkCalls).toBe(0)
+        },
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('still adopts a concurrently rotated token that carries no verdict', async () => {
+    const accountId = 'rotation-clean-account'
+    await withVaultAccount(
+      accountId,
+      {
+        tokens: {
+          access_token: 'new-access',
+          refresh_token: 'rotated-refresh',
+          account_id: accountId,
+          expires_at: Date.now() + 3600_000,
+        },
+        last_refresh: new Date().toISOString(),
+        refresh: { state: 'idle' },
+      },
+      async filePath => {
+        const result = await refreshAccountTokens(accountId, 'old-refresh', filePath)
+        expect(result.status).toBe('refreshed')
+        expect(result.refreshToken).toBe('rotated-refresh')
+      },
+    )
   })
 })

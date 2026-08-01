@@ -1110,6 +1110,67 @@ describe('loadVaultAccounts correlates a terminal verdict with the token it name
     }
   })
 
+  // A corrupted profile must not out-argue the verdict. Coercing a non-string
+  // token would hash to a confident mismatch and load the account healthy.
+  test('treats a non-string refresh token as uncorrelatable, not as a mismatch', () => {
+    for (const badToken of [12345, { token: 'x' }, ['x'], true]) {
+      const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+      const accountsDir = join(dir, 'accounts')
+      mkdirSync(accountsDir, { recursive: true })
+      writeFileSync(
+        join(accountsDir, `${ACCOUNT_ID}.json`),
+        JSON.stringify({
+          tokens: {
+            access_token: 'access',
+            refresh_token: badToken,
+            account_id: ACCOUNT_ID,
+            expires_at: Date.now() + 8 * 24 * 3600_000,
+          },
+          last_refresh: new Date().toISOString(),
+          refresh: {
+            state: 'reauth_required',
+            refresh_token_hash: sha256('a-revoked-token'),
+            marked_at: '2026-07-15T16:16:47.998Z',
+            reason: 'refresh_token_invalidated',
+          },
+        }),
+        'utf-8',
+      )
+
+      const accounts = loadVaultAccountsForTest(dir)
+      expect(accounts[0]?.status).not.toBe('healthy')
+      expect(accounts[0]?.status).toBe('quarantined')
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The reset is conditional on the token actually changing. Re-saving the same
+  // token must leave a still-current verdict standing.
+  test('a save that reuses the stored refresh token preserves the verdict', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+    const verdict = {
+      state: 'reauth_required',
+      refresh_token_hash: sha256('current-refresh-token'),
+      marked_at: '2026-07-02T22:03:59.839Z',
+      reason: 'http_401',
+    }
+    writeProfile(dir, verdict)
+    const filePath = join(dir, 'accounts', `${ACCOUNT_ID}.json`)
+
+    saveCodexTokenToVault(
+      {
+        accessToken: 'rotated-access-only',
+        refreshToken: 'current-refresh-token',
+        accountId: ACCOUNT_ID,
+      },
+      { writer: 'test.sameToken', filePath },
+    )
+
+    expect(JSON.parse(readFileSync(filePath, 'utf-8')).refresh).toEqual(verdict)
+    expect(loadVaultAccountsForTest(dir)[0]?.status).toBe('dead')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   test('a login over a marked profile clears the verdict and loads healthy', () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
     writeProfile(
