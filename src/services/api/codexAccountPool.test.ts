@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { createHash } from 'crypto'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -1024,6 +1025,147 @@ describe('codexAccountPool appendAccount', () => {
     const updated = getPoolStatus().accounts.find((account) => account.accountId === 'vault-account')
     expect(updated?.source).toBe('vault')
     expect(updated?.vaultFilePath).toBe('/tmp/vault/accounts/78c.json')
+  })
+})
+
+describe('loadVaultAccounts correlates a terminal verdict with the token it names', () => {
+  // Deliberately not a real account id: these tests drive the vault WRITE path,
+  // so a future regression in the temp-path seam must not be able to aim at a
+  // profile that exists on the operator's machine.
+  const ACCOUNT_ID = '00000000-0000-4000-8000-00000000fake'
+  const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
+
+  function writeProfile(
+    dir: string,
+    refresh: Record<string, unknown> | undefined,
+    refreshToken = 'current-refresh-token',
+  ): void {
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${ACCOUNT_ID}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: 'access',
+          refresh_token: refreshToken,
+          account_id: ACCOUNT_ID,
+          expires_at: Date.now() + 8 * 24 * 3600_000,
+        },
+        last_refresh: new Date().toISOString(),
+        alias: 'bluesky',
+        ...(refresh ? { refresh } : {}),
+      }),
+      'utf-8',
+    )
+  }
+
+  // The reported bug: a login replaces the refresh token but the preserved
+  // verdict still names the old one, so the fresh credential loaded as dead.
+  test('ignores a reauth verdict that names a token the profile no longer holds', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+    writeProfile(dir, {
+      state: 'reauth_required',
+      refresh_token_hash: sha256('an-older-revoked-token'),
+      marked_at: '2026-07-15T16:16:47.998Z',
+      reason: 'refresh_token_invalidated',
+    })
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0]?.status).toBe('healthy')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('keeps a reauth verdict that names the token the profile still holds', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+    writeProfile(dir, {
+      state: 'reauth_required',
+      refresh_token_hash: sha256('current-refresh-token'),
+      marked_at: '2026-07-02T22:03:59.839Z',
+      reason: 'http_401',
+    })
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts[0]?.status).toBe('dead')
+    expect(accounts[0]?.statusReason).toBe('auth_dead')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  // Fail closed: an uncorrelatable verdict must not resurrect the account, but
+  // must not strand it either. Quarantine hands it to the probe.
+  test('quarantines rather than resurrects a verdict with no usable hash', () => {
+    for (const badHash of [undefined, 'not-a-sha256', '', sha256('x').slice(0, 60)]) {
+      const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+      writeProfile(dir, {
+        state: 'reauth_required',
+        ...(badHash === undefined ? {} : { refresh_token_hash: badHash }),
+        marked_at: '2026-07-15T16:16:47.998Z',
+        reason: 'refresh_token_invalidated',
+      })
+
+      const accounts = loadVaultAccountsForTest(dir)
+      expect(accounts[0]?.status).toBe('quarantined')
+      expect(accounts[0]?.statusReason).toBe('probe_pending_transport')
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a login over a marked profile clears the verdict and loads healthy', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+    writeProfile(
+      dir,
+      {
+        state: 'reauth_required',
+        refresh_token_hash: sha256('old-refresh-token'),
+        marked_at: '2026-07-15T16:16:47.998Z',
+        reason: 'refresh_token_invalidated',
+      },
+      'old-refresh-token',
+    )
+    const filePath = join(dir, 'accounts', `${ACCOUNT_ID}.json`)
+
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: 'brand-new-access',
+        refreshToken: 'brand-new-refresh',
+        accountId: ACCOUNT_ID,
+        alias: 'bluesky',
+        expiresAt: Date.now() + 10 * 24 * 3600_000,
+      },
+      { writer: 'test.persistCodexLogin', filePath },
+    )
+
+    expect(saved?.metadataAction).toBe('preserved')
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf-8'))
+    expect(onDisk.refresh).toEqual({ state: 'idle' })
+    expect(onDisk.alias).toBe('bluesky')
+
+    expect(loadVaultAccountsForTest(dir)[0]?.status).toBe('healthy')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  // The write must stay beside its target: when `filePath` points somewhere the
+  // configured vault does not cover, the old code created its temp file in the
+  // real vault and then renamed across directories, which failed outright when
+  // the target directory did not exist yet.
+  test('saveCodexTokenToVault writes into a target directory it must create', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-seam-'))
+    const filePath = join(dir, 'accounts', `${ACCOUNT_ID}.json`)
+
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        accountId: ACCOUNT_ID,
+      },
+      { writer: 'test.seam', filePath },
+    )
+
+    expect(saved?.filePath).toBe(filePath)
+    expect(saved?.metadataAction).toBe('created')
+    expect(JSON.parse(readFileSync(filePath, 'utf-8')).tokens.access_token).toBe('access')
+    expect(readdirSync(join(dir, 'accounts')).filter((f) => f.endsWith('.tmp'))).toHaveLength(0)
+    rmSync(dir, { recursive: true, force: true })
   })
 })
 
