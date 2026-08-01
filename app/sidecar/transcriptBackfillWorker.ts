@@ -246,7 +246,7 @@ function buildBoundedFrames(
       sessionId: appSessionId,
       requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
       code: 'internal_error',
-      message: `Restored history was truncated to ${retained.length} recent events.`,
+      message: `Only the ${retained.length} most recent messages are shown.`,
       retryable: false,
     })
   }

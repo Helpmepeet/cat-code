@@ -36,14 +36,14 @@ This is that idiom on our socket.
   before any live event — single-socket ordering, no sequencing machinery
   (`sidecarServer.ts` `sendHistoryReplay`).
 - **Cap + truncation:** the NEWEST contiguous tail is kept under BOTH
-  `MAX_HISTORY_REPLAY_FRAMES` (400) and `MAX_HISTORY_REPLAY_BYTES` (4 MiB)
+  `MAX_HISTORY_REPLAY_FRAMES` (4,000) and `MAX_HISTORY_REPLAY_BYTES` (4 MiB)
   (`app/shared/limits.ts`); stop-not-skip, so never a mid-history hole. Any omission emits
   the boundary error frame `requestId: 'catcode.history-truncated'`
   (`HISTORY_REPLAY_TRUNCATION_REQUEST_ID`, protocol.ts) BEFORE the tail — the exact
   `replayBuffer.ts` truncation idiom, so a capped replay is visibly lossy, never silent.
 - **Reload alignment (operator-held seam):** both caps sit STRICTLY below main's per-session
-  replay-buffer budgets (512 frames / 8 MiB, `app/main/replayBuffer.ts`), with headroom for
-  ready/C3/early live frames, so a renderer reload replays the SAME history from main's
+  replay-buffer budgets (8,000 frames / 8 MiB, `app/main/replayBuffer.ts`), with headroom for
+  early live frames, so a renderer reload replays the SAME history from main's
   buffer. Enforced by `app/main/historyReplayReload.test.ts` (invariant + an at-cap
   functional pass through the real `AttachmentGate` + `FrameReplayBuffer`); byte accounting
   matches the buffer's (serialized UTF-8 JSON of the whole frame).

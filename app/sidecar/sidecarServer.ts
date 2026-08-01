@@ -656,7 +656,7 @@ export class SidecarServer {
         connection,
         HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
         'internal_error',
-        'Earlier restored-session history was omitted because it exceeded the replay retention limit.',
+        `Only the ${retained.length} most recent messages are shown.`,
         false,
       )
     }

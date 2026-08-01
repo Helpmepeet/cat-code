@@ -74,8 +74,6 @@ export const DEFAULT_MAX_BUFFERED_FRAMES = 8_000
 export const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024
 
 const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
-const REPLAY_TRUNCATION_MESSAGE =
-  'Earlier session events were omitted because the renderer replay buffer reached its retention limit.'
 
 type FrameRetention = 'head' | 'sticky' | 'ring'
 
@@ -243,7 +241,9 @@ export class FrameReplayBuffer {
     const frames: ServerFrame[] = []
     if (entry.ready) frames.push(entry.ready)
     frames.push(...entry.sticky.values())
-    if (entry.truncated) frames.push(replayTruncationFrame(sessionId))
+    if (entry.truncated) {
+      frames.push(replayTruncationFrame(sessionId, entry.recent.length))
+    }
     frames.push(...entry.recent)
     return frames
   }
@@ -268,14 +268,17 @@ export function isReplayTruncationFrame(
   )
 }
 
-function replayTruncationFrame(sessionId: SessionId): ServerFrame {
+function replayTruncationFrame(
+  sessionId: SessionId,
+  retained: number,
+): ServerFrame {
   return {
     kind: 'error',
     protocolVersion: PROTOCOL_VERSION,
     sessionId,
     requestId: REPLAY_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
-    message: REPLAY_TRUNCATION_MESSAGE,
+    message: `Only the ${retained} most recent messages are shown.`,
     retryable: false,
   }
 }

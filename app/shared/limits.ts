@@ -77,8 +77,23 @@ export const MAX_QUESTION_ANSWER_CHARS = 4_096
  * The ready head and the once-per-attach snapshots no longer consume any of
  * that headroom: they are `head`/`sticky` in the buffer's retention table and
  * sit outside its budgets entirely.
+ *
+ * The FRAME count is sized so the BYTE budget is what binds, the same reasoning
+ * `DEFAULT_MAX_BUFFERED_FRAMES` was re-sized under (replayBuffer.ts). 400 dated
+ * from 2026-07-05, when the buffer was still 512 and 400 was simply "below it
+ * with headroom"; raising the buffer to 8,000 on 2026-07-27 left this one
+ * behind. Measured over the 142 conversation-bearing transcripts in this repo's
+ * store, 400 truncated 18 of them and the frame cap bound EVERY time while the
+ * byte cap bound none: the worst case dropped 645 of 1,045 messages (62%) while
+ * holding 2.1 MiB against a 4 MiB budget. Truncation reaches zero at ~2,000
+ * frames, above which per-message size (p50 1.9 KB, p90 3.7 KB) makes 4 MiB the
+ * binding cap at roughly 1,100-2,200 messages. 4,000 clears that crossover with
+ * margin and still leaves half of main's ring free for early live frames.
+ *
+ * The BYTE cap stays at 4 MiB: no measured session exceeded 2.7 MiB, and memory
+ * is the thing worth bounding.
  */
-export const MAX_HISTORY_REPLAY_FRAMES = 400
+export const MAX_HISTORY_REPLAY_FRAMES = 4_000
 export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
 
 /**
