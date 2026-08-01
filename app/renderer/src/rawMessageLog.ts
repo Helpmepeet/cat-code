@@ -2,7 +2,16 @@ import type { SDKMessage } from '@cat-code/engine/sdk'
 import type { ServerFrame, SessionId } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
 
-export const DEFAULT_MAX_RAW_MESSAGES = 512
+/**
+ * Sized so the BYTE budget below is what binds, the same correction
+ * `DEFAULT_MAX_BUFFERED_FRAMES` took (app/main/replayBuffer.ts) and
+ * `MAX_HISTORY_REPLAY_FRAMES` took after it. 512 was the third copy of the
+ * P1-0 walking-skeleton number and truncated real sessions at roughly a
+ * quarter of their length while the byte budget sat nearly empty. Raising the
+ * count does NOT raise this store's memory ceiling: 8 MiB already bounded it,
+ * and the count only ever cut retention short of that.
+ */
+export const DEFAULT_MAX_RAW_MESSAGES = 8_000
 /**
  * Per-session raw-message retention budget, measured as serialized UTF-8 JSON.
  * Oldest messages are evicted until both this and the count cap hold; an

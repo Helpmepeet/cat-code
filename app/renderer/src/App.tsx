@@ -3414,7 +3414,14 @@ export function SessionPane({
     el.scrollTop = el.scrollHeight
     setAtBottom(true)
   }, [activeSessionId])
-  const contentSignature = `${activeLog.messages.length}:${partialCount}`
+  // Derived from the RENDERED transcript, never from `activeLog`: the raw log is
+  // capped per session, so once it fills, `messages.length` pins at the cap and
+  // any message that does not also move `partialCount` yields an identical
+  // signature, silently stranding the pane above the newest row.
+  const renderedRowCount = activeSessionId
+    ? (transcript.sessions[activeSessionId]?.rows.length ?? 0)
+    : 0
+  const contentSignature = `${renderedRowCount}:${partialCount}`
   // P4-24: context-window fullness for the composer donut. The prototype's
   // ContextChip is always on (`Surfaces.jsx:471-473`), so `selectContextUsage`
   // always returns — real result-frame usage once a turn provides it, a 0% gauge
@@ -3760,12 +3767,6 @@ export function SessionPane({
 
       {transportError ? (
         <div className="text-sm text-tone-danger">{transportError}</div>
-      ) : null}
-
-      {activeLog.truncated ? (
-        <div className="text-sm text-tone-warn">
-          Raw message history was truncated to the renderer retention budget.
-        </div>
       ) : null}
 
       {/* CC-16 — the parked prompt is the only sign the message still exists:

@@ -1465,12 +1465,30 @@ test('a truncated transcript is styled as a warning, with a tone the theme actua
   )
 
   expect(html).toContain('Earlier restored history was omitted.')
-  expect(html).toContain('Raw message history was truncated')
   expect(html).not.toContain('tone-warning')
   // The trailing delimiters matter: `text-tone-warning` contains `text-tone-warn`,
   // so a bare substring check would pass on the broken class too.
   expect(html).toContain('text-tone-warn"')
   expect(html).toContain('border-tone-warn ')
+  // A full raw-message log is internal bookkeeping the user cannot see: the
+  // rendered transcript comes from `transcript`, not `activeLog`. The warning
+  // that used to sit here announced a loss with no visible content behind it.
+  expect(html).not.toContain('Raw message history')
+})
+
+test('the autoscroll signature tracks the RENDERED transcript, not the capped raw log', () => {
+  // `activeLog` is bounded by DEFAULT_MAX_RAW_MESSAGES. Deriving the signature
+  // from it meant that, past the cap, `messages.length` pinned and any message
+  // that did not also move `partialCount` produced an identical signature, so
+  // the follow-to-bottom effect never re-ran. SSR cannot observe an effect, so
+  // this is pinned at the source (the P4-38 / userVisibleText.test.ts precedent).
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const contentSignature =')
+  expect(start).toBeGreaterThan(-1)
+  const line = source.slice(start, source.indexOf('\n', start))
+
+  expect(line).not.toContain('activeLog')
+  expect(line).toContain('renderedRowCount')
 })
 
 test('a parked prompt is visible, and the send arrow says so', () => {
