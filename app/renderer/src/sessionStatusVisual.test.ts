@@ -60,3 +60,12 @@ describe('statusChipTone (TabTone → shared chip Tone — the second tone syste
     expect(statusChipTone('dead')).toBe('default')
   })
 })
+
+test('a previewed pane resolves through the ONE shared vocabulary', () => {
+  // It used to be hand-built inline at the TabBar call site (App.tsx) — the
+  // fifth drifted copy of the mapping this module exists to centralize.
+  expect(sessionStatusVisual('preview', false, true)).toEqual({
+    tone: 'busy',
+    label: 'preview',
+  })
+})

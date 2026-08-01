@@ -59,6 +59,7 @@ import {
   reduceRosterBootstrapState,
 } from './rosterBootstrap.js'
 import { deriveTabVisualState } from './tabStatus.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
@@ -957,8 +958,10 @@ export function App() {
           descriptor,
           visual: previewOnly
             ? {
-                label: 'preview',
-                tone: 'busy' as const,
+                // Label + tone come from the ONE shared vocabulary
+                // (`sessionStatusVisual`), never hand-built here; only the two
+                // tab-specific booleans are set locally.
+                ...sessionStatusVisual('preview', false, true),
                 restartable: false,
                 needsAttention: false,
               }

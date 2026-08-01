@@ -389,6 +389,97 @@ test('P4-18b: a bash card tints an error line and expands failed results', () =>
   expect(html).toContain('text-tone-danger')
 })
 
+// Quote-free slice of ResumeAgent's real ack: SSR escapes the `"@Ramanujan"`
+// the engine's wording puts around the name, so assert on the rest of it.
+const RESUME_ACK = 'in the background. Previous context: ~105k / 372k tokens (28%).'
+
+test('ack card: a resumed agent shows its outcome COLLAPSED, never as raw JSON', () => {
+  const html = render(
+    toolRow({
+      toolName: 'ResumeAgent',
+      toolFamily: 'agent-control',
+      input: { agentId: '@Ramanujan', prompt: 'measure the card height' },
+      status: 'success',
+      result: {
+        isError: false,
+        content: JSON.stringify({
+          success: true,
+          message: `Resumed "@Ramanujan" ${RESUME_ACK}`,
+        }),
+        diff: null,
+      },
+    }),
+  )
+
+  // The whole point: no expansion needed, and none of the JSON scaffolding.
+  expect(html).toContain(RESUME_ACK)
+  expect(html).not.toContain('"success"')
+  expect(html).toContain('resume @Ramanujan') // target from the real agentId
+  expect(html).toContain('◇') // hollow mark against the spawn card's ◆
+  expect(html).toContain('text-[#a78bfa]')
+})
+
+test('ack card: a FAILED ack tints the peek while the header still reports the call', () => {
+  const html = render(
+    toolRow({
+      toolName: 'ResumeAgent',
+      toolFamily: 'agent-control',
+      input: { agentId: '@Ramanujon', prompt: 'go' },
+      // The tool call succeeded; the operation it performed did not.
+      status: 'success',
+      result: {
+        isError: false,
+        content: JSON.stringify({
+          success: false,
+          message: 'No subagent found for "@Ramanujon".',
+        }),
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('No subagent found')
+  expect(html).toContain('text-tone-danger') // ack tone, from `success:false`
+  expect(html).toContain('done') // call status, unchanged and still true
+  expect(html).not.toContain('failed')
+})
+
+test('ack card: the expanded body labels the result and the prompt that was sent', () => {
+  const html = render(
+    toolRow({
+      toolName: 'ResumeAgent',
+      toolFamily: 'agent-control',
+      input: { agentId: '@Ramanujan', prompt: 'measure the card height' },
+      // An errored row is the default-expanded case, so SSR can see the body.
+      status: 'error',
+      result: {
+        isError: true,
+        content: JSON.stringify({ success: false, message: 'Failed to resume.' }),
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('Result')
+  expect(html).toContain('Failed to resume.')
+  expect(html).toContain('Sent')
+  expect(html).toContain('measure the card height')
+})
+
+test('ack card: a non-ack result keeps its existing rendering untouched', () => {
+  const html = render(
+    toolRow({
+      toolName: 'SomeFutureTool',
+      toolFamily: 'other',
+      status: 'error',
+      result: { isError: true, content: 'plain stdout, not JSON', diff: null },
+    }),
+  )
+
+  expect(html).toContain('plain stdout, not JSON')
+  expect(html).toContain('Tool') // still the neutral family
+})
+
 test('P4-18b: an edit card renders a dual-gutter diff with +adds/−dels counts', () => {
   const diff: ToolDiffProjection = {
     filePath: '/repo/app.ts',
@@ -446,6 +537,7 @@ test('P4-18b: each tool family renders its own glyph + word header', () => {
     { family: 'lsp', word: 'LSP' },
     { family: 'skill', word: 'Skill' },
     { family: 'imagegen', word: 'Image' },
+    { family: 'agent-control', word: 'Agent' },
     { family: 'other', word: 'Tool' },
   ]
   for (const { family, word } of families) {

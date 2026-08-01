@@ -100,6 +100,15 @@ export type ToolFamily =
   | 'lsp'
   | 'skill'
   | 'agent'
+  /**
+   * Tools that act on an agent that ALREADY exists (resume, message) as opposed
+   * to spawning one. Deliberately NOT `'agent'`: `ToolCard` routes that family
+   * to `AgentToolCard`, whose body reads spawn-shaped input
+   * (`subagent_type`/`description`), which these tools do not carry. Keep the
+   * dispatch there an exact equality test so this family keeps falling through
+   * to the generic card.
+   */
+  | 'agent-control'
   | 'imagegen'
   | 'other'
 
@@ -1234,6 +1243,11 @@ function deriveToolFamily(toolName: string): ToolFamily {
     case 'Agent':
     case 'Task':
       return 'agent'
+    // `RESUME_AGENT_TOOL_NAME` (`src/tools/ResumeAgentTool/constants.ts:1`) and
+    // `SEND_MESSAGE_TOOL_NAME` (`src/tools/SendMessageTool/constants.ts:1`).
+    case 'ResumeAgent':
+    case 'SendMessage':
+      return 'agent-control'
     case 'GenerateImage':
       return 'imagegen'
     default:

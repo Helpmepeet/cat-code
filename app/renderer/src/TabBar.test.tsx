@@ -177,3 +177,39 @@ test('tabLabel prefers title, falls back to cwd basename, then a default', () =>
     'New session',
   )
 })
+
+test('the title outranks the status chip it sits beside', () => {
+  // The chip QUALIFIES the tab; the title IDENTIFIES it. A bar of preview tabs
+  // used to read as PREVIEW PREVIEW PREVIEW because the chip ran saturated and
+  // uppercase against a #52525b title.
+  const html = render(
+    [tab('a', { label: 'preview', tone: 'busy' }, { title: 'say hi' })],
+    null,
+  )
+
+  expect(html).toContain('say hi')
+  expect(html).toContain('preview')
+  // Chip: quiet, plain, unshouted.
+  expect(html).toContain('text-[10px] text-text-faint')
+  expect(html).not.toContain('uppercase tracking-wide')
+  // Inactive title sits above the chip, not at the ghost token.
+  expect(html).toContain('text-text-subtle')
+})
+
+test('the hidden close button reserves no width until the tab is hovered', () => {
+  // `opacity-0` alone does not free layout: the invisible × used to hold 18px on
+  // every tab, narrowing the very title it was hidden to protect.
+  const html = render([tab('a')], 'a')
+
+  expect(html).toContain('w-0')
+  expect(html).toContain('group-hover:w-[18px]')
+  expect(html).toContain('focus-visible:w-[18px]') // still keyboard-reachable
+})
+
+test('tabs grow into spare bar width but never shrink below the crowded case', () => {
+  const html = render([tab('a'), tab('b')], 'a')
+
+  expect(html).toContain('grow')
+  expect(html).toContain('shrink-0') // crowded behaviour unchanged: scroll, not squeeze
+  expect(html).toContain('max-w-[176px]')
+})

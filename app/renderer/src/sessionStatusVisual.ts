@@ -35,10 +35,16 @@ export type SessionStatusVisual = {
  * and the switch only sees the four real descriptor statuses.
  */
 export function sessionStatusVisual(
-  status: SessionDescriptor['status'] | 'history',
+  status: SessionDescriptor['status'] | 'history' | 'preview',
   restorable: boolean,
   inRegistry: boolean,
 ): SessionStatusVisual {
+  // A PREVIEWED pane (`shell.previews`, never promoted to a real tab) is a
+  // shell-layout fact rather than a control-plane status, which is why it used
+  // to be hand-built inline at the TabBar call site — the exact fifth drifted
+  // copy this module exists to prevent. It lands here so one module owns every
+  // label a session surface can print.
+  if (status === 'preview') return { tone: 'busy', label: 'preview' }
   // A terminal-history row (no registry row) is a not-live session — `dead`
   // tone, but its distinct `history` label reads apart from a restorable row's
   // `closed`/`crashed` and a live row's no-chip.

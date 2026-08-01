@@ -139,6 +139,12 @@ export function WorkspaceLayout({
         {panels.map((panel, index) => {
           const width = layout.widths[index] ?? 100 / panels.length
           const active = index === layout.activeIndex
+          // Per-panel chrome answers "WHICH panel", so it only means anything
+          // once there is more than one. `PanelHeader` below already gates on
+          // this; the focused-panel ring did not, so an unsplit workspace drew
+          // an accent hairline around the whole app to distinguish it from
+          // nothing.
+          const isSplit = panels.length > 1
           const next = panels[index + 1]
           return (
             <Fragment key={panel.sessionId}>
@@ -151,14 +157,14 @@ export function WorkspaceLayout({
                 <section
                   className={
                     'relative flex min-h-0 flex-1 flex-col overflow-hidden ' +
-                    (active
+                    (active && isSplit
                       ? 'bg-app-bg ring-1 ring-inset ring-accent/35'
                       : 'bg-app-bg')
                   }
                   aria-label={panelAriaLabel(panel, index, active)}
                   onMouseDown={() => onFocusPanel(index, panel.sessionId)}
                 >
-                  {panels.length > 1 ? (
+                  {isSplit ? (
                     <PanelHeader
                       active={active}
                       index={index}

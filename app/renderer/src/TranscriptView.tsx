@@ -78,6 +78,7 @@ import {
   AGENT_TYPE_TONE_CLASS,
 } from './agentChromeModel.js'
 import { ToolInspector } from './ToolInspector.js'
+import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
   findNestedToolUseRow,
   resolveToolCardExpanded,
@@ -756,6 +757,13 @@ const FAMILY_STYLE: Record<
   lsp: { mark: '◈', word: 'LSP', color: 'text-[#f87171]' },
   skill: { mark: '✦', word: 'Skill', color: 'text-[#5eead4]' },
   agent: { mark: '◆', word: 'Agent', color: 'text-accent' },
+  // Same WORD as the spawn family, hollow mark against its filled one: ◆ creates
+  // an agent, ◇ acts on one that already exists. The hue is the prototype's own
+  // agent-family violet (`Messages.jsx` FE_FAMC `agent:'#a78bfa'`), which this
+  // app left unused by tokenizing its agent family to `text-accent` — an
+  // existing palette hue, not a new one. Literal class string, never
+  // interpolated (the dynamic-class trap this map's header documents).
+  'agent-control': { mark: '◇', word: 'Agent', color: 'text-[#a78bfa]' },
   imagegen: { mark: '◰', word: 'Image', color: 'text-[#e879f9]' },
   other: { mark: '•', word: 'Tool', color: 'text-text-muted' },
 }
@@ -817,6 +825,15 @@ function deriveTarget(row: ToolUseNestedRow): string {
       // The Agent card's one-line target is the task, from the REAL tool input
       // (`Agent`/`Task` carry `description`/`prompt` — messageActions.tsx:107-114).
       return str('description') ?? str('prompt') ?? row.toolName
+    case 'agent-control': {
+      // The verb plus WHO it acted on, from each tool's real recipient key:
+      // `agentId` (`ResumeAgentTool.tsx:25`) and `to` (`SendMessageTool.ts:91`).
+      const recipient = str('agentId') ?? str('to')
+      if (recipient === null) return row.toolName
+      return row.toolName === 'ResumeAgent'
+        ? `resume ${recipient}`
+        : `message ${recipient}`
+    }
     default:
       return row.toolName
   }
@@ -951,6 +968,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
 
   const content = row.result?.content ?? ''
   const isImageDone = row.toolFamily === 'imagegen' && row.status === 'success'
+  const ack = parseToolAck(content)
   return (
     <div className="w-full">
       <ToolCardShell
@@ -960,7 +978,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         sub={deriveSub(row)}
         defaultExpanded={row.status === 'error' || isImageDone}
         collapsedExtra={
-          row.toolFamily === 'bash' && content.length > 0 ? (
+          ack !== null ? (
+            <AckPeek ack={ack} />
+          ) : row.toolFamily === 'bash' && content.length > 0 ? (
             <BashTailPeek content={content} />
           ) : null
         }
@@ -1176,6 +1196,10 @@ function ToolCardBody({
   if (row.result?.diff) return <DiffView diff={row.result.diff} />
 
   const errorTone = row.result?.isError === true
+  // Only an EXACT ack replaces the body: a richer object's other fields would
+  // vanish with no way to notice they were there (`toolAck.ts` `exact`).
+  const ack = parseToolAck(content)
+  if (ack !== null && ack.exact) return <AckBody ack={ack} input={row.input} />
   if (!row.result) {
     // No correlated result yet: show the real input so a running/queued tool is
     // legible rather than blank.
@@ -1290,6 +1314,84 @@ function BashBody({
 }
 
 /** Collapsed tail-peek: the last few output lines, faded (prototype bash peek). */
+/**
+ * The collapsed one-liner `FrameEShell` reserved its `collapsedExtra` slot for
+ * and the prototype never built: "bash tail peek, agent one-liner"
+ * (`Messages.jsx:93`). Same band, same 11px mono as `BashTailPeek` below, so an
+ * ack card and a bash card read as one species at rest.
+ *
+ * Clipped to one line, never wrapped: a peek must not change the card's height
+ * with the length of a sentence the operator did not choose. The full text is
+ * one click away in the body.
+ *
+ * Tone comes from the ack's own `ok`, NOT the row status, because those disagree
+ * exactly when it matters: a failed resume is a successful tool call, and the
+ * header's `done` is a true statement about the call. No tick or cross glyph
+ * rides along, for the reason `TaskNotificationBox` states: the engine's
+ * sentence already ends in its own outcome, so a glyph prints it twice.
+ */
+function AckPeek({ ack }: { ack: ToolAck }) {
+  return (
+    <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
+      <span
+        className={`block truncate font-mono text-[11px] leading-relaxed ${
+          ack.ok ? 'text-text-subtle/80' : 'text-tone-danger'
+        }`}
+      >
+        {ack.message}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * The expanded ack body, in `AgentCompletionBody`'s labelled-section grammar
+ * (the prototype's `AgentTranscriptCard` result grammar, `AgentIdentity.jsx:225`).
+ *
+ * `Result` is the same sentence the peek clipped, now wrapped in full. `Sent` is
+ * the prompt that went to the agent, which no card surfaced anywhere before —
+ * it is the one thing expanding ADDS once the outcome is already visible
+ * collapsed. Absent for an input with no prompt, rather than an empty label.
+ */
+function AckBody({
+  ack,
+  input,
+}: {
+  ack: ToolAck
+  input: Record<string, unknown>
+}) {
+  // `prompt` is ResumeAgent's (`ResumeAgentTool.tsx:30`); `message` is
+  // SendMessage's, which is a string OR a structured object — only the string
+  // form is renderable prose here.
+  const sent = [input.prompt, input.message].find(
+    (value): value is string => typeof value === 'string' && value.length > 0,
+  )
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-subtle">
+        Result
+      </span>
+      <div
+        className={`whitespace-pre-wrap break-words text-xs leading-relaxed ${
+          ack.ok ? 'text-text-muted' : 'text-tone-danger'
+        }`}
+      >
+        {ack.message}
+      </div>
+      {sent !== undefined ? (
+        <>
+          <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-subtle">
+            Sent
+          </span>
+          <div className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-text-muted">
+            {sent}
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 function BashTailPeek({ content }: { content: string }) {
   const lines = content.split('\n').filter(line => line.length > 0)
   if (lines.length === 0) return null

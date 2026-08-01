@@ -19,7 +19,10 @@ import {
 // branches on, and real OAuth tokens are not available in a test process. The
 // mock passes through to the real implementations whenever `tier` is null, so a
 // leaked module registration cannot change behavior for other suites.
-let tier: 'max' | null = null
+// `'codex'` selects the OTHER arm of getModelOptionsBase — the one a Codex
+// session takes, which offers Anthropic models as cross-provider rows so you can
+// switch before the first query.
+let tier: 'max' | 'codex' | null = null
 
 const previous = {
   override: getMainLoopModelOverride(),
@@ -50,12 +53,15 @@ beforeEach(async () => {
   await mock.module('src/utils/auth.js', () => ({
     ...actual,
     isClaudeAISubscriber: () =>
-      tier === null ? real.isClaudeAISubscriber() : true,
-    isMaxSubscriber: () => (tier === null ? real.isMaxSubscriber() : true),
+      tier === null ? real.isClaudeAISubscriber() : tier === 'max',
+    isMaxSubscriber: () =>
+      tier === null ? real.isMaxSubscriber() : tier === 'max',
     isTeamPremiumSubscriber: () =>
       tier === null ? real.isTeamPremiumSubscriber() : false,
-    isCodexSubscriber: () => (tier === null ? real.isCodexSubscriber() : false),
-    hasCodexTokens: () => (tier === null ? real.hasCodexTokens() : false),
+    isCodexSubscriber: () =>
+      tier === null ? real.isCodexSubscriber() : tier === 'codex',
+    hasCodexTokens: () =>
+      tier === null ? real.hasCodexTokens() : tier === 'codex',
     hasAnthropicCredentials: () =>
       tier === null ? real.hasAnthropicCredentials() : true,
   }))
@@ -171,5 +177,49 @@ describe('getModelOptions duplicate-row fallback', () => {
     expect(optionCoversModelSetting('opusplan', 'opusplan')).toBe(true)
     // The Default row (null) never covers a concrete setting.
     expect(optionCoversModelSetting(null, 'claude-sonnet-5')).toBe(false)
+  })
+})
+
+describe('1M-context rows and Sonnet 4.6', () => {
+  test('no roster row advertises "(1M context)" on first-party', async () => {
+    // Claude 5 frontier models already use the 1M window with no suffix
+    // (`modelUses1MContextByDefault`), so the suffix named a window identical to
+    // the plain row beside it and read as arbitrary next to Opus 5 and Fable 5,
+    // which are equally 1M and never carried it.
+    const { getModelOptions } = await import('./modelOptions.js')
+
+    for (const currentTier of ['max', 'codex'] as const) {
+      tier = currentTier
+      const options = getModelOptions(false)
+      expect(options.length).toBeGreaterThan(0)
+      expect(options.some(option => option.label.includes('(1M context)'))).toBe(
+        false,
+      )
+    }
+  })
+
+  test('Sonnet 4.6 is gone from the roster entirely', async () => {
+    const { getModelOptions } = await import('./modelOptions.js')
+
+    for (const currentTier of ['max', 'codex'] as const) {
+      tier = currentTier
+      const options = getModelOptions(false)
+      expect(options.some(option => option.label.includes('4.6'))).toBe(false)
+      expect(options.some(option => option.value === 'sonnet[1m]')).toBe(false)
+    }
+  })
+
+  test('the Codex arm still offers the Anthropic cross-provider rows', async () => {
+    // Removing the 1M row must not take the cross-provider block with it: this
+    // branch exists so you can switch provider before the first query.
+    const { getModelOptions } = await import('./modelOptions.js')
+    tier = 'codex'
+
+    const labels = getModelOptions(false).map(option => option.label)
+
+    expect(labels).toContain('Sonnet 5')
+    expect(labels).toContain('Opus 5')
+    expect(labels).toContain('Fable 5')
+    expect(labels).toContain('GPT-5.6 Sol')
   })
 })

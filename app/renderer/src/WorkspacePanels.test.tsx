@@ -157,3 +157,43 @@ function panel(
     content,
   }
 }
+
+test('the focused-panel ring is split-only, so one panel is not boxed in accent', () => {
+  // "Which panel has focus" has no other candidate when there is one panel, so
+  // the ring drew an accent hairline around the whole app for nothing. Same
+  // condition PanelHeader already applies to the rest of the per-panel chrome.
+  const alpha = descriptor('session-a', 'Alpha')
+  const beta = descriptor('session-b', 'Beta')
+
+  const render = (panelViews: WorkspacePanelView[], layout: WorkspaceLayoutState) =>
+    renderToStaticMarkup(
+      <WorkspaceLayout
+        layout={layout}
+        panels={panelViews}
+        sessions={[alpha, beta]}
+        notice={null}
+        onClosePanel={() => {}}
+        onFocusPanel={() => {}}
+        onSelectSession={() => {}}
+        onSplitPanel={() => {}}
+        onWidthsChange={() => {}}
+      />,
+    )
+
+  const single = render([panel(alpha, <div>Alpha transcript</div>)], {
+    panels: [{ sessionId: 'session-a' }],
+    widths: [100],
+    activeIndex: 0,
+  })
+  expect(single).not.toContain('ring-accent/35')
+
+  const split = render(
+    [panel(alpha, <div>Alpha transcript</div>), panel(beta, <div>Beta transcript</div>)],
+    {
+      panels: [{ sessionId: 'session-a' }, { sessionId: 'session-b' }],
+      widths: [50, 50],
+      activeIndex: 0,
+    },
+  )
+  expect(split).toContain('ring-accent/35')
+})

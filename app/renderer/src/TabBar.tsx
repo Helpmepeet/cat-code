@@ -252,7 +252,11 @@ function Tab({
     <div
       ref={ref}
       className={
-        'group relative flex min-w-[90px] max-w-[176px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-[rgba(255,255,255,0.05)] pl-3 pr-1.5 transition-colors ' +
+        // `grow shrink-0`: tabs SHARE leftover bar width up to the 176px cap, so
+        // a handful of sessions read in full instead of every title clipping
+        // against a fixed width with empty bar to the right. `shrink-0` keeps the
+        // crowded case exactly as it was — natural width, then horizontal scroll.
+        'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-[rgba(255,255,255,0.05)] pl-3 pr-1.5 transition-colors ' +
         (isActive ? 'bg-[rgba(255,255,255,0.05)]' : 'hover:bg-[rgba(255,255,255,0.025)]')
       }
       role="tab"
@@ -284,10 +288,14 @@ function Tab({
         <StatusDot tone={visual.tone} />
       )}
 
+      {/* The tab's IDENTITY, so it is the brightest thing on the tab. An
+          inactive title used to sit at `text-text-faint` (#52525b, the token
+          reserved for resting/ghost text) while the status chip beside it ran
+          saturated and uppercase — the qualifier out-shouting the name. */}
       <span
         className={
           'min-w-0 flex-1 truncate text-xs transition-colors ' +
-          (isActive ? 'text-text-primary' : 'text-text-faint')
+          (isActive ? 'text-text-primary' : 'text-text-subtle')
         }
       >
         {title}
@@ -337,8 +345,12 @@ function Tab({
         </button>
       ) : null}
 
+      {/* `opacity-0` alone does NOT free layout, so the invisible × used to
+          reserve its full 18px on every tab at rest, permanently narrowing the
+          title it was hidden to protect. Collapsing the WIDTH too gives that
+          space back until the tab is hovered or the button is keyboard-focused. */}
       <button
-        className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-all hover:bg-white/10 hover:text-text-primary group-hover:opacity-100"
+        className="flex h-[18px] w-0 shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-all hover:bg-white/10 hover:text-text-primary group-hover:w-[18px] group-hover:opacity-100 focus-visible:w-[18px] focus-visible:opacity-100"
         onClick={event => {
           event.stopPropagation()
           onClose(id)
@@ -354,21 +366,23 @@ function Tab({
 }
 
 /**
- * The status chip — a small text token in the tab's tone. Suppressed for a
- * plain healthy `ready` tab (a live tab needs no chip; the dot carries it) so
- * the bar stays quiet; shown for every non-nominal state.
+ * The status chip — a small text token QUALIFYING the tab, so it is quieter than
+ * the title it sits beside: plain weight at `text-text-faint`, no mono, no
+ * uppercase, no tone colour. The tone lives on the dot, which is the one thing
+ * that should carry colour here.
+ *
+ * It used to paint `font-mono uppercase tracking-wide` in a saturated tone
+ * colour against a `text-text-faint` title, which inverted the hierarchy: a row
+ * of preview tabs read as PREVIEW PREVIEW PREVIEW rather than as session names.
+ *
+ * Suppressed for a plain healthy `ready` tab (`tone === 'live'` is produced ONLY
+ * for a nominal ready tab — spawning is `warn`, every terminal state is `dead`),
+ * so a bar of healthy tabs carries no chips at all.
  */
 function StatusChip({ visual }: { visual: TabVisualState }) {
-  // A healthy live tab needs no chip (the dot carries it). `tone === 'live'` is
-  // produced ONLY for a nominal `ready` tab (spawning is `warn`, every terminal
-  // state is `dead`), so the tone alone is the "quiet, healthy" signal.
   if (visual.tone === 'live') return null
   return (
-    <span
-      className={`shrink-0 font-mono text-[10px] uppercase tracking-wide ${toneTextClass(visual.tone)}`}
-    >
-      {visual.label}
-    </span>
+    <span className="shrink-0 text-[10px] text-text-faint">{visual.label}</span>
   )
 }
 
@@ -398,19 +412,6 @@ function AttentionBadge() {
       <span className="h-1.5 w-1.5 rounded-full bg-accent" />
     </span>
   )
-}
-
-function toneTextClass(tone: TabTone): string {
-  switch (tone) {
-    case 'live':
-      return 'text-tone-good'
-    case 'busy':
-      return 'text-accent'
-    case 'warn':
-      return 'text-tone-warn'
-    case 'dead':
-      return 'text-tone-danger'
-  }
 }
 
 function toneDotClass(tone: TabTone): string {
