@@ -26,7 +26,11 @@ import { getModelStrings, resolveOverriddenModel } from './modelStrings.js'
 import { formatModelPricing, getOpus46CostTier } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
-import { getAPIProvider } from './providers.js'
+import {
+  getAPIProvider,
+  getConfiguredAnthropicProvider,
+  isFirstPartyAnthropicBaseUrl,
+} from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'
@@ -92,6 +96,14 @@ const RETIRED_CLAUDE_46_MODEL_REPLACEMENTS: Record<string, ModelName> = {
   'claude-opus-4-6': 'claude-opus-5',
 }
 
+function remapRetiredClaude46ModelById(model: ModelName): ModelName {
+  const base = model.trim().replace(/\[1m\]$/i, '')
+  // Do not resolve settings-based model overrides here: an override keyed by
+  // the retired ID must itself be migrated rather than hiding that ID.
+  const replacement = RETIRED_CLAUDE_46_MODEL_REPLACEMENTS[firstPartyNameToCanonical(base)]
+  return replacement ?? model
+}
+
 /**
  * Retire first-party Claude 4.6 model pins in favor of Claude 5.
  *
@@ -103,11 +115,44 @@ export function remapRetiredClaude46Model(model: ModelName): ModelName {
   if (getAPIProvider() !== 'firstParty') {
     return model
   }
-  const base = model.trim().replace(/\[1m\]$/i, '')
-  // Do not resolve settings-based model overrides here: an override keyed by
-  // the retired ID must itself be migrated rather than hiding that ID.
-  const replacement = RETIRED_CLAUDE_46_MODEL_REPLACEMENTS[firstPartyNameToCanonical(base)]
-  return replacement ?? model
+  return remapRetiredClaude46ModelById(model)
+}
+
+/**
+ * Provider-agnostic variant used only by the on-disk settings migration
+ * (migrateRetiredClaude46ModelsToClaude5.ts). A config-file migration is
+ * about what is stored on disk, not about which provider the current
+ * process happens to be routed through: runMigrations() runs at the
+ * Commander preAction hook, before setSessionProvider() ever settles the
+ * session provider for this launch, so getAPIProvider() at that point falls
+ * back to the *persisted* lastUsedProvider preference. Gating the migration
+ * on that made it a permanent no-op for anyone whose last session used
+ * Codex/OpenAI, since the migration's version bump still fires unconditionally
+ * and it never runs again.
+ *
+ * This still skips genuinely third-party-configured environments via
+ * getConfiguredAnthropicProvider(), which reads only the literal
+ * CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY env vars (never the persisted
+ * lastUsedProvider, so it isn't subject to the ordering problem above) —
+ * 3P Claude 5 availability may lag first-party, and a 3P-shaped pin (e.g. a
+ * Bedrock ARN containing "claude-opus-4-6") must not be rewritten to a bare
+ * id it can't route with.
+ *
+ * It also requires isFirstPartyAnthropicBaseUrl(): a custom ANTHROPIC_BASE_URL
+ * gateway can namespace ids (e.g. 'anthropic/claude-sonnet-4-6'), and the
+ * substring canonicalization that correctly resolves dated snapshots
+ * (claude-opus-4-6-20260101) would otherwise also match the retired id
+ * embedded in that namespaced string, silently dropping the gateway prefix
+ * the persisted value is written back with.
+ */
+export function remapRetiredClaude46ModelForMigration(model: ModelName): ModelName {
+  if (
+    getConfiguredAnthropicProvider() !== 'firstParty' ||
+    !isFirstPartyAnthropicBaseUrl()
+  ) {
+    return model
+  }
+  return remapRetiredClaude46ModelById(model)
 }
 
 /**

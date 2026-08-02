@@ -2139,7 +2139,7 @@ async function run(): Promise<CommanderCommand> {
     const defaultStartupModel = implicitStartupProvider === 'openai'
       ? 'gpt-5.6-terra'
       : getDefaultMainLoopModel();
-    const resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
+    let resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
     // A model chosen for THIS launch (--model, CAT_CODE_MODEL/ANTHROPIC_MODEL,
     // or the active agent) is a provider-selection event. A model that only
     // sits in a settings FILE is not: CLAUDE_CODE_USE_* outranks saved
@@ -2156,6 +2156,15 @@ async function run(): Promise<CommanderCommand> {
         implicitStartupProvider,
       ),
     );
+    // Re-resolve now that the session provider has settled. parseUserSpecifiedModel's
+    // alias branches (getDefaultOpusModel/getDefaultSonnetModel) and its legacy-pin
+    // remap read getAPIProvider() internally, so a launch that flips the provider
+    // (e.g. an explicit Claude --model while lastUsedProvider was 'openai') would
+    // otherwise leave resolvedInitialModel resolved under the stale pre-flip
+    // provider for every downstream consumer (SessionStart hooks, the deprecation
+    // warning, the fast-mode default, the advisor gate) even though the actual
+    // request re-resolves the alias correctly under the settled provider.
+    resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
 
     // Provider-sensitive tools must be selected only after the startup model has
     // resolved the session provider. In particular, OpenAI uses Apply_patch's

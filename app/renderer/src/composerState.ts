@@ -553,6 +553,31 @@ export function resolvePendingSubmit(connection: {
 }
 
 /**
+ * Bug fix (CC-16/stop) — Stop must not let the CC-16 drain treat its own
+ * abort as a natural turn end. The abort's `turn.status(activeTurn:false)`
+ * flips the connection snapshot to `{status:'ready', inputEnabled:true}` —
+ * BYTE-IDENTICAL to a natural turn end, since `resolvePendingSubmit` above
+ * reads only `status`/`inputEnabled` and cannot tell the two apart. Left
+ * alone, the drain effect (`App.tsx`) fires the parked prompt as a fresh
+ * turn the instant that frame lands.
+ *
+ * `stopTurn` (`App.tsx`, inside `SessionPane`) is only reachable while the
+ * session is `generating` (`ready` + `inputEnabled:false`), so a prompt
+ * parked for THIS session at the moment Stop is clicked was queued because
+ * of the very turn Stop is cancelling — never a coincidence from some other
+ * park. This lets Stop resolve the ambiguity itself, synchronously, before
+ * the abort round-trip can produce the frame that would otherwise re-arm the
+ * drain: the caller releases the parked prompt back to the composer (via the
+ * existing `releasePendingSubmit` path) up front, so by the time
+ * `turn.status(false)` arrives there is nothing left for the drain to find.
+ */
+export function shouldReleasePendingSubmitOnStop(
+  pendingSubmit: string | null,
+): boolean {
+  return pendingSubmit !== null
+}
+
+/**
  * Shown when a parked prompt is released — the text is visibly back, not gone.
  * Cause-free on purpose: a park is released both by a spawn that never
  * connected and by a session that dies while a queued prompt waits out its
@@ -571,4 +596,45 @@ export function restoreDraftWithPending(
   pending: string,
 ): string {
   return draft.length === 0 ? pending : `${pending}\n${draft}`
+}
+
+// ── Per-session transport error ──────────────────────────────────────────────
+
+/**
+ * Bug fix — a submit/verb/permission-response failure (or a released parked
+ * prompt) used to set ONE app-wide error string handed to every `SessionPane`
+ * alike, so a background session's failure painted red text under whichever
+ * session the user was actually looking at. Keyed per session exactly like
+ * `PendingSubmitState`, so each pane only ever shows its OWN outcome.
+ */
+export type TransportErrorState = Record<SessionId, string>
+
+export function createTransportErrorState(): TransportErrorState {
+  return {}
+}
+
+export function selectTransportError(
+  state: TransportErrorState,
+  sessionId: SessionId | null,
+): string | null {
+  if (!sessionId) return null
+  return state[sessionId] ?? null
+}
+
+export function reduceTransportErrorSet(
+  state: TransportErrorState,
+  sessionId: SessionId,
+  message: string,
+): TransportErrorState {
+  return { ...state, [sessionId]: message }
+}
+
+export function reduceTransportErrorCleared(
+  state: TransportErrorState,
+  sessionId: SessionId,
+): TransportErrorState {
+  if (!(sessionId in state)) return state
+  const next = { ...state }
+  delete next[sessionId]
+  return next
 }

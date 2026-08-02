@@ -170,6 +170,28 @@ export function reduceHiddenWorkspacesCleared(
 }
 
 /**
+ * Un-hide exactly the groups THIS render is offering back — the restore
+ * button's own `hidden` list from `selectVisibleWorkspaceGroups`, never the
+ * whole persisted list. The button's label names `groups.length`; without
+ * this, a search-narrowed render could read "Show 1 hidden project" while its
+ * click cleared every hidden project, including ones the current view never
+ * enumerated (a search filter, `isSidebarVisibleRow`, or a pin can each drop a
+ * hidden project out of one render's group list without un-hiding it).
+ * Generic over `{ cwd }` (the `selectVisibleWorkspaceGroups` idiom). Returns
+ * the SAME reference on a no-op, folding `reduceWorkspaceShown`'s own no-op
+ * guarantee across every group named.
+ */
+export function reduceHiddenWorkspacesShown<G extends { cwd: string }>(
+  hidden: HiddenWorkspaces,
+  groups: readonly G[],
+): HiddenWorkspaces {
+  return groups.reduce(
+    (next, group) => reduceWorkspaceShown(next, group.cwd),
+    hidden,
+  )
+}
+
+/**
  * Split the rendered group sequence into what the rail shows and what it is
  * holding back, preserving the caller's order in both.
  *

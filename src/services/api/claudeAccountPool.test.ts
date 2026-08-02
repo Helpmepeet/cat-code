@@ -1,9 +1,19 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+
+import { saveGlobalConfig } from '../../utils/config.js'
 import {
+  getClaudePoolStatus,
+  initClaudeAccountPool,
+  loadClaudePoolForObservation,
   resetClaudeAccountPoolForTest,
   resolveClaudeAccountByPrefix,
   seedClaudeAccountPoolForTest,
+  setClaudeConfigAccountForTest,
+  setClaudeVaultPathForTest,
   type ClaudePoolAccount,
 } from './claudeAccountPool.js'
 
@@ -170,5 +180,118 @@ describe('resolveClaudeAccountByPrefix', () => {
     if (filtered.kind === 'unique') {
       expect(filtered.account.accountUuid).toBe('uuid-1')
     }
+  })
+})
+
+// Regression coverage for the accounts-pool-worker fix: the worker must be
+// able to populate the Anthropic pool for display (loadClaudePoolForObservation)
+// without ever performing the vault-migration write that resurrects a
+// deleted account's credential file (initClaudeAccountPool's write half).
+describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boundary)', () => {
+  let vaultDir: string
+
+  beforeEach(() => {
+    resetClaudeAccountPoolForTest()
+    vaultDir = mkdtempSync(join(tmpdir(), 'claude-vault-test-'))
+    setClaudeVaultPathForTest(vaultDir)
+  })
+
+  afterEach(() => {
+    resetClaudeAccountPoolForTest()
+    rmSync(vaultDir, { recursive: true, force: true })
+  })
+
+  function accountsDir(): string {
+    return join(vaultDir, 'accounts')
+  }
+
+  function vaultFilePathFor(uuid: string): string {
+    return join(accountsDir(), `${uuid}.json`)
+  }
+
+  // Writes a vault JSON file directly (bypassing the module under test) to
+  // seed a pre-existing vault account, matching the on-disk shape
+  // loadVaultAccounts() expects.
+  function writeVaultAccountFile(account: ClaudePoolAccount): void {
+    mkdirSync(accountsDir(), { recursive: true })
+    const data = {
+      tokens: {
+        access_token: account.accessToken,
+        refresh_token: account.refreshToken,
+        expires_at: account.expiresAt,
+        scopes: account.scopes,
+        subscription_type: account.subscriptionType,
+        rate_limit_tier: account.rateLimitTier,
+      },
+      profile: {
+        account_uuid: account.accountUuid,
+        email_address: account.emailAddress,
+      },
+      last_refresh: new Date().toISOString(),
+    }
+    writeFileSync(vaultFilePathFor(account.accountUuid), JSON.stringify(data, null, 2) + '\n', 'utf-8')
+  }
+
+  test('loadClaudePoolForObservation reads an existing vault account without writing (worker regression)', () => {
+    writeVaultAccountFile(
+      buildClaudeAccount({ accountUuid: 'vault-uuid', emailAddress: 'vault@example.com' }),
+    )
+    setClaudeConfigAccountForTest({ active: true, value: null })
+
+    loadClaudePoolForObservation()
+
+    const status = getClaudePoolStatus()
+    expect(status.initialized).toBe(true)
+    expect(status.accounts.map((a) => a.accountUuid)).toEqual(['vault-uuid'])
+    expect(status.accounts[0]?.status).toBe('healthy')
+    expect(status.activeIndex).toBe(0)
+  })
+
+  test('loadClaudePoolForObservation merges a config-only account into memory without writing to the vault', () => {
+    const configOnly = buildClaudeAccount({
+      accountUuid: 'resurrection-uuid',
+      emailAddress: 'resurrected@example.com',
+    })
+    setClaudeConfigAccountForTest({ active: true, value: configOnly })
+    saveGlobalConfig((current) => ({ ...current, activeClaudeAccountUuid: 'resurrection-uuid' }))
+
+    loadClaudePoolForObservation()
+
+    const status = getClaudePoolStatus()
+    expect(status.initialized).toBe(true)
+    expect(status.accounts.map((a) => a.accountUuid)).toEqual(['resurrection-uuid'])
+    expect(status.accounts[0]?.vaultFilePath).toBeUndefined()
+    expect(status.activeIndex).toBe(0)
+
+    // No disk write at all: not the file, not even the accounts directory.
+    expect(existsSync(vaultFilePathFor('resurrection-uuid'))).toBe(false)
+    expect(existsSync(accountsDir())).toBe(false)
+  })
+
+  test('initClaudeAccountPool still migrates a config-only account to the vault under the same state (extraction is behavior-preserving)', () => {
+    const configOnly = buildClaudeAccount({
+      accountUuid: 'resurrection-uuid',
+      emailAddress: 'resurrected@example.com',
+    })
+    setClaudeConfigAccountForTest({ active: true, value: configOnly })
+    saveGlobalConfig((current) => ({ ...current, activeClaudeAccountUuid: 'resurrection-uuid' }))
+
+    initClaudeAccountPool()
+
+    const status = getClaudePoolStatus()
+    expect(status.initialized).toBe(true)
+    expect(status.accounts.map((a) => a.accountUuid)).toEqual(['resurrection-uuid'])
+    expect(status.activeIndex).toBe(0)
+
+    const filePath = vaultFilePathFor('resurrection-uuid')
+    expect(existsSync(filePath)).toBe(true)
+    expect(status.accounts[0]?.vaultFilePath).toBe(filePath)
+
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+      tokens: { access_token: string }
+      profile: { account_uuid: string }
+    }
+    expect(written.tokens.access_token).toBe(configOnly.accessToken)
+    expect(written.profile.account_uuid).toBe('resurrection-uuid')
   })
 })

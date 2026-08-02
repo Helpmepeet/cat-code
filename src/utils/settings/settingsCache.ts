@@ -52,6 +52,18 @@ export function setCachedParsedFile(path: string, value: ParsedSettings): void {
   parseFileCache.set(path, value)
 }
 
+/**
+ * Drop one path's entry from the parse cache without touching the rest.
+ * `parseFileCache` has no mtime/size check, so a caller that must observe a
+ * write made since its last read (e.g. `updateSettingsForSource`'s
+ * under-lock read, settings.ts) needs a way to force the next
+ * `parseSettingsFile(path)` call back to disk without the blunt, whole-cache
+ * `resetSettingsCache()`.
+ */
+export function deleteCachedParsedFile(path: string): void {
+  parseFileCache.delete(path)
+}
+
 export function resetSettingsCache(): void {
   sessionSettingsCache = null
   perSourceCache.clear()

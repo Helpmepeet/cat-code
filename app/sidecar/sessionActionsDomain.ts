@@ -18,9 +18,14 @@
  *     control-plane channel — see protocol.ts SESSION_ACTION_VERB_TYPES).
  *   - Tag (P4-29) → `saveTag` (`src/utils/sessionStorage.ts:3257`), the SAME
  *     per-session tag write `/tag` uses (`src/commands/tag/tag.tsx:118` set,
- *     `:141` remove-with-empty-string). It appends a `{type:'tag'}` entry to this
- *     session's transcript, which is where the sessions catalog reads `tag` back
- *     from — one write, one reader, no renderer-side tag store.
+ *     `:141` remove-with-empty-string), normalized with the SAME
+ *     `recursivelySanitizeUnicode(tag).trim()` `/tag` applies
+ *     (`src/commands/tag/tag.tsx:82`, `src/utils/sanitization.ts`) before the
+ *     write, so a renderer-supplied tag can't carry the hidden/bidi
+ *     characters that gate is meant to strip. It appends a `{type:'tag'}`
+ *     entry to this session's transcript, which is where the sessions
+ *     catalog reads `tag` back from — one write, one reader, no
+ *     renderer-side tag store.
  *
  * The executor is behind a seam (like `runControlsDomain`): the real one wires the
  * engine functions; tests inject a fake so the domain round-trip is proven without
@@ -40,6 +45,7 @@ import type { Tools } from '../../src/Tool.js'
 import type { SerializedMessage } from '../../src/types/logs.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { renderMessagesToPlainText } from '../../src/utils/exportRenderer.js'
+import { recursivelySanitizeUnicode } from '../../src/utils/sanitization.js'
 import {
   getTranscriptPath,
   saveCustomTitle,
@@ -192,9 +198,14 @@ export function createSidecarSessionActionsDomain(
       }
     },
     async tag(tag) {
-      // Trim here so `#  spaces  ` can never become a tag the filter tabs cannot
-      // match; an all-whitespace value is the REMOVE form, not a failure.
-      const trimmed = tag.trim()
+      // Mirror `/tag`'s own normalization (tag.tsx:82) byte-for-byte before
+      // this ever reaches `saveTag`: `recursivelySanitizeUnicode` strips the
+      // hidden-character ranges (bidi overrides, zero-width, private-use —
+      // sanitization.ts) a renderer-supplied tag has no other gate against,
+      // THEN trim so `#  spaces  ` can never become a tag the filter tabs
+      // cannot match. An all-whitespace (or now-empty-after-sanitizing) value
+      // is the REMOVE form, not a failure.
+      const trimmed = recursivelySanitizeUnicode(tag).trim()
       try {
         await executor.tag(trimmed)
         return {

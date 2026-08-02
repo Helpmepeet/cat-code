@@ -36,6 +36,7 @@ import {
 } from './managedPath.js'
 import { getHkcuSettings, getMdmSettings } from './mdm/settings.js'
 import {
+  deleteCachedParsedFile,
   getCachedParsedFile,
   getCachedSettingsForSource,
   getPluginSettingsBase,
@@ -504,6 +505,17 @@ export function updateSettingsForSource(
     // lost — the read below and the write further down are otherwise two
     // unsynchronized syscalls. Mirrors saveConfigWithLock (config.ts).
     release = acquireSettingsLockSync(filePath)
+
+    // The lock alone does not make the read below see a write made since
+    // this process's cache was last populated: getSettingsForSourceUncached
+    // bypasses perSourceCache but falls through to the cached
+    // parseSettingsFile, and parseFileCache has no mtime/size check — its
+    // only invalidator is this process's own resetSettingsCache(). Drop this
+    // file's entry so the read that follows is genuinely off disk, not a
+    // stale successful parse from before another writer's change (including
+    // this same process's own post-write snapshot re-read re-arming the
+    // cache, e.g. app/sidecar/settingsDomain.ts's readSettingsSnapshotOnce()).
+    deleteCachedParsedFile(filePath)
 
     // Try to get existing settings with validation. Bypass the per-source
     // cache — mergeWith below mutates its target (including nested refs),

@@ -5,6 +5,7 @@ import {
   createHiddenWorkspaces,
   readHiddenWorkspacesFromStorage,
   reduceHiddenWorkspacesCleared,
+  reduceHiddenWorkspacesShown,
   reduceWorkspaceHidden,
   reduceWorkspaceShown,
   selectVisibleWorkspaceGroups,
@@ -82,6 +83,55 @@ test('clearing empties the list, and is a no-op reference when nothing is hidden
   expect(
     reduceHiddenWorkspacesCleared([{ cwd: '/w/a', hiddenAt: 100 }]),
   ).toEqual([])
+})
+
+// ── the restore button (BUG: it used to call reduceHiddenWorkspacesCleared,
+// which emptied the WHOLE persisted list even when a search-narrowed render's
+// label named a smaller count) ───────────────────────────────────────────────
+
+test('restoring shows back exactly the groups named, nothing more', () => {
+  const hidden = [
+    { cwd: '/w/a', hiddenAt: 100 },
+    { cwd: '/w/b', hiddenAt: 200 },
+  ]
+  expect(
+    reduceHiddenWorkspacesShown(hidden, [{ cwd: '/w/a' }, { cwd: '/w/b' }]),
+  ).toEqual([])
+})
+
+test('REGRESSION: a search-narrowed restore leaves the un-enumerated hidden project alone', () => {
+  // The rail hides two projects: alpha and beta ("Show 2 hidden projects").
+  // The operator searches "alpha" — beta's rows never match the query, so
+  // Sidebar.tsx's own `groupRows.filter(matchesQuery)` drops beta's group
+  // BEFORE `selectVisibleWorkspaceGroups` ever sees it. Only alpha survives
+  // into this render's group list, so the button now reads "Show 1 hidden
+  // project". The bug: clicking it called `reduceHiddenWorkspacesCleared`,
+  // which emptied the whole persisted list — beta reappeared too, the moment
+  // the search box was cleared, with no click on it at all.
+  const hidden = [
+    { cwd: '/w/beta', hiddenAt: 200 },
+    { cwd: '/w/alpha', hiddenAt: 100 },
+  ]
+  const groups = [{ cwd: '/w/alpha' }] // search-narrowed: beta isn't here.
+  const { hidden: hiddenGroups } = selectVisibleWorkspaceGroups(
+    groups,
+    hidden,
+    () => 0,
+  )
+  expect(hiddenGroups).toHaveLength(1) // the button's label: "Show 1 hidden project"
+
+  const next = reduceHiddenWorkspacesShown(hidden, hiddenGroups)
+  expect(next).toEqual([{ cwd: '/w/beta', hiddenAt: 200 }])
+})
+
+test('a group naming a cwd this list never hid is a no-op for that entry', () => {
+  const hidden = [{ cwd: '/w/a', hiddenAt: 100 }]
+  expect(reduceHiddenWorkspacesShown(hidden, [{ cwd: '/w/z' }])).toBe(hidden)
+})
+
+test('an empty group list is a no-op reference', () => {
+  const hidden = [{ cwd: '/w/a', hiddenAt: 100 }]
+  expect(reduceHiddenWorkspacesShown(hidden, [])).toBe(hidden)
 })
 
 // ── what the rail shows ──────────────────────────────────────────────────────

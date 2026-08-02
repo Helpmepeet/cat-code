@@ -28,13 +28,18 @@ import {
   selectSessionPasteState,
   shouldCollapsePaste,
   createPendingSubmitState,
+  createTransportErrorState,
   planSessionSubmit,
   reducePendingSubmitCleared,
   reducePendingSubmitHeld,
+  reduceTransportErrorCleared,
+  reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreDraftWithPending,
   selectComposerGate,
   selectPendingSubmit,
+  selectTransportError,
+  shouldReleasePendingSubmitOnStop,
   type ComposerGateInput,
 } from './composerState.js'
 
@@ -690,5 +695,66 @@ describe('CC-16 drain — flushed on ready, given back on failure', () => {
     expect(restoreDraftWithPending('typed after', 'parked')).toBe(
       'parked\ntyped after',
     )
+  })
+})
+
+describe('Bug 1 — Stop must not let the drain fire a queued prompt', () => {
+  test('root cause: a post-abort snapshot is byte-identical to a natural turn end', () => {
+    // `AppSessionController.submit`'s `finally` flips `activeTurn` to false
+    // (`turn.status(activeTurn:false)`) on BOTH an abort and a natural
+    // completion, so the connection snapshot the drain reads is the same
+    // `{status:'ready', inputEnabled:true}` shape either way.
+    // `resolvePendingSubmit` reads only `status`/`inputEnabled`, so — taken
+    // alone — it cannot refuse to send a prompt parked by the turn Stop just
+    // cancelled. This is exactly the bug: without an extra signal, the drain
+    // sends.
+    const postAbort = { status: 'ready' as const, inputEnabled: true }
+    expect(resolvePendingSubmit(postAbort)).toBe('send')
+  })
+
+  test('a pending submit at the moment Stop is clicked must be released', () => {
+    expect(
+      shouldReleasePendingSubmitOnStop('also delete the old migration'),
+    ).toBe(true)
+  })
+
+  test('no pending submit is a no-op', () => {
+    expect(shouldReleasePendingSubmitOnStop(null)).toBe(false)
+  })
+})
+
+describe('Bug 3 — transport error is per-session, not one app-wide string', () => {
+  test('set / select / clear round-trip, keyed per session', () => {
+    let state = createTransportErrorState()
+    expect(selectTransportError(state, S1)).toBeNull()
+    state = reduceTransportErrorSet(state, S1, 'session A failed')
+    state = reduceTransportErrorSet(state, S2, 'session B failed')
+    expect(selectTransportError(state, S1)).toBe('session A failed')
+    expect(selectTransportError(state, S2)).toBe('session B failed')
+    state = reduceTransportErrorCleared(state, S1)
+    expect(selectTransportError(state, S1)).toBeNull()
+    expect(selectTransportError(state, S2)).toBe('session B failed')
+  })
+
+  test('a null session selects nothing', () => {
+    expect(selectTransportError(createTransportErrorState(), null)).toBeNull()
+  })
+
+  test('clearing an absent session is identity (no needless re-render)', () => {
+    const state = createTransportErrorState()
+    expect(reduceTransportErrorCleared(state, S1)).toBe(state)
+  })
+
+  test('a background session error never bleeds into another session (regression)', () => {
+    // The bug: a single app-wide `transportError` meant session B's drain
+    // failure painted red text under whatever session the user was actually
+    // looking at (session A), even though nothing about A failed.
+    const state = reduceTransportErrorSet(
+      createTransportErrorState(),
+      S2,
+      'session B failed',
+    )
+    expect(selectTransportError(state, S1)).toBeNull()
+    expect(selectTransportError(state, S2)).toBe('session B failed')
   })
 })

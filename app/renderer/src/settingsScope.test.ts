@@ -694,7 +694,154 @@ describe('row grammar', () => {
     })
     expect(row.annotation.kind).toBe('set-here')
     expect(row.read.kind).toBe('unreadable')
-    expect(settingsRowNote(row)).toContain('cannot be shown')
+    // `set-here` unreadable means the CHOSEN layer is the winner and does set
+    // the key, so the reason is that its own value is outside what the
+    // control allows, never the "resolved value only" limitation the other
+    // unreadable annotations use — that copy told the operator the wrong
+    // reason even though the row's state was right.
+    expect(settingsRowNote(row)).toBe(
+      `Set here: ${USER_FILE}. The saved value here doesn't fit what this ` +
+        'setting allows, so it cannot be shown. Enter a new value to replace it.',
+    )
+  })
+})
+
+/**
+ * The bug this session exists to close: three of the four `selectSettingsRow`
+ * branches (`managed`, `set-here`, `inherited`) used to read a row's value
+ * with a SOURCE-BLIND lookup (`.find(entry => entry.key === key)`), which
+ * returns whichever layer's value happens to exist in `editableValues` — not
+ * necessarily the winning layer's own value. When the sidecar's per-key
+ * validator drops the winning layer's raw value (out of range, or an empty
+ * string on a `dynamic-enum`), that lookup silently falls through to a lower
+ * layer and the row shows a value it attributes to the wrong file, right next
+ * to a badge naming the winner. The fourth branch (`overridden`) already used
+ * the source-scoped `layerValue` helper and never had this bug; these tests
+ * pin the other three to the same rule.
+ */
+describe('a row never shows a value borrowed from a layer other than the one its badge names', () => {
+  test('set-here: the project wins but its own out-of-range value was dropped, so the row must not show the user file\'s number', () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          {
+            source: 'userSettings',
+            origin: USER_FILE,
+            keys: ['cleanupPeriodDays'],
+          },
+          {
+            source: 'projectSettings',
+            origin: PROJECT_FILE,
+            keys: ['cleanupPeriodDays'],
+          },
+        ],
+        resolved: [
+          {
+            key: 'cleanupPeriodDays',
+            source: 'projectSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        // The project file's own 5000 is out of the control's [0, 3650] domain
+        // and was dropped by the sidecar's validator, so only the user file's
+        // (unrelated) 30 survives into editableValues.
+        editableValues: [
+          { key: 'cleanupPeriodDays', value: 30, source: 'userSettings' },
+        ],
+      }),
+      key: 'cleanupPeriodDays',
+      layer: 'projectSettings',
+    })
+    expect(row.annotation).toEqual({ kind: 'set-here', origin: PROJECT_FILE })
+    // The project is both the winner and the chosen scope, but its own value
+    // is unknown to this app — never the user file's 30 relabelled as the
+    // project's.
+    expect(row.read).toEqual({
+      kind: 'unreadable',
+      by: null,
+      origin: PROJECT_FILE,
+    })
+  })
+
+  test('managed: policy wins but its own empty-string value was dropped, so the row must not show the user file\'s pick as policy', () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'userSettings', origin: USER_FILE, keys: ['outputStyle'] },
+          {
+            source: 'policySettings',
+            origin: POLICY_FILE,
+            keys: ['outputStyle'],
+          },
+        ],
+        resolved: [
+          {
+            key: 'outputStyle',
+            source: 'policySettings',
+            editable: false,
+            managed: true,
+          },
+        ],
+        // Policy's own "" fails the dynamic-enum's non-empty check and was
+        // dropped; only the user file's "explanatory" survives.
+        editableValues: [
+          { key: 'outputStyle', value: 'explanatory', source: 'userSettings' },
+        ],
+      }),
+      key: 'outputStyle',
+      layer: 'userSettings',
+    })
+    expect(row.annotation).toEqual({ kind: 'enforced', origin: POLICY_FILE })
+    // Never "policy enforces explanatory" — policy's own value is unreadable.
+    expect(row.read).toEqual({
+      kind: 'unreadable',
+      by: null,
+      origin: POLICY_FILE,
+    })
+  })
+
+  test('inherited: local scope has nothing to say about the key, project wins but its own empty-string value was dropped, so the row must not show the user file\'s model as the project\'s', () => {
+    const row = selectSettingsRow({
+      snapshot: snapshot({
+        layers: [
+          { source: 'userSettings', origin: USER_FILE, keys: ['model'] },
+          {
+            source: 'projectSettings',
+            origin: PROJECT_FILE,
+            keys: ['model'],
+          },
+        ],
+        resolved: [
+          {
+            key: 'model',
+            source: 'projectSettings',
+            editable: true,
+            managed: false,
+          },
+        ],
+        // The project's own "" fails the dynamic-enum's non-empty check and
+        // was dropped; only the user file's "opus" survives. `localSettings`
+        // does not set the key at all, so choosing it falls through to the
+        // project, which is the winner but not the chosen layer: `inherited`.
+        editableValues: [
+          { key: 'model', value: 'opus', source: 'userSettings' },
+        ],
+      }),
+      key: 'model',
+      layer: 'localSettings',
+    })
+    expect(row.annotation).toEqual({
+      kind: 'inherited',
+      from: 'projectSettings',
+      origin: PROJECT_FILE,
+    })
+    // Never "opus" attributed to the project. Project's own value is unknown.
+    expect(row.read).toEqual({
+      kind: 'unreadable',
+      by: null,
+      origin: PROJECT_FILE,
+    })
   })
 })
 
@@ -1265,18 +1412,33 @@ describe('a legal value that destroys data is gated, not typed away', () => {
     ).toBe('confirm')
   })
 
-  /** An EMPTY field is `Number('') === 0`, so clearing it and clicking away used
-   * to be a second silent route to the destructive value. It is now the same
-   * gate, not a special case. */
-  test('an emptied field reaches the same gate rather than committing zero', () => {
+  /**
+   * `Number('')` and `Number('   ')` are both `0`, so clearing the field and
+   * clicking away used to be indistinguishable from typing a zero: it landed
+   * in `cleanupPeriodDays`' destructive gate, a "Delete every saved session?"
+   * modal for a field the operator just left blank. That coupling ran
+   * backwards, because the gate is declared per key while `IntField` is
+   * generic over every int key — the next int setting would inherit "empty
+   * means zero" with no gate at all. An emptied field is now its own outcome,
+   * for every int key, gate or not.
+   */
+  test('an emptied or whitespace-only field is invalid, never a silent zero', () => {
+    expect(
+      selectSettingsIntCommit({
+        key: 'cleanupPeriodDays',
+        draft: '',
+        current: 30,
+        commitUnchanged: false,
+      }),
+    ).toEqual({ kind: 'invalid', error: 'Enter a number.' })
     expect(
       selectSettingsIntCommit({
         key: 'cleanupPeriodDays',
         draft: '   ',
         current: 30,
         commitUnchanged: false,
-      }).kind,
-    ).toBe('confirm')
+      }),
+    ).toEqual({ kind: 'invalid', error: 'Enter a number.' })
   })
 
   test('every other value on the same key still commits with no gate at all', () => {

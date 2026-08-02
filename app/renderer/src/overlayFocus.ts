@@ -87,10 +87,21 @@ export function overlayEscapeAction({
 
 type ModalFocusOwner = symbol
 
+/**
+ * A popover entry shares this stack with modals (Bug 2 fix) purely so a
+ * popover can tell whether a modal opened on top of it — it is NOT a second
+ * kind of modal. `isTop` stays filtered to `'modal'` entries so modal-vs-modal
+ * arbitration (and a modal's own Tab trap while a popover is nested inside
+ * it, e.g. PlanPanel's ApproveMenu) is byte-for-byte the pre-existing
+ * behavior; `isBlockedByModal` is the one new query, used only by popovers.
+ */
+type ModalFocusEntryKind = 'modal' | 'popover'
+
 type ModalFocusEntry = {
   owner: ModalFocusOwner
   container: HTMLElement | null
   restoreTarget: HTMLElement | null
+  kind: ModalFocusEntryKind
 }
 
 export type ModalFocusStack = {
@@ -98,12 +109,19 @@ export type ModalFocusStack = {
     owner: ModalFocusOwner,
     container: HTMLElement | null,
     restoreTarget: HTMLElement | null,
+    kind?: ModalFocusEntryKind,
   ): void
   unregister(owner: ModalFocusOwner): {
     restoreTarget: HTMLElement | null
     shouldRestore: boolean
   }
+  /** True iff `owner` is the topmost `'modal'`-kind entry. A popover above or
+   * below never changes this — see the type doc comment above. */
   isTop(owner: ModalFocusOwner): boolean
+  /** True iff a `'modal'`-kind entry is registered above `owner`'s own
+   * position. A popover uses this to defer Escape to a modal opened on top
+   * of it (Bug 2), rather than consuming Escape unconditionally. */
+  isBlockedByModal(owner: ModalFocusOwner): boolean
 }
 
 function resolveConnectedRestoreTarget(
@@ -126,13 +144,13 @@ export function createModalFocusStack(): ModalFocusStack {
   const entries: ModalFocusEntry[] = []
 
   return {
-    register(owner, container, restoreTarget) {
+    register(owner, container, restoreTarget, kind = 'modal') {
       const existing = entries.findIndex(entry => entry.owner === owner)
       if (existing >= 0) {
-        entries[existing] = { owner, container, restoreTarget }
+        entries[existing] = { owner, container, restoreTarget, kind }
         return
       }
-      entries.push({ owner, container, restoreTarget })
+      entries.push({ owner, container, restoreTarget, kind })
     },
 
     unregister(owner) {
@@ -165,7 +183,14 @@ export function createModalFocusStack(): ModalFocusStack {
     },
 
     isTop(owner) {
-      return entries.at(-1)?.owner === owner
+      const modalEntries = entries.filter(entry => entry.kind === 'modal')
+      return modalEntries.at(-1)?.owner === owner
+    },
+
+    isBlockedByModal(owner) {
+      const index = entries.findIndex(entry => entry.owner === owner)
+      if (index < 0) return false
+      return entries.slice(index + 1).some(entry => entry.kind === 'modal')
     },
   }
 }
@@ -182,7 +207,37 @@ export function modalKeyAction(
 ): 'escape' | 'tab' | null {
   if (!activeOwner || event.defaultPrevented) return null
   if (overlayEscapeAction(event) === 'close') return 'escape'
-  return event.key === 'Tab' ? 'tab' : null
+  // Mirror overlayEscapeAction's modifier rejection: Ctrl/Cmd/Alt+Tab are OS-
+  // or app-level chords (window/tab switching), never the plain focus-trap
+  // Tab this branch traps. Without this, e.g. Ctrl+Tab got treated as a bare
+  // Tab and swallowed by the modal's focus wrap.
+  return event.key === 'Tab' &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey
+    ? 'tab'
+    : null
+}
+
+/**
+ * A popover's Escape arbitration (Bug 2). `activeOwner` is
+ * `!stack.isBlockedByModal(owner)` — false when a modal opened on top of
+ * this popover, so that popover's Escape listener (which may run first
+ * purely by registration order) yields instead of unconditionally
+ * `preventDefault()`-ing and restoring focus behind the modal.
+ */
+export function popoverKeyAction(
+  activeOwner: boolean,
+  event: {
+    key: string
+    defaultPrevented: boolean
+    metaKey?: boolean
+    ctrlKey?: boolean
+    altKey?: boolean
+  },
+): 'escape' | null {
+  if (!activeOwner || event.defaultPrevented) return null
+  return overlayEscapeAction(event) === 'close' ? 'escape' : null
 }
 
 const modalFocusStack = createModalFocusStack()
@@ -238,6 +293,7 @@ export function useModalFocus({
       owner,
       containerRef.current,
       activeHtmlElement(),
+      'modal',
     )
     const frame = requestAnimationFrame(() => {
       if (!modalFocusStack.isTop(owner)) return
@@ -302,6 +358,7 @@ export function usePopoverFocus({
   onEscape: () => void
   initialFocusSelector?: string
 }): { restoreTriggerFocus: () => void } {
+  const ownerRef = useRef<ModalFocusOwner>(Symbol('popover-focus-owner'))
   const triggerFocusRef = useRef<HTMLElement | null>(null)
 
   const restoreTriggerFocus = useCallback(() => {
@@ -313,17 +370,34 @@ export function usePopoverFocus({
       triggerFocusRef.current = null
       return
     }
+    const owner = ownerRef.current
     triggerFocusRef.current = activeHtmlElement()
+    // Join the SAME stack `useModalFocus` registers with (kind: 'popover'),
+    // so `isBlockedByModal` below can tell a modal opened on top of this
+    // popover apart from the ordinary case (no modal involved at all).
+    modalFocusStack.register(
+      owner,
+      containerRef.current,
+      triggerFocusRef.current,
+      'popover',
+    )
     const frame = requestAnimationFrame(() => {
       focusFirst(containerRef.current, initialFocusSelector, false)
     })
-    return () => cancelAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(frame)
+      modalFocusStack.unregister(owner)
+    }
   }, [containerRef, initialFocusSelector, open])
 
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (overlayEscapeAction(event) !== 'close') return
+      const action = popoverKeyAction(
+        !modalFocusStack.isBlockedByModal(ownerRef.current),
+        event,
+      )
+      if (action !== 'escape') return
       event.preventDefault()
       restoreTriggerFocus()
       onEscape()

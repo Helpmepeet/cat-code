@@ -66,6 +66,8 @@ const {
 const ENV_KEYS = [
   'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
 ] as const
 const envSnapshot = new Map<string, string | undefined>()
 
@@ -150,6 +152,81 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
     expect(getDefaultSonnetModel()).toBe('claude-sonnet-5')
     expect(getDefaultOpusModel()).toBe('claude-opus-5')
   })
+
+  // Regression for the preAction-vs-setSessionProvider ordering bug: runMigrations()
+  // runs at the Commander preAction hook, before setSessionProvider() ever settles the
+  // session provider, so getAPIProvider() at migration time falls back to whatever the
+  // *persisted* lastUsedProvider preference resolves to. Gating the migration itself on
+  // that made it a permanent no-op for anyone whose last session used Codex/OpenAI, since
+  // the migration's version bump still fires unconditionally and it never runs again.
+  test('runs the migration even when the current/persisted provider is not firstParty', () => {
+    provider = 'openai'
+    userSettings = {
+      model: 'claude-opus-4-6',
+      availableModels: ['claude-opus-4-6', 'claude-sonnet-4-6'],
+      modelOverrides: {
+        'claude-opus-4-6': 'my-endpoint-id',
+      },
+    }
+
+    migrateRetiredClaude46ModelsToClaude5()
+
+    expect(updateCalls).toEqual([
+      {
+        model: 'claude-opus-5',
+        availableModels: ['claude-opus-5', 'claude-sonnet-5'],
+        modelOverrides: {
+          'claude-opus-4-6': undefined,
+          'claude-opus-5': 'my-endpoint-id',
+        },
+      },
+    ])
+  })
+
+  // Regression for the migration's substring canonicalization rewriting namespaced/proxy
+  // ids: a gateway can route on a prefix like 'anthropic/claude-sonnet-4-6', and the
+  // substring match that correctly resolves dated snapshots would otherwise also match
+  // the retired id embedded in that namespaced string and clobber the prefix on disk.
+  test('does not rewrite a namespaced model id when ANTHROPIC_BASE_URL points at a custom gateway', () => {
+    process.env.ANTHROPIC_BASE_URL = 'https://my-gateway.example.com'
+    userSettings = {
+      model: 'anthropic/claude-sonnet-4-6',
+    }
+
+    migrateRetiredClaude46ModelsToClaude5()
+
+    expect(updateCalls).toEqual([])
+    expect(userSettings.model).toBe('anthropic/claude-sonnet-4-6')
+  })
+
+  // The substring canonicalization itself is correct and required for dated snapshot ids
+  // (e.g. claude-opus-4-6-20260101) — only the gateway-namespaced case above should be
+  // excluded. Pins against the default (unset) ANTHROPIC_BASE_URL.
+  test('still remaps a dated first-party snapshot id when no gateway is configured', () => {
+    userSettings = {
+      model: 'claude-opus-4-6-20260101',
+    }
+
+    migrateRetiredClaude46ModelsToClaude5()
+
+    expect(updateCalls).toEqual([{ model: 'claude-opus-5' }])
+  })
+
+  // The migration must not lose the existing "third-party providers keep their 4.6
+  // identifiers" protection just because it stops depending on the (ordering-unsafe)
+  // session provider: a Bedrock-shaped ARN pin must not be rewritten to a bare Claude 5
+  // id it can't route with.
+  test('preserves a third-party-shaped 4.6 pin when a 3P provider is configured via env', () => {
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1'
+    userSettings = {
+      model: 'us.anthropic.claude-opus-4-6-v1:0',
+    }
+
+    migrateRetiredClaude46ModelsToClaude5()
+
+    expect(updateCalls).toEqual([])
+    expect(userSettings.model).toBe('us.anthropic.claude-opus-4-6-v1:0')
+  })
 })
 
 test('startup wiring tripwire keeps the Claude 4.6 retirement migration active', () => {
@@ -163,4 +240,20 @@ test('startup wiring tripwire keeps the Claude 4.6 retirement migration active',
   )
   const runMigrations = mainSource.slice(mainSource.indexOf('function runMigrations'))
   expect(runMigrations).toContain('migrateRetiredClaude46ModelsToClaude5();')
+
+  // A migration only actually runs for existing users if it is wired into the
+  // migrationVersion gate/bump: users who already have migrationVersion ===
+  // CURRENT_MIGRATION_VERSION stored skip the whole block forever, so a migration
+  // added to the list without also sitting inside that gated block (whose
+  // saveGlobalConfig call persists the bumped CURRENT_MIGRATION_VERSION) would pass
+  // the two assertions above yet never run for existing users. Pin the call site
+  // between the version-check guard and the version-bumping saveGlobalConfig.
+  const gateIndex = runMigrations.indexOf(
+    'if (getGlobalConfig().migrationVersion !== CURRENT_MIGRATION_VERSION)',
+  )
+  const callIndex = runMigrations.indexOf('migrateRetiredClaude46ModelsToClaude5();')
+  const saveIndex = runMigrations.indexOf('saveGlobalConfig(')
+  expect(gateIndex).toBeGreaterThanOrEqual(0)
+  expect(callIndex).toBeGreaterThan(gateIndex)
+  expect(saveIndex).toBeGreaterThan(callIndex)
 })

@@ -10,17 +10,47 @@
  * prefers this snapshot over the session's, which hides the account chip and
  * re-asserts the first-run sign-in surface on a fully authenticated app.
  *
- * ISOLATION — nothing here reads the operator's real credentials.
- * `CLAUDE_CONFIG_DIR` is an empty temp home, so vault and config are empty, and
- * the route is driven by a THROWAWAY `CLAUDE_CODE_OAUTH_TOKEN` in the child
- * env. That variable is deliberately the discriminator: the engine honours it
- * only outside bare mode, so it distinguishes the two bootstraps without going
- * near the keychain. No request is ever made with it (the worker exits first).
+ * ISOLATION — what is actually isolated here, and by what mechanism:
+ *   - Keychain + global config (`getSecureStorage()`, `getGlobalConfig()` /
+ *     `config.oauthAccount`) are isolated by `CLAUDE_CONFIG_DIR` pointing at
+ *     an empty temp dir. The keychain service name is suffixed with
+ *     `sha256(configDir)`, so a fresh temp config dir addresses a keychain
+ *     entry that has never existed.
+ *   - The Codex vault + `.codex-nootp` config
+ *     (`readVaultPath()`/`DEFAULT_VAULT_PATH`, `codexAccountPool.ts:91-92`)
+ *     are `homedir()`-derived, NOT `CLAUDE_CONFIG_DIR`-derived, so
+ *     `CLAUDE_CONFIG_DIR` alone does nothing for them: prior to this fix this
+ *     test spawned the worker with the operator's REAL `HOME`, so
+ *     `loadPoolForObservation()` read the operator's real `~/codex-vault`.
+ *     `runWorker` below now also overrides `HOME` to a second, separate empty
+ *     temp dir, so that resolution lands on a directory that has never held a
+ *     real vault. With zero accounts loaded there is nothing for the worker's
+ *     one network call (`fetchPoolUsage`) to fetch usage for, so it makes zero
+ *     real HTTP requests either.
+ *   - The Anthropic vault (`claudeAccountPool.ts:58`, same `homedir()`
+ *     pattern, so it had the identical exposure) is still READ by the worker,
+ *     via `loadClaudePoolForObservation()`, but is never WRITTEN: the worker
+ *     stopped calling `initClaudeAccountPool()` (see `accountsPoolWorker.ts`'s
+ *     header) because that function migrates a config-only account into the
+ *     vault, which a disposable 60s worker must never do. The read is what
+ *     keeps the Accounts page populated; the `HOME` override below is what
+ *     keeps that read off the operator's real vault, so it is load-bearing
+ *     here, not belt-and-braces.
+ *   - The Anthropic ROUTE booleans under test (not the account list) are
+ *     driven by a THROWAWAY `CLAUDE_CODE_OAUTH_TOKEN` in the child env,
+ *     deliberately the discriminator: the engine honours it only outside bare
+ *     mode, so it distinguishes the two bootstraps without going near the
+ *     keychain. No request is ever made with it (the worker exits first).
+ *
+ * `assertHermeticHome` below is a static, no-spawn check that the `HOME` this
+ * test hands the worker cannot equal, or derive the same vault path as, the
+ * real home directory — an enforced invariant instead of a claim in this
+ * comment to trust.
  */
 
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -40,14 +70,42 @@ function temp(prefix: string): string {
   return dir
 }
 
+/**
+ * Mirrors the exact vault-path derivation `codexAccountPool.ts:91-92`
+ * (`DEFAULT_VAULT_PATH`/`CODEX_NOOTP_CONFIG`) and `claudeAccountPool.ts:58`
+ * use — `join(homedir(), 'codex-vault' | '.codex-nootp' | 'claude-vault')` —
+ * so a real vault path can never be handed to the spawned worker, and a
+ * future change to either module's formula breaks this loudly instead of the
+ * isolation silently lapsing.
+ */
+function assertHermeticHome(fakeHome: string): void {
+  const realHome = homedir()
+  if (fakeHome === realHome) {
+    throw new Error('accounts-worker probe: fake HOME equals the real home directory')
+  }
+  for (const child of ['codex-vault', '.codex-nootp', 'claude-vault']) {
+    if (join(fakeHome, child) === join(realHome, child)) {
+      throw new Error(`accounts-worker probe: derived ${child} path is not isolated from the real home`)
+    }
+  }
+}
+
 async function runWorker(env: Record<string, string | undefined>) {
   const cwd = temp('catcode-accounts-worker-cwd-')
+  const fakeHome = temp('catcode-accounts-worker-home-')
+  assertHermeticHome(fakeHome)
   const proc = Bun.spawn(['bun', 'run', worker, '--bare'], {
     cwd,
     env: {
       ...process.env,
       NODE_ENV: 'development',
       CLAUDE_CONFIG_DIR: temp('catcode-accounts-worker-config-'),
+      // The Codex + Anthropic vault paths are `homedir()`-derived, not
+      // `CLAUDE_CONFIG_DIR`-derived (see the file header) — without this the
+      // worker would resolve to the operator's REAL `~/codex-vault` /
+      // `~/claude-vault`. `assertHermeticHome` above proves this value cannot
+      // collide with the real home before it is ever handed to the child.
+      HOME: fakeHome,
       // Clear every OTHER Anthropic route the host machine might carry, so the
       // assertion below is driven only by what this test sets.
       ANTHROPIC_API_KEY: undefined,

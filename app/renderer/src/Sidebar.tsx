@@ -116,7 +116,7 @@ import {
 import {
   createHiddenWorkspaces,
   readHiddenWorkspacesFromStorage,
-  reduceHiddenWorkspacesCleared,
+  reduceHiddenWorkspacesShown,
   reduceWorkspaceHidden,
   selectVisibleWorkspaceGroups,
   writeHiddenWorkspacesToStorage,
@@ -707,10 +707,17 @@ export function Sidebar({
                   item => item.id === target.dataset.sidebarNavId,
                 )?.id ?? null)
               : null
-          refocusNavId.current = selectSidebarNavFocusHandoff(
+          const handoffNavId = selectSidebarNavFocusHandoff(
             open,
             focusedNavId,
           )
+          refocusNavId.current = handoffNavId
+          // The expanded nav list is `inert` while folded (`navOpen === false`),
+          // and `HTMLElement.focus()` on an inert element is a no-op — so a
+          // pending handoff must unfold it in this SAME update, before the
+          // re-focus layout effect below runs, or focus silently falls to
+          // <body> instead of landing on the button reverse-Tab targeted.
+          if (handoffNavId != null) setNavOpen(true)
           setFocusWithin(true)
         }}
         onBlurCapture={event => {
@@ -928,13 +935,19 @@ export function Sidebar({
 
                 {/* The only way back. Hiding is not destructive and must not
                  * feel one-way, so the rail says how many projects it is
-                 * holding and brings them all back in one click. */}
+                 * holding and brings back exactly the ones it named in one
+                 * click — never the whole persisted hidden list, which a
+                 * search filter can leave holding MORE than this button
+                 * counts. */}
                 {hiddenGroups.length > 0 ? (
                   <button
                     type="button"
                     onClick={() =>
                       commitHiddenWorkspaces(
-                        reduceHiddenWorkspacesCleared(hiddenWorkspaces),
+                        reduceHiddenWorkspacesShown(
+                          hiddenWorkspaces,
+                          hiddenGroups,
+                        ),
                       )
                     }
                     className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-text-faint transition-colors hover:bg-shell-hover hover:text-text-muted"

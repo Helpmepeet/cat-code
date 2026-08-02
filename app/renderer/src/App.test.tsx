@@ -333,6 +333,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
       onAnswerQuestions={() => {}}
       onCancelQuestions={() => {}}
       prompt=""
+      releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
@@ -438,6 +439,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
       preview
       previewTruncationMessage="Earlier restored history was omitted."
       prompt=""
+      releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
@@ -505,6 +507,7 @@ test('CC-16: a connecting session accepts typing and can arm the send arrow', ()
     onAnswerQuestions: () => {},
     onCancelQuestions: () => {},
     prompt: '',
+    releasePendingSubmit: () => {},
     restorePermission: () => {},
     setPermissionMode: () => {},
     setPrompt: () => {},
@@ -580,6 +583,7 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
     onAnswerQuestions: () => {},
     onCancelQuestions: () => {},
     prompt: 'mid-turn text',
+    releasePendingSubmit: () => {},
     restorePermission: () => {},
     setPermissionMode: () => {},
     setPrompt: () => {},
@@ -680,6 +684,7 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
     onAnswerQuestions: () => {},
     onCancelQuestions: () => {},
     prompt: 'text',
+    releasePendingSubmit: () => {},
     restorePermission: () => {},
     setPermissionMode: () => {},
     setPrompt: () => {},
@@ -904,6 +909,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
       onAnswerQuestions={() => {}}
       onCancelQuestions={() => {}}
       prompt=""
+      releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
@@ -969,6 +975,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
       onAnswerQuestions={() => {}}
       onCancelQuestions={() => {}}
       prompt=""
+      releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
@@ -1160,6 +1167,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
       onAnswerQuestions={() => {}}
       onCancelQuestions={() => {}}
       prompt=""
+      releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
@@ -1225,6 +1233,7 @@ test('P4-24: collapsed-paste pills render with token label, remove control, and 
       onAnswerQuestions={() => {}}
       onCancelQuestions={() => {}}
       prompt="see [Pasted text #1 +2 lines]"
+      releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
@@ -1383,6 +1392,7 @@ test('a previewed pane shows what the cached session really ran on', () => {
     onAnswerQuestions: () => {},
     onCancelQuestions: () => {},
     prompt: '',
+    releasePendingSubmit: () => {},
     restorePermission: () => {},
     setPermissionMode: () => {},
     setPrompt: () => {},
@@ -1449,6 +1459,7 @@ test('a previewed pane with an empty cache claims nothing', () => {
     onAnswerQuestions: () => {},
     onCancelQuestions: () => {},
     prompt: '',
+    releasePendingSubmit: () => {},
     restorePermission: () => {},
     setPermissionMode: () => {},
     setPrompt: () => {},
@@ -1508,6 +1519,7 @@ function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
     onAnswerQuestions: () => {},
     onCancelQuestions: () => {},
     prompt: '',
+    releasePendingSubmit: () => {},
     restorePermission: () => {},
     setPermissionMode: () => {},
     setPrompt: () => {},
@@ -1748,7 +1760,14 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
     'selectPlanReview(permissions, activeSessionId) !== null',
   )
   expect(effectBody).toContain('if (dedicatedFlowOwnsKeyboard) return')
-  expect(source).toContain('    dedicatedFlowOwnsKeyboard,\n  ])')
+
+  // Bug fix — the card these shortcuts act on renders only in the 'chat'
+  // view. Navigating to Accounts/Settings/... while a permission is pending
+  // used to leave this listener attached with nothing on screen to answer:
+  // focus fell to `document.body`, which `permissionKeysAreLive` reads as
+  // live, so Enter/Escape acted on an invisible request.
+  expect(effectBody).toContain("if (activeView !== 'chat') return")
+  expect(source).toContain('    dedicatedFlowOwnsKeyboard,\n    activeView,\n  ])')
 
   // One answer per request: a second response is rejected by the sidecar as
   // unknown, and that rejection un-marks the card, re-enabling Allow/Deny on an

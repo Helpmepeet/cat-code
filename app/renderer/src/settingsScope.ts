@@ -59,7 +59,7 @@ import type {
 import { validateEditableSettingValue } from '../../shared/settingsEditable.js'
 import { settingsUnreadNote } from './settingsReadState.js'
 import { settingsPaneSpecs } from './settingsEditorModel.js'
-import { selectEditableValue, selectLayerOrigin, SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
+import { selectLayerOrigin, SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 
 /* ── scope ────────────────────────────────────────────────────────────────── */
 
@@ -628,10 +628,14 @@ export function selectSettingsRow({
   }
 
   const winner = snapshot.resolved.find(entry => entry.key === key) ?? null
-  const value = selectEditableValue(snapshot, key)
 
   if (winner?.managed) {
     const origin = selectLayerOrigin(snapshot, winner.source)
+    // The winning layer's OWN value, never a lower layer's borrowed via a
+    // source-blind lookup (that was the bug: a value the sidecar's per-key
+    // validator dropped for this layer fell through to whichever layer's value
+    // happened to exist, and the row attributed it to the winner regardless).
+    const value = layerValue(snapshot, winner.source, key)
     return {
       read:
         value === null
@@ -673,6 +677,11 @@ export function selectSettingsRow({
 
   if (winner && winner.source === layer) {
     const origin = selectLayerOrigin(snapshot, layer)
+    // Source-scoped, not the blind winner lookup: this layer IS the winner, but
+    // its own stored value can still be missing when the sidecar's per-key
+    // validator dropped it, and a blind key-only lookup would then borrow a
+    // lower layer's value and attribute it to this one.
+    const value = layerValue(snapshot, layer, key)
     return {
       read:
         value === null
@@ -688,6 +697,9 @@ export function selectSettingsRow({
     // A LOWER layer wins, which can only mean this layer does not set the key.
     // The value shown is what the scope resolves to; editing it is an override.
     const origin = selectLayerOrigin(snapshot, winner.source)
+    // The winning (lower) layer's OWN value, not a blind key-only lookup that
+    // could borrow yet another layer's value the sidecar's validator kept.
+    const value = layerValue(snapshot, winner.source, key)
     return {
       read:
         value === null
@@ -977,6 +989,11 @@ export function selectSettingsIntCommit({
    * so re-typing it IS a change to the file (`settingsRowCommitsUnchanged`). */
   commitUnchanged: boolean
 }): SettingsIntCommit {
+  // `Number('')` and `Number('   ')` are both `0`, so an emptied field would
+  // otherwise commit as a typed zero with no way to tell the two apart.
+  if (draft.trim().length === 0) {
+    return { kind: 'invalid', error: 'Enter a number.' }
+  }
   const validation = validateEditableSettingValue(key, Number(draft.trim()))
   if (!validation.ok) return { kind: 'invalid', error: validation.error }
   const value = validation.value as number
@@ -1063,6 +1080,14 @@ export function settingsRowNote(row: SettingsRowModel): string | null {
   // A path-terminated annotation carries no full stop of its own, so add one
   // before the follow-on sentence rather than running the two together.
   const stop = base.endsWith('.') ? '' : '.'
+  // `set-here` + unreadable means THIS layer is the winner and does set the
+  // key, but its own stored value fell outside what the setting allows, so the
+  // reason is the value, not a resolved-value-only limitation (the other
+  // annotations reaching this branch are genuinely about a layer this app never
+  // reads at all).
+  if (row.annotation.kind === 'set-here') {
+    return `${base}${stop} The saved value here doesn't fit what this setting allows, so it cannot be shown. Enter a new value to replace it.`
+  }
   return `${base}${stop} This app reads the resolved value only, so your own value here cannot be shown.`
 }
 

@@ -32,9 +32,14 @@ import {
 
 /**
  * Default cadence. Longer than the catalog's 30 s because usage headroom is
- * coarse (percent buckets on a 5-hour window) and the worker's one network read
- * (`fetchPoolUsage`) is engine-side cached for 1 minute — polling faster would
- * spend a full engine boot to re-read a cached value.
+ * coarse (percent buckets on a 5-hour window), and because the worker's one
+ * network read (`fetchPoolUsage`) is NOT effectively cached here: its
+ * module-level cache (`codexUsage.ts:93`, 1-minute TTL) lives inside the
+ * disposable worker process this driver spawns fresh every run, so the cache
+ * never survives between runs and every run performs a live authenticated
+ * fetch regardless of interval. Polling faster does not "spend a boot to
+ * re-read a cached value" — it directly multiplies real network calls against
+ * the account's usage endpoint.
  */
 export const ACCOUNTS_POOL_REFRESH_INTERVAL_MS = 60_000
 export const ACCOUNTS_POOL_WORKER_TIMEOUT_MS = 2 * 60 * 1000

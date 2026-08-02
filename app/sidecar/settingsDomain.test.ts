@@ -357,6 +357,39 @@ test('two sequential writes read-modify-write under lock — no lost update', ()
   expect(onDisk.fastMode).toBe(true)
 })
 
+test('an external writer between two runVerb calls is not silently erased', () => {
+  const settingsFile = useTempConfigHome()
+  const domain = createSidecarSettingsDomain()
+
+  // A's first write. The domain's post-write readSettingsSnapshotOnce()
+  // (settingsDomain.ts) re-reads the file and re-populates the process-local
+  // parse cache with A's own write — this is what re-arms the staleness
+  // window even though updateSettingsForSource resets its cache on write.
+  expect(
+    domain.runVerb(write('userSettings', 'includeCoAuthoredBy', false)).ok,
+  ).toBe(true)
+
+  // An EXTERNAL writer — a different process/session in reality — writes the
+  // settings file directly, bypassing this domain's lock and cache
+  // invalidation entirely (mirrors a concurrent sidecar/session on the same
+  // config dir).
+  const external = { respectGitignore: true, fastMode: true }
+  writeFileSync(settingsFile, JSON.stringify(external, null, 2) + '\n')
+
+  // A's second write must read genuinely fresh from disk under the lock, not
+  // the stale process-local cache re-armed by the first write's post-write
+  // re-read. Before the fix, this silently drops the external write.
+  const result = domain.runVerb(
+    write('userSettings', 'alwaysThinkingEnabled', false),
+  )
+  expect(result.ok).toBe(true)
+
+  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  expect(onDisk.fastMode).toBe(true)
+  expect(onDisk.respectGitignore).toBe(true)
+  expect(onDisk.alwaysThinkingEnabled).toBe(false)
+})
+
 test('runVerb validates enum + int values and rejects out-of-set / out-of-range', () => {
   useTempConfigHome()
   const domain = createSidecarSettingsDomain()

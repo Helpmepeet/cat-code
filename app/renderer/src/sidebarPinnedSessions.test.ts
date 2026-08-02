@@ -12,6 +12,7 @@ import {
   selectPinnedRows,
   selectUnpinnedRows,
   writePinnedSessionsToStorage,
+  type PinnedSessions,
 } from './sidebarPinnedSessions.js'
 
 // The Pinned section's behaviour is a pure module by necessity: the renderer
@@ -190,17 +191,40 @@ test('the storage boundary drops non-strings, blanks and duplicates', () => {
   expect(readPinnedSessionsFromStorage(store)).toEqual(['a', 'b'])
 })
 
-test('the storage boundary caps the least-preferred tail', () => {
+test('the storage boundary caps the oldest-pinned HEAD, never the newest tail', () => {
+  // A new pin lands at the TAIL (`reducePinnedSessionsToggled`), so the cap
+  // must drop overflow from the HEAD — the entries pinned longest ago — or a
+  // pin created right at the cap would always be the one silently lost.
   const many = Array.from(
     { length: MAX_SIDEBAR_PINNED_SESSIONS + 5 },
     (_, index) => `s${index}`,
   )
   const store = storage()
   writePinnedSessionsToStorage(store, many)
-  expect(readPinnedSessionsFromStorage(store)).toHaveLength(
-    MAX_SIDEBAR_PINNED_SESSIONS,
+  const read = readPinnedSessionsFromStorage(store)
+  expect(read).toHaveLength(MAX_SIDEBAR_PINNED_SESSIONS)
+  expect(read?.[0]).toBe('s5')
+  expect(read?.at(-1)).toBe(`s${MAX_SIDEBAR_PINNED_SESSIONS + 4}`)
+})
+
+test('REGRESSION: a new pin past the cap survives a relaunch; the oldest pin yields instead', () => {
+  // The bug: MAX_SIDEBAR_PINNED_SESSIONS truncated the tail while
+  // reducePinnedSessionsToggled appends new pins to the tail, so the pin the
+  // operator JUST created was always the one dropped on the next launch — the
+  // UI showed it succeed (in-memory state is uncapped) right up until then.
+  let pinned: PinnedSessions = Array.from(
+    { length: MAX_SIDEBAR_PINNED_SESSIONS },
+    (_, index) => `s${index}`,
   )
-  expect(readPinnedSessionsFromStorage(store)?.[0]).toBe('s0')
+  pinned = reducePinnedSessionsToggled(pinned, 'new')
+  expect(pinned).toHaveLength(MAX_SIDEBAR_PINNED_SESSIONS + 1) // in-memory: uncapped
+
+  const store = storage()
+  writePinnedSessionsToStorage(store, pinned)
+  const read = readPinnedSessionsFromStorage(store)
+  expect(read).toHaveLength(MAX_SIDEBAR_PINNED_SESSIONS)
+  expect(read).toContain('new')
+  expect(read).not.toContain('s0')
 })
 
 test('a null storage disables persistence without throwing', () => {

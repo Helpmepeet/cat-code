@@ -6,6 +6,7 @@ import {
   modalKeyAction,
   nextTabStopIndex,
   overlayEscapeAction,
+  popoverKeyAction,
   selectFocusableElements,
 } from './overlayFocus.js'
 
@@ -137,6 +138,33 @@ test('Escape closes only when a nested control has not already handled it', () =
   ).toBeNull()
 })
 
+test('modalKeyAction ignores Ctrl/Cmd/Alt+Tab as OS-level chords, only a bare Tab traps focus', () => {
+  expect(modalKeyAction(true, { key: 'Tab', defaultPrevented: false })).toBe(
+    'tab',
+  )
+  expect(
+    modalKeyAction(true, {
+      key: 'Tab',
+      defaultPrevented: false,
+      ctrlKey: true,
+    }),
+  ).toBeNull()
+  expect(
+    modalKeyAction(true, {
+      key: 'Tab',
+      defaultPrevented: false,
+      metaKey: true,
+    }),
+  ).toBeNull()
+  expect(
+    modalKeyAction(true, {
+      key: 'Tab',
+      defaultPrevented: false,
+      altKey: true,
+    }),
+  ).toBeNull()
+})
+
 test('only the topmost concurrent modal owns Tab and bare Escape, then the underlying modal is promoted', () => {
   const stack = createModalFocusStack()
   const underlyingOwner = Symbol('tasks')
@@ -209,4 +237,78 @@ test('concurrent cleanup resolves restoration past removed overlay content', () 
     shouldRestore: true,
   })
   expect(topRemoval.restoreTarget).not.toBe(underlyingButton)
+})
+
+test('a popover defers Escape to a modal opened on top of it, regardless of which keydown listener runs first', () => {
+  const stack = createModalFocusStack()
+  const popoverOwner = Symbol('composer-popover')
+  const modalOwner = Symbol('command-palette')
+  const trigger = focusNode()
+  const popoverContainer = focusNode()
+  const paletteContainer = focusNode()
+  const escape = { key: 'Escape', defaultPrevented: false }
+
+  // Composer face popover (Model / Reasoning / Permission mode) opens first.
+  stack.register(popoverOwner, popoverContainer, trigger, 'popover')
+  expect(stack.isBlockedByModal(popoverOwner)).toBe(false)
+  expect(popoverKeyAction(!stack.isBlockedByModal(popoverOwner), escape)).toBe(
+    'escape',
+  )
+
+  // Command palette opens on top via ⌘K; the popover never closed (no
+  // outside mousedown occurred).
+  stack.register(modalOwner, paletteContainer, trigger, 'modal')
+
+  // The popover's own listener may still run first purely by registration
+  // order (App.tsx re-registers the palette's listener every render — see
+  // overlayFocus.ts). It must now yield instead of consuming Escape.
+  expect(stack.isBlockedByModal(popoverOwner)).toBe(true)
+  expect(
+    popoverKeyAction(!stack.isBlockedByModal(popoverOwner), escape),
+  ).toBeNull()
+  // The palette, not the popover, owns Escape and Tab.
+  expect(modalKeyAction(stack.isTop(modalOwner), escape)).toBe('escape')
+  expect(
+    modalKeyAction(stack.isTop(modalOwner), { key: 'Tab', defaultPrevented: false }),
+  ).toBe('tab')
+
+  // Once the palette closes, the popover regains ownership of its own Escape.
+  stack.unregister(modalOwner)
+  expect(stack.isBlockedByModal(popoverOwner)).toBe(false)
+  expect(popoverKeyAction(!stack.isBlockedByModal(popoverOwner), escape)).toBe(
+    'escape',
+  )
+})
+
+test('a popover nested inside an open modal (PlanPanel + ApproveMenu) owns its own Escape without disturbing the modal Tab trap', () => {
+  const stack = createModalFocusStack()
+  const modalOwner = Symbol('plan-panel')
+  const popoverOwner = Symbol('approve-menu')
+  const opener = focusNode()
+  const modalContainer = focusNode()
+  const popoverContainer = focusNode(modalContainer)
+  const escape = { key: 'Escape', defaultPrevented: false }
+  const tab = { key: 'Tab', defaultPrevented: false }
+
+  stack.register(modalOwner, modalContainer, opener, 'modal')
+  // ApproveMenu mounts while PlanPanel is open — a popover registered ON TOP
+  // of an already-open modal, the reverse ordering from the previous test.
+  stack.register(popoverOwner, popoverContainer, opener, 'popover')
+
+  // The popover is free to handle its own Escape (PlanPanel additionally
+  // disables its own modal Escape via `escapeEnabled: false` while this is
+  // up, so nothing here fights over it).
+  expect(stack.isBlockedByModal(popoverOwner)).toBe(false)
+  expect(popoverKeyAction(!stack.isBlockedByModal(popoverOwner), escape)).toBe(
+    'escape',
+  )
+
+  // The modal's own Tab trap is unaffected by the nested popover sitting
+  // above it in the stack — `isTop` is filtered to modal-kind entries.
+  expect(stack.isTop(modalOwner)).toBe(true)
+  expect(modalKeyAction(stack.isTop(modalOwner), tab)).toBe('tab')
+
+  // Closing the popover leaves the modal exactly where it was.
+  stack.unregister(popoverOwner)
+  expect(stack.isTop(modalOwner)).toBe(true)
 })

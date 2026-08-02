@@ -98,8 +98,15 @@ export type SidecarSettingsDomain = {
    * `SettingsUpdater`-under-lock form and refresh the cached snapshot. This is
    * the LAST line before disk — it re-validates the (already sidecar-validated)
    * verb against the same allowlist as defense-in-depth, and never touches a
-   * non-editable source. The engine writer is the cross-process single writer
-   * (lockfile + fresh under-lock read), so this cannot lose a concurrent update.
+   * non-editable source. The engine writer is the cross-process single writer:
+   * it takes the lockfile AND, under that lock, drops its own parse cache for
+   * the file before reading (settings.ts `updateSettingsForSource`), so the
+   * under-lock read is genuinely fresh off disk rather than a stale
+   * process-local cache entry — including one this domain's own post-write
+   * `readSettingsSnapshotOnce()` re-arms below. Without that cache drop, the
+   * lock alone was not sufficient: it serializes the syscalls but not what a
+   * cached `parseSettingsFile()` call returns, so a write could silently lose
+   * a concurrent external write despite holding the lock.
    */
   runVerb(verb: SettingsVerbMessage): SettingsWriteResult
 }

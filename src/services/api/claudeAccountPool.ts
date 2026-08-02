@@ -68,48 +68,101 @@ const pool: ClaudePoolState = {
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
+ * Read-only bootstrap: populate the pool inventory (accounts + activeIndex +
+ * initialized) from the vault + keychain/config sources, WITHOUT the
+ * vault-migration write `initClaudeAccountPool` performs for a config-only
+ * account. This is the read-half of initClaudeAccountPool, extracted so
+ * observation-only callers (e.g. the accounts-pool worker) can load the pool
+ * without ever writing a credential file. Mirrors the Codex precedent,
+ * `loadPoolForObservation` (`codexAccountPool.ts:171-181`).
+ *
+ * A config-only account (keychain/config uuid absent from the vault) is
+ * still merged into the in-memory pool here — same accounts, same
+ * `activeIndex`, as `initClaudeAccountPool` would produce — just without the
+ * `saveClaudeTokenToVault` write and without stamping `vaultFilePath`. A
+ * merged account that lacks `vaultFilePath` is exactly the signal
+ * `initClaudeAccountPool` uses below to know it still owes that account a
+ * vault file.
+ *
+ * A config-only account is indistinguishable, from data alone, between the
+ * legacy pre-vault single-account case this exists to migrate, and a
+ * lingering keychain/`config.oauthAccount` remnant of an account whose vault
+ * file `/delete-account` just removed (`removeClaudeAccount`, below, only
+ * deletes the vault file — it does not clear config or keychain). Both
+ * initClaudeAccountPool and this observation path show it either way; the
+ * guarantee this extraction adds is narrower and disk-only: the observation
+ * path never re-creates the vault file, so a deletion is never undone on
+ * disk by an unattended background read.
+ *
+ * Disk reads only — never writes a file. `initClaudeAccountPool` calls this
+ * first and then performs its own migration write, so this refactor changes
+ * no `initClaudeAccountPool` behavior.
+ */
+export function loadClaudePoolForObservation(): void {
+  const vaultAccounts = loadVaultAccounts()
+  const configAccount = loadConfigAccount()
+
+  const byUuid = new Map<string, ClaudePoolAccount>()
+  for (const acct of vaultAccounts) {
+    byUuid.set(acct.accountUuid, acct)
+  }
+
+  if (configAccount && !byUuid.has(configAccount.accountUuid)) {
+    // Merge in memory only — no vault write, no vaultFilePath. See doc
+    // comment above.
+    byUuid.set(configAccount.accountUuid, configAccount)
+  } else if (configAccount && byUuid.has(configAccount.accountUuid)) {
+    // Config has fresher tokens — update the vault entry in memory only.
+    const existing = byUuid.get(configAccount.accountUuid)!
+    existing.accessToken = configAccount.accessToken
+    existing.refreshToken = configAccount.refreshToken
+    existing.expiresAt = configAccount.expiresAt
+    existing.scopes = configAccount.scopes
+    existing.subscriptionType = configAccount.subscriptionType
+    existing.rateLimitTier = configAccount.rateLimitTier
+  }
+
+  pool.accounts = Array.from(byUuid.values())
+  restoreActiveClaudeAccountPointer()
+  pool.initialized = true
+
+  const healthy = pool.accounts.filter((a) => a.status === 'healthy').length
+  logForDebugging(
+    `[claude-pool] Loaded ${pool.accounts.length} accounts (${healthy} healthy) [observation]`,
+  )
+}
+
+function restoreActiveClaudeAccountPointer(): void {
+  const config = getGlobalConfig()
+  const savedActiveUuid = config.activeClaudeAccountUuid
+  if (savedActiveUuid) {
+    const idx = pool.accounts.findIndex(
+      (a) => a.accountUuid === savedActiveUuid && a.status === 'healthy',
+    )
+    pool.activeIndex = idx >= 0 ? idx : pool.accounts.findIndex((a) => a.status === 'healthy')
+  } else {
+    pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
+  }
+}
+
+/**
  * Initialize the Claude account pool from vault + keychain/config fallback.
  * Migrates existing single account into vault on first run.
  */
 export function initClaudeAccountPool(): void {
   try {
-    const vaultAccounts = loadVaultAccounts()
-    const configAccount = loadConfigAccount()
+    loadClaudePoolForObservation()
 
-    // Merge: vault is authoritative, config fills in if not already present
-    const byUuid = new Map<string, ClaudePoolAccount>()
-    for (const acct of vaultAccounts) {
-      byUuid.set(acct.accountUuid, acct)
-    }
-
-    // Migrate existing single account into vault if not already there
-    if (configAccount && !byUuid.has(configAccount.accountUuid)) {
-      saveClaudeTokenToVault(configAccount)
-      configAccount.vaultFilePath = join(getVaultAccountsDir(), `${configAccount.accountUuid}.json`)
-      byUuid.set(configAccount.accountUuid, configAccount)
-    } else if (configAccount && byUuid.has(configAccount.accountUuid)) {
-      // Config has fresher tokens — update the vault entry
-      const existing = byUuid.get(configAccount.accountUuid)!
-      existing.accessToken = configAccount.accessToken
-      existing.refreshToken = configAccount.refreshToken
-      existing.expiresAt = configAccount.expiresAt
-      existing.scopes = configAccount.scopes
-      existing.subscriptionType = configAccount.subscriptionType
-      existing.rateLimitTier = configAccount.rateLimitTier
-    }
-
-    pool.accounts = Array.from(byUuid.values())
-
-    // Restore active account pointer from config
-    const config = getGlobalConfig()
-    const savedActiveUuid = config.activeClaudeAccountUuid
-    if (savedActiveUuid) {
-      const idx = pool.accounts.findIndex(
-        (a) => a.accountUuid === savedActiveUuid && a.status === 'healthy',
-      )
-      pool.activeIndex = idx >= 0 ? idx : pool.accounts.findIndex((a) => a.status === 'healthy')
-    } else {
-      pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
+    // The observation step above already merged a config-only account into
+    // pool.accounts (in memory, no vaultFilePath). Perform the one write it
+    // deliberately skips: a merged account without vaultFilePath came from
+    // config, not the vault, and is the only one that can lack it (config
+    // yields at most one account) — write it and stamp vaultFilePath so it
+    // has a persisted vault file, same end state as before this extraction.
+    const migratable = pool.accounts.find((a) => !a.vaultFilePath)
+    if (migratable) {
+      saveClaudeTokenToVault(migratable)
+      migratable.vaultFilePath = join(getVaultAccountsDir(), `${migratable.accountUuid}.json`)
     }
 
     pool.initialized = true
@@ -560,8 +613,12 @@ export function setClaudeAccountAlias(accountUuid: string, alias: string): boole
 
 // ── Vault helpers ─────────────────────────────────────────────────────────
 
+// Test-only redirect so tests never read or write the operator's real
+// ~/claude-vault. undefined means "use DEFAULT_VAULT_PATH" (production).
+let vaultPathOverrideForTest: string | undefined
+
 function getVaultAccountsDir(): string {
-  return join(DEFAULT_VAULT_PATH, 'accounts')
+  return join(vaultPathOverrideForTest ?? DEFAULT_VAULT_PATH, 'accounts')
 }
 
 function saveClaudeTokenToVault(account: ClaudePoolAccount): void {
@@ -668,7 +725,17 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
   return results
 }
 
+// Test-only override so tests never read the operator's real macOS keychain
+// (loadConfigAccount's primary source, via getSecureStorage()). `active:
+// false` means "use the real read" (production); when active, `value` is
+// returned as-is, bypassing keychain/config entirely.
+let configAccountOverrideForTest: { active: boolean; value: ClaudePoolAccount | null } = {
+  active: false,
+  value: null,
+}
+
 function loadConfigAccount(): ClaudePoolAccount | null {
+  if (configAccountOverrideForTest.active) return configAccountOverrideForTest.value
   try {
     const secureStorage = getSecureStorage()
     const storageData = secureStorage.read()
@@ -734,8 +801,32 @@ export function seedClaudeAccountPoolForTest({
   }
 }
 
+/**
+ * Test-only: redirect the vault directory (`<path>/accounts/*.json`) so
+ * loadClaudePoolForObservation()/initClaudeAccountPool() tests never touch
+ * the operator's real ~/claude-vault. Pass undefined to restore the default.
+ */
+export function setClaudeVaultPathForTest(path: string | undefined): void {
+  vaultPathOverrideForTest = path
+}
+
+/**
+ * Test-only: force loadConfigAccount()'s result so tests never read the
+ * operator's real macOS keychain. Call with `active: false` to restore the
+ * real read.
+ */
+export function setClaudeConfigAccountForTest(
+  override: { active: true; value: ClaudePoolAccount | null } | { active: false },
+): void {
+  configAccountOverrideForTest = override.active
+    ? { active: true, value: override.value }
+    : { active: false, value: null }
+}
+
 export function resetClaudeAccountPoolForTest(): void {
   pool.accounts = []
   pool.activeIndex = -1
   pool.initialized = false
+  vaultPathOverrideForTest = undefined
+  configAccountOverrideForTest = { active: false, value: null }
 }

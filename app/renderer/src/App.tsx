@@ -119,6 +119,7 @@ import {
   createHistoryState,
   createPasteState,
   createPendingSubmitState,
+  createTransportErrorState,
   EMPTY_HISTORY_NAV,
   formatPasteRef,
   navigateHistory,
@@ -133,6 +134,8 @@ import {
   reducePendingSubmitCleared,
   reducePendingSubmitHeld,
   reduceSessionPastesCleared,
+  reduceTransportErrorCleared,
+  reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreDraftWithPending,
   selectAgentMentionItems,
@@ -141,13 +144,16 @@ import {
   selectPendingSubmit,
   selectSessionPasteList,
   selectSessionPasteState,
+  selectTransportError,
   shouldCollapsePaste,
+  shouldReleasePendingSubmitOnStop,
   type DraftWriteReason,
   type HistoryNav,
   type HistoryState,
   type PasteEntry,
   type PasteState,
   type PendingSubmitState,
+  type TransportErrorState,
 } from './composerState.js'
 import {
   WorkspaceLayout,
@@ -430,7 +436,12 @@ export function App() {
   )
   const pendingSubmitsRef = useRef(pendingSubmits)
   pendingSubmitsRef.current = pendingSubmits
-  const [transportError, setTransportError] = useState<string | null>(null)
+  // Bug fix — per-session (was one app-wide string shown on every pane
+  // regardless of which session actually failed; `selectTransportError`
+  // resolves it for the pane it belongs to).
+  const [transportErrors, setTransportErrors] = useState<TransportErrorState>(
+    createTransportErrorState,
+  )
   const [shellError, setShellError] = useState<string | null>(null)
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -1663,7 +1674,9 @@ export function App() {
         restoreDraftWithPending(selectPromptDraft(drafts, sessionId), parked),
       ),
     )
-    setTransportError(PENDING_SUBMIT_RELEASED_MESSAGE)
+    setTransportErrors(prev =>
+      reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
+    )
   }, [])
 
   const restoreLiveSession = useCallback(
@@ -1878,7 +1891,7 @@ export function App() {
     if (action.type === 'hold') {
       setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))
       retireDraft()
-      setTransportError(null)
+      setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       return
     }
 
@@ -1888,9 +1901,11 @@ export function App() {
     try {
       getBridge().submit(sessionId, text)
       retireDraft()
-      setTransportError(null)
+      setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
     } catch (error) {
-      setTransportError(errorMessage(error))
+      setTransportErrors(prev =>
+        reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+      )
     }
   }
 
@@ -1913,10 +1928,12 @@ export function App() {
       try {
         getBridge().submit(sessionId, parked)
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
-        setTransportError(null)
+        setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       } catch (error) {
         releasePendingSubmit(sessionId)
-        setTransportError(errorMessage(error))
+        setTransportErrors(prev =>
+          reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+        )
       }
     }
   }, [connection, pendingSubmits, releasePendingSubmit])
@@ -2005,9 +2022,9 @@ export function App() {
       )
       if (error) {
         dispatchPermission({ type: 'submissionFailed', sessionId, requestId })
-        setTransportError(error)
+        setTransportErrors(prev => reduceTransportErrorSet(prev, sessionId, error))
       } else {
-        setTransportError(null)
+        setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       }
     },
     [permissions],
@@ -2059,6 +2076,14 @@ export function App() {
   useEffect(() => {
     if (!pendingPermission || !activeSessionId) return
     if (dedicatedFlowOwnsKeyboard) return
+    // Bug fix — the card these shortcuts act on renders only in the 'chat'
+    // view (the final branch of the view switch below, e.g. `activeView ===
+    // 'chat' && activeSessionId` at the TasksStrip mount just below it). On
+    // any other view (Accounts, Settings, ...) the card is unmounted, focus
+    // has nowhere to land but `document.body`, and `permissionKeysAreLive`
+    // reads that as live — so Enter/Escape would allow/snooze a request the
+    // user cannot see.
+    if (activeView !== 'chat') return
 
     const handleKeyDown = (event: KeyboardEvent) => {
       // Never hijack a key the focused element already acts on: the deny
@@ -2091,6 +2116,7 @@ export function App() {
     pendingPermission,
     activeSessionId,
     dedicatedFlowOwnsKeyboard,
+    activeView,
   ])
 
   // Shell keyboard: keyboard-first tab switching + create/close, matching the
@@ -2239,9 +2265,11 @@ export function App() {
               // dispatches here against `accounts.lastResult`.
               try {
                 getBridge().accountVerb(sessionId, verb)
-                setTransportError(null)
+                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
               } catch (error) {
-                setTransportError(errorMessage(error))
+                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
               }
             } : undefined}
             onManageAccounts={() => setActiveView('accounts')}
@@ -2274,9 +2302,11 @@ export function App() {
 	                  requestId: newRequestId(),
 	                  model,
 	                })
-	                setTransportError(null)
+	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 	              } catch (error) {
-	                setTransportError(errorMessage(error))
+	                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 	              }
 	            }}
 	            onSetEffort={effort => {
@@ -2286,9 +2316,11 @@ export function App() {
 	                  requestId: newRequestId(),
 	                  effort,
 	                })
-	                setTransportError(null)
+	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 	              } catch (error) {
-	                setTransportError(errorMessage(error))
+	                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 	              }
 	            }}
 	            onSetFast={active => {
@@ -2298,9 +2330,11 @@ export function App() {
 	                  requestId: newRequestId(),
 	                  active,
 	                })
-	                setTransportError(null)
+	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 	              } catch (error) {
-	                setTransportError(errorMessage(error))
+	                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 	              }
 	            }}
 	            orchestratorActive={panelOrchestratorActive}
@@ -2311,9 +2345,11 @@ export function App() {
 		              // agent-mode.snapshot, which flips the reflected `active`.
 		              try {
 		                getBridge().setAgentMode(sessionId, next)
-		                setTransportError(null)
+		                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 		              } catch (error) {
-		                setTransportError(errorMessage(error))
+		                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 		              }
 		            }}
 	            allowPermission={(requestId, applySuggestions = []) => {
@@ -2339,9 +2375,11 @@ export function App() {
 	              if (!sessionPlanReview) return
 	              try {
 	                getBridge().setPermissionMode(sessionId, mode)
-	                setTransportError(null)
+	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 	              } catch (error) {
-	                setTransportError(errorMessage(error))
+	                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 	                return
 	              }
 	              const requestId = sessionPlanReview.request.requestId
@@ -2381,14 +2419,16 @@ export function App() {
 	              dispatchPermission({ type: 'submitted', sessionId, requestId })
 	              try {
 	                getBridge().answerQuestions(sessionId, requestId, answers)
-	                setTransportError(null)
+	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 	              } catch (error) {
 	                dispatchPermission({
 	                  type: 'submissionFailed',
 	                  sessionId,
 	                  requestId,
 	                })
-	                setTransportError(errorMessage(error))
+	                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 	              }
 	            }}
 	            onCancelQuestions={() => {
@@ -2421,9 +2461,11 @@ export function App() {
 	            setPermissionMode={mode => {
 	              try {
 	                getBridge().setPermissionMode(sessionId, mode)
-	                setTransportError(null)
+	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
 	              } catch (error) {
-	                setTransportError(errorMessage(error))
+	                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
 	              }
 	            }}
 	            setPrompt={(value, reason) =>
@@ -2453,7 +2495,8 @@ export function App() {
 	              )
 	            }
 		            transcript={panelPreviewTranscript ?? transcript}
-	            transportError={transportError}
+	            transportError={selectTransportError(transportErrors, sessionId)}
+	            releasePendingSubmit={() => releasePendingSubmit(sessionId)}
 	          />
 	        ),
 	      }
@@ -3171,6 +3214,7 @@ export function SessionPane({
   permissionQueue,
   planReview,
   prompt,
+  releasePendingSubmit,
   restorePermission,
   setPermissionMode,
   setPrompt,
@@ -3472,8 +3516,20 @@ export function SessionPane({
   // Stop → the real `app.abort` boundary. The requestId is a message envelope
   // (the sidecar aborts the current turn regardless — `sidecarServer.ts:642`),
   // so a fresh id is correct; no engine-minted turn id is needed.
+  //
+  // Bug fix — Stop must cancel a queued prompt along with the turn it
+  // interrupts, not leave it for the CC-16 drain (`App.tsx`) to fire as a
+  // fresh turn: the abort's `turn.status(activeTurn:false)` re-enables input
+  // on a connection snapshot indistinguishable from a natural turn end. This
+  // session is `generating` for Stop to even be reachable, so a prompt parked
+  // here was queued because of THIS turn; releasing it synchronously, before
+  // the abort round-trip can produce that frame, is enough (see
+  // `shouldReleasePendingSubmitOnStop` in `composerState.ts`).
   const stopTurn = (): void => {
     if (!activeSessionId) return
+    if (shouldReleasePendingSubmitOnStop(pendingSubmit)) {
+      releasePendingSubmit()
+    }
     try {
       getBridge().abort(activeSessionId, `abort-${Date.now()}`, 'user-stop')
       setStopError(null)
@@ -4418,6 +4474,11 @@ type SessionPaneProps = {
   /** CC-16 — a prompt submitted before the engine could accept it, held until it
    * can. Present = the composer is empty because the text is queued, not lost. */
   pendingSubmit?: string | null
+  /** Bug fix — hands `pendingSubmit` back to the composer without sending it.
+   * `stopTurn` calls this so Stop cancels a queued prompt along with the turn,
+   * instead of the CC-16 drain firing it as a fresh turn the instant the
+   * abort's `turn.status(false)` re-enables input. */
+  releasePendingSubmit: () => void
   /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
   history: string[]
   /** Store a large paste as a collapsed chip and splice its token in at the

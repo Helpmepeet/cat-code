@@ -35,6 +35,22 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
 }
 
 /**
+ * Whether `element` is a control the user could be actively typing into: a
+ * text input, a textarea, or a contenteditable node. Since 4394086 the
+ * mid-turn composer is one of these, so a card mounting mid-word must not
+ * steal its focus — the user's next Enter would land on the card (an unread
+ * allow) instead of sending. Deliberately narrower than
+ * `permissionKeysAreLive`'s selector, which also treats buttons and the card
+ * itself as "owning" the keys; here we only care about text entry.
+ */
+function isEditableElement(element: Element | null): boolean {
+  if (element === null) return false
+  if (element instanceof HTMLTextAreaElement) return true
+  if (element instanceof HTMLInputElement) return true
+  return (element as HTMLElement).isContentEditable === true
+}
+
+/**
  * One permission card. Options map 1:1 to the S2 §5 payload contract:
  *   Allow            → allow once (empty selection)
  *   Always allow …   → allow + `applySuggestions` (C1 index selection into
@@ -109,6 +125,14 @@ export function PermissionPrompt({
     const node = sectionRef.current
     if (!node) return
     const previous = document.activeElement
+    if (isEditableElement(previous)) {
+      // The user is typing somewhere else (e.g. the mid-turn composer,
+      // editable since 4394086). Leave focus alone and report the keys dead
+      // through the same predicate the document listener uses, so the hint
+      // never advertises keys that will not fire.
+      setKeysLive(permissionKeysAreLive(previous))
+      return
+    }
     const timer = setTimeout(() => {
       node.focus()
       setKeysLive(document.activeElement === node)

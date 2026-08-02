@@ -171,4 +171,57 @@ describe('sessionActionsDomain — tag (P4-29)', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toContain('transcript is read-only')
   })
+
+  // HackerOne #3086545 — hidden Unicode characters (bidi overrides, zero-width
+  // marks) must not survive into the catalog's `tag` field verbatim, the same
+  // as `/tag` itself does via `recursivelySanitizeUnicode`
+  // (`src/commands/tag/tag.tsx:82`, `src/utils/sanitization.ts`). Plain
+  // `.trim()` alone does not touch any of these — these tags all sit inside
+  // the string, not at its edges.
+  test('a bidi-override character is stripped, not merely trimmed around', async () => {
+    const { executor, calls } = fakeExecutor()
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    // U+202E RIGHT-TO-LEFT OVERRIDE — the RTL-injection example from the bug
+    // report (`"prod‮gnimaerts"` renders as an RTL override live).
+    const result = await domain.tag('prod‮gnimaerts')
+
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('Tagged #prodgnimaerts.')
+    expect(calls).toEqual(['tag:prodgnimaerts'])
+  })
+
+  test('a zero-width character is stripped so two visually-identical tags cannot diverge into separate filter tabs', async () => {
+    const { executor, calls } = fakeExecutor()
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    // U+200B ZERO WIDTH SPACE embedded in an otherwise-plain tag.
+    const result = await domain.tag('in​fra')
+
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('Tagged #infra.')
+    expect(calls).toEqual(['tag:infra'])
+  })
+
+  test('sanitization runs before trim, matching the engine order recursivelySanitizeUnicode(tag).trim()', async () => {
+    const { executor, calls } = fakeExecutor()
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    const result = await domain.tag('  prod‮gnimaerts  ')
+
+    expect(result.ok).toBe(true)
+    expect(calls).toEqual(['tag:prodgnimaerts'])
+  })
+
+  test('a tag made only of hidden characters sanitizes to empty and stays the REMOVE form', async () => {
+    const { executor, calls } = fakeExecutor()
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    // Zero-width space / non-joiner / joiner — nothing renderable survives.
+    const result = await domain.tag('​‌‍')
+
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('Tag removed.')
+    expect(calls).toEqual(['tag:'])
+  })
 })

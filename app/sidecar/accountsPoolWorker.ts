@@ -23,11 +23,36 @@
  * probes, or usage polls", `codexAccountPool.ts:171-181`) — plus the MACRO shim
  * alone from `initializeRuntime.ts`.
  *
- * The ONE outbound network call is `fetchPoolUsage`, the same read-only
- * (GET, engine-side 1-min-cached, existing tokens, no refresh, no completion
- * burn) call the sidecar accounts domain already makes. It is what keeps the
- * headroom numbers live; a failure degrades to "pool without fresh usage" and
- * never fails the run.
+ * The Anthropic pool now has the same shape of entry point:
+ * `loadClaudePoolForObservation()` (`claudeAccountPool.ts:101`), extracted
+ * from `initClaudeAccountPool()` the same way. `initClaudeAccountPool()`
+ * (`claudeAccountPool.ts:152`) is the one that can WRITE a fresh vault file
+ * (`saveClaudeTokenToVault`, `claudeAccountPool.ts:624`) whenever it finds a
+ * keychain/config account not yet present in the vault — including one the
+ * operator just deleted with `/delete-account`, since delete leaves the
+ * keychain blob and `config.oauthAccount` intact. A read from a 60 s
+ * disposable timer must not write, so this worker calls
+ * `loadClaudePoolForObservation()` instead: it merges vault accounts and, in
+ * memory only, a config-only account into the SAME pool shape
+ * `initClaudeAccountPool()` would produce, but never performs that write.
+ * Because a config-only account looks identical whether it is the legacy
+ * pre-vault single-account case or a `/delete-account`'d account's lingering
+ * keychain/config remnant, this worker can still show that one edge case in
+ * the emitted list — what it guarantees is narrower and disk-only: this
+ * unattended worker never re-creates the vault file, so a deletion is never
+ * undone on disk by an idle background read. The two Anthropic ROUTE
+ * booleans below are read through a separate, disk-write-free path and stay
+ * accurate regardless.
+ *
+ * The ONE outbound network call is `fetchPoolUsage`, the same read-only (GET,
+ * existing tokens, no refresh, no completion burn) call the sidecar accounts
+ * domain already makes. It is what keeps the headroom numbers live; a failure
+ * degrades to "pool without fresh usage" and never fails the run. Its
+ * module-level cache (`codexUsage.ts:93`, 1-minute TTL) does not help this
+ * process: each run is a fresh disposable worker, so `cachedSnapshot` always
+ * starts `null` here and every run performs a live fetch regardless of poll
+ * interval — see `accountsPoolRunner.ts`'s cadence comment for the actual
+ * reason the interval is 60 s.
  *
  * The emitted record is the ALREADY-redacted `AccountsSnapshot` (no token, no
  * vault path by construction), and it is `secretGuard`-scanned here AND again at
@@ -52,7 +77,7 @@ async function main(): Promise<void> {
   // ~189 MB engine import is paid only here, per run.
   const [
     { getPoolStatus, loadPoolForObservation },
-    { initClaudeAccountPool },
+    { loadClaudePoolForObservation },
     { buildAccountsSnapshot },
     { ensureEngineMacro },
     { enableConfigs },
@@ -67,13 +92,17 @@ async function main(): Promise<void> {
   // The engine hard-fails any config read taken before this latch
   // (`config.ts:1465` "Config accessed before allowed"), and both pool loads
   // read the global config. `enableConfigs` is the engine's own idempotent
-  // unlock and validates the config file; it is the ONLY piece of `init()` this
-  // worker needs, and it carries none of init's live side-effects.
+  // unlock and validates the config file; it is the ONLY piece of `init()`
+  // this worker needs, and it carries none of init's live side-effects.
   enableConfigs()
 
-  // Both pool loads are disk-only (vault + config). Neither refreshes a token.
+  // Both loads are disk-only (vault + config) observation; neither refreshes
+  // a token or writes a vault file (see the file header). `buildAccountsSnapshot`
+  // below reads the Anthropic pool through its own `getClaudePoolStatus()`
+  // default parameter, a pure in-memory read of the singleton state
+  // `loadClaudePoolForObservation` just populated — no disk access, no write.
   await loadPoolForObservation()
-  initClaudeAccountPool()
+  loadClaudePoolForObservation()
 
   // Live usage headroom — the reason this page polls at all. Best-effort: an
   // offline or stale-token run still emits the pool with whatever usage the

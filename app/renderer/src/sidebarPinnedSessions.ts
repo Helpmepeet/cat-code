@@ -35,8 +35,11 @@ export const SIDEBAR_PINNED_SESSIONS_STORAGE_KEY =
  * Persistence bound. The list deliberately KEEPS keys for sessions that are not
  * currently enumerated (a pinned session whose transcript has not been read yet
  * must not lose its pin), so without a cap it would grow for the life of the
- * install. The tail is the least-preferred end, so truncating there costs least.
- * In-memory the list is uncapped; the cap applies at the storage boundary.
+ * install. A NEW pin lands at the TAIL (`reducePinnedSessionsToggled`), so the
+ * cap truncates from the opposite, oldest-pinned HEAD once the list exceeds
+ * it — truncating the tail instead would silently drop the pin the operator
+ * just created (REGRESSION, fixed: the two used to disagree). In-memory the
+ * list is uncapped; the cap applies at the storage boundary.
  */
 export const MAX_SIDEBAR_PINNED_SESSIONS = 32
 
@@ -77,12 +80,15 @@ function dedupeIds(values: readonly string[]): string[] {
   return out
 }
 
-/** Storage-boundary normalization: strings only, deduped, capped. */
+/** Storage-boundary normalization: strings only, deduped, capped. A new pin
+ * lands at the tail (`reducePinnedSessionsToggled`), so the cap keeps the
+ * tail and drops overflow from the head — the oldest-pinned end — never the
+ * pin the operator just created. */
 function normalizePinnedSessions(values: readonly unknown[]): string[] {
   const strings = values.filter(
     (value): value is string => typeof value === 'string',
   )
-  return dedupeIds(strings).slice(0, MAX_SIDEBAR_PINNED_SESSIONS)
+  return dedupeIds(strings).slice(-MAX_SIDEBAR_PINNED_SESSIONS)
 }
 
 export function readPinnedSessionsFromStorage(
@@ -130,7 +136,9 @@ export function isSessionPinned(
 /**
  * Toggle one session's pin. A NEW pin lands at the END of the list, so pinning
  * something never displaces the order the operator already arranged above it.
- * Returns the SAME reference on a no-op so the caller can skip a state write.
+ * The storage cap (`MAX_SIDEBAR_PINNED_SESSIONS`) truncates from the opposite,
+ * oldest-pinned end for exactly this reason — see its doc comment. Returns the
+ * SAME reference on a no-op so the caller can skip a state write.
  */
 export function reducePinnedSessionsToggled(
   pinned: PinnedSessions,
