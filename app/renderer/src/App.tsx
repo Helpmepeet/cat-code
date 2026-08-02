@@ -3439,13 +3439,17 @@ export function SessionPane({
     return () => clearInterval(id)
   }, [generating, activeSessionId])
 
-  // Live per-turn token estimate for the activity byline. Recomputed when the
-  // transcript slice changes (streaming deltas) or the 1s elapsed tick fires,
-  // so its cadence matches the elapsed clock without a second timer. Only while
-  // a turn is running; the gauge is gated behind 30s in `ActivityIndicator`.
+  // Live per-turn token count for the activity byline: real output tokens for
+  // the turn's finished messages, a character estimate for the one still
+  // streaming. Both halves are needed — see `selectLiveTokenEstimate`. Rows
+  // supply the turn boundary and the raw log supplies the usage; the two join
+  // on the API message id. Recomputed when the transcript slice changes
+  // (streaming deltas) or the 1s elapsed tick fires, so its cadence matches the
+  // elapsed clock without a second timer. Only while a turn is running; the
+  // gauge is gated behind 30s in `ActivityIndicator`.
   const liveTokens = useMemo(
-    () => (generating ? selectLiveTokenEstimate(nestedRows) : 0),
-    [generating, nestedRows, elapsedMs],
+    () => (generating ? selectLiveTokenEstimate(nestedRows, activeLog.messages) : 0),
+    [generating, nestedRows, activeLog.messages, elapsedMs],
   )
 
   // Stop → the real `app.abort` boundary. The requestId is a message envelope
@@ -4104,9 +4108,10 @@ const SHOW_TOKENS_AFTER_MS = 30_000
  * P4-18c activity indicator (`Chat.jsx` SpinnerWithVerb): pulse dots + verb +
  * active target + elapsed clock + optional per-turn token byline. Paused (a
  * pending permission request) tints amber and reads "Waiting for approval". The
- * token byline is the renderer-side `displayedResponseLength / 4` estimate
- * (`selectLiveTokenEstimate`), gated on `elapsed > 30s && tokens > 0` like the
- * engine — an estimate, never a mocked exact count.
+ * token byline is `selectLiveTokenEstimate` — the real `output_tokens` of the
+ * turn's finished messages plus a character estimate for the one still
+ * streaming — gated on `elapsed > 30s && tokens > 0` like the engine. Never a
+ * mocked count, and the estimated part is what the tooltip names.
  *
  * No fill and no seam: the row floats on the pane background so it reads as a
  * byline over the conversation rather than a band separating it from the
@@ -4160,7 +4165,7 @@ function ActivityIndicator({
         {fmtElapsed(elapsedMs)}
         {showTokens ? (
           <span
-            title="Output tokens this turn (estimate); arrow shows phase, not direction"
+            title="Output tokens this turn, with the message still streaming estimated; arrow shows phase, not direction"
           >
             {' · ↓ '}
             {fmtTok(liveTokens)} tokens

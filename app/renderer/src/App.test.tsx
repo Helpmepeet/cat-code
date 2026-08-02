@@ -1016,13 +1016,18 @@ test('P4-18 fmtTok: raw below 1k, N.Nk to 100k, Nk above (matches Chat.jsx:134)'
   expect(fmtTok(120_000)).toBe('120k')
 })
 
-test('P4-18 selectLiveTokenEstimate: current-turn output ÷ 4; prior turns excluded; no boundary → 0', () => {
+test('P4-18 selectLiveTokenEstimate with no usage on the wire: output ÷ 4; prior turns excluded; no boundary → 0', () => {
+  // The character half of the hybrid, in isolation: no raw messages means no
+  // reported usage, so every message falls through to the estimate. The joined
+  // behaviour is covered in `appModelTokens.test.ts`.
+  //
   // No user boundary present → 0, so a retained transcript never leaks as a
   // huge count (fail to "no estimate", never to a wrong large number).
   expect(
-    selectLiveTokenEstimate([
-      blockRow({ kind: 'assistant-text', role: 'assistant', content: 'x'.repeat(80) }),
-    ]),
+    selectLiveTokenEstimate(
+      [blockRow({ kind: 'assistant-text', role: 'assistant', content: 'x'.repeat(80) })],
+      [],
+    ),
   ).toBe(0)
 
   const rows: NestedTranscriptRow[] = [
@@ -1047,7 +1052,7 @@ test('P4-18 selectLiveTokenEstimate: current-turn output ÷ 4; prior turns exclu
     }),
   ]
   // (38 + 2) / 4 = 10; the 400-char prior reply does not count.
-  expect(selectLiveTokenEstimate(rows)).toBe(10)
+  expect(selectLiveTokenEstimate(rows, [])).toBe(10)
 })
 
 test('composer form owns the ↑/↓ history key scope', () => {

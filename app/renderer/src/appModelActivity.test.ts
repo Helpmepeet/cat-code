@@ -187,10 +187,11 @@ test('only when every tool in the turn has settled does the verb move on', () =>
 })
 
 test('a task notification arriving mid-turn does not orphan running tools', () => {
-  // The interaction the review named as a precondition. `task-notification` is
-  // a member of `TURN_BOUNDARY_KINDS`, so reusing that set would have opened a
-  // fresh window at the notification, dropped both pending tools out of scope,
-  // and reported "Working" while they ran.
+  // The interaction the review named as a precondition. Counting
+  // `task-notification` as a boundary opens a fresh window at the notification,
+  // drops both pending tools out of scope, and reports "Working" while they
+  // run. The token byline made the same mistake until 2026-08-02; both selectors
+  // now share `OPERATOR_TURN_BOUNDARY_KINDS`.
   const rows = project([
     userTurn('search the repo'),
     toolCalls([
