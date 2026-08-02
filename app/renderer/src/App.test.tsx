@@ -360,8 +360,10 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   )
   // P4-24: the scaffold <h1>Transcript</h1> heading is dropped (full-bleed).
   expect(html).not.toContain('Transcript</h1>')
-  // Idle (inputEnabled) session mounts no activity indicator at all.
+  // Idle (inputEnabled) session mounts no activity indicator at all, and the
+  // send slot holds Send rather than Stop.
   expect(html).not.toContain('Working')
+  expect(html).not.toContain('aria-label="Stop the turn"')
   // P4-24: the raw-SDKMessage inspector is hidden by default (opt-in dev flag),
   // absent under `bun test`. With the Permissions <details> box now a chip, a
   // clean idle pane has NO disclosure box at all.
@@ -593,9 +595,11 @@ test('CC-16 REGRESSION GUARD: a mid-turn composer is still blocked — the engin
   expect(textarea).toContain(
     'placeholder="Input is unavailable until the current response finishes."',
   )
-  // Non-empty draft, yet the arrow stays disabled: the engine, not the draft,
-  // is what refuses this submit.
-  expect(sendButton).toContain('disabled=""')
+  // Non-empty draft, yet this turn cannot be submitted. The guarantee is now
+  // stronger than a disabled arrow: mid-turn the send slot holds Stop, so the
+  // submit control does not exist at all. The engine, not the draft, decides.
+  expect(sendButton).toBe('')
+  expect(html).toContain('aria-label="Stop the turn"')
 })
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
@@ -791,8 +795,11 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // "typeable" can never drift apart from "sendable" again.
   expect(source).toContain('const composerReadOnly = !composerGate.editable')
   expect(source).toContain('readOnly={composerReadOnly}')
-  expect(source).toContain(
-    'disabled={\n              !composerGate.editable ||\n              prompt.trim().length === 0 ||\n              pendingSubmit !== null\n            }',
+  // Whitespace-normalised: the assertion is about which gate the send button
+  // reads, not how deeply it happens to be indented. It broke once when the
+  // button moved inside the send/stop ternary without its logic changing.
+  expect(source.replace(/\s+/g, ' ')).toContain(
+    'disabled={ !composerGate.editable || prompt.trim().length === 0 || pendingSubmit !== null }',
   )
   expect(source).toContain('attachDisabled={!composerGate.editable}')
   // …and nothing instructs the user to act on a not-yet-connected session.
@@ -936,8 +943,13 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   )
 
   expect(html).toContain('Working') // derived verb (empty transcript tail)
-  // The Stop button was removed; Escape (composer keydown) is the interrupt.
+  // The activity row carries no control; the send slot holds Stop instead
+  // (Chat.jsx:1413-1423). Escape alone is NOT sufficient — it is bound on the
+  // composer form, so it reaches nothing once focus leaves the textarea, and a
+  // focused permission card consumes it as that card's dismiss.
   expect(html).not.toContain('■ Stop')
+  expect(html).toContain('aria-label="Stop the turn"')
+  expect(html).not.toContain('aria-label="Send prompt"')
   // No fill and no seam on the row: it reads as a byline over the pane, not a
   // band between the transcript and the composer.
   expect(html).not.toContain('gap-2.5 border-b border-shell-seam')

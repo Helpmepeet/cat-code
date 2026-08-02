@@ -3979,33 +3979,53 @@ export function SessionPane({
               value={prompt}
             />
           </div>
-          {/* Pink up-arrow SEND (Chat.jsx:1419) — icon, not a labelled button;
-           * quiet when the draft is empty. Stop lives in the activity row. */}
-          <button
-            aria-label="Send prompt"
-            title="Send"
-            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
-            disabled={
-              !composerGate.editable ||
-              prompt.trim().length === 0 ||
-              pendingSubmit !== null
-            }
-            type="submit"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          {/* The send slot holds SEND or STOP, never both (Chat.jsx:1413-1423
+           * `isGenerating ? Stop : Send`). This is the interrupt's only
+           * always-visible mount: Escape is bound on the form
+           * (`onComposerKeyDown`), so it reaches nothing once focus leaves the
+           * composer, and while a permission card holds focus Escape is that
+           * card's dismiss instead. A control that is only reachable when the
+           * user happens to be in the textarea is not an interrupt. */}
+          {generating ? (
+            <button
+              aria-label="Stop the turn"
+              title="Stop (Esc)"
+              aria-keyshortcuts="Escape"
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-tone-danger transition-colors hover:bg-tone-danger/10"
+              onClick={stopTurn}
+              type="button"
             >
-              <line x1="12" y1="19" x2="12" y2="5" />
-              <polyline points="5 12 12 5 19 12" />
-            </svg>
-          </button>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              aria-label="Send prompt"
+              title="Send"
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
+              disabled={
+                !composerGate.editable ||
+                prompt.trim().length === 0 ||
+                pendingSubmit !== null
+              }
+              type="submit"
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="12" y1="19" x2="12" y2="5" />
+                <polyline points="5 12 12 5 19 12" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Focus rule (Chat.jsx:1428): a hairline that lights to an accent
