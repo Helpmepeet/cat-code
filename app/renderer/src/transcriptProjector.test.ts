@@ -405,6 +405,7 @@ test('skips malformed blocks without dropping valid siblings', () => {
       input: {},
       status: 'pending',
       result: null,
+      agentCompletion: null,
     },
   ])
 })
@@ -757,10 +758,28 @@ test('projects an engine task-notification banner as a system-side notice, not a
   expect(rows[0]).toMatchObject({
     kind: 'task-notification',
     status: 'completed',
-    content: banner,
+    summary: 'Agent @Hamilton completed',
   })
   // The critical assertion: it is NOT rendered as a user-side row.
   expect(rows[0]?.kind).not.toBe('user-text')
+  // Regression (leak, 2026-08-01): the row carries the one-line summary and
+  // NOTHING of the model-facing banner. The task id is the specific string the
+  // operator saw on screen.
+  expect(rows[0]).not.toHaveProperty('content')
+  expect(JSON.stringify(rows[0])).not.toContain('a9b0c1b002e2dd6e3')
+  expect(JSON.stringify(rows[0])).not.toContain('Task notification')
+})
+
+test('a task-notification with no summary yields a row the view declines to draw', () => {
+  // `UserAgentNotificationMessage.tsx:37` returns null without a summary; the
+  // desktop keeps the row (ordering) and `TaskNotificationBox` renders nothing,
+  // rather than drawing an empty banner shell.
+  const rows = rowsForUserOrigin({ kind: 'task-notification', status: 'completed' }, [
+    { type: 'text', text: 'Task notification\nTask ID: deadbeef\nStatus: completed' },
+  ])
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ kind: 'task-notification', summary: null })
+  expect(JSON.stringify(rows[0])).not.toContain('deadbeef')
 })
 
 /**
@@ -854,8 +873,204 @@ test('legacy <task-notification> transcripts (no origin field) do not regress', 
   expect(rows[0]).toMatchObject({
     kind: 'task-notification',
     status: 'failed',
-    content: legacy,
+    // The envelope's own `<summary>`, not the envelope. These transcripts have
+    // no join key, so they always stay a standalone row.
+    summary: 'build broke',
+    toolUseId: null,
   })
+  expect(JSON.stringify(rows[0])).not.toContain('<task-notification>')
+})
+
+/* ── background-agent finish folds into its card (leak fix, 2026-08-01) ──────
+ * The prototype's disposition (`~/catcode_prototype/cat-app/data.js:153-165`):
+ * the notification is joined to the named spawn card on the task id and the
+ * duplicate row is dropped, because upstream it is a `role:'user'` message and
+ * "rendering it as a human turn would misread the conversation".
+ */
+function stateWithBackgroundAgent(origin: unknown) {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg-spawn',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_agent_1',
+            name: 'Agent',
+            input: { subagent_type: 'Explore', description: 'Find the owner files' },
+          },
+        ],
+      },
+      uuid: '00000000-0000-4000-8000-000000000401',
+    } as unknown as SDKMessage),
+  )
+  const raw = JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          // The real banner, verbatim — the projector must keep every one of
+          // these internals off the row.
+          text: [
+            'Task notification',
+            'Task ID: ae916c961d15ead2f',
+            'Output file: /private/tmp/tasks/ae916c961d15ead2f.output',
+            'Tool use ID: toolu_agent_1',
+            'Status: completed',
+            'Summary: Agent @Ada completed',
+            'Result:',
+            'Sidebar lives in app/renderer/src/Sidebar.tsx',
+          ].join('\n'),
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000402',
+    origin,
+  })
+  return projectServerFrame(
+    state,
+    messageFrame('session-1', JSON.parse(raw) as SDKMessage),
+  )
+}
+
+const ADA_ORIGIN = {
+  kind: 'task-notification',
+  status: 'completed',
+  summary: 'Agent @Ada completed',
+  toolUseId: 'toolu_agent_1',
+  result: 'Sidebar lives in app/renderer/src/Sidebar.tsx',
+  usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
+}
+
+test('a background agent’s finish rides its own card, and the banner row disappears', () => {
+  const rows = selectTranscriptRows(stateWithBackgroundAgent(ADA_ORIGIN), 'session-1')
+
+  // One finished agent reads as ONE row, not a card plus a banner.
+  expect(rows.filter(row => row.kind === 'task-notification')).toHaveLength(0)
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'tool-use',
+    toolUseId: 'toolu_agent_1',
+    agentCompletion: {
+      status: 'completed',
+      summary: 'Agent @Ada completed',
+      result: 'Sidebar lives in app/renderer/src/Sidebar.tsx',
+      usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
+    },
+  })
+
+  // The leak, pinned shut: not one of the banner's internals survives into
+  // anything the view can read.
+  const serialized = JSON.stringify(rows)
+  for (const leaked of [
+    'ae916c961d15ead2f',
+    '/private/tmp/tasks',
+    'Task notification',
+    'Output file',
+    'Tool use ID',
+  ]) {
+    expect(serialized).not.toContain(leaked)
+  }
+})
+
+test('the completion reaches the agent card through the nested selector too', () => {
+  const nested = selectNestedTranscriptRows(
+    stateWithBackgroundAgent(ADA_ORIGIN),
+    'session-1',
+  )
+  expect(nested).toHaveLength(1)
+  expect(nested[0]).toMatchObject({
+    kind: 'tool-use',
+    toolFamily: 'agent',
+    agentCompletion: { summary: 'Agent @Ada completed' },
+  })
+})
+
+test('a completion whose card never arrived stays a visible row, never vanishes', () => {
+  // Degraded placement, not data loss — the same posture as an orphaned child
+  // row surfacing at top level.
+  const rows = selectTranscriptRows(
+    stateWithBackgroundAgent({ ...ADA_ORIGIN, toolUseId: 'toolu_never_spawned' }),
+    'session-1',
+  )
+  const notifications = rows.filter(row => row.kind === 'task-notification')
+  expect(notifications).toHaveLength(1)
+  expect(notifications[0]).toMatchObject({
+    kind: 'task-notification',
+    summary: 'Agent @Ada completed',
+    toolUseId: 'toolu_never_spawned',
+  })
+  // …and the agent card that WAS spawned keeps a null completion.
+  expect(rows.find(row => row.kind === 'tool-use')).toMatchObject({
+    agentCompletion: null,
+  })
+})
+
+test('a background SHELL finish keeps its own row — only agent cards absorb one', () => {
+  // `LocalShellTask.tsx:165` notifies with the Bash `toolUseId`. A Bash card has
+  // no completion renderer, so folding one in would delete the notice outright.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg-bash',
+        content: [
+          { type: 'tool_use', id: 'toolu_bash_1', name: 'Bash', input: { command: 'bun test' } },
+        ],
+      },
+      uuid: '00000000-0000-4000-8000-000000000501',
+    } as unknown as SDKMessage),
+  )
+  const raw = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'Task notification\nSummary: bun test completed' }] },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000502',
+    origin: {
+      kind: 'task-notification',
+      status: 'completed',
+      summary: 'bun test completed',
+      toolUseId: 'toolu_bash_1',
+    },
+  })
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', JSON.parse(raw) as SDKMessage),
+  )
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows.filter(row => row.kind === 'task-notification')).toHaveLength(1)
+  // …and the Bash card never grows a completion it cannot draw.
+  expect(rows.find(row => row.kind === 'tool-use')).toMatchObject({
+    toolFamily: 'bash',
+    agentCompletion: null,
+  })
+})
+
+test('a partial or malformed usage object reads as no usage, never a holed stat line', () => {
+  for (const usage of [
+    { totalTokens: 10, toolUses: 2 },
+    { totalTokens: 'lots', toolUses: 2, durationMs: 5 },
+    { totalTokens: Number.NaN, toolUses: 2, durationMs: 5 },
+    null,
+    'usage',
+  ]) {
+    const rows = selectTranscriptRows(
+      stateWithBackgroundAgent({ ...ADA_ORIGIN, usage }),
+      'session-1',
+    )
+    expect(rows[0]).toMatchObject({ agentCompletion: { usage: null } })
+  }
 })
 
 /* ── local slash-command output (bug, 2026-07-29) ──────────────────────────

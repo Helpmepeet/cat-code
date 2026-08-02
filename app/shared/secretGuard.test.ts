@@ -131,15 +131,31 @@ test('an origin-bearing user frame is secretGuard-clean; a raw channel `meta` wo
   if (!r.ok) expect(r.key).toBe('authorization')
 })
 
-test('a task-notification origin carries no free-text result to scan', () => {
-  // `MessageOrigin`'s task-notification variant carries `result`/`usage`; the
-  // projection keeps only status + summary, so the frame does not double the
-  // banner text it already carries.
+test('a task-notification origin carries display fields only, and they scan clean', () => {
+  // The projection carries `result`/`usage`/`toolUseId` so a display can render
+  // a finished agent from structured fields instead of reprinting the engine's
+  // model-facing banner (leak, 2026-08-01). That text already crossed inside
+  // the banner this frame carries, so the widening adds nothing new to scan;
+  // what it DOES remove is `taskId`/`outputFile`, which have no display meaning
+  // and were the internals the leak put on screen.
   const projected = {
     kind: 'task-notification',
     status: 'completed',
-    summary: 'done',
+    summary: 'Agent @Ada completed',
+    toolUseId: 'toolu_agent_1',
+    result: 'Sidebar lives in app/renderer/src/Sidebar.tsx',
+    usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
   }
   expect(scanForSecrets(projected).ok).toBe(true)
-  expect(Object.keys(projected).sort()).toEqual(['kind', 'status', 'summary'])
+  // Every key is a short enum, a handle, an id or a number-bag: none is
+  // third-party-authored, so none can collide with the key-name scan the way
+  // `channel.meta` would.
+  expect(Object.keys(projected).sort()).toEqual([
+    'kind',
+    'result',
+    'status',
+    'summary',
+    'toolUseId',
+    'usage',
+  ])
 })

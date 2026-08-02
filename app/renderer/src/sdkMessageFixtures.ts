@@ -900,10 +900,16 @@ export const SDK_MESSAGE_FIXTURE: {
         },
         parent_tool_use_id: null,
         isReplay: true,
+        // Carries the full narrowed origin. `toolUseId` names a card that is
+        // absent from this one-message projection, so the row stays visible
+        // here; the merge itself is covered in transcriptProjector.test.ts.
         origin: {
           kind: 'task-notification',
           status: 'completed',
           summary: 'refactored the parser',
+          toolUseId: 'toolu_absent_here',
+          result: 'The parser now reads the header in one pass.',
+          usage: { totalTokens: 8200, toolUses: 5, durationMs: 31000 },
         },
         session_id: SESSION,
         uuid: '00000000-0000-4000-8000-00000000u010',
