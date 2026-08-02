@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { ServerFrame } from '../../shared/protocol.js'
+import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -109,6 +110,68 @@ test('records transport errors without adding non-message events to the raw log'
   const active = selectRawMessageLog(state, 'session-1')
   expect(active.messages).toEqual([])
   expect(active.error).toBe('turn failed')
+})
+
+test('the replay-buffer retention notice never reaches the error line', () => {
+  // It rides `kind:'error'` to reuse the channel, but retention is working as
+  // designed and there is nothing to act on. Shown, it pinned an undismissable
+  // red line above the composer for the rest of the session, because nothing
+  // ever clears `error`. Its history-replay sibling is deliberately still shown:
+  // the preview/restore surface owns that message.
+  const ready: ServerFrame = {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  }
+  let suppressed = reduceServerFrame(createRawMessageLogState(), ready)
+  suppressed = reduceServerFrame(suppressed, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    // app/main/replayBuffer.ts:76, N = DEFAULT_MAX_BUFFERED_FRAMES (8,000).
+    requestId: 'catcode.replay-truncated',
+    code: 'internal_error',
+    message: 'Only the 8000 most recent messages are shown.',
+    retryable: false,
+  })
+  expect(selectRawMessageLog(suppressed, 'session-1').error).toBeNull()
+
+  // The history-replay sibling still surfaces — a different surface owns it.
+  let restored = reduceServerFrame(createRawMessageLogState(), ready)
+  restored = reduceServerFrame(restored, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+    code: 'internal_error',
+    message: 'Earlier restored history was omitted.',
+    retryable: false,
+  })
+  expect(selectRawMessageLog(restored, 'session-1').error).toBe(
+    'Earlier restored history was omitted.',
+  )
+
+  // A real internal_error with no request id is untouched.
+  let state = reduceServerFrame(createRawMessageLogState(), ready)
+  state = reduceServerFrame(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    code: 'internal_error',
+    message: 'turn failed',
+    retryable: false,
+  })
+  expect(selectRawMessageLog(state, 'session-1').error).toBe('turn failed')
 })
 
 test('keys logs by ready session and rejects frames for an unattached session', () => {

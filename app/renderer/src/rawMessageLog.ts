@@ -3,6 +3,27 @@ import type { ServerFrame, SessionId } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
 
 /**
+ * The replay buffer's retention notice ("Only the N most recent messages are
+ * shown.", `app/main/replayBuffer.ts:281`, N = `DEFAULT_MAX_BUFFERED_FRAMES`
+ * 8,000) rides `kind:'error'` to reuse the channel, but it is not an error:
+ * retention is working as designed and there is nothing for the user to act on.
+ * Nothing ever clears `error`, so displaying it pinned an undismissable red line
+ * above the composer for the rest of the session.
+ *
+ * Dropped at DISPLAY only, and only for this one id. The frame still reaches
+ * `app/main/attachmentGate.ts` and `app/main/transcriptCache.ts`, which key off
+ * it, and `replayBuffer.ts` still logs the retained/total counts. The sibling
+ * `HISTORY_REPLAY_TRUNCATION_REQUEST_ID` is deliberately NOT filtered: the
+ * preview/restore surface shows its own boundary message and owns that call.
+ *
+ * The constant is private to `app/main/replayBuffer.ts:76` and lives across a
+ * process boundary the renderer cannot import from. Promote it to
+ * `shared/protocol.ts` beside its sibling and import it here once that file
+ * settles.
+ */
+const REPLAY_BUFFER_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
+
+/**
  * Sized so the BYTE budget below is what binds, the same correction
  * `DEFAULT_MAX_BUFFERED_FRAMES` took (app/main/replayBuffer.ts) and
  * `MAX_HISTORY_REPLAY_FRAMES` took after it. 512 was the third copy of the
@@ -91,6 +112,7 @@ export function reduceServerFrameWithLimits(
   }
 
   if (frame.kind === 'error') {
+    if (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID) return state
     const session = state.sessions[frame.sessionId] ?? EMPTY_SESSION_LOG
     return updateSession(state, frame.sessionId, {
       ...session,
