@@ -72,11 +72,17 @@ describe('AppSessionController', () => {
 
     await controller.submit('hello', { goalSnapshot: goal })
 
+    // `turn.status` brackets the turn: a subscriber that joins after attach
+    // learns the turn started and finished without re-reading a snapshot.
     expect(events.map(event => event.type)).toEqual([
+      'turn.status',
       'goal.snapshot',
       'message',
       'message',
+      'turn.status',
     ])
+    expect(events.at(0)).toEqual({ type: 'turn.status', activeTurn: true })
+    expect(events.at(-1)).toEqual({ type: 'turn.status', activeTurn: false })
     expect(controller.getGoalSnapshot()).toEqual(goal)
     expect(controller.getAbortState()).toEqual({ status: 'idle' })
   })
@@ -133,10 +139,12 @@ describe('AppSessionController', () => {
       updatedInput: { command: 'pwd', timeout: 1000 },
     })
     expect(events.map(event => event.type)).toEqual([
+      'turn.status',
       'permission.requested',
       'permission.resolved',
       'message',
       'message',
+      'turn.status',
     ])
     expect(controller.getPendingPermissionRequests()).toEqual([])
   })
@@ -194,11 +202,13 @@ describe('AppSessionController', () => {
 
     expect(outerSinkMessages).toHaveLength(0)
     expect(events.map(event => event.type)).toEqual([
+      'turn.status',
       'goal.snapshot',
       'message',
       'message',
+      'turn.status',
     ])
-    expect(events[1]).toMatchObject({
+    expect(events[2]).toMatchObject({
       type: 'message',
       message: {
         type: 'system',
@@ -264,12 +274,19 @@ describe('AppSessionController', () => {
       message: 'User aborted',
     })
     expect(interruptCalls).toBe(1)
+    // An aborted turn still reports its end. `setActiveTurn(false)` runs at the
+    // top of the same `finally` that settles the abort, so the turn-over signal
+    // lands BEFORE the final `aborted` classification — a client watching only
+    // for a clean result can never be left showing a turn that is already over.
     expect(events.map(event => event.type)).toEqual([
+      'turn.status',
       'permission.requested',
       'abort.status',
       'permission.resolved',
+      'turn.status',
       'abort.status',
     ])
+    expect(events[4]).toEqual({ type: 'turn.status', activeTurn: false })
     expect(controller.getAbortState()).toEqual({
       status: 'aborted',
       reason: 'User aborted',

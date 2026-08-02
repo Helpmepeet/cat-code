@@ -149,6 +149,28 @@ export function reduceConnectionState(
       },
     }
   }
+  // The engine's live turn boundary (`AppSessionController.setActiveTurn`).
+  // Without it `inputEnabled` would only ever hold the value the `ready`
+  // handshake carried at attach, so a session that started a turn afterwards
+  // still read as idle — which is what silently disabled the whole in-turn
+  // activity surface (indicator, Stop, Esc, mid-turn composer lock).
+  //
+  // Only `inputEnabled` moves: `status` stays whatever the lifecycle/error
+  // frames last said, so a turn event can never resurrect a dead session.
+  if (frame.kind === 'event' && frame.event.type === 'turn.status') {
+    const existing = state.sessions[frame.sessionId]
+    if (!existing) return state
+    const inputEnabled = !frame.event.activeTurn
+    if (existing.inputEnabled === inputEnabled) return state
+    return {
+      ...state,
+      sessions: {
+        ...state.sessions,
+        [frame.sessionId]: { ...existing, inputEnabled },
+      },
+    }
+  }
+
   if (frame.kind === 'error') {
     const status =
       frame.code === 'session_not_found'

@@ -48,6 +48,13 @@ export function createAppSessionEventMapper({
         return [{ type: 'abort.status', abort: event.abort }]
       }
 
+      // The browser protocol has no turn-boundary event, so this maps to
+      // nothing rather than being forwarded as an unknown shape. Narrowing it
+      // here is also what keeps the `event.message` reads below sound.
+      if (event.type === 'turn.status') {
+        return []
+      }
+
       if (event.message.type === 'stream_event') {
         return mapStreamEvent(event.message, getActiveAssistantMessageId)
       }

@@ -8,6 +8,7 @@ import {
   createMessageEvent,
   createPermissionRequestedEvent,
   createPermissionResolvedEvent,
+  createTurnStatusEvent,
   type AppGoalSnapshot,
   type AppPermissionRequest,
   type AppPermissionResponse,
@@ -132,7 +133,7 @@ export class AppSessionController {
       throw new Error('Session turn already running')
     }
 
-    this.activeTurn = true
+    this.setActiveTurn(true)
     this.abortController = new AbortController()
 
     if (this.abortState.status !== 'idle') {
@@ -166,7 +167,7 @@ export class AppSessionController {
             this.emit(createMessageEvent(message))
           }
         } finally {
-          this.activeTurn = false
+          this.setActiveTurn(false)
           const signal = this.abortController.signal
           this.abortController = null
 
@@ -198,6 +199,17 @@ export class AppSessionController {
   private setAbortState(abortState: AppSessionAbortState): void {
     this.abortState = abortState
     this.emit(createAbortStatusEvent(abortState))
+  }
+
+  /**
+   * The only writer of `activeTurn` — a bare assignment cannot announce itself,
+   * and a client that misses one flip is stuck with a stale turn state until it
+   * reattaches. Idempotent so a repeated write emits nothing.
+   */
+  private setActiveTurn(activeTurn: boolean): void {
+    if (this.activeTurn === activeTurn) return
+    this.activeTurn = activeTurn
+    this.emit(createTurnStatusEvent(activeTurn))
   }
 
   private waitForPermissionResponse(

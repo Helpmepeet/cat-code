@@ -28,6 +28,6 @@ describe('createRuntimeBackedWebAppSession', () => {
     controller.subscribe(event => events.push(event.type))
     await controller.submit('hello')
 
-    expect(events).toEqual(['message'])
+    expect(events).toEqual(['turn.status', 'message', 'turn.status'])
   })
 })

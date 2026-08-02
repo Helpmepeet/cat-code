@@ -8,7 +8,8 @@
  * under Bun, imports the real modules directly; the NON-engine app processes use
  * this snapshot for types only.
  *
- * Canonical sources at commit 234da9e (re-verified in sync 2026-07-02):
+ * Canonical sources at commit 234da9e (AppSessionEvent re-synced 2026-08-02 for
+ * the `turn.status` member):
  *   SDKMessage:        src/entrypoints/agentSdkTypes.ts
  *   AppSessionEvent:   src/app-runtime/sessionEvents.ts
  *   AppClientMessage + AppReadyPayload: src/web/appSessionProtocol.ts
@@ -88,6 +89,10 @@ export type AppSessionEvent =
   | {
       type: 'abort.status'
       abort: AppSessionAbortState
+    }
+  | {
+      type: 'turn.status'
+      activeTurn: boolean
     }
 
 /* --- src/web/appSessionProtocol.ts (the 4 allowlisted client message types) --- */

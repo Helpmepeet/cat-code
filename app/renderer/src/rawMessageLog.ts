@@ -101,6 +101,15 @@ export function reduceServerFrameWithLimits(
   const session = state.sessions[frame.sessionId]
   if (!session) return state
 
+  // Turn boundary — the same live signal `connectionState` reads, kept in step
+  // here because the composer gate reads BOTH copies of `inputEnabled` and a
+  // disagreement between them would leave the composer half-enabled mid-turn.
+  if (frame.kind === 'event' && frame.event.type === 'turn.status') {
+    const inputEnabled = !frame.event.activeTurn
+    if (session.inputEnabled === inputEnabled) return state
+    return updateSession(state, frame.sessionId, { ...session, inputEnabled })
+  }
+
   if (frame.kind !== 'event' || frame.event.type !== 'message') return state
 
   // An in-run restore reuses the appSessionId and this store is never torn

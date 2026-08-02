@@ -263,3 +263,53 @@ test('in-run restore: raw message log does not duplicate replayed history (SF-1)
   state = reduceServerFrame(state, message('00000000-0000-4000-8000-0000000000bb'))
   expect(selectRawMessageLog(state, sessionId).messages).toHaveLength(3)
 })
+
+test('the turn boundary moves inputEnabled and leaves the message log alone', () => {
+  // The composer gate (`selectComposerGate`) reads BOTH this copy of
+  // `inputEnabled` and `connectionState`'s. They must move together, or the
+  // composer ends up half-enabled mid-turn.
+  let state = reduceServerFrame(createRawMessageLogState(), {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+
+  const turnStatus = (activeTurn: boolean) =>
+    ({
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      event: { type: 'turn.status', activeTurn },
+    }) as unknown as ServerFrame
+
+  state = reduceServerFrame(state, turnStatus(true))
+  expect(selectRawMessageLog(state, 'session-1').inputEnabled).toBe(false)
+  // A turn boundary is not a message: the raw debug view must not gain a row.
+  expect(selectRawMessageLog(state, 'session-1').messages).toEqual([])
+
+  state = reduceServerFrame(state, turnStatus(false))
+  expect(selectRawMessageLog(state, 'session-1').inputEnabled).toBe(true)
+  expect(selectRawMessageLog(state, 'session-1').messages).toEqual([])
+})
+
+test('a turn frame before the ready frame is a no-op', () => {
+  const state = createRawMessageLogState()
+  expect(
+    reduceServerFrame(state, {
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId: 'ghost',
+      event: { type: 'turn.status', activeTurn: true },
+    } as unknown as ServerFrame),
+  ).toBe(state)
+})

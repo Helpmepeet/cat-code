@@ -43,12 +43,24 @@ export type AppSessionAbortStatusEvent = {
   abort: AppSessionAbortState
 }
 
+/**
+ * Turn boundary. `AppReadyPayload.activeTurn` reports this same flag, but only
+ * at attach — a client that learns it once can never tell a running turn from
+ * an idle session again. Emitted on every change, exactly like `abort.status`,
+ * so "a turn is running" is a live fact rather than a handshake artifact.
+ */
+export type AppSessionTurnStatusEvent = {
+  type: 'turn.status'
+  activeTurn: boolean
+}
+
 export type AppSessionEvent =
   | AppSessionMessageEvent
   | AppSessionGoalSnapshotEvent
   | AppSessionPermissionRequestedEvent
   | AppSessionPermissionResolvedEvent
   | AppSessionAbortStatusEvent
+  | AppSessionTurnStatusEvent
 
 export function createMessageEvent(message: SDKMessage): AppSessionMessageEvent {
   return {
@@ -98,5 +110,14 @@ export function createAbortStatusEvent(
   return {
     type: 'abort.status',
     abort,
+  }
+}
+
+export function createTurnStatusEvent(
+  activeTurn: boolean,
+): AppSessionTurnStatusEvent {
+  return {
+    type: 'turn.status',
+    activeTurn,
   }
 }

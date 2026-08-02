@@ -193,3 +193,64 @@ test('a real sidecar process delivers the projected slash catalog (SLASH-2: inde
   expect(typeof help?.description).toBe('string')
   expect(help && help.description.length).toBeGreaterThan(0)
 })
+
+test('turn.status crosses the real socket and brackets the turn', async () => {
+  // The live-path proof for the turn boundary. It has to be a REAL spawn: the
+  // renderer suite renders `SessionPane` from hand-fed props, so it happily
+  // passed for months while NOTHING on the wire ever flipped `inputEnabled`
+  // after the `ready` handshake — the whole in-turn activity surface (the
+  // indicator, Stop, Esc, the mid-turn composer lock) was dead in the app and
+  // green in CI.
+  supervisor = new SidecarSupervisor({
+    sidecarCommand: 'bun',
+    sidecarArgs: ['run', sidecarEntry],
+    sidecarEnv: { CATCODE_SIDECAR_PROBE: '1' },
+  })
+  const sessionId = supervisor.spawnSession('p1-0-test-turnstatus')
+
+  const seen: Array<{ kind: string; activeTurn?: boolean }> = []
+  const unsubscribe = supervisor.subscribe((event: SupervisorEvent) => {
+    if (event.type !== 'frame') return
+    const frame = event.frame
+    if (frame.kind === 'ready') {
+      seen.push({ kind: 'ready' })
+      return
+    }
+    if (frame.kind !== 'event') return
+    if (frame.event.type === 'turn.status') {
+      seen.push({ kind: 'turn.status', activeTurn: frame.event.activeTurn })
+      return
+    }
+    if (frame.event.type === 'message') seen.push({ kind: 'message' })
+  })
+
+  // Wait for the turn to finish, not just to start.
+  const closing = await waitForFrame(
+    supervisor,
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'turn.status' &&
+      frame.event.activeTurn === false,
+  )
+  unsubscribe()
+
+  expect(closing.sessionId).toBe(sessionId)
+
+  const turns = seen.filter(entry => entry.kind === 'turn.status')
+  expect(turns.map(entry => entry.activeTurn)).toEqual([true, false])
+
+  // Ordering is the contract a client depends on: the open arrives before any
+  // message of the turn, the close after the last one.
+  const openIndex = seen.findIndex(e => e.kind === 'turn.status' && e.activeTurn)
+  const closeIndex = seen.findIndex(e => e.kind === 'turn.status' && !e.activeTurn)
+  const messageIndexes = seen
+    .map((entry, index) => (entry.kind === 'message' ? index : -1))
+    .filter(index => index >= 0)
+  expect(messageIndexes.length).toBeGreaterThan(0)
+  expect(Math.min(...messageIndexes)).toBeGreaterThan(openIndex)
+  expect(Math.max(...messageIndexes)).toBeLessThan(closeIndex)
+
+  // `ready` still precedes everything, so a client can never see a turn
+  // boundary for a session it has not been handed yet.
+  expect(seen[0]?.kind).toBe('ready')
+})

@@ -211,3 +211,71 @@ test('no recovery sentence prints the engine discriminant or an em dash', () => 
     expect(message).not.toContain('—')
   }
 })
+
+const turnStatus = (sessionId: string, activeTurn: boolean) =>
+  ({
+    kind: 'event',
+    protocolVersion: 1,
+    sessionId,
+    event: { type: 'turn.status', activeTurn },
+  }) as unknown as ServerFrame
+
+test('a live turn closes and reopens input across the turn boundary', () => {
+  // The regression this pins: `inputEnabled` used to come ONLY from the
+  // `ready` handshake, so it held its attach-time value for the whole session
+  // and `generating` (App.tsx) was false for the entire turn — the activity
+  // indicator, Stop, Esc-to-interrupt and the mid-turn composer lock all
+  // rendered as if nothing were running.
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  expect(selectConnection(state, 'session-1').inputEnabled).toBe(true)
+
+  state = reduceConnectionState(state, turnStatus('session-1', true))
+  expect(selectConnection(state, 'session-1')).toEqual({
+    status: 'ready',
+    inputEnabled: false,
+  })
+
+  state = reduceConnectionState(state, turnStatus('session-1', false))
+  expect(selectConnection(state, 'session-1')).toEqual({
+    status: 'ready',
+    inputEnabled: true,
+  })
+})
+
+test('a turn boundary never revives a session the lifecycle already killed', () => {
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  state = reduceConnectionState(state, {
+    kind: 'lifecycle',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    status: 'exited',
+  } as ServerFrame)
+
+  // A late turn frame may only move `inputEnabled`; the status it finds is the
+  // one the lifecycle set, so a dead pane cannot read as ready again.
+  state = reduceConnectionState(state, turnStatus('session-1', false))
+  expect(selectConnection(state, 'session-1').status).toBe('exited')
+  expect(isTerminalConnectionStatus(selectConnection(state, 'session-1').status)).toBe(
+    true,
+  )
+})
+
+test('a turn frame for an unknown session is a no-op', () => {
+  const state = createConnectionState()
+  expect(reduceConnectionState(state, turnStatus('ghost', true))).toBe(state)
+})
+
+test('a repeated turn value returns the identical state object', () => {
+  const state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  // Reference equality, so a re-broadcast cannot churn a React render.
+  expect(reduceConnectionState(state, turnStatus('session-1', false))).toBe(state)
+})

@@ -879,11 +879,17 @@ test('app.submit emits the live user event before the assistant and the projecto
       prompt: 'hello desktop',
     }),
   )
-  await waitFor(() => received.filter(f => f.kind === 'event').length >= 2)
+  await waitFor(
+    () =>
+      received.filter(f => f.kind === 'event' && f.event.type === 'message')
+        .length >= 2,
+  )
 
+  // Message events only: the turn boundary (`turn.status`) also rides this
+  // stream, and this test is about the ORDER OF THE TWO MESSAGES.
   const events = received.filter(
     (frame): frame is Extract<ServerFrame, { kind: 'event' }> =>
-      frame.kind === 'event',
+      frame.kind === 'event' && frame.event.type === 'message',
   )
   const firstEvent = events[0]!.event
   const secondEvent = events[1]!.event
@@ -3109,7 +3115,16 @@ test('F6 — an outbound event carrying a secret key is blocked, not shipped', a
   await waitFor(() => received.some(f => f.kind === 'error'))
 
   // The event frame was blocked; an internal_error was sent in its place.
-  expect(received.some(f => f.kind === 'event')).toBe(false)
+  // Asserted on the SECRET rather than on "no event frame at all", because the
+  // benign `turn.status` boundary also rides this stream — checking the raw
+  // bytes pins the property that actually matters and cannot be satisfied by
+  // an unrelated frame simply being absent.
+  expect(
+    received.some(f => f.kind === 'event' && f.event.type === 'message'),
+  ).toBe(false)
+  const wire = JSON.stringify(received)
+  expect(wire).not.toContain('sk-leak')
+  expect(wire).not.toContain('accessToken')
   const err = received.find(f => f.kind === 'error')
   expect(err?.kind).toBe('error')
   if (err?.kind === 'error') {
