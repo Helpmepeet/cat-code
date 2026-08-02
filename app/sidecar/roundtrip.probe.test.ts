@@ -239,8 +239,12 @@ test('turn.status crosses the real socket and brackets the turn', async () => {
   const turns = seen.filter(entry => entry.kind === 'turn.status')
   expect(turns.map(entry => entry.activeTurn)).toEqual([true, false])
 
-  // Ordering is the contract a client depends on: the open arrives before any
-  // message of the turn, the close after the last one.
+  // SCOPE: probe mode submits straight to the controller (`index.ts:287`), so
+  // this ordering is the CONTROLLER's, not the production submit path's. The
+  // production path echoes the user message first, putting the open one frame
+  // AFTER it — pinned separately by the `production app.submit order` test in
+  // `sidecarServer.test.ts`. What this test uniquely proves is that the event
+  // crosses a real Unix-domain socket at all.
   const openIndex = seen.findIndex(e => e.kind === 'turn.status' && e.activeTurn)
   const closeIndex = seen.findIndex(e => e.kind === 'turn.status' && !e.activeTurn)
   const messageIndexes = seen

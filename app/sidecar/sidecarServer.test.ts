@@ -5811,3 +5811,62 @@ test('P4-6b — a session-action verb with NO domain (probe) fails closed with i
     received.some(f => f.kind === 'error' && f.requestId === 'sb2'),
   ).toBe(true)
 })
+
+test('production app.submit order: the echoed user message, THEN turn.status(true)', async () => {
+  // The `roundtrip.probe` socket test drives `controller.submit()` directly
+  // (probe mode, `index.ts:287`) and so never exercises `handleSubmit`. The
+  // production path echoes the submitted user message BEFORE calling the
+  // controller (`:1067`), so the turn boundary lands one frame AFTER the user
+  // bubble, not before it. Pinned here because the probe cannot see it, and a
+  // report of this change originally got the ordering wrong.
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'assistant',
+        message: {
+          id: 'msg-order',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done' }],
+        },
+        parent_tool_use_id: null,
+        session_id: ENGINE_SESSION,
+        uuid: '00000000-0000-4000-8000-00000000b001',
+      } as never
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'r-turn-order',
+      prompt: 'hello',
+    }),
+  )
+  await waitFor(() =>
+    received.some(
+      f =>
+        f.kind === 'event' &&
+        f.event.type === 'turn.status' &&
+        f.event.activeTurn === false,
+    ),
+  )
+
+  const timeline = received
+    .filter((f): f is Extract<ServerFrame, { kind: 'event' }> => f.kind === 'event')
+    .map(f =>
+      f.event.type === 'turn.status'
+        ? `turn.status(${f.event.activeTurn})`
+        : `message(${(f.event.message as { type?: string }).type})`,
+    )
+
+  expect(timeline).toEqual([
+    'message(user)',
+    'turn.status(true)',
+    'message(assistant)',
+    'turn.status(false)',
+  ])
+})

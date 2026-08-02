@@ -5,6 +5,11 @@
 **Trigger:** operator asked what the app actually renders during a live turn
 **Outcome:** one defect fixed and committed (`d9c1cf1`, `91aa79f`, STATUS row CC-25); two defects
 found and left open, one of them discovered only after the first fix made the surface visible
+**Review:** returned YELLOW on 2026-08-02. All four findings and both nits verified against source
+and are corrected below; see §8 for the disposition of each.
+
+> **Fidelity acceptance is PENDING, not met.** Nothing here has been seen by an operator on a
+> running window, and §6 lists prototype mismatches that remain open.
 
 ---
 
@@ -45,8 +50,11 @@ const generating =
 `inputEnabled` was only ever written from the `app.ready` handshake payload
 (`connectionState.ts:128`, `rawMessageLog.ts:78`), and the sidecar sends that frame exactly once,
 when a client attaches (`sidecarServer.ts:498`). The sidecar flipped its own `activeTurn` at
-`sidecarServer.ts:1066` and back at `:1097` but never re-broadcast, and no frame in
-`app/shared/protocol.ts` carried turn state at all.
+`sidecarServer.ts:1066` and back at `:1097` but never re-broadcast.
+
+To be precise about what was missing: `app.ready` *did* carry `activeTurn`, correct as of the
+moment of attach. What did not exist was any **live change event** — nothing on the wire told a
+client that the value it was handed had since changed.
 
 So on any normally attached session `inputEnabled` stayed at its attach-time value of `true`, and
 `generating` was false for the whole session.
@@ -125,14 +133,30 @@ result                 generating=true
 turn.status(false)     generating=false
 ```
 
-The load-bearing test is a real-spawn probe in `app/sidecar/roundtrip.probe.test.ts`: it asserts
-`turn.status` crosses an actual Unix-domain socket, arrives after `ready`, opens before the turn's
-first message and closes after its last. That is the proof class the SSR suite structurally cannot
-provide, and its absence is why this shipped dead.
+Two tests carry the proof, and they cover different things:
+
+- `app/sidecar/roundtrip.probe.test.ts` — a real spawn asserting `turn.status` crosses an actual
+  Unix-domain socket and arrives after `ready`. That is the proof class the SSR suite structurally
+  cannot provide, and its absence is why this shipped dead. **What it does not cover:** probe mode
+  submits straight to the controller (`app/sidecar/index.ts:287`), so it never exercises
+  `handleSubmit`, and its event ordering is the controller's rather than production's.
+- `app/sidecar/sidecarServer.test.ts` — the production `app.submit` path, added after review. It
+  pins the real order:
+
+  ```
+  message(user) → turn.status(true) → message(assistant) → turn.status(false)
+  ```
+
+  The production path echoes the submitted user message **before** calling the controller
+  (`sidecarServer.ts:1067`), so the turn boundary lands one frame **after** the user bubble. An
+  earlier revision of this report claimed the open preceded the turn's first message; that was true
+  only of probe mode. Functionally the ordering is fine, and arguably preferable: the user's own
+  message appears first, then the activity row.
 
 | Battery | Result |
 |---|---|
-| `bun test app/` | 2307 pass / 0 fail, 169 files, 8060 assertions (2305/0 at session start) |
+| `bun test app/` | 2307 pass / 0 fail, 169 files, 8060 assertions (2305/0 at session start); re-measured 2306/0 after the review fix, one test added — the shared tree moves under concurrent sessions, so treat 0 fail as the gate and re-measure rather than diffing counts |
+| focused: sidecar server, socket probe, both renderer reducers | 203 pass / 0 fail |
 | `bun run --cwd app typecheck` | clean |
 | `bun run --cwd app typecheck:sidecar` | scoped pass, 5,559 upstream ignored, 0 owned |
 | `bun run --cwd app test:hardening` | 19/19 |
@@ -211,14 +235,36 @@ same message follows it.
 
 Derive from the turn, not the tail:
 
-1. Scope to the current turn first, reusing the boundary logic `selectLiveTokenEstimate` already has
-   (`appModel.ts:87`, `TURN_BOUNDARY_KINDS`). This is not optional polish: an aborted turn leaves its
+1. Scope to the current turn first. This is not optional polish: an aborted turn leaves its
    `tool-use` row `pending` forever, because no `tool_result` ever arrives, so an unscoped "any
    pending tool wins" rule would pin the verb to that tool for every later turn. Tool results
    themselves do not create false boundaries, since a result-only user frame projects no visible row.
 2. Any pending tool in that window wins, not only a trailing one.
 3. Then a streaming assistant-text tail gives `Responding`.
 4. Otherwise `Working`.
+
+**Correction after review — do not reuse `TURN_BOUNDARY_KINDS` for step 1.** An earlier revision of
+this report proposed borrowing the set `selectLiveTokenEstimate` uses (`appModel.ts:87`). That set
+includes `task-notification`, and task notifications are **injected mid-turn**: the drain is
+explicitly documented as "the LIVE path by which an engine-injected turn reaches an out-of-process
+UI" (`src/QueryEngine.ts:995`, drained at `src/query.ts:1605`). So a background agent finishing while
+other tools are still running would open a fresh "turn" window, the still-pending tools would fall
+outside it, and the verb would report `Working` again. That reproduces the exact bug the fix is meant
+to close.
+
+The activity scope needs its own **operator-turn** boundary, and the data to build one already
+exists. The projector distinguishes provenance in `projectMessageOrigin`: a `human` origin returns
+null, and injected turns are routed to their own row kinds (`TaskNotificationRow`, `InjectedTurnRow`)
+rather than to `UserTextRow`. So the boundary set should be `user-text`, `user-image`, `command-echo`
+only, defined separately from `TURN_BOUNDARY_KINDS` rather than shared with it.
+
+**Pre-existing bug this uncovers, not owned here:** `selectLiveTokenEstimate` uses that same set, so
+the per-turn token estimate already resets mid-turn whenever a background agent notification lands.
+Same root cause, different symptom, and it predates this work.
+
+Before implementing, add an interaction test covering pending tools plus an injected notification
+arriving mid-turn. That case is what makes the difference between the two boundary definitions
+observable, and neither definition is safe to ship on reasoning alone.
 
 `Thinking` should **not** be synthesized from the absence of other activity. That would assert a
 state the renderer cannot observe. It becomes real once F3 is fixed.
@@ -236,8 +282,11 @@ Two open questions for the operator, both about user-visible text:
 ## 4. F3 — thinking never streams
 
 `projectStreamEvent` accepts only text blocks and `text_delta`, and returns state unchanged for
-every other delta type (`transcriptProjector.ts:1452`). `thinking_delta` is therefore dropped, and a
-thinking row exists only once the complete assistant message arrives.
+every other delta type — the rejection is the `delta?.type !== 'text_delta'` guard inside that
+function. (Anchored by function name deliberately: `transcriptProjector.ts` is being edited
+concurrently, so its line numbers drift. The guard sits at `:1330` as of `d9c1cf1` and `:1452` in
+the working tree.) `thinking_delta` is therefore dropped, and a thinking row exists only once the
+complete assistant message arrives.
 
 The consequence is the quietest part of the whole interface: between the user bubble and the first
 token, nothing is added to the transcript at all. With F1 fixed the activity row at least says the
@@ -273,15 +322,79 @@ phases `connecting → thinking → tool → responding` and a quiet `paused` st
 in the same file is defined but never rendered, and is already recorded as cut.
 
 The desktop equivalent is now reachable and structurally matches: pulse dots, verb, target, elapsed,
-gated token byline. It adds a Stop button, correctly, because the desktop has no Ctrl+C. What
-remains different is the verb vocabulary and the target text, which is F2 plus the item above.
+gated token byline. It adds a Stop button, correctly, because the desktop has no Ctrl+C.
+
+**Fidelity is PENDING.** An earlier revision of this report said only verb vocabulary and target text
+still differ. That understated it: the canonical parity ledger (`PARITY-LEDGER.md:504`) records
+further unported behavior, and the full open list is:
+
+| Open mismatch | Source |
+|---|---|
+| Verb shimmer animation on the active verb | `PARITY-LEDGER.md:504`; prototype `Chat.jsx:190` |
+| Playful verb rotation ("Pouncing", "Prowling", …) | `PARITY-LEDGER.md:504`; prototype `Chat.jsx:32` |
+| Per-tool tone colours; desktop uses accent/warn only | `PARITY-LEDGER.md:504,506`; prototype `Chat.jsx:31` |
+| `↑` during the requesting phase; desktop always shows `↓` | `PARITY-LEDGER.md:504`; prototype `Chat.jsx:196` |
+| Verb vocabulary reports a row, not the turn | F2, this report |
+| Target is the tool name, not the real command or path | §5, this report |
+| Live activity row never confirmed on a running window | `PARITY-LEDGER.md:504` records this as UNVERIFIED |
+
+The first four are recorded in the ledger as cosmetic adaptations. They are listed here because a
+fidelity claim cannot be made while any mismatch is open and unapproved, and this report should not
+read as if the surface matched.
 
 ---
 
-## 7. Not verified
+## 7. Commit provenance — `91aa79f` is not solely mine
 
-Everything in section 2 is proven headlessly and through a real socket. Nothing here has been
-confirmed by an operator looking at a running window. The acceptance steps are:
+`91aa79f` is described in its own message as the CC-25 STATUS row plus a sweep of three other
+sessions' uncommitted rows. That disclosure was incomplete. The commit actually carries **six** rows,
+only one of which is mine:
+
+| Row | Relationship to this work |
+|---|---|
+| CC-25 | mine |
+| CC-22, CC-23, CC-24 | other sessions, added |
+| P4-17 | other session, modified |
+| P4-61 | other session, added |
+
+`docs/migration/STATUS.md` is a single file written by several concurrent sessions, so staging the
+explicit path still picked up whatever those sessions had left uncommitted in it. Committing was
+authorised by the operator, and no other session's content was altered or lost — but the commit
+should not be read as CC-25 bookkeeping alone, and per-commit attribution for that file is not
+reliable.
+
+**Deliberately not corrected by rewriting history.** `CLAUDE.md` §4 forbids rewrites on this shared
+branch, and other commits may already sit on top. This note is the correction.
+
+---
+
+## 8. Review dispositions
+
+Reviewed 2026-08-02, verdict YELLOW. Every finding was checked against source before acting; all
+four and both nits held.
+
+| Finding | Disposition |
+|---|---|
+| F1 · the socket probe bypasses production `app.submit`, so the report's ordering claim was probe-mode-only | **Fixed.** Added a production `app.submit` ordering test to `sidecarServer.test.ts` pinning `message(user) → turn.status(true) → message(assistant) → turn.status(false)`; annotated the probe test with its true scope; corrected §2. |
+| F2 · the proposed algorithm reuses `TURN_BOUNDARY_KINDS`, which includes mid-turn `task-notification` | **Design corrected before implementation**, §3. A separate operator-turn boundary is specified, the interaction test is named as a precondition, and the same pre-existing bug in `selectLiveTokenEstimate` is recorded. |
+| F3 · `91aa79f` swept five rows belonging to other sessions | **Recorded, not rewritten**, §7. |
+| F4 · the prototype comparison understated the open fidelity gap | **Fixed**, §6: every open mismatch enumerated, fidelity marked pending, banner added at the head of the report. |
+| Nit · "no frame carried turn state at all" | **Fixed**, §2: `app.ready` carried `activeTurn`; what was missing was a live change event. |
+| Nit · the F3 anchor does not hold at `d9c1cf1` | **Fixed**, §4: anchored by function and guard expression, with both line numbers given, because that file is being edited concurrently. |
+
+One correction to the review's own verification block: it reports `bun test app/` at 2291 pass
+against clean `d9c1cf1`, where this session measured 2307. The gap is concurrent work landing in the
+shared tree between the two runs, not a disagreement about this change; the counts here were taken at
+the time each battery ran and should be re-measured rather than trusted.
+
+---
+
+## 9. Not verified
+
+Everything in section 2 is proven headlessly, through a real socket, and on the production submit
+path. Nothing here has been confirmed by an operator looking at a running window, and per §6 the
+fidelity comparison has open mismatches, so this change is **not acceptance-ready**. The acceptance
+steps are:
 
 Send a turn and confirm the activity row appears above the composer with a live elapsed clock; that
 Stop and Escape both interrupt it; that the composer goes read-only mid-turn and recovers after; and
