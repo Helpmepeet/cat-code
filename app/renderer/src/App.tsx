@@ -2172,14 +2172,24 @@ export function App() {
 	        selectFirstAccountsSnapshot(accounts)
 	      const panelOrchestratorActive =
 	        selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false
-	      // Read-only git branch for the empty-state meta strip — from the session
-	      // log's `gitBranch` (shared catalog seam), keyed by this panel's session.
-	      // Matched on `appSessionId` for the same reason `activeSessionRow` is
-	      // (:911): `row.sessionId` holds the engineSessionId once one is assigned,
-	      // so matching on it misses every session that has reached ready.
+	      // Read-only git branch for the empty-state meta strip. The SESSION's own
+	      // snapshot leads: the catalog's `gitBranch` is only written when a
+	      // message is persisted (`src/utils/sessionStorage.ts:1464`), so it is
+	      // always absent in the one state this strip renders in — the empty
+	      // transcript — and the column read "none" in every repo. The catalog
+	      // stays as the fallback for a session whose sidecar snapshot has not
+	      // landed yet (or a restored row with no live process). Matched on
+	      // `appSessionId` for the same reason `activeSessionRow` is (:911):
+	      // `row.sessionId` holds the engineSessionId once one is assigned, so
+	      // matching on it misses every session that has reached ready.
+	      const panelDiagnostics = selectDiagnosticsSnapshot(diagnostics, sessionId)
 	      const panelBranch =
+	        panelDiagnostics?.gitBranch ??
 	        sessionCatalogRows.find(r => r.appSessionId === sessionId)?.gitBranch ??
 	        null
+	      // Where this session's tools actually run. "Locally" is not a constant:
+	      // a sandboxed session does not run in the checkout the same way.
+	      const panelSandboxed = panelDiagnostics?.sandboxEnabled ?? false
 	      // P4-24c — the LIVE composer run-controls seam (Model/effort/fast + the
 	      // real picker options), re-broadcast on every change so the faces reflect
 	      // this session's current state with no respawn. Supersedes the P4-24 read
@@ -2237,6 +2247,7 @@ export function App() {
                   sessionId,
                 )}
 	            branch={panelBranch}
+	            sandboxed={panelSandboxed}
 	            model={panelRunControls?.model.current ?? null}
 	            reasoningEffort={panelRunControls?.effort.current ?? null}
 	            fastMode={panelRunControls?.fast.active ?? false}
@@ -3108,6 +3119,7 @@ export function SessionPane({
   activeConnection,
   activeDescriptor,
   branch,
+  sandboxed,
   activeLog,
   activeSessionId,
   isActivePane,
@@ -3711,6 +3723,7 @@ export function SessionPane({
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
             branch={branch}
+            sandboxed={sandboxed}
             orchestratorActive={orchestratorActive}
             onToggleOrchestrator={onToggleOrchestrator}
             restorePhase={restorePhase}
@@ -4259,8 +4272,12 @@ type SessionPaneProps = {
   activeConnection: ConnectionSnapshot
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
-  /** Read-only git branch for the empty-state meta strip (session log `gitBranch`). */
+  /** Read-only git branch for the empty-state meta strip — this session's own
+   * `diagnostics.snapshot`, falling back to the session log's `gitBranch`. */
   branch: string | null
+  /** Whether this session's tools run sandboxed (`diagnostics.snapshot`), read by
+   * the empty-state meta strip's "Start in" column. */
+  sandboxed?: boolean
   activeSessionId: SessionId | null
   /** This pane is the operator's focused one — gates window-level keyboard ownership in a split. */
   isActivePane: boolean

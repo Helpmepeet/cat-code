@@ -285,14 +285,47 @@ test("the 'session' variant shows a read-only cwd project (no picker) + the real
   expect(html).toContain('Codex')
   expect(html).toContain('main')
   expect(html).toContain('15%')
-  // Project is the read-only session cwd, not the interactive picker.
-  expect(html).toContain('/Users/me/cat-code')
+  // Project is the read-only session workspace, not the interactive picker: the
+  // NAME is what renders (a full cwd truncates mid-path in this column), with
+  // the whole path one hover away.
+  expect(html).toContain('title="/Users/me/cat-code"')
+  expect(html).toContain('>cat-code<')
   // The real git branch is shown read-only in its own meta column.
   expect(html).toContain('Branch')
   expect(html).toContain('feature/login')
   // No interactive project picker button and no recents launcher in-session.
   expect(html).not.toContain('<button')
   expect(html).not.toContain('Open a project')
+})
+
+test("'Start in' reports the one thing about a session's start that varies", () => {
+  // The prototype's chooser is cut with its worktree option, so a constant label
+  // was all this column ever said. Sandboxing is a real per-session fact already
+  // on `diagnostics.snapshot`.
+  const plain = renderToStaticMarkup(
+    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} orchestratorActive={false} />,
+  )
+  expect(plain).toContain('Locally')
+  expect(plain).not.toContain('Sandboxed')
+
+  const sandboxed = renderToStaticMarkup(
+    <WelcomeScreen
+      variant="session"
+      cwd="/w"
+      branch={null}
+      sandboxed
+      accounts={null}
+      orchestratorActive={false}
+    />,
+  )
+  expect(sandboxed).toContain('Sandboxed')
+
+  // The launcher has no session to ask, so it keeps the plain default.
+  const launcher = renderToStaticMarkup(
+    <WelcomeScreen recents={[]} accounts={null} orchestratorActive={false} onOpenRecent={noop} onOpenFolder={noop} />,
+  )
+  expect(launcher).toContain('Locally')
+  expect(launcher).not.toContain('Sandboxed')
 })
 
 test("the 'session' variant reflects orchestrator read-only and degrades a null pool + null cwd honestly", () => {

@@ -132,6 +132,7 @@ export const TranscriptView = memo(function TranscriptView({
   onToggleOrchestrator,
   cwd,
   branch,
+  sandboxed,
   restorePhase,
 }: {
   state: TranscriptState
@@ -145,6 +146,9 @@ export const TranscriptView = memo(function TranscriptView({
   onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
+  /** Whether this session's tools run sandboxed, read by the empty state's
+   * "Start in" column. */
+  sandboxed?: boolean
   /** IS-C (M5) — restore affordance phase; null for an ordinary live pane. */
   restorePhase?: RestorePhase | null
 }) {
@@ -156,6 +160,7 @@ export const TranscriptView = memo(function TranscriptView({
       onToggleOrchestrator={onToggleOrchestrator}
       cwd={cwd ?? null}
       branch={branch ?? null}
+      sandboxed={sandboxed ?? false}
       restorePhase={restorePhase ?? null}
     />
   )
@@ -168,6 +173,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onToggleOrchestrator,
   cwd = null,
   branch = null,
+  sandboxed = false,
   restorePhase = null,
 }: {
   rows: NestedTranscriptRow[]
@@ -176,6 +182,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
+  sandboxed?: boolean
   restorePhase?: RestorePhase | null
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
@@ -210,6 +217,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           variant="session"
           cwd={cwd}
           branch={branch}
+          sandboxed={sandboxed}
           accounts={accounts}
           orchestratorActive={orchestratorActive}
           onToggleOrchestrator={onToggleOrchestrator}

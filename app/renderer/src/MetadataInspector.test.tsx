@@ -175,6 +175,7 @@ const diagnostics: DiagnosticsSnapshot = {
   reasoningEffort: 'low',
   fastMode: false,
   sandboxEnabled: true,
+  gitBranch: null,
   installationWarnings: [],
   healthWarnings: ['auto-update is disabled'],
   memoryWarnings: [],

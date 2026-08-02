@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { getDefaultAppState, type AppState } from '../../src/state/AppStateStore.js'
 import { createStore } from '../../src/state/store.js'
+import { getBranch } from '../../src/utils/git.js'
 import { createSidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 
 // The compiled sidecar receives MACRO via Bun's build defines
@@ -63,6 +64,24 @@ test('an explicit mainLoopModelForSession is preferred over the resolver fallbac
     makeAppStateStore({ mainLoopModel: null, mainLoopModelForSession: 'gpt-5.6-terra' }),
   )
   expect(domain.getSnapshot()?.mainLoopModelForSession).toBe('gpt-5.6-terra')
+})
+
+// Live path, not shape-only: the branch on the wire must be what the ENGINE's own
+// reader says, because the transcript catalog stamps its `gitBranch` with that
+// same call (`src/utils/sessionStorage.ts:1464`) and the two must never disagree.
+// This suite runs inside a git checkout, so the guarded arm is the real one.
+test('the branch is the engine own getBranch(), with HEAD normalised to null', async () => {
+  const engineBranch = await getBranch()
+  const snapshot = (
+    await createSidecarDiagnosticsDomain(makeAppStateStore())
+  ).getSnapshot()
+  if (engineBranch && engineBranch !== 'HEAD') {
+    expect(snapshot?.gitBranch).toBe(engineBranch)
+    expect(snapshot?.gitBranch?.length).toBeGreaterThan(0)
+  } else {
+    // No repo, or a detached HEAD: neither is a branch, so nothing is claimed.
+    expect(snapshot?.gitBranch).toBeNull()
+  }
 })
 
 test('a numeric effort value serialises to its string form', async () => {

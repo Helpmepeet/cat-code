@@ -22,6 +22,7 @@
 
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
+import { getBranch } from '../../src/utils/git.js'
 import { getMainLoopModel } from '../../src/utils/model/model.js'
 import {
   buildInstallationDiagnostics,
@@ -42,6 +43,26 @@ function resolveSessionModel(state: AppState): string | null {
   if (state.mainLoopModel) return state.mainLoopModel
   try {
     return getMainLoopModel()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * This session's branch, from the engine's own `getBranch()` — the same call
+ * `sessionStorage.ts:1464` makes when it stamps `gitBranch` onto a message, and
+ * a `.git/HEAD` read rather than a shell-out (`git/gitFilesystem.ts`
+ * `computeBranch`). The sidecar's process cwd IS the session root
+ * (`supervisor.ts:213`), so no path has to be passed or authored.
+ *
+ * `computeBranch` answers the literal string `'HEAD'` for BOTH "not a repo" and
+ * "detached HEAD"; neither is a branch, so both become null and the surface
+ * renders its own empty text instead of the word HEAD.
+ */
+async function readSessionBranch(): Promise<string | null> {
+  try {
+    const branch = await getBranch()
+    return branch && branch !== 'HEAD' ? branch : null
   } catch {
     return null
   }
@@ -79,11 +100,12 @@ async function readDiagnosticsSnapshotOnce(
   appStateStore: Store<AppState>,
 ): Promise<DiagnosticsSnapshot | null> {
   try {
-    const [installationWarnings, healthWarnings, memoryWarnings] =
+    const [installationWarnings, healthWarnings, memoryWarnings, gitBranch] =
       await Promise.all([
         buildInstallationDiagnostics(),
         buildInstallationHealthDiagnostics(),
         buildMemoryDiagnostics(),
+        readSessionBranch(),
       ])
     const state = appStateStore.getState()
     return {
@@ -93,6 +115,7 @@ async function readDiagnosticsSnapshotOnce(
       reasoningEffort: effortToDisplay(state.effortValue),
       fastMode: state.fastMode ?? false,
       sandboxEnabled: SandboxManager.isSandboxingEnabled(),
+      gitBranch,
       // The engine builders are typed `Diagnostic[]` (`ReactNode`); today they
       // yield plain strings, but a future JSX-emitting variant would be silently
       // dropped by `checkJsonSafe` on the outbound frame. Coerce explicitly so

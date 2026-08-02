@@ -13,6 +13,7 @@ const SNAPSHOT: DiagnosticsSnapshot = {
   reasoningEffort: null,
   fastMode: false,
   sandboxEnabled: true,
+  gitBranch: null,
   installationWarnings: [],
   healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],
   memoryWarnings: [],

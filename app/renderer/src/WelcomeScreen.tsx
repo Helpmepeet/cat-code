@@ -27,6 +27,15 @@
  *
  * §0 deviations (WELCOME-LAUNCHER §3 keep/cut + seam limits), flagged not dropped:
  *  - Branch chooser + "New worktree" start-in option: CUT/deferred (D5 Q2) — absent.
+ *    With the chooser gone, "Start in" reported a constant, so the session
+ *    variant now reads the one real variable it has: `sandboxed` off this
+ *    session's `diagnostics.snapshot` (operator, 2026-08-02). §0 adapted: the
+ *    prototype's axis was checkout-vs-worktree, and worktree creation does not
+ *    exist here to be reported on.
+ *  - Project (session variant) shows the workspace NAME, not the raw cwd. §0
+ *    adapted: the prototype shows a short `~/project` (`Welcome.jsx:231`) and
+ *    the renderer has no home-directory seam to build one, while a full path
+ *    truncates mid-path in this column. The path stays in the `title`.
  *  - Greeting username: DEFERRED — no engine-user seam in the renderer today.
  *  - Per-recent trust badge: best-effort (only live sessions expose trust); a
  *    global projects-trust feed is out of scope (no new feed rule).
@@ -47,6 +56,7 @@ import {
   handleMenuRovingKeyDown,
   usePopover,
 } from './composerPopover.js'
+import { basename } from './pathUtils.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
@@ -82,9 +92,14 @@ type WelcomeScreenProps =
       variant: 'session'
       /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
       cwd: string | null
-      /** The session's git branch, read-only (from the session log's `gitBranch`;
-       * null outside a git repo or before the catalog entry lands). */
+      /** The session's git branch, read-only. App reads it from this session's
+       * own `diagnostics.snapshot` (`getBranch()` at spawn), falling back to the
+       * session log's `gitBranch`; null outside a git repo or on a detached HEAD. */
       branch: string | null
+      /** Whether this session's tools run sandboxed (`diagnostics.snapshot`).
+       * The "Start in" column's only real variable, now that the launcher's
+       * worktree option is cut. */
+      sandboxed?: boolean
       accounts: AccountsSnapshot | null
       orchestratorActive: boolean
       /**
@@ -152,8 +167,16 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               </MetaCol>
               <div className="w-px bg-shell-seam" />
               <MetaCol icon={<MonitorIcon />} label="Start in">
-                {/* Worktree option cut (D5 Q2); "Locally" is the only real start. */}
-                <span className="text-[13px] text-text-muted">Locally</span>
+                {/* The prototype's chooser is CUT with its worktree option (D5 Q2),
+                    so this reads the one thing about where a session runs that is
+                    genuinely variable: whether its tools are sandboxed
+                    (`diagnostics.snapshot`). The launcher has no session to ask,
+                    so it states the plain default. */}
+                <span className="text-[13px] text-text-muted">
+                  {props.variant === 'session' && props.sandboxed
+                    ? 'Sandboxed'
+                    : 'Locally'}
+                </span>
               </MetaCol>
               {/* Branch is a SESSION-variant column only: read-only (HC1), the real
                   `gitBranch` from the session log (absent outside a repo / pre-catalog).
@@ -195,13 +218,20 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
  * so it is omitted rather than fabricated (§0 deferred).
  */
 function SessionProject({ cwd }: { cwd: string | null }) {
+  // The NAME, not the raw path: a full cwd truncates mid-path in this column
+  // ("/Users/pt/Discor…") and tells you nothing. The prototype has the same
+  // instinct, showing a short `~/project` (`Welcome.jsx:231`); the renderer has
+  // no home-directory seam to build that form, so it uses the shared `basename`
+  // every other surface already names a workspace by. The full path stays one
+  // hover away. §0 adapted, not cut.
+  const name = cwd ? basename(cwd) : ''
   return (
     <span className="inline-flex max-w-full items-center gap-1.5">
       <span
         className="truncate font-mono text-[13px] text-text-muted"
         title={cwd ?? undefined}
       >
-        {cwd ?? 'This workspace'}
+        {name || cwd || 'This workspace'}
       </span>
     </span>
   )

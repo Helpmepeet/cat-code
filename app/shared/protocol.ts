@@ -2210,6 +2210,21 @@ export type DiagnosticsSnapshot = {
   fastMode: boolean
   /** Whether the Bash sandbox is enabled for this session (`SandboxManager.isSandboxingEnabled()`). */
   sandboxEnabled: boolean
+  /**
+   * The git branch of the session's own cwd, or null outside a repo / on a
+   * detached HEAD. Read with the engine's own `getBranch()` — the SAME function
+   * that stamps `gitBranch` onto every persisted message
+   * (`src/utils/sessionStorage.ts:1464`), so this and the transcript catalog can
+   * never disagree about what branch a session is on.
+   *
+   * It exists because the catalog's copy is unreadable in the one state that
+   * needs it: `gitBranch` is only written when a MESSAGE is persisted, so the
+   * empty-transcript launcher (`WelcomeScreen` session variant) always read
+   * "none", in a repo or not. Additive + OUTBOUND-only (no new inbound
+   * vocabulary). Spawn-frozen like the rest of this snapshot: a branch switched
+   * while the empty state is open is not re-read.
+   */
+  gitBranch: string | null
   /** `checkInstall()` warnings — install-path/PATH/symlink issues. */
   installationWarnings: string[]
   /** `getDoctorDiagnostic()` health warnings + missing-update-permission note. */
