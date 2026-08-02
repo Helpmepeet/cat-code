@@ -1330,6 +1330,23 @@ export const SDKMessageOriginSchema = lazySchema(() =>
         .enum(['completed', 'failed', 'killed', 'running', 'pending'])
         .optional(),
       summary: z.string().optional(),
+      // The three fields a UI needs to present a finished agent WITHOUT
+      // reprinting the model-facing banner. `toolUseId` is the join key back to
+      // the spawning `tool_use` block, so a display can fold the completion into
+      // that agent's own card instead of emitting a second row.
+      //
+      // `taskId` and `outputFile` are deliberately NOT here: they are internal
+      // bookkeeping with no display meaning, and a UI that renders the raw
+      // banner puts both on screen (bug, 2026-08-01).
+      toolUseId: z.string().optional(),
+      result: z.string().optional(),
+      usage: z
+        .object({
+          totalTokens: z.number(),
+          toolUses: z.number(),
+          durationMs: z.number(),
+        })
+        .optional(),
     }),
     z.object({ kind: z.literal('coordinator') }),
     z.object({

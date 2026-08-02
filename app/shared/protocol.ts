@@ -514,8 +514,12 @@ export type ReadyFrame = {
  *    renderer's need to infer provenance from attacker-influenceable text.
  *  - **Secret-owner invariant untouched (SECURITY-MINIMUM §4).** The projection
  *    is NARROWED at the engine, not forwarded whole: `task-notification` keeps
- *    only `status`/`summary` (its `result`/`usage` free text is already inside
- *    the banner content this frame carries), `teammate` keeps only the sender
+ *    `status`/`summary`/`toolUseId`/`result`/`usage` and DROPS `taskId` +
+ *    `outputFile` (internal bookkeeping with no display meaning — a UI that
+ *    reprinted the raw banner put both on screen, the 2026-08-01 leak); every
+ *    field kept is one the transcript actually renders, and `result`/`usage`
+ *    already crossed inside the banner text this frame carries, so the widening
+ *    adds no byte the renderer could not already read. `teammate` keeps only the sender
  *    handle (never the `TeammateMessageContract[]` payload), and `channel` DROPS
  *    `meta: Record<string, string>` — whose KEYS are authored by a third-party
  *    MCP channel server, so a key named `authorization`/`apiKey` would trip

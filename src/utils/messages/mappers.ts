@@ -22,7 +22,10 @@ import type {
 } from 'src/types/message.js'
 import type { DeepImmutable } from 'src/types/utils.js'
 import stripAnsi from 'strip-ansi'
-import { createAssistantMessage } from '../messages.js'
+import {
+  createAssistantMessage,
+  isInternalNoResponseSentinel,
+} from '../messages.js'
 import { getPlan } from '../plans.js'
 
 export function toInternalMessages(
@@ -136,6 +139,14 @@ export function toSDKMessageOrigin(
         kind: 'task-notification',
         ...(origin.status !== undefined && { status: origin.status }),
         ...(origin.summary !== undefined && { summary: origin.summary }),
+        // Carried so a display can render the finished agent from STRUCTURED
+        // fields and fold it into the spawning agent's card, rather than
+        // reprinting `formatTaskNotificationText`'s model-facing banner (which
+        // puts the task id, output path and tool-use id on screen).
+        // `taskId`/`outputFile` stay engine-side: no display meaning.
+        ...(origin.toolUseId !== undefined && { toolUseId: origin.toolUseId }),
+        ...(origin.result !== undefined && { result: origin.result }),
+        ...(origin.usage !== undefined && { usage: origin.usage }),
       }
     case 'coordinator':
       return { kind: 'coordinator' }
@@ -181,6 +192,7 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
   return messages.flatMap((message): SDKMessage[] => {
     switch (message.type) {
       case 'assistant':
+        if (isInternalNoResponseSentinel(message)) return []
         return [
           {
             type: 'assistant',

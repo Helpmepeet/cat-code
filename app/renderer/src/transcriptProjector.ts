@@ -86,6 +86,31 @@ export type ToolUseRow = RowSource & {
   input: Record<string, unknown>
   status: ToolCardStatus
   result: ToolResultProjection | null
+  /**
+   * A BACKGROUND agent's finish, joined in at read time from
+   * `agentCompletionsByToolUseId`. Null for every foreground tool: their answer
+   * is the correlated `tool_result` in `result`. A background agent's
+   * `tool_result` only says it started, so its real outcome arrives later on a
+   * separate task-notification turn — this is where that outcome lands, which
+   * is what lets the notification stop being a transcript row of its own.
+   */
+  agentCompletion: AgentCompletionProjection | null
+}
+
+/**
+ * The display-facing half of a task-notification, taken from STRUCTURED wire
+ * fields (`SDKUserMessage.origin`) rather than parsed back out of the engine's
+ * model-facing banner. `taskId`/`outputFile` are absent by construction: they
+ * are not on the wire, so no display can leak them (bug, 2026-08-01).
+ */
+export type AgentCompletionProjection = {
+  /** `completed` | `failed` | `killed` | …; null when the engine sent none. */
+  status: string | null
+  /** One-line outcome, e.g. `Agent @Ada completed`. */
+  summary: string | null
+  /** The agent's final message. Null when it finished with no output. */
+  result: string | null
+  usage: { totalTokens: number; toolUses: number; durationMs: number } | null
 }
 
 export type ToolFamily =
@@ -220,8 +245,26 @@ export type TaskNotificationRow = RowSource & {
   kind: 'task-notification'
   /** `origin.status` (completed|failed|killed|…), else the legacy `<status>` tag. */
   status: string | null
-  /** The full banner text — rendered on the system side, never as a user bubble. */
-  content: string
+  /**
+   * One-line outcome ONLY (`Agent @Ada completed`). The banner text this row
+   * rides is model-facing — it carries the task id, the output-file path and
+   * the tool-use id — and printing it verbatim put all three on the operator's
+   * screen (bug, 2026-08-01; the row's own doc used to call that "preserved
+   * verbatim so nothing is lost"). The terminal has never shown more than this
+   * line either: `UserAgentNotificationMessage.tsx:46` renders `● {summary}`
+   * and returns null without one.
+   */
+  summary: string | null
+  /**
+   * The spawning `tool_use` id, when the engine sent one. A row that HAS one
+   * and finds its agent card is suppressed at read time in favour of that card
+   * (`selectTranscriptRows`), which is the prototype's disposition:
+   * `data.js:153-165` merges the notification into the named agent card and
+   * drops the duplicate row. Null (or unmatched) keeps the row visible, so a
+   * completion whose card never arrived degrades to a one-liner, never to
+   * nothing.
+   */
+  toolUseId: string | null
   timestamp?: string
   isReplay: boolean
 }
@@ -317,6 +360,17 @@ type TranscriptSessionState = {
    */
   toolResultsByUseId: Record<string, ToolResultProjection>
   /**
+   * Correlation map for background-agent finishes: the spawning `tool_use_id`
+   * → the completion carried by that agent's task-notification turn. Same
+   * shape and same discipline as `toolResultsByUseId` above — the outcome is
+   * joined onto the agent's card at read time, never written into a stored row.
+   *
+   * Its presence is also what suppresses the standalone notification row, so
+   * one finished agent reads as one card rather than a card plus a banner
+   * (prototype disposition, `~/catcode_prototype/cat-app/data.js:153-165`).
+   */
+  agentCompletionsByToolUseId: Record<string, AgentCompletionProjection>
+  /**
    * P3-7 slash catalog: the user-invocable command names carried by the
    * `system/init` frame's `slash_commands` field (engine-side, built from the
    * session's real command list — `systemInit.ts:69`, already filtered to
@@ -341,6 +395,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     nextBlockIndexByMessageId: {},
     seenFrameIds: {},
     toolResultsByUseId: {},
+    agentCompletionsByToolUseId: {},
     slashCommands: [],
   }
 }
@@ -360,16 +415,55 @@ export function selectTranscriptRows(
 ): TranscriptRow[] {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return []
-  return session.rows.map(row => {
-    if (row.kind !== 'tool-use') return row
+  const completions = session.agentCompletionsByToolUseId
+  /**
+   * The AGENT cards actually on screen — the only rows that can absorb a
+   * completion, because `AgentToolCard` is the only card that renders one.
+   *
+   * Two traps this set closes. It must be built from the rows, not from
+   * `agentCompletionsByToolUseId`: a notification always files itself into that
+   * map, so keying off it would make every notification suppress itself and a
+   * completion whose card never arrived would vanish. And it must be filtered
+   * to `agent`: background SHELL tasks notify with a `toolUseId` too
+   * (`src/tasks/LocalShellTask/LocalShellTask.tsx:165`), which names a Bash
+   * card that has no completion renderer, so an unfiltered set would suppress a
+   * finished background command into nothing.
+   */
+  const agentToolUseIds = new Set<string>()
+  for (const row of session.rows) {
+    if (row.kind === 'tool-use' && row.toolFamily === 'agent') {
+      agentToolUseIds.add(row.toolUseId)
+    }
+  }
+  return session.rows.flatMap((row): TranscriptRow[] => {
+    // A notification whose agent card is on screen is folded INTO that card
+    // (below) and drops out here, so one finished agent is one row. Without a
+    // join key, or before its card arrives, it stays as its own one-liner —
+    // degraded placement, never data loss.
+    if (row.kind === 'task-notification') {
+      const merged = row.toolUseId !== null && agentToolUseIds.has(row.toolUseId)
+      return merged ? [] : [row]
+    }
+    if (row.kind !== 'tool-use') return [row]
     const result = session.toolResultsByUseId[row.toolUseId] ?? null
     const status: ToolCardStatus = result
       ? result.isError
         ? 'error'
         : 'success'
       : 'pending'
-    if (row.status === status && row.result === result) return row
-    return { ...row, status, result }
+    // Only an agent card carries one, matching the suppression above: the two
+    // must agree, or a completion is both hidden and unrendered.
+    const agentCompletion = agentToolUseIds.has(row.toolUseId)
+      ? (completions[row.toolUseId] ?? null)
+      : null
+    if (
+      row.status === status &&
+      row.result === result &&
+      row.agentCompletion === agentCompletion
+    ) {
+      return [row]
+    }
+    return [{ ...row, status, result, agentCompletion }]
   })
 }
 
@@ -847,7 +941,35 @@ function projectUserFrame(
     return row === null ? [] : [row]
   })
   if (rows.length === 0) return state
-  return appendFrameRows(state, frameId, rows)
+  return appendFrameRows(
+    recordAgentCompletion(state, origin),
+    frameId,
+    rows,
+  )
+}
+
+/**
+ * File a background agent's finish under the `tool_use_id` that spawned it, so
+ * `selectTranscriptRows` can fold it into that agent's card. Only a
+ * task-notification carrying a join key writes here; everything else passes
+ * through untouched, and a duplicate id is overwritten by the later turn (the
+ * engine notifies once per task, guarded by the `notified` flag at
+ * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:307`).
+ */
+function recordAgentCompletion(
+  state: TranscriptSessionState,
+  origin: InjectedOrigin | null,
+): TranscriptSessionState {
+  if (origin === null || origin.kind !== 'task-notification') return state
+  const { toolUseId, completion } = origin
+  if (toolUseId === null || completion === null) return state
+  return {
+    ...state,
+    agentCompletionsByToolUseId: {
+      ...state.agentCompletionsByToolUseId,
+      [toolUseId]: completion,
+    },
+  }
 }
 
 function projectResultFrame(
@@ -1512,6 +1634,7 @@ function projectAssistantContentBlock(
         // minted this tick, before any read has happened yet.
         status: 'pending',
         result: null,
+        agentCompletion: null,
       }
 
     case 'thinking': {
@@ -1596,7 +1719,8 @@ function projectUserContentBlock(
         id: rowId(source, 'task-notification'),
         kind: 'task-notification',
         status: origin.status,
-        content: block.text,
+        summary: origin.completion?.summary ?? null,
+        toolUseId: origin.toolUseId,
       }
     }
     if (origin) {
@@ -1646,7 +1770,10 @@ function projectUserContentBlock(
         id: rowId(source, 'task-notification'),
         kind: 'task-notification',
         status: parseLegacyTaskNotificationStatus(block.text),
-        content: block.text,
+        // The envelope's own `<summary>`, not the envelope. These transcripts
+        // predate `origin`, so they carry no join key and always stay a row.
+        summary: nonEmptyString(extractXmlTag(block.text, 'summary')?.trim()),
+        toolUseId: null,
       }
     }
     return {
@@ -1847,6 +1974,10 @@ type InjectedOrigin = {
   label: string | null
   /** `task-notification` status; null for every other kind. */
   status: string | null
+  /** `task-notification` display fields; null for every other kind. */
+  completion: AgentCompletionProjection | null
+  /** `task-notification` join key back to the spawning agent card. */
+  toolUseId: string | null
 }
 
 /**
@@ -1873,11 +2004,46 @@ function projectMessageOrigin(value: unknown): InjectedOrigin | null {
       : kind === 'teammate'
         ? from
         : null
+  const isTaskNotification = kind === 'task-notification'
+  const status = isTaskNotification ? nonEmptyString(value.status) : null
   return {
     kind,
     label,
-    status: kind === 'task-notification' ? nonEmptyString(value.status) : null,
+    status,
+    toolUseId: isTaskNotification ? nonEmptyString(value.toolUseId) : null,
+    completion: isTaskNotification
+      ? {
+          status,
+          summary: nonEmptyString(value.summary),
+          result: nonEmptyString(value.result),
+          usage: projectAgentCompletionUsage(value.usage),
+        }
+      : null,
   }
+}
+
+/**
+ * The three numbers off the wire, all-or-nothing: a partial `usage` object
+ * would render as a stat line with holes in it, so anything that is not three
+ * finite numbers reads as "no usage" instead. Runtime-narrowed, no casts — the
+ * claim comes from the far side of a socket.
+ */
+function projectAgentCompletionUsage(
+  value: unknown,
+): { totalTokens: number; toolUses: number; durationMs: number } | null {
+  if (!isRecord(value)) return null
+  const { totalTokens, toolUses, durationMs } = value
+  if (
+    typeof totalTokens !== 'number' ||
+    typeof toolUses !== 'number' ||
+    typeof durationMs !== 'number' ||
+    !Number.isFinite(totalTokens) ||
+    !Number.isFinite(toolUses) ||
+    !Number.isFinite(durationMs)
+  ) {
+    return null
+  }
+  return { totalTokens, toolUses, durationMs }
 }
 
 function rowId(source: Omit<RowSource, 'id'>, blockId: string): string {
